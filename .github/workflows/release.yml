@@ -17,7 +17,7 @@ jobs:
             target: x86_64-pc-windows-msvc
           - platform: macos-latest
             target: aarch64-apple-darwin
-          - platform: macos-13
+          - platform: macos-latest
             target: x86_64-apple-darwin
 
     runs-on: ${{ matrix.platform }}
@@ -54,6 +54,9 @@ jobs:
           cd packages/daw-ui
           npm ci
 
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@latest
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -69,5 +72,5 @@ jobs:
           releaseBody: 'Download the installer for your platform below.'
           releaseDraft: false
           prerelease: false
-          tauriScript: npx tauri
+          tauriScript: tauri
           args: --target ${{ matrix.target }}
