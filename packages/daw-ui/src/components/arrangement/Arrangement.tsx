@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo } from '../../stores/trackStore'
 import { useTransportStore } from '../../stores/transportStore'
+import { hw } from '../../theme'
 
 const PPQ = 960
 const TRACK_HEIGHT = 56
@@ -22,10 +23,10 @@ interface DragState {
 
 const waveformData = new Map<string, [number, number][]>()
 
-// FL Studio color palette for clips — muted tones
-const FL_CLIP_COLORS = [
-  '#3A6878', '#6A5A4A', '#4A7A4A', '#784A5A',
-  '#5A5A78', '#78784A', '#4A6868', '#6A4A6A',
+// Hardwave clip palette — saturated but not garish
+const CLIP_COLORS = [
+  '#3B82F6', '#8B5CF6', '#EF4444', '#10B981',
+  '#EC4899', '#F59E0B', '#6366F1', '#14B8A6',
 ]
 
 export function Arrangement() {
@@ -81,13 +82,13 @@ export function Arrangement() {
     const scrollOffset = Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
 
     // Background
-    ctx.fillStyle = '#191919'
+    ctx.fillStyle = '#08080c'
     ctx.fillRect(0, 0, w, h)
 
-    // Ruler bar at top — FL dark with subtle border
-    ctx.fillStyle = '#222'
+    // Ruler bar
+    ctx.fillStyle = '#0c0c12'
     ctx.fillRect(0, 0, w, RULER_HEIGHT)
-    ctx.strokeStyle = '#2A2A2A'
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(0, RULER_HEIGHT)
@@ -102,8 +103,8 @@ export function Arrangement() {
 
       const isBar = i % 4 === 0
 
-      // Grid lines — FL very subtle
-      ctx.strokeStyle = isBar ? '#2A2A2A' : '#1E1E1E'
+      // Grid lines
+      ctx.strokeStyle = isBar ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.02)'
       ctx.lineWidth = isBar ? 1 : 0.5
       ctx.beginPath()
       ctx.moveTo(x, RULER_HEIGHT)
@@ -112,17 +113,17 @@ export function Arrangement() {
 
       // Ruler markings
       if (isBar) {
-        ctx.strokeStyle = '#333'
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)'
         ctx.beginPath()
         ctx.moveTo(x, 0)
         ctx.lineTo(x, RULER_HEIGHT)
         ctx.stroke()
 
-        ctx.fillStyle = '#777'
-        ctx.font = '9px "Segoe UI", sans-serif'
+        ctx.fillStyle = '#71717a'
+        ctx.font = '9px -apple-system, "Segoe UI", sans-serif'
         ctx.fillText(`${Math.floor(i / 4) + 1}`, x + 3, 13)
       } else {
-        ctx.strokeStyle = '#2A2A2A'
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)'
         ctx.beginPath()
         ctx.moveTo(x, RULER_HEIGHT - 4)
         ctx.lineTo(x, RULER_HEIGHT)
@@ -130,14 +131,14 @@ export function Arrangement() {
       }
     }
 
-    // Track lane backgrounds — FL very dark alternating
+    // Track lane backgrounds
     for (let i = 0; i < audioTracks.length; i++) {
       const y = RULER_HEIGHT + i * TRACK_HEIGHT
-      ctx.fillStyle = i % 2 === 0 ? '#181818' : '#1B1B1B'
+      ctx.fillStyle = i % 2 === 0 ? '#0a0a10' : '#0c0c14'
       ctx.fillRect(0, y, w, TRACK_HEIGHT)
 
       // Track separator
-      ctx.strokeStyle = '#141414'
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)'
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(0, y + TRACK_HEIGHT)
@@ -149,24 +150,24 @@ export function Arrangement() {
     for (let i = 0; i < audioTracks.length; i++) {
       const y = RULER_HEIGHT + i * TRACK_HEIGHT
       const track = audioTracks[i]
-      const clipColor = FL_CLIP_COLORS[i % FL_CLIP_COLORS.length]
+      const clipColor = CLIP_COLORS[i % CLIP_COLORS.length]
 
       for (const clip of track.clips) {
         drawClip(ctx, clip, clipColor, y, scrollOffset, w, pixelsPerTick)
       }
     }
 
-    // Playhead — FL uses a subtle green/yellow line
+    // Playhead — Hardwave red
     const playheadX = playheadSecs * PIXELS_PER_SECOND - scrollOffset
     if (playing || positionSamples > 0) {
-      ctx.strokeStyle = '#5A5'
+      ctx.strokeStyle = '#EF4444'
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(playheadX, 0)
       ctx.lineTo(playheadX, h)
       ctx.stroke()
 
-      ctx.fillStyle = '#5A5'
+      ctx.fillStyle = '#EF4444'
       ctx.beginPath()
       ctx.moveTo(playheadX - 4, 0)
       ctx.lineTo(playheadX + 4, 0)
@@ -214,8 +215,8 @@ export function Arrangement() {
     ctx.fill()
 
     // Clip name in header
-    ctx.fillStyle = clip.muted ? '#555' : '#DDD'
-    ctx.font = '9px "Segoe UI", Arial, sans-serif'
+    ctx.fillStyle = clip.muted ? '#555' : '#EEE'
+    ctx.font = '9px -apple-system, "Segoe UI", sans-serif'
     ctx.save()
     ctx.beginPath()
     ctx.rect(x + 2, y, w - 4, headerH)
@@ -254,7 +255,7 @@ export function Arrangement() {
 
     // Border
     if (isSelected) {
-      ctx.strokeStyle = '#E8A030'
+      ctx.strokeStyle = '#EF4444'
       ctx.lineWidth = 2
     } else {
       ctx.strokeStyle = clip.muted ? '#444' : lightenColor(color, 0.2)
@@ -412,8 +413,8 @@ export function Arrangement() {
         flex: 1,
         position: 'relative',
         overflow: 'hidden',
-        background: '#191919',
-        ...(dropHighlight ? { outline: '2px solid #FF6B00', outlineOffset: -2 } : {}),
+        background: '#08080c',
+        ...(dropHighlight ? { outline: '2px solid #EF4444', outlineOffset: -2 } : {}),
       }}
     >
       <canvas

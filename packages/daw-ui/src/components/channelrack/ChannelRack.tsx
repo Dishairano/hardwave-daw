@@ -1,15 +1,8 @@
 import { useState } from 'react'
+import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 
 const STEPS = 16
-
-// FL Studio step colors — each beat group (4 steps) has a distinct shade
-const STEP_GROUP_COLORS = [
-  { active: '#E8A030', inactive: '#3A3020' },
-  { active: '#D09028', inactive: '#332818' },
-  { active: '#E8A030', inactive: '#3A3020' },
-  { active: '#D09028', inactive: '#332818' },
-]
 
 export function ChannelRack() {
   const { tracks, selectedTrackId, selectTrack, toggleMute } = useTrackStore()
@@ -31,90 +24,88 @@ export function ChannelRack() {
   return (
     <div style={{
       height: '100%',
-      background: '#1D1D1D',
+      background: hw.bgElevated,
       display: 'flex',
       flexDirection: 'column',
     }}>
-      {/* Header — FL style with pattern info */}
+      {/* Header */}
       <div style={{
-        height: 20,
-        background: '#252525',
-        borderBottom: '1px solid #111',
+        height: 28,
+        background: hw.bg,
+        borderBottom: `1px solid ${hw.border}`,
         display: 'flex',
         alignItems: 'center',
-        padding: '0 6px',
-        gap: 6,
+        padding: '0 10px',
+        gap: 8,
       }}>
-        <span style={{ fontSize: 10, color: '#777' }}>Channel rack</span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: hw.textSecondary }}>Channel Rack</span>
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 9, color: '#555' }}>Pattern 1</span>
+        <span style={{ fontSize: 10, color: hw.textFaint }}>Pattern 1</span>
       </div>
 
-      {/* Channel list + step grid */}
-      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+      {/* Channel rows */}
+      <div style={{ flex: 1, overflowY: 'auto' }}>
         {audioTracks.map((track) => (
           <div
             key={track.id}
             style={{
-              height: 26,
+              height: 30,
               display: 'flex',
               alignItems: 'stretch',
-              borderBottom: '1px solid #151515',
-              background: selectedTrackId === track.id ? '#2A2A2A' : '#1D1D1D',
+              borderBottom: `1px solid ${hw.border}`,
+              background: selectedTrackId === track.id ? hw.bgHover : 'transparent',
             }}
           >
-            {/* Channel button — FL has round LED + name */}
+            {/* Channel name */}
             <div
               onClick={() => selectTrack(track.id)}
               style={{
-                width: 110,
-                minWidth: 110,
+                width: 120,
+                minWidth: 120,
                 display: 'flex',
                 alignItems: 'center',
-                gap: 4,
-                padding: '0 4px',
+                gap: 6,
+                padding: '0 8px',
                 cursor: 'default',
-                borderRight: '1px solid #111',
+                borderRight: `1px solid ${hw.border}`,
               }}
             >
-              {/* Round LED (FL-style green circle, dim when muted) */}
               <div
                 style={{
-                  width: 7, height: 7, borderRadius: '50%',
-                  background: track.muted ? '#333' : track.color,
-                  boxShadow: track.muted ? 'none' : `0 0 3px ${track.color}44`,
-                  flexShrink: 0,
-                  cursor: 'default',
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: track.muted ? hw.textFaint : track.color,
+                  boxShadow: track.muted ? 'none' : `0 0 6px ${track.color}40`,
+                  cursor: 'pointer',
                 }}
                 onClick={(e) => { e.stopPropagation(); toggleMute(track.id) }}
               />
               <span style={{
-                fontSize: 10, color: '#B0B0B0',
+                fontSize: 11, color: hw.textSecondary,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
                 {track.name}
               </span>
             </div>
 
-            {/* Step buttons — FL colored squares with beat grouping */}
+            {/* Step buttons */}
             <div style={{
               flex: 1, display: 'flex', alignItems: 'center',
-              padding: '0 3px', gap: 1,
+              padding: '0 6px', gap: 2,
             }}>
               {Array.from({ length: STEPS }, (_, i) => {
                 const active = getSteps(track.id)[i]
-                const group = STEP_GROUP_COLORS[Math.floor(i / 4) % STEP_GROUP_COLORS.length]
                 return (
                   <button
                     key={i}
                     onClick={() => toggleStep(track.id, i)}
                     style={{
-                      width: 20, height: 18,
-                      border: 'none',
-                      background: active ? group.active : group.inactive,
-                      cursor: 'default',
+                      width: 20, height: 20,
+                      borderRadius: hw.radius.sm,
+                      background: active ? hw.red : hw.bgCard,
+                      border: `1px solid ${active ? hw.red : hw.border}`,
+                      boxShadow: active ? `0 0 6px ${hw.redGlow}` : 'none',
                       flexShrink: 0,
-                      marginRight: i % 4 === 3 ? 3 : 0,
+                      marginRight: i % 4 === 3 ? 4 : 0,
                     }}
                   />
                 )
@@ -124,8 +115,8 @@ export function ChannelRack() {
         ))}
 
         {audioTracks.length === 0 && (
-          <div style={{ padding: 12, textAlign: 'center', color: '#444', fontSize: 10 }}>
-            Add channels from the toolbar
+          <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 11 }}>
+            Add tracks to populate channels
           </div>
         )}
       </div>

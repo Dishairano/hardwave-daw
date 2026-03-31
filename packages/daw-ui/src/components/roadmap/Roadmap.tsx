@@ -12,7 +12,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   current: {
     title: 'v0.1.x — Current Release',
     subtitle: 'Foundation & basic audio playback',
-    color: '#E8A030',
+    color: '#EF4444',
     milestones: [
       {
         name: 'Core Audio Engine',
@@ -332,7 +332,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   stretch: {
     title: 'Beyond v1.0 — Stretch Goals',
     subtitle: 'Differentiators and long-term vision',
-    color: '#888',
+    color: '#71717a',
     milestones: [
       {
         name: 'Multiplayer (Hardwave Collabs)',
@@ -415,41 +415,41 @@ export function Roadmap() {
   return (
     <div style={{
       height: '100%',
-      background: '#191919',
+      background: '#08080c',
       display: 'flex',
       flexDirection: 'column',
-      color: '#CCC',
+      color: '#a1a1aa',
     }}>
       {/* Header */}
       <div style={{
         padding: '12px 16px',
-        background: '#1A1A1A',
+        background: '#0c0c12',
         borderBottom: '1px solid #333',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{
-            fontSize: 14, fontWeight: 800, color: '#E8A030',
+            fontSize: 14, fontWeight: 800, color: '#EF4444',
             letterSpacing: 1,
           }}>
             HARDWAVE DAW ROADMAP
           </span>
-          <span style={{ fontSize: 10, color: '#666' }}>
+          <span style={{ fontSize: 10, color: '#52525b' }}>
             {doneFeatures} / {totalFeatures} features
           </span>
           <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#E8A030' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#EF4444' }}>
             {overallPercent}%
           </span>
         </div>
 
         {/* Overall progress bar */}
         <div style={{
-          marginTop: 6, height: 4, background: '#333', borderRadius: 2,
+          marginTop: 6, height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2,
           overflow: 'hidden',
         }}>
           <div style={{
             height: '100%', width: `${overallPercent}%`,
-            background: 'linear-gradient(90deg, #E8A030, #D09028)',
+            background: 'linear-gradient(90deg, #EF4444, #DC2626)',
             borderRadius: 2,
             transition: 'width 300ms',
           }} />
@@ -459,7 +459,7 @@ export function Roadmap() {
       {/* Phase timeline bar */}
       <div style={{
         display: 'flex', padding: '0 2px',
-        background: '#222', borderBottom: '1px solid #333',
+        background: '#0e0e14', borderBottom: '1px solid #333',
       }}>
         {PHASE_ORDER.map(phase => {
           const data = ROADMAP[phase]
@@ -482,13 +482,13 @@ export function Roadmap() {
               }}
             >
               <div style={{
-                fontSize: 8, fontWeight: 700, color: isActive ? data.color : '#666',
+                fontSize: 8, fontWeight: 700, color: isActive ? data.color : '#52525b',
                 letterSpacing: 0.5, textTransform: 'uppercase',
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
                 {data.title.split('—')[0].trim()}
               </div>
-              <div style={{ fontSize: 7, color: '#555', marginTop: 1 }}>
+              <div style={{ fontSize: 7, color: '#52525b', marginTop: 1 }}>
                 {pct}%
               </div>
             </div>
@@ -518,14 +518,14 @@ export function Roadmap() {
                     {data.title}
                   </span>
                 </div>
-                <div style={{ fontSize: 10, color: '#888', marginTop: 2, marginLeft: 18 }}>
+                <div style={{ fontSize: 10, color: '#71717a', marginTop: 2, marginLeft: 18 }}>
                   {data.subtitle}
                 </div>
 
                 {/* Phase progress */}
                 <div style={{ marginTop: 6, marginLeft: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{
-                    flex: 1, maxWidth: 200, height: 3, background: '#333',
+                    flex: 1, maxWidth: 200, height: 3, background: 'rgba(255,255,255,0.06)',
                     borderRadius: 2, overflow: 'hidden',
                   }}>
                     <div style={{
@@ -533,7 +533,7 @@ export function Roadmap() {
                       background: data.color, borderRadius: 2,
                     }} />
                   </div>
-                  <span style={{ fontSize: 9, color: '#666' }}>
+                  <span style={{ fontSize: 9, color: '#52525b' }}>
                     {done}/{features.length}
                   </span>
                 </div>
@@ -550,7 +550,7 @@ export function Roadmap() {
                 return (
                   <div key={mKey} style={{
                     marginBottom: 4,
-                    background: '#252525',
+                    background: '#101018',
                     borderRadius: 4,
                     border: '1px solid #333',
                     overflow: 'hidden',
@@ -567,7 +567,7 @@ export function Roadmap() {
                       }}
                     >
                       <span style={{
-                        fontSize: 9, color: '#666', fontFamily: 'monospace',
+                        fontSize: 9, color: '#52525b', fontFamily: 'monospace',
                         transform: isExpanded ? 'rotate(90deg)' : 'none',
                         transition: 'transform 150ms',
                         display: 'inline-block',
@@ -576,10 +576,10 @@ export function Roadmap() {
                       </span>
 
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: '#DDD' }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: '#ffffff' }}>
                           {milestone.name}
                         </div>
-                        <div style={{ fontSize: 9, color: '#666', marginTop: 1 }}>
+                        <div style={{ fontSize: 9, color: '#52525b', marginTop: 1 }}>
                           {milestone.description}
                         </div>
                       </div>
@@ -587,7 +587,7 @@ export function Roadmap() {
                       {/* Mini progress */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <div style={{
-                          width: 60, height: 3, background: '#333',
+                          width: 60, height: 3, background: 'rgba(255,255,255,0.06)',
                           borderRadius: 2, overflow: 'hidden',
                         }}>
                           <div style={{
@@ -597,7 +597,7 @@ export function Roadmap() {
                           }} />
                         </div>
                         <span style={{
-                          fontSize: 9, color: mPct === 100 ? '#44DD88' : '#666',
+                          fontSize: 9, color: mPct === 100 ? '#44DD88' : '#52525b',
                           fontWeight: mPct === 100 ? 700 : 400,
                           minWidth: 30, textAlign: 'right',
                         }}>
@@ -628,7 +628,7 @@ export function Roadmap() {
                               flexShrink: 0, marginTop: 1,
                             }}>
                               {feature.done && (
-                                <span style={{ fontSize: 8, color: '#1A1A1A', fontWeight: 900 }}>
+                                <span style={{ fontSize: 8, color: '#0c0c12', fontWeight: 900 }}>
                                   {'\\u2713'}
                                 </span>
                               )}
@@ -637,13 +637,13 @@ export function Roadmap() {
                             <div style={{ flex: 1 }}>
                               <div style={{
                                 fontSize: 10,
-                                color: feature.done ? '#888' : '#CCC',
+                                color: feature.done ? '#71717a' : '#a1a1aa',
                                 textDecoration: feature.done ? 'line-through' : 'none',
                               }}>
                                 {feature.name}
                               </div>
                               {feature.detail && (
-                                <div style={{ fontSize: 8, color: '#555', marginTop: 1 }}>
+                                <div style={{ fontSize: 8, color: '#52525b', marginTop: 1 }}>
                                   {feature.detail}
                                 </div>
                               )}
@@ -663,14 +663,14 @@ export function Roadmap() {
       {/* Release schedule footer */}
       <div style={{
         padding: '8px 12px',
-        background: '#1A1A1A',
+        background: '#0c0c12',
         borderTop: '1px solid #333',
         display: 'flex',
         gap: 12,
         flexWrap: 'wrap',
       }}>
         {[
-          { version: 'v0.1', label: 'Foundation', color: '#E8A030', status: 'Released' },
+          { version: 'v0.1', label: 'Foundation', color: '#EF4444', status: 'Released' },
           { version: 'v0.2', label: 'Core Editing', color: '#44AAFF', status: 'Next' },
           { version: 'v0.3', label: 'Mix & Automate', color: '#44DD88', status: 'Planned' },
           { version: 'v0.4', label: 'Sound Design', color: '#DD44DD', status: 'Planned' },
@@ -682,15 +682,15 @@ export function Roadmap() {
           }}>
             <div style={{
               width: 6, height: 6, borderRadius: '50%',
-              background: r.status === 'Released' ? r.color : '#444',
+              background: r.status === 'Released' ? r.color : '#3f3f46',
               border: r.status === 'Next' ? `1px solid ${r.color}` : 'none',
             }} />
             <span style={{
-              fontSize: 8, fontWeight: 700, color: r.status === 'Released' ? r.color : '#666',
+              fontSize: 8, fontWeight: 700, color: r.status === 'Released' ? r.color : '#52525b',
             }}>
               {r.version}
             </span>
-            <span style={{ fontSize: 8, color: '#555' }}>
+            <span style={{ fontSize: 8, color: '#52525b' }}>
               {r.label}
             </span>
           </div>

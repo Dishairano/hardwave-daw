@@ -1,9 +1,11 @@
+import { hw } from '../../theme'
+
 interface TitleBarProps {
   hintText: string
 }
 
 export function TitleBar({ hintText }: TitleBarProps) {
-  const menus = ['FILE', 'EDIT', 'ADD', 'PATTERNS', 'VIEW', 'OPTIONS', 'TOOLS', 'HELP']
+  const menus = ['File', 'Edit', 'Add', 'View', 'Options', 'Tools', 'Help']
 
   return (
     <div
@@ -11,56 +13,70 @@ export function TitleBar({ hintText }: TitleBarProps) {
       style={{
         display: 'flex',
         alignItems: 'center',
-        height: 20,
-        background: '#2C2C2C',
-        borderBottom: '1px solid #1A1A1A',
+        height: 32,
+        background: hw.bg,
+        borderBottom: `1px solid ${hw.border}`,
         // @ts-ignore
         WebkitAppRegion: 'drag',
-        fontSize: 11,
+        padding: '0 12px',
+        gap: 0,
       }}
     >
-      {/* Menu items — FL Studio puts these directly in the title bar */}
+      {/* Brand mark */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        marginRight: 16,
+        // @ts-ignore
+        WebkitAppRegion: 'no-drag',
+      }}>
+        <div style={{ display: 'flex', gap: 2 }}>
+          <div style={{ width: 3, height: 14, background: hw.red, borderRadius: '2px 0 0 2px' }} />
+          <div style={{ width: 3, height: 14, background: hw.red }} />
+          <div style={{ width: 3, height: 14, background: hw.red, borderRadius: '0 2px 2px 0' }} />
+        </div>
+        <span style={{ fontSize: 12, fontWeight: 700, color: hw.textPrimary, letterSpacing: 0.5 }}>
+          HARDWAVE
+        </span>
+      </div>
+
+      {/* Menu items */}
       {menus.map(m => (
         <div
           key={m}
           style={{
-            padding: '0 6px',
-            height: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            fontSize: 11,
-            color: '#999',
+            padding: '4px 10px',
+            fontSize: 12,
+            color: hw.textMuted,
             cursor: 'default',
+            borderRadius: hw.radius.sm,
             // @ts-ignore
             WebkitAppRegion: 'no-drag',
           }}
           onMouseEnter={e => {
-            e.currentTarget.style.background = '#454545'
-            e.currentTarget.style.color = '#DDD'
+            e.currentTarget.style.background = hw.bgHover
+            e.currentTarget.style.color = hw.textSecondary
           }}
           onMouseLeave={e => {
             e.currentTarget.style.background = 'transparent'
-            e.currentTarget.style.color = '#999'
+            e.currentTarget.style.color = hw.textMuted
           }}
         >
           {m}
         </div>
       ))}
 
-      {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Hint text — FL shows contextual help here */}
+      {/* Hint text */}
       <div style={{
         fontSize: 11,
-        color: '#666',
-        marginRight: 8,
+        color: hw.textFaint,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
-        maxWidth: 400,
+        maxWidth: 350,
       }}>
-        {hintText || 'Hardwave DAW v0.1.5'}
+        {hintText}
       </div>
     </div>
   )

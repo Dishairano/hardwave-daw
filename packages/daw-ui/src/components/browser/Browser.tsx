@@ -1,8 +1,9 @@
 import { useState } from 'react'
+import { hw } from '../../theme'
 import { usePluginStore } from '../../stores/pluginStore'
 import { useTrackStore } from '../../stores/trackStore'
 
-type Tab = 'plugins' | 'files' | 'current'
+type Tab = 'plugins' | 'files' | 'project'
 
 export function Browser() {
   const [activeTab, setActiveTab] = useState<Tab>('plugins')
@@ -11,68 +12,64 @@ export function Browser() {
 
   return (
     <div style={{
-      width: 190,
-      minWidth: 190,
-      background: '#1D1D1D',
-      borderRight: '1px solid #111',
+      width: 200,
+      minWidth: 200,
+      background: hw.bgElevated,
+      borderRight: `1px solid ${hw.border}`,
       display: 'flex',
       flexDirection: 'column',
     }}>
-      {/* Tab bar — FL uses icon tabs at top */}
+      {/* Tab bar */}
       <div style={{
         display: 'flex',
-        background: '#252525',
-        borderBottom: '1px solid #111',
-        height: 22,
+        background: hw.bg,
+        borderBottom: `1px solid ${hw.border}`,
+        height: 30,
       }}>
-        {(['plugins', 'files', 'current'] as Tab[]).map(tab => (
-          <div
+        {(['plugins', 'files', 'project'] as Tab[]).map(tab => (
+          <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             style={{
               flex: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 9,
-              fontWeight: 600,
-              color: activeTab === tab ? '#E8A030' : '#666',
-              background: activeTab === tab ? '#2A2A2A' : 'transparent',
-              borderBottom: activeTab === tab ? '1px solid #E8A030' : '1px solid transparent',
-              cursor: 'default',
-              textTransform: 'uppercase',
-              letterSpacing: 0.3,
+              fontSize: 11,
+              fontWeight: 500,
+              color: activeTab === tab ? hw.textPrimary : hw.textFaint,
+              position: 'relative',
             }}
           >
-            {tab === 'current' ? 'Proj' : tab === 'plugins' ? 'Plug' : 'File'}
-          </div>
+            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {activeTab === tab && (
+              <div style={{
+                position: 'absolute', bottom: 0, left: 6, right: 6,
+                height: 2, background: hw.red, borderRadius: 1,
+              }} />
+            )}
+          </button>
         ))}
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: 4 }}>
         {activeTab === 'plugins' && (
-          <div>
-            {/* Scan button */}
-            <div style={{ padding: '4px 6px', borderBottom: '1px solid #222' }}>
-              <button
-                onClick={scanPlugins}
-                disabled={scanning}
-                style={{
-                  width: '100%',
-                  padding: '3px 0',
-                  fontSize: 10,
-                  color: '#999',
-                  background: '#252525',
-                  border: '1px solid #3A3A3A',
-                }}
-              >
-                {scanning ? 'Scanning...' : 'Scan Plugins'}
-              </button>
-            </div>
+          <>
+            <button
+              onClick={scanPlugins}
+              disabled={scanning}
+              style={{
+                width: '100%', padding: '6px 0', margin: '4px 0 8px',
+                fontSize: 11, color: hw.textSecondary,
+                background: hw.bgCard,
+                border: `1px solid ${hw.border}`,
+                borderRadius: hw.radius.md,
+                opacity: scanning ? 0.5 : 1,
+              }}
+            >
+              {scanning ? 'Scanning...' : 'Scan Plugins'}
+            </button>
 
             {plugins.length === 0 && (
-              <div style={{ padding: 12, textAlign: 'center', color: '#444', fontSize: 10 }}>
+              <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 11 }}>
                 Click Scan to find<br />VST3 & CLAP plugins
               </div>
             )}
@@ -81,10 +78,11 @@ export function Browser() {
               <div
                 key={plugin.id}
                 style={{
-                  padding: '3px 6px',
-                  cursor: selectedTrackId ? 'default' : 'default',
+                  padding: '6px 8px',
+                  borderRadius: hw.radius.sm,
+                  marginBottom: 1,
+                  cursor: selectedTrackId ? 'pointer' : 'default',
                   opacity: selectedTrackId ? 1 : 0.5,
-                  borderBottom: '1px solid #1A1A1A',
                 }}
                 onClick={async () => {
                   if (!selectedTrackId) return
@@ -92,26 +90,26 @@ export function Browser() {
                   await addToTrack(selectedTrackId, plugin.id)
                   useTrackStore.getState().fetchTracks()
                 }}
-                onMouseEnter={e => { if (selectedTrackId) e.currentTarget.style.background = '#282828' }}
+                onMouseEnter={e => { e.currentTarget.style.background = hw.bgHover }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
               >
-                <div style={{ fontSize: 10, color: '#BBB' }}>{plugin.name}</div>
-                <div style={{ fontSize: 8, color: '#555' }}>
-                  {plugin.vendor} | {plugin.format}
+                <div style={{ fontSize: 11, color: hw.textSecondary }}>{plugin.name}</div>
+                <div style={{ fontSize: 9, color: hw.textFaint, marginTop: 1 }}>
+                  {plugin.vendor} · {plugin.format}
                 </div>
               </div>
             ))}
-          </div>
+          </>
         )}
 
         {activeTab === 'files' && (
-          <div style={{ padding: 12, textAlign: 'center', color: '#444', fontSize: 10 }}>
-            Drag audio files onto<br />the Playlist to import
+          <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 11 }}>
+            Drag audio files onto<br />the playlist to import
           </div>
         )}
 
-        {activeTab === 'current' && (
-          <div style={{ padding: 12, textAlign: 'center', color: '#444', fontSize: 10 }}>
+        {activeTab === 'project' && (
+          <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 11 }}>
             Project files will<br />appear here
           </div>
         )}
