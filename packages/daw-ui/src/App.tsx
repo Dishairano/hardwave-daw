@@ -7,6 +7,7 @@ import { Arrangement } from './components/arrangement/Arrangement'
 import { MixerPanel } from './components/mixer/MixerPanel'
 import { Browser } from './components/browser/Browser'
 import { ChannelRack } from './components/channelrack/ChannelRack'
+import { PianoRoll } from './components/piano-roll/PianoRoll'
 import { Roadmap } from './components/roadmap/Roadmap'
 import { UpdateModal } from './components/UpdateModal'
 import { useTransportStore } from './stores/transportStore'
@@ -215,6 +216,15 @@ export function App() {
                 </div>
               )}
 
+              {showPianoRoll && (
+                <div style={{
+                  flex: 1, minHeight: 200,
+                  borderBottom: showPlaylist ? '1px solid rgba(0,0,0,0.3)' : undefined,
+                }}>
+                  <PianoRoll />
+                </div>
+              )}
+
               {showPlaylist && (
                 <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
                   <TrackList />
@@ -224,8 +234,8 @@ export function App() {
 
               {showMixer && (
                 <div style={{
-                  height: (showPlaylist || showChannelRack) ? 220 : 'auto',
-                  flex: (showPlaylist || showChannelRack) ? undefined : 1,
+                  height: (showPlaylist || showChannelRack || showPianoRoll) ? 220 : 'auto',
+                  flex: (showPlaylist || showChannelRack || showPianoRoll) ? undefined : 1,
                   borderTop: '1px solid rgba(0,0,0,0.3)',
                 }}>
                   <MixerPanel />

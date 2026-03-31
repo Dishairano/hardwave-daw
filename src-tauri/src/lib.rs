@@ -63,6 +63,12 @@ pub fn run() {
             commands::audio::move_clip,
             commands::audio::resize_clip,
             commands::audio::delete_clip,
+            // MIDI
+            commands::midi::create_midi_clip,
+            commands::midi::get_midi_notes,
+            commands::midi::add_midi_note,
+            commands::midi::update_midi_note,
+            commands::midi::delete_midi_note,
         ])
         .setup(|app| {
             log::info!("Hardwave DAW starting");
