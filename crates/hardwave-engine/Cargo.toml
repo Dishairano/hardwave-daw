@@ -1,0 +1,23 @@
+[package]
+name = "hardwave-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hardwave-audio-io = { path = "../hardwave-audio-io" }
+hardwave-midi = { path = "../hardwave-midi" }
+hardwave-plugin-host = { path = "../hardwave-plugin-host" }
+hardwave-project = { path = "../hardwave-project" }
+hardwave-metering = { path = "../hardwave-metering" }
+hardwave-dsp = { path = "../hardwave-dsp" }
+
+rtrb.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+atomic_float.workspace = true
+petgraph.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

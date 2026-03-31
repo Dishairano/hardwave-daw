@@ -1,0 +1,11 @@
+[package]
+name = "hardwave-audio-io"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cpal.workspace = true
+rtrb.workspace = true
+parking_lot.workspace = true
+log.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,46 @@
+use tauri::State;
+use crate::AppState;
+use hardwave_engine::TransportCommand;
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct TransportInfo {
+    playing: bool,
+    recording: bool,
+    looping: bool,
+    position_samples: u64,
+    bpm: f64,
+}
+
+#[tauri::command]
+pub fn play(state: State<AppState>) {
+    state.engine.lock().send_command(TransportCommand::Play);
+}
+
+#[tauri::command]
+pub fn stop(state: State<AppState>) {
+    state.engine.lock().send_command(TransportCommand::Stop);
+}
+
+#[tauri::command]
+pub fn set_position(state: State<AppState>, position: u64) {
+    state.engine.lock().send_command(TransportCommand::SetPosition(position));
+}
+
+#[tauri::command]
+pub fn set_bpm(state: State<AppState>, bpm: f64) {
+    state.engine.lock().send_command(TransportCommand::SetBpm(bpm));
+}
+
+#[tauri::command]
+pub fn get_transport_state(state: State<AppState>) -> TransportInfo {
+    let engine = state.engine.lock();
+    let t = &engine.transport;
+    TransportInfo {
+        playing: t.is_playing(),
+        recording: t.recording.load(std::sync::atomic::Ordering::Relaxed),
+        looping: t.looping.load(std::sync::atomic::Ordering::Relaxed),
+        position_samples: t.position(),
+        bpm: t.bpm.load(std::sync::atomic::Ordering::Relaxed),
+    }
+}

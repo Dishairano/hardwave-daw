@@ -1,0 +1,16 @@
+[package]
+name = "hardwave-project"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rmp-serde.workspace = true
+zstd.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+log.workspace = true
+thiserror.workspace = true
+dirs.workspace = true
+hardwave-midi = { path = "../hardwave-midi" }

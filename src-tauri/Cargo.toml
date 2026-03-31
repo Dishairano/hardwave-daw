@@ -1,0 +1,24 @@
+[package]
+name = "hardwave-daw"
+version.workspace = true
+edition.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+hardwave-engine = { path = "../crates/hardwave-engine" }
+hardwave-project = { path = "../crates/hardwave-project" }
+hardwave-plugin-host = { path = "../crates/hardwave-plugin-host" }
+hardwave-metering = { path = "../crates/hardwave-metering" }
+
+tauri.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+parking_lot.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+[lib]
+name = "hardwave_daw_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]

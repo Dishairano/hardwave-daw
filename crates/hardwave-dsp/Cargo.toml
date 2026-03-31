@@ -1,0 +1,13 @@
+[package]
+name = "hardwave-dsp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rustfft.workspace = true
+rubato.workspace = true
+symphonia.workspace = true
+hound.workspace = true
+serde.workspace = true
+log.workspace = true
+thiserror.workspace = true

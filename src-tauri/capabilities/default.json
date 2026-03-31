@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegram/nicegram-tauri/v2/crates/tauri-utils/schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for Hardwave DAW",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-listen"
+  ]
+}

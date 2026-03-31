@@ -1,0 +1,9 @@
+[package]
+name = "hardwave-native-plugins"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hardwave-engine = { path = "../hardwave-engine" }
+serde.workspace = true
+log.workspace = true
