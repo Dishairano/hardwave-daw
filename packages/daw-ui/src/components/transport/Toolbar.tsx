@@ -3,13 +3,41 @@ import { useTrackStore } from '../../stores/trackStore'
 
 export function Toolbar() {
   const { playing, bpm, positionSamples, sampleRate, togglePlayback, stop, setBpm } = useTransportStore()
-  const { addAudioTrack, addMidiTrack } = useTrackStore()
+  const { tracks, selectedTrackId, addAudioTrack, addMidiTrack, importAudioFile } = useTrackStore()
 
   const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
   const mins = Math.floor(seconds / 60)
   const secs = Math.floor(seconds % 60)
   const ms = Math.floor((seconds % 1) * 1000)
   const timeStr = `${mins}:${String(secs).padStart(2, '0')}.${String(ms).padStart(3, '0')}`
+
+  const handleImport = async () => {
+    // Use Tauri file dialog
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'Audio', extensions: ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a'] }],
+    })
+    if (!selected) return
+
+    // Find or create a track to put it on
+    let trackId = selectedTrackId
+    const audioTracks = tracks.filter(t => t.kind === 'Audio')
+    if (!trackId || !audioTracks.find(t => t.id === trackId)) {
+      if (audioTracks.length === 0) {
+        await addAudioTrack()
+        // Re-read from store after adding
+        const { tracks: updated } = useTrackStore.getState()
+        const newTrack = updated.find(t => t.kind === 'Audio')
+        if (!newTrack) return
+        trackId = newTrack.id
+      } else {
+        trackId = audioTracks[0].id
+      }
+    }
+
+    await importAudioFile(trackId, selected as string)
+  }
 
   return (
     <div style={{
@@ -52,6 +80,11 @@ export function Toolbar() {
       </div>
 
       <div style={{ flex: 1 }} />
+
+      {/* Import audio */}
+      <button onClick={handleImport} style={{ ...addBtnStyle, color: '#7c3aed' }}>
+        Import Audio
+      </button>
 
       {/* Add track buttons */}
       <button onClick={() => addAudioTrack()} style={addBtnStyle}>+ Audio</button>

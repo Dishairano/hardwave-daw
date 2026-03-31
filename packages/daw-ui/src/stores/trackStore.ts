@@ -1,6 +1,15 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 
+interface ClipInfo {
+  id: string
+  name: string
+  kind: string
+  position_ticks: number
+  length_ticks: number
+  muted: boolean
+}
+
 interface TrackInfo {
   id: string
   name: string
@@ -14,8 +23,24 @@ interface TrackInfo {
   insert_count: number
 }
 
+interface TrackWithClips extends TrackInfo {
+  clips: ClipInfo[]
+}
+
+interface ImportedClip {
+  track_id: string
+  clip_id: string
+  name: string
+  source_id: string
+  duration_secs: number
+  sample_rate: number
+  channels: number
+  position_ticks: number
+  length_ticks: number
+}
+
 interface TrackState {
-  tracks: TrackInfo[]
+  tracks: TrackWithClips[]
   selectedTrackId: string | null
 
   fetchTracks: () => Promise<void>
@@ -27,6 +52,7 @@ interface TrackState {
   setPan: (id: string, pan: number) => Promise<void>
   toggleMute: (id: string) => Promise<void>
   toggleSolo: (id: string) => Promise<void>
+  importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
 }
 
 export const useTrackStore = create<TrackState>((set, get) => ({
@@ -34,7 +60,14 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   selectedTrackId: null,
 
   fetchTracks: async () => {
-    const tracks = await invoke<TrackInfo[]>('get_tracks')
+    const trackList = await invoke<TrackInfo[]>('get_tracks')
+    // Fetch clips for each track
+    const tracks: TrackWithClips[] = await Promise.all(
+      trackList.map(async (t) => {
+        const clips = await invoke<ClipInfo[]>('get_track_clips', { trackId: t.id })
+        return { ...t, clips }
+      })
+    )
     set({ tracks })
   },
 
@@ -75,5 +108,15 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   toggleSolo: async (id) => {
     await invoke('toggle_solo', { trackId: id })
     await get().fetchTracks()
+  },
+
+  importAudioFile: async (trackId, filePath, positionTicks) => {
+    const result = await invoke<ImportedClip>('import_audio_file', {
+      trackId,
+      filePath,
+      positionTicks: positionTicks ?? null,
+    })
+    await get().fetchTracks()
+    return result
   },
 }))

@@ -21,6 +21,7 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             // Transport
@@ -53,6 +54,9 @@ pub fn run() {
             commands::engine::stop_engine,
             commands::engine::get_meters,
             commands::engine::get_audio_devices,
+            // Audio
+            commands::audio::import_audio_file,
+            commands::audio::get_track_clips,
         ])
         .setup(|app| {
             log::info!("Hardwave DAW starting");
