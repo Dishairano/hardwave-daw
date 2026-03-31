@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { SplashScreen } from './components/SplashScreen'
 import { TitleBar } from './components/transport/TitleBar'
 import { Toolbar } from './components/transport/Toolbar'
 import { TrackList } from './components/arrangement/TrackList'
@@ -34,6 +35,10 @@ export function App() {
   const [showPlaylist, setShowPlaylist] = useState(true)
   const [showRoadmap, setShowRoadmap] = useState(false)
 
+  // Splash screen
+  const [showSplash, setShowSplash] = useState(true)
+  const [dataReady, setDataReady] = useState(false)
+
   // Hint bar text
   const [hintText, setHintText] = useState('')
 
@@ -55,7 +60,7 @@ export function App() {
     if (initRan.current) return
     initRan.current = true
     startListening()
-    fetchTracks()
+    fetchTracks().finally(() => setDataReady(true))
     // Check for updates after a short delay
     const timer = setTimeout(checkForUpdates, 3000)
     return () => clearTimeout(timer)
@@ -163,6 +168,13 @@ export function App() {
       width: '100vw',
       background: '#1E1E22',
     }}>
+      {showSplash && (
+        <SplashScreen
+          dataReady={dataReady}
+          onFinished={() => setShowSplash(false)}
+        />
+      )}
+
       <TitleBar hintText={hintText} />
 
       <Toolbar
