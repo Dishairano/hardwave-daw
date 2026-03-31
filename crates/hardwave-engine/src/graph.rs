@@ -1,6 +1,5 @@
 //! Audio graph — DAG of processing nodes, topologically sorted for real-time execution.
 
-use serde::Serialize;
 
 pub type NodeId = usize;
 

@@ -9,7 +9,8 @@ export function TitleBar() {
         height: 32,
         background: '#0e0e10',
         borderBottom: '1px solid rgba(255,255,255,0.04)',
-        WebkitAppRegion: 'drag' as any,
+        // @ts-ignore — Tauri drag region
+        WebkitAppRegion: 'drag',
       }}
     >
       <span style={{ fontSize: 11, fontWeight: 700, color: '#555', letterSpacing: 2 }}>

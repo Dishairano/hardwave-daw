@@ -166,7 +166,7 @@ impl EngineCallback {
 }
 
 impl AudioCallback for EngineCallback {
-    fn process(&mut self, output: &mut [f32], num_frames: usize, num_channels: u16) {
+    fn process(&mut self, output: &mut [f32], num_frames: usize, _num_channels: u16) {
         self.process_commands();
 
         if !self.transport.is_playing() {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use parking_lot::Mutex;
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 
 mod commands;
 
@@ -64,15 +64,19 @@ pub fn run() {
 
             std::thread::spawn(move || {
                 loop {
-                    std::thread::sleep(std::time::Duration::from_millis(33)); // ~30fps
+                    std::thread::sleep(std::time::Duration::from_millis(33));
                     let meters = engine.lock().master_meter();
                     let _ = app_handle.emit("daw:meters", &meters);
 
-                    // Broadcast transport position
-                    let transport = &engine.lock().transport;
-                    let pos = transport.position();
-                    let playing = transport.is_playing();
-                    let bpm = transport.bpm.load(std::sync::atomic::Ordering::Relaxed);
+                    let pos;
+                    let playing;
+                    let bpm;
+                    {
+                        let eng = engine.lock();
+                        pos = eng.transport.position();
+                        playing = eng.transport.is_playing();
+                        bpm = eng.transport.bpm.load(std::sync::atomic::Ordering::Relaxed);
+                    }
                     let _ = app_handle.emit("daw:transport", serde_json::json!({
                         "position": pos,
                         "playing": playing,

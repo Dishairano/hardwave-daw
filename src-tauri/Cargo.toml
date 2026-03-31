@@ -18,6 +18,7 @@ serde_json.workspace = true
 parking_lot.workspace = true
 log.workspace = true
 env_logger.workspace = true
+uuid = { version = "1", features = ["v4"] }
 
 [lib]
 name = "hardwave_daw_lib"

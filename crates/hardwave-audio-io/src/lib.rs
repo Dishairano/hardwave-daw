@@ -1,8 +1,7 @@
 //! Hardwave Audio I/O — cpal device management and real-time audio stream.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Host, SampleRate, StreamConfig, SupportedStreamConfigRange};
-use parking_lot::Mutex;
+use cpal::{Host, SampleRate, StreamConfig, SupportedStreamConfigRange};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
@@ -158,3 +157,7 @@ impl Default for AudioDeviceManager {
         Self::new()
     }
 }
+
+// Safety: cpal::Stream is a handle to an OS audio thread — safe to move between threads.
+// The stream itself is only started/stopped from the engine thread.
+unsafe impl Send for AudioDeviceManager {}
