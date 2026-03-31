@@ -17,6 +17,48 @@ export function App() {
     fetchTracks()
   }, [])
 
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Don't handle shortcuts when typing in an input
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
+      const transport = useTransportStore.getState()
+      const tracks = useTrackStore.getState()
+
+      switch (e.code) {
+        case 'Space':
+          e.preventDefault()
+          transport.togglePlayback()
+          break
+        case 'Delete':
+        case 'Backspace':
+          e.preventDefault()
+          tracks.deleteSelectedClip()
+          break
+        case 'Home':
+          e.preventDefault()
+          transport.setPosition(0)
+          break
+        case 'KeyR':
+          if (!e.metaKey && !e.ctrlKey) {
+            // Could toggle record in the future
+          }
+          break
+        case 'KeyS':
+          if (e.metaKey || e.ctrlKey) {
+            e.preventDefault()
+            // TODO: save project
+          }
+          break
+      }
+    }
+
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
   return (
     <div style={{
       display: 'grid',

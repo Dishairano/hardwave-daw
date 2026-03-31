@@ -1,16 +1,17 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 
-interface ClipInfo {
+export interface ClipInfo {
   id: string
   name: string
   kind: string
+  source_id: string
   position_ticks: number
   length_ticks: number
   muted: boolean
 }
 
-interface TrackInfo {
+export interface TrackInfo {
   id: string
   name: string
   kind: string
@@ -23,7 +24,7 @@ interface TrackInfo {
   insert_count: number
 }
 
-interface TrackWithClips extends TrackInfo {
+export interface TrackWithClips extends TrackInfo {
   clips: ClipInfo[]
 }
 
@@ -39,12 +40,17 @@ interface ImportedClip {
   length_ticks: number
 }
 
+// Cache waveform peaks per source_id
+const waveformCache = new Map<string, [number, number][]>()
+
 interface TrackState {
   tracks: TrackWithClips[]
   selectedTrackId: string | null
+  selectedClipId: string | null
 
   fetchTracks: () => Promise<void>
   selectTrack: (id: string) => void
+  selectClip: (clipId: string | null, trackId?: string) => void
   addAudioTrack: (name?: string) => Promise<void>
   addMidiTrack: (name?: string) => Promise<void>
   removeTrack: (id: string) => Promise<void>
@@ -53,15 +59,20 @@ interface TrackState {
   toggleMute: (id: string) => Promise<void>
   toggleSolo: (id: string) => Promise<void>
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
+  moveClip: (trackId: string, clipId: string, newPositionTicks: number) => Promise<void>
+  resizeClip: (trackId: string, clipId: string, newLengthTicks: number) => Promise<void>
+  deleteClip: (trackId: string, clipId: string) => Promise<void>
+  deleteSelectedClip: () => Promise<void>
+  getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<[number, number][]>
 }
 
 export const useTrackStore = create<TrackState>((set, get) => ({
   tracks: [],
   selectedTrackId: null,
+  selectedClipId: null,
 
   fetchTracks: async () => {
     const trackList = await invoke<TrackInfo[]>('get_tracks')
-    // Fetch clips for each track
     const tracks: TrackWithClips[] = await Promise.all(
       trackList.map(async (t) => {
         const clips = await invoke<ClipInfo[]>('get_track_clips', { trackId: t.id })
@@ -72,6 +83,11 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   },
 
   selectTrack: (id) => set({ selectedTrackId: id }),
+
+  selectClip: (clipId, trackId) => set({
+    selectedClipId: clipId,
+    ...(trackId ? { selectedTrackId: trackId } : {}),
+  }),
 
   addAudioTrack: async (name) => {
     const n = get().tracks.filter(t => t.kind === 'Audio').length + 1
@@ -118,5 +134,43 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     })
     await get().fetchTracks()
     return result
+  },
+
+  moveClip: async (trackId, clipId, newPositionTicks) => {
+    await invoke('move_clip', { trackId, clipId, newPositionTicks })
+    await get().fetchTracks()
+  },
+
+  resizeClip: async (trackId, clipId, newLengthTicks) => {
+    await invoke('resize_clip', { trackId, clipId, newLengthTicks })
+    await get().fetchTracks()
+  },
+
+  deleteClip: async (trackId, clipId) => {
+    await invoke('delete_clip', { trackId, clipId })
+    set({ selectedClipId: null })
+    await get().fetchTracks()
+  },
+
+  deleteSelectedClip: async () => {
+    const { selectedClipId, tracks } = get()
+    if (!selectedClipId) return
+    for (const track of tracks) {
+      const clip = track.clips.find(c => c.id === selectedClipId)
+      if (clip) {
+        await get().deleteClip(track.id, clip.id)
+        return
+      }
+    }
+  },
+
+  getWaveformPeaks: async (sourceId, numBuckets) => {
+    const cacheKey = `${sourceId}:${numBuckets}`
+    if (waveformCache.has(cacheKey)) {
+      return waveformCache.get(cacheKey)!
+    }
+    const peaks = await invoke<[number, number][]>('get_waveform_peaks', { sourceId, numBuckets })
+    waveformCache.set(cacheKey, peaks)
+    return peaks
   },
 }))

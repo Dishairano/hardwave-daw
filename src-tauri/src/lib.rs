@@ -57,6 +57,10 @@ pub fn run() {
             // Audio
             commands::audio::import_audio_file,
             commands::audio::get_track_clips,
+            commands::audio::get_waveform_peaks,
+            commands::audio::move_clip,
+            commands::audio::resize_clip,
+            commands::audio::delete_clip,
         ])
         .setup(|app| {
             log::info!("Hardwave DAW starting");

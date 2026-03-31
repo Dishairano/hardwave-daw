@@ -108,6 +108,7 @@ pub fn get_track_clips(
                     id: ac.id.clone(),
                     name: ac.name.clone(),
                     kind: "audio".into(),
+                    source_id: ac.source_path.clone(),
                     position_ticks: clip.position_ticks,
                     length_ticks: clip.length_ticks,
                     muted: ac.muted,
@@ -118,6 +119,7 @@ pub fn get_track_clips(
                     id: mc.id.clone(),
                     name: mc.clip.name.clone(),
                     kind: "midi".into(),
+                    source_id: String::new(),
                     position_ticks: clip.position_ticks,
                     length_ticks: clip.length_ticks,
                     muted: false,
@@ -132,7 +134,138 @@ pub struct ClipInfo {
     id: String,
     name: String,
     kind: String,
+    source_id: String,
     position_ticks: u64,
     length_ticks: u64,
     muted: bool,
+}
+
+/// Get downsampled waveform peaks for an audio source.
+/// Returns pairs of (min, max) per bucket for rendering.
+#[tauri::command]
+pub fn get_waveform_peaks(
+    state: State<AppState>,
+    source_id: String,
+    num_buckets: usize,
+) -> Result<Vec<[f32; 2]>, String> {
+    let engine = state.engine.lock();
+    let buffer = engine.audio_pool.get(&source_id)
+        .ok_or_else(|| format!("Source not found: {}", source_id))?;
+
+    let num_frames = buffer.num_frames;
+    if num_frames == 0 || num_buckets == 0 {
+        return Ok(vec![]);
+    }
+
+    let bucket_size = (num_frames as f64 / num_buckets as f64).ceil() as usize;
+    let mut peaks = Vec::with_capacity(num_buckets);
+
+    for i in 0..num_buckets {
+        let start = i * bucket_size;
+        let end = ((i + 1) * bucket_size).min(num_frames);
+        if start >= num_frames {
+            peaks.push([0.0, 0.0]);
+            continue;
+        }
+
+        let mut min_val: f32 = 0.0;
+        let mut max_val: f32 = 0.0;
+
+        // Mix all channels for the peak display
+        let num_ch = buffer.channels.len();
+        for frame in start..end {
+            let mut sample = 0.0_f32;
+            for ch in 0..num_ch {
+                sample += buffer.sample(ch, frame);
+            }
+            sample /= num_ch as f32;
+            min_val = min_val.min(sample);
+            max_val = max_val.max(sample);
+        }
+
+        peaks.push([min_val, max_val]);
+    }
+
+    Ok(peaks)
+}
+
+/// Move a clip to a new position (in ticks).
+#[tauri::command]
+pub fn move_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    new_position_ticks: u64,
+) -> Result<(), String> {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    let track = project.track_mut(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+
+    let clip = track.clips.iter_mut().find(|c| {
+        match &c.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+            hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
+        }
+    }).ok_or_else(|| format!("Clip not found: {}", clip_id))?;
+
+    clip.position_ticks = new_position_ticks;
+    drop(project);
+    engine.rebuild_graph();
+    Ok(())
+}
+
+/// Resize a clip (change its length in ticks).
+#[tauri::command]
+pub fn resize_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    new_length_ticks: u64,
+) -> Result<(), String> {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    let track = project.track_mut(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+
+    let clip = track.clips.iter_mut().find(|c| {
+        match &c.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+            hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
+        }
+    }).ok_or_else(|| format!("Clip not found: {}", clip_id))?;
+
+    clip.length_ticks = new_length_ticks;
+    drop(project);
+    engine.rebuild_graph();
+    Ok(())
+}
+
+/// Delete a clip from a track.
+#[tauri::command]
+pub fn delete_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+) -> Result<(), String> {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    let track = project.track_mut(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+
+    let before = track.clips.len();
+    track.clips.retain(|c| {
+        match &c.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => ac.id != clip_id,
+            hardwave_project::clip::ClipContent::Midi(mc) => mc.id != clip_id,
+        }
+    });
+
+    if track.clips.len() == before {
+        return Err(format!("Clip not found: {}", clip_id));
+    }
+
+    drop(project);
+    engine.rebuild_graph();
+    Ok(())
 }
