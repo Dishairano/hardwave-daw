@@ -49,10 +49,11 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install frontend dependencies
+      - name: Install and build frontend
         run: |
           cd packages/daw-ui
           npm ci
+          npm run build
 
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli@latest

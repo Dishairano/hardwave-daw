@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../packages/daw-ui/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "cd packages/daw-ui && npm run dev",
-    "beforeBuildCommand": "cd packages/daw-ui && npm run build"
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
   },
   "app": {
     "windows": [
