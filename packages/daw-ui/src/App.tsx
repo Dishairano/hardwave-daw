@@ -21,6 +21,9 @@ export function App() {
   const [showPlaylist, setShowPlaylist] = useState(true)
   const [showRoadmap, setShowRoadmap] = useState(false)
 
+  // Hint bar text (FL-style contextual help)
+  const [hintText, setHintText] = useState('')
+
   useEffect(() => {
     startListening()
     fetchTracks()
@@ -96,10 +99,10 @@ export function App() {
       flexDirection: 'column',
       height: '100vh',
       width: '100vw',
-      background: '#2A2A2A',
+      background: '#191919',
     }}>
-      {/* Title bar with menu */}
-      <TitleBar />
+      {/* Title / Menu bar (FL merges these) */}
+      <TitleBar hintText={hintText} />
 
       {/* Toolbar */}
       <Toolbar
@@ -113,12 +116,12 @@ export function App() {
         onToggleChannelRack={() => setShowChannelRack(v => !v)}
         onToggleMixer={() => setShowMixer(v => !v)}
         onToggleRoadmap={() => setShowRoadmap(v => !v)}
+        onSetHint={setHintText}
       />
 
       {/* Main content area */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {showRoadmap ? (
-          /* Roadmap takes full content area */
           <Roadmap />
         ) : (
           <>
@@ -129,7 +132,7 @@ export function App() {
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               {/* Channel Rack */}
               {showChannelRack && (
-                <div style={{ height: 200, borderBottom: '2px solid #1A1A1A' }}>
+                <div style={{ height: 200, borderBottom: '1px solid #111' }}>
                   <ChannelRack />
                 </div>
               )}
@@ -147,7 +150,7 @@ export function App() {
                 <div style={{
                   height: showPlaylist ? 220 : 'auto',
                   flex: showPlaylist ? undefined : 1,
-                  borderTop: '2px solid #1A1A1A',
+                  borderTop: '1px solid #111',
                 }}>
                   <MixerPanel />
                 </div>

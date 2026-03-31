@@ -14,32 +14,30 @@ export function MixerPanel() {
   return (
     <div style={{
       height: '100%',
-      background: '#1E1E1E',
+      background: '#191919',
       display: 'flex',
       flexDirection: 'column',
     }}>
       {/* Header */}
       <div style={{
-        height: 22,
-        background: '#1A1A1A',
-        borderBottom: '1px solid #333',
+        height: 20,
+        background: '#252525',
+        borderBottom: '1px solid #111',
         display: 'flex',
         alignItems: 'center',
-        padding: '0 8px',
+        padding: '0 6px',
       }}>
-        <span style={{ fontSize: 9, fontWeight: 700, color: '#888', letterSpacing: 1 }}>
-          MIXER
-        </span>
+        <span style={{ fontSize: 10, color: '#777' }}>Mixer</span>
       </div>
 
-      {/* Mixer strips */}
+      {/* Mixer strips — FL horizontal scroll */}
       <div style={{
         flex: 1,
         display: 'flex',
         overflowX: 'auto',
         overflowY: 'hidden',
-        padding: '4px 2px',
-        gap: 1,
+        padding: '2px 1px',
+        gap: 0,
       }}>
         {/* Insert tracks */}
         {allTracks.map((track, idx) => (
@@ -47,7 +45,7 @@ export function MixerPanel() {
             key={track.id}
             name={track.name}
             color={track.color}
-            number={idx + 1}
+            number={idx}
             volumeDb={track.volume_db}
             pan={track.pan}
             muted={track.muted}
@@ -60,16 +58,16 @@ export function MixerPanel() {
           />
         ))}
 
-        {/* Separator */}
+        {/* Separator before master */}
         {allTracks.length > 0 && (
-          <div style={{ width: 2, background: '#333', margin: '0 2px', flexShrink: 0 }} />
+          <div style={{ width: 1, background: '#333', margin: '4px 1px', flexShrink: 0 }} />
         )}
 
         {/* Master strip */}
         <MixerStrip
           name="Master"
-          color="#FF4444"
-          number={0}
+          color="#888"
+          number={-1}
           volumeDb={masterTrack?.volume_db ?? 0}
           pan={0}
           muted={masterTrack?.muted ?? false}
@@ -85,7 +83,7 @@ export function MixerPanel() {
         {allTracks.length === 0 && (
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flex: 1, color: '#333', fontSize: 10,
+            flex: 1, color: '#282828', fontSize: 10,
           }}>
             Add tracks to see mixer inserts
           </div>
@@ -113,112 +111,86 @@ interface MixerStripProps {
 
 function MixerStrip({
   name, color, number, volumeDb, pan, muted, soloed, peakDb,
-  isMaster, onVolumeChange, onPanChange, onToggleMute, onToggleSolo,
+  isMaster, onVolumeChange, onToggleMute, onToggleSolo,
 }: MixerStripProps) {
+  // FL fader color: grey default, green selected
   const meterHeight = Math.max(0, Math.min(100, (peakDb + 60) / 72 * 100))
-  const meterColor = peakDb > -3 ? '#FF4444' : peakDb > -12 ? '#DDDD44' : '#44AA44'
 
   return (
     <div style={{
-      width: 68,
-      minWidth: 68,
+      width: 58,
+      minWidth: 58,
       display: 'flex',
       flexDirection: 'column',
-      background: isMaster ? '#252525' : '#222',
-      borderRadius: 2,
-      border: `1px solid ${isMaster ? '#444' : '#2A2A2A'}`,
+      background: '#1D1D1D',
+      border: '1px solid #161616',
       flexShrink: 0,
     }}>
-      {/* Insert number / name header */}
+      {/* Track number */}
       <div style={{
-        padding: '3px 4px',
-        borderBottom: '1px solid #333',
-        textAlign: 'center',
+        height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderBottom: '1px solid #222',
+        fontSize: 9, color: '#555',
       }}>
-        <div style={{
-          fontSize: 8, color: '#666', marginBottom: 1,
-        }}>
-          {isMaster ? '' : `Insert ${number}`}
-        </div>
-        <div style={{
-          fontSize: 9, fontWeight: 600,
-          color: isMaster ? '#FF6B00' : '#BBB',
+        {isMaster ? 'M' : `${number}`}
+      </div>
+
+      {/* Track name */}
+      <div style={{
+        height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderBottom: '1px solid #222',
+        padding: '0 2px',
+      }}>
+        <span style={{
+          fontSize: 8, color: '#999',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {name}
-        </div>
+        </span>
       </div>
 
-      {/* FX slot indicators */}
-      <div style={{ padding: '2px 4px', borderBottom: '1px solid #2A2A2A' }}>
+      {/* FX slot indicators — FL has 10, we show 3 */}
+      <div style={{ padding: '1px 2px', borderBottom: '1px solid #1A1A1A' }}>
         {[0, 1, 2].map(i => (
           <div key={i} style={{
-            height: 10,
-            background: '#1A1A1A',
-            borderRadius: 1,
+            height: 9,
+            background: '#161616',
+            border: '1px solid #222',
             marginBottom: 1,
-            border: '1px solid #333',
-            display: 'flex',
-            alignItems: 'center',
-            padding: '0 3px',
+            display: 'flex', alignItems: 'center', padding: '0 2px',
           }}>
-            <span style={{ fontSize: 7, color: '#444' }}>Slot {i + 1}</span>
+            <span style={{ fontSize: 6, color: '#333' }}>{i + 1}</span>
           </div>
         ))}
       </div>
 
-      {/* Pan knob area */}
-      <div style={{
-        padding: '4px', display: 'flex', flexDirection: 'column',
-        alignItems: 'center', borderBottom: '1px solid #2A2A2A',
-      }}>
-        <input
-          type="range"
-          min={-100}
-          max={100}
-          value={Math.round(pan * 100)}
-          onChange={(e) => onPanChange(parseInt(e.target.value) / 100)}
-          style={{
-            width: 50, height: 8, appearance: 'none',
-            background: '#1A1A1A', borderRadius: 4,
-            cursor: 'pointer',
-          }}
-        />
-        <span style={{ fontSize: 7, color: '#555', marginTop: 1 }}>
-          {pan === 0 ? 'C' : pan < 0 ? `L${Math.round(-pan * 100)}` : `R${Math.round(pan * 100)}`}
-        </span>
-      </div>
-
       {/* Fader + meter area */}
       <div style={{
-        flex: 1, display: 'flex', padding: '4px 4px',
-        gap: 2, minHeight: 80,
+        flex: 1, display: 'flex', padding: '2px',
+        gap: 1, minHeight: 70,
       }}>
-        {/* LED meter */}
-        <div style={{
-          width: 8, background: '#111', borderRadius: 1,
-          position: 'relative', overflow: 'hidden',
-          border: '1px solid #333',
-        }}>
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0,
-            height: `${meterHeight}%`,
-            background: `linear-gradient(to top, ${meterColor}, ${meterColor}88)`,
-            transition: 'height 60ms',
-          }} />
-          {/* dB scale marks */}
-          {[0, -6, -12, -24, -48].map(db => {
-            const pos = ((db + 60) / 72) * 100
-            return (
-              <div key={db} style={{
-                position: 'absolute', bottom: `${pos}%`, left: 0, right: 0,
-                height: 1, background: '#444',
+        {/* FL-style dual peak meter (L/R) */}
+        <div style={{ display: 'flex', gap: 0, width: 10, flexShrink: 0 }}>
+          {[0, 1].map(ch => (
+            <div key={ch} style={{
+              flex: 1, background: '#0A0A0A', position: 'relative',
+              border: '1px solid #1A1A1A',
+            }}>
+              <div style={{
+                position: 'absolute', bottom: 0, left: 0, right: 0,
+                height: `${meterHeight}%`,
+                background: peakDb > -3
+                  ? 'linear-gradient(to top, #5A5, #CC4, #C44)'
+                  : peakDb > -12
+                  ? 'linear-gradient(to top, #5A5, #CC4)'
+                  : '#5A5',
+                transition: 'height 60ms',
               }} />
-            )
-          })}
+            </div>
+          ))}
         </div>
 
-        {/* Vertical fader */}
+        {/* Vertical fader — FL grey fader with groove */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <input
             type="range"
@@ -231,67 +203,62 @@ function MixerStrip({
               writingMode: 'vertical-lr' as any,
               direction: 'rtl',
               flex: 1,
-              width: 18,
+              width: 14,
               appearance: 'none',
-              background: 'linear-gradient(to right, #2A2A2A, #333, #2A2A2A)',
-              borderRadius: 2,
-              cursor: 'pointer',
-              border: '1px solid #444',
+              background: 'linear-gradient(to right, #1A1A1A, #222, #1A1A1A)',
+              border: '1px solid #333',
+              cursor: 'default',
             }}
           />
         </div>
       </div>
 
-      {/* Volume readout */}
+      {/* dB readout */}
       <div style={{
-        textAlign: 'center', padding: '2px 0',
-        borderTop: '1px solid #2A2A2A',
+        textAlign: 'center', padding: '1px 0',
+        borderTop: '1px solid #1A1A1A',
       }}>
         <span style={{
-          fontSize: 8, color: '#777',
-          fontFamily: "'Courier New', monospace",
+          fontSize: 8, color: '#666',
+          fontFamily: "'Consolas', monospace",
         }}>
-          {volumeDb > -60 ? `${volumeDb.toFixed(1)}dB` : '-inf'}
+          {volumeDb > -60 ? `${volumeDb.toFixed(1)}` : '-inf'}
         </span>
       </div>
 
-      {/* M / S buttons */}
+      {/* M/S row */}
       <div style={{
-        display: 'flex', gap: 1, padding: '2px 4px 4px',
+        display: 'flex', gap: 0, padding: '1px 2px 2px',
         justifyContent: 'center',
       }}>
         <button
           onClick={() => onToggleMute?.()}
           style={{
             ...stripBtn,
-            color: muted ? '#FF4444' : '#555',
-            background: muted ? '#3A2222' : '#1A1A1A',
-            borderColor: muted ? '#FF4444' : '#444',
+            color: muted ? '#C44' : '#444',
+            background: muted ? '#2A1818' : '#161616',
           }}
         >M</button>
         <button
           onClick={onToggleSolo}
           style={{
             ...stripBtn,
-            color: soloed ? '#DDDD44' : '#555',
-            background: soloed ? '#3A3A22' : '#1A1A1A',
-            borderColor: soloed ? '#DDDD44' : '#444',
+            color: soloed ? '#CC4' : '#444',
+            background: soloed ? '#2A2A18' : '#161616',
           }}
         >S</button>
       </div>
 
       {/* Color strip at bottom */}
-      <div style={{ height: 3, background: color, borderRadius: '0 0 2px 2px' }} />
+      <div style={{ height: 2, background: color }} />
     </div>
   )
 }
 
 const stripBtn: React.CSSProperties = {
-  width: 22, height: 14,
+  width: 20, height: 13,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  fontSize: 8, fontWeight: 800,
-  border: '1px solid #444',
-  borderRadius: 2,
+  fontSize: 7, fontWeight: 700,
+  border: '1px solid #2A2A2A',
   padding: 0,
-  cursor: 'pointer',
 }

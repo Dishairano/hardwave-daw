@@ -12,7 +12,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   current: {
     title: 'v0.1.x — Current Release',
     subtitle: 'Foundation & basic audio playback',
-    color: '#FF6B00',
+    color: '#E8A030',
     milestones: [
       {
         name: 'Core Audio Engine',
@@ -415,7 +415,7 @@ export function Roadmap() {
   return (
     <div style={{
       height: '100%',
-      background: '#1E1E1E',
+      background: '#191919',
       display: 'flex',
       flexDirection: 'column',
       color: '#CCC',
@@ -428,7 +428,7 @@ export function Roadmap() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{
-            fontSize: 14, fontWeight: 800, color: '#FF6B00',
+            fontSize: 14, fontWeight: 800, color: '#E8A030',
             letterSpacing: 1,
           }}>
             HARDWAVE DAW ROADMAP
@@ -437,7 +437,7 @@ export function Roadmap() {
             {doneFeatures} / {totalFeatures} features
           </span>
           <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#FF6B00' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#E8A030' }}>
             {overallPercent}%
           </span>
         </div>
@@ -449,7 +449,7 @@ export function Roadmap() {
         }}>
           <div style={{
             height: '100%', width: `${overallPercent}%`,
-            background: 'linear-gradient(90deg, #FF6B00, #FF8533)',
+            background: 'linear-gradient(90deg, #E8A030, #D09028)',
             borderRadius: 2,
             transition: 'width 300ms',
           }} />
@@ -670,7 +670,7 @@ export function Roadmap() {
         flexWrap: 'wrap',
       }}>
         {[
-          { version: 'v0.1', label: 'Foundation', color: '#FF6B00', status: 'Released' },
+          { version: 'v0.1', label: 'Foundation', color: '#E8A030', status: 'Released' },
           { version: 'v0.2', label: 'Core Editing', color: '#44AAFF', status: 'Next' },
           { version: 'v0.3', label: 'Mix & Automate', color: '#44DD88', status: 'Planned' },
           { version: 'v0.4', label: 'Sound Design', color: '#DD44DD', status: 'Planned' },

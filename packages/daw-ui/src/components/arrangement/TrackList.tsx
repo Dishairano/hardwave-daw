@@ -6,23 +6,23 @@ export function TrackList() {
 
   return (
     <div style={{
-      width: 160,
-      minWidth: 160,
-      background: '#262626',
-      borderRight: '1px solid #1A1A1A',
+      width: 150,
+      minWidth: 150,
+      background: '#1D1D1D',
+      borderRight: '1px solid #111',
       display: 'flex',
       flexDirection: 'column',
     }}>
-      {/* Header */}
+      {/* Header — matches ruler height in Arrangement */}
       <div style={{
         height: 22,
-        background: '#1E1E1E',
-        borderBottom: '1px solid #333',
+        background: '#252525',
+        borderBottom: '1px solid #111',
         display: 'flex',
         alignItems: 'center',
-        padding: '0 8px',
+        padding: '0 6px',
       }}>
-        <span style={{ fontSize: 9, fontWeight: 700, color: '#888', letterSpacing: 1 }}>PLAYLIST</span>
+        <span style={{ fontSize: 9, color: '#666' }}>Playlist</span>
       </div>
 
       {/* Track headers */}
@@ -35,58 +35,51 @@ export function TrackList() {
               height: 56,
               display: 'flex',
               alignItems: 'stretch',
-              borderBottom: '1px solid #1E1E1E',
-              background: selectedTrackId === track.id ? '#333' : idx % 2 === 0 ? '#282828' : '#2C2C2C',
-              cursor: 'pointer',
+              borderBottom: '1px solid #151515',
+              background: selectedTrackId === track.id ? '#2A2A2A' : idx % 2 === 0 ? '#1C1C1C' : '#1E1E1E',
+              cursor: 'default',
             }}
           >
-            {/* Color strip */}
-            <div style={{ width: 4, background: track.color, flexShrink: 0 }} />
+            {/* Color strip — FL has thin color bar on left */}
+            <div style={{ width: 3, background: track.color, flexShrink: 0 }} />
 
             {/* Track info */}
             <div style={{
-              flex: 1, padding: '4px 6px',
+              flex: 1, padding: '4px 5px',
               display: 'flex', flexDirection: 'column', justifyContent: 'center',
               minWidth: 0,
             }}>
               {/* Track number + name */}
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 4,
-              }}>
-                <span style={{ fontSize: 8, color: '#555', minWidth: 12 }}>{idx + 1}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                <span style={{ fontSize: 8, color: '#444', minWidth: 10 }}>{idx + 1}</span>
                 <span style={{
-                  fontSize: 10, fontWeight: 600, color: '#CCC',
+                  fontSize: 10, color: '#B0B0B0',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>
                   {track.name}
                 </span>
               </div>
 
-              {/* Controls row */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginTop: 4 }}>
-                {/* Mute */}
+              {/* M/S buttons */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 4 }}>
                 <button
                   onClick={(e) => { e.stopPropagation(); toggleMute(track.id) }}
                   style={{
                     ...trackBtn,
-                    color: track.muted ? '#FF4444' : '#666',
-                    background: track.muted ? '#3A2222' : '#222',
+                    color: track.muted ? '#C44' : '#555',
+                    background: track.muted ? '#2A1818' : '#1A1A1A',
                   }}
                 >M</button>
-
-                {/* Solo */}
                 <button
                   onClick={(e) => { e.stopPropagation(); toggleSolo(track.id) }}
                   style={{
                     ...trackBtn,
-                    color: track.soloed ? '#DDDD44' : '#666',
-                    background: track.soloed ? '#3A3A22' : '#222',
+                    color: track.soloed ? '#CC4' : '#555',
+                    background: track.soloed ? '#2A2A18' : '#1A1A1A',
                   }}
                 >S</button>
-
-                {/* Volume indicator */}
-                <span style={{ fontSize: 8, color: '#555', marginLeft: 'auto' }}>
-                  {track.volume_db > -60 ? `${track.volume_db.toFixed(0)}dB` : '-∞'}
+                <span style={{ fontSize: 8, color: '#444', marginLeft: 'auto' }}>
+                  {track.volume_db > -60 ? `${track.volume_db.toFixed(0)}` : '-\u221E'}
                 </span>
               </div>
             </div>
@@ -94,7 +87,7 @@ export function TrackList() {
         ))}
 
         {audioTracks.length === 0 && (
-          <div style={{ padding: 16, textAlign: 'center', color: '#444', fontSize: 10 }}>
+          <div style={{ padding: 12, textAlign: 'center', color: '#333', fontSize: 10 }}>
             Add tracks from<br />the toolbar
           </div>
         )}
@@ -104,10 +97,9 @@ export function TrackList() {
 }
 
 const trackBtn: React.CSSProperties = {
-  width: 18, height: 14,
+  width: 16, height: 13,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  fontSize: 8, fontWeight: 800,
-  border: '1px solid #444',
-  borderRadius: 2,
+  fontSize: 8, fontWeight: 700,
+  border: '1px solid #333',
   padding: 0,
 }

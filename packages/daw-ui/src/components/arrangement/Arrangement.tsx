@@ -22,10 +22,10 @@ interface DragState {
 
 const waveformData = new Map<string, [number, number][]>()
 
-// FL Studio color palette for clips
+// FL Studio color palette for clips — muted tones
 const FL_CLIP_COLORS = [
-  '#4A7A8C', '#7A6A5A', '#5A8A5A', '#8A5A6A',
-  '#6A6A8A', '#8A8A5A', '#5A7A7A', '#7A5A7A',
+  '#3A6878', '#6A5A4A', '#4A7A4A', '#784A5A',
+  '#5A5A78', '#78784A', '#4A6868', '#6A4A6A',
 ]
 
 export function Arrangement() {
@@ -80,14 +80,14 @@ export function Arrangement() {
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const scrollOffset = Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
 
-    // Background (FL-style dark with alternating track rows)
-    ctx.fillStyle = '#1E1E1E'
+    // Background
+    ctx.fillStyle = '#191919'
     ctx.fillRect(0, 0, w, h)
 
-    // Ruler bar at top
-    ctx.fillStyle = '#252525'
+    // Ruler bar at top — FL dark with subtle border
+    ctx.fillStyle = '#222'
     ctx.fillRect(0, 0, w, RULER_HEIGHT)
-    ctx.strokeStyle = '#333'
+    ctx.strokeStyle = '#2A2A2A'
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(0, RULER_HEIGHT)
@@ -102,8 +102,8 @@ export function Arrangement() {
 
       const isBar = i % 4 === 0
 
-      // Grid lines
-      ctx.strokeStyle = isBar ? '#333' : '#252525'
+      // Grid lines — FL very subtle
+      ctx.strokeStyle = isBar ? '#2A2A2A' : '#1E1E1E'
       ctx.lineWidth = isBar ? 1 : 0.5
       ctx.beginPath()
       ctx.moveTo(x, RULER_HEIGHT)
@@ -112,32 +112,32 @@ export function Arrangement() {
 
       // Ruler markings
       if (isBar) {
-        ctx.strokeStyle = '#444'
+        ctx.strokeStyle = '#333'
         ctx.beginPath()
         ctx.moveTo(x, 0)
         ctx.lineTo(x, RULER_HEIGHT)
         ctx.stroke()
 
-        ctx.fillStyle = '#888'
-        ctx.font = '9px "Segoe UI", Arial, sans-serif'
-        ctx.fillText(`${Math.floor(i / 4) + 1}`, x + 4, 14)
+        ctx.fillStyle = '#777'
+        ctx.font = '9px "Segoe UI", sans-serif'
+        ctx.fillText(`${Math.floor(i / 4) + 1}`, x + 3, 13)
       } else {
-        ctx.strokeStyle = '#333'
+        ctx.strokeStyle = '#2A2A2A'
         ctx.beginPath()
-        ctx.moveTo(x, RULER_HEIGHT - 5)
+        ctx.moveTo(x, RULER_HEIGHT - 4)
         ctx.lineTo(x, RULER_HEIGHT)
         ctx.stroke()
       }
     }
 
-    // Track lane backgrounds (alternating FL-style)
+    // Track lane backgrounds — FL very dark alternating
     for (let i = 0; i < audioTracks.length; i++) {
       const y = RULER_HEIGHT + i * TRACK_HEIGHT
-      ctx.fillStyle = i % 2 === 0 ? '#1C1C1C' : '#202020'
+      ctx.fillStyle = i % 2 === 0 ? '#181818' : '#1B1B1B'
       ctx.fillRect(0, y, w, TRACK_HEIGHT)
 
       // Track separator
-      ctx.strokeStyle = '#1A1A1A'
+      ctx.strokeStyle = '#141414'
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(0, y + TRACK_HEIGHT)
@@ -156,18 +156,17 @@ export function Arrangement() {
       }
     }
 
-    // Playhead (FL-style green line)
+    // Playhead — FL uses a subtle green/yellow line
     const playheadX = playheadSecs * PIXELS_PER_SECOND - scrollOffset
     if (playing || positionSamples > 0) {
-      ctx.strokeStyle = '#55AA55'
+      ctx.strokeStyle = '#5A5'
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(playheadX, 0)
       ctx.lineTo(playheadX, h)
       ctx.stroke()
 
-      // Playhead marker on ruler
-      ctx.fillStyle = '#55AA55'
+      ctx.fillStyle = '#5A5'
       ctx.beginPath()
       ctx.moveTo(playheadX - 4, 0)
       ctx.lineTo(playheadX + 4, 0)
@@ -255,7 +254,7 @@ export function Arrangement() {
 
     // Border
     if (isSelected) {
-      ctx.strokeStyle = '#FF6B00'
+      ctx.strokeStyle = '#E8A030'
       ctx.lineWidth = 2
     } else {
       ctx.strokeStyle = clip.muted ? '#444' : lightenColor(color, 0.2)
@@ -413,7 +412,7 @@ export function Arrangement() {
         flex: 1,
         position: 'relative',
         overflow: 'hidden',
-        background: '#1E1E1E',
+        background: '#191919',
         ...(dropHighlight ? { outline: '2px solid #FF6B00', outlineOffset: -2 } : {}),
       }}
     >
