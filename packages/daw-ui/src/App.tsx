@@ -161,7 +161,7 @@ export function App() {
       flexDirection: 'column',
       height: '100vh',
       width: '100vw',
-      background: '#191919',
+      background: '#1E1E22',
     }}>
       <TitleBar hintText={hintText} />
 
@@ -188,7 +188,7 @@ export function App() {
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               {showChannelRack && (
-                <div style={{ height: 200, borderBottom: '1px solid #111' }}>
+                <div style={{ height: 200, borderBottom: '1px solid rgba(0,0,0,0.3)' }}>
                   <ChannelRack />
                 </div>
               )}
@@ -204,7 +204,7 @@ export function App() {
                 <div style={{
                   height: showPlaylist ? 220 : 'auto',
                   flex: showPlaylist ? undefined : 1,
-                  borderTop: '1px solid #111',
+                  borderTop: '1px solid rgba(0,0,0,0.3)',
                 }}>
                   <MixerPanel />
                 </div>

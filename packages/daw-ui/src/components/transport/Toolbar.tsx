@@ -57,208 +57,188 @@ export function Toolbar(props: ToolbarProps) {
     <div style={{
       display: 'flex',
       alignItems: 'center',
-      height: 40,
-      background: hw.bgElevated,
-      borderBottom: `1px solid ${hw.border}`,
-      padding: '0 8px',
-      gap: 6,
+      height: 34,
+      background: hw.bgToolbarGrad,
+      borderBottom: `1px solid ${hw.borderDark}`,
+      padding: '0 4px',
+      gap: 1,
     }}>
-      {/* Transport */}
-      <div style={{ display: 'flex', gap: 2 }}>
-        <TransportBtn
-          onClick={stop}
-          active={false}
-          onMouseEnter={hint('Stop')}
-          onMouseLeave={clear}
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <rect x="1" y="1" width="8" height="8" rx="1" fill="currentColor" />
-          </svg>
-        </TransportBtn>
-        <TransportBtn
-          onClick={togglePlayback}
-          active={playing}
-          activeColor={hw.green}
-          onMouseEnter={hint('Play / Pause (Space)')}
-          onMouseLeave={clear}
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <polygon points="1,0 10,5 1,10" fill="currentColor" />
-          </svg>
-        </TransportBtn>
-        <TransportBtn
-          onClick={() => {}}
-          active={false}
-          activeColor={hw.red}
-          onMouseEnter={hint('Record (R)')}
-          onMouseLeave={clear}
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <circle cx="5" cy="5" r="4" fill="currentColor" />
-          </svg>
-        </TransportBtn>
+      {/* Panel shortcut buttons (small icon buttons) */}
+      <div style={{ display: 'flex', gap: 0 }}>
+        <IconBtn icon="browser" active={props.showBrowser} onClick={props.onToggleBrowser} onEnter={hint('Browser')} onLeave={clear} />
+        <IconBtn icon="channel" active={props.showChannelRack} onClick={props.onToggleChannelRack} onEnter={hint('Channel Rack (F6)')} onLeave={clear} />
+        <IconBtn icon="playlist" active={props.showPlaylist} onClick={props.onTogglePlaylist} onEnter={hint('Playlist (F5)')} onLeave={clear} />
+        <IconBtn icon="mixer" active={props.showMixer} onClick={props.onToggleMixer} onEnter={hint('Mixer (F9)')} onLeave={clear} />
+        <IconBtn icon="roadmap" active={props.showRoadmap} onClick={props.onToggleRoadmap} onEnter={hint('Roadmap')} onLeave={clear} />
       </div>
 
-      <Divider />
+      <Sep />
 
-      {/* BPM */}
-      <div
-        style={{
-          display: 'flex', alignItems: 'center',
-          background: hw.bgCard,
-          border: `1px solid ${hw.border}`,
-          borderRadius: hw.radius.md,
-          padding: '0 8px',
-          height: 26,
-        }}
-        onMouseEnter={hint('Tempo (BPM)')}
-        onMouseLeave={clear}
-      >
+      {/* PAT / SONG */}
+      <div style={{
+        display: 'flex', background: hw.bgInput, border: `1px solid ${hw.border}`,
+        overflow: 'hidden', borderRadius: 2,
+      }}>
+        <ModeBtn label="PAT" active onEnter={hint('Pattern mode')} onLeave={clear} />
+        <div style={{ width: 1, background: hw.border }} />
+        <ModeBtn label="SONG" active={false} onEnter={hint('Song mode')} onLeave={clear} />
+      </div>
+
+      <Sep />
+
+      {/* Transport */}
+      <div style={{ display: 'flex', gap: 0 }}>
+        <button onClick={stop} style={tBtn} onMouseEnter={hint('Stop')} onMouseLeave={clear}>
+          <svg width="8" height="8"><rect width="8" height="8" rx="1" fill={hw.textMuted} /></svg>
+        </button>
+        <button onClick={togglePlayback} style={{ ...tBtn, background: playing ? hw.greenDim : tBtn.background }} onMouseEnter={hint('Play (Space)')} onMouseLeave={clear}>
+          <svg width="8" height="10"><polygon points="0,0 8,5 0,10" fill={playing ? hw.green : hw.textMuted} /></svg>
+        </button>
+        <button style={tBtn} onMouseEnter={hint('Record (R)')} onMouseLeave={clear}>
+          <svg width="8" height="8"><circle cx="4" cy="4" r="3.5" fill="#8B3030" /></svg>
+        </button>
+      </div>
+
+      <Sep />
+
+      {/* Tempo */}
+      <div style={{ ...lcdBox, width: 52 }} onMouseEnter={hint('Tempo')} onMouseLeave={clear}>
         <input
-          type="number"
-          value={bpm}
-          onChange={(e) => setBpm(parseFloat(e.target.value) || 140)}
+          type="number" value={bpm}
+          onChange={e => setBpm(parseFloat(e.target.value) || 140)}
           style={{
-            width: 36, background: 'transparent', border: 'none',
-            color: hw.textPrimary, fontSize: 13, fontWeight: 600,
-            fontFamily: "'SF Mono', 'Consolas', monospace",
+            width: 34, background: 'transparent', border: 'none',
+            color: hw.purple, fontSize: 13, fontWeight: 700,
+            fontFamily: "'Consolas', 'Courier New', monospace",
             textAlign: 'right', outline: 'none',
           }}
         />
-        <span style={{ fontSize: 10, color: hw.textFaint, marginLeft: 2 }}>bpm</span>
       </div>
 
-      <Divider />
+      <Sep />
 
-      {/* Time display */}
+      {/* Large centered time display — like FL VEEL shows prominently */}
       <div style={{
-        display: 'flex', gap: 8,
-        background: hw.bgCard,
-        border: `1px solid ${hw.border}`,
-        borderRadius: hw.radius.md,
-        padding: '4px 10px',
-        height: 26,
-        alignItems: 'center',
+        ...lcdBox, padding: '0 6px', gap: 6,
       }}>
-        <span style={timeLcd}>
-          {String(bar).padStart(3, ' ')}
+        {/* Bar:Beat:Tick */}
+        <span style={lcdText}>
+          <span style={{ color: hw.purple }}>{String(bar).padStart(3, ' ')}</span>
           <span style={{ color: hw.textFaint }}>:</span>
-          {beat}
+          <span style={{ color: hw.purple }}>{beat}</span>
           <span style={{ color: hw.textFaint }}>:</span>
-          {String(tick).padStart(3, '0')}
+          <span style={{ color: hw.purple }}>{String(tick).padStart(3, '0')}</span>
         </span>
-        <div style={{ width: 1, height: 14, background: hw.border }} />
-        <span style={{ ...timeLcd, color: hw.textMuted }}>
-          {String(mins).padStart(2, ' ')}
+        <div style={{ width: 1, height: 12, background: hw.border }} />
+        {/* Min:Sec.Cs */}
+        <span style={lcdText}>
+          <span style={{ color: hw.green }}>{String(mins).padStart(2, ' ')}</span>
           <span style={{ color: hw.textFaint }}>:</span>
-          {String(secs).padStart(2, '0')}
+          <span style={{ color: hw.green }}>{String(secs).padStart(2, '0')}</span>
           <span style={{ color: hw.textFaint }}>.</span>
-          {String(cs).padStart(2, '0')}
+          <span style={{ color: hw.green }}>{String(cs).padStart(2, '0')}</span>
         </span>
+      </div>
+
+      <Sep />
+
+      {/* Snap */}
+      <div style={{ ...lcdBox, padding: '0 6px' }}>
+        <span style={{ fontSize: 10, color: hw.textMuted }}>Line</span>
       </div>
 
       <div style={{ flex: 1 }} />
 
-      {/* Panel toggles */}
+      {/* Right side actions */}
       <div style={{ display: 'flex', gap: 2 }}>
-        <PanelBtn label="Browser" active={props.showBrowser} onClick={props.onToggleBrowser} onEnter={hint('Browser')} onLeave={clear} />
-        <PanelBtn label="Channel" active={props.showChannelRack} onClick={props.onToggleChannelRack} onEnter={hint('Channel Rack (F6)')} onLeave={clear} />
-        <PanelBtn label="Playlist" active={props.showPlaylist} onClick={props.onTogglePlaylist} onEnter={hint('Playlist (F5)')} onLeave={clear} />
-        <PanelBtn label="Mixer" active={props.showMixer} onClick={props.onToggleMixer} onEnter={hint('Mixer (F9)')} onLeave={clear} />
-        <PanelBtn label="Roadmap" active={props.showRoadmap} onClick={props.onToggleRoadmap} onEnter={hint('Roadmap')} onLeave={clear} />
+        <SmallBtn label="Import" onClick={handleImport} onEnter={hint('Import audio file')} onLeave={clear} />
+        <SmallBtn label="+Audio" onClick={() => addAudioTrack()} onEnter={hint('Add audio track')} onLeave={clear} />
+        <SmallBtn label="+MIDI" onClick={() => addMidiTrack()} onEnter={hint('Add MIDI track')} onLeave={clear} />
       </div>
 
-      <Divider />
+      <Sep />
 
-      {/* Actions */}
-      <div style={{ display: 'flex', gap: 4 }}>
-        <ActionBtn label="Import" onClick={handleImport} onEnter={hint('Import audio file')} onLeave={clear} />
-        <ActionBtn label="+ Track" onClick={() => addAudioTrack()} onEnter={hint('Add audio track')} onLeave={clear} />
+      {/* Mini scope placeholder */}
+      <div style={{
+        width: 56, height: 20,
+        background: hw.bgDeep, border: `1px solid ${hw.border}`,
+        borderRadius: 2,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <span style={{ fontSize: 7, color: hw.textFaint }}>SCOPE</span>
       </div>
     </div>
   )
 }
 
-function Divider() {
-  return <div style={{ width: 1, height: 18, background: hw.border, margin: '0 2px' }} />
+/* --- Sub-components --- */
+
+function Sep() {
+  return <div style={{ width: 1, height: 20, background: hw.border, margin: '0 3px' }} />
 }
 
-function TransportBtn({ children, onClick, active, activeColor, onMouseEnter, onMouseLeave }: {
-  children: React.ReactNode
-  onClick: () => void
-  active: boolean
-  activeColor?: string
-  onMouseEnter?: () => void
-  onMouseLeave?: () => void
+function IconBtn({ icon, active, onClick, onEnter, onLeave }: {
+  icon: string; active: boolean; onClick: () => void; onEnter: () => void; onLeave: () => void
 }) {
-  const color = active ? (activeColor || hw.textPrimary) : hw.textMuted
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-      style={{
-        width: 30, height: 26,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color,
-        background: active ? `${activeColor || hw.textPrimary}15` : hw.bgCard,
-        border: `1px solid ${active ? `${activeColor || hw.textPrimary}30` : hw.border}`,
-        borderRadius: hw.radius.md,
-      }}
-    />
-  )
-}
-
-function PanelBtn({ label, active, onClick, onEnter, onLeave }: {
-  label: string; active: boolean; onClick: () => void; onEnter: () => void; onLeave: () => void
-}) {
+  const icons: Record<string, React.ReactNode> = {
+    browser: <svg width="11" height="11" viewBox="0 0 11 11"><rect x="0.5" y="0.5" width="10" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1"/><line x1="3.5" y1="0.5" x2="3.5" y2="10.5" stroke="currentColor" strokeWidth="1"/></svg>,
+    channel: <svg width="11" height="11" viewBox="0 0 11 11"><rect x="0.5" y="1.5" width="10" height="2" rx="0.5" fill="currentColor"/><rect x="0.5" y="4.5" width="10" height="2" rx="0.5" fill="currentColor"/><rect x="0.5" y="7.5" width="10" height="2" rx="0.5" fill="currentColor"/></svg>,
+    playlist: <svg width="11" height="11" viewBox="0 0 11 11"><rect x="0.5" y="1" width="4" height="3" rx="0.5" fill="currentColor"/><rect x="5.5" y="1" width="5" height="3" rx="0.5" fill="currentColor" opacity="0.6"/><rect x="1.5" y="6" width="6" height="3" rx="0.5" fill="currentColor"/></svg>,
+    mixer: <svg width="11" height="11" viewBox="0 0 11 11"><line x1="2.5" y1="1" x2="2.5" y2="10" stroke="currentColor" strokeWidth="1.2"/><line x1="5.5" y1="1" x2="5.5" y2="10" stroke="currentColor" strokeWidth="1.2"/><line x1="8.5" y1="1" x2="8.5" y2="10" stroke="currentColor" strokeWidth="1.2"/><circle cx="2.5" cy="3.5" r="1.3" fill="currentColor"/><circle cx="5.5" cy="6.5" r="1.3" fill="currentColor"/><circle cx="8.5" cy="5" r="1.3" fill="currentColor"/></svg>,
+    roadmap: <svg width="11" height="11" viewBox="0 0 11 11"><path d="M1.5 2.5h8M1.5 5.5h6M1.5 8.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>,
+  }
   return (
     <button
       onClick={onClick}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       style={{
-        padding: '3px 8px',
-        fontSize: 11,
-        fontWeight: 500,
-        color: active ? hw.textPrimary : hw.textFaint,
-        background: active ? hw.redDim : 'transparent',
-        border: `1px solid ${active ? hw.red + '30' : 'transparent'}`,
-        borderRadius: hw.radius.sm,
-        position: 'relative',
+        width: 22, height: 22,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: active ? hw.purple : hw.textFaint,
+        background: active ? hw.purpleDim : 'transparent',
+        border: `1px solid ${active ? hw.purple + '40' : 'transparent'}`,
+        borderRadius: 2,
       }}
     >
-      {label}
-      {active && (
-        <div style={{
-          position: 'absolute', bottom: -1, left: 4, right: 4,
-          height: 2, background: hw.red, borderRadius: 1,
-        }} />
-      )}
+      {icons[icon]}
     </button>
   )
 }
 
-function ActionBtn({ label, onClick, onEnter, onLeave }: {
+function ModeBtn({ label, active, onEnter, onLeave }: {
+  label: string; active: boolean; onEnter: () => void; onLeave: () => void
+}) {
+  return (
+    <div
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      style={{
+        padding: '2px 6px',
+        fontSize: 9, fontWeight: 700,
+        color: active ? hw.purple : hw.textFaint,
+        background: active ? hw.bgCard : 'transparent',
+        cursor: 'default',
+        letterSpacing: 0.5,
+      }}
+    >
+      {label}
+    </div>
+  )
+}
+
+function SmallBtn({ label, onClick, onEnter, onLeave }: {
   label: string; onClick: () => void; onEnter: () => void; onLeave: () => void
 }) {
   return (
     <button
       onClick={onClick}
-      onMouseEnter={e => {
-        e.currentTarget.style.background = hw.bgHover
-        e.currentTarget.style.borderColor = hw.borderStrong
-        onEnter()
-      }}
-      onMouseLeave={e => {
-        e.currentTarget.style.background = hw.bgCard
-        e.currentTarget.style.borderColor = hw.border
-        onLeave()
-      }}
+      onMouseEnter={e => { e.currentTarget.style.background = hw.bgHover; onEnter() }}
+      onMouseLeave={e => { e.currentTarget.style.background = hw.bgCard; onLeave() }}
       style={{
-        padding: '3px 10px', fontSize: 11, color: hw.textSecondary,
+        padding: '2px 8px', fontSize: 10, color: hw.textMuted,
         background: hw.bgCard, border: `1px solid ${hw.border}`,
-        borderRadius: hw.radius.md,
+        borderRadius: 2,
       }}
     >
       {label}
@@ -266,11 +246,26 @@ function ActionBtn({ label, onClick, onEnter, onLeave }: {
   )
 }
 
-const timeLcd: React.CSSProperties = {
-  fontFamily: "'SF Mono', 'Consolas', 'Courier New', monospace",
-  fontSize: 12,
-  fontWeight: 600,
-  color: '#ffffff',
-  letterSpacing: 0,
+const tBtn: React.CSSProperties = {
+  width: 24, height: 22,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  background: '#222226',
+  border: '1px solid rgba(255,255,255,0.07)',
+  borderRadius: 2,
+}
+
+const lcdBox: React.CSSProperties = {
+  display: 'flex', alignItems: 'center',
+  background: '#111114',
+  border: '1px solid rgba(255,255,255,0.07)',
+  borderRadius: 2,
+  height: 22,
+  padding: '0 3px',
+}
+
+const lcdText: React.CSSProperties = {
+  fontFamily: "'Consolas', 'Courier New', monospace",
+  fontSize: 12, fontWeight: 700,
   whiteSpace: 'pre',
+  letterSpacing: 0,
 }

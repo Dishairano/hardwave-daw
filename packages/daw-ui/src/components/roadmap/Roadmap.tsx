@@ -12,7 +12,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   current: {
     title: 'v0.1.x — Current Release',
     subtitle: 'Foundation & basic audio playback',
-    color: '#EF4444',
+    color: '#9B6DFF',
     milestones: [
       {
         name: 'Core Audio Engine',
@@ -415,7 +415,7 @@ export function Roadmap() {
   return (
     <div style={{
       height: '100%',
-      background: '#08080c',
+      background: '#1E1E22',
       display: 'flex',
       flexDirection: 'column',
       color: '#a1a1aa',
@@ -423,12 +423,12 @@ export function Roadmap() {
       {/* Header */}
       <div style={{
         padding: '12px 16px',
-        background: '#0c0c12',
+        background: '#18181C',
         borderBottom: '1px solid #333',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{
-            fontSize: 14, fontWeight: 800, color: '#EF4444',
+            fontSize: 14, fontWeight: 800, color: '#9B6DFF',
             letterSpacing: 1,
           }}>
             HARDWAVE DAW ROADMAP
@@ -437,7 +437,7 @@ export function Roadmap() {
             {doneFeatures} / {totalFeatures} features
           </span>
           <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#EF4444' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#9B6DFF' }}>
             {overallPercent}%
           </span>
         </div>
@@ -459,7 +459,7 @@ export function Roadmap() {
       {/* Phase timeline bar */}
       <div style={{
         display: 'flex', padding: '0 2px',
-        background: '#0e0e14', borderBottom: '1px solid #333',
+        background: '#222226', borderBottom: '1px solid #333',
       }}>
         {PHASE_ORDER.map(phase => {
           const data = ROADMAP[phase]
@@ -550,7 +550,7 @@ export function Roadmap() {
                 return (
                   <div key={mKey} style={{
                     marginBottom: 4,
-                    background: '#101018',
+                    background: '#2A2A2E',
                     borderRadius: 4,
                     border: '1px solid #333',
                     overflow: 'hidden',
@@ -628,7 +628,7 @@ export function Roadmap() {
                               flexShrink: 0, marginTop: 1,
                             }}>
                               {feature.done && (
-                                <span style={{ fontSize: 8, color: '#0c0c12', fontWeight: 900 }}>
+                                <span style={{ fontSize: 8, color: '#18181C', fontWeight: 900 }}>
                                   {'\\u2713'}
                                 </span>
                               )}
@@ -663,14 +663,14 @@ export function Roadmap() {
       {/* Release schedule footer */}
       <div style={{
         padding: '8px 12px',
-        background: '#0c0c12',
+        background: '#18181C',
         borderTop: '1px solid #333',
         display: 'flex',
         gap: 12,
         flexWrap: 'wrap',
       }}>
         {[
-          { version: 'v0.1', label: 'Foundation', color: '#EF4444', status: 'Released' },
+          { version: 'v0.1', label: 'Foundation', color: '#9B6DFF', status: 'Released' },
           { version: 'v0.2', label: 'Core Editing', color: '#44AAFF', status: 'Next' },
           { version: 'v0.3', label: 'Mix & Automate', color: '#44DD88', status: 'Planned' },
           { version: 'v0.4', label: 'Sound Design', color: '#DD44DD', status: 'Planned' },
