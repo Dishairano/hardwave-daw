@@ -6,10 +6,12 @@ interface ToolbarProps {
   showPlaylist: boolean
   showChannelRack: boolean
   showMixer: boolean
+  showRoadmap: boolean
   onToggleBrowser: () => void
   onTogglePlaylist: () => void
   onToggleChannelRack: () => void
   onToggleMixer: () => void
+  onToggleRoadmap: () => void
 }
 
 export function Toolbar(props: ToolbarProps) {
@@ -63,6 +65,7 @@ export function Toolbar(props: ToolbarProps) {
       <ToggleBtn label="Channel" active={props.showChannelRack} onClick={props.onToggleChannelRack} />
       <ToggleBtn label="Playlist" active={props.showPlaylist} onClick={props.onTogglePlaylist} />
       <ToggleBtn label="Mixer" active={props.showMixer} onClick={props.onToggleMixer} />
+      <ToggleBtn label="Roadmap" active={props.showRoadmap} onClick={props.onToggleRoadmap} />
 
       <Separator />
 

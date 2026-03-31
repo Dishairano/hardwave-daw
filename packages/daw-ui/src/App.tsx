@@ -6,6 +6,7 @@ import { Arrangement } from './components/arrangement/Arrangement'
 import { MixerPanel } from './components/mixer/MixerPanel'
 import { Browser } from './components/browser/Browser'
 import { ChannelRack } from './components/channelrack/ChannelRack'
+import { Roadmap } from './components/roadmap/Roadmap'
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
 
@@ -18,6 +19,7 @@ export function App() {
   const [showMixer, setShowMixer] = useState(true)
   const [showChannelRack, setShowChannelRack] = useState(false)
   const [showPlaylist, setShowPlaylist] = useState(true)
+  const [showRoadmap, setShowRoadmap] = useState(false)
 
   useEffect(() => {
     startListening()
@@ -105,45 +107,54 @@ export function App() {
         showPlaylist={showPlaylist}
         showChannelRack={showChannelRack}
         showMixer={showMixer}
+        showRoadmap={showRoadmap}
         onToggleBrowser={() => setShowBrowser(v => !v)}
         onTogglePlaylist={() => setShowPlaylist(v => !v)}
         onToggleChannelRack={() => setShowChannelRack(v => !v)}
         onToggleMixer={() => setShowMixer(v => !v)}
+        onToggleRoadmap={() => setShowRoadmap(v => !v)}
       />
 
       {/* Main content area */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Browser panel (left) */}
-        {showBrowser && <Browser />}
+        {showRoadmap ? (
+          /* Roadmap takes full content area */
+          <Roadmap />
+        ) : (
+          <>
+            {/* Browser panel (left) */}
+            {showBrowser && <Browser />}
 
-        {/* Center panels */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {/* Channel Rack */}
-          {showChannelRack && (
-            <div style={{ height: 200, borderBottom: '2px solid #1A1A1A' }}>
-              <ChannelRack />
-            </div>
-          )}
+            {/* Center panels */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              {/* Channel Rack */}
+              {showChannelRack && (
+                <div style={{ height: 200, borderBottom: '2px solid #1A1A1A' }}>
+                  <ChannelRack />
+                </div>
+              )}
 
-          {/* Playlist / Arrangement */}
-          {showPlaylist && (
-            <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-              <TrackList />
-              <Arrangement />
-            </div>
-          )}
+              {/* Playlist / Arrangement */}
+              {showPlaylist && (
+                <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+                  <TrackList />
+                  <Arrangement />
+                </div>
+              )}
 
-          {/* Mixer */}
-          {showMixer && (
-            <div style={{
-              height: showPlaylist ? 220 : 'auto',
-              flex: showPlaylist ? undefined : 1,
-              borderTop: '2px solid #1A1A1A',
-            }}>
-              <MixerPanel />
+              {/* Mixer */}
+              {showMixer && (
+                <div style={{
+                  height: showPlaylist ? 220 : 'auto',
+                  flex: showPlaylist ? undefined : 1,
+                  borderTop: '2px solid #1A1A1A',
+                }}>
+                  <MixerPanel />
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
     </div>
   )
