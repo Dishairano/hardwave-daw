@@ -30,9 +30,10 @@ export function App() {
 
   // Panel visibility
   const [showBrowser, setShowBrowser] = useState(true)
-  const [showMixer, setShowMixer] = useState(true)
+  const [showMixer, setShowMixer] = useState(false)
   const [showChannelRack, setShowChannelRack] = useState(false)
   const [showPlaylist, setShowPlaylist] = useState(true)
+  const [showPianoRoll, setShowPianoRoll] = useState(false)
   const [showRoadmap, setShowRoadmap] = useState(false)
 
   // Splash screen
@@ -150,6 +151,10 @@ export function App() {
           e.preventDefault()
           setShowChannelRack(v => !v)
           break
+        case 'F7':
+          e.preventDefault()
+          setShowPianoRoll(v => !v)
+          break
         case 'F9':
           e.preventDefault()
           setShowMixer(v => !v)
@@ -181,13 +186,13 @@ export function App() {
         showBrowser={showBrowser}
         showPlaylist={showPlaylist}
         showChannelRack={showChannelRack}
+        showPianoRoll={showPianoRoll}
         showMixer={showMixer}
-        showRoadmap={showRoadmap}
         onToggleBrowser={() => setShowBrowser(v => !v)}
         onTogglePlaylist={() => setShowPlaylist(v => !v)}
         onToggleChannelRack={() => setShowChannelRack(v => !v)}
+        onTogglePianoRoll={() => setShowPianoRoll(v => !v)}
         onToggleMixer={() => setShowMixer(v => !v)}
-        onToggleRoadmap={() => setShowRoadmap(v => !v)}
         onSetHint={setHintText}
       />
 
@@ -200,13 +205,18 @@ export function App() {
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               {showChannelRack && (
-                <div style={{ height: 200, borderBottom: '1px solid rgba(0,0,0,0.3)' }}>
+                <div style={{
+                  flex: showPlaylist ? undefined : 1,
+                  height: showPlaylist ? '55%' : undefined,
+                  minHeight: 120,
+                  borderBottom: showPlaylist ? '1px solid rgba(0,0,0,0.3)' : undefined,
+                }}>
                   <ChannelRack />
                 </div>
               )}
 
               {showPlaylist && (
-                <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+                <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
                   <TrackList />
                   <Arrangement />
                 </div>
@@ -214,8 +224,8 @@ export function App() {
 
               {showMixer && (
                 <div style={{
-                  height: showPlaylist ? 220 : 'auto',
-                  flex: showPlaylist ? undefined : 1,
+                  height: (showPlaylist || showChannelRack) ? 220 : 'auto',
+                  flex: (showPlaylist || showChannelRack) ? undefined : 1,
                   borderTop: '1px solid rgba(0,0,0,0.3)',
                 }}>
                   <MixerPanel />

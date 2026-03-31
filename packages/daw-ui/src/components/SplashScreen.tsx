@@ -26,32 +26,18 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
   useEffect(() => {
     const tl = anime.timeline({ easing: 'easeOutExpo' })
 
-    // Background glows fade in
+    // Background glows fade in (breathing is now CSS-driven)
     tl.add({
       targets: [glow1Ref.current, glow2Ref.current],
       opacity: [0, 1],
       scale: [0.5, 1],
       duration: 1200,
+      complete: () => {
+        // Activate CSS breathing animations after fade-in
+        glow1Ref.current?.classList.add('glow-breathe-1')
+        glow2Ref.current?.classList.add('glow-breathe-2')
+      },
     }, 0)
-
-    // Glow breathing
-    anime({
-      targets: glow1Ref.current,
-      scale: [1, 1.2, 1],
-      opacity: [0.8, 1, 0.8],
-      duration: 3000,
-      easing: 'easeInOutSine',
-      loop: true,
-    })
-    anime({
-      targets: glow2Ref.current,
-      scale: [1, 1.15, 1],
-      opacity: [0.7, 1, 0.7],
-      duration: 3500,
-      easing: 'easeInOutSine',
-      loop: true,
-      delay: 500,
-    })
 
     // Particles
     if (particlesRef.current) {
@@ -190,8 +176,8 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
     }
   }, [animDone, dataReady, onFinished])
 
-  // Particle colors — alternating purple shades
-  const particles = Array.from({ length: 25 }).map((_, i) => ({
+  // Particle colors — alternating purple shades (reduced from 25 to 12)
+  const particles = Array.from({ length: 12 }).map((_, i) => ({
     width: 2 + Math.random() * 3,
     left: Math.random() * 100,
     bg: i % 2 === 0
@@ -205,6 +191,24 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: '#0c0c10', overflow: 'hidden',
     }}>
+      {/* CSS keyframes for glow breathing (GPU-composited, no JS) */}
+      <style>{`
+        @keyframes glowBreathe1 {
+          0%, 100% { transform: translate(-50%, -50%) translateZ(0) scale(1); opacity: 0.8; }
+          50% { transform: translate(-50%, -50%) translateZ(0) scale(1.2); opacity: 1; }
+        }
+        @keyframes glowBreathe2 {
+          0%, 100% { transform: translate(-40%, -60%) translateZ(0) scale(1); opacity: 0.7; }
+          50% { transform: translate(-40%, -60%) translateZ(0) scale(1.15); opacity: 1; }
+        }
+        .glow-breathe-1 {
+          animation: glowBreathe1 3s ease-in-out infinite;
+        }
+        .glow-breathe-2 {
+          animation: glowBreathe2 3.5s ease-in-out 0.5s infinite;
+        }
+      `}</style>
+
       {/* Particles */}
       <div ref={particlesRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
         {particles.map((p, i) => (
@@ -219,6 +223,8 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
               borderRadius: '50%',
               background: p.bg,
               opacity: 0,
+              willChange: 'transform, opacity',
+              transform: 'translateZ(0)',
             }}
           />
         ))}
@@ -227,17 +233,19 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
       {/* Background glows */}
       <div ref={glow1Ref} style={{
         position: 'absolute', top: '50%', left: '50%',
-        transform: 'translate(-50%, -50%)',
+        transform: 'translate(-50%, -50%) translateZ(0)',
         width: 500, height: 500, borderRadius: '50%',
         background: 'rgba(155, 109, 255, 0.08)',
         filter: 'blur(120px)', opacity: 0,
+        willChange: 'transform, opacity',
       }} />
       <div ref={glow2Ref} style={{
         position: 'absolute', top: '50%', left: '50%',
-        transform: 'translate(-40%, -60%)',
+        transform: 'translate(-40%, -60%) translateZ(0)',
         width: 400, height: 400, borderRadius: '50%',
         background: 'rgba(123, 90, 192, 0.05)',
         filter: 'blur(120px)', opacity: 0,
+        willChange: 'transform, opacity',
       }} />
 
       {/* Center content */}
