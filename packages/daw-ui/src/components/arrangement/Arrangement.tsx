@@ -4,9 +4,10 @@ import { useTrackStore, ClipInfo } from '../../stores/trackStore'
 import { useTransportStore } from '../../stores/transportStore'
 
 const PPQ = 960
-const TRACK_HEIGHT = 60
+const TRACK_HEIGHT = 56
 const PIXELS_PER_SECOND = 100
 const RESIZE_HANDLE_PX = 6
+const RULER_HEIGHT = 22
 
 type DragMode = 'none' | 'move' | 'resize-right'
 
@@ -19,8 +20,13 @@ interface DragState {
   originalLengthTicks: number
 }
 
-// Waveform cache
 const waveformData = new Map<string, [number, number][]>()
+
+// FL Studio color palette for clips
+const FL_CLIP_COLORS = [
+  '#4A7A8C', '#7A6A5A', '#5A8A5A', '#8A5A6A',
+  '#6A6A8A', '#8A8A5A', '#5A7A7A', '#7A5A7A',
+]
 
 export function Arrangement() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -36,7 +42,7 @@ export function Arrangement() {
   const pixelsPerBeat = PIXELS_PER_SECOND / beatsPerSecond
   const pixelsPerTick = pixelsPerBeat / PPQ
 
-  // Load waveforms for visible clips
+  // Load waveforms
   useEffect(() => {
     for (const track of audioTracks) {
       for (const clip of track.clips) {
@@ -71,77 +77,111 @@ export function Arrangement() {
     const w = rect.width
     const h = rect.height
 
-    // Scroll
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const scrollOffset = Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
 
-    // Background
-    ctx.fillStyle = '#0a0a0b'
+    // Background (FL-style dark with alternating track rows)
+    ctx.fillStyle = '#1E1E1E'
     ctx.fillRect(0, 0, w, h)
 
-    // Beat grid
+    // Ruler bar at top
+    ctx.fillStyle = '#252525'
+    ctx.fillRect(0, 0, w, RULER_HEIGHT)
+    ctx.strokeStyle = '#333'
     ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(0, RULER_HEIGHT)
+    ctx.lineTo(w, RULER_HEIGHT)
+    ctx.stroke()
+
+    // Beat grid
     const startBeat = Math.floor(scrollOffset / pixelsPerBeat)
     for (let i = startBeat; i < startBeat + Math.ceil(w / pixelsPerBeat) + 2; i++) {
       const x = i * pixelsPerBeat - scrollOffset
       if (x < -1 || x > w + 1) continue
-      ctx.strokeStyle = i % 4 === 0 ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.03)'
+
+      const isBar = i % 4 === 0
+
+      // Grid lines
+      ctx.strokeStyle = isBar ? '#333' : '#252525'
+      ctx.lineWidth = isBar ? 1 : 0.5
       ctx.beginPath()
-      ctx.moveTo(x, 0)
+      ctx.moveTo(x, RULER_HEIGHT)
       ctx.lineTo(x, h)
       ctx.stroke()
-      if (i % 4 === 0 && i >= 0) {
-        ctx.fillStyle = '#333'
-        ctx.font = '9px monospace'
-        ctx.fillText(`${Math.floor(i / 4) + 1}`, x + 3, 10)
+
+      // Ruler markings
+      if (isBar) {
+        ctx.strokeStyle = '#444'
+        ctx.beginPath()
+        ctx.moveTo(x, 0)
+        ctx.lineTo(x, RULER_HEIGHT)
+        ctx.stroke()
+
+        ctx.fillStyle = '#888'
+        ctx.font = '9px "Segoe UI", Arial, sans-serif'
+        ctx.fillText(`${Math.floor(i / 4) + 1}`, x + 4, 14)
+      } else {
+        ctx.strokeStyle = '#333'
+        ctx.beginPath()
+        ctx.moveTo(x, RULER_HEIGHT - 5)
+        ctx.lineTo(x, RULER_HEIGHT)
+        ctx.stroke()
       }
     }
 
-    // Tracks and clips
+    // Track lane backgrounds (alternating FL-style)
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = 16 + i * TRACK_HEIGHT
-      const track = audioTracks[i]
+      const y = RULER_HEIGHT + i * TRACK_HEIGHT
+      ctx.fillStyle = i % 2 === 0 ? '#1C1C1C' : '#202020'
+      ctx.fillRect(0, y, w, TRACK_HEIGHT)
 
       // Track separator
-      ctx.strokeStyle = 'rgba(255,255,255,0.04)'
+      ctx.strokeStyle = '#1A1A1A'
+      ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(0, y + TRACK_HEIGHT)
       ctx.lineTo(w, y + TRACK_HEIGHT)
       ctx.stroke()
+    }
 
-      ctx.fillStyle = 'rgba(255,255,255,0.01)'
-      ctx.fillRect(0, y, w, TRACK_HEIGHT)
+    // Clips
+    for (let i = 0; i < audioTracks.length; i++) {
+      const y = RULER_HEIGHT + i * TRACK_HEIGHT
+      const track = audioTracks[i]
+      const clipColor = FL_CLIP_COLORS[i % FL_CLIP_COLORS.length]
 
-      // Clips
       for (const clip of track.clips) {
-        drawClip(ctx, clip, track.color, track.id, y, scrollOffset, w, pixelsPerTick)
+        drawClip(ctx, clip, clipColor, y, scrollOffset, w, pixelsPerTick)
       }
     }
 
-    // Playhead
+    // Playhead (FL-style green line)
+    const playheadX = playheadSecs * PIXELS_PER_SECOND - scrollOffset
     if (playing || positionSamples > 0) {
-      const playheadX = playheadSecs * PIXELS_PER_SECOND - scrollOffset
-      ctx.strokeStyle = '#ef4444'
-      ctx.lineWidth = 1.5
+      ctx.strokeStyle = '#55AA55'
+      ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(playheadX, 0)
       ctx.lineTo(playheadX, h)
       ctx.stroke()
-      ctx.fillStyle = '#ef4444'
+
+      // Playhead marker on ruler
+      ctx.fillStyle = '#55AA55'
       ctx.beginPath()
-      ctx.moveTo(playheadX - 5, 0)
-      ctx.lineTo(playheadX + 5, 0)
-      ctx.lineTo(playheadX, 7)
+      ctx.moveTo(playheadX - 4, 0)
+      ctx.lineTo(playheadX + 4, 0)
+      ctx.lineTo(playheadX, 6)
       ctx.closePath()
       ctx.fill()
     }
+
   }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
     clip: ClipInfo,
-    trackColor: string,
-    _trackId: string,
+    baseColor: string,
     trackY: number,
     scrollOffset: number,
     viewWidth: number,
@@ -151,70 +191,88 @@ export function Arrangement() {
     const clipW = clip.length_ticks * pxPerTick
     if (clipX + clipW < 0 || clipX > viewWidth) return
 
-    const y = trackY + 4
-    const h = TRACK_HEIGHT - 8
+    const pad = 2
+    const x = clipX
+    const y = trackY + pad
+    const w = clipW
+    const h = TRACK_HEIGHT - pad * 2
     const isSelected = clip.id === selectedClipId
-    const color = clip.muted ? '#333' : trackColor
+    const color = clip.muted ? '#3A3A3A' : baseColor
 
-    // Body
-    ctx.fillStyle = clip.muted ? 'rgba(255,255,255,0.02)' : hexToRgba(color, 0.2)
+    // FL-style clip body (solid color, slightly transparent)
+    ctx.fillStyle = color
+    ctx.globalAlpha = clip.muted ? 0.3 : 0.7
     ctx.beginPath()
-    ctx.roundRect(clipX, y, clipW, h, 4)
+    ctx.roundRect(x, y, w, h, 2)
     ctx.fill()
+    ctx.globalAlpha = 1.0
+
+    // Clip header bar (darker, with name)
+    const headerH = 14
+    ctx.fillStyle = clip.muted ? '#333' : darkenColor(color, 0.5)
+    ctx.beginPath()
+    ctx.roundRect(x, y, w, headerH, [2, 2, 0, 0])
+    ctx.fill()
+
+    // Clip name in header
+    ctx.fillStyle = clip.muted ? '#555' : '#DDD'
+    ctx.font = '9px "Segoe UI", Arial, sans-serif'
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x + 2, y, w - 4, headerH)
+    ctx.clip()
+    ctx.fillText(clip.name, x + 4, y + 10)
+    ctx.restore()
 
     // Waveform
     const peaks = waveformData.get(clip.source_id)
     if (peaks && peaks.length > 0 && !clip.muted) {
       ctx.save()
       ctx.beginPath()
-      ctx.roundRect(clipX + 1, y + 1, clipW - 2, h - 2, 3)
+      ctx.rect(x + 1, y + headerH, w - 2, h - headerH - 1)
       ctx.clip()
 
-      const midY = y + h * 0.5
-      const ampScale = h * 0.4
-      ctx.fillStyle = hexToRgba(color, 0.5)
+      const waveArea = h - headerH - 2
+      const midY = y + headerH + waveArea * 0.5
+      const ampScale = waveArea * 0.45
+      ctx.fillStyle = lightenColor(color, 0.3)
+      ctx.globalAlpha = 0.8
 
-      const pxPerBucket = clipW / peaks.length
+      const pxPerBucket = w / peaks.length
       for (let j = 0; j < peaks.length; j++) {
-        const bx = clipX + j * pxPerBucket
+        const bx = x + j * pxPerBucket
         if (bx + pxPerBucket < 0 || bx > viewWidth) continue
         const [minVal, maxVal] = peaks[j]
         const top = midY - maxVal * ampScale
         const bottom = midY - minVal * ampScale
-        const barH = Math.max(1, bottom - top)
-        ctx.fillRect(bx, top, Math.max(1, pxPerBucket - 0.5), barH)
+        const barH = Math.max(0.5, bottom - top)
+        ctx.fillRect(bx, top, Math.max(0.5, pxPerBucket - 0.3), barH)
       }
 
+      ctx.globalAlpha = 1.0
       ctx.restore()
     }
 
     // Border
-    ctx.strokeStyle = isSelected
-      ? '#fff'
-      : clip.muted ? 'rgba(255,255,255,0.06)' : hexToRgba(color, 0.6)
-    ctx.lineWidth = isSelected ? 1.5 : 1
+    if (isSelected) {
+      ctx.strokeStyle = '#FF6B00'
+      ctx.lineWidth = 2
+    } else {
+      ctx.strokeStyle = clip.muted ? '#444' : lightenColor(color, 0.2)
+      ctx.lineWidth = 1
+    }
     ctx.beginPath()
-    ctx.roundRect(clipX, y, clipW, h, 4)
+    ctx.roundRect(x, y, w, h, 2)
     ctx.stroke()
-
-    // Name
-    ctx.fillStyle = clip.muted ? '#444' : '#ddd'
-    ctx.font = '10px system-ui, sans-serif'
-    ctx.save()
-    ctx.beginPath()
-    ctx.rect(clipX, y, clipW, h)
-    ctx.clip()
-    ctx.fillText(clip.name, clipX + 6, y + 14)
-    ctx.restore()
   }
 
-  // Hit test: find which clip is under (mouseX, mouseY)
+  // Hit test
   const hitTest = useCallback((mouseX: number, mouseY: number, scrollOffset: number): {
     clip: ClipInfo, trackId: string, edge: 'body' | 'right'
   } | null => {
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = 16 + i * TRACK_HEIGHT
-      if (mouseY < y + 4 || mouseY > y + TRACK_HEIGHT - 4) continue
+      const y = RULER_HEIGHT + i * TRACK_HEIGHT
+      if (mouseY < y + 2 || mouseY > y + TRACK_HEIGHT - 2) continue
       const track = audioTracks[i]
       for (const clip of track.clips) {
         const clipX = clip.position_ticks * pixelsPerTick - scrollOffset
@@ -235,7 +293,6 @@ export function Arrangement() {
     return Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
   }, [positionSamples, sampleRate])
 
-  // Mouse handlers
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect()
     const mouseX = e.clientX - rect.left
@@ -261,7 +318,6 @@ export function Arrangement() {
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const drag = dragRef.current
     if (!drag || drag.mode === 'none') {
-      // Update cursor
       const rect = (e.target as HTMLElement).getBoundingClientRect()
       const mouseX = e.clientX - rect.left
       const mouseY = e.clientY - rect.top
@@ -280,7 +336,6 @@ export function Arrangement() {
 
     if (drag.mode === 'move') {
       const newPos = Math.max(0, drag.originalPositionTicks + dTicks)
-      // Snap to beat
       const snapped = Math.round(newPos / PPQ) * PPQ
       moveClip(drag.trackId, drag.clipId, snapped)
     } else if (drag.mode === 'resize-right') {
@@ -294,7 +349,7 @@ export function Arrangement() {
     dragRef.current = null
   }, [])
 
-  // Drag-and-drop audio files from OS
+  // Drag-and-drop
   const [dropHighlight, setDropHighlight] = useState(false)
 
   useEffect(() => {
@@ -309,24 +364,20 @@ export function Arrangement() {
       })
       if (files.length === 0) return
 
-      // Find or create a target track
       const state = useTrackStore.getState()
       let trackId = state.selectedTrackId
       const audio = state.tracks.filter(t => t.kind === 'Audio')
       if (!trackId || !audio.find(t => t.id === trackId)) {
         if (audio.length === 0) {
           await addAudioTrack()
-          const updated = useTrackStore.getState()
-          trackId = updated.tracks.find(t => t.kind === 'Audio')?.id || null
+          trackId = useTrackStore.getState().tracks.find(t => t.kind === 'Audio')?.id || null
         } else {
           trackId = audio[0].id
         }
       }
       if (!trackId) return
 
-      // Import each file sequentially, stacking them one after another
       let offsetTicks = 0
-      // Find the end of existing clips on this track
       const track = useTrackStore.getState().tracks.find(t => t.id === trackId)
       if (track) {
         for (const clip of track.clips) {
@@ -359,8 +410,11 @@ export function Arrangement() {
     <div
       ref={containerRef}
       style={{
-        position: 'relative', overflow: 'hidden', background: '#0a0a0b',
-        ...(dropHighlight ? { outline: '2px solid #7c3aed', outlineOffset: -2 } : {}),
+        flex: 1,
+        position: 'relative',
+        overflow: 'hidden',
+        background: '#1E1E1E',
+        ...(dropHighlight ? { outline: '2px solid #FF6B00', outlineOffset: -2 } : {}),
       }}
     >
       <canvas
@@ -374,18 +428,25 @@ export function Arrangement() {
       {audioTracks.length === 0 && (
         <div style={{
           position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#222', fontSize: 13, pointerEvents: 'none',
+          color: '#333', fontSize: 12, pointerEvents: 'none',
         }}>
-          Add tracks to get started
+          Drop audio files here or add tracks from the toolbar
         </div>
       )}
     </div>
   )
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return `rgba(${r},${g},${b},${alpha})`
+function darkenColor(hex: string, amount: number): string {
+  const r = Math.round(parseInt(hex.slice(1, 3), 16) * (1 - amount))
+  const g = Math.round(parseInt(hex.slice(3, 5), 16) * (1 - amount))
+  const b = Math.round(parseInt(hex.slice(5, 7), 16) * (1 - amount))
+  return `rgb(${r},${g},${b})`
+}
+
+function lightenColor(hex: string, amount: number): string {
+  const r = Math.min(255, Math.round(parseInt(hex.slice(1, 3), 16) * (1 + amount)))
+  const g = Math.min(255, Math.round(parseInt(hex.slice(3, 5), 16) * (1 + amount)))
+  const b = Math.min(255, Math.round(parseInt(hex.slice(5, 7), 16) * (1 + amount)))
+  return `rgb(${r},${g},${b})`
 }

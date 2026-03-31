@@ -4,7 +4,8 @@ import { Toolbar } from './components/transport/Toolbar'
 import { TrackList } from './components/arrangement/TrackList'
 import { Arrangement } from './components/arrangement/Arrangement'
 import { MixerPanel } from './components/mixer/MixerPanel'
-import { PluginBrowser } from './components/browser/PluginBrowser'
+import { Browser } from './components/browser/Browser'
+import { ChannelRack } from './components/channelrack/ChannelRack'
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
 
@@ -12,26 +13,26 @@ export function App() {
   const { startListening } = useTransportStore()
   const { fetchTracks } = useTrackStore()
 
+  // Panel visibility (FL-style toggleable panels)
+  const [showBrowser, setShowBrowser] = useState(true)
+  const [showMixer, setShowMixer] = useState(true)
+  const [showChannelRack, setShowChannelRack] = useState(false)
+  const [showPlaylist, setShowPlaylist] = useState(true)
+
   useEffect(() => {
     startListening()
     fetchTracks()
   }, [])
 
   // Auto-updater
-  const [updateAvailable, setUpdateAvailable] = useState<string | null>(null)
-  const [updating, setUpdating] = useState(false)
-
   useEffect(() => {
     async function checkUpdate() {
       try {
         const { check } = await import('@tauri-apps/plugin-updater')
         const update = await check()
         if (update) {
-          setUpdateAvailable(update.version)
-          // Auto-download and install
           const confirmed = confirm(`Update ${update.version} is available. Install now?`)
           if (confirmed) {
-            setUpdating(true)
             await update.downloadAndInstall()
             const { relaunch } = await import('@tauri-apps/plugin-process')
             await relaunch()
@@ -41,7 +42,6 @@ export function App() {
         console.log('Update check skipped:', e)
       }
     }
-    // Check after a short delay so the app loads first
     const timer = setTimeout(checkUpdate, 3000)
     return () => clearTimeout(timer)
   }, [])
@@ -49,7 +49,6 @@ export function App() {
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Don't handle shortcuts when typing in an input
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
 
@@ -70,45 +69,82 @@ export function App() {
           e.preventDefault()
           transport.setPosition(0)
           break
-        case 'KeyR':
-          if (!e.metaKey && !e.ctrlKey) {
-            // Could toggle record in the future
-          }
+        // FL-style panel toggles
+        case 'F5':
+          e.preventDefault()
+          setShowPlaylist(v => !v)
           break
-        case 'KeyS':
-          if (e.metaKey || e.ctrlKey) {
-            e.preventDefault()
-            // TODO: save project
-          }
+        case 'F6':
+          e.preventDefault()
+          setShowChannelRack(v => !v)
+          break
+        case 'F9':
+          e.preventDefault()
+          setShowMixer(v => !v)
           break
       }
     }
-
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
   return (
     <div style={{
-      display: 'grid',
-      gridTemplateRows: '32px 42px 1fr 200px',
+      display: 'flex',
+      flexDirection: 'column',
       height: '100vh',
       width: '100vw',
-      background: '#0a0a0b',
+      background: '#2A2A2A',
     }}>
+      {/* Title bar with menu */}
       <TitleBar />
-      <Toolbar />
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '200px 1fr 220px',
-        overflow: 'hidden',
-        borderTop: '1px solid rgba(255,255,255,0.06)',
-      }}>
-        <TrackList />
-        <Arrangement />
-        <PluginBrowser />
+
+      {/* Toolbar */}
+      <Toolbar
+        showBrowser={showBrowser}
+        showPlaylist={showPlaylist}
+        showChannelRack={showChannelRack}
+        showMixer={showMixer}
+        onToggleBrowser={() => setShowBrowser(v => !v)}
+        onTogglePlaylist={() => setShowPlaylist(v => !v)}
+        onToggleChannelRack={() => setShowChannelRack(v => !v)}
+        onToggleMixer={() => setShowMixer(v => !v)}
+      />
+
+      {/* Main content area */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        {/* Browser panel (left) */}
+        {showBrowser && <Browser />}
+
+        {/* Center panels */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Channel Rack */}
+          {showChannelRack && (
+            <div style={{ height: 200, borderBottom: '2px solid #1A1A1A' }}>
+              <ChannelRack />
+            </div>
+          )}
+
+          {/* Playlist / Arrangement */}
+          {showPlaylist && (
+            <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+              <TrackList />
+              <Arrangement />
+            </div>
+          )}
+
+          {/* Mixer */}
+          {showMixer && (
+            <div style={{
+              height: showPlaylist ? 220 : 'auto',
+              flex: showPlaylist ? undefined : 1,
+              borderTop: '2px solid #1A1A1A',
+            }}>
+              <MixerPanel />
+            </div>
+          )}
+        </div>
       </div>
-      <MixerPanel />
     </div>
   )
 }
