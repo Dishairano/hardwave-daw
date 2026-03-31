@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { TitleBar } from './components/transport/TitleBar'
 import { Toolbar } from './components/transport/Toolbar'
 import { TrackList } from './components/arrangement/TrackList'
@@ -15,6 +15,35 @@ export function App() {
   useEffect(() => {
     startListening()
     fetchTracks()
+  }, [])
+
+  // Auto-updater
+  const [updateAvailable, setUpdateAvailable] = useState<string | null>(null)
+  const [updating, setUpdating] = useState(false)
+
+  useEffect(() => {
+    async function checkUpdate() {
+      try {
+        const { check } = await import('@tauri-apps/plugin-updater')
+        const update = await check()
+        if (update) {
+          setUpdateAvailable(update.version)
+          // Auto-download and install
+          const confirmed = confirm(`Update ${update.version} is available. Install now?`)
+          if (confirmed) {
+            setUpdating(true)
+            await update.downloadAndInstall()
+            const { relaunch } = await import('@tauri-apps/plugin-process')
+            await relaunch()
+          }
+        }
+      } catch (e) {
+        console.log('Update check skipped:', e)
+      }
+    }
+    // Check after a short delay so the app loads first
+    const timer = setTimeout(checkUpdate, 3000)
+    return () => clearTimeout(timer)
   }, [])
 
   // Global keyboard shortcuts
