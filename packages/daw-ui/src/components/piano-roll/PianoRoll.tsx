@@ -81,7 +81,7 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
     // Background
-    ctx.fillStyle = '#1A1A1E'
+    ctx.fillStyle = '#363636'
     ctx.fillRect(0, 0, w, h)
 
     // Draw pitch rows (alternating shade for black keys)
@@ -89,12 +89,12 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       const y = yFromPitch(pitch)
       if (y + NOTE_HEIGHT < 0 || y > h) continue
       if (isBlackKey(pitch)) {
-        ctx.fillStyle = '#161619'
+        ctx.fillStyle = '#303030'
         ctx.fillRect(0, y, w, NOTE_HEIGHT)
       }
       // C note highlight
       if (pitch % 12 === 0) {
-        ctx.fillStyle = 'rgba(155, 109, 255, 0.04)'
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.03)'
         ctx.fillRect(0, y, w, NOTE_HEIGHT)
       }
     }
@@ -147,10 +147,10 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       if (x + noteW < 0 || x > w || y + NOTE_HEIGHT < 0 || y > h) continue
 
       const isSelected = selectedNotes.has(note.index)
-      const color = note.muted ? hw.textFaint : hw.purple
+      const color = note.muted ? '#666' : '#00CC44'
 
       // Note body
-      ctx.fillStyle = isSelected ? hw.purpleLight : color
+      ctx.fillStyle = isSelected ? '#44FF66' : color
       ctx.globalAlpha = note.muted ? 0.4 : 0.85
       ctx.beginPath()
       ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), NOTE_HEIGHT - 2, 2)
@@ -320,9 +320,9 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
           {(['draw', 'select', 'erase'] as const).map(t => (
             <button key={t} onClick={() => setTool(t)} style={{
               padding: '1px 6px', fontSize: 9, fontWeight: 600,
-              color: tool === t ? hw.purple : hw.textFaint,
-              background: tool === t ? hw.purpleDim : 'transparent',
-              border: `1px solid ${tool === t ? hw.purple + '40' : 'transparent'}`,
+              color: tool === t ? '#FFF' : '#888',
+              background: tool === t ? '#555' : 'transparent',
+              border: `1px solid ${tool === t ? 'rgba(255,255,255,0.12)' : 'transparent'}`,
               borderRadius: 2, textTransform: 'uppercase',
             }}>
               {t}

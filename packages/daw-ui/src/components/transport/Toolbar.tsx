@@ -38,75 +38,80 @@ export function Toolbar(props: ToolbarProps) {
     <div style={{
       display: 'flex',
       alignItems: 'center',
-      height: 34,
+      height: 38,
       background: hw.bgToolbarGrad,
-      borderBottom: `1px solid ${hw.borderDark}`,
+      borderBottom: '1px solid rgba(0,0,0,0.5)',
       padding: '0 4px',
-      gap: 1,
+      gap: 2,
     }}>
-      {/* 1. Panel shortcut buttons — FL order */}
-      <div style={{ display: 'flex', gap: 0 }}>
-        <IconBtn icon="playlist" active={props.showPlaylist} onClick={props.onTogglePlaylist} onEnter={hint('Playlist (F5)')} onLeave={clear} />
-        <IconBtn icon="channel" active={props.showChannelRack} onClick={props.onToggleChannelRack} onEnter={hint('Channel Rack (F6)')} onLeave={clear} />
-        <IconBtn icon="pianoroll" active={props.showPianoRoll} onClick={props.onTogglePianoRoll} onEnter={hint('Piano Roll (F7)')} onLeave={clear} />
-        <IconBtn icon="mixer" active={props.showMixer} onClick={props.onToggleMixer} onEnter={hint('Mixer (F9)')} onLeave={clear} />
-        <IconBtn icon="browser" active={props.showBrowser} onClick={props.onToggleBrowser} onEnter={hint('Browser')} onLeave={clear} />
+      {/* 1. Panel toggle buttons — FL order */}
+      <div style={{ display: 'flex', gap: 1 }}>
+        <PanelBtn icon="playlist" label="Playlist" active={props.showPlaylist} onClick={props.onTogglePlaylist} onEnter={hint('Playlist (F5)')} onLeave={clear} />
+        <PanelBtn icon="channel" label="Channel" active={props.showChannelRack} onClick={props.onToggleChannelRack} onEnter={hint('Channel Rack (F6)')} onLeave={clear} />
+        <PanelBtn icon="pianoroll" label="Piano" active={props.showPianoRoll} onClick={props.onTogglePianoRoll} onEnter={hint('Piano Roll (F7)')} onLeave={clear} />
+        <PanelBtn icon="mixer" label="Mixer" active={props.showMixer} onClick={props.onToggleMixer} onEnter={hint('Mixer (F9)')} onLeave={clear} />
+        <PanelBtn icon="browser" label="Browser" active={props.showBrowser} onClick={props.onToggleBrowser} onEnter={hint('Browser')} onLeave={clear} />
       </div>
 
       <Sep />
 
-      {/* 2. Pattern selector with +/- */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
-        <button style={patNavBtn} onMouseEnter={hint('Previous pattern')} onMouseLeave={clear}>
-          <svg width="5" height="7" viewBox="0 0 5 7"><path d="M4 0.5L1 3.5L4 6.5" stroke={hw.textFaint} strokeWidth="1" fill="none"/></svg>
+      {/* 2. Pattern selector */}
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <button style={navBtn} onMouseEnter={hint('Previous pattern')} onMouseLeave={clear}>
+          <svg width="5" height="7" viewBox="0 0 5 7"><path d="M4 0.5L1 3.5L4 6.5" stroke="#999" strokeWidth="1.2" fill="none"/></svg>
         </button>
         <div style={{
-          ...lcdBox, padding: '0 6px', cursor: 'default', minWidth: 70,
+          ...lcd, padding: '0 8px', minWidth: 80,
         }} onMouseEnter={hint('Select pattern')} onMouseLeave={clear}>
-          <span style={{ fontSize: 10, color: hw.textSecondary }}>Pattern 1</span>
+          <span style={{ fontSize: 10, color: '#C0C0C0' }}>Pattern 1</span>
         </div>
-        <button style={patNavBtn} onMouseEnter={hint('Next pattern')} onMouseLeave={clear}>
-          <svg width="5" height="7" viewBox="0 0 5 7"><path d="M1 0.5L4 3.5L1 6.5" stroke={hw.textFaint} strokeWidth="1" fill="none"/></svg>
+        <button style={navBtn} onMouseEnter={hint('Next pattern')} onMouseLeave={clear}>
+          <svg width="5" height="7" viewBox="0 0 5 7"><path d="M1 0.5L4 3.5L1 6.5" stroke="#999" strokeWidth="1.2" fill="none"/></svg>
         </button>
       </div>
 
       <Sep />
 
-      {/* 3. PAT / SONG */}
+      {/* 3. PAT / SONG toggle */}
       <div style={{
-        display: 'flex', background: hw.bgInput, border: `1px solid ${hw.border}`,
+        display: 'flex', background: '#2A2A2A',
+        border: '1px solid rgba(0,0,0,0.5)',
         overflow: 'hidden', borderRadius: 2,
       }}>
         <ModeBtn label="PAT" active onEnter={hint('Pattern mode')} onLeave={clear} />
-        <div style={{ width: 1, background: hw.border }} />
+        <div style={{ width: 1, background: 'rgba(0,0,0,0.5)' }} />
         <ModeBtn label="SONG" active={false} onEnter={hint('Song mode')} onLeave={clear} />
       </div>
 
       <Sep />
 
-      {/* 4. Transport — Record, Stop, Play (FL order) */}
-      <div style={{ display: 'flex', gap: 0 }}>
-        <button style={tBtn} onMouseEnter={hint('Record (R)')} onMouseLeave={clear}>
-          <svg width="8" height="8"><circle cx="4" cy="4" r="3.5" fill="#8B3030" /></svg>
+      {/* 4. Transport — Record, Stop, Play */}
+      <div style={{ display: 'flex', gap: 1 }}>
+        <button style={transportBtn} onMouseEnter={hint('Record (R)')} onMouseLeave={clear}>
+          <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#993333" /></svg>
         </button>
-        <button onClick={stop} style={tBtn} onMouseEnter={hint('Stop')} onMouseLeave={clear}>
-          <svg width="8" height="8"><rect width="8" height="8" rx="1" fill={hw.textMuted} /></svg>
+        <button onClick={stop} style={transportBtn} onMouseEnter={hint('Stop')} onMouseLeave={clear}>
+          <svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="0.5" fill="#999" /></svg>
         </button>
-        <button onClick={togglePlayback} style={{ ...tBtn, background: playing ? hw.greenDim : tBtn.background }} onMouseEnter={hint('Play (Space)')} onMouseLeave={clear}>
-          <svg width="8" height="10"><polygon points="0,0 8,5 0,10" fill={playing ? hw.green : hw.textMuted} /></svg>
+        <button onClick={togglePlayback} style={{
+          ...transportBtn,
+          background: playing ? 'rgba(0,204,68,0.15)' : transportBtn.background,
+          borderColor: playing ? 'rgba(0,204,68,0.3)' : 'rgba(0,0,0,0.4)',
+        }} onMouseEnter={hint('Play (Space)')} onMouseLeave={clear}>
+          <svg width="10" height="12"><polygon points="0,0 10,6 0,12" fill={playing ? '#00CC44' : '#999'} /></svg>
         </button>
       </div>
 
       <Sep />
 
-      {/* 5. Tempo */}
-      <div style={{ ...lcdBox, width: 62 }} onMouseEnter={hint('Tempo')} onMouseLeave={clear}>
+      {/* 5. Tempo LCD */}
+      <div style={{ ...lcd, width: 68 }} onMouseEnter={hint('Tempo')} onMouseLeave={clear}>
         <input
           type="number" value={bpm}
           onChange={e => setBpm(parseFloat(e.target.value) || 140)}
           style={{
-            width: 44, background: 'transparent', border: 'none',
-            color: hw.purple, fontSize: 13, fontWeight: 700,
+            width: 50, background: 'transparent', border: 'none',
+            color: hw.greenLcd, fontSize: 14, fontWeight: 700,
             fontFamily: "'Consolas', 'Courier New', monospace",
             textAlign: 'right', outline: 'none',
           }}
@@ -115,22 +120,22 @@ export function Toolbar(props: ToolbarProps) {
 
       <Sep />
 
-      {/* 6. Time display — Bar:Beat:Tick | Min:Sec.Cs */}
-      <div style={{ ...lcdBox, padding: '0 6px', gap: 6 }}>
-        <span style={lcdText}>
-          <span style={{ color: hw.purple }}>{String(bar).padStart(3, ' ')}</span>
-          <span style={{ color: hw.textFaint }}>:</span>
-          <span style={{ color: hw.purple }}>{beat}</span>
-          <span style={{ color: hw.textFaint }}>:</span>
-          <span style={{ color: hw.purple }}>{String(tick).padStart(3, '0')}</span>
+      {/* 6. Time display — Bar:Beat:Tick | Min:Sec.Cs — green LCD digits */}
+      <div style={{ ...lcd, padding: '0 8px', gap: 8 }}>
+        <span style={lcdDigit}>
+          <span style={{ color: hw.greenLcd }}>{String(bar).padStart(3, ' ')}</span>
+          <span style={{ color: '#336633' }}>:</span>
+          <span style={{ color: hw.greenLcd }}>{beat}</span>
+          <span style={{ color: '#336633' }}>:</span>
+          <span style={{ color: hw.greenLcd }}>{String(tick).padStart(3, '0')}</span>
         </span>
-        <div style={{ width: 1, height: 12, background: hw.border }} />
-        <span style={lcdText}>
-          <span style={{ color: hw.green }}>{String(mins).padStart(2, ' ')}</span>
-          <span style={{ color: hw.textFaint }}>:</span>
-          <span style={{ color: hw.green }}>{String(secs).padStart(2, '0')}</span>
-          <span style={{ color: hw.textFaint }}>.</span>
-          <span style={{ color: hw.green }}>{String(cs).padStart(2, '0')}</span>
+        <div style={{ width: 1, height: 14, background: '#333' }} />
+        <span style={lcdDigit}>
+          <span style={{ color: hw.greenLcd }}>{String(mins).padStart(2, ' ')}</span>
+          <span style={{ color: '#336633' }}>:</span>
+          <span style={{ color: hw.greenLcd }}>{String(secs).padStart(2, '0')}</span>
+          <span style={{ color: '#336633' }}>.</span>
+          <span style={{ color: hw.greenLcd }}>{String(cs).padStart(2, '0')}</span>
         </span>
       </div>
 
@@ -138,33 +143,33 @@ export function Toolbar(props: ToolbarProps) {
 
       {/* 7. Song position slider */}
       <div style={{
-        width: 80, height: 6, background: hw.bgInput, borderRadius: 3,
-        border: `1px solid ${hw.border}`, position: 'relative', cursor: 'pointer',
+        width: 80, height: 8, background: '#222', borderRadius: 1,
+        border: '1px solid rgba(0,0,0,0.5)', position: 'relative', cursor: 'pointer',
       }} onMouseEnter={hint('Song position')} onMouseLeave={clear}>
         <div style={{
           position: 'absolute', left: 0, top: 0, width: '0%', height: '100%',
-          background: `linear-gradient(90deg, ${hw.purpleMuted}, ${hw.purple})`,
-          borderRadius: 3,
+          background: 'linear-gradient(90deg, #555, #777)',
+          borderRadius: 1,
         }} />
       </div>
 
       <Sep />
 
-      {/* 8. Global snap */}
-      <div style={{ ...lcdBox, padding: '0 6px', cursor: 'default' }} onMouseEnter={hint('Global snap')} onMouseLeave={clear}>
+      {/* 8. Snap */}
+      <div style={{ ...lcd, padding: '0 6px', cursor: 'default' }} onMouseEnter={hint('Global snap')} onMouseLeave={clear}>
         <svg width="8" height="8" viewBox="0 0 8 8" style={{ marginRight: 3 }}>
-          <path d="M1 7V1h6" stroke={hw.textFaint} strokeWidth="0.8" fill="none"/>
-          <circle cx="4" cy="4" r="1.5" fill={hw.textMuted}/>
+          <path d="M1 7V1h6" stroke="#999" strokeWidth="0.8" fill="none"/>
+          <circle cx="4" cy="4" r="1.5" fill="#999"/>
         </svg>
-        <span style={{ fontSize: 10, color: hw.textMuted }}>Line</span>
+        <span style={{ fontSize: 10, color: '#B0B0B0' }}>Line</span>
         <svg width="7" height="5" viewBox="0 0 7 5" style={{ marginLeft: 3 }}>
-          <path d="M0.5 0.5L3.5 4L6.5 0.5" stroke={hw.textFaint} strokeWidth="1" fill="none" />
+          <path d="M0.5 0.5L3.5 4L6.5 0.5" stroke="#999" strokeWidth="1" fill="none" />
         </svg>
       </div>
 
       <Sep />
 
-      {/* 9. Tool buttons — FL Studio signature: Draw, Paint, Delete, Mute, Slip, Slice, Select, Zoom */}
+      {/* 9. Tool buttons */}
       <div style={{ display: 'flex', gap: 0 }}>
         <ToolSelectBtn tool="draw" active={activeTool} onClick={setActiveTool} onEnter={hint('Draw (P)')} onLeave={clear}>
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 8.5L2 6L7 1L9 3L4 8Z" stroke="currentColor" strokeWidth="0.8" fill={activeTool === 'draw' ? 'currentColor' : 'none'} opacity={activeTool === 'draw' ? 0.3 : 1}/><path d="M7 1L9 3" stroke="currentColor" strokeWidth="1"/></svg>
@@ -194,7 +199,7 @@ export function Toolbar(props: ToolbarProps) {
 
       <Sep />
 
-      {/* 10. Multilink to controllers */}
+      {/* 10. Multilink */}
       <ToolBtn onEnter={hint('Multilink to controllers')} onLeave={clear}>
         <svg width="11" height="11" viewBox="0 0 11 11">
           <circle cx="3" cy="3" r="1.5" stroke="currentColor" strokeWidth="0.8" fill="none"/>
@@ -221,17 +226,17 @@ export function Toolbar(props: ToolbarProps) {
       {/* 12. Master volume */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 3 }} onMouseEnter={hint('Master volume')} onMouseLeave={clear}>
         <svg width="9" height="9" viewBox="0 0 9 9">
-          <polygon points="0,4 3,1 3,7" fill={hw.textFaint} />
-          <path d="M4.5 2.5 Q6 4.5 4.5 6.5" stroke={hw.textFaint} strokeWidth="0.8" fill="none"/>
-          <path d="M5.5 1.5 Q8 4.5 5.5 7.5" stroke={hw.textFaint} strokeWidth="0.8" fill="none"/>
+          <polygon points="0,4 3,1 3,7" fill="#999" />
+          <path d="M4.5 2.5 Q6 4.5 4.5 6.5" stroke="#999" strokeWidth="0.8" fill="none"/>
+          <path d="M5.5 1.5 Q8 4.5 5.5 7.5" stroke="#999" strokeWidth="0.8" fill="none"/>
         </svg>
         <div style={{
-          width: 50, height: 4, background: hw.bgInput, borderRadius: 2,
-          border: `1px solid ${hw.border}`, position: 'relative',
+          width: 55, height: 6, background: '#222', borderRadius: 1,
+          border: '1px solid rgba(0,0,0,0.5)', position: 'relative',
         }}>
           <div style={{
-            width: '80%', height: '100%', borderRadius: 2,
-            background: `linear-gradient(90deg, ${hw.purpleMuted}, ${hw.purple})`,
+            width: '80%', height: '100%', borderRadius: 1,
+            background: 'linear-gradient(90deg, #555, #888)',
           }} />
         </div>
       </div>
@@ -240,14 +245,15 @@ export function Toolbar(props: ToolbarProps) {
 
       {/* 13. Master pitch knob */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 2 }} onMouseEnter={hint('Master pitch')} onMouseLeave={clear}>
-        <span style={{ fontSize: 7, color: hw.textFaint }}>PIT</span>
+        <span style={{ fontSize: 7, color: '#888' }}>PIT</span>
         <div style={{
-          width: 14, height: 14, borderRadius: '50%',
-          background: hw.bgInput, border: `1px solid ${hw.border}`,
+          width: 16, height: 16, borderRadius: '50%',
+          background: 'linear-gradient(145deg, #555, #3A3A3A)',
+          border: '1px solid rgba(0,0,0,0.5)',
           position: 'relative',
         }}>
           <div style={{
-            position: 'absolute', width: 1, height: 5, background: hw.textMuted,
+            position: 'absolute', width: 1.5, height: 5, background: '#CCC',
             top: 2, left: '50%', transform: 'translateX(-50%)',
             borderRadius: 1,
           }} />
@@ -256,32 +262,36 @@ export function Toolbar(props: ToolbarProps) {
 
       <Sep />
 
-      {/* 14. CPU / Polyphony meters */}
+      {/* 14. CPU / Polyphony */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} onMouseEnter={hint('CPU / Polyphony')} onMouseLeave={clear}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-          <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>CPU</span>
-          <div style={{ width: 28, height: 3, background: hw.bgInput, borderRadius: 1 }}>
-            <div style={{ width: '12%', height: '100%', background: hw.green, borderRadius: 1 }} />
+          <span style={{ fontSize: 7, color: '#888', lineHeight: 1 }}>CPU</span>
+          <div style={{ width: 30, height: 4, background: '#222', borderRadius: 1, border: '1px solid rgba(0,0,0,0.4)' }}>
+            <div style={{ width: '12%', height: '100%', background: '#00CC44', borderRadius: 1 }} />
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-          <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>POLY</span>
-          <div style={{ width: 28, height: 3, background: hw.bgInput, borderRadius: 1 }}>
-            <div style={{ width: '5%', height: '100%', background: hw.green, borderRadius: 1 }} />
+          <span style={{ fontSize: 7, color: '#888', lineHeight: 1 }}>POLY</span>
+          <div style={{ width: 30, height: 4, background: '#222', borderRadius: 1, border: '1px solid rgba(0,0,0,0.4)' }}>
+            <div style={{ width: '5%', height: '100%', background: '#00CC44', borderRadius: 1 }} />
           </div>
         </div>
       </div>
 
       <Sep />
 
-      {/* 15. Mini scope / output monitor */}
+      {/* 15. Mini scope */}
       <div style={{
-        width: 56, height: 20,
-        background: hw.bgDeep, border: `1px solid ${hw.border}`,
-        borderRadius: 2,
+        width: 60, height: 22,
+        background: '#1A1A1A', border: '1px solid rgba(0,0,0,0.5)',
+        borderRadius: 1,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <span style={{ fontSize: 7, color: hw.textFaint }}>SCOPE</span>
+        {/* Flat line scope placeholder */}
+        <svg width="40" height="12" viewBox="0 0 40 12">
+          <polyline points="0,6 5,6 8,3 12,9 16,4 20,8 24,5 28,7 32,6 36,6 40,6"
+            fill="none" stroke="#00CC44" strokeWidth="1" opacity="0.5" />
+        </svg>
       </div>
     </div>
   )
@@ -290,7 +300,7 @@ export function Toolbar(props: ToolbarProps) {
 /* --- Sub-components --- */
 
 function Sep() {
-  return <div style={{ width: 1, height: 20, background: hw.border, margin: '0 3px' }} />
+  return <div style={{ width: 1, height: 24, background: 'rgba(0,0,0,0.3)', margin: '0 3px' }} />
 }
 
 function ToolBtn({ children, onEnter, onLeave }: {
@@ -298,12 +308,12 @@ function ToolBtn({ children, onEnter, onLeave }: {
 }) {
   return (
     <button
-      onMouseEnter={onEnter}
-      onMouseLeave={onLeave}
+      onMouseEnter={e => { onEnter(); e.currentTarget.style.background = '#666' }}
+      onMouseLeave={e => { onLeave(); e.currentTarget.style.background = 'transparent' }}
       style={{
-        width: 22, height: 22,
+        width: 24, height: 24,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: hw.textFaint,
+        color: '#999',
         background: 'transparent',
         border: '1px solid transparent',
         borderRadius: 2,
@@ -325,11 +335,11 @@ function ToolSelectBtn({ tool, active, onClick, children, onEnter, onLeave }: {
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       style={{
-        width: 20, height: 20,
+        width: 22, height: 22,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: isActive ? hw.purple : hw.textFaint,
-        background: isActive ? hw.purpleDim : 'transparent',
-        border: `1px solid ${isActive ? hw.purple + '40' : 'transparent'}`,
+        color: isActive ? '#FFFFFF' : '#999',
+        background: isActive ? '#555' : 'transparent',
+        border: `1px solid ${isActive ? 'rgba(255,255,255,0.15)' : 'transparent'}`,
         borderRadius: 2,
       }}
     >
@@ -338,15 +348,15 @@ function ToolSelectBtn({ tool, active, onClick, children, onEnter, onLeave }: {
   )
 }
 
-function IconBtn({ icon, active, onClick, onEnter, onLeave }: {
-  icon: string; active: boolean; onClick: () => void; onEnter: () => void; onLeave: () => void
+function PanelBtn({ icon, active, onClick, onEnter, onLeave }: {
+  icon: string; label: string; active: boolean; onClick: () => void; onEnter: () => void; onLeave: () => void
 }) {
   const icons: Record<string, React.ReactNode> = {
-    playlist: <svg width="11" height="11" viewBox="0 0 11 11"><rect x="0.5" y="1" width="4" height="3" rx="0.5" fill="currentColor"/><rect x="5.5" y="1" width="5" height="3" rx="0.5" fill="currentColor" opacity="0.6"/><rect x="1.5" y="6" width="6" height="3" rx="0.5" fill="currentColor"/></svg>,
-    channel: <svg width="11" height="11" viewBox="0 0 11 11"><rect x="0.5" y="1.5" width="10" height="2" rx="0.5" fill="currentColor"/><rect x="0.5" y="4.5" width="10" height="2" rx="0.5" fill="currentColor"/><rect x="0.5" y="7.5" width="10" height="2" rx="0.5" fill="currentColor"/></svg>,
-    pianoroll: <svg width="11" height="11" viewBox="0 0 11 11"><rect x="0.5" y="0.5" width="10" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="0.8"/><rect x="0.5" y="0.5" width="3" height="2" fill="currentColor"/><rect x="0.5" y="4" width="3" height="2" fill="currentColor"/><rect x="0.5" y="7.5" width="3" height="2" fill="currentColor"/><rect x="5" y="3" width="5" height="1.5" rx="0.5" fill="currentColor" opacity="0.7"/><rect x="4" y="6" width="4" height="1.5" rx="0.5" fill="currentColor" opacity="0.7"/></svg>,
-    mixer: <svg width="11" height="11" viewBox="0 0 11 11"><line x1="2.5" y1="1" x2="2.5" y2="10" stroke="currentColor" strokeWidth="1.2"/><line x1="5.5" y1="1" x2="5.5" y2="10" stroke="currentColor" strokeWidth="1.2"/><line x1="8.5" y1="1" x2="8.5" y2="10" stroke="currentColor" strokeWidth="1.2"/><circle cx="2.5" cy="3.5" r="1.3" fill="currentColor"/><circle cx="5.5" cy="6.5" r="1.3" fill="currentColor"/><circle cx="8.5" cy="5" r="1.3" fill="currentColor"/></svg>,
-    browser: <svg width="11" height="11" viewBox="0 0 11 11"><rect x="0.5" y="0.5" width="10" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1"/><line x1="3.5" y1="0.5" x2="3.5" y2="10.5" stroke="currentColor" strokeWidth="1"/></svg>,
+    playlist: <svg width="12" height="12" viewBox="0 0 12 12"><rect x="0.5" y="1" width="4.5" height="3.5" rx="0.5" fill="currentColor"/><rect x="6" y="1" width="5.5" height="3.5" rx="0.5" fill="currentColor" opacity="0.6"/><rect x="1.5" y="6.5" width="7" height="3.5" rx="0.5" fill="currentColor"/></svg>,
+    channel: <svg width="12" height="12" viewBox="0 0 12 12"><rect x="0.5" y="1.5" width="11" height="2.5" rx="0.5" fill="currentColor"/><rect x="0.5" y="5" width="11" height="2.5" rx="0.5" fill="currentColor"/><rect x="0.5" y="8.5" width="11" height="2.5" rx="0.5" fill="currentColor"/></svg>,
+    pianoroll: <svg width="12" height="12" viewBox="0 0 12 12"><rect x="0.5" y="0.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" strokeWidth="0.8"/><rect x="0.5" y="0.5" width="3.5" height="2.5" fill="currentColor"/><rect x="0.5" y="4.5" width="3.5" height="2.5" fill="currentColor"/><rect x="0.5" y="8.5" width="3.5" height="2.5" fill="currentColor"/><rect x="5.5" y="3.5" width="5" height="2" rx="0.5" fill="currentColor" opacity="0.7"/><rect x="4.5" y="7" width="4.5" height="2" rx="0.5" fill="currentColor" opacity="0.7"/></svg>,
+    mixer: <svg width="12" height="12" viewBox="0 0 12 12"><line x1="3" y1="1" x2="3" y2="11" stroke="currentColor" strokeWidth="1.5"/><line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.5"/><line x1="9" y1="1" x2="9" y2="11" stroke="currentColor" strokeWidth="1.5"/><circle cx="3" cy="4" r="1.5" fill="currentColor"/><circle cx="6" cy="7" r="1.5" fill="currentColor"/><circle cx="9" cy="5.5" r="1.5" fill="currentColor"/></svg>,
+    browser: <svg width="12" height="12" viewBox="0 0 12 12"><rect x="0.5" y="0.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" strokeWidth="1"/><line x1="4" y1="0.5" x2="4" y2="11.5" stroke="currentColor" strokeWidth="1"/></svg>,
   }
   return (
     <button
@@ -354,11 +364,11 @@ function IconBtn({ icon, active, onClick, onEnter, onLeave }: {
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       style={{
-        width: 22, height: 22,
+        width: 26, height: 26,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: active ? hw.purple : hw.textFaint,
-        background: active ? hw.purpleDim : 'transparent',
-        border: `1px solid ${active ? hw.purple + '40' : 'transparent'}`,
+        color: active ? '#FFFFFF' : '#888',
+        background: active ? '#555' : 'transparent',
+        border: `1px solid ${active ? 'rgba(255,255,255,0.12)' : 'transparent'}`,
         borderRadius: 2,
       }}
     >
@@ -375,10 +385,10 @@ function ModeBtn({ label, active, onEnter, onLeave }: {
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       style={{
-        padding: '2px 6px',
-        fontSize: 9, fontWeight: 700,
-        color: active ? hw.purple : hw.textFaint,
-        background: active ? hw.bgCard : 'transparent',
+        padding: '3px 8px',
+        fontSize: 10, fontWeight: 700,
+        color: active ? hw.greenLcd : '#777',
+        background: active ? '#333' : 'transparent',
         cursor: 'default',
         letterSpacing: 0.5,
       }}
@@ -388,34 +398,34 @@ function ModeBtn({ label, active, onEnter, onLeave }: {
   )
 }
 
-const tBtn: React.CSSProperties = {
-  width: 24, height: 22,
+const transportBtn: React.CSSProperties = {
+  width: 28, height: 26,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  background: '#222226',
-  border: '1px solid rgba(255,255,255,0.07)',
+  background: '#444',
+  border: '1px solid rgba(0,0,0,0.4)',
   borderRadius: 2,
 }
 
-const patNavBtn: React.CSSProperties = {
-  width: 14, height: 22,
+const navBtn: React.CSSProperties = {
+  width: 16, height: 26,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   background: 'transparent',
   border: 'none',
   cursor: 'pointer',
 }
 
-const lcdBox: React.CSSProperties = {
+const lcd: React.CSSProperties = {
   display: 'flex', alignItems: 'center',
-  background: '#111114',
-  border: '1px solid rgba(255,255,255,0.07)',
+  background: '#1A1A1A',
+  border: '1px solid rgba(0,0,0,0.6)',
   borderRadius: 2,
-  height: 22,
-  padding: '0 3px',
+  height: 26,
+  padding: '0 4px',
 }
 
-const lcdText: React.CSSProperties = {
+const lcdDigit: React.CSSProperties = {
   fontFamily: "'Consolas', 'Courier New', monospace",
-  fontSize: 12, fontWeight: 700,
+  fontSize: 13, fontWeight: 700,
   whiteSpace: 'pre',
   letterSpacing: 0,
 }

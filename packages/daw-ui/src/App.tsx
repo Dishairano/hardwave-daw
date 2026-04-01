@@ -172,7 +172,7 @@ export function App() {
       flexDirection: 'column',
       height: '100vh',
       width: '100vw',
-      background: '#1E1E22',
+      background: '#444444',
     }}>
       {showSplash && (
         <SplashScreen

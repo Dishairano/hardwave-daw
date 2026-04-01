@@ -31,7 +31,7 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
     // Background
-    ctx.fillStyle = '#1C1C20'
+    ctx.fillStyle = '#3A3A3A'
     ctx.fillRect(0, 0, width, h)
 
     for (let pitch = 0; pitch < totalNotes; pitch++) {
@@ -43,13 +43,13 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
 
       // Key background
       if (black) {
-        ctx.fillStyle = '#18181C'
+        ctx.fillStyle = '#333'
         ctx.fillRect(0, y, width, noteHeight)
         // Black key overlay
-        ctx.fillStyle = '#131316'
+        ctx.fillStyle = '#2A2A2A'
         ctx.fillRect(0, y + 1, width * 0.6, noteHeight - 2)
       } else {
-        ctx.fillStyle = isC ? '#24242A' : '#1F1F24'
+        ctx.fillStyle = isC ? '#444' : '#3E3E3E'
         ctx.fillRect(0, y, width, noteHeight)
       }
 

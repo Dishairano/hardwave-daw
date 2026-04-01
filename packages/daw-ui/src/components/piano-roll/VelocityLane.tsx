@@ -41,7 +41,7 @@ export function VelocityLane({
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
     // Background
-    ctx.fillStyle = '#161619'
+    ctx.fillStyle = '#2A2A2A'
     ctx.fillRect(0, 0, w, height)
 
     // Horizontal guide lines at 25/50/75/100%
@@ -79,11 +79,11 @@ export function VelocityLane({
         gradient.addColorStop(0, '#EF4444')
         gradient.addColorStop(1, '#DC2626')
       } else if (note.velocity > 0.5) {
-        gradient.addColorStop(0, hw.purple)
-        gradient.addColorStop(1, hw.purpleMuted)
+        gradient.addColorStop(0, '#00CC44')
+        gradient.addColorStop(1, '#009933')
       } else {
-        gradient.addColorStop(0, hw.purpleMuted)
-        gradient.addColorStop(1, '#4A3A80')
+        gradient.addColorStop(0, '#009933')
+        gradient.addColorStop(1, '#006622')
       }
 
       ctx.fillStyle = gradient
@@ -124,7 +124,7 @@ export function VelocityLane({
   }, [notes, scrollX, pixelsPerTick, height, onVelocityChange])
 
   return (
-    <div ref={containerRef} style={{
+    <div ref={containerRef} data-testid="velocity-lane" style={{
       height, marginLeft: keyboardWidth,
       borderTop: `1px solid ${hw.borderDark}`,
       overflow: 'hidden',
