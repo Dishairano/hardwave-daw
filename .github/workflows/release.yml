@@ -80,3 +80,102 @@ jobs:
           prerelease: false
           tauriScript: tauri
           args: --target ${{ matrix.target }}
+
+  discord-changelog:
+    needs: build
+    runs-on: ubuntu-latest
+    if: success()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get release info
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch the release body from GitHub
+          BODY=$(gh release view "${{ github.ref_name }}" --json body -q '.body' 2>/dev/null || echo "")
+          echo "body<<RELEASE_EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Post Discord changelog
+        if: env.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          VERSION: ${{ github.ref_name }}
+          RELEASE_BODY: ${{ steps.release.outputs.body }}
+        run: |
+          # Parse changelog sections from release body
+          # Expected format: ## New / ## Improved / ## Fixed with bullet points
+
+          parse_section() {
+            local section="$1"
+            local body="$2"
+            echo "$body" | sed -n "/^## *${section}/,/^## /p" | grep '^\s*[-*]' | sed 's/^\s*[-*]\s*//' | head -8
+          }
+
+          NEW=$(parse_section "New" "$RELEASE_BODY")
+          IMPROVED=$(parse_section "Improved" "$RELEASE_BODY")
+          FIXED=$(parse_section "Fixed" "$RELEASE_BODY")
+
+          # Count items
+          NEW_COUNT=$(echo "$NEW" | grep -c '.' 2>/dev/null || echo 0)
+          IMPROVED_COUNT=$(echo "$IMPROVED" | grep -c '.' 2>/dev/null || echo 0)
+          FIXED_COUNT=$(echo "$FIXED" | grep -c '.' 2>/dev/null || echo 0)
+
+          # Build embed fields JSON
+          FIELDS="[]"
+
+          if [ -n "$NEW" ] && [ "$NEW_COUNT" -gt 0 ]; then
+            NEW_FMT=$(echo "$NEW" | sed 's/^/• /' | tr '\n' '\n')
+            FIELDS=$(echo "$FIELDS" | jq --arg v "$NEW_FMT" '. + [{"name": "✦ NEW", "value": $v, "inline": false}]')
+          fi
+
+          if [ -n "$IMPROVED" ] && [ "$IMPROVED_COUNT" -gt 0 ]; then
+            IMP_FMT=$(echo "$IMPROVED" | sed 's/^/• /' | tr '\n' '\n')
+            FIELDS=$(echo "$FIELDS" | jq --arg v "$IMP_FMT" '. + [{"name": "✦ IMPROVED", "value": $v, "inline": false}]')
+          fi
+
+          if [ -n "$FIXED" ] && [ "$FIXED_COUNT" -gt 0 ]; then
+            FIX_FMT=$(echo "$FIXED" | sed 's/^/• /' | tr '\n' '\n')
+            FIELDS=$(echo "$FIELDS" | jq --arg v "$FIX_FMT" '. + [{"name": "✦ FIXED", "value": $v, "inline": false}]')
+          fi
+
+          # Fallback if no structured changelog
+          if [ "$(echo "$FIELDS" | jq 'length')" -eq 0 ]; then
+            FALLBACK="${RELEASE_BODY:-Bug fixes and improvements.}"
+            FIELDS=$(echo '[]' | jq --arg v "$FALLBACK" '. + [{"name": "Changes", "value": $v, "inline": false}]')
+          fi
+
+          # Summary line
+          SUMMARY=""
+          [ "$NEW_COUNT" -gt 0 ] && SUMMARY="${NEW_COUNT} new"
+          [ "$IMPROVED_COUNT" -gt 0 ] && SUMMARY="${SUMMARY:+$SUMMARY · }${IMPROVED_COUNT} improved"
+          [ "$FIXED_COUNT" -gt 0 ] && SUMMARY="${SUMMARY:+$SUMMARY · }${FIXED_COUNT} fixed"
+
+          # Build the webhook payload
+          PAYLOAD=$(jq -n \
+            --arg title "Hardwave DAW ${VERSION}" \
+            --arg footer "${SUMMARY:-Release ${VERSION}}" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson fields "$FIELDS" \
+            '{
+              "embeds": [{
+                "title": $title,
+                "color": 15228416,
+                "fields": $fields,
+                "footer": {
+                  "text": ("Download at hardwavestudios.com/daw  •  " + $footer)
+                },
+                "timestamp": $timestamp
+              }]
+            }')
+
+          # Send to Discord
+          curl -s -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL"
+
+          echo "Discord changelog posted for ${VERSION}"
