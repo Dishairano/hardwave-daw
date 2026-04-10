@@ -1,59 +1,68 @@
-/** FL Studio 21 default theme — warm medium-dark gray, orange accents, green LEDs */
+/** Hardwave DAW — Dark purple-accent theme with near-black backgrounds */
 export const hw = {
-  // Backgrounds — FL's warm medium-dark grays (NOT near-black)
-  bg: '#464646',           // main panel background
-  bgDark: '#3E3E3E',       // slightly darker panels
-  bgDeep: '#333333',       // deepest (title bar, panel headers)
-  bgToolbar: '#525252',    // toolbar base
-  bgToolbarGrad: 'linear-gradient(180deg, #606060 0%, #525252 40%, #484848 100%)',
-  bgPanel: '#444444',      // channel rack / mixer background
-  bgCard: '#4E4E4E',       // raised card elements
-  bgHover: '#555555',      // hover highlight
-  bgInput: '#2A2A2A',      // LCD/input recessed areas
+  // ─── Backgrounds ─────────────────────────────────────────────────────────────
+  bg: '#0c0c10',              // root / deepest background
+  bgPanel: '#111116',         // side panels, browser, track list
+  bgSurface: '#17171e',      // cards, elevated panels
+  bgElevated: '#1e1e28',     // hover, raised elements
+  bgInput: '#08080c',        // recessed inputs, LCD areas
+  bgToolbar: '#131318',      // toolbar base
+  bgToolbarGrad: 'linear-gradient(180deg, #1a1a22 0%, #141419 40%, #101015 100%)',
 
-  // Text — FL's light gray text
-  textPrimary: '#DDDDDD',
-  textSecondary: '#C0C0C0',
-  textMuted: '#999999',
-  textFaint: '#777777',
-  textBright: '#FFFFFF',
+  // ─── Text ────────────────────────────────────────────────────────────────────
+  textPrimary: '#e0e0ec',
+  textSecondary: '#9898b0',
+  textMuted: '#606078',
+  textFaint: '#3c3c50',
+  textBright: '#ffffff',
 
-  // Borders — FL style
-  border: 'rgba(255, 255, 255, 0.1)',
-  borderLight: 'rgba(255, 255, 255, 0.15)',
-  borderDark: 'rgba(0, 0, 0, 0.4)',
+  // ─── Borders ─────────────────────────────────────────────────────────────────
+  border: 'rgba(255, 255, 255, 0.06)',
+  borderLight: 'rgba(255, 255, 255, 0.10)',
+  borderDark: 'rgba(0, 0, 0, 0.6)',
 
-  // FL Orange — the signature channel rack color
-  orange: '#E85D00',
-  orangeLight: '#FF7722',
-  orangeDim: 'rgba(232, 93, 0, 0.2)',
+  // ─── Accent — Hardwave Purple ────────────────────────────────────────────────
+  accent: '#9B6DFF',
+  accentLight: '#B48EFF',
+  accentDim: 'rgba(155, 109, 255, 0.15)',
+  accentGlow: 'rgba(155, 109, 255, 0.3)',
 
-  // FL Green — LEDs and LCD digits
-  green: '#00CC44',
-  greenBright: '#00FF44',
-  greenDim: 'rgba(0, 204, 68, 0.15)',
-  greenLcd: '#00DD44',    // LCD digit color
+  // ─── Secondary — Deep Purple ─────────────────────────────────────────────────
+  secondary: '#7B5AC0',
+  secondaryDim: 'rgba(123, 90, 192, 0.15)',
 
-  // Red — record, mute
-  red: '#CC3333',
-  redDim: 'rgba(204, 51, 51, 0.15)',
+  // ─── Meters / Success — Teal ─────────────────────────────────────────────────
+  green: '#00D4AA',
+  greenBright: '#00FFCC',
+  greenDim: 'rgba(0, 212, 170, 0.15)',
+  greenLcd: '#C4B5FF',       // LCD digit color — purple-tinted
 
-  // Yellow — solo, warning
-  yellow: '#DDAA00',
-  yellowDim: 'rgba(221, 170, 0, 0.15)',
+  // ─── Record / Danger — Pink-Red ──────────────────────────────────────────────
+  red: '#FF4466',
+  redDim: 'rgba(255, 68, 102, 0.15)',
 
-  blue: '#5599DD',
+  // ─── Solo / Warning — Amber ──────────────────────────────────────────────────
+  yellow: '#FFB020',
+  yellowDim: 'rgba(255, 176, 32, 0.15)',
 
-  // Selection / active highlight
-  selection: '#5588BB',
-  selectionDim: 'rgba(85, 136, 187, 0.2)',
+  // ─── Info — Blue ─────────────────────────────────────────────────────────────
+  blue: '#4488FF',
 
-  // Clip colors — FL Studio's pattern/clip palette
+  // ─── Selection ───────────────────────────────────────────────────────────────
+  selection: '#9B6DFF',
+  selectionDim: 'rgba(155, 109, 255, 0.12)',
+
+  // ─── Playhead ────────────────────────────────────────────────────────────────
+  orange: '#9B6DFF',          // legacy name kept for compat — now purple
+  orangeLight: '#B48EFF',
+  orangeDim: 'rgba(155, 109, 255, 0.2)',
+
+  // ─── Clip Colors — Vibrant on dark ───────────────────────────────────────────
   clips: [
-    '#C06060', '#60A060', '#6060C0', '#C0A060',
-    '#60C0C0', '#C060C0', '#A0C060', '#6080C0',
+    '#9B6DFF', '#00D4AA', '#FF4466', '#FFB020',
+    '#4488FF', '#FF66AA', '#66DDFF', '#88EE66',
   ],
 
-  // Radius — FL uses minimal rounding
-  radius: { sm: 1, md: 2, lg: 4 },
+  // ─── Radius ──────────────────────────────────────────────────────────────────
+  radius: { sm: 3, md: 6, lg: 10 },
 } as const

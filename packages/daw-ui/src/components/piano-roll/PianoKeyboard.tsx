@@ -31,7 +31,7 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
     // Background
-    ctx.fillStyle = '#3A3A3A'
+    ctx.fillStyle = hw.bgPanel
     ctx.fillRect(0, 0, width, h)
 
     for (let pitch = 0; pitch < totalNotes; pitch++) {
@@ -41,25 +41,23 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
       const black = isBlack(pitch)
       const isC = pitch % 12 === 0
 
-      // Key background
       if (black) {
-        ctx.fillStyle = '#333'
+        ctx.fillStyle = '#0a0a10'
         ctx.fillRect(0, y, width, noteHeight)
-        // Black key overlay
-        ctx.fillStyle = '#2A2A2A'
+        ctx.fillStyle = '#080810'
         ctx.fillRect(0, y + 1, width * 0.6, noteHeight - 2)
       } else {
-        ctx.fillStyle = isC ? '#444' : '#3E3E3E'
+        ctx.fillStyle = isC ? '#17171e' : '#111118'
         ctx.fillRect(0, y, width, noteHeight)
       }
 
-      // Bottom border of key
+      // Key border
       ctx.fillStyle = pitch % 12 === 0 || pitch % 12 === 5
-        ? 'rgba(255,255,255,0.08)' // C and F boundaries
-        : 'rgba(255,255,255,0.025)'
+        ? 'rgba(155, 109, 255, 0.06)'
+        : 'rgba(255,255,255,0.02)'
       ctx.fillRect(0, y + noteHeight - 0.5, width, 0.5)
 
-      // Note label (only for C notes or if tall enough)
+      // Note label
       if (isC || (noteHeight >= 14 && !black)) {
         const label = isC
           ? `C${Math.floor(pitch / 12) - 1}`
@@ -73,7 +71,7 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
     }
 
     // Right border
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'
+    ctx.fillStyle = hw.borderDark
     ctx.fillRect(width - 1, 0, 1, h)
   }, [width, noteHeight, scrollY, totalNotes])
 

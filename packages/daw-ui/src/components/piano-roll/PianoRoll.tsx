@@ -46,7 +46,6 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
     origDuration: number
   }>({ mode: 'none', noteIndex: -1, startX: 0, startY: 0, origTick: 0, origPitch: 0, origDuration: 0 })
 
-  const totalWidth = PPQ * 4 * 32 * pixelsPerTick // 32 bars
   const totalHeight = TOTAL_NOTES * NOTE_HEIGHT
 
   const snapTick = (tick: number) => Math.round(tick / snap) * snap
@@ -55,7 +54,6 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
   const yFromPitch = (pitch: number) => (TOTAL_NOTES - 1 - pitch) * NOTE_HEIGHT - scrollY
   const xFromTick = (tick: number) => tick * pixelsPerTick - scrollX + KEYBOARD_WIDTH
 
-  // Note name helper
   const noteName = (pitch: number) => {
     const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
     return `${names[pitch % 12]}${Math.floor(pitch / 12) - 1}`
@@ -63,7 +61,6 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
 
   const isBlackKey = (pitch: number) => [1, 3, 6, 8, 10].includes(pitch % 12)
 
-  // Draw the grid canvas
   const draw = useCallback(() => {
     const canvas = canvasRef.current
     const container = containerRef.current
@@ -80,27 +77,26 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
     const ctx = canvas.getContext('2d')!
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
-    // Background
-    ctx.fillStyle = '#363636'
+    // Background — near-black
+    ctx.fillStyle = '#0e0e14'
     ctx.fillRect(0, 0, w, h)
 
-    // Draw pitch rows (alternating shade for black keys)
+    // Pitch rows
     for (let pitch = 0; pitch < TOTAL_NOTES; pitch++) {
       const y = yFromPitch(pitch)
       if (y + NOTE_HEIGHT < 0 || y > h) continue
       if (isBlackKey(pitch)) {
-        ctx.fillStyle = '#303030'
+        ctx.fillStyle = '#0a0a10'
         ctx.fillRect(0, y, w, NOTE_HEIGHT)
       }
-      // C note highlight
       if (pitch % 12 === 0) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.03)'
+        ctx.fillStyle = 'rgba(155, 109, 255, 0.02)'
         ctx.fillRect(0, y, w, NOTE_HEIGHT)
       }
     }
 
-    // Horizontal grid lines (per note)
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)'
+    // Horizontal grid lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)'
     ctx.lineWidth = 0.5
     for (let pitch = 0; pitch < TOTAL_NOTES; pitch++) {
       const y = yFromPitch(pitch) + NOTE_HEIGHT
@@ -111,7 +107,7 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       ctx.stroke()
     }
 
-    // Vertical grid lines (beats and bars)
+    // Vertical grid lines
     const startTick = Math.max(0, Math.floor(scrollX / pixelsPerTick / PPQ) * PPQ)
     const endTick = (scrollX + w) / pixelsPerTick
 
@@ -123,13 +119,13 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       const isBeat = tick % PPQ === 0
 
       if (isBar) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)'
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)'
         ctx.lineWidth = 1
       } else if (isBeat) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)'
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)'
         ctx.lineWidth = 0.5
       } else {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.025)'
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.015)'
         ctx.lineWidth = 0.5
       }
 
@@ -139,7 +135,7 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       ctx.stroke()
     }
 
-    // Draw notes
+    // Notes — purple
     for (const note of notes) {
       const x = xFromTick(note.startTick) - KEYBOARD_WIDTH
       const y = yFromPitch(note.pitch)
@@ -147,37 +143,44 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       if (x + noteW < 0 || x > w || y + NOTE_HEIGHT < 0 || y > h) continue
 
       const isSelected = selectedNotes.has(note.index)
-      const color = note.muted ? '#666' : '#00CC44'
+      const color = note.muted ? '#3c3c50' : '#9B6DFF'
 
       // Note body
-      ctx.fillStyle = isSelected ? '#44FF66' : color
+      ctx.fillStyle = isSelected ? '#B48EFF' : color
       ctx.globalAlpha = note.muted ? 0.4 : 0.85
       ctx.beginPath()
-      ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), NOTE_HEIGHT - 2, 2)
+      ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), NOTE_HEIGHT - 2, 3)
       ctx.fill()
       ctx.globalAlpha = 1
 
+      // Glow for active notes
+      if (!note.muted && !isSelected) {
+        ctx.shadowColor = 'rgba(155, 109, 255, 0.3)'
+        ctx.shadowBlur = 4
+      }
+
       // Note border
-      ctx.strokeStyle = isSelected ? '#fff' : 'rgba(255,255,255,0.15)'
+      ctx.strokeStyle = isSelected ? '#fff' : 'rgba(255,255,255,0.1)'
       ctx.lineWidth = isSelected ? 1.5 : 0.5
       ctx.beginPath()
-      ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), NOTE_HEIGHT - 2, 2)
+      ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), NOTE_HEIGHT - 2, 3)
       ctx.stroke()
+      ctx.shadowBlur = 0
 
-      // Note name label (if wide enough)
+      // Note name label
       if (noteW > 30) {
         ctx.fillStyle = isSelected ? '#fff' : 'rgba(255,255,255,0.7)'
         ctx.font = '9px Segoe UI, sans-serif'
         ctx.fillText(noteName(note.pitch), x + 4, y + NOTE_HEIGHT - 3)
       }
 
-      // Velocity brightness indicator (left edge bar)
+      // Velocity indicator
       const velH = (NOTE_HEIGHT - 4) * note.velocity
       ctx.fillStyle = `rgba(255, 255, 255, ${0.1 + note.velocity * 0.2})`
       ctx.fillRect(x + 1, y + NOTE_HEIGHT - 1 - velH, 2, velH)
 
-      // Resize handle (right edge)
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.25)'
+      // Resize handle
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.2)'
       ctx.fillRect(x + noteW - 4, y + 3, 2, NOTE_HEIGHT - 6)
     }
   }, [notes, scrollX, scrollY, pixelsPerTick, selectedNotes])
@@ -186,14 +189,12 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
     draw()
   }, [draw])
 
-  // Re-draw on resize
   useEffect(() => {
     const obs = new ResizeObserver(() => draw())
     if (containerRef.current) obs.observe(containerRef.current)
     return () => obs.disconnect()
   }, [draw])
 
-  // Mouse handlers on canvas
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = canvasRef.current!.getBoundingClientRect()
     const mx = e.clientX - rect.left
@@ -201,7 +202,6 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
     const tick = tickFromX(mx + KEYBOARD_WIDTH)
     const pitch = pitchFromY(my + RULER_HEIGHT)
 
-    // Check if clicking on existing note
     for (const note of notes) {
       const nx = xFromTick(note.startTick) - KEYBOARD_WIDTH
       const ny = yFromPitch(note.pitch)
@@ -212,7 +212,6 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
           setNotes(prev => prev.filter(n => n.index !== note.index))
           return
         }
-        // Resize handle check (last 6px)
         if (mx >= nx + nw - 6) {
           dragRef.current = {
             mode: 'resize', noteIndex: note.index,
@@ -233,7 +232,6 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       }
     }
 
-    // Draw new note
     if (tool === 'draw' && pitch >= 0 && pitch < 128) {
       const snappedTick = snapTick(tick)
       const newNote: Note = {
@@ -285,10 +283,8 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
     dragRef.current.mode = 'none'
   }, [])
 
-  // Scroll handling
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
-      // Zoom horizontal
       e.preventDefault()
       setPixelsPerTick(prev => Math.max(0.02, Math.min(1, prev * (e.deltaY < 0 ? 1.15 : 0.87))))
     } else if (e.shiftKey) {
@@ -303,10 +299,10 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       flex: 1, display: 'flex', flexDirection: 'column',
       background: hw.bgPanel, overflow: 'hidden',
     }}>
-      {/* Piano Roll header bar */}
+      {/* Header bar */}
       <div style={{
-        height: RULER_HEIGHT, background: hw.bgDeep,
-        borderBottom: `1px solid ${hw.borderDark}`,
+        height: RULER_HEIGHT, background: hw.bg,
+        borderBottom: `1px solid ${hw.border}`,
         display: 'flex', alignItems: 'center', padding: '0 8px', gap: 6,
       }}>
         <span style={{ fontSize: 10, fontWeight: 600, color: hw.textMuted }}>Piano Roll</span>
@@ -315,28 +311,26 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
         </span>
         <div style={{ flex: 1 }} />
 
-        {/* Tool selector */}
         <div style={{ display: 'flex', gap: 1 }}>
           {(['draw', 'select', 'erase'] as const).map(t => (
             <button key={t} onClick={() => setTool(t)} style={{
               padding: '1px 6px', fontSize: 9, fontWeight: 600,
-              color: tool === t ? '#FFF' : '#888',
-              background: tool === t ? '#555' : 'transparent',
-              border: `1px solid ${tool === t ? 'rgba(255,255,255,0.12)' : 'transparent'}`,
-              borderRadius: 2, textTransform: 'uppercase',
+              color: tool === t ? hw.accent : hw.textFaint,
+              background: tool === t ? hw.accentDim : 'transparent',
+              border: `1px solid ${tool === t ? hw.accentGlow : 'transparent'}`,
+              borderRadius: hw.radius.sm, textTransform: 'uppercase',
             }}>
               {t}
             </button>
           ))}
         </div>
 
-        {/* Snap selector */}
         <select
           value={snap}
           onChange={e => setSnap(Number(e.target.value))}
           style={{
             fontSize: 9, background: hw.bgInput, color: hw.textMuted,
-            border: `1px solid ${hw.border}`, borderRadius: 2, padding: '1px 4px',
+            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '1px 4px',
           }}
         >
           <option value={PPQ * 4}>Bar</option>
@@ -350,9 +344,8 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
         </select>
       </div>
 
-      {/* Main area: keyboard + grid */}
+      {/* Main area */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Piano keyboard */}
         <PianoKeyboard
           width={KEYBOARD_WIDTH}
           noteHeight={NOTE_HEIGHT}
@@ -360,15 +353,11 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
           totalNotes={TOTAL_NOTES}
         />
 
-        {/* Grid canvas */}
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-          {/* Time ruler */}
           <canvas
             style={{ display: 'block' }}
             ref={useRef<HTMLCanvasElement>(null)}
           />
-
-          {/* Note grid */}
           <canvas
             ref={canvasRef}
             onMouseDown={handleMouseDown}
@@ -381,7 +370,6 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
         </div>
       </div>
 
-      {/* Velocity lane */}
       <VelocityLane
         notes={notes}
         selectedNotes={selectedNotes}

@@ -38,14 +38,14 @@ export function Toolbar(props: ToolbarProps) {
     <div style={{
       display: 'flex',
       alignItems: 'center',
-      height: 38,
+      height: 40,
       background: hw.bgToolbarGrad,
-      borderBottom: '1px solid rgba(0,0,0,0.5)',
-      padding: '0 4px',
+      borderBottom: `1px solid ${hw.borderDark}`,
+      padding: '0 6px',
       gap: 2,
     }}>
-      {/* 1. Panel toggle buttons — FL order */}
-      <div style={{ display: 'flex', gap: 1 }}>
+      {/* 1. Panel toggle buttons */}
+      <div style={{ display: 'flex', gap: 2 }}>
         <PanelBtn icon="playlist" label="Playlist" active={props.showPlaylist} onClick={props.onTogglePlaylist} onEnter={hint('Playlist (F5)')} onLeave={clear} />
         <PanelBtn icon="channel" label="Channel" active={props.showChannelRack} onClick={props.onToggleChannelRack} onEnter={hint('Channel Rack (F6)')} onLeave={clear} />
         <PanelBtn icon="pianoroll" label="Piano" active={props.showPianoRoll} onClick={props.onTogglePianoRoll} onEnter={hint('Piano Roll (F7)')} onLeave={clear} />
@@ -58,15 +58,15 @@ export function Toolbar(props: ToolbarProps) {
       {/* 2. Pattern selector */}
       <div style={{ display: 'flex', alignItems: 'center' }}>
         <button style={navBtn} onMouseEnter={hint('Previous pattern')} onMouseLeave={clear}>
-          <svg width="5" height="7" viewBox="0 0 5 7"><path d="M4 0.5L1 3.5L4 6.5" stroke="#999" strokeWidth="1.2" fill="none"/></svg>
+          <svg width="5" height="7" viewBox="0 0 5 7"><path d="M4 0.5L1 3.5L4 6.5" stroke={hw.textMuted} strokeWidth="1.2" fill="none"/></svg>
         </button>
         <div style={{
           ...lcd, padding: '0 8px', minWidth: 80,
         }} onMouseEnter={hint('Select pattern')} onMouseLeave={clear}>
-          <span style={{ fontSize: 10, color: '#C0C0C0' }}>Pattern 1</span>
+          <span style={{ fontSize: 10, color: hw.textSecondary }}>Pattern 1</span>
         </div>
         <button style={navBtn} onMouseEnter={hint('Next pattern')} onMouseLeave={clear}>
-          <svg width="5" height="7" viewBox="0 0 5 7"><path d="M1 0.5L4 3.5L1 6.5" stroke="#999" strokeWidth="1.2" fill="none"/></svg>
+          <svg width="5" height="7" viewBox="0 0 5 7"><path d="M1 0.5L4 3.5L1 6.5" stroke={hw.textMuted} strokeWidth="1.2" fill="none"/></svg>
         </button>
       </div>
 
@@ -74,31 +74,31 @@ export function Toolbar(props: ToolbarProps) {
 
       {/* 3. PAT / SONG toggle */}
       <div style={{
-        display: 'flex', background: '#2A2A2A',
-        border: '1px solid rgba(0,0,0,0.5)',
-        overflow: 'hidden', borderRadius: 2,
+        display: 'flex', background: hw.bgInput,
+        border: `1px solid ${hw.borderDark}`,
+        overflow: 'hidden', borderRadius: hw.radius.sm,
       }}>
         <ModeBtn label="PAT" active onEnter={hint('Pattern mode')} onLeave={clear} />
-        <div style={{ width: 1, background: 'rgba(0,0,0,0.5)' }} />
+        <div style={{ width: 1, background: hw.borderDark }} />
         <ModeBtn label="SONG" active={false} onEnter={hint('Song mode')} onLeave={clear} />
       </div>
 
       <Sep />
 
       {/* 4. Transport — Record, Stop, Play */}
-      <div style={{ display: 'flex', gap: 1 }}>
+      <div style={{ display: 'flex', gap: 2 }}>
         <button style={transportBtn} onMouseEnter={hint('Record (R)')} onMouseLeave={clear}>
-          <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#993333" /></svg>
+          <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill={hw.red} opacity="0.7" /></svg>
         </button>
         <button onClick={stop} style={transportBtn} onMouseEnter={hint('Stop')} onMouseLeave={clear}>
-          <svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="0.5" fill="#999" /></svg>
+          <svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="1" fill={hw.textMuted} /></svg>
         </button>
         <button onClick={togglePlayback} style={{
           ...transportBtn,
-          background: playing ? 'rgba(0,204,68,0.15)' : transportBtn.background,
-          borderColor: playing ? 'rgba(0,204,68,0.3)' : 'rgba(0,0,0,0.4)',
+          background: playing ? hw.accentDim : transportBtn.background,
+          borderColor: playing ? hw.accentGlow : hw.borderDark,
         }} onMouseEnter={hint('Play (Space)')} onMouseLeave={clear}>
-          <svg width="10" height="12"><polygon points="0,0 10,6 0,12" fill={playing ? '#00CC44' : '#999'} /></svg>
+          <svg width="10" height="12"><polygon points="0,0 10,6 0,12" fill={playing ? hw.accent : hw.textMuted} /></svg>
         </button>
       </div>
 
@@ -120,21 +120,21 @@ export function Toolbar(props: ToolbarProps) {
 
       <Sep />
 
-      {/* 6. Time display — Bar:Beat:Tick | Min:Sec.Cs — green LCD digits */}
+      {/* 6. Time display — Bar:Beat:Tick | Min:Sec.Cs */}
       <div style={{ ...lcd, padding: '0 8px', gap: 8 }}>
         <span style={lcdDigit}>
           <span style={{ color: hw.greenLcd }}>{String(bar).padStart(3, ' ')}</span>
-          <span style={{ color: '#336633' }}>:</span>
+          <span style={{ color: hw.secondary }}>:</span>
           <span style={{ color: hw.greenLcd }}>{beat}</span>
-          <span style={{ color: '#336633' }}>:</span>
+          <span style={{ color: hw.secondary }}>:</span>
           <span style={{ color: hw.greenLcd }}>{String(tick).padStart(3, '0')}</span>
         </span>
-        <div style={{ width: 1, height: 14, background: '#333' }} />
+        <div style={{ width: 1, height: 14, background: hw.border }} />
         <span style={lcdDigit}>
           <span style={{ color: hw.greenLcd }}>{String(mins).padStart(2, ' ')}</span>
-          <span style={{ color: '#336633' }}>:</span>
+          <span style={{ color: hw.secondary }}>:</span>
           <span style={{ color: hw.greenLcd }}>{String(secs).padStart(2, '0')}</span>
-          <span style={{ color: '#336633' }}>.</span>
+          <span style={{ color: hw.secondary }}>.</span>
           <span style={{ color: hw.greenLcd }}>{String(cs).padStart(2, '0')}</span>
         </span>
       </div>
@@ -143,13 +143,14 @@ export function Toolbar(props: ToolbarProps) {
 
       {/* 7. Song position slider */}
       <div style={{
-        width: 80, height: 8, background: '#222', borderRadius: 1,
-        border: '1px solid rgba(0,0,0,0.5)', position: 'relative', cursor: 'pointer',
+        width: 80, height: 8, background: hw.bgInput, borderRadius: hw.radius.sm,
+        border: `1px solid ${hw.borderDark}`, position: 'relative', cursor: 'pointer',
       }} onMouseEnter={hint('Song position')} onMouseLeave={clear}>
         <div style={{
           position: 'absolute', left: 0, top: 0, width: '0%', height: '100%',
-          background: 'linear-gradient(90deg, #555, #777)',
-          borderRadius: 1,
+          background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accent})`,
+          borderRadius: hw.radius.sm,
+          opacity: 0.5,
         }} />
       </div>
 
@@ -158,12 +159,12 @@ export function Toolbar(props: ToolbarProps) {
       {/* 8. Snap */}
       <div style={{ ...lcd, padding: '0 6px', cursor: 'default' }} onMouseEnter={hint('Global snap')} onMouseLeave={clear}>
         <svg width="8" height="8" viewBox="0 0 8 8" style={{ marginRight: 3 }}>
-          <path d="M1 7V1h6" stroke="#999" strokeWidth="0.8" fill="none"/>
-          <circle cx="4" cy="4" r="1.5" fill="#999"/>
+          <path d="M1 7V1h6" stroke={hw.textMuted} strokeWidth="0.8" fill="none"/>
+          <circle cx="4" cy="4" r="1.5" fill={hw.textMuted}/>
         </svg>
-        <span style={{ fontSize: 10, color: '#B0B0B0' }}>Line</span>
+        <span style={{ fontSize: 10, color: hw.textSecondary }}>Line</span>
         <svg width="7" height="5" viewBox="0 0 7 5" style={{ marginLeft: 3 }}>
-          <path d="M0.5 0.5L3.5 4L6.5 0.5" stroke="#999" strokeWidth="1" fill="none" />
+          <path d="M0.5 0.5L3.5 4L6.5 0.5" stroke={hw.textMuted} strokeWidth="1" fill="none" />
         </svg>
       </div>
 
@@ -226,17 +227,18 @@ export function Toolbar(props: ToolbarProps) {
       {/* 12. Master volume */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 3 }} onMouseEnter={hint('Master volume')} onMouseLeave={clear}>
         <svg width="9" height="9" viewBox="0 0 9 9">
-          <polygon points="0,4 3,1 3,7" fill="#999" />
-          <path d="M4.5 2.5 Q6 4.5 4.5 6.5" stroke="#999" strokeWidth="0.8" fill="none"/>
-          <path d="M5.5 1.5 Q8 4.5 5.5 7.5" stroke="#999" strokeWidth="0.8" fill="none"/>
+          <polygon points="0,4 3,1 3,7" fill={hw.textMuted} />
+          <path d="M4.5 2.5 Q6 4.5 4.5 6.5" stroke={hw.textMuted} strokeWidth="0.8" fill="none"/>
+          <path d="M5.5 1.5 Q8 4.5 5.5 7.5" stroke={hw.textMuted} strokeWidth="0.8" fill="none"/>
         </svg>
         <div style={{
-          width: 55, height: 6, background: '#222', borderRadius: 1,
-          border: '1px solid rgba(0,0,0,0.5)', position: 'relative',
+          width: 55, height: 6, background: hw.bgInput, borderRadius: hw.radius.sm,
+          border: `1px solid ${hw.borderDark}`, position: 'relative',
         }}>
           <div style={{
-            width: '80%', height: '100%', borderRadius: 1,
-            background: 'linear-gradient(90deg, #555, #888)',
+            width: '80%', height: '100%', borderRadius: hw.radius.sm,
+            background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accent})`,
+            opacity: 0.6,
           }} />
         </div>
       </div>
@@ -245,15 +247,15 @@ export function Toolbar(props: ToolbarProps) {
 
       {/* 13. Master pitch knob */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 2 }} onMouseEnter={hint('Master pitch')} onMouseLeave={clear}>
-        <span style={{ fontSize: 7, color: '#888' }}>PIT</span>
+        <span style={{ fontSize: 7, color: hw.textFaint }}>PIT</span>
         <div style={{
           width: 16, height: 16, borderRadius: '50%',
-          background: 'linear-gradient(145deg, #555, #3A3A3A)',
-          border: '1px solid rgba(0,0,0,0.5)',
+          background: `linear-gradient(145deg, ${hw.bgElevated}, ${hw.bgInput})`,
+          border: `1px solid ${hw.borderDark}`,
           position: 'relative',
         }}>
           <div style={{
-            position: 'absolute', width: 1.5, height: 5, background: '#CCC',
+            position: 'absolute', width: 1.5, height: 5, background: hw.accent,
             top: 2, left: '50%', transform: 'translateX(-50%)',
             borderRadius: 1,
           }} />
@@ -265,15 +267,15 @@ export function Toolbar(props: ToolbarProps) {
       {/* 14. CPU / Polyphony */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} onMouseEnter={hint('CPU / Polyphony')} onMouseLeave={clear}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-          <span style={{ fontSize: 7, color: '#888', lineHeight: 1 }}>CPU</span>
-          <div style={{ width: 30, height: 4, background: '#222', borderRadius: 1, border: '1px solid rgba(0,0,0,0.4)' }}>
-            <div style={{ width: '12%', height: '100%', background: '#00CC44', borderRadius: 1 }} />
+          <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>CPU</span>
+          <div style={{ width: 30, height: 4, background: hw.bgInput, borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
+            <div style={{ width: '12%', height: '100%', background: hw.green, borderRadius: hw.radius.sm }} />
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-          <span style={{ fontSize: 7, color: '#888', lineHeight: 1 }}>POLY</span>
-          <div style={{ width: 30, height: 4, background: '#222', borderRadius: 1, border: '1px solid rgba(0,0,0,0.4)' }}>
-            <div style={{ width: '5%', height: '100%', background: '#00CC44', borderRadius: 1 }} />
+          <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>POLY</span>
+          <div style={{ width: 30, height: 4, background: hw.bgInput, borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
+            <div style={{ width: '5%', height: '100%', background: hw.green, borderRadius: hw.radius.sm }} />
           </div>
         </div>
       </div>
@@ -282,15 +284,14 @@ export function Toolbar(props: ToolbarProps) {
 
       {/* 15. Mini scope */}
       <div style={{
-        width: 60, height: 22,
-        background: '#1A1A1A', border: '1px solid rgba(0,0,0,0.5)',
-        borderRadius: 1,
+        width: 60, height: 24,
+        background: hw.bgInput, border: `1px solid ${hw.borderDark}`,
+        borderRadius: hw.radius.sm,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        {/* Flat line scope placeholder */}
         <svg width="40" height="12" viewBox="0 0 40 12">
           <polyline points="0,6 5,6 8,3 12,9 16,4 20,8 24,5 28,7 32,6 36,6 40,6"
-            fill="none" stroke="#00CC44" strokeWidth="1" opacity="0.5" />
+            fill="none" stroke={hw.accent} strokeWidth="1" opacity="0.5" />
         </svg>
       </div>
     </div>
@@ -300,7 +301,7 @@ export function Toolbar(props: ToolbarProps) {
 /* --- Sub-components --- */
 
 function Sep() {
-  return <div style={{ width: 1, height: 24, background: 'rgba(0,0,0,0.3)', margin: '0 3px' }} />
+  return <div style={{ width: 1, height: 26, background: hw.border, margin: '0 3px' }} />
 }
 
 function ToolBtn({ children, onEnter, onLeave }: {
@@ -308,15 +309,15 @@ function ToolBtn({ children, onEnter, onLeave }: {
 }) {
   return (
     <button
-      onMouseEnter={e => { onEnter(); e.currentTarget.style.background = '#666' }}
+      onMouseEnter={e => { onEnter(); e.currentTarget.style.background = hw.bgElevated }}
       onMouseLeave={e => { onLeave(); e.currentTarget.style.background = 'transparent' }}
       style={{
         width: 24, height: 24,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: '#999',
+        color: hw.textMuted,
         background: 'transparent',
         border: '1px solid transparent',
-        borderRadius: 2,
+        borderRadius: hw.radius.sm,
       }}
     >
       {children}
@@ -337,10 +338,10 @@ function ToolSelectBtn({ tool, active, onClick, children, onEnter, onLeave }: {
       style={{
         width: 22, height: 22,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: isActive ? '#FFFFFF' : '#999',
-        background: isActive ? '#555' : 'transparent',
-        border: `1px solid ${isActive ? 'rgba(255,255,255,0.15)' : 'transparent'}`,
-        borderRadius: 2,
+        color: isActive ? hw.accent : hw.textMuted,
+        background: isActive ? hw.accentDim : 'transparent',
+        border: `1px solid ${isActive ? hw.accentGlow : 'transparent'}`,
+        borderRadius: hw.radius.sm,
       }}
     >
       {children}
@@ -366,10 +367,10 @@ function PanelBtn({ icon, active, onClick, onEnter, onLeave }: {
       style={{
         width: 26, height: 26,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: active ? '#FFFFFF' : '#888',
-        background: active ? '#555' : 'transparent',
-        border: `1px solid ${active ? 'rgba(255,255,255,0.12)' : 'transparent'}`,
-        borderRadius: 2,
+        color: active ? hw.accent : hw.textFaint,
+        background: active ? hw.accentDim : 'transparent',
+        border: `1px solid ${active ? hw.accentGlow : 'transparent'}`,
+        borderRadius: hw.radius.sm,
       }}
     >
       {icons[icon]}
@@ -387,8 +388,8 @@ function ModeBtn({ label, active, onEnter, onLeave }: {
       style={{
         padding: '3px 8px',
         fontSize: 10, fontWeight: 700,
-        color: active ? hw.greenLcd : '#777',
-        background: active ? '#333' : 'transparent',
+        color: active ? hw.greenLcd : hw.textFaint,
+        background: active ? hw.bgSurface : 'transparent',
         cursor: 'default',
         letterSpacing: 0.5,
       }}
@@ -401,9 +402,9 @@ function ModeBtn({ label, active, onEnter, onLeave }: {
 const transportBtn: React.CSSProperties = {
   width: 28, height: 26,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  background: '#444',
-  border: '1px solid rgba(0,0,0,0.4)',
-  borderRadius: 2,
+  background: hw.bgSurface,
+  border: `1px solid ${hw.borderDark}`,
+  borderRadius: hw.radius.sm,
 }
 
 const navBtn: React.CSSProperties = {
@@ -416,9 +417,9 @@ const navBtn: React.CSSProperties = {
 
 const lcd: React.CSSProperties = {
   display: 'flex', alignItems: 'center',
-  background: '#1A1A1A',
-  border: '1px solid rgba(0,0,0,0.6)',
-  borderRadius: 2,
+  background: hw.bgInput,
+  border: `1px solid ${hw.borderDark}`,
+  borderRadius: hw.radius.sm,
   height: 26,
   padding: '0 4px',
 }

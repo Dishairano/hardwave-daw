@@ -13,20 +13,21 @@ export function TitleBar({ hintText }: TitleBarProps) {
       style={{
         display: 'flex',
         alignItems: 'center',
-        height: 26,
-        background: '#3C3C3C',
-        borderBottom: '1px solid rgba(0,0,0,0.5)',
+        height: 28,
+        background: hw.bg,
+        borderBottom: `1px solid ${hw.border}`,
         // @ts-ignore
         WebkitAppRegion: 'drag',
-        padding: '0 6px',
+        padding: '0 8px',
       }}
     >
-      {/* FL Logo placeholder */}
+      {/* Hardwave Logo */}
       <div style={{
-        width: 18, height: 18, marginRight: 6,
-        background: 'linear-gradient(135deg, #FF8800, #FF6600)',
-        borderRadius: 3,
+        width: 20, height: 20, marginRight: 8,
+        background: 'linear-gradient(135deg, #9B6DFF, #7B5AC0)',
+        borderRadius: 6,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 0 12px rgba(155, 109, 255, 0.2)',
         // @ts-ignore
         WebkitAppRegion: 'no-drag',
       }}>
@@ -38,20 +39,22 @@ export function TitleBar({ hintText }: TitleBarProps) {
         <div
           key={m}
           style={{
-            padding: '3px 8px',
+            padding: '4px 8px',
             fontSize: 11,
-            color: '#B0B0B0',
+            color: hw.textMuted,
             cursor: 'default',
+            borderRadius: hw.radius.sm,
+            transition: 'color 0.1s, background 0.1s',
             // @ts-ignore
             WebkitAppRegion: 'no-drag',
           }}
           onMouseEnter={e => {
-            e.currentTarget.style.background = '#555555'
-            e.currentTarget.style.color = '#FFFFFF'
+            e.currentTarget.style.background = hw.bgElevated
+            e.currentTarget.style.color = hw.textPrimary
           }}
           onMouseLeave={e => {
             e.currentTarget.style.background = 'transparent'
-            e.currentTarget.style.color = '#B0B0B0'
+            e.currentTarget.style.color = hw.textMuted
           }}
         >
           {m}
@@ -60,10 +63,10 @@ export function TitleBar({ hintText }: TitleBarProps) {
 
       <div style={{ flex: 1 }} />
 
-      {/* Hint text (FL hint bar) */}
+      {/* Hint text */}
       <div style={{
         fontSize: 11,
-        color: '#888888',
+        color: hw.textFaint,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
@@ -90,18 +93,19 @@ function WinBtn({ label, isClose }: { label: string; isClose?: boolean }) {
   return (
     <div
       style={{
-        width: 28, height: 22,
+        width: 30, height: 24,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 12, color: '#999',
+        fontSize: 12, color: hw.textMuted,
         cursor: 'default',
+        borderRadius: hw.radius.sm,
       }}
       onMouseEnter={e => {
-        e.currentTarget.style.background = isClose ? '#C42B1C' : '#555'
+        e.currentTarget.style.background = isClose ? '#C42B1C' : hw.bgElevated
         e.currentTarget.style.color = '#FFF'
       }}
       onMouseLeave={e => {
         e.currentTarget.style.background = 'transparent'
-        e.currentTarget.style.color = '#999'
+        e.currentTarget.style.color = hw.textMuted
       }}
     >
       {label}

@@ -41,11 +41,11 @@ export function VelocityLane({
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
     // Background
-    ctx.fillStyle = '#2A2A2A'
+    ctx.fillStyle = hw.bgInput
     ctx.fillRect(0, 0, w, height)
 
-    // Horizontal guide lines at 25/50/75/100%
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)'
+    // Guide lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)'
     ctx.lineWidth = 0.5
     for (const pct of [0.25, 0.5, 0.75]) {
       const y = height * (1 - pct)
@@ -56,7 +56,7 @@ export function VelocityLane({
     }
 
     // Top border
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'
+    ctx.fillStyle = hw.borderDark
     ctx.fillRect(0, 0, w, 1)
 
     // Label
@@ -64,7 +64,7 @@ export function VelocityLane({
     ctx.font = '8px Segoe UI, sans-serif'
     ctx.fillText('VEL', 4, 12)
 
-    // Draw velocity bars
+    // Velocity bars — purple gradient
     const barW = Math.max(3, 6 * pixelsPerTick)
     for (const note of notes) {
       const x = note.startTick * pixelsPerTick - scrollX
@@ -73,17 +73,16 @@ export function VelocityLane({
       const barH = note.velocity * (height - 4)
       const isSelected = selectedNotes.has(note.index)
 
-      // Velocity bar
       const gradient = ctx.createLinearGradient(0, height - barH, 0, height)
       if (note.velocity > 0.85) {
-        gradient.addColorStop(0, '#EF4444')
-        gradient.addColorStop(1, '#DC2626')
+        gradient.addColorStop(0, '#FF4466')
+        gradient.addColorStop(1, '#CC2244')
       } else if (note.velocity > 0.5) {
-        gradient.addColorStop(0, '#00CC44')
-        gradient.addColorStop(1, '#009933')
+        gradient.addColorStop(0, '#9B6DFF')
+        gradient.addColorStop(1, '#7B5AC0')
       } else {
-        gradient.addColorStop(0, '#009933')
-        gradient.addColorStop(1, '#006622')
+        gradient.addColorStop(0, '#7B5AC0')
+        gradient.addColorStop(1, '#5A3FA0')
       }
 
       ctx.fillStyle = gradient
@@ -112,7 +111,6 @@ export function VelocityLane({
 
     const barW = Math.max(3, 6 * pixelsPerTick)
 
-    // Find note under cursor
     for (const note of notes) {
       const x = note.startTick * pixelsPerTick - scrollX
       if (mx >= x && mx <= x + barW) {

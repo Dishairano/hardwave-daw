@@ -12,12 +12,12 @@ export function MixerPanel() {
   const masterTrack = tracks.find(t => t.kind === 'Master')
 
   return (
-    <div style={{ height: '100%', background: '#3A3A3A', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100%', background: hw.bgPanel, display: 'flex', flexDirection: 'column' }}>
       <div style={{
-        height: 22, background: '#333', borderBottom: '1px solid rgba(0,0,0,0.4)',
+        height: 22, background: hw.bg, borderBottom: `1px solid ${hw.border}`,
         display: 'flex', alignItems: 'center', padding: '0 8px',
       }}>
-        <span style={{ fontSize: 10, fontWeight: 600, color: '#999' }}>Mixer</span>
+        <span style={{ fontSize: 10, fontWeight: 600, color: hw.textMuted }}>Mixer</span>
       </div>
 
       <div style={{
@@ -37,10 +37,10 @@ export function MixerPanel() {
           />
         ))}
 
-        {allTracks.length > 0 && <div style={{ width: 1, background: 'rgba(0,0,0,0.3)', margin: '0 1px', flexShrink: 0 }} />}
+        {allTracks.length > 0 && <div style={{ width: 1, background: hw.border, margin: '0 1px', flexShrink: 0 }} />}
 
         <Strip
-          name="Master" color="#FF8800" number={-1}
+          name="Master" color={hw.accent} number={-1}
           volumeDb={masterTrack?.volume_db ?? 0} pan={0}
           muted={masterTrack?.muted ?? false} soloed={false}
           peakDb={master.peak_db} isMaster
@@ -50,7 +50,7 @@ export function MixerPanel() {
         />
 
         {allTracks.length === 0 && (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#777', fontSize: 10 }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: hw.textFaint, fontSize: 10 }}>
             Add tracks to see mixer
           </div>
         )}
@@ -69,53 +69,53 @@ interface StripProps {
 
 function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster, onVolume, onMute, onSolo }: StripProps) {
   const mH = Math.max(0, Math.min(100, (peakDb + 60) / 72 * 100))
-  const mC = peakDb > -3 ? '#CC3333' : peakDb > -12 ? '#DDAA00' : '#00CC44'
+  const mC = peakDb > -3 ? hw.red : peakDb > -12 ? hw.yellow : hw.green
 
   return (
     <div style={{
       width: 62, minWidth: 62,
       display: 'flex', flexDirection: 'column',
-      background: '#404040', border: '1px solid rgba(0,0,0,0.3)',
-      borderRadius: 2, flexShrink: 0, overflow: 'hidden',
+      background: hw.bgSurface, border: `1px solid ${hw.border}`,
+      borderRadius: hw.radius.md, flexShrink: 0, overflow: 'hidden',
     }}>
       {/* Color bar */}
       <div style={{ height: 2, background: color }} />
 
       {/* Header */}
-      <div style={{ padding: '3px 3px 2px', textAlign: 'center', borderBottom: '1px solid rgba(0,0,0,0.2)' }}>
-        <div style={{ fontSize: 8, color: '#888' }}>{isMaster ? 'M' : number}</div>
+      <div style={{ padding: '3px 3px 2px', textAlign: 'center', borderBottom: `1px solid ${hw.border}` }}>
+        <div style={{ fontSize: 8, color: hw.textFaint }}>{isMaster ? 'M' : number}</div>
         <div style={{
-          fontSize: 9, fontWeight: 500, color: '#CCC',
+          fontSize: 9, fontWeight: 500, color: hw.textPrimary,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{name}</div>
       </div>
 
       {/* FX slots */}
-      <div style={{ padding: '2px 3px', borderBottom: '1px solid rgba(0,0,0,0.2)' }}>
+      <div style={{ padding: '2px 3px', borderBottom: `1px solid ${hw.border}` }}>
         {[0, 1, 2].map(i => (
           <div key={i} style={{
-            height: 11, background: '#333', border: '1px solid rgba(0,0,0,0.3)',
-            borderRadius: 1, marginBottom: 1,
+            height: 11, background: hw.bgInput, border: `1px solid ${hw.borderDark}`,
+            borderRadius: hw.radius.sm, marginBottom: 1,
             display: 'flex', alignItems: 'center', padding: '0 3px',
           }}>
-            <span style={{ fontSize: 7, color: '#777' }}>{i + 1}</span>
+            <span style={{ fontSize: 7, color: hw.textFaint }}>{i + 1}</span>
           </div>
         ))}
       </div>
 
       {/* Fader + meter */}
       <div style={{ flex: 1, display: 'flex', padding: 3, gap: 2, minHeight: 70 }}>
-        {/* Dual meter — segmented green/yellow/red */}
+        {/* Dual meter */}
         <div style={{ display: 'flex', gap: 1, width: 10, flexShrink: 0 }}>
           {[0, 1].map(ch => (
             <div key={ch} style={{
-              flex: 1, background: '#1A1A1A', position: 'relative',
-              border: '1px solid rgba(0,0,0,0.4)', borderRadius: 1,
+              flex: 1, background: hw.bgInput, position: 'relative',
+              border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
             }}>
               <div style={{
                 position: 'absolute', bottom: 0, left: 0, right: 0,
                 height: `${mH}%`, background: mC,
-                borderRadius: 1, transition: 'height 60ms',
+                borderRadius: hw.radius.sm, transition: 'height 60ms',
               }} />
             </div>
           ))}
@@ -128,15 +128,15 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
             style={{
               writingMode: 'vertical-lr' as any, direction: 'rtl',
               flex: 1, width: 16, appearance: 'none',
-              background: 'linear-gradient(to bottom, #555, #333)',
-              border: '1px solid rgba(0,0,0,0.4)', borderRadius: 2, cursor: 'pointer',
+              background: `linear-gradient(to bottom, ${hw.bgElevated}, ${hw.bgInput})`,
+              border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm, cursor: 'pointer',
             }}
           />
         </div>
       </div>
 
       {/* dB readout */}
-      <div style={{ textAlign: 'center', padding: '2px 0', borderTop: '1px solid rgba(0,0,0,0.2)' }}>
+      <div style={{ textAlign: 'center', padding: '2px 0', borderTop: `1px solid ${hw.border}` }}>
         <span style={{ fontSize: 8, color: hw.greenLcd, fontFamily: "'Consolas', monospace" }}>
           {volumeDb > -60 ? `${volumeDb.toFixed(1)}` : '-\u221E'}
         </span>
@@ -145,12 +145,12 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
       {/* M/S buttons */}
       <div style={{ display: 'flex', gap: 1, padding: '2px 3px 3px', justifyContent: 'center' }}>
         <button onClick={() => onMute?.()} style={{
-          ...sB, color: muted ? '#CC3333' : '#999',
-          background: muted ? 'rgba(204,51,51,0.15)' : '#333',
+          ...sB, color: muted ? hw.red : hw.textMuted,
+          background: muted ? hw.redDim : hw.bgInput,
         }}>M</button>
         <button onClick={onSolo} style={{
-          ...sB, color: soloed ? '#DDAA00' : '#999',
-          background: soloed ? 'rgba(221,170,0,0.15)' : '#333',
+          ...sB, color: soloed ? hw.yellow : hw.textMuted,
+          background: soloed ? hw.yellowDim : hw.bgInput,
         }}>S</button>
       </div>
     </div>
@@ -159,6 +159,6 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
 
 const sB: React.CSSProperties = {
   width: 22, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
-  fontSize: 7, fontWeight: 700, borderRadius: 2, padding: 0,
-  border: '1px solid rgba(0,0,0,0.3)',
+  fontSize: 7, fontWeight: 700, borderRadius: hw.radius.sm, padding: 0,
+  border: `1px solid ${hw.borderDark}`,
 }

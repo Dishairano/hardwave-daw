@@ -1,3 +1,4 @@
+import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 
 export function Inspector() {
@@ -6,7 +7,7 @@ export function Inspector() {
 
   if (!track) {
     return (
-      <div style={{ padding: 16, color: '#222', fontSize: 11, textAlign: 'center' }}>
+      <div style={{ padding: 16, color: hw.textFaint, fontSize: 11, textAlign: 'center' }}>
         Select a track to inspect
       </div>
     )
@@ -14,8 +15,8 @@ export function Inspector() {
 
   return (
     <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#ddd' }}>{track.name}</div>
-      <div style={{ fontSize: 9, color: '#555' }}>{track.kind} Track</div>
+      <div style={{ fontSize: 12, fontWeight: 700, color: hw.textPrimary }}>{track.name}</div>
+      <div style={{ fontSize: 9, color: hw.textFaint }}>{track.kind} Track</div>
 
       <label style={labelStyle}>
         Volume
@@ -23,7 +24,7 @@ export function Inspector() {
           onChange={(e) => setVolume(track.id, parseFloat(e.target.value))}
           style={{ width: '100%' }}
         />
-        <span style={{ fontSize: 9, color: '#555' }}>{track.volume_db.toFixed(1)} dB</span>
+        <span style={{ fontSize: 9, color: hw.textFaint }}>{track.volume_db.toFixed(1)} dB</span>
       </label>
 
       <label style={labelStyle}>
@@ -34,7 +35,7 @@ export function Inspector() {
         />
       </label>
 
-      <div style={{ fontSize: 10, color: '#555', marginTop: 8 }}>
+      <div style={{ fontSize: 10, color: hw.textFaint, marginTop: 8 }}>
         Inserts: {track.insert_count}
       </div>
 
@@ -43,8 +44,8 @@ export function Inspector() {
           onClick={() => removeTrack(track.id)}
           style={{
             marginTop: 'auto', padding: '5px', fontSize: 10,
-            background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)',
-            borderRadius: 4, color: '#ef4444', cursor: 'pointer', fontFamily: 'inherit',
+            background: hw.redDim, border: `1px solid rgba(255,68,102,0.2)`,
+            borderRadius: hw.radius.md, color: hw.red, cursor: 'pointer', fontFamily: 'inherit',
           }}
         >
           Remove Track
@@ -55,5 +56,5 @@ export function Inspector() {
 }
 
 const labelStyle: React.CSSProperties = {
-  display: 'flex', flexDirection: 'column', gap: 2, fontSize: 10, color: '#777',
+  display: 'flex', flexDirection: 'column', gap: 2, fontSize: 10, color: hw.textMuted,
 }

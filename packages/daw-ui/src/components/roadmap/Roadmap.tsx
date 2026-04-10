@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { hw } from '../../theme'
 
 type Phase = 'current' | 'phase1' | 'phase2' | 'phase3' | 'phase4' | 'phase5' | 'stretch'
 
@@ -12,7 +13,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   current: {
     title: 'v0.1.x — Current Release',
     subtitle: 'Foundation & basic audio playback',
-    color: '#FF6600',
+    color: hw.accent,
     milestones: [
       {
         name: 'Core Audio Engine',
@@ -43,10 +44,10 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
         ],
       },
       {
-        name: 'FL Studio UI',
-        description: 'Dark theme with orange accents, panel system',
+        name: 'Hardwave UI',
+        description: 'Dark theme with purple accents, panel system',
         features: [
-          { name: 'FL-style dark theme', done: true },
+          { name: 'Hardwave dark theme', done: true },
           { name: 'Title bar with menu items', done: true },
           { name: 'Toolbar with transport, PAT/SONG, time display', done: true },
           { name: 'Browser panel (plugins/files/project tabs)', done: true },
@@ -61,7 +62,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   phase1: {
     title: 'v0.2 — Core Editing',
     subtitle: 'Piano roll, MIDI, recording, project save/load',
-    color: '#44AAFF',
+    color: '#4488FF',
     milestones: [
       {
         name: 'Project Format (.hwp)',
@@ -77,7 +78,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
       },
       {
         name: 'Piano Roll',
-        description: 'FL Studio\'s iconic MIDI note editor',
+        description: 'MIDI note editor',
         features: [
           { name: 'Note grid with draw/select/delete tools', done: false },
           { name: 'Note velocity editing (bottom lane)', done: false },
@@ -90,7 +91,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
           { name: 'Copy / paste / duplicate', done: false },
           { name: 'Zoom & scroll', done: false },
           { name: 'MIDI CC lanes (pitch bend, mod wheel, etc.)', done: false },
-          { name: 'Keyboard input (QWERTY → MIDI)', done: false },
+          { name: 'Keyboard input (QWERTY to MIDI)', done: false },
         ],
       },
       {
@@ -122,18 +123,18 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   phase2: {
     title: 'v0.3 — Mixing & Automation',
     subtitle: 'Professional mixing tools and automation system',
-    color: '#44DD88',
+    color: hw.green,
     milestones: [
       {
         name: 'Automation System',
         description: 'Drawable automation clips for any parameter',
         features: [
           { name: 'Automation clips in playlist', done: false },
-          { name: 'Right-click any knob → create automation clip', done: false },
+          { name: 'Right-click any knob to create automation clip', done: false },
           { name: 'Curve types (smooth, hold, stairs, pulse)', done: false },
           { name: 'Automation recording (record knob movements)', done: false },
           { name: 'LFO-based automation shapes', done: false },
-          { name: 'Envelope follower (audio → automation)', done: false },
+          { name: 'Envelope follower (audio to automation)', done: false },
           { name: 'Tempo-synced automation', done: false },
         ],
       },
@@ -145,7 +146,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
           { name: 'FX enable/disable toggle per slot', done: false },
           { name: 'FX drag reorder', done: false },
           { name: 'Dry/wet mix per FX slot', done: false },
-          { name: 'Send routing (any track → any track)', done: false },
+          { name: 'Send routing (any track to any track)', done: false },
           { name: 'Sidechain routing to plugin inputs', done: false },
           { name: 'Per-track stereo L/R peak meters', done: false },
           { name: 'Phase invert & stereo swap', done: false },
@@ -172,10 +173,10 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   phase3: {
     title: 'v0.4 — Sampling & Sound Design',
     subtitle: 'Sample editor, slicer, built-in instruments',
-    color: '#DD44DD',
+    color: '#FF66AA',
     milestones: [
       {
-        name: 'Sample Editor (Edison-like)',
+        name: 'Sample Editor',
         description: 'Built-in waveform editor for audio processing',
         features: [
           { name: 'Waveform display with zoom & scroll', done: false },
@@ -235,7 +236,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   phase4: {
     title: 'v0.5 — Built-in Effects & Instruments',
     subtitle: 'Ship native DSP plugins, reduce dependency on third-party',
-    color: '#DDDD44',
+    color: hw.yellow,
     milestones: [
       {
         name: 'Core Effects Suite',
@@ -260,7 +261,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
           { name: '3-oscillator subtractive synth', done: false },
           { name: 'FM synth (4-6 operator)', done: false },
           { name: 'Wavetable synth', done: false },
-          { name: 'Drum machine / FPC-style pad sampler', done: false },
+          { name: 'Drum machine / pad sampler', done: false },
           { name: 'Simple mono bass synth', done: false },
           { name: 'Kick drum synth', done: false },
         ],
@@ -281,7 +282,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   phase5: {
     title: 'v1.0 — Production Ready',
     subtitle: 'Polish, performance, and professional workflow',
-    color: '#FF4444',
+    color: hw.red,
     milestones: [
       {
         name: 'Advanced Workflow',
@@ -332,7 +333,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
   stretch: {
     title: 'Beyond v1.0 — Stretch Goals',
     subtitle: 'Differentiators and long-term vision',
-    color: '#71717a',
+    color: hw.textMuted,
     milestones: [
       {
         name: 'Multiplayer (Hardwave Collabs)',
@@ -415,51 +416,50 @@ export function Roadmap() {
   return (
     <div style={{
       height: '100%',
-      background: '#3A3A3A',
+      background: hw.bgPanel,
       display: 'flex',
       flexDirection: 'column',
-      color: '#a1a1aa',
+      color: hw.textSecondary,
     }}>
       {/* Header */}
       <div style={{
         padding: '12px 16px',
-        background: '#333',
-        borderBottom: '1px solid #333',
+        background: hw.bg,
+        borderBottom: `1px solid ${hw.border}`,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{
-            fontSize: 14, fontWeight: 800, color: '#FF6600',
+            fontSize: 14, fontWeight: 800, color: hw.accent,
             letterSpacing: 1,
           }}>
             HARDWAVE DAW ROADMAP
           </span>
-          <span style={{ fontSize: 10, color: '#888' }}>
+          <span style={{ fontSize: 10, color: hw.textFaint }}>
             {doneFeatures} / {totalFeatures} features
           </span>
           <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#FF6600' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: hw.accent }}>
             {overallPercent}%
           </span>
         </div>
 
-        {/* Overall progress bar */}
         <div style={{
-          marginTop: 6, height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2,
+          marginTop: 6, height: 4, background: hw.bgInput, borderRadius: 2,
           overflow: 'hidden',
         }}>
           <div style={{
             height: '100%', width: `${overallPercent}%`,
-            background: 'linear-gradient(90deg, #CC5500, #FF6600)',
+            background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accent})`,
             borderRadius: 2,
             transition: 'width 300ms',
           }} />
         </div>
       </div>
 
-      {/* Phase timeline bar */}
+      {/* Phase timeline */}
       <div style={{
         display: 'flex', padding: '0 2px',
-        background: '#3E3E3E', borderBottom: '1px solid #333',
+        background: hw.bg, borderBottom: `1px solid ${hw.border}`,
       }}>
         {PHASE_ORDER.map(phase => {
           const data = ROADMAP[phase]
@@ -478,17 +478,17 @@ export function Roadmap() {
                 textAlign: 'center',
                 cursor: 'pointer',
                 borderBottom: isActive ? `2px solid ${data.color}` : '2px solid transparent',
-                background: isActive ? 'rgba(255,255,255,0.03)' : 'transparent',
+                background: isActive ? 'rgba(255,255,255,0.02)' : 'transparent',
               }}
             >
               <div style={{
-                fontSize: 8, fontWeight: 700, color: isActive ? data.color : '#52525b',
+                fontSize: 8, fontWeight: 700, color: isActive ? data.color : hw.textFaint,
                 letterSpacing: 0.5, textTransform: 'uppercase',
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
                 {data.title.split('—')[0].trim()}
               </div>
-              <div style={{ fontSize: 7, color: '#52525b', marginTop: 1 }}>
+              <div style={{ fontSize: 7, color: hw.textFaint, marginTop: 1 }}>
                 {pct}%
               </div>
             </div>
@@ -507,25 +507,24 @@ export function Roadmap() {
 
           return (
             <div>
-              {/* Phase header */}
               <div style={{ marginBottom: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{
                     width: 10, height: 10, borderRadius: '50%',
                     background: data.color,
+                    boxShadow: `0 0 8px ${data.color}44`,
                   }} />
                   <span style={{ fontSize: 13, fontWeight: 700, color: data.color }}>
                     {data.title}
                   </span>
                 </div>
-                <div style={{ fontSize: 10, color: '#71717a', marginTop: 2, marginLeft: 18 }}>
+                <div style={{ fontSize: 10, color: hw.textFaint, marginTop: 2, marginLeft: 18 }}>
                   {data.subtitle}
                 </div>
 
-                {/* Phase progress */}
                 <div style={{ marginTop: 6, marginLeft: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{
-                    flex: 1, maxWidth: 200, height: 3, background: 'rgba(255,255,255,0.06)',
+                    flex: 1, maxWidth: 200, height: 3, background: hw.bgInput,
                     borderRadius: 2, overflow: 'hidden',
                   }}>
                     <div style={{
@@ -533,13 +532,12 @@ export function Roadmap() {
                       background: data.color, borderRadius: 2,
                     }} />
                   </div>
-                  <span style={{ fontSize: 9, color: '#52525b' }}>
+                  <span style={{ fontSize: 9, color: hw.textFaint }}>
                     {done}/{features.length}
                   </span>
                 </div>
               </div>
 
-              {/* Milestones */}
               {data.milestones.map((milestone, mIdx) => {
                 const mKey = `${phase}-${mIdx}`
                 const isExpanded = expandedMilestones.has(mKey)
@@ -550,12 +548,11 @@ export function Roadmap() {
                 return (
                   <div key={mKey} style={{
                     marginBottom: 4,
-                    background: '#444',
-                    borderRadius: 4,
-                    border: '1px solid #333',
+                    background: hw.bgSurface,
+                    borderRadius: hw.radius.md,
+                    border: `1px solid ${hw.border}`,
                     overflow: 'hidden',
                   }}>
-                    {/* Milestone header */}
                     <div
                       onClick={() => toggleMilestone(mKey)}
                       style={{
@@ -567,7 +564,7 @@ export function Roadmap() {
                       }}
                     >
                       <span style={{
-                        fontSize: 9, color: '#52525b', fontFamily: 'monospace',
+                        fontSize: 9, color: hw.textFaint, fontFamily: 'monospace',
                         transform: isExpanded ? 'rotate(90deg)' : 'none',
                         transition: 'transform 150ms',
                         display: 'inline-block',
@@ -576,28 +573,27 @@ export function Roadmap() {
                       </span>
 
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: '#ffffff' }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: hw.textPrimary }}>
                           {milestone.name}
                         </div>
-                        <div style={{ fontSize: 9, color: '#52525b', marginTop: 1 }}>
+                        <div style={{ fontSize: 9, color: hw.textFaint, marginTop: 1 }}>
                           {milestone.description}
                         </div>
                       </div>
 
-                      {/* Mini progress */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <div style={{
-                          width: 60, height: 3, background: 'rgba(255,255,255,0.06)',
+                          width: 60, height: 3, background: hw.bgInput,
                           borderRadius: 2, overflow: 'hidden',
                         }}>
                           <div style={{
                             height: '100%', width: `${mPct}%`,
-                            background: mPct === 100 ? '#44DD88' : data.color,
+                            background: mPct === 100 ? hw.green : data.color,
                             borderRadius: 2,
                           }} />
                         </div>
                         <span style={{
-                          fontSize: 9, color: mPct === 100 ? '#44DD88' : '#52525b',
+                          fontSize: 9, color: mPct === 100 ? hw.green : hw.textFaint,
                           fontWeight: mPct === 100 ? 700 : 400,
                           minWidth: 30, textAlign: 'right',
                         }}>
@@ -606,10 +602,9 @@ export function Roadmap() {
                       </div>
                     </div>
 
-                    {/* Feature list */}
                     {isExpanded && (
                       <div style={{
-                        borderTop: '1px solid #333',
+                        borderTop: `1px solid ${hw.border}`,
                         padding: '4px 0',
                       }}>
                         {milestone.features.map((feature, fIdx) => (
@@ -619,17 +614,16 @@ export function Roadmap() {
                             alignItems: 'flex-start',
                             gap: 8,
                           }}>
-                            {/* Checkbox */}
                             <div style={{
-                              width: 12, height: 12, borderRadius: 2,
-                              border: feature.done ? 'none' : '1px solid #555',
-                              background: feature.done ? '#44DD88' : 'transparent',
+                              width: 12, height: 12, borderRadius: 3,
+                              border: feature.done ? 'none' : `1px solid ${hw.textFaint}`,
+                              background: feature.done ? hw.green : 'transparent',
                               display: 'flex', alignItems: 'center', justifyContent: 'center',
                               flexShrink: 0, marginTop: 1,
                             }}>
                               {feature.done && (
-                                <span style={{ fontSize: 8, color: '#333', fontWeight: 900 }}>
-                                  {'\\u2713'}
+                                <span style={{ fontSize: 8, color: hw.bg, fontWeight: 900 }}>
+                                  {'\u2713'}
                                 </span>
                               )}
                             </div>
@@ -637,13 +631,13 @@ export function Roadmap() {
                             <div style={{ flex: 1 }}>
                               <div style={{
                                 fontSize: 10,
-                                color: feature.done ? '#71717a' : '#a1a1aa',
+                                color: feature.done ? hw.textFaint : hw.textSecondary,
                                 textDecoration: feature.done ? 'line-through' : 'none',
                               }}>
                                 {feature.name}
                               </div>
                               {feature.detail && (
-                                <div style={{ fontSize: 8, color: '#52525b', marginTop: 1 }}>
+                                <div style={{ fontSize: 8, color: hw.textFaint, marginTop: 1 }}>
                                   {feature.detail}
                                 </div>
                               )}
@@ -660,37 +654,38 @@ export function Roadmap() {
         })()}
       </div>
 
-      {/* Release schedule footer */}
+      {/* Footer */}
       <div style={{
         padding: '8px 12px',
-        background: '#333',
-        borderTop: '1px solid #333',
+        background: hw.bg,
+        borderTop: `1px solid ${hw.border}`,
         display: 'flex',
         gap: 12,
         flexWrap: 'wrap',
       }}>
         {[
-          { version: 'v0.1', label: 'Foundation', color: '#FF6600', status: 'Released' },
-          { version: 'v0.2', label: 'Core Editing', color: '#44AAFF', status: 'Next' },
-          { version: 'v0.3', label: 'Mix & Automate', color: '#44DD88', status: 'Planned' },
-          { version: 'v0.4', label: 'Sound Design', color: '#DD44DD', status: 'Planned' },
-          { version: 'v0.5', label: 'Effects & Synths', color: '#DDDD44', status: 'Planned' },
-          { version: 'v1.0', label: 'Production Ready', color: '#FF4444', status: 'Planned' },
+          { version: 'v0.1', label: 'Foundation', color: hw.accent, status: 'Released' },
+          { version: 'v0.2', label: 'Core Editing', color: '#4488FF', status: 'Next' },
+          { version: 'v0.3', label: 'Mix & Automate', color: hw.green, status: 'Planned' },
+          { version: 'v0.4', label: 'Sound Design', color: '#FF66AA', status: 'Planned' },
+          { version: 'v0.5', label: 'Effects & Synths', color: hw.yellow, status: 'Planned' },
+          { version: 'v1.0', label: 'Production Ready', color: hw.red, status: 'Planned' },
         ].map(r => (
           <div key={r.version} style={{
             display: 'flex', alignItems: 'center', gap: 4,
           }}>
             <div style={{
               width: 6, height: 6, borderRadius: '50%',
-              background: r.status === 'Released' ? r.color : '#3f3f46',
+              background: r.status === 'Released' ? r.color : hw.bgInput,
               border: r.status === 'Next' ? `1px solid ${r.color}` : 'none',
+              boxShadow: r.status === 'Released' ? `0 0 6px ${r.color}44` : 'none',
             }} />
             <span style={{
-              fontSize: 8, fontWeight: 700, color: r.status === 'Released' ? r.color : '#52525b',
+              fontSize: 8, fontWeight: 700, color: r.status === 'Released' ? r.color : hw.textFaint,
             }}>
               {r.version}
             </span>
-            <span style={{ fontSize: 8, color: '#52525b' }}>
+            <span style={{ fontSize: 8, color: hw.textFaint }}>
               {r.label}
             </span>
           </div>

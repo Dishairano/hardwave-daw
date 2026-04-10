@@ -12,6 +12,7 @@ import { Roadmap } from './components/roadmap/Roadmap'
 import { UpdateModal } from './components/UpdateModal'
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
+import { hw } from './theme'
 
 interface UpdateInfo {
   version: string
@@ -172,7 +173,7 @@ export function App() {
       flexDirection: 'column',
       height: '100vh',
       width: '100vw',
-      background: '#444444',
+      background: hw.bg,
     }}>
       {showSplash && (
         <SplashScreen
@@ -210,7 +211,7 @@ export function App() {
                   flex: showPlaylist ? undefined : 1,
                   height: showPlaylist ? '55%' : undefined,
                   minHeight: 120,
-                  borderBottom: showPlaylist ? '1px solid rgba(0,0,0,0.3)' : undefined,
+                  borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
                 }}>
                   <ChannelRack />
                 </div>
@@ -219,7 +220,7 @@ export function App() {
               {showPianoRoll && (
                 <div style={{
                   flex: 1, minHeight: 200,
-                  borderBottom: showPlaylist ? '1px solid rgba(0,0,0,0.3)' : undefined,
+                  borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
                 }}>
                   <PianoRoll />
                 </div>
@@ -236,7 +237,7 @@ export function App() {
                 <div style={{
                   height: (showPlaylist || showChannelRack || showPianoRoll) ? 220 : 'auto',
                   flex: (showPlaylist || showChannelRack || showPianoRoll) ? undefined : 1,
-                  borderTop: '1px solid rgba(0,0,0,0.3)',
+                  borderTop: `1px solid ${hw.borderDark}`,
                 }}>
                   <MixerPanel />
                 </div>
