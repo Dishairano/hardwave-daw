@@ -34,8 +34,36 @@ jobs:
           path: packages/daw-ui/dist
           retention-days: 1
 
+  changelog:
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.changelog.outputs.body }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog from tag annotation
+        id: changelog
+        run: |
+          # Get the annotated tag message (set by release.sh)
+          TAG_MSG=$(git tag -l --format='%(contents)' "${{ github.ref_name }}" 2>/dev/null || echo "")
+          if [ -z "$TAG_MSG" ] || [ "$TAG_MSG" = "${{ github.ref_name }}" ]; then
+            # Fallback: generate from commits since previous tag
+            PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ]; then
+              TAG_MSG=$(git log "${PREV_TAG}..${{ github.ref_name }}" --pretty=format:"- %s" --no-merges | grep -v "^- Release\|^- v[0-9]" || echo "- Bug fixes and improvements")
+            else
+              TAG_MSG="- Bug fixes and improvements"
+            fi
+            TAG_MSG="## Changes"$'\n'"${TAG_MSG}"
+          fi
+          echo "body<<CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+          echo "$TAG_MSG" >> "$GITHUB_OUTPUT"
+          echo "CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+
   build:
-    needs: frontend
+    needs: [frontend, changelog]
     strategy:
       fail-fast: false
       matrix:
@@ -98,90 +126,48 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Hardwave DAW ${{ github.ref_name }}'
-          releaseBody: 'Download the installer for your platform below.'
+          releaseBody: ${{ needs.changelog.outputs.body }}
           releaseDraft: false
-          prerelease: false
+          prerelease: true
           tauriScript: tauri
           args: --target ${{ matrix.target }}
 
   discord-changelog:
-    needs: build
+    needs: [build, changelog]
     runs-on: ubuntu-latest
     if: success()
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Get release info
-        id: release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          BODY=$(gh release view "${{ github.ref_name }}" --json body -q '.body' 2>/dev/null || echo "")
-          echo "body<<RELEASE_EOF" >> "$GITHUB_OUTPUT"
-          echo "$BODY" >> "$GITHUB_OUTPUT"
-          echo "RELEASE_EOF" >> "$GITHUB_OUTPUT"
-
       - name: Post Discord changelog
         if: env.DISCORD_WEBHOOK_URL != ''
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           VERSION: ${{ github.ref_name }}
-          RELEASE_BODY: ${{ steps.release.outputs.body }}
+          RELEASE_BODY: ${{ needs.changelog.outputs.body }}
         run: |
-          parse_section() {
-            local section="$1"
-            local body="$2"
-            echo "$body" | sed -n "/^## *${section}/,/^## /p" | grep '^\s*[-*]' | sed 's/^\s*[-*]\s*//' | head -8
-          }
+          # Extract bullet points from the changelog body
+          CHANGES=$(echo "$RELEASE_BODY" | grep '^\s*[-*]' | sed 's/^\s*[-*]\s*/• /' | head -15)
 
-          NEW=$(parse_section "New" "$RELEASE_BODY")
-          IMPROVED=$(parse_section "Improved" "$RELEASE_BODY")
-          FIXED=$(parse_section "Fixed" "$RELEASE_BODY")
-
-          NEW_COUNT=$(echo "$NEW" | grep -c '.' 2>/dev/null || echo 0)
-          IMPROVED_COUNT=$(echo "$IMPROVED" | grep -c '.' 2>/dev/null || echo 0)
-          FIXED_COUNT=$(echo "$FIXED" | grep -c '.' 2>/dev/null || echo 0)
-
-          FIELDS="[]"
-
-          if [ -n "$NEW" ] && [ "$NEW_COUNT" -gt 0 ]; then
-            NEW_FMT=$(echo "$NEW" | sed 's/^/• /' | tr '\n' '\n')
-            FIELDS=$(echo "$FIELDS" | jq --arg v "$NEW_FMT" '. + [{"name": "✦ NEW", "value": $v, "inline": false}]')
+          if [ -z "$CHANGES" ]; then
+            CHANGES="• Bug fixes and improvements"
           fi
 
-          if [ -n "$IMPROVED" ] && [ "$IMPROVED_COUNT" -gt 0 ]; then
-            IMP_FMT=$(echo "$IMPROVED" | sed 's/^/• /' | tr '\n' '\n')
-            FIELDS=$(echo "$FIELDS" | jq --arg v "$IMP_FMT" '. + [{"name": "✦ IMPROVED", "value": $v, "inline": false}]')
-          fi
-
-          if [ -n "$FIXED" ] && [ "$FIXED_COUNT" -gt 0 ]; then
-            FIX_FMT=$(echo "$FIXED" | sed 's/^/• /' | tr '\n' '\n')
-            FIELDS=$(echo "$FIELDS" | jq --arg v "$FIX_FMT" '. + [{"name": "✦ FIXED", "value": $v, "inline": false}]')
-          fi
-
-          if [ "$(echo "$FIELDS" | jq 'length')" -eq 0 ]; then
-            FALLBACK="${RELEASE_BODY:-Bug fixes and improvements.}"
-            FIELDS=$(echo '[]' | jq --arg v "$FALLBACK" '. + [{"name": "Changes", "value": $v, "inline": false}]')
-          fi
-
-          SUMMARY=""
-          [ "$NEW_COUNT" -gt 0 ] && SUMMARY="${NEW_COUNT} new"
-          [ "$IMPROVED_COUNT" -gt 0 ] && SUMMARY="${SUMMARY:+$SUMMARY · }${IMPROVED_COUNT} improved"
-          [ "$FIXED_COUNT" -gt 0 ] && SUMMARY="${SUMMARY:+$SUMMARY · }${FIXED_COUNT} fixed"
+          CHANGE_COUNT=$(echo "$CHANGES" | grep -c '.' 2>/dev/null || echo 0)
 
           PAYLOAD=$(jq -n \
             --arg title "Hardwave DAW ${VERSION}" \
-            --arg footer "${SUMMARY:-Release ${VERSION}}" \
+            --arg changes "$CHANGES" \
+            --arg footer "Release ${VERSION} · ${CHANGE_COUNT} changes" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --argjson fields "$FIELDS" \
             '{
               "embeds": [{
                 "title": $title,
                 "color": 15228416,
-                "fields": $fields,
+                "fields": [
+                  {"name": "Changes", "value": $changes, "inline": false}
+                ],
                 "footer": {
-                  "text": ("Download at hardwavestudios.com/daw  •  " + $footer)
+                  "text": $footer
                 },
                 "timestamp": $timestamp
               }]
