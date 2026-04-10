@@ -46,7 +46,7 @@ export function UpdateModal({
         background: hw.bgSurface,
         border: `1px solid ${hw.border}`,
         borderRadius: 14,
-        boxShadow: '0 25px 50px rgba(0,0,0,0.6), 0 0 80px rgba(155,109,255,0.08)',
+        boxShadow: '0 25px 50px rgba(0,0,0,0.6), 0 0 80px rgba(220,38,38,0.08)',
         overflow: 'hidden',
       }}>
         {/* Gradient accent line */}
@@ -162,7 +162,7 @@ export function UpdateModal({
             margin: '0 16px 6px',
             padding: '6px 10px',
             background: hw.redDim,
-            border: `1px solid rgba(255,68,102,0.2)`,
+            border: `1px solid rgba(239,68,68,0.2)`,
             borderRadius: 8,
             display: 'flex', alignItems: 'center', gap: 6,
           }}>
@@ -189,7 +189,7 @@ export function UpdateModal({
                   fontSize: 12, color: hw.textMuted,
                 }}
                 onMouseEnter={e => {
-                  e.currentTarget.style.background = '#2a2a36'
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.08)'
                   e.currentTarget.style.color = hw.textPrimary
                 }}
                 onMouseLeave={e => {
@@ -241,7 +241,7 @@ export function UpdateModal({
             <div style={{
               flex: 1, padding: '8px 0', borderRadius: 10,
               background: hw.greenDim,
-              border: `1px solid rgba(0,212,170,0.2)`,
+              border: `1px solid rgba(16,185,129,0.2)`,
               fontSize: 12, color: hw.green,
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
             }}>

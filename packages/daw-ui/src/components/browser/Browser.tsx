@@ -18,7 +18,8 @@ export function Browser() {
     <div style={{
       width: 200,
       minWidth: 200,
-      background: hw.bgPanel,
+      background: 'rgba(255,255,255,0.02)',
+      backdropFilter: hw.blur.sm,
       borderRight: `1px solid ${hw.border}`,
       display: 'flex',
       flexDirection: 'column',
@@ -26,7 +27,7 @@ export function Browser() {
       {/* Tabs */}
       <div style={{
         display: 'flex',
-        background: hw.bg,
+        background: 'rgba(255,255,255,0.01)',
         borderBottom: `1px solid ${hw.border}`,
       }}>
         {(['plugins', 'files', 'project'] as Tab[]).map(tab => (
@@ -37,8 +38,9 @@ export function Browser() {
               flex: 1, padding: '5px 0',
               fontSize: 10, fontWeight: activeTab === tab ? 600 : 400,
               color: activeTab === tab ? hw.textPrimary : hw.textFaint,
-              background: activeTab === tab ? hw.bgSurface : 'transparent',
+              background: activeTab === tab ? 'rgba(255,255,255,0.04)' : 'transparent',
               borderBottom: activeTab === tab ? `2px solid ${hw.accent}` : '2px solid transparent',
+              transition: 'all 0.15s',
             }}
           >
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -57,8 +59,9 @@ export function Browser() {
                 style={{
                   width: '100%', padding: '4px 0',
                   fontSize: 10, color: hw.textSecondary,
-                  background: hw.bgSurface, border: `1px solid ${hw.border}`,
+                  background: 'rgba(255,255,255,0.04)', border: `1px solid ${hw.border}`,
                   borderRadius: hw.radius.md, opacity: scanning ? 0.5 : 1,
+                  transition: 'all 0.15s',
                 }}
               >
                 {scanning ? 'Scanning...' : 'Scan Plugins'}
@@ -125,14 +128,15 @@ function TreeGroup({ label, count, expanded, onToggle, children }: {
           padding: '4px 8px',
           display: 'flex', alignItems: 'center', gap: 4,
           cursor: 'default', fontSize: 11,
+          transition: 'background 0.15s',
         }}
-        onMouseEnter={e => { e.currentTarget.style.background = hw.bgElevated }}
+        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
         onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
       >
         <span style={{
           fontSize: 8, color: hw.textMuted,
           transform: expanded ? 'rotate(90deg)' : 'none',
-          display: 'inline-block', transition: 'transform 100ms',
+          display: 'inline-block', transition: 'transform 150ms',
         }}>
           {'\u25B6'}
         </span>
@@ -151,6 +155,7 @@ function PluginItem({ plugin, canAdd }: { plugin: any; canAdd: boolean }) {
         padding: '3px 8px 3px 16px',
         cursor: canAdd ? 'pointer' : 'default',
         opacity: canAdd ? 1 : 0.5,
+        transition: 'background 0.15s',
       }}
       onClick={async () => {
         if (!canAdd) return
@@ -159,7 +164,7 @@ function PluginItem({ plugin, canAdd }: { plugin: any; canAdd: boolean }) {
         await usePluginStore.getState().addToTrack(selectedTrackId, plugin.id)
         useTrackStore.getState().fetchTracks()
       }}
-      onMouseEnter={e => { if (canAdd) e.currentTarget.style.background = hw.bgElevated }}
+      onMouseEnter={e => { if (canAdd) e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
     >
       <div style={{ fontSize: 10, color: hw.textPrimary }}>{plugin.name}</div>

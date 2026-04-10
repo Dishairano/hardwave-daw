@@ -31,7 +31,7 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
     // Background
-    ctx.fillStyle = hw.bgPanel
+    ctx.fillStyle = '#0a0a0f'
     ctx.fillRect(0, 0, width, h)
 
     for (let pitch = 0; pitch < totalNotes; pitch++) {
@@ -42,18 +42,18 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
       const isC = pitch % 12 === 0
 
       if (black) {
-        ctx.fillStyle = '#0a0a10'
+        ctx.fillStyle = '#08080d'
         ctx.fillRect(0, y, width, noteHeight)
-        ctx.fillStyle = '#080810'
+        ctx.fillStyle = '#060608'
         ctx.fillRect(0, y + 1, width * 0.6, noteHeight - 2)
       } else {
-        ctx.fillStyle = isC ? '#17171e' : '#111118'
+        ctx.fillStyle = isC ? '#0d0d12' : '#0a0a0f'
         ctx.fillRect(0, y, width, noteHeight)
       }
 
       // Key border
       ctx.fillStyle = pitch % 12 === 0 || pitch % 12 === 5
-        ? 'rgba(155, 109, 255, 0.06)'
+        ? 'rgba(220,38,38,0.06)'
         : 'rgba(255,255,255,0.02)'
       ctx.fillRect(0, y + noteHeight - 0.5, width, 0.5)
 
@@ -64,14 +64,14 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
           : NOTE_NAMES[pitch % 12]
         ctx.fillStyle = isC ? hw.textSecondary : hw.textFaint
         ctx.font = isC
-          ? `bold ${Math.min(10, noteHeight - 3)}px Segoe UI, sans-serif`
-          : `${Math.min(8, noteHeight - 4)}px Segoe UI, sans-serif`
+          ? `bold ${Math.min(10, noteHeight - 3)}px Inter, ui-sans-serif, sans-serif`
+          : `${Math.min(8, noteHeight - 4)}px Inter, ui-sans-serif, sans-serif`
         ctx.fillText(label, 4, y + noteHeight - 3)
       }
     }
 
     // Right border
-    ctx.fillStyle = hw.borderDark
+    ctx.fillStyle = 'rgba(255,255,255,0.04)'
     ctx.fillRect(width - 1, 0, 1, h)
   }, [width, noteHeight, scrollY, totalNotes])
 

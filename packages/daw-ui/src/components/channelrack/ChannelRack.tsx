@@ -25,10 +25,10 @@ export function ChannelRack() {
   }
 
   return (
-    <div style={{ height: '100%', background: hw.bgPanel, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100%', background: 'rgba(255,255,255,0.02)', backdropFilter: hw.blur.sm, display: 'flex', flexDirection: 'column' }}>
       {/* Top toolbar */}
       <div style={{
-        height: 26, background: hw.bg,
+        height: 26, background: 'rgba(255,255,255,0.01)',
         borderBottom: `1px solid ${hw.border}`,
         display: 'flex', alignItems: 'center', padding: '0 4px', gap: 2,
       }}>
@@ -61,9 +61,9 @@ export function ChannelRack() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <span style={{ fontSize: 8, color: hw.textFaint }}>Steps</span>
           <span style={{
-            fontSize: 10, color: hw.greenLcd, fontWeight: 700,
+            fontSize: 10, color: hw.textPrimary, fontWeight: 700,
             fontFamily: "'Consolas', monospace",
-            background: hw.bgInput, padding: '1px 5px', borderRadius: hw.radius.sm,
+            background: 'rgba(255,255,255,0.04)', padding: '1px 5px', borderRadius: hw.radius.sm,
             border: `1px solid ${hw.borderDark}`,
           }}>
             {STEPS}
@@ -85,7 +85,7 @@ export function ChannelRack() {
 
         <span style={{
           fontSize: 10, color: hw.textPrimary, fontWeight: 600,
-          background: hw.bgSurface, padding: '2px 10px', borderRadius: hw.radius.sm,
+          background: 'rgba(255,255,255,0.04)', padding: '2px 10px', borderRadius: hw.radius.sm,
           border: `1px solid ${hw.border}`,
         }}>
           Pattern 1
@@ -104,7 +104,7 @@ export function ChannelRack() {
               style={{
                 height: 30, display: 'flex', alignItems: 'stretch',
                 borderBottom: `1px solid ${hw.border}`,
-                background: selected ? hw.selectionDim : (ci % 2 === 1 ? hw.bgPanel : hw.bgSurface),
+                background: selected ? hw.selectionDim : (ci % 2 === 1 ? 'transparent' : 'rgba(255,255,255,0.015)'),
               }}
             >
               {/* 1. LED */}
@@ -117,7 +117,7 @@ export function ChannelRack() {
               >
                 <div style={{
                   width: 8, height: 8, borderRadius: '50%',
-                  background: ch.muted ? hw.bgElevated : hw.green,
+                  background: ch.muted ? 'rgba(255,255,255,0.06)' : hw.green,
                   boxShadow: ch.muted ? 'none' : `0 0 6px ${hw.greenDim}`,
                 }} />
               </div>
@@ -147,7 +147,7 @@ export function ChannelRack() {
                 style={{
                   width: 110, minWidth: 110, display: 'flex', alignItems: 'center',
                   padding: '0 6px', cursor: 'default',
-                  background: selected ? hw.accentDim : hw.bgSurface,
+                  background: selected ? hw.accentDim : 'rgba(255,255,255,0.03)',
                   borderRight: `1px solid ${hw.border}`,
                   gap: 4,
                 }}
@@ -177,7 +177,7 @@ export function ChannelRack() {
                 }} />
               </div>
 
-              {/* 7. Step sequencer — PURPLE buttons */}
+              {/* 7. Step sequencer — RED buttons */}
               <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 4px', gap: 1, overflow: 'hidden' }}>
                 {Array.from({ length: STEPS }, (_, i) => {
                   const active = getSteps(ch.id)[i]
@@ -191,8 +191,8 @@ export function ChannelRack() {
                         flex: 1, maxWidth: 28, height: 22,
                         background: active
                           ? hw.accent
-                          : (isOddGroup ? hw.bgElevated : hw.bgSurface),
-                        border: `1px solid ${active ? hw.accentLight : hw.borderDark}`,
+                          : (isOddGroup ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.03)'),
+                        border: `1px solid ${active ? hw.accentLight : 'rgba(255,255,255,0.06)'}`,
                         borderRadius: hw.radius.sm,
                         boxShadow: active ? `0 0 8px ${hw.accentGlow}` : 'none',
                         marginRight: i % 4 === 3 ? 4 : 0,
@@ -216,7 +216,7 @@ export function ChannelRack() {
       {/* Graph editor */}
       {graphEditor && (
         <div style={{
-          height: 60, background: hw.bgInput,
+          height: 60, background: 'rgba(255,255,255,0.02)',
           borderTop: `1px solid ${hw.border}`,
           display: 'flex', alignItems: 'flex-end', padding: '4px 4px 2px',
           gap: 1, marginLeft: 210,
@@ -236,7 +236,7 @@ export function ChannelRack() {
 
       {/* Bottom bar */}
       <div style={{
-        height: 22, background: hw.bg,
+        height: 22, background: 'rgba(255,255,255,0.01)',
         borderTop: `1px solid ${hw.border}`,
         display: 'flex', alignItems: 'center', padding: '0 6px', gap: 4,
       }}>
@@ -268,7 +268,7 @@ function MiniKnob({ value, color, size }: { value: number; color: string; size: 
 
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      <circle cx={cx} cy={cy} r={r} fill={hw.bgInput} stroke={hw.borderDark} strokeWidth="0.5" />
+      <circle cx={cx} cy={cy} r={r} fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)" strokeWidth="0.5" />
       <line x1={cx} y1={cy} x2={endX} y2={endY} stroke={color} strokeWidth="1.2" strokeLinecap="round" />
       <circle cx={cx} cy={cy} r="1" fill={color} opacity="0.4" />
     </svg>
@@ -283,5 +283,5 @@ const topBtn: React.CSSProperties = {
   width: 22, height: 18,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   background: 'transparent', border: '1px solid transparent',
-  borderRadius: hw.radius.sm, cursor: 'pointer',
+  borderRadius: 6, cursor: 'pointer',
 }

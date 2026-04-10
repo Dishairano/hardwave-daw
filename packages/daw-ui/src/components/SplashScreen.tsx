@@ -33,7 +33,6 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
       scale: [0.5, 1],
       duration: 1200,
       complete: () => {
-        // Activate CSS breathing animations after fade-in
         glow1Ref.current?.classList.add('glow-breathe-1')
         glow2Ref.current?.classList.add('glow-breathe-2')
       },
@@ -63,13 +62,13 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
       easing: 'easeOutElastic(1, 0.6)',
     }, 200)
 
-    // Logo shadow — purple glow
+    // Logo shadow — red glow
     tl.add({
       targets: logoRef.current,
       boxShadow: [
-        '0 0 0px rgba(155,109,255,0), 0 0 0px rgba(123,90,192,0)',
-        '0 0 80px rgba(155,109,255,0.5), 0 0 160px rgba(123,90,192,0.3)',
-        '0 0 40px rgba(155,109,255,0.25), 0 0 80px rgba(123,90,192,0.15)',
+        '0 0 0px rgba(220,38,38,0), 0 0 0px rgba(185,28,28,0)',
+        '0 0 80px rgba(220,38,38,0.5), 0 0 160px rgba(185,28,28,0.3)',
+        '0 0 40px rgba(220,38,38,0.25), 0 0 80px rgba(185,28,28,0.15)',
       ],
       duration: 800,
       easing: 'easeOutQuad',
@@ -176,20 +175,20 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
     }
   }, [animDone, dataReady, onFinished])
 
-  // Particle colors — alternating purple shades (reduced from 25 to 12)
+  // Particle colors — alternating red shades
   const particles = Array.from({ length: 12 }).map((_, i) => ({
     width: 2 + Math.random() * 3,
     left: Math.random() * 100,
     bg: i % 2 === 0
-      ? 'linear-gradient(135deg, #9B6DFF, #7B5AC0)'
-      : 'linear-gradient(135deg, #B48EFF, #9B6DFF)',
+      ? 'linear-gradient(135deg, #DC2626, #B91C1C)'
+      : 'linear-gradient(135deg, #EF4444, #DC2626)',
   }))
 
   return (
     <div ref={containerRef} style={{
       position: 'fixed', inset: 0, zIndex: 50,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: '#0c0c10', overflow: 'hidden',
+      background: '#08080c', overflow: 'hidden',
     }}>
       {/* CSS keyframes for glow breathing (GPU-composited, no JS) */}
       <style>{`
@@ -235,7 +234,7 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
         position: 'absolute', top: '50%', left: '50%',
         transform: 'translate(-50%, -50%) translateZ(0)',
         width: 500, height: 500, borderRadius: '50%',
-        background: 'rgba(155, 109, 255, 0.08)',
+        background: 'rgba(220, 38, 38, 0.08)',
         filter: 'blur(120px)', opacity: 0,
         willChange: 'transform, opacity',
       }} />
@@ -243,7 +242,7 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
         position: 'absolute', top: '50%', left: '50%',
         transform: 'translate(-40%, -60%) translateZ(0)',
         width: 400, height: 400, borderRadius: '50%',
-        background: 'rgba(123, 90, 192, 0.05)',
+        background: 'rgba(185, 28, 28, 0.05)',
         filter: 'blur(120px)', opacity: 0,
         willChange: 'transform, opacity',
       }} />
@@ -252,11 +251,11 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <div ref={ring1Ref} style={{
           position: 'absolute', width: 96, height: 96, borderRadius: '50%',
-          border: '2px solid rgba(155, 109, 255, 0.4)', opacity: 0, top: 0,
+          border: '2px solid rgba(220, 38, 38, 0.4)', opacity: 0, top: 0,
         }} />
         <div ref={ring2Ref} style={{
           position: 'absolute', width: 96, height: 96, borderRadius: '50%',
-          border: '2px solid rgba(155, 109, 255, 0.2)', opacity: 0, top: 0,
+          border: '2px solid rgba(220, 38, 38, 0.2)', opacity: 0, top: 0,
         }} />
 
         {/* Logo with shine sweep */}
@@ -274,14 +273,14 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
         <h1 ref={titleRef} style={{
           fontSize: 30, fontWeight: 700, color: '#FFF',
           marginTop: 24, opacity: 0,
-          fontFamily: "'Segoe UI', -apple-system, sans-serif",
+          fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
         }}>
           Hardwave DAW
         </h1>
         <p ref={subtitleRef} style={{
-          fontSize: 14, color: '#58585F',
+          fontSize: 14, color: '#52525b',
           marginTop: 8, opacity: 0,
-          fontFamily: "'Segoe UI', -apple-system, sans-serif",
+          fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
         }}>
           Digital Audio Workstation
         </p>
@@ -293,7 +292,7 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
         }}>
           <div ref={barFillRef} style={{
             height: '100%', width: '0%',
-            background: 'linear-gradient(90deg, #7B5AC0, #9B6DFF)',
+            background: 'linear-gradient(90deg, #B91C1C, #DC2626)',
             borderRadius: 2,
           }} />
         </div>

@@ -40,7 +40,8 @@ export function Toolbar(props: ToolbarProps) {
       alignItems: 'center',
       height: 40,
       background: hw.bgToolbarGrad,
-      borderBottom: `1px solid ${hw.borderDark}`,
+      backdropFilter: hw.blur.md,
+      borderBottom: `1px solid ${hw.border}`,
       padding: '0 6px',
       gap: 2,
     }}>
@@ -74,7 +75,7 @@ export function Toolbar(props: ToolbarProps) {
 
       {/* 3. PAT / SONG toggle */}
       <div style={{
-        display: 'flex', background: hw.bgInput,
+        display: 'flex', background: 'rgba(255,255,255,0.03)',
         border: `1px solid ${hw.borderDark}`,
         overflow: 'hidden', borderRadius: hw.radius.sm,
       }}>
@@ -96,7 +97,7 @@ export function Toolbar(props: ToolbarProps) {
         <button onClick={togglePlayback} style={{
           ...transportBtn,
           background: playing ? hw.accentDim : transportBtn.background,
-          borderColor: playing ? hw.accentGlow : hw.borderDark,
+          borderColor: playing ? hw.accentGlow : 'rgba(255,255,255,0.06)',
         }} onMouseEnter={hint('Play (Space)')} onMouseLeave={clear}>
           <svg width="10" height="12"><polygon points="0,0 10,6 0,12" fill={playing ? hw.accent : hw.textMuted} /></svg>
         </button>
@@ -111,7 +112,7 @@ export function Toolbar(props: ToolbarProps) {
           onChange={e => setBpm(parseFloat(e.target.value) || 140)}
           style={{
             width: 50, background: 'transparent', border: 'none',
-            color: hw.greenLcd, fontSize: 14, fontWeight: 700,
+            color: hw.textPrimary, fontSize: 14, fontWeight: 700,
             fontFamily: "'Consolas', 'Courier New', monospace",
             textAlign: 'right', outline: 'none',
           }}
@@ -123,19 +124,19 @@ export function Toolbar(props: ToolbarProps) {
       {/* 6. Time display — Bar:Beat:Tick | Min:Sec.Cs */}
       <div style={{ ...lcd, padding: '0 8px', gap: 8 }}>
         <span style={lcdDigit}>
-          <span style={{ color: hw.greenLcd }}>{String(bar).padStart(3, ' ')}</span>
-          <span style={{ color: hw.secondary }}>:</span>
-          <span style={{ color: hw.greenLcd }}>{beat}</span>
-          <span style={{ color: hw.secondary }}>:</span>
-          <span style={{ color: hw.greenLcd }}>{String(tick).padStart(3, '0')}</span>
+          <span style={{ color: hw.textPrimary }}>{String(bar).padStart(3, ' ')}</span>
+          <span style={{ color: hw.textFaint }}>:</span>
+          <span style={{ color: hw.textPrimary }}>{beat}</span>
+          <span style={{ color: hw.textFaint }}>:</span>
+          <span style={{ color: hw.textPrimary }}>{String(tick).padStart(3, '0')}</span>
         </span>
         <div style={{ width: 1, height: 14, background: hw.border }} />
         <span style={lcdDigit}>
-          <span style={{ color: hw.greenLcd }}>{String(mins).padStart(2, ' ')}</span>
-          <span style={{ color: hw.secondary }}>:</span>
-          <span style={{ color: hw.greenLcd }}>{String(secs).padStart(2, '0')}</span>
-          <span style={{ color: hw.secondary }}>.</span>
-          <span style={{ color: hw.greenLcd }}>{String(cs).padStart(2, '0')}</span>
+          <span style={{ color: hw.textPrimary }}>{String(mins).padStart(2, ' ')}</span>
+          <span style={{ color: hw.textFaint }}>:</span>
+          <span style={{ color: hw.textPrimary }}>{String(secs).padStart(2, '0')}</span>
+          <span style={{ color: hw.textFaint }}>.</span>
+          <span style={{ color: hw.textPrimary }}>{String(cs).padStart(2, '0')}</span>
         </span>
       </div>
 
@@ -143,7 +144,7 @@ export function Toolbar(props: ToolbarProps) {
 
       {/* 7. Song position slider */}
       <div style={{
-        width: 80, height: 8, background: hw.bgInput, borderRadius: hw.radius.sm,
+        width: 80, height: 8, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm,
         border: `1px solid ${hw.borderDark}`, position: 'relative', cursor: 'pointer',
       }} onMouseEnter={hint('Song position')} onMouseLeave={clear}>
         <div style={{
@@ -232,7 +233,7 @@ export function Toolbar(props: ToolbarProps) {
           <path d="M5.5 1.5 Q8 4.5 5.5 7.5" stroke={hw.textMuted} strokeWidth="0.8" fill="none"/>
         </svg>
         <div style={{
-          width: 55, height: 6, background: hw.bgInput, borderRadius: hw.radius.sm,
+          width: 55, height: 6, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm,
           border: `1px solid ${hw.borderDark}`, position: 'relative',
         }}>
           <div style={{
@@ -250,7 +251,7 @@ export function Toolbar(props: ToolbarProps) {
         <span style={{ fontSize: 7, color: hw.textFaint }}>PIT</span>
         <div style={{
           width: 16, height: 16, borderRadius: '50%',
-          background: `linear-gradient(145deg, ${hw.bgElevated}, ${hw.bgInput})`,
+          background: 'rgba(255,255,255,0.04)',
           border: `1px solid ${hw.borderDark}`,
           position: 'relative',
         }}>
@@ -268,13 +269,13 @@ export function Toolbar(props: ToolbarProps) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} onMouseEnter={hint('CPU / Polyphony')} onMouseLeave={clear}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
           <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>CPU</span>
-          <div style={{ width: 30, height: 4, background: hw.bgInput, borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
+          <div style={{ width: 30, height: 4, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
             <div style={{ width: '12%', height: '100%', background: hw.green, borderRadius: hw.radius.sm }} />
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
           <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>POLY</span>
-          <div style={{ width: 30, height: 4, background: hw.bgInput, borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
+          <div style={{ width: 30, height: 4, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
             <div style={{ width: '5%', height: '100%', background: hw.green, borderRadius: hw.radius.sm }} />
           </div>
         </div>
@@ -285,7 +286,7 @@ export function Toolbar(props: ToolbarProps) {
       {/* 15. Mini scope */}
       <div style={{
         width: 60, height: 24,
-        background: hw.bgInput, border: `1px solid ${hw.borderDark}`,
+        background: 'rgba(255,255,255,0.03)', border: `1px solid ${hw.borderDark}`,
         borderRadius: hw.radius.sm,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
@@ -309,7 +310,7 @@ function ToolBtn({ children, onEnter, onLeave }: {
 }) {
   return (
     <button
-      onMouseEnter={e => { onEnter(); e.currentTarget.style.background = hw.bgElevated }}
+      onMouseEnter={e => { onEnter(); e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
       onMouseLeave={e => { onLeave(); e.currentTarget.style.background = 'transparent' }}
       style={{
         width: 24, height: 24,
@@ -318,6 +319,7 @@ function ToolBtn({ children, onEnter, onLeave }: {
         background: 'transparent',
         border: '1px solid transparent',
         borderRadius: hw.radius.sm,
+        transition: 'background 0.15s',
       }}
     >
       {children}
@@ -342,6 +344,7 @@ function ToolSelectBtn({ tool, active, onClick, children, onEnter, onLeave }: {
         background: isActive ? hw.accentDim : 'transparent',
         border: `1px solid ${isActive ? hw.accentGlow : 'transparent'}`,
         borderRadius: hw.radius.sm,
+        transition: 'all 0.1s',
       }}
     >
       {children}
@@ -371,6 +374,7 @@ function PanelBtn({ icon, active, onClick, onEnter, onLeave }: {
         background: active ? hw.accentDim : 'transparent',
         border: `1px solid ${active ? hw.accentGlow : 'transparent'}`,
         borderRadius: hw.radius.sm,
+        transition: 'all 0.1s',
       }}
     >
       {icons[icon]}
@@ -388,8 +392,8 @@ function ModeBtn({ label, active, onEnter, onLeave }: {
       style={{
         padding: '3px 8px',
         fontSize: 10, fontWeight: 700,
-        color: active ? hw.greenLcd : hw.textFaint,
-        background: active ? hw.bgSurface : 'transparent',
+        color: active ? hw.textPrimary : hw.textFaint,
+        background: active ? 'rgba(255,255,255,0.04)' : 'transparent',
         cursor: 'default',
         letterSpacing: 0.5,
       }}
@@ -402,9 +406,9 @@ function ModeBtn({ label, active, onEnter, onLeave }: {
 const transportBtn: React.CSSProperties = {
   width: 28, height: 26,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  background: hw.bgSurface,
-  border: `1px solid ${hw.borderDark}`,
-  borderRadius: hw.radius.sm,
+  background: 'rgba(255,255,255,0.03)',
+  border: `1px solid rgba(255,255,255,0.06)`,
+  borderRadius: 6,
 }
 
 const navBtn: React.CSSProperties = {
@@ -417,9 +421,9 @@ const navBtn: React.CSSProperties = {
 
 const lcd: React.CSSProperties = {
   display: 'flex', alignItems: 'center',
-  background: hw.bgInput,
-  border: `1px solid ${hw.borderDark}`,
-  borderRadius: hw.radius.sm,
+  background: 'rgba(255,255,255,0.03)',
+  border: `1px solid rgba(255,255,255,0.04)`,
+  borderRadius: 6,
   height: 26,
   padding: '0 4px',
 }

@@ -45,7 +45,7 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
       },
       {
         name: 'Hardwave UI',
-        description: 'Dark theme with purple accents, panel system',
+        description: 'Dark glassmorphic theme with red accents, panel system',
         features: [
           { name: 'Hardwave dark theme', done: true },
           { name: 'Title bar with menu items', done: true },

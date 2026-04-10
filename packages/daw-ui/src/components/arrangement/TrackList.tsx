@@ -8,12 +8,13 @@ export function TrackList() {
   return (
     <div style={{
       width: 155, minWidth: 155,
-      background: hw.bgPanel,
+      background: 'rgba(255,255,255,0.02)',
+      backdropFilter: hw.blur.sm,
       borderRight: `1px solid ${hw.border}`,
       display: 'flex', flexDirection: 'column',
     }}>
       <div style={{
-        height: 22, background: hw.bg, borderBottom: `1px solid ${hw.border}`,
+        height: 22, background: 'rgba(255,255,255,0.01)', borderBottom: `1px solid ${hw.border}`,
         display: 'flex', alignItems: 'center', padding: '0 8px',
       }}>
         <span style={{ fontSize: 10, color: hw.textMuted }}>Playlist</span>
@@ -27,8 +28,11 @@ export function TrackList() {
             style={{
               height: 56, display: 'flex', alignItems: 'stretch',
               borderBottom: `1px solid ${hw.border}`,
-              background: selectedTrackId === track.id ? hw.accentDim : idx % 2 === 0 ? hw.bgPanel : hw.bgSurface,
+              background: selectedTrackId === track.id
+                ? hw.accentDim
+                : idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)',
               cursor: 'default',
+              transition: 'background 0.1s',
             }}
           >
             <div style={{ width: 3, background: track.color, flexShrink: 0 }} />
@@ -48,7 +52,7 @@ export function TrackList() {
                   style={{
                     ...tb,
                     color: track.muted ? hw.red : hw.textMuted,
-                    background: track.muted ? hw.redDim : hw.bgSurface,
+                    background: track.muted ? hw.redDim : 'rgba(255,255,255,0.04)',
                   }}
                 >M</button>
                 <button
@@ -56,7 +60,7 @@ export function TrackList() {
                   style={{
                     ...tb,
                     color: track.soloed ? hw.yellow : hw.textMuted,
-                    background: track.soloed ? hw.yellowDim : hw.bgSurface,
+                    background: track.soloed ? hw.yellowDim : 'rgba(255,255,255,0.04)',
                   }}
                 >S</button>
                 <span style={{ fontSize: 8, color: hw.textFaint, marginLeft: 'auto', alignSelf: 'center' }}>
@@ -81,6 +85,6 @@ const tb: React.CSSProperties = {
   width: 18, height: 14,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   fontSize: 8, fontWeight: 700,
-  border: `1px solid ${hw.borderDark}`,
-  borderRadius: hw.radius.sm, padding: 0,
+  border: `1px solid rgba(255,255,255,0.06)`,
+  borderRadius: 6, padding: 0,
 }

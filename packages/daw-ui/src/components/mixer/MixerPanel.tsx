@@ -12,9 +12,9 @@ export function MixerPanel() {
   const masterTrack = tracks.find(t => t.kind === 'Master')
 
   return (
-    <div style={{ height: '100%', background: hw.bgPanel, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100%', background: 'rgba(255,255,255,0.02)', backdropFilter: hw.blur.sm, display: 'flex', flexDirection: 'column' }}>
       <div style={{
-        height: 22, background: hw.bg, borderBottom: `1px solid ${hw.border}`,
+        height: 22, background: 'rgba(255,255,255,0.01)', borderBottom: `1px solid ${hw.border}`,
         display: 'flex', alignItems: 'center', padding: '0 8px',
       }}>
         <span style={{ fontSize: 10, fontWeight: 600, color: hw.textMuted }}>Mixer</span>
@@ -75,8 +75,8 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
     <div style={{
       width: 62, minWidth: 62,
       display: 'flex', flexDirection: 'column',
-      background: hw.bgSurface, border: `1px solid ${hw.border}`,
-      borderRadius: hw.radius.md, flexShrink: 0, overflow: 'hidden',
+      background: 'rgba(255,255,255,0.03)', border: `1px solid ${hw.border}`,
+      borderRadius: hw.radius.lg, flexShrink: 0, overflow: 'hidden',
     }}>
       {/* Color bar */}
       <div style={{ height: 2, background: color }} />
@@ -94,7 +94,7 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
       <div style={{ padding: '2px 3px', borderBottom: `1px solid ${hw.border}` }}>
         {[0, 1, 2].map(i => (
           <div key={i} style={{
-            height: 11, background: hw.bgInput, border: `1px solid ${hw.borderDark}`,
+            height: 11, background: 'rgba(255,255,255,0.03)', border: `1px solid ${hw.borderDark}`,
             borderRadius: hw.radius.sm, marginBottom: 1,
             display: 'flex', alignItems: 'center', padding: '0 3px',
           }}>
@@ -109,7 +109,7 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
         <div style={{ display: 'flex', gap: 1, width: 10, flexShrink: 0 }}>
           {[0, 1].map(ch => (
             <div key={ch} style={{
-              flex: 1, background: hw.bgInput, position: 'relative',
+              flex: 1, background: 'rgba(255,255,255,0.03)', position: 'relative',
               border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
             }}>
               <div style={{
@@ -128,7 +128,7 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
             style={{
               writingMode: 'vertical-lr' as any, direction: 'rtl',
               flex: 1, width: 16, appearance: 'none',
-              background: `linear-gradient(to bottom, ${hw.bgElevated}, ${hw.bgInput})`,
+              background: 'rgba(255,255,255,0.04)',
               border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm, cursor: 'pointer',
             }}
           />
@@ -137,7 +137,7 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
 
       {/* dB readout */}
       <div style={{ textAlign: 'center', padding: '2px 0', borderTop: `1px solid ${hw.border}` }}>
-        <span style={{ fontSize: 8, color: hw.greenLcd, fontFamily: "'Consolas', monospace" }}>
+        <span style={{ fontSize: 8, color: hw.textPrimary, fontFamily: "'Consolas', monospace" }}>
           {volumeDb > -60 ? `${volumeDb.toFixed(1)}` : '-\u221E'}
         </span>
       </div>
@@ -146,11 +146,11 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
       <div style={{ display: 'flex', gap: 1, padding: '2px 3px 3px', justifyContent: 'center' }}>
         <button onClick={() => onMute?.()} style={{
           ...sB, color: muted ? hw.red : hw.textMuted,
-          background: muted ? hw.redDim : hw.bgInput,
+          background: muted ? hw.redDim : 'rgba(255,255,255,0.03)',
         }}>M</button>
         <button onClick={onSolo} style={{
           ...sB, color: soloed ? hw.yellow : hw.textMuted,
-          background: soloed ? hw.yellowDim : hw.bgInput,
+          background: soloed ? hw.yellowDim : 'rgba(255,255,255,0.03)',
         }}>S</button>
       </div>
     </div>
@@ -159,6 +159,6 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
 
 const sB: React.CSSProperties = {
   width: 22, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
-  fontSize: 7, fontWeight: 700, borderRadius: hw.radius.sm, padding: 0,
-  border: `1px solid ${hw.borderDark}`,
+  fontSize: 7, fontWeight: 700, borderRadius: 6, padding: 0,
+  border: `1px solid rgba(255,255,255,0.06)`,
 }

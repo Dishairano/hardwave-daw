@@ -41,7 +41,7 @@ export function VelocityLane({
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
     // Background
-    ctx.fillStyle = hw.bgInput
+    ctx.fillStyle = '#08080d'
     ctx.fillRect(0, 0, w, height)
 
     // Guide lines
@@ -56,15 +56,15 @@ export function VelocityLane({
     }
 
     // Top border
-    ctx.fillStyle = hw.borderDark
+    ctx.fillStyle = 'rgba(255,255,255,0.04)'
     ctx.fillRect(0, 0, w, 1)
 
     // Label
     ctx.fillStyle = hw.textFaint
-    ctx.font = '8px Segoe UI, sans-serif'
+    ctx.font = '8px Inter, ui-sans-serif, sans-serif'
     ctx.fillText('VEL', 4, 12)
 
-    // Velocity bars — purple gradient
+    // Velocity bars — red gradient
     const barW = Math.max(3, 6 * pixelsPerTick)
     for (const note of notes) {
       const x = note.startTick * pixelsPerTick - scrollX
@@ -75,14 +75,14 @@ export function VelocityLane({
 
       const gradient = ctx.createLinearGradient(0, height - barH, 0, height)
       if (note.velocity > 0.85) {
-        gradient.addColorStop(0, '#FF4466')
-        gradient.addColorStop(1, '#CC2244')
+        gradient.addColorStop(0, '#EF4444')
+        gradient.addColorStop(1, '#B91C1C')
       } else if (note.velocity > 0.5) {
-        gradient.addColorStop(0, '#9B6DFF')
-        gradient.addColorStop(1, '#7B5AC0')
+        gradient.addColorStop(0, '#DC2626')
+        gradient.addColorStop(1, '#991B1B')
       } else {
-        gradient.addColorStop(0, '#7B5AC0')
-        gradient.addColorStop(1, '#5A3FA0')
+        gradient.addColorStop(0, '#991B1B')
+        gradient.addColorStop(1, '#7F1D1D')
       }
 
       ctx.fillStyle = gradient
@@ -124,7 +124,7 @@ export function VelocityLane({
   return (
     <div ref={containerRef} data-testid="velocity-lane" style={{
       height, marginLeft: keyboardWidth,
-      borderTop: `1px solid ${hw.borderDark}`,
+      borderTop: `1px solid rgba(255,255,255,0.04)`,
       overflow: 'hidden',
     }}>
       <canvas

@@ -1,68 +1,81 @@
-/** Hardwave DAW — Dark purple-accent theme with near-black backgrounds */
+/** Hardwave DAW — Suite-matched dark glassmorphic theme with red accents */
 export const hw = {
   // ─── Backgrounds ─────────────────────────────────────────────────────────────
-  bg: '#0c0c10',              // root / deepest background
-  bgPanel: '#111116',         // side panels, browser, track list
-  bgSurface: '#17171e',      // cards, elevated panels
-  bgElevated: '#1e1e28',     // hover, raised elements
-  bgInput: '#08080c',        // recessed inputs, LCD areas
-  bgToolbar: '#131318',      // toolbar base
-  bgToolbarGrad: 'linear-gradient(180deg, #1a1a22 0%, #141419 40%, #101015 100%)',
+  bg: '#08080c',              // root / deepest background (Suite base)
+  bgPanel: 'rgba(255,255,255,0.02)',  // glass panels
+  bgSurface: 'rgba(255,255,255,0.03)', // elevated glass
+  bgElevated: 'rgba(255,255,255,0.06)', // hover / raised
+  bgInput: 'rgba(255,255,255,0.04)',    // recessed inputs
+  bgToolbar: 'rgba(255,255,255,0.02)',
+  bgToolbarGrad: 'linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.02) 40%, rgba(255,255,255,0.01) 100%)',
+  // Solid fallbacks for canvas (canvas can't use rgba well)
+  bgCanvasDark: '#0a0a0f',
+  bgCanvasRow1: '#0b0b10',
+  bgCanvasRow2: '#0d0d12',
 
   // ─── Text ────────────────────────────────────────────────────────────────────
-  textPrimary: '#e0e0ec',
-  textSecondary: '#9898b0',
-  textMuted: '#606078',
-  textFaint: '#3c3c50',
+  textPrimary: '#fafafa',     // zinc-50
+  textSecondary: '#d4d4d8',   // zinc-300
+  textMuted: '#a1a1a6',       // zinc-400
+  textFaint: '#52525b',       // zinc-600
   textBright: '#ffffff',
 
-  // ─── Borders ─────────────────────────────────────────────────────────────────
-  border: 'rgba(255, 255, 255, 0.06)',
-  borderLight: 'rgba(255, 255, 255, 0.10)',
-  borderDark: 'rgba(0, 0, 0, 0.6)',
+  // ─── Borders (glass style) ───────────────────────────────────────────────────
+  border: 'rgba(255,255,255,0.06)',
+  borderLight: 'rgba(255,255,255,0.08)',
+  borderDark: 'rgba(255,255,255,0.04)',
 
-  // ─── Accent — Hardwave Purple ────────────────────────────────────────────────
-  accent: '#9B6DFF',
-  accentLight: '#B48EFF',
-  accentDim: 'rgba(155, 109, 255, 0.15)',
-  accentGlow: 'rgba(155, 109, 255, 0.3)',
+  // ─── Accent — Hardwave Red (matches Suite) ──────────────────────────────────
+  accent: '#DC2626',          // red-600
+  accentLight: '#EF4444',     // red-500
+  accentDim: 'rgba(220,38,38,0.15)',
+  accentGlow: 'rgba(220,38,38,0.3)',
 
-  // ─── Secondary — Deep Purple ─────────────────────────────────────────────────
-  secondary: '#7B5AC0',
-  secondaryDim: 'rgba(123, 90, 192, 0.15)',
+  // ─── Secondary — Red-700 ────────────────────────────────────────────────────
+  secondary: '#B91C1C',       // red-700
+  secondaryDim: 'rgba(185,28,28,0.15)',
 
-  // ─── Meters / Success — Teal ─────────────────────────────────────────────────
-  green: '#00D4AA',
-  greenBright: '#00FFCC',
-  greenDim: 'rgba(0, 212, 170, 0.15)',
-  greenLcd: '#C4B5FF',       // LCD digit color — purple-tinted
+  // ─── Meters / Success — Emerald ──────────────────────────────────────────────
+  green: '#10B981',           // emerald-500
+  greenBright: '#34D399',     // emerald-400
+  greenDim: 'rgba(16,185,129,0.15)',
+  greenLcd: '#fafafa',        // LCD digits — white (Suite style)
 
-  // ─── Record / Danger — Pink-Red ──────────────────────────────────────────────
-  red: '#FF4466',
-  redDim: 'rgba(255, 68, 102, 0.15)',
+  // ─── Record / Danger — Red ───────────────────────────────────────────────────
+  red: '#EF4444',             // red-500
+  redDim: 'rgba(239,68,68,0.12)',
 
   // ─── Solo / Warning — Amber ──────────────────────────────────────────────────
-  yellow: '#FFB020',
-  yellowDim: 'rgba(255, 176, 32, 0.15)',
+  yellow: '#F59E0B',          // amber-500
+  yellowDim: 'rgba(245,158,11,0.15)',
 
-  // ─── Info — Blue ─────────────────────────────────────────────────────────────
-  blue: '#4488FF',
+  // ─── Info — Violet ───────────────────────────────────────────────────────────
+  blue: '#7C3AED',            // violet-600
 
   // ─── Selection ───────────────────────────────────────────────────────────────
-  selection: '#9B6DFF',
-  selectionDim: 'rgba(155, 109, 255, 0.12)',
+  selection: '#DC2626',
+  selectionDim: 'rgba(220,38,38,0.12)',
 
   // ─── Playhead ────────────────────────────────────────────────────────────────
-  orange: '#9B6DFF',          // legacy name kept for compat — now purple
-  orangeLight: '#B48EFF',
-  orangeDim: 'rgba(155, 109, 255, 0.2)',
+  orange: '#DC2626',          // legacy alias — now red
+  orangeLight: '#EF4444',
+  orangeDim: 'rgba(220,38,38,0.2)',
 
   // ─── Clip Colors — Vibrant on dark ───────────────────────────────────────────
   clips: [
-    '#9B6DFF', '#00D4AA', '#FF4466', '#FFB020',
-    '#4488FF', '#FF66AA', '#66DDFF', '#88EE66',
+    '#DC2626', '#10B981', '#A855F7', '#F59E0B',
+    '#3B82F6', '#EC4899', '#06B6D4', '#84CC16',
   ],
 
-  // ─── Radius ──────────────────────────────────────────────────────────────────
-  radius: { sm: 3, md: 6, lg: 10 },
+  // ─── Radius (Suite uses larger radii) ────────────────────────────────────────
+  radius: { sm: 6, md: 8, lg: 12 },
+
+  // ─── Backdrop blur ───────────────────────────────────────────────────────────
+  blur: {
+    sm: 'blur(4px)',
+    md: 'blur(8px)',
+  },
+
+  // ─── Glow ────────────────────────────────────────────────────────────────────
+  glowRed: '0 0 40px rgba(220,38,38,0.08), 0 0 80px rgba(220,38,38,0.04)',
 } as const

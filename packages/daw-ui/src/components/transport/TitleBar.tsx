@@ -14,7 +14,8 @@ export function TitleBar({ hintText }: TitleBarProps) {
         display: 'flex',
         alignItems: 'center',
         height: 28,
-        background: hw.bg,
+        background: 'rgba(255,255,255,0.02)',
+        backdropFilter: hw.blur.md,
         borderBottom: `1px solid ${hw.border}`,
         // @ts-ignore
         WebkitAppRegion: 'drag',
@@ -24,10 +25,10 @@ export function TitleBar({ hintText }: TitleBarProps) {
       {/* Hardwave Logo */}
       <div style={{
         width: 20, height: 20, marginRight: 8,
-        background: 'linear-gradient(135deg, #9B6DFF, #7B5AC0)',
+        background: `linear-gradient(135deg, ${hw.secondary}, ${hw.accent})`,
         borderRadius: 6,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        boxShadow: '0 0 12px rgba(155, 109, 255, 0.2)',
+        boxShadow: '0 0 12px rgba(220,38,38,0.2)',
         // @ts-ignore
         WebkitAppRegion: 'no-drag',
       }}>
@@ -44,12 +45,12 @@ export function TitleBar({ hintText }: TitleBarProps) {
             color: hw.textMuted,
             cursor: 'default',
             borderRadius: hw.radius.sm,
-            transition: 'color 0.1s, background 0.1s',
+            transition: 'color 0.15s, background 0.15s',
             // @ts-ignore
             WebkitAppRegion: 'no-drag',
           }}
           onMouseEnter={e => {
-            e.currentTarget.style.background = hw.bgElevated
+            e.currentTarget.style.background = 'rgba(255,255,255,0.06)'
             e.currentTarget.style.color = hw.textPrimary
           }}
           onMouseLeave={e => {
@@ -81,9 +82,9 @@ export function TitleBar({ hintText }: TitleBarProps) {
         // @ts-ignore
         WebkitAppRegion: 'no-drag',
       }}>
-        <WinBtn label="\u2012" />
-        <WinBtn label="\u25A1" />
-        <WinBtn label="\u00D7" isClose />
+        <WinBtn label={'\u2012'} />
+        <WinBtn label={'\u25A1'} />
+        <WinBtn label={'\u00D7'} isClose />
       </div>
     </div>
   )
@@ -98,9 +99,10 @@ function WinBtn({ label, isClose }: { label: string; isClose?: boolean }) {
         fontSize: 12, color: hw.textMuted,
         cursor: 'default',
         borderRadius: hw.radius.sm,
+        transition: 'background 0.15s, color 0.15s',
       }}
       onMouseEnter={e => {
-        e.currentTarget.style.background = isClose ? '#C42B1C' : hw.bgElevated
+        e.currentTarget.style.background = isClose ? '#C42B1C' : 'rgba(255,255,255,0.08)'
         e.currentTarget.style.color = '#FFF'
       }}
       onMouseLeave={e => {

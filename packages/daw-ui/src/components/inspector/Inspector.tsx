@@ -44,7 +44,7 @@ export function Inspector() {
           onClick={() => removeTrack(track.id)}
           style={{
             marginTop: 'auto', padding: '5px', fontSize: 10,
-            background: hw.redDim, border: `1px solid rgba(255,68,102,0.2)`,
+            background: hw.redDim, border: `1px solid rgba(239,68,68,0.2)`,
             borderRadius: hw.radius.md, color: hw.red, cursor: 'pointer', fontFamily: 'inherit',
           }}
         >

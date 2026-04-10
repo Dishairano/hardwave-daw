@@ -25,8 +25,8 @@ const waveformData = new Map<string, [number, number][]>()
 
 // Hardwave clip palette — vibrant on near-black
 const CLIP_COLORS = [
-  '#9B6DFF', '#00D4AA', '#FF4466', '#FFB020',
-  '#4488FF', '#FF66AA', '#66DDFF', '#88EE66',
+  '#DC2626', '#10B981', '#A855F7', '#F59E0B',
+  '#3B82F6', '#EC4899', '#06B6D4', '#84CC16',
 ]
 
 export function Arrangement() {
@@ -82,11 +82,11 @@ export function Arrangement() {
     const scrollOffset = Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
 
     // Background — near-black
-    ctx.fillStyle = '#0e0e14'
+    ctx.fillStyle = '#0a0a0f'
     ctx.fillRect(0, 0, w, h)
 
     // Ruler bar
-    ctx.fillStyle = '#0a0a10'
+    ctx.fillStyle = '#08080d'
     ctx.fillRect(0, 0, w, RULER_HEIGHT)
     ctx.strokeStyle = 'rgba(255,255,255,0.04)'
     ctx.lineWidth = 1
@@ -118,8 +118,8 @@ export function Arrangement() {
         ctx.lineTo(x, RULER_HEIGHT)
         ctx.stroke()
 
-        ctx.fillStyle = '#606078'
-        ctx.font = '9px "Segoe UI", sans-serif'
+        ctx.fillStyle = '#71717a'
+        ctx.font = '9px Inter, ui-sans-serif, sans-serif'
         ctx.fillText(`${Math.floor(i / 4) + 1}`, x + 3, 13)
       } else {
         ctx.strokeStyle = 'rgba(255,255,255,0.03)'
@@ -133,7 +133,7 @@ export function Arrangement() {
     // Track lane backgrounds
     for (let i = 0; i < audioTracks.length; i++) {
       const y = RULER_HEIGHT + i * TRACK_HEIGHT
-      ctx.fillStyle = i % 2 === 0 ? '#0c0c12' : '#0e0e16'
+      ctx.fillStyle = i % 2 === 0 ? '#0a0a0f' : '#0c0c11'
       ctx.fillRect(0, y, w, TRACK_HEIGHT)
 
       ctx.strokeStyle = 'rgba(255,255,255,0.03)'
@@ -155,10 +155,10 @@ export function Arrangement() {
       }
     }
 
-    // Playhead — purple
+    // Playhead — red
     const playheadX = playheadSecs * PIXELS_PER_SECOND - scrollOffset
     if (playing || positionSamples > 0) {
-      ctx.strokeStyle = '#9B6DFF'
+      ctx.strokeStyle = '#DC2626'
       ctx.lineWidth = 1.5
       ctx.beginPath()
       ctx.moveTo(playheadX, 0)
@@ -166,14 +166,14 @@ export function Arrangement() {
       ctx.stroke()
 
       // Glow
-      ctx.strokeStyle = 'rgba(155, 109, 255, 0.15)'
+      ctx.strokeStyle = 'rgba(220,38,38,0.15)'
       ctx.lineWidth = 6
       ctx.beginPath()
       ctx.moveTo(playheadX, 0)
       ctx.lineTo(playheadX, h)
       ctx.stroke()
 
-      ctx.fillStyle = '#9B6DFF'
+      ctx.fillStyle = '#DC2626'
       ctx.beginPath()
       ctx.moveTo(playheadX - 5, 0)
       ctx.lineTo(playheadX + 5, 0)
@@ -209,7 +209,7 @@ export function Arrangement() {
     ctx.fillStyle = color
     ctx.globalAlpha = clip.muted ? 0.3 : 0.25
     ctx.beginPath()
-    ctx.roundRect(x, y, w, h, 4)
+    ctx.roundRect(x, y, w, h, 6)
     ctx.fill()
     ctx.globalAlpha = 1.0
 
@@ -218,13 +218,13 @@ export function Arrangement() {
     ctx.fillStyle = clip.muted ? '#161620' : darkenColor(color, 0.4)
     ctx.globalAlpha = clip.muted ? 0.5 : 0.8
     ctx.beginPath()
-    ctx.roundRect(x, y, w, headerH, [4, 4, 0, 0])
+    ctx.roundRect(x, y, w, headerH, [6, 6, 0, 0])
     ctx.fill()
     ctx.globalAlpha = 1
 
     // Clip name
-    ctx.fillStyle = clip.muted ? '#3c3c50' : '#EEE'
-    ctx.font = '9px -apple-system, "Segoe UI", sans-serif'
+    ctx.fillStyle = clip.muted ? '#52525b' : '#EEE'
+    ctx.font = '9px Inter, ui-sans-serif, sans-serif'
     ctx.save()
     ctx.beginPath()
     ctx.rect(x + 2, y, w - 4, headerH)
@@ -263,9 +263,9 @@ export function Arrangement() {
 
     // Border
     if (isSelected) {
-      ctx.strokeStyle = '#B48EFF'
+      ctx.strokeStyle = '#EF4444'
       ctx.lineWidth = 2
-      ctx.shadowColor = 'rgba(155, 109, 255, 0.4)'
+      ctx.shadowColor = 'rgba(220,38,38,0.4)'
       ctx.shadowBlur = 8
     } else {
       ctx.strokeStyle = clip.muted ? '#2a2a38' : `${color}88`
@@ -273,7 +273,7 @@ export function Arrangement() {
       ctx.shadowBlur = 0
     }
     ctx.beginPath()
-    ctx.roundRect(x, y, w, h, 4)
+    ctx.roundRect(x, y, w, h, 6)
     ctx.stroke()
     ctx.shadowBlur = 0
   }
@@ -425,7 +425,7 @@ export function Arrangement() {
         flex: 1,
         position: 'relative',
         overflow: 'hidden',
-        background: '#0e0e14',
+        background: '#0a0a0f',
         ...(dropHighlight ? { outline: `2px solid ${hw.accent}`, outlineOffset: -2 } : {}),
       }}
     >

@@ -78,7 +78,7 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
     // Background — near-black
-    ctx.fillStyle = '#0e0e14'
+    ctx.fillStyle = '#0a0a0f'
     ctx.fillRect(0, 0, w, h)
 
     // Pitch rows
@@ -86,11 +86,11 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       const y = yFromPitch(pitch)
       if (y + NOTE_HEIGHT < 0 || y > h) continue
       if (isBlackKey(pitch)) {
-        ctx.fillStyle = '#0a0a10'
+        ctx.fillStyle = '#08080d'
         ctx.fillRect(0, y, w, NOTE_HEIGHT)
       }
       if (pitch % 12 === 0) {
-        ctx.fillStyle = 'rgba(155, 109, 255, 0.02)'
+        ctx.fillStyle = 'rgba(220,38,38,0.02)'
         ctx.fillRect(0, y, w, NOTE_HEIGHT)
       }
     }
@@ -135,7 +135,7 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       ctx.stroke()
     }
 
-    // Notes — purple
+    // Notes — red
     for (const note of notes) {
       const x = xFromTick(note.startTick) - KEYBOARD_WIDTH
       const y = yFromPitch(note.pitch)
@@ -143,19 +143,19 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       if (x + noteW < 0 || x > w || y + NOTE_HEIGHT < 0 || y > h) continue
 
       const isSelected = selectedNotes.has(note.index)
-      const color = note.muted ? '#3c3c50' : '#9B6DFF'
+      const color = note.muted ? '#52525b' : '#DC2626'
 
       // Note body
-      ctx.fillStyle = isSelected ? '#B48EFF' : color
+      ctx.fillStyle = isSelected ? '#EF4444' : color
       ctx.globalAlpha = note.muted ? 0.4 : 0.85
       ctx.beginPath()
-      ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), NOTE_HEIGHT - 2, 3)
+      ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), NOTE_HEIGHT - 2, 4)
       ctx.fill()
       ctx.globalAlpha = 1
 
       // Glow for active notes
       if (!note.muted && !isSelected) {
-        ctx.shadowColor = 'rgba(155, 109, 255, 0.3)'
+        ctx.shadowColor = 'rgba(220,38,38,0.3)'
         ctx.shadowBlur = 4
       }
 
@@ -163,14 +163,14 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
       ctx.strokeStyle = isSelected ? '#fff' : 'rgba(255,255,255,0.1)'
       ctx.lineWidth = isSelected ? 1.5 : 0.5
       ctx.beginPath()
-      ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), NOTE_HEIGHT - 2, 3)
+      ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), NOTE_HEIGHT - 2, 4)
       ctx.stroke()
       ctx.shadowBlur = 0
 
       // Note name label
       if (noteW > 30) {
         ctx.fillStyle = isSelected ? '#fff' : 'rgba(255,255,255,0.7)'
-        ctx.font = '9px Segoe UI, sans-serif'
+        ctx.font = '9px Inter, ui-sans-serif, sans-serif'
         ctx.fillText(noteName(note.pitch), x + 4, y + NOTE_HEIGHT - 3)
       }
 
@@ -297,11 +297,11 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
   return (
     <div ref={containerRef} style={{
       flex: 1, display: 'flex', flexDirection: 'column',
-      background: hw.bgPanel, overflow: 'hidden',
+      background: 'rgba(255,255,255,0.02)', backdropFilter: hw.blur.sm, overflow: 'hidden',
     }}>
       {/* Header bar */}
       <div style={{
-        height: RULER_HEIGHT, background: hw.bg,
+        height: RULER_HEIGHT, background: 'rgba(255,255,255,0.01)',
         borderBottom: `1px solid ${hw.border}`,
         display: 'flex', alignItems: 'center', padding: '0 8px', gap: 6,
       }}>
@@ -319,6 +319,7 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
               background: tool === t ? hw.accentDim : 'transparent',
               border: `1px solid ${tool === t ? hw.accentGlow : 'transparent'}`,
               borderRadius: hw.radius.sm, textTransform: 'uppercase',
+              transition: 'all 0.1s',
             }}>
               {t}
             </button>
@@ -329,7 +330,7 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
           value={snap}
           onChange={e => setSnap(Number(e.target.value))}
           style={{
-            fontSize: 9, background: hw.bgInput, color: hw.textMuted,
+            fontSize: 9, background: 'rgba(255,255,255,0.04)', color: hw.textMuted,
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '1px 4px',
           }}
         >
