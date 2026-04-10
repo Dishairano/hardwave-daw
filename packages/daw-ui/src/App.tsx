@@ -267,53 +267,50 @@ export function App() {
       />
 
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {showRoadmap ? (
-          <Roadmap />
-        ) : (
-          <>
-            {showBrowser && <Browser />}
+        {showBrowser && <Browser />}
 
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {showChannelRack && (
-                <div style={{
-                  flex: showPlaylist ? undefined : 1,
-                  height: showPlaylist ? '55%' : undefined,
-                  minHeight: 120,
-                  borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
-                }}>
-                  <ChannelRack />
-                </div>
-              )}
-
-              {showPianoRoll && (
-                <div style={{
-                  flex: 1, minHeight: 200,
-                  borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
-                }}>
-                  <PianoRoll />
-                </div>
-              )}
-
-              {showPlaylist && (
-                <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
-                  <TrackList />
-                  <Arrangement />
-                </div>
-              )}
-
-              {showMixer && (
-                <div style={{
-                  height: (showPlaylist || showChannelRack || showPianoRoll) ? 220 : 'auto',
-                  flex: (showPlaylist || showChannelRack || showPianoRoll) ? undefined : 1,
-                  borderTop: `1px solid ${hw.borderDark}`,
-                }}>
-                  <MixerPanel />
-                </div>
-              )}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {showChannelRack && (
+            <div style={{
+              flex: showPlaylist ? undefined : 1,
+              height: showPlaylist ? '55%' : undefined,
+              minHeight: 120,
+              borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
+            }}>
+              <ChannelRack />
             </div>
-          </>
-        )}
+          )}
+
+          {showPianoRoll && (
+            <div style={{
+              flex: 1, minHeight: 200,
+              borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
+            }}>
+              <PianoRoll />
+            </div>
+          )}
+
+          {showPlaylist && (
+            <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
+              <TrackList />
+              <Arrangement />
+            </div>
+          )}
+
+          {showMixer && (
+            <div style={{
+              height: (showPlaylist || showChannelRack || showPianoRoll) ? 220 : 'auto',
+              flex: (showPlaylist || showChannelRack || showPianoRoll) ? undefined : 1,
+              borderTop: `1px solid ${hw.borderDark}`,
+            }}>
+              <MixerPanel />
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Floating detached panels */}
+      {showRoadmap && <Roadmap onClose={() => setShowRoadmap(false)} />}
 
       {/* Update modal — same pattern as Hardwave Suite */}
       {updateInfo.available && !updateInfo.dismissed && (

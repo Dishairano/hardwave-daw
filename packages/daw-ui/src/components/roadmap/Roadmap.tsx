@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { hw } from '../../theme'
 
 type Phase = 'current' | 'phase1' | 'phase2' | 'phase3' | 'phase4' | 'phase5' | 'stretch'
@@ -396,9 +396,66 @@ const ROADMAP: Record<Phase, { title: string; subtitle: string; color: string; m
 
 const PHASE_ORDER: Phase[] = ['current', 'phase1', 'phase2', 'phase3', 'phase4', 'phase5', 'stretch']
 
-export function Roadmap() {
+const DEFAULT_W = 520
+const DEFAULT_H = 560
+
+interface RoadmapProps {
+  onClose: () => void
+}
+
+export function Roadmap({ onClose }: RoadmapProps) {
   const [expandedPhase, setExpandedPhase] = useState<Phase>('current')
   const [expandedMilestones, setExpandedMilestones] = useState<Set<string>>(new Set())
+
+  // Window position & size
+  const [pos, setPos] = useState({ x: Math.round((window.innerWidth - DEFAULT_W) / 2), y: 60 })
+  const [size, setSize] = useState({ w: DEFAULT_W, h: DEFAULT_H })
+
+  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
+  const resizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null)
+  const windowRef = useRef<HTMLDivElement>(null)
+
+  // Drag
+  const onTitleMouseDown = useCallback((e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('[data-no-drag]')) return
+    e.preventDefault()
+    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y }
+  }, [pos])
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (dragRef.current) {
+        const dx = e.clientX - dragRef.current.startX
+        const dy = e.clientY - dragRef.current.startY
+        setPos({ x: dragRef.current.origX + dx, y: Math.max(0, dragRef.current.origY + dy) })
+      }
+      if (resizeRef.current) {
+        const dx = e.clientX - resizeRef.current.startX
+        const dy = e.clientY - resizeRef.current.startY
+        setSize({
+          w: Math.max(360, resizeRef.current.origW + dx),
+          h: Math.max(300, resizeRef.current.origH + dy),
+        })
+      }
+    }
+    const onUp = () => {
+      dragRef.current = null
+      resizeRef.current = null
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [])
+
+  // Resize handle
+  const onResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    resizeRef.current = { startX: e.clientX, startY: e.clientY, origW: size.w, origH: size.h }
+  }, [size])
 
   const toggleMilestone = (key: string) => {
     setExpandedMilestones(prev => {
@@ -414,52 +471,96 @@ export function Roadmap() {
   const overallPercent = Math.round((doneFeatures / totalFeatures) * 100)
 
   return (
-    <div style={{
-      height: '100%',
-      background: hw.bgPanel,
-      display: 'flex',
-      flexDirection: 'column',
-      color: hw.textSecondary,
-    }}>
-      {/* Header */}
-      <div style={{
-        padding: '12px 16px',
-        background: hw.bg,
-        borderBottom: `1px solid ${hw.border}`,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{
-            fontSize: 14, fontWeight: 800, color: hw.accent,
-            letterSpacing: 1,
-          }}>
-            HARDWAVE DAW ROADMAP
-          </span>
-          <span style={{ fontSize: 10, color: hw.textFaint }}>
-            {doneFeatures} / {totalFeatures} features
-          </span>
-          <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, fontWeight: 700, color: hw.accent }}>
-            {overallPercent}%
-          </span>
+    <div
+      ref={windowRef}
+      style={{
+        position: 'fixed',
+        left: pos.x,
+        top: pos.y,
+        width: size.w,
+        height: size.h,
+        zIndex: 80,
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'rgba(12,12,16,0.96)',
+        backdropFilter: 'blur(16px)',
+        border: `1px solid ${hw.borderLight}`,
+        borderRadius: hw.radius.lg,
+        boxShadow: '0 20px 60px rgba(0,0,0,0.7), 0 0 1px rgba(255,255,255,0.06)',
+        overflow: 'hidden',
+      }}
+    >
+      {/* Title bar — draggable */}
+      <div
+        onMouseDown={onTitleMouseDown}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          height: 32,
+          padding: '0 10px',
+          background: 'rgba(255,255,255,0.03)',
+          borderBottom: `1px solid ${hw.border}`,
+          cursor: 'grab',
+          flexShrink: 0,
+          userSelect: 'none',
+        }}
+      >
+        <span style={{
+          fontSize: 11, fontWeight: 700, color: hw.accent,
+          letterSpacing: 0.5,
+        }}>
+          ROADMAP
+        </span>
+        <span style={{ fontSize: 9, color: hw.textFaint, marginLeft: 8 }}>
+          {doneFeatures}/{totalFeatures} features ({overallPercent}%)
+        </span>
+        <div style={{ flex: 1 }} />
+        <div
+          data-no-drag
+          onClick={onClose}
+          style={{
+            width: 20, height: 20,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            borderRadius: 4, color: hw.textFaint,
+            cursor: 'pointer',
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.background = 'rgba(255,255,255,0.08)'
+            e.currentTarget.style.color = hw.textPrimary
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.background = 'transparent'
+            e.currentTarget.style.color = hw.textFaint
+          }}
+        >
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <line x1="2" y1="2" x2="10" y2="10" /><line x1="10" y1="2" x2="2" y2="10" />
+          </svg>
         </div>
+      </div>
 
+      {/* Overall progress bar */}
+      <div style={{
+        padding: '6px 10px',
+        borderBottom: `1px solid ${hw.border}`,
+        flexShrink: 0,
+      }}>
         <div style={{
-          marginTop: 6, height: 4, background: hw.bgInput, borderRadius: 2,
-          overflow: 'hidden',
+          height: 3, background: hw.bgInput, borderRadius: 2, overflow: 'hidden',
         }}>
           <div style={{
             height: '100%', width: `${overallPercent}%`,
             background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accent})`,
             borderRadius: 2,
-            transition: 'width 300ms',
           }} />
         </div>
       </div>
 
-      {/* Phase timeline */}
+      {/* Phase tabs */}
       <div style={{
         display: 'flex', padding: '0 2px',
-        background: hw.bg, borderBottom: `1px solid ${hw.border}`,
+        borderBottom: `1px solid ${hw.border}`,
+        flexShrink: 0,
       }}>
         {PHASE_ORDER.map(phase => {
           const data = ROADMAP[phase]
@@ -474,7 +575,7 @@ export function Roadmap() {
               onClick={() => setExpandedPhase(phase)}
               style={{
                 flex: 1,
-                padding: '6px 4px',
+                padding: '5px 2px',
                 textAlign: 'center',
                 cursor: 'pointer',
                 borderBottom: isActive ? `2px solid ${data.color}` : '2px solid transparent',
@@ -482,7 +583,7 @@ export function Roadmap() {
               }}
             >
               <div style={{
-                fontSize: 8, fontWeight: 700, color: isActive ? data.color : hw.textFaint,
+                fontSize: 7, fontWeight: 700, color: isActive ? data.color : hw.textFaint,
                 letterSpacing: 0.5, textTransform: 'uppercase',
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
@@ -497,7 +598,7 @@ export function Roadmap() {
       </div>
 
       {/* Phase content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
         {(() => {
           const phase = expandedPhase
           const data = ROADMAP[phase]
@@ -507,24 +608,23 @@ export function Roadmap() {
 
           return (
             <div>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <div style={{
-                    width: 10, height: 10, borderRadius: '50%',
+                    width: 8, height: 8, borderRadius: '50%',
                     background: data.color,
                     boxShadow: `0 0 8px ${data.color}44`,
                   }} />
-                  <span style={{ fontSize: 13, fontWeight: 700, color: data.color }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: data.color }}>
                     {data.title}
                   </span>
                 </div>
-                <div style={{ fontSize: 10, color: hw.textFaint, marginTop: 2, marginLeft: 18 }}>
+                <div style={{ fontSize: 9, color: hw.textFaint, marginTop: 2, marginLeft: 14 }}>
                   {data.subtitle}
                 </div>
-
-                <div style={{ marginTop: 6, marginLeft: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ marginTop: 4, marginLeft: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{
-                    flex: 1, maxWidth: 200, height: 3, background: hw.bgInput,
+                    flex: 1, maxWidth: 180, height: 3, background: hw.bgInput,
                     borderRadius: 2, overflow: 'hidden',
                   }}>
                     <div style={{
@@ -532,9 +632,7 @@ export function Roadmap() {
                       background: data.color, borderRadius: 2,
                     }} />
                   </div>
-                  <span style={{ fontSize: 9, color: hw.textFaint }}>
-                    {done}/{features.length}
-                  </span>
+                  <span style={{ fontSize: 9, color: hw.textFaint }}>{done}/{features.length}</span>
                 </div>
               </div>
 
@@ -548,7 +646,7 @@ export function Roadmap() {
                 return (
                   <div key={mKey} style={{
                     marginBottom: 4,
-                    background: hw.bgSurface,
+                    background: 'rgba(255,255,255,0.02)',
                     borderRadius: hw.radius.md,
                     border: `1px solid ${hw.border}`,
                     overflow: 'hidden',
@@ -556,11 +654,11 @@ export function Roadmap() {
                     <div
                       onClick={() => toggleMilestone(mKey)}
                       style={{
-                        padding: '8px 10px',
+                        padding: '6px 8px',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: 8,
+                        gap: 6,
                       }}
                     >
                       <span style={{
@@ -571,19 +669,17 @@ export function Roadmap() {
                       }}>
                         {'>'}
                       </span>
-
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: 11, fontWeight: 600, color: hw.textPrimary }}>
                           {milestone.name}
                         </div>
-                        <div style={{ fontSize: 9, color: hw.textFaint, marginTop: 1 }}>
+                        <div style={{ fontSize: 8, color: hw.textFaint, marginTop: 1 }}>
                           {milestone.description}
                         </div>
                       </div>
-
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <div style={{
-                          width: 60, height: 3, background: hw.bgInput,
+                          width: 50, height: 3, background: hw.bgInput,
                           borderRadius: 2, overflow: 'hidden',
                         }}>
                           <div style={{
@@ -593,9 +689,9 @@ export function Roadmap() {
                           }} />
                         </div>
                         <span style={{
-                          fontSize: 9, color: mPct === 100 ? hw.green : hw.textFaint,
+                          fontSize: 8, color: mPct === 100 ? hw.green : hw.textFaint,
                           fontWeight: mPct === 100 ? 700 : 400,
-                          minWidth: 30, textAlign: 'right',
+                          minWidth: 26, textAlign: 'right',
                         }}>
                           {mDone}/{mTotal}
                         </span>
@@ -603,31 +699,23 @@ export function Roadmap() {
                     </div>
 
                     {isExpanded && (
-                      <div style={{
-                        borderTop: `1px solid ${hw.border}`,
-                        padding: '4px 0',
-                      }}>
+                      <div style={{ borderTop: `1px solid ${hw.border}`, padding: '3px 0' }}>
                         {milestone.features.map((feature, fIdx) => (
                           <div key={fIdx} style={{
-                            padding: '4px 10px 4px 28px',
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: 8,
+                            padding: '3px 8px 3px 24px',
+                            display: 'flex', alignItems: 'flex-start', gap: 6,
                           }}>
                             <div style={{
-                              width: 12, height: 12, borderRadius: 3,
+                              width: 11, height: 11, borderRadius: 3,
                               border: feature.done ? 'none' : `1px solid ${hw.textFaint}`,
                               background: feature.done ? hw.green : 'transparent',
                               display: 'flex', alignItems: 'center', justifyContent: 'center',
                               flexShrink: 0, marginTop: 1,
                             }}>
                               {feature.done && (
-                                <span style={{ fontSize: 8, color: hw.bg, fontWeight: 900 }}>
-                                  {'\u2713'}
-                                </span>
+                                <span style={{ fontSize: 7, color: hw.bg, fontWeight: 900 }}>{'\u2713'}</span>
                               )}
                             </div>
-
                             <div style={{ flex: 1 }}>
                               <div style={{
                                 fontSize: 10,
@@ -656,12 +744,10 @@ export function Roadmap() {
 
       {/* Footer */}
       <div style={{
-        padding: '8px 12px',
-        background: hw.bg,
+        padding: '6px 10px',
         borderTop: `1px solid ${hw.border}`,
-        display: 'flex',
-        gap: 12,
-        flexWrap: 'wrap',
+        display: 'flex', gap: 10, flexWrap: 'wrap',
+        flexShrink: 0,
       }}>
         {[
           { version: 'v0.1', label: 'Foundation', color: hw.accent, status: 'Released' },
@@ -671,25 +757,34 @@ export function Roadmap() {
           { version: 'v0.5', label: 'Effects & Synths', color: hw.yellow, status: 'Planned' },
           { version: 'v1.0', label: 'Production Ready', color: hw.red, status: 'Planned' },
         ].map(r => (
-          <div key={r.version} style={{
-            display: 'flex', alignItems: 'center', gap: 4,
-          }}>
+          <div key={r.version} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
             <div style={{
-              width: 6, height: 6, borderRadius: '50%',
+              width: 5, height: 5, borderRadius: '50%',
               background: r.status === 'Released' ? r.color : hw.bgInput,
               border: r.status === 'Next' ? `1px solid ${r.color}` : 'none',
               boxShadow: r.status === 'Released' ? `0 0 6px ${r.color}44` : 'none',
             }} />
-            <span style={{
-              fontSize: 8, fontWeight: 700, color: r.status === 'Released' ? r.color : hw.textFaint,
-            }}>
+            <span style={{ fontSize: 7, fontWeight: 700, color: r.status === 'Released' ? r.color : hw.textFaint }}>
               {r.version}
             </span>
-            <span style={{ fontSize: 8, color: hw.textFaint }}>
-              {r.label}
-            </span>
+            <span style={{ fontSize: 7, color: hw.textFaint }}>{r.label}</span>
           </div>
         ))}
+      </div>
+
+      {/* Resize handle */}
+      <div
+        onMouseDown={onResizeMouseDown}
+        style={{
+          position: 'absolute', right: 0, bottom: 0,
+          width: 16, height: 16, cursor: 'nwse-resize',
+        }}
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" style={{ position: 'absolute', right: 3, bottom: 3 }}>
+          <line x1="8" y1="1" x2="1" y2="8" stroke={hw.textFaint} strokeWidth="1" strokeOpacity="0.3" />
+          <line x1="8" y1="4" x2="4" y2="8" stroke={hw.textFaint} strokeWidth="1" strokeOpacity="0.3" />
+          <line x1="8" y1="7" x2="7" y2="8" stroke={hw.textFaint} strokeWidth="1" strokeOpacity="0.3" />
+        </svg>
       </div>
     </div>
   )
