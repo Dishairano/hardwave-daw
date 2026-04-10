@@ -28,7 +28,7 @@ echo "Version: $CURRENT -> $NEW_VERSION"
 LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
 CHANGELOG=""
 
-while IFS= read -r hash; do
+while IFS= read -r hash || [[ -n "$hash" ]]; do
   [ -z "$hash" ] && continue
   SUBJECT=$(git log -1 --format="%s" "$hash")
   BODY=$(git log -1 --format="%b" "$hash")
@@ -46,9 +46,9 @@ while IFS= read -r hash; do
   fi
 done < <(
   if [ -n "$LAST_TAG" ]; then
-    git log "${LAST_TAG}..HEAD" --pretty=format:"%H" --no-merges
+    git log "${LAST_TAG}..HEAD" --pretty=tformat:"%H" --no-merges
   else
-    git log --pretty=format:"%H" --no-merges -10
+    git log --pretty=tformat:"%H" --no-merges -10
   fi
 )
 
