@@ -12,6 +12,7 @@ import { Roadmap } from './components/roadmap/Roadmap'
 import { UpdateModal } from './components/UpdateModal'
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
+import { useProjectStore } from './stores/projectStore'
 import { hw } from './theme'
 
 interface UpdateInfo {
@@ -29,6 +30,7 @@ interface UpdateInfo {
 export function App() {
   const { startListening } = useTransportStore()
   const { fetchTracks } = useTrackStore()
+  const { newProject, saveProject, loadProject } = useProjectStore()
 
   // Panel visibility
   const [showBrowser, setShowBrowser] = useState(true)
@@ -122,6 +124,26 @@ export function App() {
     setUpdateInfo(prev => ({ ...prev, dismissed: true }))
   }, [])
 
+  const handleOpenProject = useCallback(async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({
+        filters: [{ name: 'Hardwave Project', extensions: ['hwp'] }],
+        multiple: false,
+      })
+      if (selected) {
+        await loadProject(selected as string)
+        await fetchTracks()
+      }
+    } catch {}
+  }, [loadProject, fetchTracks])
+
+  const handleSaveProjectAs = useCallback(async () => {
+    try {
+      await saveProject(undefined)
+    } catch {}
+  }, [saveProject])
+
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -130,6 +152,29 @@ export function App() {
 
       const transport = useTransportStore.getState()
       const tracks = useTrackStore.getState()
+      const project = useProjectStore.getState()
+
+      // Ctrl/Cmd shortcuts
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key.toLowerCase()) {
+          case 'n':
+            e.preventDefault()
+            project.newProject().then(() => fetchTracks())
+            return
+          case 'o':
+            e.preventDefault()
+            handleOpenProject()
+            return
+          case 's':
+            e.preventDefault()
+            if (e.shiftKey) {
+              handleSaveProjectAs()
+            } else {
+              project.saveProject()
+            }
+            return
+        }
+      }
 
       switch (e.code) {
         case 'Space':
@@ -157,6 +202,10 @@ export function App() {
           e.preventDefault()
           setShowPianoRoll(v => !v)
           break
+        case 'F8':
+          e.preventDefault()
+          setShowBrowser(v => !v)
+          break
         case 'F9':
           e.preventDefault()
           setShowMixer(v => !v)
@@ -165,7 +214,7 @@ export function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [handleOpenProject, handleSaveProjectAs, fetchTracks])
 
   return (
     <div style={{
@@ -182,7 +231,26 @@ export function App() {
         />
       )}
 
-      <TitleBar hintText={hintText} />
+      <TitleBar
+        hintText={hintText}
+        onNewProject={() => newProject().then(() => fetchTracks())}
+        onSaveProject={() => saveProject()}
+        onSaveProjectAs={handleSaveProjectAs}
+        onOpenProject={handleOpenProject}
+        onUndo={() => {}}
+        onRedo={() => {}}
+        onToggleBrowser={() => setShowBrowser(v => !v)}
+        onTogglePlaylist={() => setShowPlaylist(v => !v)}
+        onToggleChannelRack={() => setShowChannelRack(v => !v)}
+        onTogglePianoRoll={() => setShowPianoRoll(v => !v)}
+        onToggleMixer={() => setShowMixer(v => !v)}
+        onToggleRoadmap={() => setShowRoadmap(v => !v)}
+        showBrowser={showBrowser}
+        showPlaylist={showPlaylist}
+        showChannelRack={showChannelRack}
+        showPianoRoll={showPianoRoll}
+        showMixer={showMixer}
+      />
 
       <Toolbar
         showBrowser={showBrowser}
