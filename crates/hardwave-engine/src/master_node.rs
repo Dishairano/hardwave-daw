@@ -6,13 +6,23 @@ pub struct MasterNode {
     volume: f32,
 }
 
+impl Default for MasterNode {
+    fn default() -> Self {
+        Self { volume: 1.0 }
+    }
+}
+
 impl MasterNode {
     pub fn new() -> Self {
-        Self { volume: 1.0 }
+        Self::default()
     }
 
     pub fn set_volume_db(&mut self, db: f64) {
-        self.volume = if db <= -100.0 { 0.0 } else { 10.0_f64.powf(db / 20.0) as f32 };
+        self.volume = if db <= -100.0 {
+            0.0
+        } else {
+            10.0_f64.powf(db / 20.0) as f32
+        };
     }
 }
 
@@ -38,10 +48,20 @@ impl AudioNode for MasterNode {
 
         // Copy inputs through (the graph already sums connected sources)
         for (i, sample) in outputs[0].iter_mut().enumerate() {
-            *sample = inputs.get(0).and_then(|ch| ch.get(i)).copied().unwrap_or(0.0) * self.volume;
+            *sample = inputs
+                .first()
+                .and_then(|ch| ch.get(i))
+                .copied()
+                .unwrap_or(0.0)
+                * self.volume;
         }
         for (i, sample) in outputs[1].iter_mut().enumerate() {
-            *sample = inputs.get(1).and_then(|ch| ch.get(i)).copied().unwrap_or(0.0) * self.volume;
+            *sample = inputs
+                .get(1)
+                .and_then(|ch| ch.get(i))
+                .copied()
+                .unwrap_or(0.0)
+                * self.volume;
         }
     }
 }

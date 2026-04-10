@@ -57,7 +57,8 @@ pub struct Track {
 impl Track {
     pub fn new_audio(id: String, name: String) -> Self {
         Self {
-            id, name,
+            id,
+            name,
             kind: TrackKind::Audio,
             color: "#7c3aed".into(),
             volume_db: 0.0,
@@ -96,8 +97,7 @@ impl Track {
 }
 
 mod serde_bytes_opt {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use serde::de::Error;
+    use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(val: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
         match val {

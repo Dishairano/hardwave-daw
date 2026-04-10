@@ -1,7 +1,7 @@
-pub mod transport;
-pub mod tracks;
+pub mod audio;
+pub mod engine;
+pub mod midi;
 pub mod plugins;
 pub mod project;
-pub mod engine;
-pub mod audio;
-pub mod midi;
+pub mod tracks;
+pub mod transport;

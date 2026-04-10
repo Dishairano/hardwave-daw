@@ -23,21 +23,29 @@ pub fn resolve_vst3_binary(bundle_path: &Path) -> Option<std::path::PathBuf> {
         #[cfg(target_os = "macos")]
         {
             let binary = bundle_path.join("Contents/MacOS").join(name);
-            if binary.exists() { return Some(binary); }
+            if binary.exists() {
+                return Some(binary);
+            }
         }
 
         #[cfg(target_os = "linux")]
         {
-            let binary = bundle_path.join("Contents/x86_64-linux")
+            let binary = bundle_path
+                .join("Contents/x86_64-linux")
                 .join(format!("{}.so", name));
-            if binary.exists() { return Some(binary); }
+            if binary.exists() {
+                return Some(binary);
+            }
         }
 
         #[cfg(target_os = "windows")]
         {
-            let binary = bundle_path.join("Contents/x86_64-win")
+            let binary = bundle_path
+                .join("Contents/x86_64-win")
                 .join(format!("{}.vst3", name));
-            if binary.exists() { return Some(binary); }
+            if binary.exists() {
+                return Some(binary);
+            }
         }
     }
 
@@ -64,10 +72,18 @@ pub struct Vst3PluginInstance {
 
 impl Vst3PluginInstance {
     pub fn load(descriptor: PluginDescriptor) -> Result<Self, String> {
-        let _binary = resolve_vst3_binary(&descriptor.path)
-            .ok_or_else(|| format!("Could not resolve VST3 binary: {}", descriptor.path.display()))?;
+        let _binary = resolve_vst3_binary(&descriptor.path).ok_or_else(|| {
+            format!(
+                "Could not resolve VST3 binary: {}",
+                descriptor.path.display()
+            )
+        })?;
 
-        log::info!("Loading VST3: {} from {}", descriptor.name, descriptor.path.display());
+        log::info!(
+            "Loading VST3: {} from {}",
+            descriptor.name,
+            descriptor.path.display()
+        );
 
         // TODO: Full VST3 COM loading sequence:
         // 1. libloading::Library::new(binary)
@@ -87,7 +103,9 @@ impl Vst3PluginInstance {
 }
 
 impl HostedPlugin for Vst3PluginInstance {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sample_rate: f64, _max_block_size: u32) -> Result<(), String> {
         self.sample_rate = sample_rate;
@@ -119,17 +137,33 @@ impl HostedPlugin for Vst3PluginInstance {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { 0 }
-    fn get_parameter_info(&self, _index: u32) -> Option<ParameterInfo> { None }
-    fn get_parameter_value(&self, _id: u32) -> f64 { 0.0 }
+    fn get_parameter_count(&self) -> u32 {
+        0
+    }
+    fn get_parameter_info(&self, _index: u32) -> Option<ParameterInfo> {
+        None
+    }
+    fn get_parameter_value(&self, _id: u32) -> f64 {
+        0.0
+    }
     fn set_parameter_value(&mut self, _id: u32, _value: f64) {}
 
-    fn get_state(&self) -> Vec<u8> { Vec::new() }
-    fn set_state(&mut self, _state: &[u8]) -> Result<(), String> { Ok(()) }
+    fn get_state(&self) -> Vec<u8> {
+        Vec::new()
+    }
+    fn set_state(&mut self, _state: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
 
-    fn latency_samples(&self) -> u32 { 0 }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
 
-    fn open_editor(&mut self, _parent: raw_window_handle::RawWindowHandle) -> bool { false }
+    fn open_editor(&mut self, _parent: raw_window_handle::RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { self.descriptor.has_editor }
+    fn has_editor(&self) -> bool {
+        self.descriptor.has_editor
+    }
 }

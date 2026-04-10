@@ -90,7 +90,9 @@ impl TempoMap {
     pub fn bpm_at(&self, tick: u64) -> f64 {
         let mut bpm = self.entries[0].bpm;
         for entry in &self.entries {
-            if entry.tick > tick { break; }
+            if entry.tick > tick {
+                break;
+            }
             bpm = entry.bpm;
         }
         bpm
@@ -98,7 +100,11 @@ impl TempoMap {
 
     /// Convert tick to (bar, beat) tuple (1-indexed).
     pub fn tick_to_bar_beat(&self, tick: u64) -> (u32, f64) {
-        let entry = self.entries.iter().rev().find(|e| e.tick <= tick)
+        let entry = self
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.tick <= tick)
             .unwrap_or(&self.entries[0]);
 
         let ticks_per_beat = PPQ;

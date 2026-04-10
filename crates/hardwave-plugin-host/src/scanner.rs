@@ -1,7 +1,7 @@
 //! Plugin scanner — discovers VST3 and CLAP plugins on the system.
 
-use std::path::{Path, PathBuf};
 use crate::types::*;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct PluginScanner {
@@ -68,7 +68,8 @@ impl PluginScanner {
                     log::debug!("Found VST3: {}", path.display());
                     // In production, this would load the plugin in a subprocess to extract metadata.
                     // For now, create a descriptor from the filename.
-                    let name = path.file_stem()
+                    let name = path
+                        .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("Unknown")
                         .to_string();
@@ -108,7 +109,8 @@ impl PluginScanner {
 
             if ext == "clap" {
                 log::debug!("Found CLAP: {}", path.display());
-                let name = path.file_stem()
+                let name = path
+                    .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("Unknown")
                     .to_string();
@@ -171,7 +173,9 @@ fn default_vst3_paths() -> Vec<PathBuf> {
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn default_vst3_paths() -> Vec<PathBuf> { vec![] }
+fn default_vst3_paths() -> Vec<PathBuf> {
+    vec![]
+}
 
 #[cfg(target_os = "windows")]
 fn default_clap_paths() -> Vec<PathBuf> {
@@ -200,4 +204,6 @@ fn default_clap_paths() -> Vec<PathBuf> {
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn default_clap_paths() -> Vec<PathBuf> { vec![] }
+fn default_clap_paths() -> Vec<PathBuf> {
+    vec![]
+}

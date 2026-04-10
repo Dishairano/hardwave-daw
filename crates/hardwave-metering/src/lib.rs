@@ -2,7 +2,6 @@
 //! Ported from the Hardwave Analyser TypeScript engine.
 
 use serde::Serialize;
-use std::f32::consts::PI;
 
 // ---------------------------------------------------------------------------
 // Biquad filter (used for K-weighting)
@@ -10,31 +9,48 @@ use std::f32::consts::PI;
 
 #[derive(Clone)]
 struct BiquadFilter {
-    b0: f64, b1: f64, b2: f64,
-    a1: f64, a2: f64,
-    x1: f64, x2: f64, y1: f64, y2: f64,
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
+    x1: f64,
+    x2: f64,
+    y1: f64,
+    y2: f64,
 }
 
 impl BiquadFilter {
     fn new(b0: f64, b1: f64, b2: f64, a0: f64, a1: f64, a2: f64) -> Self {
         Self {
-            b0: b0 / a0, b1: b1 / a0, b2: b2 / a0,
-            a1: a1 / a0, a2: a2 / a0,
-            x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0,
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
         }
     }
 
     fn process(&mut self, x: f64) -> f64 {
         let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
-              - self.a1 * self.y1 - self.a2 * self.y2;
-        self.x2 = self.x1; self.x1 = x;
-        self.y2 = self.y1; self.y1 = y;
+            - self.a1 * self.y1
+            - self.a2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = x;
+        self.y2 = self.y1;
+        self.y1 = y;
         y
     }
 
     fn reset(&mut self) {
-        self.x1 = 0.0; self.x2 = 0.0;
-        self.y1 = 0.0; self.y2 = 0.0;
+        self.x1 = 0.0;
+        self.x2 = 0.0;
+        self.y1 = 0.0;
+        self.y2 = 0.0;
     }
 }
 
@@ -65,8 +81,12 @@ fn make_k_filter(fs: f64) -> (BiquadFilter, BiquadFilter) {
     let c2 = w2.cos();
 
     let hp = BiquadFilter::new(
-        (1.0 + c2) / 2.0, -(1.0 + c2), (1.0 + c2) / 2.0,
-        1.0 + alpha2, -2.0 * c2, 1.0 - alpha2,
+        (1.0 + c2) / 2.0,
+        -(1.0 + c2),
+        (1.0 + c2) / 2.0,
+        1.0 + alpha2,
+        -2.0 * c2,
+        1.0 - alpha2,
     );
 
     (shelf, hp)
@@ -117,8 +137,10 @@ impl ChannelMeter {
             rms_count: 0,
             rms_smooth: 0.0,
             clip: false,
-            k_shelf_l: shelf_l, k_hp_l: hp_l,
-            k_shelf_r: shelf_r, k_hp_r: hp_r,
+            k_shelf_l: shelf_l,
+            k_hp_l: hp_l,
+            k_shelf_r: shelf_r,
+            k_hp_r: hp_r,
             k_sr: sample_rate,
             lufs_z: vec![0.0; LUFS_HIST],
             lufs_pos: 0,
@@ -130,7 +152,9 @@ impl ChannelMeter {
     /// Process a block of stereo samples and update meters.
     pub fn process_block(&mut self, left: &[f32], right: &[f32]) {
         let n = left.len().min(right.len());
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
 
         let mut block_peak = 0.0_f32;
         let mut block_true_peak = 0.0_f32;
@@ -176,19 +200,33 @@ impl ChannelMeter {
         self.rms_smooth = self.rms_smooth * 0.85 + rms_lin * 0.15;
 
         // Clip detection
-        if block_peak > 0.999 { self.clip = true; }
+        if block_peak > 0.999 {
+            self.clip = true;
+        }
 
         // LUFS accumulation
         self.lufs_z[self.lufs_pos] = k_sum / n as f64;
         self.lufs_pos = (self.lufs_pos + 1) % LUFS_HIST;
-        if self.lufs_fill < LUFS_HIST { self.lufs_fill += 1; }
+        if self.lufs_fill < LUFS_HIST {
+            self.lufs_fill += 1;
+        }
     }
 
-    pub fn peak_db(&self) -> f32 { self.peak }
-    pub fn peak_hold_db(&self) -> f32 { self.peak_hold }
-    pub fn true_peak_db(&self) -> f32 { self.true_peak }
-    pub fn rms_db(&self) -> f32 { to_db(self.rms_smooth) }
-    pub fn clipped(&self) -> bool { self.clip }
+    pub fn peak_db(&self) -> f32 {
+        self.peak
+    }
+    pub fn peak_hold_db(&self) -> f32 {
+        self.peak_hold
+    }
+    pub fn true_peak_db(&self) -> f32 {
+        self.true_peak
+    }
+    pub fn rms_db(&self) -> f32 {
+        to_db(self.rms_smooth)
+    }
+    pub fn clipped(&self) -> bool {
+        self.clip
+    }
 
     /// Momentary LUFS (400ms window).
     pub fn lufs_m(&self, block_size: usize) -> Option<f32> {
@@ -202,16 +240,21 @@ impl ChannelMeter {
 
     /// Integrated LUFS (BS.1770-4 gated).
     pub fn lufs_i(&self) -> Option<f32> {
-        if let Some(m) = self.compute_lufs(400, 512) {
-            self.lufs_i_blocks.len(); // placeholder — accumulation in process_block
+        if let Some(_loudness) = self.compute_lufs(400, 512) {
+            // placeholder — accumulation happens in process_block
         }
         gated_lufs(&self.lufs_i_blocks)
     }
 
     fn compute_lufs(&self, duration_ms: u32, block_size: usize) -> Option<f32> {
-        if self.k_sr == 0.0 || self.lufs_fill == 0 { return None; }
-        let blocks_needed = ((duration_ms as f64 * self.k_sr) / (1000.0 * block_size as f64)).round() as usize;
-        if blocks_needed < 1 || self.lufs_fill < blocks_needed { return None; }
+        if self.k_sr == 0.0 || self.lufs_fill == 0 {
+            return None;
+        }
+        let blocks_needed =
+            ((duration_ms as f64 * self.k_sr) / (1000.0 * block_size as f64)).round() as usize;
+        if blocks_needed < 1 || self.lufs_fill < blocks_needed {
+            return None;
+        }
 
         let mut sum = 0.0_f64;
         for i in 0..blocks_needed {
@@ -234,8 +277,10 @@ impl ChannelMeter {
         self.lufs_pos = 0;
         self.lufs_fill = 0;
         self.lufs_i_blocks.clear();
-        self.k_shelf_l.reset(); self.k_hp_l.reset();
-        self.k_shelf_r.reset(); self.k_hp_r.reset();
+        self.k_shelf_l.reset();
+        self.k_hp_l.reset();
+        self.k_shelf_r.reset();
+        self.k_hp_r.reset();
     }
 }
 
@@ -264,14 +309,23 @@ fn to_db(linear: f32) -> f32 {
 }
 
 fn gated_lufs(blocks: &[f64]) -> Option<f32> {
-    if blocks.len() < 3 { return None; }
+    if blocks.len() < 3 {
+        return None;
+    }
     let abs_gated: Vec<f64> = blocks.iter().copied().filter(|&b| b > -70.0).collect();
-    if abs_gated.is_empty() { return None; }
+    if abs_gated.is_empty() {
+        return None;
+    }
     let sum: f64 = abs_gated.iter().map(|&b| 10.0_f64.powf(b / 10.0)).sum();
     let ungated_mean = 10.0 * (sum / abs_gated.len() as f64).log10();
     let rel_threshold = ungated_mean - 10.0;
-    let rel_gated: Vec<f64> = abs_gated.into_iter().filter(|&b| b > rel_threshold).collect();
-    if rel_gated.is_empty() { return None; }
+    let rel_gated: Vec<f64> = abs_gated
+        .into_iter()
+        .filter(|&b| b > rel_threshold)
+        .collect();
+    if rel_gated.is_empty() {
+        return None;
+    }
     let sum2: f64 = rel_gated.iter().map(|&b| 10.0_f64.powf(b / 10.0)).sum();
     Some((10.0 * (sum2 / rel_gated.len() as f64).log10()) as f32)
 }

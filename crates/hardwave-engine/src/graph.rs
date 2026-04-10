@@ -1,6 +1,5 @@
 //! Audio graph — DAG of processing nodes, topologically sorted for real-time execution.
 
-
 pub type NodeId = usize;
 
 /// Context passed to each node during processing.
@@ -28,7 +27,9 @@ pub trait AudioNode: Send {
         ctx: &ProcessContext,
     );
 
-    fn latency_samples(&self) -> u32 { 0 }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
     fn reset(&mut self) {}
 }
 
@@ -74,7 +75,12 @@ impl AudioGraph {
 
     /// Connect source node's output to dest node's input.
     pub fn connect(&mut self, source: NodeId, source_port: usize, dest: NodeId, dest_port: usize) {
-        self.edges.push(Edge { source, source_port, dest, dest_port });
+        self.edges.push(Edge {
+            source,
+            source_port,
+            dest,
+            dest_port,
+        });
         self.rebuild_order();
     }
 

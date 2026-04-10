@@ -1,15 +1,15 @@
 //! Hardwave Project — project model, track system, serialization.
 
-pub mod track;
-pub mod clip;
 pub mod automation;
-pub mod tempo;
+pub mod clip;
 pub mod mixer;
 pub mod project;
+pub mod tempo;
+pub mod track;
 
-pub use project::Project;
-pub use track::{Track, TrackId, TrackKind};
-pub use clip::{AudioClip, ClipPlacement, ClipId};
 pub use automation::{AutomationLane, AutomationPoint, AutomationTarget};
-pub use tempo::{TempoMap, TempoEntry};
+pub use clip::{AudioClip, ClipId, ClipPlacement};
 pub use mixer::{ChannelStrip, Send as MixerSend};
+pub use project::Project;
+pub use tempo::{TempoEntry, TempoMap};
+pub use track::{Track, TrackId, TrackKind};

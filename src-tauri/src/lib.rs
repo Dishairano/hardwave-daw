@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use parking_lot::Mutex;
-use tauri::{Manager, Emitter};
+use std::sync::Arc;
+use tauri::{Emitter, Manager};
 
 mod commands;
 
@@ -80,27 +80,28 @@ pub fn run() {
             let engine = Arc::clone(&state.engine);
             let app_handle = app.handle().clone();
 
-            std::thread::spawn(move || {
-                loop {
-                    std::thread::sleep(std::time::Duration::from_millis(33));
-                    let meters = engine.lock().master_meter();
-                    let _ = app_handle.emit("daw:meters", &meters);
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(33));
+                let meters = engine.lock().master_meter();
+                let _ = app_handle.emit("daw:meters", &meters);
 
-                    let pos;
-                    let playing;
-                    let bpm;
-                    {
-                        let eng = engine.lock();
-                        pos = eng.transport.position();
-                        playing = eng.transport.is_playing();
-                        bpm = eng.transport.bpm.load(std::sync::atomic::Ordering::Relaxed);
-                    }
-                    let _ = app_handle.emit("daw:transport", serde_json::json!({
+                let pos;
+                let playing;
+                let bpm;
+                {
+                    let eng = engine.lock();
+                    pos = eng.transport.position();
+                    playing = eng.transport.is_playing();
+                    bpm = eng.transport.bpm.load(std::sync::atomic::Ordering::Relaxed);
+                }
+                let _ = app_handle.emit(
+                    "daw:transport",
+                    serde_json::json!({
                         "position": pos,
                         "playing": playing,
                         "bpm": bpm,
-                    }));
-                }
+                    }),
+                );
             });
 
             Ok(())

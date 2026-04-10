@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::tempo::TempoMap;
 use crate::track::Track;
@@ -33,9 +33,7 @@ impl Default for Project {
                 modified_at: chrono::Utc::now().to_rfc3339(),
             },
             tempo_map: TempoMap::default(),
-            tracks: vec![
-                Track::new_master("master".into()),
-            ],
+            tracks: vec![Track::new_master("master".into())],
         }
     }
 }

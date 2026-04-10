@@ -37,14 +37,22 @@ pub struct AutomationLane {
 impl AutomationLane {
     /// Get the interpolated value at a given tick.
     pub fn value_at(&self, tick: u64) -> f64 {
-        if self.points.is_empty() { return 0.5; }
-        if tick <= self.points[0].tick { return self.points[0].value; }
+        if self.points.is_empty() {
+            return 0.5;
+        }
+        if tick <= self.points[0].tick {
+            return self.points[0].value;
+        }
         let last = self.points.last().unwrap();
-        if tick >= last.tick { return last.value; }
+        if tick >= last.tick {
+            return last.value;
+        }
 
         // Find surrounding points
         let idx = self.points.partition_point(|p| p.tick <= tick);
-        if idx == 0 { return self.points[0].value; }
+        if idx == 0 {
+            return self.points[0].value;
+        }
 
         let a = &self.points[idx - 1];
         let b = &self.points[idx];

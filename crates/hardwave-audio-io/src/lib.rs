@@ -70,32 +70,39 @@ impl AudioDeviceManager {
 
     /// List available input devices.
     pub fn list_input_devices(&self) -> Vec<DeviceInfo> {
-        let default_name = self.host.default_input_device()
+        let default_name = self
+            .host
+            .default_input_device()
             .and_then(|d| d.name().ok())
             .unwrap_or_default();
 
-        self.host.input_devices()
+        self.host
+            .input_devices()
             .map(|devices| {
-                devices.filter_map(|d| {
-                    let name = d.name().ok()?;
-                    let configs: Vec<SupportedStreamConfigRange> =
-                        d.supported_input_configs().ok()?.collect();
-                    let sample_rates: Vec<u32> = configs.iter()
-                        .flat_map(|c| {
-                            let min = c.min_sample_rate().0;
-                            let max = c.max_sample_rate().0;
-                            [44100, 48000, 88200, 96000, 192000].into_iter()
-                                .filter(move |&sr| sr >= min && sr <= max)
+                devices
+                    .filter_map(|d| {
+                        let name = d.name().ok()?;
+                        let configs: Vec<SupportedStreamConfigRange> =
+                            d.supported_input_configs().ok()?.collect();
+                        let sample_rates: Vec<u32> = configs
+                            .iter()
+                            .flat_map(|c| {
+                                let min = c.min_sample_rate().0;
+                                let max = c.max_sample_rate().0;
+                                [44100, 48000, 88200, 96000, 192000]
+                                    .into_iter()
+                                    .filter(move |&sr| sr >= min && sr <= max)
+                            })
+                            .collect();
+                        let max_channels = configs.iter().map(|c| c.channels()).max().unwrap_or(0);
+                        Some(DeviceInfo {
+                            is_default: name == default_name,
+                            name,
+                            sample_rates,
+                            max_channels,
                         })
-                        .collect();
-                    let max_channels = configs.iter().map(|c| c.channels()).max().unwrap_or(0);
-                    Some(DeviceInfo {
-                        is_default: name == default_name,
-                        name,
-                        sample_rates,
-                        max_channels,
                     })
-                }).collect()
+                    .collect()
             })
             .unwrap_or_default()
     }
@@ -110,39 +117,51 @@ impl AudioDeviceManager {
                     }
                 }
             }
-            log::warn!("Selected device '{}' not found, falling back to default", name);
+            log::warn!(
+                "Selected device '{}' not found, falling back to default",
+                name
+            );
         }
-        self.host.default_output_device().ok_or(AudioIoError::NoOutputDevice)
+        self.host
+            .default_output_device()
+            .ok_or(AudioIoError::NoOutputDevice)
     }
 
     /// List available output devices.
     pub fn list_output_devices(&self) -> Vec<DeviceInfo> {
-        let default_name = self.host.default_output_device()
+        let default_name = self
+            .host
+            .default_output_device()
             .and_then(|d| d.name().ok())
             .unwrap_or_default();
 
-        self.host.output_devices()
+        self.host
+            .output_devices()
             .map(|devices| {
-                devices.filter_map(|d| {
-                    let name = d.name().ok()?;
-                    let configs: Vec<SupportedStreamConfigRange> =
-                        d.supported_output_configs().ok()?.collect();
-                    let sample_rates: Vec<u32> = configs.iter()
-                        .flat_map(|c| {
-                            let min = c.min_sample_rate().0;
-                            let max = c.max_sample_rate().0;
-                            [44100, 48000, 88200, 96000, 192000].into_iter()
-                                .filter(move |&sr| sr >= min && sr <= max)
+                devices
+                    .filter_map(|d| {
+                        let name = d.name().ok()?;
+                        let configs: Vec<SupportedStreamConfigRange> =
+                            d.supported_output_configs().ok()?.collect();
+                        let sample_rates: Vec<u32> = configs
+                            .iter()
+                            .flat_map(|c| {
+                                let min = c.min_sample_rate().0;
+                                let max = c.max_sample_rate().0;
+                                [44100, 48000, 88200, 96000, 192000]
+                                    .into_iter()
+                                    .filter(move |&sr| sr >= min && sr <= max)
+                            })
+                            .collect();
+                        let max_channels = configs.iter().map(|c| c.channels()).max().unwrap_or(0);
+                        Some(DeviceInfo {
+                            is_default: name == default_name,
+                            name,
+                            sample_rates,
+                            max_channels,
                         })
-                        .collect();
-                    let max_channels = configs.iter().map(|c| c.channels()).max().unwrap_or(0);
-                    Some(DeviceInfo {
-                        is_default: name == default_name,
-                        name,
-                        sample_rates,
-                        max_channels,
                     })
-                }).collect()
+                    .collect()
             })
             .unwrap_or_default()
     }
@@ -159,7 +178,8 @@ impl AudioDeviceManager {
                 let fallback = default_config.sample_rate().0;
                 log::warn!(
                     "Requested sample rate {} not supported, falling back to {}",
-                    self.sample_rate, fallback
+                    self.sample_rate,
+                    fallback
                 );
                 self.sample_rate = fallback;
             }
@@ -181,23 +201,27 @@ impl AudioDeviceManager {
         self.running.store(true, Ordering::Relaxed);
         let running = Arc::clone(&self.running);
 
-        let stream = device.build_output_stream(
-            &config,
-            move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                if !running.load(Ordering::Relaxed) {
-                    data.fill(0.0);
-                    return;
-                }
-                let num_frames = data.len() / 2;
-                callback.process(data, num_frames, 2);
-            },
-            move |err| {
-                log::error!("Audio stream error: {}", err);
-            },
-            None,
-        ).map_err(|e| AudioIoError::Stream(e.to_string()))?;
+        let stream = device
+            .build_output_stream(
+                &config,
+                move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+                    if !running.load(Ordering::Relaxed) {
+                        data.fill(0.0);
+                        return;
+                    }
+                    let num_frames = data.len() / 2;
+                    callback.process(data, num_frames, 2);
+                },
+                move |err| {
+                    log::error!("Audio stream error: {}", err);
+                },
+                None,
+            )
+            .map_err(|e| AudioIoError::Stream(e.to_string()))?;
 
-        stream.play().map_err(|e| AudioIoError::Stream(e.to_string()))?;
+        stream
+            .play()
+            .map_err(|e| AudioIoError::Stream(e.to_string()))?;
         self.output_stream = Some(stream);
 
         Ok(())
@@ -205,10 +229,14 @@ impl AudioDeviceManager {
 
     /// Check if a sample rate is supported by a device.
     fn is_rate_supported(&self, device: &cpal::Device, rate: u32) -> bool {
-        device.supported_output_configs().ok()
+        device
+            .supported_output_configs()
+            .ok()
             .map(|configs| {
                 configs.into_iter().any(|c| {
-                    rate >= c.min_sample_rate().0 && rate <= c.max_sample_rate().0 && c.channels() >= 2
+                    rate >= c.min_sample_rate().0
+                        && rate <= c.max_sample_rate().0
+                        && c.channels() >= 2
                 })
             })
             .unwrap_or(false)

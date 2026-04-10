@@ -1,7 +1,7 @@
-use tauri::State;
 use crate::AppState;
 use hardwave_engine::TransportCommand;
 use serde::Serialize;
+use tauri::State;
 
 #[derive(Serialize)]
 pub struct TransportInfo {
@@ -24,12 +24,18 @@ pub fn stop(state: State<AppState>) {
 
 #[tauri::command]
 pub fn set_position(state: State<AppState>, position: u64) {
-    state.engine.lock().send_command(TransportCommand::SetPosition(position));
+    state
+        .engine
+        .lock()
+        .send_command(TransportCommand::SetPosition(position));
 }
 
 #[tauri::command]
 pub fn set_bpm(state: State<AppState>, bpm: f64) {
-    state.engine.lock().send_command(TransportCommand::SetBpm(bpm));
+    state
+        .engine
+        .lock()
+        .send_command(TransportCommand::SetBpm(bpm));
 }
 
 #[tauri::command]

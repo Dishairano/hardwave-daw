@@ -1,8 +1,8 @@
-use tauri::State;
 use crate::AppState;
 use hardwave_project::Project;
 use serde::Serialize;
 use std::path::PathBuf;
+use tauri::State;
 
 #[derive(Serialize)]
 pub struct ProjectInfo {
@@ -24,7 +24,9 @@ pub fn new_project(state: State<AppState>) {
 pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> {
     let engine = state.engine.lock();
     let project = engine.project.lock();
-    project.save(&PathBuf::from(path)).map_err(|e| e.to_string())
+    project
+        .save(&PathBuf::from(path))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -1,6 +1,6 @@
-use tauri::State;
 use crate::AppState;
 use hardwave_plugin_host::PluginDescriptor;
+use tauri::State;
 
 #[tauri::command]
 pub fn scan_plugins(state: State<AppState>) -> Vec<PluginDescriptor> {
@@ -26,10 +26,12 @@ pub fn add_plugin_to_track(
     let mut project = engine.project.lock();
     let scanner = engine.plugin_scanner.lock();
 
-    let descriptor = scanner.find(&plugin_id)
+    let descriptor = scanner
+        .find(&plugin_id)
         .ok_or_else(|| format!("Plugin not found: {}", plugin_id))?;
 
-    let track = project.track_mut(&track_id)
+    let track = project
+        .track_mut(&track_id)
         .ok_or_else(|| format!("Track not found: {}", track_id))?;
 
     let slot_id = uuid::Uuid::new_v4().to_string();
@@ -53,7 +55,8 @@ pub fn remove_plugin_from_track(
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
 
-    let track = project.track_mut(&track_id)
+    let track = project
+        .track_mut(&track_id)
         .ok_or_else(|| format!("Track not found: {}", track_id))?;
 
     track.inserts.retain(|s| s.id != slot_id);

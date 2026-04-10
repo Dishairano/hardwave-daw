@@ -3,5 +3,5 @@
 pub mod audio_file;
 pub mod fade;
 
-pub use audio_file::{AudioFileReader, AudioFileInfo};
-pub use fade::{FadeCurve, apply_fade};
+pub use audio_file::{AudioFileInfo, AudioFileReader};
+pub use fade::{apply_fade, FadeCurve};

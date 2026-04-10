@@ -139,7 +139,9 @@ pub struct QuantizeSettings {
 pub fn quantize_notes(notes: &mut [MidiNote], settings: &QuantizeSettings) {
     let grid = settings.grid.ticks();
     for note in notes.iter_mut() {
-        if note.muted { continue; }
+        if note.muted {
+            continue;
+        }
         let nearest = ((note.start_tick as f64 / grid as f64).round() * grid as f64) as u64;
         let offset = nearest as f64 - note.start_tick as f64;
         note.start_tick = (note.start_tick as f64 + offset * settings.strength) as u64;

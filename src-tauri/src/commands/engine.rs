@@ -1,7 +1,7 @@
-use tauri::State;
 use crate::AppState;
 use hardwave_metering::MeterSnapshot;
 use serde::Serialize;
+use tauri::State;
 
 #[derive(Serialize)]
 pub struct AudioDeviceInfo {
@@ -36,7 +36,9 @@ pub fn get_meters(state: State<AppState>) -> MeterSnapshot {
 #[tauri::command]
 pub fn get_audio_devices(state: State<AppState>) -> Vec<AudioDeviceInfo> {
     let engine = state.engine.lock();
-    engine.audio_device_manager().list_output_devices()
+    engine
+        .audio_device_manager()
+        .list_output_devices()
         .into_iter()
         .map(|d| AudioDeviceInfo {
             name: d.name,
@@ -50,7 +52,11 @@ pub fn get_audio_devices(state: State<AppState>) -> Vec<AudioDeviceInfo> {
 #[tauri::command]
 pub fn get_audio_config(state: State<AppState>) -> AudioConfig {
     let (device, sample_rate, buffer_size) = state.engine.lock().audio_config();
-    AudioConfig { device, sample_rate, buffer_size }
+    AudioConfig {
+        device,
+        sample_rate,
+        buffer_size,
+    }
 }
 
 #[tauri::command]
@@ -60,5 +66,8 @@ pub fn set_audio_config(
     sample_rate: u32,
     buffer_size: u32,
 ) -> Result<(), String> {
-    state.engine.lock().set_audio_config(device, sample_rate, buffer_size)
+    state
+        .engine
+        .lock()
+        .set_audio_config(device, sample_rate, buffer_size)
 }

@@ -32,8 +32,8 @@ pub struct TrackNode {
     name: String,
     pool: AudioPool,
     clips: Vec<ClipRegion>,
-    volume: f32,   // linear
-    pan: f32,      // -1.0 to 1.0
+    volume: f32, // linear
+    pan: f32,    // -1.0 to 1.0
     muted: bool,
     soloed: bool,
     /// Cached Arc references to audio buffers, refreshed when clips change.
@@ -131,6 +131,10 @@ impl AudioNode for TrackNode {
                 continue;
             }
 
+            let (out_left, out_rest) = outputs.split_at_mut(1);
+            let out_l = &mut out_left[0];
+            let out_r = &mut out_rest[0];
+
             for frame in 0..buf_size {
                 let timeline_sample = pos + frame as u64;
 
@@ -138,7 +142,8 @@ impl AudioNode for TrackNode {
                     continue;
                 }
 
-                let source_frame = (timeline_sample - clip.timeline_start + clip.source_offset) as usize;
+                let source_frame =
+                    (timeline_sample - clip.timeline_start + clip.source_offset) as usize;
 
                 if source_frame >= audio_buf.num_frames {
                     continue;
@@ -151,8 +156,8 @@ impl AudioNode for TrackNode {
                     l // mono → duplicate to both channels
                 };
 
-                outputs[0][frame] += l;
-                outputs[1][frame] += r;
+                out_l[frame] += l;
+                out_r[frame] += r;
             }
         }
 
@@ -160,15 +165,24 @@ impl AudioNode for TrackNode {
         let (pan_l, pan_r) = pan_law(self.pan);
         let vol = self.volume;
 
-        for frame in 0..buf_size {
-            outputs[0][frame] *= vol * pan_l;
-            outputs[1][frame] *= vol * pan_r;
+        let (out_left, out_rest) = outputs.split_at_mut(1);
+        for (l, r) in out_left[0]
+            .iter_mut()
+            .zip(out_rest[0].iter_mut())
+            .take(buf_size)
+        {
+            *l *= vol * pan_l;
+            *r *= vol * pan_r;
         }
     }
 
     fn reset(&mut self) {
         // Re-cache buffers in case pool contents changed
-        self.cached_buffers = self.clips.iter().map(|c| self.pool.get(&c.source_id)).collect();
+        self.cached_buffers = self
+            .clips
+            .iter()
+            .map(|c| self.pool.get(&c.source_id))
+            .collect();
     }
 }
 

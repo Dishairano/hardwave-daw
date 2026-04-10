@@ -1,7 +1,7 @@
-use tauri::State;
 use crate::AppState;
 use serde::Serialize;
 use std::path::PathBuf;
+use tauri::State;
 
 #[derive(Serialize)]
 pub struct ImportedClip {
@@ -25,7 +25,8 @@ pub fn import_audio_file(
     position_ticks: Option<u64>,
 ) -> Result<ImportedClip, String> {
     let path = PathBuf::from(&file_path);
-    let file_name = path.file_stem()
+    let file_name = path
+        .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled")
         .to_string();
@@ -35,7 +36,10 @@ pub fn import_audio_file(
     let (source_id, info) = engine.load_audio_file(&path)?;
 
     // Calculate clip length in ticks based on duration and current BPM
-    let bpm = engine.transport.bpm.load(std::sync::atomic::Ordering::Relaxed);
+    let bpm = engine
+        .transport
+        .bpm
+        .load(std::sync::atomic::Ordering::Relaxed);
     let beats = info.duration_secs * bpm / 60.0;
     let length_ticks = (beats * hardwave_midi::PPQ as f64).round() as u64;
     let pos_ticks = position_ticks.unwrap_or(0);
@@ -90,10 +94,7 @@ pub fn import_audio_file(
 
 /// Get clips for a specific track.
 #[tauri::command]
-pub fn get_track_clips(
-    state: State<AppState>,
-    track_id: String,
-) -> Vec<ClipInfo> {
+pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo> {
     let engine = state.engine.lock();
     let project = engine.project.lock();
     let track = match project.track(&track_id) {
@@ -101,32 +102,30 @@ pub fn get_track_clips(
         None => return vec![],
     };
 
-    track.clips.iter().filter_map(|clip| {
-        match &clip.content {
-            hardwave_project::clip::ClipContent::Audio(ac) => {
-                Some(ClipInfo {
-                    id: ac.id.clone(),
-                    name: ac.name.clone(),
-                    kind: "audio".into(),
-                    source_id: ac.source_path.clone(),
-                    position_ticks: clip.position_ticks,
-                    length_ticks: clip.length_ticks,
-                    muted: ac.muted,
-                })
-            }
-            hardwave_project::clip::ClipContent::Midi(mc) => {
-                Some(ClipInfo {
-                    id: mc.id.clone(),
-                    name: mc.clip.name.clone(),
-                    kind: "midi".into(),
-                    source_id: String::new(),
-                    position_ticks: clip.position_ticks,
-                    length_ticks: clip.length_ticks,
-                    muted: false,
-                })
-            }
-        }
-    }).collect()
+    track
+        .clips
+        .iter()
+        .map(|clip| match &clip.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => ClipInfo {
+                id: ac.id.clone(),
+                name: ac.name.clone(),
+                kind: "audio".into(),
+                source_id: ac.source_path.clone(),
+                position_ticks: clip.position_ticks,
+                length_ticks: clip.length_ticks,
+                muted: ac.muted,
+            },
+            hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
+                id: mc.id.clone(),
+                name: mc.clip.name.clone(),
+                kind: "midi".into(),
+                source_id: String::new(),
+                position_ticks: clip.position_ticks,
+                length_ticks: clip.length_ticks,
+                muted: false,
+            },
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -149,7 +148,9 @@ pub fn get_waveform_peaks(
     num_buckets: usize,
 ) -> Result<Vec<[f32; 2]>, String> {
     let engine = state.engine.lock();
-    let buffer = engine.audio_pool.get(&source_id)
+    let buffer = engine
+        .audio_pool
+        .get(&source_id)
         .ok_or_else(|| format!("Source not found: {}", source_id))?;
 
     let num_frames = buffer.num_frames;
@@ -199,15 +200,18 @@ pub fn move_clip(
 ) -> Result<(), String> {
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
-    let track = project.track_mut(&track_id)
+    let track = project
+        .track_mut(&track_id)
         .ok_or_else(|| format!("Track not found: {}", track_id))?;
 
-    let clip = track.clips.iter_mut().find(|c| {
-        match &c.content {
+    let clip = track
+        .clips
+        .iter_mut()
+        .find(|c| match &c.content {
             hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
             hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
-        }
-    }).ok_or_else(|| format!("Clip not found: {}", clip_id))?;
+        })
+        .ok_or_else(|| format!("Clip not found: {}", clip_id))?;
 
     clip.position_ticks = new_position_ticks;
     drop(project);
@@ -225,15 +229,18 @@ pub fn resize_clip(
 ) -> Result<(), String> {
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
-    let track = project.track_mut(&track_id)
+    let track = project
+        .track_mut(&track_id)
         .ok_or_else(|| format!("Track not found: {}", track_id))?;
 
-    let clip = track.clips.iter_mut().find(|c| {
-        match &c.content {
+    let clip = track
+        .clips
+        .iter_mut()
+        .find(|c| match &c.content {
             hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
             hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
-        }
-    }).ok_or_else(|| format!("Clip not found: {}", clip_id))?;
+        })
+        .ok_or_else(|| format!("Clip not found: {}", clip_id))?;
 
     clip.length_ticks = new_length_ticks;
     drop(project);
@@ -250,15 +257,14 @@ pub fn delete_clip(
 ) -> Result<(), String> {
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
-    let track = project.track_mut(&track_id)
+    let track = project
+        .track_mut(&track_id)
         .ok_or_else(|| format!("Track not found: {}", track_id))?;
 
     let before = track.clips.len();
-    track.clips.retain(|c| {
-        match &c.content {
-            hardwave_project::clip::ClipContent::Audio(ac) => ac.id != clip_id,
-            hardwave_project::clip::ClipContent::Midi(mc) => mc.id != clip_id,
-        }
+    track.clips.retain(|c| match &c.content {
+        hardwave_project::clip::ClipContent::Audio(ac) => ac.id != clip_id,
+        hardwave_project::clip::ClipContent::Midi(mc) => mc.id != clip_id,
     });
 
     if track.clips.len() == before {

@@ -1,12 +1,12 @@
 //! Audio file reading via symphonia (WAV, FLAC, MP3, OGG, AAC).
 
+use std::path::Path;
 use symphonia::core::audio::{AudioBufferRef, Signal};
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use std::path::Path;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -44,20 +44,35 @@ impl AudioFileReader {
         }
 
         let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
             .map_err(|e| AudioFileError::UnsupportedFormat(e.to_string()))?;
 
         let mut format = probed.format;
 
-        let track = format.default_track()
+        let track = format
+            .default_track()
             .ok_or_else(|| AudioFileError::Decode("No audio track found".into()))?;
 
         let sample_rate = track.codec_params.sample_rate.unwrap_or(48000);
-        let channels = track.codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
+        let channels = track
+            .codec_params
+            .channels
+            .map(|c| c.count() as u16)
+            .unwrap_or(2);
         let total_frames = track.codec_params.n_frames.unwrap_or(0);
         let duration_secs = total_frames as f64 / sample_rate as f64;
 
-        let info = AudioFileInfo { sample_rate, channels, total_frames, duration_secs };
+        let info = AudioFileInfo {
+            sample_rate,
+            channels,
+            total_frames,
+            duration_secs,
+        };
 
         let mut decoder = symphonia::default::get_codecs()
             .make(&track.codec_params, &DecoderOptions::default())
@@ -69,7 +84,10 @@ impl AudioFileReader {
             let packet = match format.next_packet() {
                 Ok(p) => p,
                 Err(symphonia::core::errors::Error::IoError(ref e))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break
+                }
                 Err(_) => break,
             };
 
@@ -80,28 +98,27 @@ impl AudioFileReader {
 
             match decoded {
                 AudioBufferRef::F32(buf) => {
-                    for ch in 0..channels as usize {
-                        if ch < buf.spec().channels.count() {
-                            channel_buffers[ch].extend_from_slice(buf.chan(ch));
-                        }
+                    for (ch_buf, ch_idx) in channel_buffers
+                        .iter_mut()
+                        .zip(0..buf.spec().channels.count())
+                    {
+                        ch_buf.extend_from_slice(buf.chan(ch_idx));
                     }
                 }
                 AudioBufferRef::S16(buf) => {
-                    for ch in 0..channels as usize {
-                        if ch < buf.spec().channels.count() {
-                            channel_buffers[ch].extend(
-                                buf.chan(ch).iter().map(|&s| s as f32 / 32768.0)
-                            );
-                        }
+                    for (ch_buf, ch_idx) in channel_buffers
+                        .iter_mut()
+                        .zip(0..buf.spec().channels.count())
+                    {
+                        ch_buf.extend(buf.chan(ch_idx).iter().map(|&s| s as f32 / 32768.0));
                     }
                 }
                 AudioBufferRef::S32(buf) => {
-                    for ch in 0..channels as usize {
-                        if ch < buf.spec().channels.count() {
-                            channel_buffers[ch].extend(
-                                buf.chan(ch).iter().map(|&s| s as f32 / 2147483648.0)
-                            );
-                        }
+                    for (ch_buf, ch_idx) in channel_buffers
+                        .iter_mut()
+                        .zip(0..buf.spec().channels.count())
+                    {
+                        ch_buf.extend(buf.chan(ch_idx).iter().map(|&s| s as f32 / 2147483648.0));
                     }
                 }
                 _ => {}

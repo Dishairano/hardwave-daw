@@ -1,20 +1,20 @@
 //! DawEngine — the top-level orchestrator that owns the audio graph, transport,
 //! plugin host, and project state. Bridges between the audio callback and the UI.
 
-use std::sync::Arc;
+use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
-use crossbeam_channel::{Receiver, Sender, bounded};
+use std::sync::Arc;
 
 use hardwave_audio_io::{AudioCallback, AudioDeviceManager};
-use hardwave_project::Project;
 use hardwave_metering::{ChannelMeter, MeterSnapshot};
 use hardwave_plugin_host::PluginScanner;
+use hardwave_project::Project;
 
-use crate::audio_pool::{AudioPool, AudioBuffer};
+use crate::audio_pool::{AudioBuffer, AudioPool};
 use crate::graph::{AudioGraph, ProcessContext};
-use crate::track_node::{TrackNode, ClipRegion};
 use crate::master_node::MasterNode;
-use crate::transport::{TransportState, TransportCommand};
+use crate::track_node::{ClipRegion, TrackNode};
+use crate::transport::{TransportCommand, TransportState};
 
 /// Main DAW engine.
 pub struct DawEngine {
@@ -66,7 +66,9 @@ impl DawEngine {
         let sample_rate = self.audio_device.sample_rate;
         let buffer_size = self.audio_device.buffer_size;
 
-        transport.sample_rate.store(sample_rate as u64, std::sync::atomic::Ordering::Relaxed);
+        transport
+            .sample_rate
+            .store(sample_rate as u64, std::sync::atomic::Ordering::Relaxed);
 
         let callback = EngineCallback::new(
             transport,
@@ -78,8 +80,7 @@ impl DawEngine {
             buffer_size,
         );
 
-        self.audio_device.start(callback)
-            .map_err(|e| e.to_string())
+        self.audio_device.start(callback).map_err(|e| e.to_string())
     }
 
     /// Stop the audio engine.
@@ -98,9 +99,12 @@ impl DawEngine {
     }
 
     /// Load an audio file into the pool and return its source ID and info.
-    pub fn load_audio_file(&self, path: &std::path::Path) -> Result<(String, hardwave_dsp::AudioFileInfo), String> {
-        let (info, channels) = hardwave_dsp::AudioFileReader::read(path)
-            .map_err(|e| e.to_string())?;
+    pub fn load_audio_file(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(String, hardwave_dsp::AudioFileInfo), String> {
+        let (info, channels) =
+            hardwave_dsp::AudioFileReader::read(path).map_err(|e| e.to_string())?;
 
         let num_frames = channels.first().map(|c| c.len()).unwrap_or(0);
         let source_id = format!("{:x}", md5_hash(path.to_string_lossy().as_bytes()));
@@ -241,28 +245,47 @@ impl EngineCallback {
     fn process_transport(&mut self, cmd: TransportCommand) {
         match cmd {
             TransportCommand::Play => {
-                self.transport.playing.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.transport
+                    .playing
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             TransportCommand::Stop => {
-                self.transport.playing.store(false, std::sync::atomic::Ordering::Relaxed);
+                self.transport
+                    .playing
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
             }
             TransportCommand::Record => {
-                self.transport.recording.store(true, std::sync::atomic::Ordering::Relaxed);
-                self.transport.playing.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.transport
+                    .recording
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.transport
+                    .playing
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             TransportCommand::SetPosition(pos) => {
                 self.transport.set_position(pos);
             }
             TransportCommand::SetBpm(bpm) => {
-                self.transport.bpm.store(bpm, std::sync::atomic::Ordering::Relaxed);
+                self.transport
+                    .bpm
+                    .store(bpm, std::sync::atomic::Ordering::Relaxed);
             }
             TransportCommand::SetLoop(start, end) => {
-                self.transport.loop_start.store(start, std::sync::atomic::Ordering::Relaxed);
-                self.transport.loop_end.store(end, std::sync::atomic::Ordering::Relaxed);
+                self.transport
+                    .loop_start
+                    .store(start, std::sync::atomic::Ordering::Relaxed);
+                self.transport
+                    .loop_end
+                    .store(end, std::sync::atomic::Ordering::Relaxed);
             }
             TransportCommand::ToggleLoop => {
-                let current = self.transport.looping.load(std::sync::atomic::Ordering::Relaxed);
-                self.transport.looping.store(!current, std::sync::atomic::Ordering::Relaxed);
+                let current = self
+                    .transport
+                    .looping
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                self.transport
+                    .looping
+                    .store(!current, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }
@@ -279,12 +302,14 @@ impl EngineCallback {
         let mut track_node_ids = Vec::new();
 
         // Determine if any track is soloed — if so, mute all non-soloed tracks
-        let any_soloed = project.tracks.iter().any(|t| t.soloed && !matches!(t.kind, hardwave_project::track::TrackKind::Master));
+        let any_soloed = project
+            .tracks
+            .iter()
+            .any(|t| t.soloed && !matches!(t.kind, hardwave_project::track::TrackKind::Master));
 
         for track in &project.tracks {
-            match track.kind {
-                hardwave_project::track::TrackKind::Master => continue,
-                _ => {}
+            if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
+                continue;
             }
 
             let mut node = TrackNode::new(track.name.clone(), self.audio_pool.clone());
@@ -296,12 +321,18 @@ impl EngineCallback {
             node.set_soloed(track.soloed);
 
             // Convert clip placements to sample-based ClipRegions
-            let regions: Vec<ClipRegion> = track.clips.iter().filter_map(|clip| {
-                match &clip.content {
+            let regions: Vec<ClipRegion> = track
+                .clips
+                .iter()
+                .filter_map(|clip| match &clip.content {
                     hardwave_project::clip::ClipContent::Audio(audio_clip) => {
-                        let timeline_start = tempo_map.tick_to_samples(clip.position_ticks, sample_rate);
-                        let timeline_end = tempo_map.tick_to_samples(clip.position_ticks + clip.length_ticks, sample_rate);
-                        let gain = if audio_clip.gain_db <= -100.0 { 0.0 } else {
+                        let timeline_start =
+                            tempo_map.tick_to_samples(clip.position_ticks, sample_rate);
+                        let timeline_end = tempo_map
+                            .tick_to_samples(clip.position_ticks + clip.length_ticks, sample_rate);
+                        let gain = if audio_clip.gain_db <= -100.0 {
+                            0.0
+                        } else {
                             10.0_f64.powf(audio_clip.gain_db / 20.0) as f32
                         };
                         Some(ClipRegion {
@@ -314,8 +345,8 @@ impl EngineCallback {
                         })
                     }
                     _ => None,
-                }
-            }).collect();
+                })
+                .collect();
 
             node.set_clips(regions);
 
@@ -353,7 +384,10 @@ impl AudioCallback for EngineCallback {
         let ctx = ProcessContext {
             sample_rate: self.sample_rate as f64,
             buffer_size: num_frames as u32,
-            tempo: self.transport.bpm.load(std::sync::atomic::Ordering::Relaxed),
+            tempo: self
+                .transport
+                .bpm
+                .load(std::sync::atomic::Ordering::Relaxed),
             time_sig: (4, 4),
             position_samples: self.transport.position(),
             playing: true,
@@ -368,8 +402,16 @@ impl AudioCallback for EngineCallback {
             if let Some(master_out) = self.graph.node_output(node_count - 1) {
                 // Copy to interleaved output
                 for frame in 0..num_frames {
-                    let l = master_out.get(0).and_then(|ch| ch.get(frame)).copied().unwrap_or(0.0);
-                    let r = master_out.get(1).and_then(|ch| ch.get(frame)).copied().unwrap_or(0.0);
+                    let l = master_out
+                        .first()
+                        .and_then(|ch| ch.get(frame))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let r = master_out
+                        .get(1)
+                        .and_then(|ch| ch.get(frame))
+                        .copied()
+                        .unwrap_or(0.0);
                     output[frame * 2] = l;
                     output[frame * 2 + 1] = r;
                 }

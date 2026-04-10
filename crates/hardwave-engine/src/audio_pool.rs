@@ -3,9 +3,9 @@
 //! Audio data is loaded on a background thread and inserted via Arc. The audio thread
 //! reads immutably — no locks in the hot path.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// A decoded audio file stored as deinterleaved f32 channels.
 #[derive(Debug, Clone)]

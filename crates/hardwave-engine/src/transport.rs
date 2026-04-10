@@ -1,8 +1,8 @@
 //! Transport state — play/stop/record/loop, shared between audio thread and UI.
 
+use atomic_float::AtomicF64;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use atomic_float::AtomicF64;
 
 /// Transport state shared between the audio thread and the UI.
 /// All fields are atomic — no locks needed on the audio thread.

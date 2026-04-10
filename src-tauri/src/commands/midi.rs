@@ -1,6 +1,6 @@
-use tauri::State;
 use crate::AppState;
 use serde::Serialize;
+use tauri::State;
 
 #[derive(Serialize)]
 pub struct MidiNoteInfo {
@@ -34,12 +34,10 @@ pub fn create_midi_clip(
     );
 
     let placement = hardwave_project::clip::ClipPlacement {
-        content: hardwave_project::clip::ClipContent::Midi(
-            hardwave_project::clip::MidiClipRef {
-                id: clip_id.clone(),
-                clip: midi_clip,
-            },
-        ),
+        content: hardwave_project::clip::ClipContent::Midi(hardwave_project::clip::MidiClipRef {
+            id: clip_id.clone(),
+            clip: midi_clip,
+        }),
         track_id: track_id.clone(),
         position_ticks: position_ticks.unwrap_or(0),
         length_ticks: len,
@@ -68,21 +66,28 @@ pub fn get_midi_notes(
 ) -> Result<Vec<MidiNoteInfo>, String> {
     let engine = state.engine.lock();
     let project = engine.project.lock();
-    let track = project.track(&track_id)
+    let track = project
+        .track(&track_id)
         .ok_or_else(|| format!("Track not found: {}", track_id))?;
 
     for clip in &track.clips {
         if let hardwave_project::clip::ClipContent::Midi(mc) = &clip.content {
             if mc.id == clip_id {
-                return Ok(mc.clip.notes.iter().enumerate().map(|(i, n)| MidiNoteInfo {
-                    index: i,
-                    start_tick: n.start_tick,
-                    duration_ticks: n.duration_ticks,
-                    pitch: n.pitch,
-                    velocity: n.velocity,
-                    channel: n.channel,
-                    muted: n.muted,
-                }).collect());
+                return Ok(mc
+                    .clip
+                    .notes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| MidiNoteInfo {
+                        index: i,
+                        start_tick: n.start_tick,
+                        duration_ticks: n.duration_ticks,
+                        pitch: n.pitch,
+                        velocity: n.velocity,
+                        channel: n.channel,
+                        muted: n.muted,
+                    })
+                    .collect());
             }
         }
     }
@@ -103,7 +108,8 @@ pub fn add_midi_note(
 ) -> Result<usize, String> {
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
-    let track = project.track_mut(&track_id)
+    let track = project
+        .track_mut(&track_id)
         .ok_or_else(|| format!("Track not found: {}", track_id))?;
 
     for clip in &mut track.clips {
@@ -128,6 +134,7 @@ pub fn add_midi_note(
 }
 
 /// Update a note in a MIDI clip.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn update_midi_note(
     state: State<AppState>,
@@ -142,19 +149,33 @@ pub fn update_midi_note(
 ) -> Result<(), String> {
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
-    let track = project.track_mut(&track_id)
+    let track = project
+        .track_mut(&track_id)
         .ok_or_else(|| format!("Track not found: {}", track_id))?;
 
     for clip in &mut track.clips {
         if let hardwave_project::clip::ClipContent::Midi(mc) = &mut clip.content {
             if mc.id == clip_id {
-                let note = mc.clip.notes.get_mut(note_index)
+                let note = mc
+                    .clip
+                    .notes
+                    .get_mut(note_index)
                     .ok_or_else(|| format!("Note index out of range: {}", note_index))?;
-                if let Some(p) = pitch { note.pitch = p; }
-                if let Some(s) = start_tick { note.start_tick = s; }
-                if let Some(d) = duration_ticks { note.duration_ticks = d; }
-                if let Some(v) = velocity { note.velocity = v; }
-                if let Some(m) = muted { note.muted = m; }
+                if let Some(p) = pitch {
+                    note.pitch = p;
+                }
+                if let Some(s) = start_tick {
+                    note.start_tick = s;
+                }
+                if let Some(d) = duration_ticks {
+                    note.duration_ticks = d;
+                }
+                if let Some(v) = velocity {
+                    note.velocity = v;
+                }
+                if let Some(m) = muted {
+                    note.muted = m;
+                }
                 return Ok(());
             }
         }
@@ -173,7 +194,8 @@ pub fn delete_midi_note(
 ) -> Result<(), String> {
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
-    let track = project.track_mut(&track_id)
+    let track = project
+        .track_mut(&track_id)
         .ok_or_else(|| format!("Track not found: {}", track_id))?;
 
     for clip in &mut track.clips {

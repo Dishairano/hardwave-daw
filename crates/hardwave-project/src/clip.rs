@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::track::TrackId;
-use crate::tempo;
 
 pub type ClipId = String;
 
