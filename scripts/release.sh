@@ -22,13 +22,38 @@ NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
 
 echo "Version: $CURRENT -> $NEW_VERSION"
 
-# Generate changelog from commits since last tag
+# Generate changelog from commits since last tag.
+# For each commit: if the body has bullet points (- lines), use those.
+# Otherwise use the subject line as a single bullet.
 LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-if [ -n "$LAST_TAG" ]; then
-  CHANGELOG=$(git log "${LAST_TAG}..HEAD" --pretty=format:"- %s" --no-merges | grep -v "^- Release\|^- v[0-9]" || true)
-else
-  CHANGELOG=$(git log --pretty=format:"- %s" --no-merges -10 || true)
-fi
+CHANGELOG=""
+
+while IFS= read -r hash; do
+  [ -z "$hash" ] && continue
+  SUBJECT=$(git log -1 --format="%s" "$hash")
+  BODY=$(git log -1 --format="%b" "$hash")
+
+  # Skip version bump commits
+  [[ "$SUBJECT" =~ ^(Release|v[0-9]) ]] && continue
+
+  # Extract bullet points from body
+  BULLETS=$(echo "$BODY" | grep '^\s*[-*]' | sed 's/^\s*//' || true)
+
+  if [ -n "$BULLETS" ]; then
+    CHANGELOG="${CHANGELOG}${BULLETS}"$'\n'
+  else
+    CHANGELOG="${CHANGELOG}- ${SUBJECT}"$'\n'
+  fi
+done < <(
+  if [ -n "$LAST_TAG" ]; then
+    git log "${LAST_TAG}..HEAD" --pretty=format:"%H" --no-merges
+  else
+    git log --pretty=format:"%H" --no-merges -10
+  fi
+)
+
+# Deduplicate
+CHANGELOG=$(echo "$CHANGELOG" | awk '!seen[$0]++' | sed '/^$/d')
 
 # Write changelog to file for CI to pick up
 CHANGELOG_FILE="RELEASE_CHANGELOG.md"
