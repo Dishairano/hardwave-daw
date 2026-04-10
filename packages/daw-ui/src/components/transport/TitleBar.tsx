@@ -28,6 +28,7 @@ interface TitleBarProps {
   onTogglePianoRoll: () => void
   onToggleMixer: () => void
   onToggleRoadmap: () => void
+  onOpenAudioSettings: () => void
   showBrowser: boolean
   showPlaylist: boolean
   showChannelRack: boolean
@@ -39,7 +40,7 @@ export function TitleBar({
   hintText,
   onNewProject, onSaveProject, onSaveProjectAs, onOpenProject,
   onUndo, onRedo,
-  onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer, onToggleRoadmap,
+  onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer, onToggleRoadmap, onOpenAudioSettings,
   showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
 }: TitleBarProps) {
   const [openMenu, setOpenMenu] = useState<number | null>(null)
@@ -95,7 +96,7 @@ export function TitleBar({
     {
       label: 'OPTIONS',
       items: [
-        { label: 'Audio settings...', disabled: true },
+        { label: 'Audio settings...', action: onOpenAudioSettings },
         { label: 'MIDI settings...', disabled: true },
       ],
     },

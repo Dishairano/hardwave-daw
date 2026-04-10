@@ -5,10 +5,17 @@ use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct AudioDeviceInfo {
-    name: String,
-    is_default: bool,
-    sample_rates: Vec<u32>,
-    max_channels: u16,
+    pub name: String,
+    pub is_default: bool,
+    pub sample_rates: Vec<u32>,
+    pub max_channels: u16,
+}
+
+#[derive(Serialize)]
+pub struct AudioConfig {
+    pub device: Option<String>,
+    pub sample_rate: u32,
+    pub buffer_size: u32,
 }
 
 #[tauri::command]
@@ -29,7 +36,29 @@ pub fn get_meters(state: State<AppState>) -> MeterSnapshot {
 #[tauri::command]
 pub fn get_audio_devices(state: State<AppState>) -> Vec<AudioDeviceInfo> {
     let engine = state.engine.lock();
-    // Access the device manager to list devices
-    // For now return empty — device manager is private, will add accessor
-    vec![]
+    engine.audio_device_manager().list_output_devices()
+        .into_iter()
+        .map(|d| AudioDeviceInfo {
+            name: d.name,
+            is_default: d.is_default,
+            sample_rates: d.sample_rates,
+            max_channels: d.max_channels,
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn get_audio_config(state: State<AppState>) -> AudioConfig {
+    let (device, sample_rate, buffer_size) = state.engine.lock().audio_config();
+    AudioConfig { device, sample_rate, buffer_size }
+}
+
+#[tauri::command]
+pub fn set_audio_config(
+    state: State<AppState>,
+    device: Option<String>,
+    sample_rate: u32,
+    buffer_size: u32,
+) -> Result<(), String> {
+    state.engine.lock().set_audio_config(device, sample_rate, buffer_size)
 }

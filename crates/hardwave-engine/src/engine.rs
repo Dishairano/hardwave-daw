@@ -130,6 +130,43 @@ impl DawEngine {
     pub fn is_running(&self) -> bool {
         self.audio_device.is_running()
     }
+
+    /// Get a reference to the audio device manager for device listing.
+    pub fn audio_device_manager(&self) -> &AudioDeviceManager {
+        &self.audio_device
+    }
+
+    /// Get current audio config.
+    pub fn audio_config(&self) -> (Option<String>, u32, u32) {
+        (
+            self.audio_device.selected_device.clone(),
+            self.audio_device.sample_rate,
+            self.audio_device.buffer_size,
+        )
+    }
+
+    /// Apply new audio settings. Restarts the audio stream if running.
+    pub fn set_audio_config(
+        &mut self,
+        device: Option<String>,
+        sample_rate: u32,
+        buffer_size: u32,
+    ) -> Result<(), String> {
+        let was_running = self.audio_device.is_running();
+        if was_running {
+            self.audio_device.stop();
+        }
+
+        self.audio_device.selected_device = device;
+        self.audio_device.sample_rate = sample_rate;
+        self.audio_device.buffer_size = buffer_size;
+
+        if was_running {
+            self.start()?;
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for DawEngine {
@@ -241,6 +278,9 @@ impl EngineCallback {
 
         let mut track_node_ids = Vec::new();
 
+        // Determine if any track is soloed — if so, mute all non-soloed tracks
+        let any_soloed = project.tracks.iter().any(|t| t.soloed && !matches!(t.kind, hardwave_project::track::TrackKind::Master));
+
         for track in &project.tracks {
             match track.kind {
                 hardwave_project::track::TrackKind::Master => continue,
@@ -250,7 +290,9 @@ impl EngineCallback {
             let mut node = TrackNode::new(track.name.clone(), self.audio_pool.clone());
             node.set_volume_db(track.volume_db);
             node.set_pan(track.pan);
-            node.set_muted(track.muted);
+            // If any track is soloed, mute tracks that aren't soloed
+            let effective_mute = track.muted || (any_soloed && !track.soloed);
+            node.set_muted(effective_mute);
             node.set_soloed(track.soloed);
 
             // Convert clip placements to sample-based ClipRegions
@@ -342,6 +384,9 @@ impl AudioCallback for EngineCallback {
                     snapshot.peak_hold_db = self.meter.peak_hold_db();
                     snapshot.true_peak_db = self.meter.true_peak_db();
                     snapshot.rms_db = self.meter.rms_db();
+                    snapshot.lufs_m = self.meter.lufs_m(num_frames);
+                    snapshot.lufs_s = self.meter.lufs_s(num_frames);
+                    snapshot.lufs_i = self.meter.lufs_i();
                     snapshot.clipped = self.meter.clipped();
                 }
             }

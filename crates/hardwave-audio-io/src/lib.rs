@@ -51,6 +51,8 @@ pub struct AudioDeviceManager {
     running: Arc<AtomicBool>,
     pub sample_rate: u32,
     pub buffer_size: u32,
+    /// Name of the selected output device (None = system default).
+    pub selected_device: Option<String>,
 }
 
 impl AudioDeviceManager {
@@ -62,7 +64,55 @@ impl AudioDeviceManager {
             running: Arc::new(AtomicBool::new(false)),
             sample_rate: 48000,
             buffer_size: 512,
+            selected_device: None,
         }
+    }
+
+    /// List available input devices.
+    pub fn list_input_devices(&self) -> Vec<DeviceInfo> {
+        let default_name = self.host.default_input_device()
+            .and_then(|d| d.name().ok())
+            .unwrap_or_default();
+
+        self.host.input_devices()
+            .map(|devices| {
+                devices.filter_map(|d| {
+                    let name = d.name().ok()?;
+                    let configs: Vec<SupportedStreamConfigRange> =
+                        d.supported_input_configs().ok()?.collect();
+                    let sample_rates: Vec<u32> = configs.iter()
+                        .flat_map(|c| {
+                            let min = c.min_sample_rate().0;
+                            let max = c.max_sample_rate().0;
+                            [44100, 48000, 88200, 96000, 192000].into_iter()
+                                .filter(move |&sr| sr >= min && sr <= max)
+                        })
+                        .collect();
+                    let max_channels = configs.iter().map(|c| c.channels()).max().unwrap_or(0);
+                    Some(DeviceInfo {
+                        is_default: name == default_name,
+                        name,
+                        sample_rates,
+                        max_channels,
+                    })
+                }).collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Resolve the output device — selected by name, or system default.
+    fn resolve_output_device(&self) -> Result<cpal::Device, AudioIoError> {
+        if let Some(ref name) = self.selected_device {
+            if let Ok(devices) = self.host.output_devices() {
+                for d in devices {
+                    if d.name().ok().as_deref() == Some(name) {
+                        return Ok(d);
+                    }
+                }
+            }
+            log::warn!("Selected device '{}' not found, falling back to default", name);
+        }
+        self.host.default_output_device().ok_or(AudioIoError::NoOutputDevice)
     }
 
     /// List available output devices.
@@ -99,8 +149,21 @@ impl AudioDeviceManager {
 
     /// Start the output audio stream with the given callback.
     pub fn start<C: AudioCallback>(&mut self, mut callback: C) -> Result<(), AudioIoError> {
-        let device = self.host.default_output_device()
-            .ok_or(AudioIoError::NoOutputDevice)?;
+        let device = self.resolve_output_device()?;
+
+        // Negotiate sample rate: check if the requested rate is supported,
+        // otherwise fall back to the device's preferred rate.
+        let supported_rate = self.is_rate_supported(&device, self.sample_rate);
+        if !supported_rate {
+            if let Ok(default_config) = device.default_output_config() {
+                let fallback = default_config.sample_rate().0;
+                log::warn!(
+                    "Requested sample rate {} not supported, falling back to {}",
+                    self.sample_rate, fallback
+                );
+                self.sample_rate = fallback;
+            }
+        }
 
         let config = StreamConfig {
             channels: 2,
@@ -138,6 +201,17 @@ impl AudioDeviceManager {
         self.output_stream = Some(stream);
 
         Ok(())
+    }
+
+    /// Check if a sample rate is supported by a device.
+    fn is_rate_supported(&self, device: &cpal::Device, rate: u32) -> bool {
+        device.supported_output_configs().ok()
+            .map(|configs| {
+                configs.into_iter().any(|c| {
+                    rate >= c.min_sample_rate().0 && rate <= c.max_sample_rate().0 && c.channels() >= 2
+                })
+            })
+            .unwrap_or(false)
     }
 
     /// Stop the audio stream.

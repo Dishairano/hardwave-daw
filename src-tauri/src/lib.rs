@@ -56,6 +56,8 @@ pub fn run() {
             commands::engine::stop_engine,
             commands::engine::get_meters,
             commands::engine::get_audio_devices,
+            commands::engine::get_audio_config,
+            commands::engine::set_audio_config,
             // Audio
             commands::audio::import_audio_file,
             commands::audio::get_track_clips,

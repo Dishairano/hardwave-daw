@@ -9,6 +9,7 @@ import { Browser } from './components/browser/Browser'
 import { ChannelRack } from './components/channelrack/ChannelRack'
 import { PianoRoll } from './components/piano-roll/PianoRoll'
 import { Roadmap } from './components/roadmap/Roadmap'
+import { AudioSettings } from './components/settings/AudioSettings'
 import { UpdateModal } from './components/UpdateModal'
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
@@ -39,6 +40,7 @@ export function App() {
   const [showPlaylist, setShowPlaylist] = useState(true)
   const [showPianoRoll, setShowPianoRoll] = useState(false)
   const [showRoadmap, setShowRoadmap] = useState(false)
+  const [showAudioSettings, setShowAudioSettings] = useState(false)
 
   // Splash screen
   const [showSplash, setShowSplash] = useState(true)
@@ -245,6 +247,7 @@ export function App() {
         onTogglePianoRoll={() => setShowPianoRoll(v => !v)}
         onToggleMixer={() => setShowMixer(v => !v)}
         onToggleRoadmap={() => setShowRoadmap(v => !v)}
+        onOpenAudioSettings={() => setShowAudioSettings(true)}
         showBrowser={showBrowser}
         showPlaylist={showPlaylist}
         showChannelRack={showChannelRack}
@@ -311,6 +314,7 @@ export function App() {
 
       {/* Floating detached panels */}
       {showRoadmap && <Roadmap onClose={() => setShowRoadmap(false)} />}
+      {showAudioSettings && <AudioSettings onClose={() => setShowAudioSettings(false)} />}
 
       {/* Update modal — same pattern as Hardwave Suite */}
       {updateInfo.available && !updateInfo.dismissed && (
