@@ -9,7 +9,33 @@ permissions:
   contents: write
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/daw-ui/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd packages/daw-ui
+          npm ci
+          npm run build
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: packages/daw-ui/dist
+          retention-days: 1
+
   build:
+    needs: frontend
     strategy:
       fail-fast: false
       matrix:
@@ -20,18 +46,31 @@ jobs:
             target: x86_64-pc-windows-msvc
           - platform: macos-latest
             target: aarch64-apple-darwin
-          - platform: macos-latest
-            target: x86_64-apple-darwin
 
     runs-on: ${{ matrix.platform }}
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: packages/daw-ui/dist
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Configure sccache
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        shell: bash
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -47,24 +86,8 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install and build frontend
-        run: |
-          cd packages/daw-ui
-          npm ci
-          npm run build
-
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli@latest
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -94,7 +117,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Fetch the release body from GitHub
           BODY=$(gh release view "${{ github.ref_name }}" --json body -q '.body' 2>/dev/null || echo "")
           echo "body<<RELEASE_EOF" >> "$GITHUB_OUTPUT"
           echo "$BODY" >> "$GITHUB_OUTPUT"
@@ -107,9 +129,6 @@ jobs:
           VERSION: ${{ github.ref_name }}
           RELEASE_BODY: ${{ steps.release.outputs.body }}
         run: |
-          # Parse changelog sections from release body
-          # Expected format: ## New / ## Improved / ## Fixed with bullet points
-
           parse_section() {
             local section="$1"
             local body="$2"
@@ -120,12 +139,10 @@ jobs:
           IMPROVED=$(parse_section "Improved" "$RELEASE_BODY")
           FIXED=$(parse_section "Fixed" "$RELEASE_BODY")
 
-          # Count items
           NEW_COUNT=$(echo "$NEW" | grep -c '.' 2>/dev/null || echo 0)
           IMPROVED_COUNT=$(echo "$IMPROVED" | grep -c '.' 2>/dev/null || echo 0)
           FIXED_COUNT=$(echo "$FIXED" | grep -c '.' 2>/dev/null || echo 0)
 
-          # Build embed fields JSON
           FIELDS="[]"
 
           if [ -n "$NEW" ] && [ "$NEW_COUNT" -gt 0 ]; then
@@ -143,19 +160,16 @@ jobs:
             FIELDS=$(echo "$FIELDS" | jq --arg v "$FIX_FMT" '. + [{"name": "✦ FIXED", "value": $v, "inline": false}]')
           fi
 
-          # Fallback if no structured changelog
           if [ "$(echo "$FIELDS" | jq 'length')" -eq 0 ]; then
             FALLBACK="${RELEASE_BODY:-Bug fixes and improvements.}"
             FIELDS=$(echo '[]' | jq --arg v "$FALLBACK" '. + [{"name": "Changes", "value": $v, "inline": false}]')
           fi
 
-          # Summary line
           SUMMARY=""
           [ "$NEW_COUNT" -gt 0 ] && SUMMARY="${NEW_COUNT} new"
           [ "$IMPROVED_COUNT" -gt 0 ] && SUMMARY="${SUMMARY:+$SUMMARY · }${IMPROVED_COUNT} improved"
           [ "$FIXED_COUNT" -gt 0 ] && SUMMARY="${SUMMARY:+$SUMMARY · }${FIXED_COUNT} fixed"
 
-          # Build the webhook payload
           PAYLOAD=$(jq -n \
             --arg title "Hardwave DAW ${VERSION}" \
             --arg footer "${SUMMARY:-Release ${VERSION}}" \
@@ -173,7 +187,6 @@ jobs:
               }]
             }')
 
-          # Send to Discord
           curl -s -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             "$DISCORD_WEBHOOK_URL"
