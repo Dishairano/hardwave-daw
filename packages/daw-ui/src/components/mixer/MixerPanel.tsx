@@ -1,7 +1,7 @@
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { useMeterStore } from '../../stores/meterStore'
-import { useEffect } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 
 export function MixerPanel() {
   const { tracks, setVolume, setPan, toggleMute, toggleSolo } = useTrackStore()
@@ -70,6 +70,9 @@ interface StripProps {
 function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster, onVolume, onMute, onSolo }: StripProps) {
   const mH = Math.max(0, Math.min(100, (peakDb + 60) / 72 * 100))
   const mC = peakDb > -3 ? hw.red : peakDb > -12 ? hw.yellow : hw.green
+  const [clipped, setClipped] = useState(false)
+  const resetClip = useCallback(() => setClipped(false), [])
+  useEffect(() => { if (peakDb >= 0) setClipped(true) }, [peakDb])
 
   return (
     <div style={{
@@ -104,7 +107,21 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
       </div>
 
       {/* Fader + meter */}
-      <div style={{ flex: 1, display: 'flex', padding: 3, gap: 2, minHeight: 70 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 3, gap: 2, minHeight: 70 }}>
+        {/* Clip indicator */}
+        <div
+          onClick={resetClip}
+          title={clipped ? 'Click to reset clip indicator' : undefined}
+          style={{
+            width: '100%', height: 6, borderRadius: hw.radius.sm,
+            background: clipped ? hw.red : 'rgba(255,255,255,0.04)',
+            border: `1px solid ${clipped ? hw.red : hw.borderDark}`,
+            cursor: clipped ? 'pointer' : 'default',
+            transition: 'background 0.1s',
+            flexShrink: 0,
+          }}
+        />
+        <div style={{ flex: 1, display: 'flex', gap: 2 }}>
         {/* Dual meter */}
         <div style={{ display: 'flex', gap: 1, width: 10, flexShrink: 0 }}>
           {[0, 1].map(ch => (
@@ -132,6 +149,7 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
               border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm, cursor: 'pointer',
             }}
           />
+        </div>
         </div>
       </div>
 

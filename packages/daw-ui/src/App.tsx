@@ -192,6 +192,18 @@ export function App() {
           e.preventDefault()
           transport.setPosition(0)
           break
+        case 'End':
+          e.preventDefault()
+          {
+            const allClips = tracks.tracks.flatMap(t => t.clips || [])
+            if (allClips.length > 0) {
+              const lastEnd = Math.max(...allClips.map(c => c.position_ticks + c.length_ticks))
+              const sr = transport.sampleRate || 48000
+              const samplesPerTick = (sr * 60) / (transport.bpm * 960)
+              transport.setPosition(Math.round(lastEnd * samplesPerTick))
+            }
+          }
+          break
         case 'F5':
           e.preventDefault()
           setShowPlaylist(v => !v)

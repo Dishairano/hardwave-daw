@@ -23,9 +23,10 @@ export function Toolbar(props: ToolbarProps) {
   const [activeTool, setActiveTool] = useState<Tool>('draw')
 
   const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
-  const mins = Math.floor(seconds / 60)
+  const hrs = Math.floor(seconds / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
   const secs = Math.floor(seconds % 60)
-  const cs = Math.floor((seconds % 1) * 100)
+  const ms = Math.floor((seconds % 1) * 1000)
   const beats = bpm > 0 ? (seconds * bpm / 60) : 0
   const bar = Math.floor(beats / 4) + 1
   const beat = Math.floor(beats % 4) + 1
@@ -132,11 +133,13 @@ export function Toolbar(props: ToolbarProps) {
         </span>
         <div style={{ width: 1, height: 14, background: hw.border }} />
         <span style={lcdDigit}>
-          <span style={{ color: hw.textPrimary }}>{String(mins).padStart(2, ' ')}</span>
+          <span style={{ color: hw.textPrimary }}>{hrs}</span>
+          <span style={{ color: hw.textFaint }}>:</span>
+          <span style={{ color: hw.textPrimary }}>{String(mins).padStart(2, '0')}</span>
           <span style={{ color: hw.textFaint }}>:</span>
           <span style={{ color: hw.textPrimary }}>{String(secs).padStart(2, '0')}</span>
           <span style={{ color: hw.textFaint }}>.</span>
-          <span style={{ color: hw.textPrimary }}>{String(cs).padStart(2, '0')}</span>
+          <span style={{ color: hw.textPrimary }}>{String(ms).padStart(3, '0')}</span>
         </span>
       </div>
 
