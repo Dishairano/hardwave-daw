@@ -31,6 +31,8 @@ pub fn run() {
             commands::transport::stop,
             commands::transport::set_position,
             commands::transport::set_bpm,
+            commands::transport::toggle_loop,
+            commands::transport::set_loop,
             commands::transport::get_transport_state,
             // Tracks
             commands::tracks::get_tracks,
@@ -41,6 +43,7 @@ pub fn run() {
             commands::tracks::set_track_pan,
             commands::tracks::toggle_mute,
             commands::tracks::toggle_solo,
+            commands::tracks::toggle_solo_safe,
             // Plugins
             commands::plugins::scan_plugins,
             commands::plugins::get_plugins,

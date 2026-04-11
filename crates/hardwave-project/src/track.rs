@@ -38,6 +38,7 @@ pub struct Track {
     pub pan: f64,
     pub muted: bool,
     pub soloed: bool,
+    pub solo_safe: bool,
     pub armed: bool,
     pub output_bus: Option<TrackId>,
 
@@ -65,6 +66,7 @@ impl Track {
             pan: 0.0,
             muted: false,
             soloed: false,
+            solo_safe: false,
             armed: false,
             output_bus: None,
             inserts: Vec::new(),

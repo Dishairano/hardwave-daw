@@ -315,8 +315,9 @@ impl EngineCallback {
             let mut node = TrackNode::new(track.name.clone(), self.audio_pool.clone());
             node.set_volume_db(track.volume_db);
             node.set_pan(track.pan);
-            // If any track is soloed, mute tracks that aren't soloed
-            let effective_mute = track.muted || (any_soloed && !track.soloed);
+            // If any track is soloed, mute tracks that aren't soloed (unless solo-safe)
+            let effective_mute =
+                track.muted || (any_soloed && !track.soloed && !track.solo_safe);
             node.set_muted(effective_mute);
             node.set_soloed(track.soloed);
 

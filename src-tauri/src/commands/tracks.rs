@@ -12,6 +12,7 @@ pub struct TrackInfo {
     pan: f64,
     muted: bool,
     soloed: bool,
+    solo_safe: bool,
     armed: bool,
     insert_count: usize,
 }
@@ -26,6 +27,7 @@ fn track_to_info(t: &hardwave_project::Track) -> TrackInfo {
         pan: t.pan,
         muted: t.muted,
         soloed: t.soloed,
+        solo_safe: t.solo_safe,
         armed: t.armed,
         insert_count: t.inserts.len(),
     }
@@ -92,5 +94,14 @@ pub fn toggle_solo(state: State<AppState>, track_id: String) {
     let mut project = engine.project.lock();
     if let Some(track) = project.track_mut(&track_id) {
         track.soloed = !track.soloed;
+    }
+}
+
+#[tauri::command]
+pub fn toggle_solo_safe(state: State<AppState>, track_id: String) {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    if let Some(track) = project.track_mut(&track_id) {
+        track.solo_safe = !track.solo_safe;
     }
 }

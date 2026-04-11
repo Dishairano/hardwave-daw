@@ -204,6 +204,10 @@ export function App() {
             }
           }
           break
+        case 'KeyL':
+          e.preventDefault()
+          transport.toggleLoop()
+          break
         case 'F5':
           e.preventDefault()
           setShowPlaylist(v => !v)

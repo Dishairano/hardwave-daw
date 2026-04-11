@@ -9,14 +9,22 @@ interface TransportState {
   positionSamples: number
   bpm: number
   sampleRate: number
+  loopStart: number
+  loopEnd: number
 
   play: () => void
   stop: () => void
   togglePlayback: () => void
   setPosition: (pos: number) => void
   setBpm: (bpm: number) => void
+  toggleLoop: () => void
+  setLoop: (start: number, end: number) => void
+  tapTempo: () => void
   startListening: () => void
 }
+
+const TAP_WINDOW_MS = 2000
+const tapTimes: number[] = []
 
 export const useTransportStore = create<TransportState>((set, get) => ({
   playing: false,
@@ -25,6 +33,8 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   positionSamples: 0,
   bpm: 140,
   sampleRate: 48000,
+  loopStart: 0,
+  loopEnd: 0,
 
   play: () => { invoke('play'); set({ playing: true }) },
   stop: () => { invoke('stop'); set({ playing: false }) },
@@ -33,6 +43,33 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   },
   setPosition: (pos) => invoke('set_position', { position: pos }),
   setBpm: (bpm) => invoke('set_bpm', { bpm }),
+  toggleLoop: () => {
+    invoke('toggle_loop')
+    set(s => ({ looping: !s.looping }))
+  },
+  setLoop: (start, end) => {
+    invoke('set_loop', { start, end })
+    set({ loopStart: start, loopEnd: end })
+  },
+  tapTempo: () => {
+    const now = Date.now()
+    if (tapTimes.length > 0 && now - tapTimes[tapTimes.length - 1] > TAP_WINDOW_MS) {
+      tapTimes.length = 0
+    }
+    tapTimes.push(now)
+    if (tapTimes.length >= 2) {
+      const intervals = []
+      for (let i = 1; i < tapTimes.length; i++) {
+        intervals.push(tapTimes[i] - tapTimes[i - 1])
+      }
+      const avg = intervals.reduce((a, b) => a + b, 0) / intervals.length
+      const bpm = Math.round(60000 / avg)
+      if (bpm >= 20 && bpm <= 999) {
+        get().setBpm(bpm)
+      }
+    }
+    if (tapTimes.length > 8) tapTimes.shift()
+  },
 
   startListening: () => {
     listen<{ position: number; playing: boolean; bpm: number }>('daw:transport', (event) => {

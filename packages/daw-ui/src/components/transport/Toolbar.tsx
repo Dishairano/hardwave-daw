@@ -19,7 +19,7 @@ interface ToolbarProps {
 }
 
 export function Toolbar(props: ToolbarProps) {
-  const { playing, bpm, positionSamples, sampleRate, togglePlayback, stop, setBpm } = useTransportStore()
+  const { playing, looping, bpm, positionSamples, sampleRate, togglePlayback, stop, setBpm, toggleLoop, tapTempo } = useTransportStore()
   const [activeTool, setActiveTool] = useState<Tool>('draw')
 
   const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
@@ -102,22 +102,40 @@ export function Toolbar(props: ToolbarProps) {
         }} onMouseEnter={hint('Play (Space)')} onMouseLeave={clear}>
           <svg width="10" height="12"><polygon points="0,0 10,6 0,12" fill={playing ? hw.accent : hw.textMuted} /></svg>
         </button>
+        <button onClick={toggleLoop} style={{
+          ...transportBtn,
+          background: looping ? 'rgba(234,179,8,0.15)' : transportBtn.background,
+          borderColor: looping ? 'rgba(234,179,8,0.3)' : 'rgba(255,255,255,0.06)',
+        }} onMouseEnter={hint('Loop (L)')} onMouseLeave={clear}>
+          <svg width="12" height="10" viewBox="0 0 12 10">
+            <path d="M3 1h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2z" fill="none" stroke={looping ? '#eab308' : hw.textMuted} strokeWidth="1.2"/>
+            <path d="M8 1l2 1.5L8 4" fill="none" stroke={looping ? '#eab308' : hw.textMuted} strokeWidth="1"/>
+          </svg>
+        </button>
       </div>
 
       <Sep />
 
-      {/* 5. Tempo LCD */}
-      <div style={{ ...lcd, width: 68 }} onMouseEnter={hint('Tempo')} onMouseLeave={clear}>
-        <input
-          type="number" value={bpm}
-          onChange={e => setBpm(parseFloat(e.target.value) || 140)}
-          style={{
-            width: 50, background: 'transparent', border: 'none',
-            color: hw.textPrimary, fontSize: 14, fontWeight: 700,
-            fontFamily: "'Consolas', 'Courier New', monospace",
-            textAlign: 'right', outline: 'none',
-          }}
-        />
+      {/* 5. Tempo LCD + Tap */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+        <div style={{ ...lcd, width: 68 }} onMouseEnter={hint('Tempo')} onMouseLeave={clear}>
+          <input
+            type="number" value={bpm}
+            onChange={e => setBpm(parseFloat(e.target.value) || 140)}
+            style={{
+              width: 50, background: 'transparent', border: 'none',
+              color: hw.textPrimary, fontSize: 14, fontWeight: 700,
+              fontFamily: "'Consolas', 'Courier New', monospace",
+              textAlign: 'right', outline: 'none',
+            }}
+          />
+        </div>
+        <button onClick={tapTempo} style={{
+          ...transportBtn, width: 24, height: 24, fontSize: 8, fontWeight: 700,
+          color: hw.textMuted, letterSpacing: 0.3,
+        }} onMouseEnter={hint('Tap tempo')} onMouseLeave={clear}>
+          TAP
+        </button>
       </div>
 
       <Sep />
