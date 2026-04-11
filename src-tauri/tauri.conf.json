@@ -35,6 +35,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "test_assets/*"
+    ],
     "createUpdaterArtifacts": "v1Compatible"
   },
   "plugins": {

@@ -11,6 +11,7 @@ import { PianoRoll } from './components/piano-roll/PianoRoll'
 import { Roadmap } from './components/roadmap/Roadmap'
 import { AudioSettings } from './components/settings/AudioSettings'
 import { UpdateModal } from './components/UpdateModal'
+import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
 import { useProjectStore } from './stores/projectStore'
@@ -41,6 +42,7 @@ export function App() {
   const [showPianoRoll, setShowPianoRoll] = useState(false)
   const [showRoadmap, setShowRoadmap] = useState(false)
   const [showAudioSettings, setShowAudioSettings] = useState(false)
+  const [showDevPanel, setShowDevPanel] = useState(false) // DEV ONLY
 
   // Splash screen
   const [showSplash, setShowSplash] = useState(true)
@@ -228,6 +230,12 @@ export function App() {
           e.preventDefault()
           setShowMixer(v => !v)
           break
+        case 'KeyD': // DEV ONLY — Ctrl+Shift+D toggles dev panel
+          if (e.ctrlKey && e.shiftKey) {
+            e.preventDefault()
+            setShowDevPanel(v => !v)
+          }
+          break
       }
     }
     window.addEventListener('keydown', handler)
@@ -331,6 +339,7 @@ export function App() {
       {/* Floating detached panels */}
       {showRoadmap && <Roadmap onClose={() => setShowRoadmap(false)} />}
       {showAudioSettings && <AudioSettings onClose={() => setShowAudioSettings(false)} />}
+      {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}
 
       {/* Update modal — same pattern as Hardwave Suite */}
       {updateInfo.available && !updateInfo.dismissed && (

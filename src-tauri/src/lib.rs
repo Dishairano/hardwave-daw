@@ -77,6 +77,11 @@ pub fn run() {
             commands::midi::add_midi_note,
             commands::midi::update_midi_note,
             commands::midi::delete_midi_note,
+            // Dev panel (stripped before merge to master)
+            commands::dev::dev_dump_state,
+            commands::dev::dev_force_device_error,
+            commands::dev::dev_resolve_test_asset,
+            commands::dev::dev_list_test_assets,
         ])
         .setup(|app| {
             log::info!("Hardwave DAW starting");

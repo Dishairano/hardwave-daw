@@ -57,6 +57,8 @@ pub struct AudioDeviceManager {
     pub buffer_size: u32,
     /// Name of the selected output device (None = system default).
     pub selected_device: Option<String>,
+    /// Name of the device currently running (set after successful start()).
+    active_device_name: Option<String>,
 }
 
 impl AudioDeviceManager {
@@ -70,6 +72,7 @@ impl AudioDeviceManager {
             sample_rate: 48000,
             buffer_size: 512,
             selected_device: None,
+            active_device_name: None,
         }
     }
 
@@ -77,6 +80,22 @@ impl AudioDeviceManager {
     /// Resets the flag on read.
     pub fn take_stream_error(&self) -> bool {
         self.stream_error.swap(false, Ordering::Relaxed)
+    }
+
+    /// Non-destructive peek at the stream-error flag (for dev inspection).
+    pub fn peek_stream_error(&self) -> bool {
+        self.stream_error.load(Ordering::Relaxed)
+    }
+
+    /// Force the stream-error flag. Used by the dev panel to verify
+    /// that the engine's device-recovery path runs end-to-end.
+    pub fn inject_stream_error(&self) {
+        self.stream_error.store(true, Ordering::Relaxed);
+    }
+
+    /// Name of the device currently in use, or None if not started.
+    pub fn active_device_name(&self) -> Option<&str> {
+        self.active_device_name.as_deref()
     }
 
     /// List available input devices.
@@ -202,12 +221,14 @@ impl AudioDeviceManager {
             buffer_size: cpal::BufferSize::Fixed(self.buffer_size),
         };
 
+        let resolved_name = device.name().unwrap_or_default();
         log::info!(
             "Starting audio: device={}, sr={}, buf={}",
-            device.name().unwrap_or_default(),
+            resolved_name,
             self.sample_rate,
             self.buffer_size,
         );
+        self.active_device_name = Some(resolved_name);
 
         self.running.store(true, Ordering::Relaxed);
         self.stream_error.store(false, Ordering::Relaxed);
@@ -261,6 +282,7 @@ impl AudioDeviceManager {
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         self.output_stream = None;
+        self.active_device_name = None;
         log::info!("Audio stream stopped");
     }
 
