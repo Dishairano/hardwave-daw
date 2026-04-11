@@ -19,7 +19,12 @@ interface ToolbarProps {
 }
 
 export function Toolbar(props: ToolbarProps) {
-  const { playing, looping, bpm, positionSamples, sampleRate, togglePlayback, stop, setBpm, toggleLoop, tapTempo } = useTransportStore()
+  const {
+    playing, looping, bpm, positionSamples, sampleRate,
+    masterVolumeDb, timeSigNumerator, timeSigDenominator, patternMode,
+    togglePlayback, stop, setBpm, toggleLoop, tapTempo,
+    setMasterVolume, setTimeSignature, setPatternMode,
+  } = useTransportStore()
   const [activeTool, setActiveTool] = useState<Tool>('draw')
 
   const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
@@ -28,8 +33,9 @@ export function Toolbar(props: ToolbarProps) {
   const secs = Math.floor(seconds % 60)
   const ms = Math.floor((seconds % 1) * 1000)
   const beats = bpm > 0 ? (seconds * bpm / 60) : 0
-  const bar = Math.floor(beats / 4) + 1
-  const beat = Math.floor(beats % 4) + 1
+  const beatsPerBar = timeSigNumerator > 0 ? timeSigNumerator : 4
+  const bar = Math.floor(beats / beatsPerBar) + 1
+  const beat = Math.floor(beats % beatsPerBar) + 1
   const tick = Math.floor((beats % 1) * 960)
 
   const hint = (text: string) => () => props.onSetHint(text)
@@ -80,9 +86,9 @@ export function Toolbar(props: ToolbarProps) {
         border: `1px solid ${hw.borderDark}`,
         overflow: 'hidden', borderRadius: hw.radius.sm,
       }}>
-        <ModeBtn label="PAT" active onEnter={hint('Pattern mode')} onLeave={clear} />
+        <ModeBtn label="PAT" active={patternMode} onClick={() => setPatternMode(true)} onEnter={hint('Pattern mode')} onLeave={clear} />
         <div style={{ width: 1, background: hw.borderDark }} />
-        <ModeBtn label="SONG" active={false} onEnter={hint('Song mode')} onLeave={clear} />
+        <ModeBtn label="SONG" active={!patternMode} onClick={() => setPatternMode(false)} onEnter={hint('Song mode')} onLeave={clear} />
       </div>
 
       <Sep />
@@ -136,6 +142,31 @@ export function Toolbar(props: ToolbarProps) {
         }} onMouseEnter={hint('Tap tempo')} onMouseLeave={clear}>
           TAP
         </button>
+        <div style={{ ...lcd, padding: '0 4px', gap: 1 }} onMouseEnter={hint('Time signature')} onMouseLeave={clear}>
+          <input
+            type="number" min={1} max={32} value={timeSigNumerator}
+            onChange={e => setTimeSignature(Math.max(1, parseInt(e.target.value) || 4), timeSigDenominator)}
+            style={{
+              width: 20, background: 'transparent', border: 'none',
+              color: hw.textPrimary, fontSize: 11, fontWeight: 700,
+              fontFamily: "'Consolas', 'Courier New', monospace",
+              textAlign: 'center', outline: 'none',
+            }}
+          />
+          <span style={{ color: hw.textFaint, fontSize: 11 }}>/</span>
+          <select
+            value={timeSigDenominator}
+            onChange={e => setTimeSignature(timeSigNumerator, parseInt(e.target.value))}
+            style={{
+              background: 'transparent', border: 'none',
+              color: hw.textPrimary, fontSize: 11, fontWeight: 700,
+              fontFamily: "'Consolas', 'Courier New', monospace",
+              outline: 'none', appearance: 'none', width: 20, textAlign: 'center',
+            }}
+          >
+            {[1, 2, 4, 8, 16, 32].map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
       </div>
 
       <Sep />
@@ -247,22 +278,13 @@ export function Toolbar(props: ToolbarProps) {
       <Sep />
 
       {/* 12. Master volume */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 3 }} onMouseEnter={hint('Master volume')} onMouseLeave={clear}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 3 }} onMouseEnter={hint(`Master volume: ${masterVolumeDb.toFixed(1)} dB`)} onMouseLeave={clear}>
         <svg width="9" height="9" viewBox="0 0 9 9">
           <polygon points="0,4 3,1 3,7" fill={hw.textMuted} />
           <path d="M4.5 2.5 Q6 4.5 4.5 6.5" stroke={hw.textMuted} strokeWidth="0.8" fill="none"/>
           <path d="M5.5 1.5 Q8 4.5 5.5 7.5" stroke={hw.textMuted} strokeWidth="0.8" fill="none"/>
         </svg>
-        <div style={{
-          width: 55, height: 6, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm,
-          border: `1px solid ${hw.borderDark}`, position: 'relative',
-        }}>
-          <div style={{
-            width: '80%', height: '100%', borderRadius: hw.radius.sm,
-            background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accent})`,
-            opacity: 0.6,
-          }} />
-        </div>
+        <MasterVolumeSlider valueDb={masterVolumeDb} onChange={setMasterVolume} />
       </div>
 
       <Sep />
@@ -403,11 +425,13 @@ function PanelBtn({ icon, active, onClick, onEnter, onLeave }: {
   )
 }
 
-function ModeBtn({ label, active, onEnter, onLeave }: {
-  label: string; active: boolean; onEnter: () => void; onLeave: () => void
+function ModeBtn({ label, active, onClick, onEnter, onLeave }: {
+  label: string; active: boolean; onClick?: () => void; onEnter: () => void; onLeave: () => void
 }) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       style={{
@@ -415,11 +439,54 @@ function ModeBtn({ label, active, onEnter, onLeave }: {
         fontSize: 10, fontWeight: 700,
         color: active ? hw.textPrimary : hw.textFaint,
         background: active ? 'rgba(255,255,255,0.04)' : 'transparent',
-        cursor: 'default',
+        border: 'none',
+        cursor: onClick ? 'pointer' : 'default',
         letterSpacing: 0.5,
       }}
     >
       {label}
+    </button>
+  )
+}
+
+// Master volume slider: -60 dB .. +6 dB, drag-to-set, double-click to reset to 0 dB.
+const MASTER_MIN_DB = -60
+const MASTER_MAX_DB = 6
+function MasterVolumeSlider({ valueDb, onChange }: { valueDb: number; onChange: (db: number) => void }) {
+  const pct = Math.max(0, Math.min(1, (valueDb - MASTER_MIN_DB) / (MASTER_MAX_DB - MASTER_MIN_DB)))
+
+  const handleDrag = (e: React.MouseEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    const rect = el.getBoundingClientRect()
+    const update = (clientX: number) => {
+      const p = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+      const db = MASTER_MIN_DB + p * (MASTER_MAX_DB - MASTER_MIN_DB)
+      onChange(db)
+    }
+    update(e.clientX)
+    const move = (ev: MouseEvent) => update(ev.clientX)
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+
+  return (
+    <div
+      onMouseDown={handleDrag}
+      onDoubleClick={() => onChange(0)}
+      style={{
+        width: 55, height: 6, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm,
+        border: `1px solid ${hw.borderDark}`, position: 'relative', cursor: 'ew-resize',
+      }}
+    >
+      <div style={{
+        width: `${pct * 100}%`, height: '100%', borderRadius: hw.radius.sm,
+        background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accent})`,
+        opacity: 0.75,
+      }} />
     </div>
   )
 }

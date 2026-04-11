@@ -3,10 +3,24 @@
 //! Reads from the AudioPool based on clip positions and the current transport position.
 //! Applies track volume and pan. No allocations in the process call.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+
+use atomic_float::AtomicF32;
 
 use crate::audio_pool::{AudioBuffer, AudioPool};
 use crate::graph::{AudioNode, ProcessContext};
+
+/// Post-fader meter state shared between the audio thread and the UI thread.
+/// Using atomics so the audio thread never allocates or locks.
+#[derive(Default)]
+pub struct TrackMeterState {
+    /// Post-fader peak in dB (last processed block, no hold/decay — UI smooths).
+    pub peak_db_l: AtomicF32,
+    pub peak_db_r: AtomicF32,
+    /// Post-fader RMS in dB (mono sum, smoothed).
+    pub rms_db: AtomicF32,
+}
 
 /// Description of a clip placed on this track, used by the audio thread.
 /// This is a lightweight copy of the project-level ClipPlacement, pre-resolved
@@ -38,10 +52,14 @@ pub struct TrackNode {
     soloed: bool,
     /// Cached Arc references to audio buffers, refreshed when clips change.
     cached_buffers: Vec<Option<Arc<AudioBuffer>>>,
+    /// Shared meter state so the UI can read post-fader peaks without locking.
+    meter: Arc<TrackMeterState>,
+    /// Smoothed RMS (linear), updated each block.
+    rms_smooth: f32,
 }
 
 impl TrackNode {
-    pub fn new(name: String, pool: AudioPool) -> Self {
+    pub fn new(name: String, pool: AudioPool, meter: Arc<TrackMeterState>) -> Self {
         Self {
             name,
             pool,
@@ -51,6 +69,8 @@ impl TrackNode {
             muted: false,
             soloed: false,
             cached_buffers: Vec::new(),
+            meter,
+            rms_smooth: 0.0,
         }
     }
 
@@ -161,11 +181,14 @@ impl AudioNode for TrackNode {
             }
         }
 
-        // Apply track volume and pan
+        // Apply track volume and pan, and measure post-fader peak/RMS.
         let (pan_l, pan_r) = pan_law(self.pan);
         let vol = self.volume;
 
         let (out_left, out_rest) = outputs.split_at_mut(1);
+        let mut peak_l = 0.0_f32;
+        let mut peak_r = 0.0_f32;
+        let mut sum_sq = 0.0_f64;
         for (l, r) in out_left[0]
             .iter_mut()
             .zip(out_rest[0].iter_mut())
@@ -173,7 +196,24 @@ impl AudioNode for TrackNode {
         {
             *l *= vol * pan_l;
             *r *= vol * pan_r;
+            peak_l = peak_l.max(l.abs());
+            peak_r = peak_r.max(r.abs());
+            let mono = (*l + *r) * 0.5;
+            sum_sq += (mono as f64) * (mono as f64);
         }
+
+        // Publish post-fader meters (lock-free).
+        self.meter
+            .peak_db_l
+            .store(linear_to_db(peak_l), Ordering::Relaxed);
+        self.meter
+            .peak_db_r
+            .store(linear_to_db(peak_r), Ordering::Relaxed);
+        let rms_lin = (sum_sq / buf_size.max(1) as f64).sqrt() as f32;
+        self.rms_smooth = self.rms_smooth * 0.85 + rms_lin * 0.15;
+        self.meter
+            .rms_db
+            .store(linear_to_db(self.rms_smooth), Ordering::Relaxed);
     }
 
     fn reset(&mut self) {
@@ -194,6 +234,11 @@ fn db_to_linear(db: f64) -> f32 {
     } else {
         10.0_f64.powf(db / 20.0) as f32
     }
+}
+
+#[inline]
+fn linear_to_db(linear: f32) -> f32 {
+    (20.0 * (linear + 1e-10).log10()).clamp(-100.0, 6.0)
 }
 
 /// Constant-power pan law. Returns (left_gain, right_gain).

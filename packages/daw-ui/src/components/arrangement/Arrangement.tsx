@@ -36,7 +36,7 @@ export function Arrangement() {
   const [, forceRender] = useState(0)
 
   const { tracks, selectedClipId, selectClip, moveClip, resizeClip, getWaveformPeaks } = useTrackStore()
-  const { positionSamples, playing, bpm, sampleRate } = useTransportStore()
+  const { positionSamples, playing, bpm, sampleRate, setPosition } = useTransportStore()
 
   const audioTracks = tracks.filter(t => t.kind !== 'Master')
   const beatsPerSecond = bpm / 60
@@ -311,6 +311,14 @@ export function Arrangement() {
     const mouseY = e.clientY - rect.top
     const scrollOffset = getScrollOffset()
 
+    // Clicking the ruler strip seeks the transport to that position.
+    if (mouseY < RULER_HEIGHT) {
+      const seconds = Math.max(0, (mouseX + scrollOffset) / PIXELS_PER_SECOND)
+      const samples = Math.round(seconds * (sampleRate || 48000))
+      setPosition(samples)
+      return
+    }
+
     const hit = hitTest(mouseX, mouseY, scrollOffset)
     if (hit) {
       selectClip(hit.clip.id, hit.trackId)
@@ -336,7 +344,11 @@ export function Arrangement() {
       const hit = hitTest(mouseX, mouseY, getScrollOffset())
       const canvas = canvasRef.current
       if (canvas) {
-        canvas.style.cursor = hit ? (hit.edge === 'right' ? 'ew-resize' : 'grab') : 'default'
+        if (mouseY < RULER_HEIGHT) {
+          canvas.style.cursor = 'pointer'
+        } else {
+          canvas.style.cursor = hit ? (hit.edge === 'right' ? 'ew-resize' : 'grab') : 'default'
+        }
       }
       return
     }

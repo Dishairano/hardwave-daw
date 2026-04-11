@@ -1,28 +1,19 @@
 //! MasterNode — sums all track inputs and applies master volume.
 
 use crate::graph::{AudioNode, ProcessContext};
+use atomic_float::AtomicF64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 pub struct MasterNode {
-    volume: f32,
-}
-
-impl Default for MasterNode {
-    fn default() -> Self {
-        Self { volume: 1.0 }
-    }
+    /// dB value read from the shared transport state each process block.
+    /// Using an atomic keeps volume changes lock-free and graph-rebuild-free.
+    volume_db: Arc<AtomicF64>,
 }
 
 impl MasterNode {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn set_volume_db(&mut self, db: f64) {
-        self.volume = if db <= -100.0 {
-            0.0
-        } else {
-            10.0_f64.powf(db / 20.0) as f32
-        };
+    pub fn new(volume_db: Arc<AtomicF64>) -> Self {
+        Self { volume_db }
     }
 }
 
@@ -46,14 +37,20 @@ impl AudioNode for MasterNode {
         outputs[0].resize(buf_size, 0.0);
         outputs[1].resize(buf_size, 0.0);
 
-        // Copy inputs through (the graph already sums connected sources)
+        let db = self.volume_db.load(Ordering::Relaxed);
+        let gain = if db <= -100.0 {
+            0.0
+        } else {
+            10.0_f64.powf(db / 20.0) as f32
+        };
+
         for (i, sample) in outputs[0].iter_mut().enumerate() {
             *sample = inputs
                 .first()
                 .and_then(|ch| ch.get(i))
                 .copied()
                 .unwrap_or(0.0)
-                * self.volume;
+                * gain;
         }
         for (i, sample) in outputs[1].iter_mut().enumerate() {
             *sample = inputs
@@ -61,7 +58,7 @@ impl AudioNode for MasterNode {
                 .and_then(|ch| ch.get(i))
                 .copied()
                 .unwrap_or(0.0)
-                * self.volume;
+                * gain;
         }
     }
 }

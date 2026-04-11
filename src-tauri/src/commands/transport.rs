@@ -12,6 +12,10 @@ pub struct TransportInfo {
     bpm: f64,
     loop_start: u64,
     loop_end: u64,
+    master_volume_db: f64,
+    time_sig_numerator: u32,
+    time_sig_denominator: u32,
+    pattern_mode: bool,
 }
 
 #[tauri::command]
@@ -57,16 +61,47 @@ pub fn set_loop(state: State<AppState>, start: u64, end: u64) {
 }
 
 #[tauri::command]
+pub fn set_master_volume(state: State<AppState>, db: f64) {
+    state
+        .engine
+        .lock()
+        .send_command(TransportCommand::SetMasterVolume(db));
+}
+
+#[tauri::command]
+pub fn set_time_signature(state: State<AppState>, numerator: u32, denominator: u32) {
+    state
+        .engine
+        .lock()
+        .send_command(TransportCommand::SetTimeSignature(numerator, denominator));
+}
+
+#[tauri::command]
+pub fn set_pattern_mode(state: State<AppState>, enabled: bool) {
+    state
+        .engine
+        .lock()
+        .send_command(TransportCommand::SetPatternMode(enabled));
+}
+
+#[tauri::command]
 pub fn get_transport_state(state: State<AppState>) -> TransportInfo {
+    use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
     let t = &engine.transport;
+    let (num, den) =
+        hardwave_engine::transport::unpack_time_sig(t.time_sig.load(Ordering::Relaxed));
     TransportInfo {
         playing: t.is_playing(),
-        recording: t.recording.load(std::sync::atomic::Ordering::Relaxed),
-        looping: t.looping.load(std::sync::atomic::Ordering::Relaxed),
+        recording: t.recording.load(Ordering::Relaxed),
+        looping: t.looping.load(Ordering::Relaxed),
         position_samples: t.position(),
-        bpm: t.bpm.load(std::sync::atomic::Ordering::Relaxed),
-        loop_start: t.loop_start.load(std::sync::atomic::Ordering::Relaxed),
-        loop_end: t.loop_end.load(std::sync::atomic::Ordering::Relaxed),
+        bpm: t.bpm.load(Ordering::Relaxed),
+        loop_start: t.loop_start.load(Ordering::Relaxed),
+        loop_end: t.loop_end.load(Ordering::Relaxed),
+        master_volume_db: t.master_volume_db.load(Ordering::Relaxed),
+        time_sig_numerator: num,
+        time_sig_denominator: den,
+        pattern_mode: t.pattern_mode.load(Ordering::Relaxed),
     }
 }

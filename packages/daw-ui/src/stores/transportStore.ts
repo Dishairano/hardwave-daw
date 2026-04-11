@@ -11,6 +11,10 @@ interface TransportState {
   sampleRate: number
   loopStart: number
   loopEnd: number
+  masterVolumeDb: number
+  timeSigNumerator: number
+  timeSigDenominator: number
+  patternMode: boolean
 
   play: () => void
   stop: () => void
@@ -19,6 +23,9 @@ interface TransportState {
   setBpm: (bpm: number) => void
   toggleLoop: () => void
   setLoop: (start: number, end: number) => void
+  setMasterVolume: (db: number) => void
+  setTimeSignature: (num: number, den: number) => void
+  setPatternMode: (enabled: boolean) => void
   tapTempo: () => void
   startListening: () => void
 }
@@ -35,9 +42,13 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   sampleRate: 48000,
   loopStart: 0,
   loopEnd: 0,
+  masterVolumeDb: 0,
+  timeSigNumerator: 4,
+  timeSigDenominator: 4,
+  patternMode: false,
 
   play: () => { invoke('play'); set({ playing: true }) },
-  stop: () => { invoke('stop'); set({ playing: false }) },
+  stop: () => { invoke('stop') },
   togglePlayback: () => {
     if (get().playing) { get().stop() } else { get().play() }
   },
@@ -50,6 +61,18 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   setLoop: (start, end) => {
     invoke('set_loop', { start, end })
     set({ loopStart: start, loopEnd: end })
+  },
+  setMasterVolume: (db) => {
+    invoke('set_master_volume', { db })
+    set({ masterVolumeDb: db })
+  },
+  setTimeSignature: (num, den) => {
+    invoke('set_time_signature', { numerator: num, denominator: den })
+    set({ timeSigNumerator: num, timeSigDenominator: den })
+  },
+  setPatternMode: (enabled) => {
+    invoke('set_pattern_mode', { enabled })
+    set({ patternMode: enabled })
   },
   tapTempo: () => {
     const now = Date.now()
@@ -72,11 +95,22 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   },
 
   startListening: () => {
-    listen<{ position: number; playing: boolean; bpm: number }>('daw:transport', (event) => {
+    listen<{
+      position: number
+      playing: boolean
+      bpm: number
+      masterVolumeDb: number
+      timeSig: [number, number]
+      patternMode: boolean
+    }>('daw:transport', (event) => {
       set({
         positionSamples: event.payload.position,
         playing: event.payload.playing,
         bpm: event.payload.bpm,
+        masterVolumeDb: event.payload.masterVolumeDb,
+        timeSigNumerator: event.payload.timeSig[0],
+        timeSigDenominator: event.payload.timeSig[1],
+        patternMode: event.payload.patternMode,
       })
     })
   },

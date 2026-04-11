@@ -49,6 +49,10 @@ pub struct AudioDeviceManager {
     host: Host,
     output_stream: Option<cpal::Stream>,
     running: Arc<AtomicBool>,
+    /// Set by the cpal error callback when the device fails at runtime
+    /// (e.g. USB interface unplugged). Polled by the engine to trigger
+    /// a restart on the system default device.
+    stream_error: Arc<AtomicBool>,
     pub sample_rate: u32,
     pub buffer_size: u32,
     /// Name of the selected output device (None = system default).
@@ -62,10 +66,17 @@ impl AudioDeviceManager {
             host,
             output_stream: None,
             running: Arc::new(AtomicBool::new(false)),
+            stream_error: Arc::new(AtomicBool::new(false)),
             sample_rate: 48000,
             buffer_size: 512,
             selected_device: None,
         }
+    }
+
+    /// Whether the stream reported an error since the last check.
+    /// Resets the flag on read.
+    pub fn take_stream_error(&self) -> bool {
+        self.stream_error.swap(false, Ordering::Relaxed)
     }
 
     /// List available input devices.
@@ -199,7 +210,9 @@ impl AudioDeviceManager {
         );
 
         self.running.store(true, Ordering::Relaxed);
+        self.stream_error.store(false, Ordering::Relaxed);
         let running = Arc::clone(&self.running);
+        let stream_error = Arc::clone(&self.stream_error);
 
         let stream = device
             .build_output_stream(
@@ -214,6 +227,8 @@ impl AudioDeviceManager {
                 },
                 move |err| {
                     log::error!("Audio stream error: {}", err);
+                    // Signal the engine to restart on the default device.
+                    stream_error.store(true, Ordering::Relaxed);
                 },
                 None,
             )

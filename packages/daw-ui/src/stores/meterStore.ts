@@ -12,8 +12,16 @@ interface MeterSnapshot {
   clipped: boolean
 }
 
+interface TrackMeter {
+  peakL: number
+  peakR: number
+  rms: number
+}
+
 interface MeterState {
   master: MeterSnapshot
+  /// Per-track post-fader meters, keyed by track id.
+  tracks: Record<string, TrackMeter>
   startListening: () => void
 }
 
@@ -22,12 +30,25 @@ const DEFAULT_METER: MeterSnapshot = {
   rms_db: -100, lufs_m: null, lufs_s: null, lufs_i: null, clipped: false,
 }
 
+export const DEFAULT_TRACK_METER: TrackMeter = { peakL: -100, peakR: -100, rms: -100 }
+
 export const useMeterStore = create<MeterState>((set) => ({
   master: DEFAULT_METER,
+  tracks: {},
 
   startListening: () => {
     listen<MeterSnapshot>('daw:meters', (event) => {
       set({ master: event.payload })
     })
+    listen<Array<{ id: string; peakL: number; peakR: number; rms: number }>>(
+      'daw:trackMeters',
+      (event) => {
+        const next: Record<string, TrackMeter> = {}
+        for (const t of event.payload) {
+          next[t.id] = { peakL: t.peakL, peakR: t.peakR, rms: t.rms }
+        }
+        set({ tracks: next })
+      },
+    )
   },
 }))

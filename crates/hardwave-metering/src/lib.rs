@@ -101,11 +101,14 @@ fn make_k_filter(fs: f64) -> (BiquadFilter, BiquadFilter) {
 pub struct ChannelMeter {
     peak: f32,
     peak_hold: f32,
+    /// Samples remaining before peak_hold starts falling.
+    peak_hold_timer: u64,
     true_peak: f32,
     rms_sum: f64,
     rms_count: u64,
     rms_smooth: f32,
     clip: bool,
+    sample_rate: f64,
 
     // K-weighting for LUFS
     k_shelf_l: BiquadFilter,
@@ -123,6 +126,10 @@ pub struct ChannelMeter {
 
 const LUFS_HIST: usize = 300;
 const PEAK_DECAY_DB: f32 = 0.0625; // ~9 dB/s at 144 fps
+/// How long peak_hold stays latched after each new peak, in seconds.
+const PEAK_HOLD_SEC: f64 = 1.5;
+/// How fast peak_hold falls once the hold timer expires, in dB/second.
+const PEAK_HOLD_FALL_DB_PER_SEC: f32 = 20.0;
 
 impl ChannelMeter {
     pub fn new(sample_rate: f64) -> Self {
@@ -132,11 +139,13 @@ impl ChannelMeter {
         Self {
             peak: -100.0,
             peak_hold: -100.0,
+            peak_hold_timer: 0,
             true_peak: -100.0,
             rms_sum: 0.0,
             rms_count: 0,
             rms_smooth: 0.0,
             clip: false,
+            sample_rate,
             k_shelf_l: shelf_l,
             k_hp_l: hp_l,
             k_shelf_r: shelf_r,
@@ -190,8 +199,19 @@ impl ChannelMeter {
         // Peak (with decay)
         let peak_db = to_db(block_peak);
         self.peak = (self.peak - PEAK_DECAY_DB).max(peak_db);
-        self.peak_hold = self.peak_hold.max(peak_db);
         self.true_peak = self.true_peak.max(to_db(block_true_peak));
+
+        // Peak hold: latch on new peak, then hold for PEAK_HOLD_SEC, then fall at PEAK_HOLD_FALL_DB_PER_SEC.
+        if peak_db >= self.peak_hold {
+            self.peak_hold = peak_db;
+            self.peak_hold_timer = (PEAK_HOLD_SEC * self.sample_rate) as u64;
+        } else if self.peak_hold_timer >= n as u64 {
+            self.peak_hold_timer -= n as u64;
+        } else {
+            self.peak_hold_timer = 0;
+            let fall = PEAK_HOLD_FALL_DB_PER_SEC * (n as f32 / self.sample_rate as f32);
+            self.peak_hold = (self.peak_hold - fall).max(-100.0);
+        }
 
         // RMS
         self.rms_sum += sum_sq;
@@ -268,6 +288,7 @@ impl ChannelMeter {
     pub fn reset(&mut self) {
         self.peak = -100.0;
         self.peak_hold = -100.0;
+        self.peak_hold_timer = 0;
         self.true_peak = -100.0;
         self.rms_sum = 0.0;
         self.rms_count = 0;
@@ -288,7 +309,7 @@ impl ChannelMeter {
 // Meter snapshot (sent to UI)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Default)]
 pub struct MeterSnapshot {
     pub peak_db: f32,
     pub peak_hold_db: f32,

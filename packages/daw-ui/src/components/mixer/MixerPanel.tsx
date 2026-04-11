@@ -1,11 +1,11 @@
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
-import { useMeterStore } from '../../stores/meterStore'
+import { useMeterStore, DEFAULT_TRACK_METER } from '../../stores/meterStore'
 import { useEffect, useState, useCallback } from 'react'
 
 export function MixerPanel() {
   const { tracks, setVolume, setPan, toggleMute, toggleSolo } = useTrackStore()
-  const { master, startListening } = useMeterStore()
+  const { master, tracks: trackMeters, startListening } = useMeterStore()
   useEffect(() => { startListening() }, [])
 
   const allTracks = tracks.filter(t => t.kind !== 'Master')
@@ -25,17 +25,24 @@ export function MixerPanel() {
         overflowX: 'auto', overflowY: 'hidden',
         padding: 4, gap: 2,
       }}>
-        {allTracks.map((track, idx) => (
-          <Strip key={track.id}
-            name={track.name} color={track.color} number={idx}
-            volumeDb={track.volume_db} pan={track.pan}
-            muted={track.muted} soloed={track.soloed} peakDb={-60}
-            onVolume={db => setVolume(track.id, db)}
-            onPan={p => setPan(track.id, p)}
-            onMute={() => toggleMute(track.id)}
-            onSolo={() => toggleSolo(track.id)}
-          />
-        ))}
+        {/* dB scale ruler (once per mixer, to the left of the first strip) */}
+        {allTracks.length > 0 && <DbScale />}
+
+        {allTracks.map((track, idx) => {
+          const meter = trackMeters[track.id] ?? DEFAULT_TRACK_METER
+          return (
+            <Strip key={track.id}
+              name={track.name} color={track.color} number={idx}
+              volumeDb={track.volume_db} pan={track.pan}
+              muted={track.muted} soloed={track.soloed}
+              peakL={meter.peakL} peakR={meter.peakR} rmsDb={meter.rms}
+              onVolume={db => setVolume(track.id, db)}
+              onPan={p => setPan(track.id, p)}
+              onMute={() => toggleMute(track.id)}
+              onSolo={() => toggleSolo(track.id)}
+            />
+          )
+        })}
 
         {allTracks.length > 0 && <div style={{ width: 1, background: hw.border, margin: '0 1px', flexShrink: 0 }} />}
 
@@ -43,7 +50,10 @@ export function MixerPanel() {
           name="Master" color={hw.accent} number={-1}
           volumeDb={masterTrack?.volume_db ?? 0} pan={0}
           muted={masterTrack?.muted ?? false} soloed={false}
-          peakDb={master.peak_db} isMaster
+          peakL={master.peak_db} peakR={master.peak_db}
+          rmsDb={master.rms_db}
+          peakHoldDb={master.peak_hold_db}
+          isMaster
           onVolume={masterTrack ? db => setVolume(masterTrack.id, db) : undefined}
           onPan={() => {}} onMute={masterTrack ? () => toggleMute(masterTrack.id) : undefined}
           onSolo={() => {}}
@@ -59,20 +69,66 @@ export function MixerPanel() {
   )
 }
 
+// Meter dB range used by every strip.
+const METER_MIN_DB = -60
+const METER_MAX_DB = 6
+
+function dbToPct(db: number) {
+  const clamped = Math.max(METER_MIN_DB, Math.min(METER_MAX_DB, db))
+  return ((clamped - METER_MIN_DB) / (METER_MAX_DB - METER_MIN_DB)) * 100
+}
+
+function DbScale() {
+  const marks = [6, 0, -6, -12, -24, -36, -48, -60]
+  return (
+    <div style={{
+      width: 18, flexShrink: 0, position: 'relative',
+      display: 'flex', flexDirection: 'column',
+      paddingTop: 22 /* match color bar + header area so ticks align with meter top */,
+      paddingBottom: 30 /* dB readout + M/S row */,
+    }}>
+      {/* We align ticks to the visible meter height. The meter lives inside Strip
+          starting after: color bar (2) + header (~22) + FX slots (~42) + clip led (6+gap).
+          Easier: render ticks on a relative span that Strip layout also honors. */}
+      <div style={{ flex: 1, position: 'relative' }}>
+        {marks.map(db => {
+          // Meters in Strip occupy the "fader row" area. We map db→pct of that area.
+          const pct = 100 - dbToPct(db)
+          return (
+            <div key={db} style={{
+              position: 'absolute', right: 1, left: 0, top: `${pct}%`,
+              transform: 'translateY(-50%)',
+              display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+              gap: 2,
+            }}>
+              <span style={{ fontSize: 7, color: hw.textFaint, fontFamily: "'Consolas', monospace" }}>
+                {db > 0 ? `+${db}` : db}
+              </span>
+              <div style={{ width: 3, height: 1, background: hw.textFaint, opacity: 0.5 }} />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 interface StripProps {
   name: string; color: string; number: number
-  volumeDb: number; pan: number; muted: boolean; soloed: boolean; peakDb: number
+  volumeDb: number; pan: number; muted: boolean; soloed: boolean
+  peakL: number; peakR: number; rmsDb: number
+  peakHoldDb?: number
   isMaster?: boolean
   onVolume?: (db: number) => void; onPan: (p: number) => void
   onMute?: () => void; onSolo: () => void
 }
 
-function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster, onVolume, onMute, onSolo }: StripProps) {
-  const mH = Math.max(0, Math.min(100, (peakDb + 60) / 72 * 100))
-  const mC = peakDb > -3 ? hw.red : peakDb > -12 ? hw.yellow : hw.green
+function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rmsDb, peakHoldDb, isMaster, onVolume, onMute, onSolo }: StripProps) {
   const [clipped, setClipped] = useState(false)
   const resetClip = useCallback(() => setClipped(false), [])
-  useEffect(() => { if (peakDb >= 0) setClipped(true) }, [peakDb])
+  useEffect(() => { if (peakL >= 0 || peakR >= 0) setClipped(true) }, [peakL, peakR])
+
+  const meterColor = (db: number) => db > -3 ? hw.red : db > -12 ? hw.yellow : hw.green
 
   return (
     <div style={{
@@ -122,18 +178,39 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakDb, isMaster,
           }}
         />
         <div style={{ flex: 1, display: 'flex', gap: 2 }}>
-        {/* Dual meter */}
+        {/* Dual meter with RMS overlay */}
         <div style={{ display: 'flex', gap: 1, width: 10, flexShrink: 0 }}>
-          {[0, 1].map(ch => (
-            <div key={ch} style={{
+          {[
+            { db: peakL, label: 'L' },
+            { db: peakR, label: 'R' },
+          ].map(({ db, label }) => (
+            <div key={label} style={{
               flex: 1, background: 'rgba(255,255,255,0.03)', position: 'relative',
               border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
+              overflow: 'hidden',
             }}>
+              {/* Peak bar */}
               <div style={{
                 position: 'absolute', bottom: 0, left: 0, right: 0,
-                height: `${mH}%`, background: mC,
-                borderRadius: hw.radius.sm, transition: 'height 60ms',
+                height: `${dbToPct(db)}%`, background: meterColor(db),
+                transition: 'height 60ms',
               }} />
+              {/* RMS overlay (translucent lighter band) */}
+              <div style={{
+                position: 'absolute', bottom: 0, left: 0, right: 0,
+                height: `${dbToPct(rmsDb)}%`,
+                background: 'rgba(255,255,255,0.35)',
+                mixBlendMode: 'overlay',
+                transition: 'height 100ms',
+              }} />
+              {/* Peak-hold tick (master only — per-track meters don't track hold yet) */}
+              {peakHoldDb !== undefined && peakHoldDb > METER_MIN_DB && (
+                <div style={{
+                  position: 'absolute', left: 0, right: 0,
+                  bottom: `${dbToPct(peakHoldDb)}%`, height: 1,
+                  background: hw.textPrimary,
+                }} />
+              )}
             </div>
           ))}
         </div>

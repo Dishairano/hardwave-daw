@@ -9,12 +9,18 @@ use hardwave_audio_io::{AudioCallback, AudioDeviceManager};
 use hardwave_metering::{ChannelMeter, MeterSnapshot};
 use hardwave_plugin_host::PluginScanner;
 use hardwave_project::Project;
+use rtrb::RingBuffer;
+
+use std::collections::HashMap;
 
 use crate::audio_pool::{AudioBuffer, AudioPool};
 use crate::graph::{AudioGraph, ProcessContext};
 use crate::master_node::MasterNode;
-use crate::track_node::{ClipRegion, TrackNode};
+use crate::track_node::{ClipRegion, TrackMeterState, TrackNode};
 use crate::transport::{TransportCommand, TransportState};
+
+/// Shared per-track meter map. Rebuilt when the audio graph is rebuilt.
+pub type TrackMeterMap = Arc<Mutex<HashMap<String, Arc<TrackMeterState>>>>;
 
 /// Main DAW engine.
 pub struct DawEngine {
@@ -27,8 +33,12 @@ pub struct DawEngine {
     command_tx: Sender<EngineCommand>,
     command_rx: Receiver<EngineCommand>,
 
-    // Metering (written by audio thread, read by UI)
-    master_meter: Arc<Mutex<MeterSnapshot>>,
+    // Metering: lock-free ring buffer (audio thread → UI thread)
+    meter_consumer: Option<rtrb::Consumer<MeterSnapshot>>,
+    meter_cache: MeterSnapshot,
+
+    /// Per-track post-fader meter state, keyed by track id.
+    pub track_meters: TrackMeterMap,
 }
 
 /// Commands sent from UI thread to audio thread.
@@ -51,7 +61,9 @@ impl DawEngine {
             audio_device: AudioDeviceManager::new(),
             command_tx: tx,
             command_rx: rx,
-            master_meter: Arc::new(Mutex::new(MeterSnapshot::default())),
+            meter_consumer: None,
+            meter_cache: MeterSnapshot::default(),
+            track_meters: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -59,7 +71,6 @@ impl DawEngine {
     pub fn start(&mut self) -> Result<(), String> {
         let transport = self.transport.clone();
         let project = Arc::clone(&self.project);
-        let master_meter = Arc::clone(&self.master_meter);
         let command_rx = self.command_rx.clone();
         let audio_pool = self.audio_pool.clone();
 
@@ -70,12 +81,16 @@ impl DawEngine {
             .sample_rate
             .store(sample_rate as u64, std::sync::atomic::Ordering::Relaxed);
 
+        let (meter_producer, meter_consumer) = RingBuffer::new(16);
+        self.meter_consumer = Some(meter_consumer);
+
         let callback = EngineCallback::new(
             transport,
             project,
-            master_meter,
+            meter_producer,
             command_rx,
             audio_pool,
+            Arc::clone(&self.track_meters),
             sample_rate,
             buffer_size,
         );
@@ -120,9 +135,31 @@ impl DawEngine {
         Ok((source_id, info))
     }
 
-    /// Get the latest master meter snapshot.
-    pub fn master_meter(&self) -> MeterSnapshot {
-        self.master_meter.lock().clone()
+    /// Snapshot per-track post-fader meters.
+    pub fn track_meter_snapshots(&self) -> Vec<(String, f32, f32, f32)> {
+        use std::sync::atomic::Ordering;
+        let meters = self.track_meters.lock();
+        meters
+            .iter()
+            .map(|(id, m)| {
+                (
+                    id.clone(),
+                    m.peak_db_l.load(Ordering::Relaxed),
+                    m.peak_db_r.load(Ordering::Relaxed),
+                    m.rms_db.load(Ordering::Relaxed),
+                )
+            })
+            .collect()
+    }
+
+    /// Get the latest master meter snapshot (drains the lock-free ring buffer).
+    pub fn master_meter(&mut self) -> MeterSnapshot {
+        if let Some(ref mut consumer) = self.meter_consumer {
+            while let Ok(snapshot) = consumer.pop() {
+                self.meter_cache = snapshot;
+            }
+        }
+        self.meter_cache
     }
 
     /// Scan for plugins.
@@ -133,6 +170,23 @@ impl DawEngine {
 
     pub fn is_running(&self) -> bool {
         self.audio_device.is_running()
+    }
+
+    /// Poll for runtime device failures (e.g. USB interface disconnected) and
+    /// transparently fall back to the system default device.
+    ///
+    /// Returns `Ok(true)` if a recovery restart happened.
+    pub fn poll_audio_health(&mut self) -> Result<bool, String> {
+        if self.audio_device.take_stream_error() {
+            log::warn!("Audio stream failed; falling back to default output device");
+            self.audio_device.stop();
+            // Clear the selected-device preference so resolve_output_device()
+            // picks the current system default on restart.
+            self.audio_device.selected_device = None;
+            self.start()?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Get a reference to the audio device manager for device listing.
@@ -197,9 +251,10 @@ fn md5_hash(data: &[u8]) -> u64 {
 struct EngineCallback {
     transport: TransportState,
     project: Arc<Mutex<Project>>,
-    master_meter: Arc<Mutex<MeterSnapshot>>,
+    meter_producer: rtrb::Producer<MeterSnapshot>,
     command_rx: Receiver<EngineCommand>,
     audio_pool: AudioPool,
+    track_meters: TrackMeterMap,
     graph: AudioGraph,
     meter: ChannelMeter,
     sample_rate: u32,
@@ -207,21 +262,24 @@ struct EngineCallback {
 }
 
 impl EngineCallback {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         transport: TransportState,
         project: Arc<Mutex<Project>>,
-        master_meter: Arc<Mutex<MeterSnapshot>>,
+        meter_producer: rtrb::Producer<MeterSnapshot>,
         command_rx: Receiver<EngineCommand>,
         audio_pool: AudioPool,
+        track_meters: TrackMeterMap,
         sample_rate: u32,
         buffer_size: u32,
     ) -> Self {
         let mut cb = Self {
             transport,
             project,
-            master_meter,
+            meter_producer,
             command_rx,
             audio_pool,
+            track_meters,
             graph: AudioGraph::new(buffer_size as usize),
             meter: ChannelMeter::new(sample_rate as f64),
             sample_rate,
@@ -250,8 +308,27 @@ impl EngineCallback {
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             TransportCommand::Stop => {
-                self.transport
+                let was_playing = self
+                    .transport
                     .playing
+                    .swap(false, std::sync::atomic::Ordering::Relaxed);
+                // Double-stop behavior: if already stopped, reset to loop start (or 0).
+                if !was_playing {
+                    let loop_start = if self
+                        .transport
+                        .looping
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        self.transport
+                            .loop_start
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                    } else {
+                        0
+                    };
+                    self.transport.set_position(loop_start);
+                }
+                self.transport
+                    .recording
                     .store(false, std::sync::atomic::Ordering::Relaxed);
             }
             TransportCommand::Record => {
@@ -261,6 +338,22 @@ impl EngineCallback {
                 self.transport
                     .playing
                     .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            TransportCommand::SetMasterVolume(db) => {
+                self.transport
+                    .master_volume_db
+                    .store(db, std::sync::atomic::Ordering::Relaxed);
+            }
+            TransportCommand::SetTimeSignature(num, den) => {
+                self.transport.time_sig.store(
+                    crate::transport::pack_time_sig(num, den),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+            TransportCommand::SetPatternMode(on) => {
+                self.transport
+                    .pattern_mode
+                    .store(on, std::sync::atomic::Ordering::Relaxed);
             }
             TransportCommand::SetPosition(pos) => {
                 self.transport.set_position(pos);
@@ -307,12 +400,28 @@ impl EngineCallback {
             .iter()
             .any(|t| t.soloed && !matches!(t.kind, hardwave_project::track::TrackKind::Master));
 
+        // Reconcile the per-track meter map with the current tracks: reuse existing
+        // Arcs where possible, create new ones, drop meters for removed tracks.
+        let mut meters = self.track_meters.lock();
+        let live_ids: std::collections::HashSet<String> = project
+            .tracks
+            .iter()
+            .filter(|t| !matches!(t.kind, hardwave_project::track::TrackKind::Master))
+            .map(|t| t.id.clone())
+            .collect();
+        meters.retain(|id, _| live_ids.contains(id));
+
         for track in &project.tracks {
             if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
                 continue;
             }
 
-            let mut node = TrackNode::new(track.name.clone(), self.audio_pool.clone());
+            let meter = meters
+                .entry(track.id.clone())
+                .or_insert_with(|| Arc::new(TrackMeterState::default()))
+                .clone();
+
+            let mut node = TrackNode::new(track.name.clone(), self.audio_pool.clone(), meter);
             node.set_volume_db(track.volume_db);
             node.set_pan(track.pan);
             let effective_mute = track.muted || (any_soloed && !track.soloed && !track.solo_safe);
@@ -353,8 +462,8 @@ impl EngineCallback {
             track_node_ids.push(node_id);
         }
 
-        // Add master node
-        let master_node = MasterNode::new();
+        // Add master node (reads volume from shared transport atomic — no rebuild on change)
+        let master_node = MasterNode::new(Arc::clone(&self.transport.master_volume_db));
         let master_id = self.graph.add_node(Box::new(master_node));
 
         // Connect all track nodes → master (L→L, R→R)
@@ -387,7 +496,11 @@ impl AudioCallback for EngineCallback {
                 .transport
                 .bpm
                 .load(std::sync::atomic::Ordering::Relaxed),
-            time_sig: (4, 4),
+            time_sig: crate::transport::unpack_time_sig(
+                self.transport
+                    .time_sig
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
             position_samples: self.transport.position(),
             playing: true,
         };
@@ -420,16 +533,18 @@ impl AudioCallback for EngineCallback {
                 let right: Vec<f32> = (0..num_frames).map(|i| output[i * 2 + 1]).collect();
                 self.meter.process_block(&left, &right);
 
-                if let Some(mut snapshot) = self.master_meter.try_lock() {
-                    snapshot.peak_db = self.meter.peak_db();
-                    snapshot.peak_hold_db = self.meter.peak_hold_db();
-                    snapshot.true_peak_db = self.meter.true_peak_db();
-                    snapshot.rms_db = self.meter.rms_db();
-                    snapshot.lufs_m = self.meter.lufs_m(num_frames);
-                    snapshot.lufs_s = self.meter.lufs_s(num_frames);
-                    snapshot.lufs_i = self.meter.lufs_i();
-                    snapshot.clipped = self.meter.clipped();
-                }
+                let snapshot = MeterSnapshot {
+                    peak_db: self.meter.peak_db(),
+                    peak_hold_db: self.meter.peak_hold_db(),
+                    true_peak_db: self.meter.true_peak_db(),
+                    rms_db: self.meter.rms_db(),
+                    lufs_m: self.meter.lufs_m(num_frames),
+                    lufs_s: self.meter.lufs_s(num_frames),
+                    lufs_i: self.meter.lufs_i(),
+                    clipped: self.meter.clipped(),
+                };
+                // Lock-free push; if the consumer is behind, drop the sample.
+                let _ = self.meter_producer.push(snapshot);
             }
         } else {
             output.fill(0.0);

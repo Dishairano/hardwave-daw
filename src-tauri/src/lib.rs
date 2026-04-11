@@ -33,6 +33,9 @@ pub fn run() {
             commands::transport::set_bpm,
             commands::transport::toggle_loop,
             commands::transport::set_loop,
+            commands::transport::set_master_volume,
+            commands::transport::set_time_signature,
+            commands::transport::set_pattern_mode,
             commands::transport::get_transport_state,
             // Tracks
             commands::tracks::get_tracks,
@@ -85,17 +88,45 @@ pub fn run() {
 
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_millis(33));
+                // Check audio-device health; if the stream failed (e.g. USB unplug),
+                // the engine will transparently restart on the default device.
+                if let Err(e) = engine.lock().poll_audio_health() {
+                    log::error!("Audio health check failed: {e}");
+                }
                 let meters = engine.lock().master_meter();
                 let _ = app_handle.emit("daw:meters", &meters);
+
+                let track_meters = engine.lock().track_meter_snapshots();
+                let track_payload: Vec<_> = track_meters
+                    .into_iter()
+                    .map(|(id, pl, pr, rms)| {
+                        serde_json::json!({
+                            "id": id,
+                            "peakL": pl,
+                            "peakR": pr,
+                            "rms": rms,
+                        })
+                    })
+                    .collect();
+                let _ = app_handle.emit("daw:trackMeters", &track_payload);
 
                 let pos;
                 let playing;
                 let bpm;
+                let master_db;
+                let (num, den);
+                let pattern_mode;
                 {
+                    use std::sync::atomic::Ordering;
                     let eng = engine.lock();
                     pos = eng.transport.position();
                     playing = eng.transport.is_playing();
-                    bpm = eng.transport.bpm.load(std::sync::atomic::Ordering::Relaxed);
+                    bpm = eng.transport.bpm.load(Ordering::Relaxed);
+                    master_db = eng.transport.master_volume_db.load(Ordering::Relaxed);
+                    (num, den) = hardwave_engine::transport::unpack_time_sig(
+                        eng.transport.time_sig.load(Ordering::Relaxed),
+                    );
+                    pattern_mode = eng.transport.pattern_mode.load(Ordering::Relaxed);
                 }
                 let _ = app_handle.emit(
                     "daw:transport",
@@ -103,6 +134,9 @@ pub fn run() {
                         "position": pos,
                         "playing": playing,
                         "bpm": bpm,
+                        "masterVolumeDb": master_db,
+                        "timeSig": [num, den],
+                        "patternMode": pattern_mode,
                     }),
                 );
             });
