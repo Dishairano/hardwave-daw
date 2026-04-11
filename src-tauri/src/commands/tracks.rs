@@ -43,65 +43,91 @@ pub fn get_tracks(state: State<AppState>) -> Vec<TrackInfo> {
 #[tauri::command]
 pub fn add_audio_track(state: State<AppState>, name: String) -> String {
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    project.add_audio_track(name)
+    let id = {
+        let mut project = engine.project.lock();
+        project.add_audio_track(name)
+    };
+    engine.rebuild_graph();
+    id
 }
 
 #[tauri::command]
 pub fn add_midi_track(state: State<AppState>, name: String) -> String {
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    project.add_midi_track(name)
+    let id = {
+        let mut project = engine.project.lock();
+        project.add_midi_track(name)
+    };
+    engine.rebuild_graph();
+    id
 }
 
 #[tauri::command]
 pub fn remove_track(state: State<AppState>, track_id: String) {
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    project.remove_track(&track_id);
+    {
+        let mut project = engine.project.lock();
+        project.remove_track(&track_id);
+    }
+    engine.rebuild_graph();
 }
 
 #[tauri::command]
 pub fn set_track_volume(state: State<AppState>, track_id: String, volume_db: f64) {
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    if let Some(track) = project.track_mut(&track_id) {
-        track.volume_db = volume_db;
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.volume_db = volume_db;
+        }
     }
+    engine.rebuild_graph();
 }
 
 #[tauri::command]
 pub fn set_track_pan(state: State<AppState>, track_id: String, pan: f64) {
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    if let Some(track) = project.track_mut(&track_id) {
-        track.pan = pan;
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.pan = pan;
+        }
     }
+    engine.rebuild_graph();
 }
 
 #[tauri::command]
 pub fn toggle_mute(state: State<AppState>, track_id: String) {
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    if let Some(track) = project.track_mut(&track_id) {
-        track.muted = !track.muted;
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.muted = !track.muted;
+        }
     }
+    engine.rebuild_graph();
 }
 
 #[tauri::command]
 pub fn toggle_solo(state: State<AppState>, track_id: String) {
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    if let Some(track) = project.track_mut(&track_id) {
-        track.soloed = !track.soloed;
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.soloed = !track.soloed;
+        }
     }
+    engine.rebuild_graph();
 }
 
 #[tauri::command]
 pub fn toggle_solo_safe(state: State<AppState>, track_id: String) {
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    if let Some(track) = project.track_mut(&track_id) {
-        track.solo_safe = !track.solo_safe;
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.solo_safe = !track.solo_safe;
+        }
     }
+    engine.rebuild_graph();
 }

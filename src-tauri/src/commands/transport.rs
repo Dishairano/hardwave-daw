@@ -30,18 +30,18 @@ pub fn stop(state: State<AppState>) {
 
 #[tauri::command]
 pub fn set_position(state: State<AppState>, position: u64) {
-    state
-        .engine
-        .lock()
-        .send_command(TransportCommand::SetPosition(position));
+    let engine = state.engine.lock();
+    engine.transport.set_position(position);
+    // Also queue for the audio thread so double-stop logic stays consistent.
+    engine.send_command(TransportCommand::SetPosition(position));
 }
 
 #[tauri::command]
 pub fn set_bpm(state: State<AppState>, bpm: f64) {
-    state
-        .engine
-        .lock()
-        .send_command(TransportCommand::SetBpm(bpm));
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    engine.transport.bpm.store(bpm, Ordering::Relaxed);
+    engine.send_command(TransportCommand::SetBpm(bpm));
 }
 
 #[tauri::command]
@@ -54,34 +54,38 @@ pub fn toggle_loop(state: State<AppState>) {
 
 #[tauri::command]
 pub fn set_loop(state: State<AppState>, start: u64, end: u64) {
-    state
-        .engine
-        .lock()
-        .send_command(TransportCommand::SetLoop(start, end));
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    engine.transport.loop_start.store(start, Ordering::Relaxed);
+    engine.transport.loop_end.store(end, Ordering::Relaxed);
+    engine.send_command(TransportCommand::SetLoop(start, end));
 }
 
 #[tauri::command]
 pub fn set_master_volume(state: State<AppState>, db: f64) {
-    state
-        .engine
-        .lock()
-        .send_command(TransportCommand::SetMasterVolume(db));
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    engine.transport.master_volume_db.store(db, Ordering::Relaxed);
+    engine.send_command(TransportCommand::SetMasterVolume(db));
 }
 
 #[tauri::command]
 pub fn set_time_signature(state: State<AppState>, numerator: u32, denominator: u32) {
-    state
-        .engine
-        .lock()
-        .send_command(TransportCommand::SetTimeSignature(numerator, denominator));
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    engine.transport.time_sig.store(
+        hardwave_engine::transport::pack_time_sig(numerator, denominator),
+        Ordering::Relaxed,
+    );
+    engine.send_command(TransportCommand::SetTimeSignature(numerator, denominator));
 }
 
 #[tauri::command]
 pub fn set_pattern_mode(state: State<AppState>, enabled: bool) {
-    state
-        .engine
-        .lock()
-        .send_command(TransportCommand::SetPatternMode(enabled));
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    engine.transport.pattern_mode.store(enabled, Ordering::Relaxed);
+    engine.send_command(TransportCommand::SetPatternMode(enabled));
 }
 
 #[tauri::command]
