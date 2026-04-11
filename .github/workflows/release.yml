@@ -93,11 +93,17 @@ jobs:
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.7
+        continue-on-error: true
 
       - name: Configure sccache
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          if sccache --start-server 2>/dev/null; then
+            echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "sccache available"
+          else
+            echo "sccache unavailable, building without cache"
+          fi
         shell: bash
 
       - name: Install Linux dependencies
