@@ -33,15 +33,24 @@ while IFS= read -r hash || [[ -n "$hash" ]]; do
   SUBJECT=$(git log -1 --format="%s" "$hash")
   BODY=$(git log -1 --format="%b" "$hash")
 
-  # Skip version bump commits
-  [[ "$SUBJECT" =~ ^(Release|v[0-9]) ]] && continue
+  # Skip internal commits (version bumps, CI fixes, formatting, refactors)
+  [[ "$SUBJECT" =~ ^(Release|v[0-9]|Fix\ rust|Fix\ clippy|Fix\ fmt|Merge) ]] && continue
 
   # Extract bullet points from body
   BULLETS=$(echo "$BODY" | grep '^\s*[-*]' | sed 's/^\s*//' || true)
 
+  # Filter out technical/internal bullets
+  if [ -n "$BULLETS" ]; then
+    BULLETS=$(echo "$BULLETS" | grep -iv \
+      -e 'rustfmt\|clippy\|sccache\|RUSTC_WRAPPER\|tformat\|trailing newline' \
+      -e 'continue-on-error\|GITHUB_OUTPUT\|read loop\|non-zero' \
+      -e 'cache\|fallback\|frontend\|exposes\|state now' \
+      -e '^- Backend:\|^- Root cause:\|^- Fix ' || true)
+  fi
+
   if [ -n "$BULLETS" ]; then
     CHANGELOG="${CHANGELOG}${BULLETS}"$'\n'
-  else
+  elif ! echo "$SUBJECT" | grep -qiE 'fmt|clippy|sccache|ci|rustfmt|changelog|fallback|cache'; then
     CHANGELOG="${CHANGELOG}- ${SUBJECT}"$'\n'
   fi
 done < <(

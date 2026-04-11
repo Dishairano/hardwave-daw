@@ -139,20 +139,25 @@ jobs:
           args: --target ${{ matrix.target }}
 
   discord-changelog:
-    needs: [build, changelog]
+    needs: [build]
     runs-on: ubuntu-latest
     if: success()
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Post Discord changelog
-        if: env.DISCORD_WEBHOOK_URL != ''
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           VERSION: ${{ github.ref_name }}
-          RELEASE_BODY: ${{ needs.changelog.outputs.body }}
         run: |
-          # Extract bullet points from the changelog body
-          CHANGES=$(echo "$RELEASE_BODY" | grep '^\s*[-*]' | sed 's/^\s*[-*]\s*/• /' | head -15)
+          # Read changelog directly from the annotated tag
+          CHANGES=$(git tag -l --format='%(contents)' "$VERSION" 2>/dev/null \
+            | grep '^\s*[-*]' \
+            | sed 's/^\s*[-*]\s*/• /' \
+            | head -15)
 
           if [ -z "$CHANGES" ]; then
             CHANGES="• Bug fixes and improvements"
