@@ -1,15 +1,15 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo } from '../../stores/trackStore'
-import { useTransportStore } from '../../stores/transportStore'
+import { useTransportStore, snapToTicks } from '../../stores/transportStore'
 import { hw } from '../../theme'
 
 const PPQ = 960
-const PIXELS_PER_SECOND = 100
+const PIXELS_PER_SECOND_BASE = 100
 const RESIZE_HANDLE_PX = 6
 const RULER_HEIGHT = 22
 
-type DragMode = 'none' | 'move' | 'resize-right'
+type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left'
 
 interface DragState {
   mode: DragMode
@@ -35,12 +35,19 @@ export function Arrangement() {
   const [, forceRender] = useState(0)
 
   const { tracks, selectedClipId, selectClip, moveClip, resizeClip, getWaveformPeaks } = useTrackStore()
-  const { positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd, trackHeight, setTrackHeight } = useTransportStore()
+  const {
+    positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
+    trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
+    clipColorOverrides,
+  } = useTransportStore()
 
   const audioTracks = tracks.filter(t => t.kind !== 'Master')
+  const PIXELS_PER_SECOND = PIXELS_PER_SECOND_BASE * horizontalZoom
   const beatsPerSecond = bpm / 60
   const pixelsPerBeat = PIXELS_PER_SECOND / beatsPerSecond
   const pixelsPerTick = pixelsPerBeat / PPQ
+  const snapTicks = snapToTicks(snapValue, snapEnabled)
+  const applySnap = (ticks: number): number => snapTicks > 0 ? Math.round(ticks / snapTicks) * snapTicks : ticks
 
   // Load waveforms
   useEffect(() => {
@@ -94,7 +101,7 @@ export function Arrangement() {
     ctx.lineTo(w, RULER_HEIGHT)
     ctx.stroke()
 
-    // Beat grid
+    // Beat grid + snap subdivisions
     const startBeat = Math.floor(scrollOffset / pixelsPerBeat)
     for (let i = startBeat; i < startBeat + Math.ceil(w / pixelsPerBeat) + 2; i++) {
       const x = i * pixelsPerBeat - scrollOffset
@@ -129,6 +136,27 @@ export function Arrangement() {
       }
     }
 
+    // Sub-beat snap grid — only when snap is finer than 1/4 and lines won't be too dense
+    if (snapTicks > 0 && snapTicks < PPQ) {
+      const snapPx = snapTicks * pixelsPerTick
+      if (snapPx >= 4) {
+        const startN = Math.floor(scrollOffset / snapPx)
+        const endN = startN + Math.ceil(w / snapPx) + 2
+        ctx.strokeStyle = 'rgba(255,255,255,0.015)'
+        ctx.lineWidth = 0.5
+        for (let i = startN; i < endN; i++) {
+          const x = i * snapPx - scrollOffset
+          if (x < -1 || x > w + 1) continue
+          // Don't redraw over beat lines
+          if (Math.abs((i * snapTicks) % PPQ) < 0.5) continue
+          ctx.beginPath()
+          ctx.moveTo(x, RULER_HEIGHT)
+          ctx.lineTo(x, h)
+          ctx.stroke()
+        }
+      }
+    }
+
     // Track lane backgrounds
     for (let i = 0; i < audioTracks.length; i++) {
       const y = RULER_HEIGHT + i * trackHeight
@@ -147,10 +175,11 @@ export function Arrangement() {
     for (let i = 0; i < audioTracks.length; i++) {
       const y = RULER_HEIGHT + i * trackHeight
       const track = audioTracks[i]
-      const clipColor = CLIP_COLORS[i % CLIP_COLORS.length]
+      const defaultColor = CLIP_COLORS[i % CLIP_COLORS.length]
 
       for (const clip of track.clips) {
-        drawClip(ctx, clip, clipColor, y, scrollOffset, w, pixelsPerTick)
+        const color = clipColorOverrides[clip.id] || defaultColor
+        drawClip(ctx, clip, color, y, scrollOffset, w, pixelsPerTick)
       }
     }
 
@@ -226,7 +255,7 @@ export function Arrangement() {
       ctx.fill()
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, looping, loopStart, loopEnd, trackHeight])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -324,7 +353,7 @@ export function Arrangement() {
 
   // Hit test
   const hitTest = useCallback((mouseX: number, mouseY: number, scrollOffset: number): {
-    clip: ClipInfo, trackId: string, edge: 'body' | 'right'
+    clip: ClipInfo, trackId: string, edge: 'body' | 'left' | 'right'
   } | null => {
     for (let i = 0; i < audioTracks.length; i++) {
       const y = RULER_HEIGHT + i * trackHeight
@@ -334,13 +363,15 @@ export function Arrangement() {
         const clipX = clip.position_ticks * pixelsPerTick - scrollOffset
         const clipW = clip.length_ticks * pixelsPerTick
         if (mouseX >= clipX && mouseX <= clipX + clipW) {
-          const edge = (mouseX > clipX + clipW - RESIZE_HANDLE_PX) ? 'right' : 'body'
+          let edge: 'body' | 'left' | 'right' = 'body'
+          if (mouseX > clipX + clipW - RESIZE_HANDLE_PX) edge = 'right'
+          else if (mouseX < clipX + RESIZE_HANDLE_PX) edge = 'left'
           return { clip, trackId: track.id, edge }
         }
       }
     }
     return null
-  }, [audioTracks, pixelsPerTick])
+  }, [audioTracks, pixelsPerTick, trackHeight])
 
   const getScrollOffset = useCallback(() => {
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
@@ -367,7 +398,7 @@ export function Arrangement() {
     if (hit) {
       selectClip(hit.clip.id, hit.trackId)
       dragRef.current = {
-        mode: hit.edge === 'right' ? 'resize-right' : 'move',
+        mode: hit.edge === 'right' ? 'resize-right' : hit.edge === 'left' ? 'resize-left' : 'move',
         clipId: hit.clip.id,
         trackId: hit.trackId,
         startMouseX: mouseX,
@@ -391,7 +422,9 @@ export function Arrangement() {
         if (mouseY < RULER_HEIGHT) {
           canvas.style.cursor = 'pointer'
         } else {
-          canvas.style.cursor = hit ? (hit.edge === 'right' ? 'ew-resize' : 'grab') : 'default'
+          canvas.style.cursor = hit
+            ? (hit.edge === 'right' || hit.edge === 'left' ? 'ew-resize' : 'grab')
+            : 'default'
         }
       }
       return
@@ -402,16 +435,25 @@ export function Arrangement() {
     const dx = mouseX - drag.startMouseX
     const dTicks = Math.round(dx / pixelsPerTick)
 
+    const minLen = snapTicks > 0 ? snapTicks : PPQ
+
     if (drag.mode === 'move') {
       const newPos = Math.max(0, drag.originalPositionTicks + dTicks)
-      const snapped = Math.round(newPos / PPQ) * PPQ
-      moveClip(drag.trackId, drag.clipId, snapped)
+      moveClip(drag.trackId, drag.clipId, applySnap(newPos))
     } else if (drag.mode === 'resize-right') {
-      const newLen = Math.max(PPQ, drag.originalLengthTicks + dTicks)
-      const snapped = Math.round(newLen / PPQ) * PPQ
-      resizeClip(drag.trackId, drag.clipId, snapped)
+      const newLen = Math.max(minLen, drag.originalLengthTicks + dTicks)
+      resizeClip(drag.trackId, drag.clipId, applySnap(newLen))
+    } else if (drag.mode === 'resize-left') {
+      // Keep the right edge anchored; shift position and shrink length.
+      const rightEdge = drag.originalPositionTicks + drag.originalLengthTicks
+      let newPos = Math.max(0, drag.originalPositionTicks + dTicks)
+      newPos = applySnap(newPos)
+      if (newPos > rightEdge - minLen) newPos = rightEdge - minLen
+      const newLen = rightEdge - newPos
+      moveClip(drag.trackId, drag.clipId, newPos)
+      resizeClip(drag.trackId, drag.clipId, newLen)
     }
-  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, resizeClip])
+  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, resizeClip, snapTicks])
 
   const handleMouseUp = useCallback(() => {
     dragRef.current = null
@@ -423,8 +465,15 @@ export function Arrangement() {
       e.preventDefault()
       const delta = e.deltaY < 0 ? 8 : -8
       setTrackHeight(trackHeight + delta)
+      return
     }
-  }, [trackHeight, setTrackHeight])
+    // Ctrl+Wheel: horizontal zoom
+    if (e.ctrlKey) {
+      e.preventDefault()
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
+      setHorizontalZoom(horizontalZoom * factor)
+    }
+  }, [trackHeight, setTrackHeight, horizontalZoom, setHorizontalZoom])
 
   // Drag-and-drop
   const [dropHighlight, setDropHighlight] = useState(false)

@@ -2,6 +2,39 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
+export type SnapValue =
+  | 'Off' | '1/1' | '1/2' | '1/4' | '1/8' | '1/16' | '1/32' | '1/64'
+  | '1/4T' | '1/8T' | '1/16T' | '1/4D' | '1/8D'
+
+export const SNAP_VALUES: SnapValue[] = [
+  'Off', '1/1', '1/2', '1/4', '1/8', '1/16', '1/32', '1/64',
+  '1/4T', '1/8T', '1/16T', '1/4D', '1/8D',
+]
+
+const PPQ_TICKS = 960
+// Returns tick count for a given snap value, or 0 when snap is disabled.
+export function snapToTicks(snap: SnapValue, enabled: boolean): number {
+  if (!enabled || snap === 'Off') return 0
+  const base: Record<string, number> = {
+    '1/1': PPQ_TICKS * 4,
+    '1/2': PPQ_TICKS * 2,
+    '1/4': PPQ_TICKS,
+    '1/8': PPQ_TICKS / 2,
+    '1/16': PPQ_TICKS / 4,
+    '1/32': PPQ_TICKS / 8,
+    '1/64': PPQ_TICKS / 16,
+  }
+  if (snap.endsWith('T')) {
+    const root = snap.slice(0, -1)
+    return Math.round((base[root] || PPQ_TICKS) * 2 / 3)
+  }
+  if (snap.endsWith('D')) {
+    const root = snap.slice(0, -1)
+    return Math.round((base[root] || PPQ_TICKS) * 3 / 2)
+  }
+  return base[snap] || PPQ_TICKS
+}
+
 interface TransportState {
   playing: boolean
   recording: boolean
@@ -16,6 +49,10 @@ interface TransportState {
   timeSigDenominator: number
   patternMode: boolean
   trackHeight: number
+  snapValue: SnapValue
+  snapEnabled: boolean
+  horizontalZoom: number
+  clipColorOverrides: Record<string, string>
 
   play: () => void
   stop: () => void
@@ -28,6 +65,11 @@ interface TransportState {
   setTimeSignature: (num: number, den: number) => void
   setPatternMode: (enabled: boolean) => void
   setTrackHeight: (height: number) => void
+  setSnapValue: (v: SnapValue) => void
+  toggleSnap: () => void
+  setHorizontalZoom: (z: number) => void
+  zoomToFit: () => void
+  setClipColor: (clipId: string, color: string | null) => void
   tapTempo: () => void
   startListening: () => void
 }
@@ -49,6 +91,10 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   timeSigDenominator: 4,
   patternMode: false,
   trackHeight: 56,
+  snapValue: '1/4',
+  snapEnabled: true,
+  horizontalZoom: 1,
+  clipColorOverrides: {},
 
   play: () => { invoke('play'); set({ playing: true }) },
   stop: () => { invoke('stop') },
@@ -78,6 +124,15 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     set({ patternMode: enabled })
   },
   setTrackHeight: (height) => set({ trackHeight: Math.min(200, Math.max(24, height)) }),
+  setSnapValue: (v) => set({ snapValue: v, snapEnabled: v !== 'Off' ? true : false }),
+  toggleSnap: () => set(s => ({ snapEnabled: !s.snapEnabled })),
+  setHorizontalZoom: (z) => set({ horizontalZoom: Math.max(0.1, Math.min(16, z)) }),
+  zoomToFit: () => set({ horizontalZoom: 1 }),
+  setClipColor: (clipId, color) => set(s => {
+    const next = { ...s.clipColorOverrides }
+    if (color == null) delete next[clipId]; else next[clipId] = color
+    return { clipColorOverrides: next }
+  }),
   tapTempo: () => {
     const now = Date.now()
     if (tapTimes.length > 0 && now - tapTimes[tapTimes.length - 1] > TAP_WINDOW_MS) {

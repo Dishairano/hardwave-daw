@@ -10,6 +10,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { devDumpState, devForceDeviceError, devResolveTestAsset, queryTestId, getMeterDb, clickCanvas, simulateKey, type DevState } from './devApi'
+import { useTransportStore, snapToTicks } from '../stores/transportStore'
 
 export type TestKind = 'AUTO' | 'MANUAL'
 export type TestStatus = 'idle' | 'running' | 'pass' | 'fail'
@@ -1801,6 +1802,146 @@ export const TESTS: TestDef[] = [
       const ok = masters === 1 && audios === 0
       log(ok ? 'pass' : 'fail', 'tracks', { expected: '1 master / 0 audio', actual: `${masters}/${audios}` })
       return { pass: ok, note: `${masters} master, ${audios} audio` }
+    },
+  },
+
+  // -------------------------------------------------------------------------
+  // Phase 2 Round 1 — Foundation (snap, zoom, left-edge resize, clip color)
+  // -------------------------------------------------------------------------
+  {
+    id: 'p2r1_snap_ticks_math',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Snap value math',
+    title: 'snapToTicks returns correct PPQ multiples for all divisions',
+    instructions: 'Unit-level check that snap value → tick conversion is correct for plain, triplet, and dotted divisions.',
+    run: async ({ log }) => {
+      const checks: Array<[string, number]> = [
+        ['1/4', 960], ['1/8', 480], ['1/16', 240], ['1/1', 3840],
+        ['1/4T', 640], ['1/8T', 320],
+        ['1/4D', 1440], ['1/8D', 720],
+      ]
+      for (const [v, expected] of checks) {
+        const got = snapToTicks(v as any, true)
+        if (got !== expected) {
+          log('fail', `snapToTicks(${v})`, { expected, actual: got })
+          return { pass: false, note: `${v} → ${got}, expected ${expected}` }
+        }
+      }
+      if (snapToTicks('Off', true) !== 0) return { pass: false, note: 'Off must yield 0' }
+      if (snapToTicks('1/4', false) !== 0) return { pass: false, note: 'disabled must yield 0' }
+      log('pass', 'all snap divisions correct')
+      return { pass: true, note: 'plain + triplet + dotted all match' }
+    },
+  },
+  {
+    id: 'p2r1_snap_toggle',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Snap toggle',
+    title: 'toggleSnap flips snapEnabled boolean',
+    instructions: 'Calling toggleSnap must invert the snapEnabled flag.',
+    run: async ({ log }) => {
+      const s = useTransportStore.getState()
+      const before = s.snapEnabled
+      s.toggleSnap()
+      const mid = useTransportStore.getState().snapEnabled
+      s.toggleSnap()
+      const after = useTransportStore.getState().snapEnabled
+      const ok = mid === !before && after === before
+      log(ok ? 'pass' : 'fail', 'toggle', { expected: `${!before}→${before}`, actual: `${mid}→${after}` })
+      return { pass: ok, note: ok ? 'toggled twice, restored' : 'toggle did not invert' }
+    },
+  },
+  {
+    id: 'p2r1_set_snap_value_off',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Snap value selector',
+    title: 'setSnapValue("Off") disables snap; other values enable it',
+    instructions: 'Selecting Off in the dropdown must disable snap; selecting any division must enable it.',
+    run: async ({ log }) => {
+      const s = useTransportStore.getState()
+      s.setSnapValue('Off')
+      const off = useTransportStore.getState()
+      s.setSnapValue('1/8')
+      const on = useTransportStore.getState()
+      const ok = off.snapEnabled === false && on.snapEnabled === true && on.snapValue === '1/8'
+      log(ok ? 'pass' : 'fail', 'state', { expected: 'Off→disabled, 1/8→enabled', actual: `${off.snapEnabled}/${on.snapEnabled} v=${on.snapValue}` })
+      // Restore default
+      useTransportStore.getState().setSnapValue('1/4')
+      return { pass: ok, note: 'Off disables, division enables' }
+    },
+  },
+  {
+    id: 'p2r1_snap_dropdown_in_dom',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Snap value selector',
+    title: 'Snap dropdown is rendered with all 13 values',
+    instructions: 'Toolbar must expose a snap-select element containing every SnapValue option.',
+    run: async ({ log }) => {
+      const el = queryTestId('snap-select') as HTMLSelectElement | null
+      if (!el) return { pass: false, note: 'snap-select testid missing' }
+      const count = el.options.length
+      const ok = count === 13
+      log(ok ? 'pass' : 'fail', 'option count', { expected: 13, actual: count })
+      return { pass: ok, note: `${count} options` }
+    },
+  },
+  {
+    id: 'p2r1_horizontal_zoom_clamp',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Horizontal zoom',
+    title: 'setHorizontalZoom clamps to [0.1, 16]',
+    instructions: 'Out-of-range zoom values must be clamped instead of rejected.',
+    run: async ({ log }) => {
+      const s = useTransportStore.getState()
+      const before = s.horizontalZoom
+      s.setHorizontalZoom(100)
+      const hi = useTransportStore.getState().horizontalZoom
+      s.setHorizontalZoom(0.001)
+      const lo = useTransportStore.getState().horizontalZoom
+      useTransportStore.getState().setHorizontalZoom(before)
+      const ok = hi === 16 && lo === 0.1
+      log(ok ? 'pass' : 'fail', 'clamps', { expected: 'hi=16, lo=0.1', actual: `hi=${hi}, lo=${lo}` })
+      return { pass: ok, note: `hi=${hi}, lo=${lo}` }
+    },
+  },
+  {
+    id: 'p2r1_zoom_to_fit_resets',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Zoom-to-fit button',
+    title: 'zoomToFit resets horizontalZoom to 1.0',
+    instructions: 'After zooming in, zoomToFit must return horizontalZoom to the default 1.0.',
+    run: async ({ log }) => {
+      const s = useTransportStore.getState()
+      s.setHorizontalZoom(5)
+      s.zoomToFit()
+      const z = useTransportStore.getState().horizontalZoom
+      const ok = z === 1
+      log(ok ? 'pass' : 'fail', 'zoom', { expected: 1, actual: z })
+      return { pass: ok, note: `zoom=${z}` }
+    },
+  },
+  {
+    id: 'p2r1_clip_color_override_roundtrip',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip color override',
+    title: 'setClipColor stores override; passing null clears it',
+    instructions: 'Setting a hex color then clearing with null must leave the override map clean.',
+    run: async ({ log }) => {
+      const s = useTransportStore.getState()
+      s.setClipColor('test-clip-xyz', '#abcdef')
+      const set1 = useTransportStore.getState().clipColorOverrides['test-clip-xyz']
+      s.setClipColor('test-clip-xyz', null)
+      const set2 = useTransportStore.getState().clipColorOverrides['test-clip-xyz']
+      const ok = set1 === '#abcdef' && set2 === undefined
+      log(ok ? 'pass' : 'fail', 'override', { expected: '#abcdef then undefined', actual: `${set1} → ${set2}` })
+      return { pass: ok, note: 'set + clear round-trip' }
     },
   },
 ]

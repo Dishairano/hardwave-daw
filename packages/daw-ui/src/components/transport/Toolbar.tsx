@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { hw } from '../../theme'
-import { useTransportStore } from '../../stores/transportStore'
+import { useTransportStore, SNAP_VALUES } from '../../stores/transportStore'
 
 type Tool = 'draw' | 'paint' | 'delete' | 'mute' | 'slip' | 'slice' | 'select' | 'zoom'
 
@@ -24,6 +24,8 @@ export function Toolbar(props: ToolbarProps) {
     masterVolumeDb, timeSigNumerator, timeSigDenominator, patternMode,
     togglePlayback, stop, setBpm, toggleLoop, tapTempo,
     setMasterVolume, setTimeSignature, setPatternMode,
+    snapValue, snapEnabled, setSnapValue, toggleSnap,
+    horizontalZoom, setHorizontalZoom, zoomToFit,
   } = useTransportStore()
   const [activeTool, setActiveTool] = useState<Tool>('draw')
 
@@ -210,15 +212,43 @@ export function Toolbar(props: ToolbarProps) {
       <Sep />
 
       {/* 8. Snap */}
-      <div style={{ ...lcd, padding: '0 6px', cursor: 'default' }} onMouseEnter={hint('Global snap')} onMouseLeave={clear}>
-        <svg width="8" height="8" viewBox="0 0 8 8" style={{ marginRight: 3 }}>
-          <path d="M1 7V1h6" stroke={hw.textMuted} strokeWidth="0.8" fill="none"/>
-          <circle cx="4" cy="4" r="1.5" fill={hw.textMuted}/>
-        </svg>
-        <span style={{ fontSize: 10, color: hw.textSecondary }}>Line</span>
-        <svg width="7" height="5" viewBox="0 0 7 5" style={{ marginLeft: 3 }}>
-          <path d="M0.5 0.5L3.5 4L6.5 0.5" stroke={hw.textMuted} strokeWidth="1" fill="none" />
-        </svg>
+      <div style={{ ...lcd, padding: '0 4px', gap: 3 }} onMouseEnter={hint(`Snap: ${snapEnabled ? snapValue : 'Off'}`)} onMouseLeave={clear}>
+        <button
+          onClick={toggleSnap}
+          title="Toggle snap"
+          style={{
+            width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: snapEnabled ? hw.accentDim : 'transparent',
+            border: `1px solid ${snapEnabled ? hw.accentGlow : 'transparent'}`,
+            borderRadius: hw.radius.sm, color: snapEnabled ? hw.accent : hw.textMuted, padding: 0,
+          }}
+        >
+          <svg width="8" height="8" viewBox="0 0 8 8">
+            <path d="M1 7V1h6" stroke="currentColor" strokeWidth="0.9" fill="none"/>
+            <circle cx="4" cy="4" r="1.3" fill="currentColor"/>
+          </svg>
+        </button>
+        <select
+          value={snapValue}
+          onChange={e => setSnapValue(e.target.value as any)}
+          data-testid="snap-select"
+          style={{
+            background: 'transparent', border: 'none', color: hw.textSecondary,
+            fontSize: 10, fontFamily: "'Consolas', 'Courier New', monospace", outline: 'none',
+            padding: '0 2px', appearance: 'none', cursor: 'pointer', minWidth: 38,
+          }}
+        >
+          {SNAP_VALUES.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+      </div>
+
+      <Sep />
+
+      {/* 8b. Horizontal zoom */}
+      <div style={{ ...lcd, padding: '0 2px', gap: 1 }} onMouseEnter={hint(`Zoom: ${horizontalZoom.toFixed(2)}x`)} onMouseLeave={clear}>
+        <button onClick={() => setHorizontalZoom(horizontalZoom / 1.25)} style={zoomBtn} title="Zoom out">−</button>
+        <button onClick={zoomToFit} data-testid="zoom-to-fit" style={{ ...zoomBtn, fontSize: 8, letterSpacing: 0.3 }} title="Zoom to fit">FIT</button>
+        <button onClick={() => setHorizontalZoom(horizontalZoom * 1.25)} style={zoomBtn} title="Zoom in">+</button>
       </div>
 
       <Sep />
@@ -514,6 +544,13 @@ const lcd: React.CSSProperties = {
   borderRadius: 6,
   height: 26,
   padding: '0 4px',
+}
+
+const zoomBtn: React.CSSProperties = {
+  width: 18, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
+  background: 'transparent', border: 'none', color: '#a1a1aa',
+  fontSize: 11, fontWeight: 700, fontFamily: "'Consolas', 'Courier New', monospace",
+  cursor: 'pointer', padding: 0,
 }
 
 const lcdDigit: React.CSSProperties = {
