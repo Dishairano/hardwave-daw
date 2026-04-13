@@ -86,6 +86,20 @@ export async function devResolveTestAsset(name: string): Promise<string> {
   return invoke<string>('dev_resolve_test_asset', { name })
 }
 
+/** Simulate a keyboard event on the window. */
+export function simulateKey(code: string, opts?: { ctrlKey?: boolean; shiftKey?: boolean; metaKey?: boolean }) {
+  const event = new KeyboardEvent('keydown', {
+    code,
+    key: code.replace('Key', '').toLowerCase(),
+    bubbles: true,
+    cancelable: true,
+    ctrlKey: opts?.ctrlKey ?? false,
+    shiftKey: opts?.shiftKey ?? false,
+    metaKey: opts?.metaKey ?? false,
+  })
+  window.dispatchEvent(event)
+}
+
 /** Query a DOM element by data-testid. */
 export function queryTestId(id: string): HTMLElement | null {
   return document.querySelector(`[data-testid="${id}"]`)

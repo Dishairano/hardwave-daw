@@ -294,11 +294,11 @@ export function App() {
       />
 
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {showBrowser && <Browser />}
+        {showBrowser && <div data-testid="panel-browser"><Browser /></div>}
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {showChannelRack && (
-            <div style={{
+            <div data-testid="panel-channel-rack" style={{
               flex: showPlaylist ? undefined : 1,
               height: showPlaylist ? '55%' : undefined,
               minHeight: 120,
@@ -309,7 +309,7 @@ export function App() {
           )}
 
           {showPianoRoll && (
-            <div style={{
+            <div data-testid="panel-piano-roll" style={{
               flex: 1, minHeight: 200,
               borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
             }}>
@@ -318,14 +318,14 @@ export function App() {
           )}
 
           {showPlaylist && (
-            <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
+            <div data-testid="panel-playlist" style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
               <TrackList />
               <Arrangement />
             </div>
           )}
 
           {showMixer && (
-            <div style={{
+            <div data-testid="panel-mixer" style={{
               height: (showPlaylist || showChannelRack || showPianoRoll) ? 220 : 'auto',
               flex: (showPlaylist || showChannelRack || showPianoRoll) ? undefined : 1,
               borderTop: `1px solid ${hw.borderDark}`,

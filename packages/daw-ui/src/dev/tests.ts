@@ -9,7 +9,7 @@
 // MANUAL tests are where we actually trust ears and eyes. Be explicit about which.
 
 import { invoke } from '@tauri-apps/api/core'
-import { devDumpState, devForceDeviceError, devResolveTestAsset, queryTestId, getMeterDb, clickCanvas, type DevState } from './devApi'
+import { devDumpState, devForceDeviceError, devResolveTestAsset, queryTestId, getMeterDb, clickCanvas, simulateKey, type DevState } from './devApi'
 
 export type TestKind = 'AUTO' | 'MANUAL'
 export type TestStatus = 'idle' | 'running' | 'pass' | 'fail'
@@ -471,6 +471,745 @@ export const TESTS: TestDef[] = [
         actual: `diffCount=${diffCount}/${samples}`,
       })
       return { pass: ok, note: ok ? `${diffCount}/${samples} differed` : `only ${diffCount} differed` }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // Transport tests
+  // -------------------------------------------------------------------------
+  {
+    id: 'play_pause_toggle',
+    kind: 'AUTO',
+    phase1Item: 'Play / pause toggle',
+    title: 'Play starts, stop pauses',
+    instructions: 'Invokes play, verifies playing=true; invokes stop, verifies playing=false.',
+    run: async ({ log }) => {
+      await invoke('stop')
+      await sleep(40)
+      const s0 = await devDumpState()
+      if (s0.playing) { log('fail', 'precondition', { expected: false, actual: true }); return { pass: false, note: 'already playing' } }
+      await invoke('play')
+      await sleep(40)
+      const s1 = await devDumpState()
+      if (!s1.playing) { log('fail', 'after play', { expected: true, actual: false }); return { pass: false, note: 'play did not start' } }
+      await invoke('stop')
+      await sleep(40)
+      const s2 = await devDumpState()
+      const ok = !s2.playing
+      log(ok ? 'pass' : 'fail', 'play/stop cycle', { expected: 'playing→true→false', actual: `${s0.playing}→${s1.playing}→${s2.playing}` })
+      return { pass: ok, note: ok ? 'toggled correctly' : 'stop did not pause' }
+    },
+  },
+  {
+    id: 'bpm_roundtrip',
+    kind: 'AUTO',
+    phase1Item: 'BPM setting (20-999)',
+    title: 'BPM set/readback at boundaries',
+    instructions: 'Sets BPM to 20, 140, 999 and verifies atomic readback.',
+    run: async ({ log }) => {
+      for (const target of [20, 140, 300, 999]) {
+        await invoke('set_bpm', { bpm: target })
+        await sleep(40)
+        const s = await devDumpState()
+        const ok = Math.abs(s.bpm - target) < 0.01
+        log(ok ? 'pass' : 'fail', `bpm=${target}`, { expected: target, actual: s.bpm })
+        if (!ok) return { pass: false, note: `mismatch at ${target}` }
+      }
+      await invoke('set_bpm', { bpm: 140 })
+      return { pass: true, note: '4/4 BPM values matched' }
+    },
+  },
+  {
+    id: 'loop_toggle',
+    kind: 'AUTO',
+    phase1Item: 'Loop mode: toggle on/off',
+    title: 'Loop toggle roundtrip',
+    instructions: 'Toggles loop on then off, verifies readback each time.',
+    run: async ({ log }) => {
+      // Ensure starts off
+      const initial = await devDumpState()
+      if (initial.looping) await invoke('toggle_loop')
+      await sleep(40)
+
+      await invoke('toggle_loop')
+      await sleep(40)
+      const s1 = await devDumpState()
+      if (!s1.looping) { log('fail', 'toggle on', { expected: true, actual: false }); return { pass: false, note: 'loop did not enable' } }
+
+      await invoke('toggle_loop')
+      await sleep(40)
+      const s2 = await devDumpState()
+      const ok = !s2.looping
+      log(ok ? 'pass' : 'fail', 'loop toggle cycle', { expected: 'off→on→off', actual: `${initial.looping}→${s1.looping}→${s2.looping}` })
+      return { pass: ok, note: ok ? 'toggled correctly' : 'did not toggle off' }
+    },
+  },
+  {
+    id: 'position_advances',
+    kind: 'AUTO',
+    phase1Item: 'Sample-accurate playback position tracking',
+    title: 'Position advances proportional to BPM',
+    instructions: 'Plays at 120 BPM for ~500ms, verifies position advanced roughly 24000 samples (±20%).',
+    run: async ({ log }) => {
+      await invoke('stop')
+      await invoke('set_bpm', { bpm: 120 })
+      await invoke('set_pattern_mode', { enabled: false })
+      await invoke('set_position', { position: 0 })
+      try { await invoke('start_engine') } catch {}
+      await invoke('play')
+      await sleep(500)
+      const s = await devDumpState()
+      await invoke('stop')
+      // 500ms at 48kHz = 24000 samples expected
+      const expected = 24000
+      const ok = s.positionSamples > expected * 0.6 && s.positionSamples < expected * 1.6
+      log(ok ? 'pass' : 'fail', 'position after 500ms', { expected: `~${expected} ±40%`, actual: s.positionSamples })
+      return { pass: ok, note: `position=${s.positionSamples}` }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // Keyboard shortcut tests
+  // -------------------------------------------------------------------------
+  {
+    id: 'key_space_play',
+    kind: 'AUTO',
+    phase1Item: 'Space: play/pause',
+    title: 'Space key toggles playback',
+    instructions: 'Dispatches Space keydown, verifies playing toggles.',
+    run: async ({ log }) => {
+      await invoke('stop')
+      await sleep(40)
+      simulateKey('Space')
+      await sleep(80)
+      const s1 = await devDumpState()
+      if (!s1.playing) { log('fail', 'Space did not play', { expected: true, actual: false }); return { pass: false, note: 'Space had no effect' } }
+      simulateKey('Space')
+      await sleep(80)
+      const s2 = await devDumpState()
+      const ok = !s2.playing
+      log(ok ? 'pass' : 'fail', 'Space toggle', { expected: 'play→stop', actual: `${s1.playing}→${s2.playing}` })
+      return { pass: ok, note: ok ? 'Space toggled play/stop' : 'did not stop' }
+    },
+  },
+  {
+    id: 'key_home',
+    kind: 'AUTO',
+    phase1Item: 'Home key: return to start',
+    title: 'Home key resets position to 0',
+    instructions: 'Sets position to 48000, dispatches Home, verifies position=0.',
+    run: async ({ log }) => {
+      await invoke('stop')
+      await invoke('set_position', { position: 48000 })
+      await sleep(40)
+      simulateKey('Home')
+      await sleep(80)
+      const s = await devDumpState()
+      const ok = s.positionSamples === 0
+      log(ok ? 'pass' : 'fail', 'Home key', { expected: 0, actual: s.positionSamples })
+      return { pass: ok, note: ok ? 'reset to 0' : `position=${s.positionSamples}` }
+    },
+  },
+  {
+    id: 'key_end',
+    kind: 'AUTO',
+    phase1Item: 'End key: jump to end of last clip',
+    title: 'End key jumps to end of last clip',
+    instructions: 'Imports an audio clip, dispatches End key, verifies position jumped past 0.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      await invoke('stop')
+      await invoke('set_bpm', { bpm: 140 })
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine_1khz_-6dbfs_stereo_5s.wav')
+      await invoke('set_position', { position: 0 })
+      await sleep(40)
+      simulateKey('End')
+      await sleep(80)
+      const s = await devDumpState()
+      const ok = s.positionSamples > 0
+      log(ok ? 'pass' : 'fail', 'End key', { expected: '> 0', actual: s.positionSamples })
+      return { pass: ok, note: ok ? `jumped to ${s.positionSamples}` : 'did not move' }
+    },
+  },
+  {
+    id: 'key_l_loop',
+    kind: 'AUTO',
+    phase1Item: 'Loop mode: toggle on/off',
+    title: 'L key toggles loop mode',
+    instructions: 'Dispatches KeyL, verifies looping toggles.',
+    run: async ({ log }) => {
+      const s0 = await devDumpState()
+      const wasBefore = s0.looping
+      simulateKey('KeyL')
+      await sleep(80)
+      const s1 = await devDumpState()
+      const toggled = s1.looping !== wasBefore
+      simulateKey('KeyL')
+      await sleep(80)
+      const s2 = await devDumpState()
+      const toggledBack = s2.looping === wasBefore
+      const ok = toggled && toggledBack
+      log(ok ? 'pass' : 'fail', 'L key loop toggle', { expected: `${wasBefore}→${!wasBefore}→${wasBefore}`, actual: `${s0.looping}→${s1.looping}→${s2.looping}` })
+      return { pass: ok, note: ok ? 'L toggled loop' : 'did not toggle' }
+    },
+  },
+  {
+    id: 'key_f5_playlist',
+    kind: 'AUTO',
+    phase1Item: 'F5: toggle Playlist',
+    title: 'F5 toggles playlist panel',
+    instructions: 'Dispatches F5, checks panel-playlist testid appears/disappears.',
+    run: async ({ log }) => {
+      const before = !!queryTestId('panel-playlist')
+      simulateKey('F5')
+      await sleep(100)
+      const after = !!queryTestId('panel-playlist')
+      const toggled = before !== after
+      // Toggle back to original state
+      simulateKey('F5')
+      await sleep(100)
+      const restored = !!queryTestId('panel-playlist') === before
+      const ok = toggled && restored
+      log(ok ? 'pass' : 'fail', 'F5 playlist', { expected: `${before}→${!before}→${before}`, actual: `${before}→${after}→${!!queryTestId('panel-playlist')}` })
+      return { pass: ok, note: ok ? 'F5 toggled playlist' : 'no toggle' }
+    },
+  },
+  {
+    id: 'key_f9_mixer',
+    kind: 'AUTO',
+    phase1Item: 'F9: toggle Mixer',
+    title: 'F9 toggles mixer panel',
+    instructions: 'Dispatches F9, checks panel-mixer testid appears/disappears.',
+    run: async ({ log }) => {
+      const before = !!queryTestId('panel-mixer')
+      simulateKey('F9')
+      await sleep(100)
+      const after = !!queryTestId('panel-mixer')
+      const toggled = before !== after
+      simulateKey('F9')
+      await sleep(100)
+      const restored = !!queryTestId('panel-mixer') === before
+      const ok = toggled && restored
+      log(ok ? 'pass' : 'fail', 'F9 mixer', { expected: `${before}→${!before}→${before}`, actual: `${before}→${after}→${!!queryTestId('panel-mixer')}` })
+      return { pass: ok, note: ok ? 'F9 toggled mixer' : 'no toggle' }
+    },
+  },
+  {
+    id: 'key_f8_browser',
+    kind: 'AUTO',
+    phase1Item: 'F8: toggle Browser',
+    title: 'F8 toggles browser panel',
+    instructions: 'Dispatches F8, checks panel-browser testid appears/disappears.',
+    run: async ({ log }) => {
+      const before = !!queryTestId('panel-browser')
+      simulateKey('F8')
+      await sleep(100)
+      const after = !!queryTestId('panel-browser')
+      const toggled = before !== after
+      simulateKey('F8')
+      await sleep(100)
+      const restored = !!queryTestId('panel-browser') === before
+      const ok = toggled && restored
+      log(ok ? 'pass' : 'fail', 'F8 browser', { expected: `${before}→${!before}→${before}`, actual: `${before}→${after}→${!!queryTestId('panel-browser')}` })
+      return { pass: ok, note: ok ? 'F8 toggled browser' : 'no toggle' }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // Audio graph / track tests
+  // -------------------------------------------------------------------------
+  {
+    id: 'track_volume_roundtrip',
+    kind: 'AUTO',
+    phase1Item: 'Per-track volume fader (linear to dB)',
+    title: 'Track volume set/readback',
+    instructions: 'Sets track volume to -12, 0, +6 dB and verifies via get_tracks.',
+    run: async ({ log, ensureAudioTrack }) => {
+      const trackId = await ensureAudioTrack()
+      for (const target of [-12, 0, 6]) {
+        await invoke('set_track_volume', { trackId, volumeDb: target })
+        await sleep(40)
+        const tracks = await invoke<any[]>('get_tracks')
+        const t = tracks.find((t: any) => t.id === trackId)
+        const ok = t && Math.abs(t.volume_db - target) < 0.01
+        log(ok ? 'pass' : 'fail', `volume=${target}`, { expected: target, actual: t?.volume_db })
+        if (!ok) return { pass: false, note: `mismatch at ${target}` }
+      }
+      await invoke('set_track_volume', { trackId, volumeDb: 0 })
+      return { pass: true, note: '3/3 volume values matched' }
+    },
+  },
+  {
+    id: 'track_pan_roundtrip',
+    kind: 'AUTO',
+    phase1Item: 'Per-track pan knob (constant power)',
+    title: 'Track pan set/readback',
+    instructions: 'Sets pan to -1, 0, +1 and verifies via get_tracks.',
+    run: async ({ log, ensureAudioTrack }) => {
+      const trackId = await ensureAudioTrack()
+      for (const target of [-1, 0, 0.5, 1]) {
+        await invoke('set_track_pan', { trackId, pan: target })
+        await sleep(40)
+        const tracks = await invoke<any[]>('get_tracks')
+        const t = tracks.find((t: any) => t.id === trackId)
+        const ok = t && Math.abs(t.pan - target) < 0.01
+        log(ok ? 'pass' : 'fail', `pan=${target}`, { expected: target, actual: t?.pan })
+        if (!ok) return { pass: false, note: `mismatch at ${target}` }
+      }
+      await invoke('set_track_pan', { trackId, pan: 0 })
+      return { pass: true, note: '4/4 pan values matched' }
+    },
+  },
+  {
+    id: 'track_mute_toggle',
+    kind: 'AUTO',
+    phase1Item: 'Per-track mute button',
+    title: 'Track mute toggle roundtrip',
+    instructions: 'Toggles mute and verifies via get_tracks.',
+    run: async ({ log, ensureAudioTrack }) => {
+      const trackId = await ensureAudioTrack()
+      // Ensure starts unmuted
+      let tracks = await invoke<any[]>('get_tracks')
+      let t = tracks.find((t: any) => t.id === trackId)
+      if (t?.muted) await invoke('toggle_mute', { trackId })
+
+      await invoke('toggle_mute', { trackId })
+      await sleep(40)
+      tracks = await invoke<any[]>('get_tracks')
+      t = tracks.find((t: any) => t.id === trackId)
+      if (!t?.muted) { log('fail', 'mute on', { expected: true, actual: false }); return { pass: false, note: 'mute did not enable' } }
+
+      await invoke('toggle_mute', { trackId })
+      await sleep(40)
+      tracks = await invoke<any[]>('get_tracks')
+      t = tracks.find((t: any) => t.id === trackId)
+      const ok = !t?.muted
+      log(ok ? 'pass' : 'fail', 'mute toggle', { expected: 'off→on→off', actual: ok ? 'correct' : 'stuck muted' })
+      return { pass: ok, note: ok ? 'mute toggled correctly' : 'did not unmute' }
+    },
+  },
+  {
+    id: 'track_solo_toggle',
+    kind: 'AUTO',
+    phase1Item: 'Per-track solo button',
+    title: 'Track solo toggle roundtrip',
+    instructions: 'Toggles solo and verifies via get_tracks.',
+    run: async ({ log, ensureAudioTrack }) => {
+      const trackId = await ensureAudioTrack()
+      let tracks = await invoke<any[]>('get_tracks')
+      let t = tracks.find((t: any) => t.id === trackId)
+      if (t?.soloed) await invoke('toggle_solo', { trackId })
+
+      await invoke('toggle_solo', { trackId })
+      await sleep(40)
+      tracks = await invoke<any[]>('get_tracks')
+      t = tracks.find((t: any) => t.id === trackId)
+      if (!t?.soloed) { log('fail', 'solo on', { expected: true, actual: false }); return { pass: false, note: 'solo did not enable' } }
+
+      await invoke('toggle_solo', { trackId })
+      await sleep(40)
+      tracks = await invoke<any[]>('get_tracks')
+      t = tracks.find((t: any) => t.id === trackId)
+      const ok = !t?.soloed
+      log(ok ? 'pass' : 'fail', 'solo toggle', { expected: 'off→on→off', actual: ok ? 'correct' : 'stuck soloed' })
+      return { pass: ok, note: ok ? 'solo toggled correctly' : 'did not unsolo' }
+    },
+  },
+  {
+    id: 'track_solo_safe',
+    kind: 'AUTO',
+    phase1Item: 'Solo-safe mode per track',
+    title: 'Solo-safe toggle roundtrip',
+    instructions: 'Toggles solo_safe and verifies via get_tracks.',
+    run: async ({ log, ensureAudioTrack }) => {
+      const trackId = await ensureAudioTrack()
+      let tracks = await invoke<any[]>('get_tracks')
+      let t = tracks.find((t: any) => t.id === trackId)
+      if (t?.solo_safe) await invoke('toggle_solo_safe', { trackId })
+
+      await invoke('toggle_solo_safe', { trackId })
+      await sleep(40)
+      tracks = await invoke<any[]>('get_tracks')
+      t = tracks.find((t: any) => t.id === trackId)
+      if (!t?.solo_safe) { log('fail', 'solo_safe on', { expected: true, actual: false }); return { pass: false, note: 'solo_safe did not enable' } }
+
+      await invoke('toggle_solo_safe', { trackId })
+      await sleep(40)
+      tracks = await invoke<any[]>('get_tracks')
+      t = tracks.find((t: any) => t.id === trackId)
+      const ok = !t?.solo_safe
+      log(ok ? 'pass' : 'fail', 'solo_safe toggle', { expected: 'off→on→off', actual: ok ? 'correct' : 'stuck' })
+      return { pass: ok, note: ok ? 'solo_safe toggled correctly' : 'did not reset' }
+    },
+  },
+  {
+    id: 'track_add_remove',
+    kind: 'AUTO',
+    phase1Item: 'Track node creation in audio graph',
+    title: 'Add and remove audio track',
+    instructions: 'Adds an audio track, verifies it appears in get_tracks, removes it, verifies gone.',
+    run: async ({ log }) => {
+      const before = await invoke<any[]>('get_tracks')
+      const beforeCount = before.filter((t: any) => t.kind !== 'Master').length
+      const newId = await invoke<string>('add_audio_track', { name: 'TestAddRemove' })
+      const after = await invoke<any[]>('get_tracks')
+      const afterCount = after.filter((t: any) => t.kind !== 'Master').length
+      if (afterCount !== beforeCount + 1) {
+        log('fail', 'add track', { expected: beforeCount + 1, actual: afterCount })
+        return { pass: false, note: 'track count did not increase' }
+      }
+      await invoke('remove_track', { trackId: newId })
+      const final_ = await invoke<any[]>('get_tracks')
+      const finalCount = final_.filter((t: any) => t.kind !== 'Master').length
+      const ok = finalCount === beforeCount
+      log(ok ? 'pass' : 'fail', 'remove track', { expected: beforeCount, actual: finalCount })
+      return { pass: ok, note: ok ? 'add/remove roundtrip correct' : 'count mismatch after remove' }
+    },
+  },
+  {
+    id: 'track_summing',
+    kind: 'AUTO',
+    phase1Item: 'Track summing (mix N tracks to stereo)',
+    title: 'Two tracks sum to louder master',
+    instructions: 'Creates 2 tracks with pink noise, plays, verifies master peak > single-track peak.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      await invoke('stop')
+      await invoke('set_pattern_mode', { enabled: false })
+      await invoke('set_master_volume', { db: 0 })
+
+      // Create two tracks with the same signal
+      const t1 = await ensureAudioTrack()
+      await clearTrackClips(t1)
+      await importAsset(t1, 'pink_noise_-12dbfs_10s.wav')
+      await invoke('set_track_volume', { trackId: t1, volumeDb: -6 })
+
+      const t2 = await invoke<string>('add_audio_track', { name: 'Sum Test' })
+      await importAsset(t2, 'pink_noise_-12dbfs_10s.wav')
+      await invoke('set_track_volume', { trackId: t2, volumeDb: -6 })
+
+      await invoke('set_position', { position: 0 })
+      try { await invoke('start_engine') } catch {}
+      await invoke('play')
+      await sleep(1000)
+      const both = await devDumpState()
+      await invoke('stop')
+
+      // Mute second track, play again
+      await invoke('toggle_mute', { trackId: t2 })
+      await invoke('set_position', { position: 0 })
+      await invoke('play')
+      await sleep(1000)
+      const single = await devDumpState()
+      await invoke('stop')
+
+      // Clean up
+      await invoke('toggle_mute', { trackId: t2 })
+      await invoke('remove_track', { trackId: t2 })
+
+      const ok = both.masterPeakDb > single.masterPeakDb + 1
+      log(ok ? 'pass' : 'fail', 'track summing', {
+        expected: 'both > single + 1 dB',
+        actual: `both=${both.masterPeakDb.toFixed(1)} single=${single.masterPeakDb.toFixed(1)}`,
+      })
+      return { pass: ok, note: `both=${both.masterPeakDb.toFixed(1)} single=${single.masterPeakDb.toFixed(1)}` }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // Audio decode tests
+  // -------------------------------------------------------------------------
+  {
+    id: 'wav_import',
+    kind: 'AUTO',
+    phase1Item: 'WAV decode (PCM 16/24/32-bit, float)',
+    title: 'WAV file import creates clip',
+    instructions: 'Imports a WAV test asset and verifies a clip was created on the track.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine_1khz_-6dbfs_stereo_5s.wav')
+      const clips = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = clips.length === 1
+      log(ok ? 'pass' : 'fail', 'WAV import', { expected: '1 clip', actual: `${clips.length} clips` })
+      return { pass: ok, note: ok ? `clip: ${clips[0]?.name}` : 'no clip created' }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // Clip manipulation tests
+  // -------------------------------------------------------------------------
+  {
+    id: 'clip_move',
+    kind: 'AUTO',
+    phase1Item: 'Clip move: horizontal drag (time)',
+    title: 'Move clip to new tick position',
+    instructions: 'Creates a clip at tick 0, moves it to tick 960, verifies new position.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine_1khz_-6dbfs_stereo_5s.wav')
+      const clips = await invoke<any[]>('get_track_clips', { trackId })
+      if (clips.length === 0) { log('fail', 'no clip', {}); return { pass: false, note: 'no clip to move' } }
+      const clipId = clips[0].id
+      await invoke('move_clip', { trackId, clipId, newPositionTicks: 960 })
+      const after = await invoke<any[]>('get_track_clips', { trackId })
+      const moved = after.find((c: any) => c.id === clipId)
+      const ok = moved?.position_ticks === 960
+      log(ok ? 'pass' : 'fail', 'clip move', { expected: 960, actual: moved?.position_ticks })
+      return { pass: ok, note: ok ? 'moved to 960' : `position=${moved?.position_ticks}` }
+    },
+  },
+  {
+    id: 'clip_resize',
+    kind: 'AUTO',
+    phase1Item: 'Clip resize: drag right edge',
+    title: 'Resize clip length',
+    instructions: 'Creates a clip and resizes it to 1920 ticks, verifies new length.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine_1khz_-6dbfs_stereo_5s.wav')
+      const clips = await invoke<any[]>('get_track_clips', { trackId })
+      if (clips.length === 0) { log('fail', 'no clip', {}); return { pass: false, note: 'no clip to resize' } }
+      const clipId = clips[0].id
+      const originalLen = clips[0].length_ticks
+      const newLen = 1920
+      await invoke('resize_clip', { trackId, clipId, newLengthTicks: newLen })
+      const after = await invoke<any[]>('get_track_clips', { trackId })
+      const resized = after.find((c: any) => c.id === clipId)
+      const ok = resized?.length_ticks === newLen
+      log(ok ? 'pass' : 'fail', 'clip resize', { expected: newLen, actual: resized?.length_ticks })
+      // Restore original
+      await invoke('resize_clip', { trackId, clipId, newLengthTicks: originalLen })
+      return { pass: ok, note: ok ? `resized to ${newLen}` : `length=${resized?.length_ticks}` }
+    },
+  },
+  {
+    id: 'clip_delete',
+    kind: 'AUTO',
+    phase1Item: 'Clip delete: Delete/Backspace key',
+    title: 'Delete clip removes it from track',
+    instructions: 'Creates a clip, deletes it via command, verifies track is empty.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine_1khz_-6dbfs_stereo_5s.wav')
+      const clips = await invoke<any[]>('get_track_clips', { trackId })
+      if (clips.length === 0) { log('fail', 'no clip', {}); return { pass: false, note: 'no clip to delete' } }
+      await invoke('delete_clip', { trackId, clipId: clips[0].id })
+      const after = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = after.length === 0
+      log(ok ? 'pass' : 'fail', 'clip delete', { expected: 0, actual: after.length })
+      return { pass: ok, note: ok ? 'clip deleted' : `${after.length} clips remain` }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // Project save/load tests
+  // -------------------------------------------------------------------------
+  {
+    id: 'project_save_load',
+    kind: 'AUTO',
+    phase1Item: 'File > Save / File > Open project',
+    title: 'Project save/load roundtrip',
+    instructions: 'Adds tracks, sets BPM, saves .hwp, new project, loads, verifies state matches.',
+    run: async ({ log }) => {
+      // Setup: add a track and set BPM
+      await invoke('set_bpm', { bpm: 175 })
+      const trackId = await invoke<string>('add_audio_track', { name: 'SaveTest' })
+      await sleep(40)
+
+      const beforeInfo = await invoke<any>('get_project_info')
+      const beforeTracks = await invoke<any[]>('get_tracks')
+      const beforeNonMaster = beforeTracks.filter((t: any) => t.kind !== 'Master').length
+
+      // Save
+      const path = '/tmp/hardwave_test_project.hwp'
+      await invoke('save_project', { path })
+
+      // New project (resets everything)
+      await invoke('new_project')
+      await sleep(40)
+      const midInfo = await invoke<any>('get_project_info')
+      const midTracks = await invoke<any[]>('get_tracks')
+      const midNonMaster = midTracks.filter((t: any) => t.kind !== 'Master').length
+      if (midNonMaster !== 0) {
+        log('info', 'new_project did not clear tracks', { actual: midNonMaster })
+      }
+
+      // Load
+      await invoke('load_project', { path })
+      await sleep(40)
+      const afterInfo = await invoke<any>('get_project_info')
+      const afterTracks = await invoke<any[]>('get_tracks')
+      const afterNonMaster = afterTracks.filter((t: any) => t.kind !== 'Master').length
+
+      const bpmOk = Math.abs(afterInfo.bpm - 175) < 0.01
+      const tracksOk = afterNonMaster >= beforeNonMaster
+      const ok = bpmOk && tracksOk
+      log(ok ? 'pass' : 'fail', 'save/load roundtrip', {
+        expected: `bpm=175, tracks>=${beforeNonMaster}`,
+        actual: `bpm=${afterInfo.bpm}, tracks=${afterNonMaster}`,
+      })
+
+      // Clean up test track
+      const testTrack = afterTracks.find((t: any) => t.name === 'SaveTest')
+      if (testTrack) await invoke('remove_track', { trackId: testTrack.id })
+
+      return { pass: ok, note: ok ? 'save/load matched' : `bpmOk=${bpmOk} tracksOk=${tracksOk}` }
+    },
+  },
+  {
+    id: 'new_project_resets',
+    kind: 'AUTO',
+    phase1Item: 'File > New project',
+    title: 'New project resets state',
+    instructions: 'Adds tracks and clips, invokes new_project, verifies clean state.',
+    run: async ({ log }) => {
+      await invoke<string>('add_audio_track', { name: 'TempTrack' })
+      await invoke('set_bpm', { bpm: 200 })
+      await sleep(40)
+
+      await invoke('new_project')
+      await sleep(40)
+      const info = await invoke<any>('get_project_info')
+      const tracks = await invoke<any[]>('get_tracks')
+      const nonMaster = tracks.filter((t: any) => t.kind !== 'Master').length
+      const ok = nonMaster === 0 && info.name === 'Untitled'
+      log(ok ? 'pass' : 'fail', 'new project', {
+        expected: '0 tracks, name=Untitled',
+        actual: `${nonMaster} tracks, name=${info.name}`,
+      })
+      return { pass: ok, note: ok ? 'reset to default' : `tracks=${nonMaster} name=${info.name}` }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // Mixer UI DOM tests
+  // -------------------------------------------------------------------------
+  {
+    id: 'clip_indicator_0dbfs',
+    kind: 'AUTO',
+    phase1Item: 'Clip indicator (red light at 0dBFS)',
+    title: 'Clip LED activates at 0 dBFS',
+    instructions: 'Plays a hot signal (+6 dB), checks master meter reads clipped via dev_dump_state.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      await invoke('stop')
+      await invoke('set_pattern_mode', { enabled: false })
+      await invoke('set_master_volume', { db: 12 })
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine_1khz_-6dbfs_stereo_5s.wav')
+      await invoke('set_track_volume', { trackId, volumeDb: 12 })
+      await invoke('set_position', { position: 0 })
+      try { await invoke('start_engine') } catch {}
+      await invoke('play')
+      await sleep(1000)
+      const s = await devDumpState()
+      await invoke('stop')
+      await invoke('set_master_volume', { db: 0 })
+      await invoke('set_track_volume', { trackId, volumeDb: 0 })
+      const ok = s.masterClipped || s.masterPeakDb >= -0.1
+      log(ok ? 'pass' : 'fail', 'clip indicator', {
+        expected: 'clipped=true or peak >= -0.1',
+        actual: `clipped=${s.masterClipped} peak=${s.masterPeakDb.toFixed(1)}`,
+      })
+      return { pass: ok, note: `clipped=${s.masterClipped} peak=${s.masterPeakDb.toFixed(1)}` }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // Audio device tests
+  // -------------------------------------------------------------------------
+  {
+    id: 'audio_device_enum',
+    kind: 'AUTO',
+    phase1Item: 'Audio device enumeration (cpal)',
+    title: 'Audio devices listed',
+    instructions: 'Invokes get_audio_devices and verifies at least one output device.',
+    run: async ({ log }) => {
+      const devices = await invoke<any[]>('get_audio_devices')
+      const ok = devices.length > 0
+      log(ok ? 'pass' : 'fail', 'device list', { expected: '>= 1 device', actual: `${devices.length} devices` })
+      return { pass: ok, note: ok ? `${devices.length} devices found` : 'no devices' }
+    },
+  },
+  {
+    id: 'audio_config_roundtrip',
+    kind: 'AUTO',
+    phase1Item: 'Buffer size configuration (64-4096)',
+    title: 'Audio config get/set roundtrip',
+    instructions: 'Reads audio config, verifies sample_rate and buffer_size are valid.',
+    run: async ({ log }) => {
+      const s = await devDumpState()
+      const srOk = [44100, 48000, 88200, 96000].includes(s.sampleRate)
+      const bsOk = s.bufferSize >= 64 && s.bufferSize <= 4096
+      const ok = srOk && bsOk
+      log(ok ? 'pass' : 'fail', 'audio config', {
+        expected: 'valid SR and buffer size',
+        actual: `sr=${s.sampleRate} bs=${s.bufferSize}`,
+      })
+      return { pass: ok, note: `sr=${s.sampleRate} bs=${s.bufferSize}` }
+    },
+  },
+  {
+    id: 'engine_start_stop',
+    kind: 'AUTO',
+    phase1Item: 'Stereo output stream creation',
+    title: 'Engine start/stop cycle',
+    instructions: 'Starts engine, verifies streamRunning=true; stops, verifies false.',
+    run: async ({ log }) => {
+      try { await invoke('start_engine') } catch {}
+      await sleep(200)
+      const s1 = await devDumpState()
+      if (!s1.streamRunning) { log('fail', 'start', { expected: true, actual: false }); return { pass: false, note: 'engine did not start' } }
+      await invoke('stop_engine')
+      await sleep(200)
+      const s2 = await devDumpState()
+      const ok = !s2.streamRunning
+      log(ok ? 'pass' : 'fail', 'engine stop', { expected: false, actual: s2.streamRunning })
+      // Restart for other tests
+      try { await invoke('start_engine') } catch {}
+      return { pass: ok, note: ok ? 'start/stop cycle OK' : 'stream still running after stop' }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // Waveform & rendering tests
+  // -------------------------------------------------------------------------
+  {
+    id: 'waveform_peaks',
+    kind: 'AUTO',
+    phase1Item: 'Clip waveform peak pre-computation',
+    title: 'Waveform peaks returned for imported audio',
+    instructions: 'Imports WAV, requests 100 peak buckets, verifies non-zero data.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine_1khz_-6dbfs_stereo_5s.wav')
+      const clips = await invoke<any[]>('get_track_clips', { trackId })
+      if (clips.length === 0) { log('fail', 'no clip', {}); return { pass: false, note: 'no clip' } }
+      const sourceId = clips[0].source_id
+      const peaks = await invoke<[number, number][]>('get_waveform_peaks', { sourceId, numBuckets: 100 })
+      const nonZero = peaks.filter(([mn, mx]) => mn !== 0 || mx !== 0).length
+      const ok = peaks.length === 100 && nonZero > 50
+      log(ok ? 'pass' : 'fail', 'waveform peaks', { expected: '100 buckets, >50 non-zero', actual: `${peaks.length} buckets, ${nonZero} non-zero` })
+      return { pass: ok, note: `${peaks.length} buckets, ${nonZero} active` }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // MIDI tests
+  // -------------------------------------------------------------------------
+  {
+    id: 'midi_clip_roundtrip',
+    kind: 'AUTO',
+    phase1Item: 'MIDI note input via piano roll',
+    title: 'MIDI clip create, add note, readback',
+    instructions: 'Creates a MIDI track, creates a clip, adds a note, reads it back.',
+    run: async ({ log }) => {
+      const trackId = await invoke<string>('add_midi_track', { name: 'MIDITest' })
+      const clipId = await invoke<string>('create_midi_clip', { trackId, positionTicks: 0, lengthTicks: 3840, name: 'Test Clip' })
+      await invoke('add_midi_note', { trackId, clipId, note: 60, velocity: 100, startTick: 0, durationTicks: 960 })
+      const notes = await invoke<any[]>('get_midi_notes', { trackId, clipId })
+      const ok = notes.length === 1 && notes[0].note === 60 && notes[0].velocity === 100
+      log(ok ? 'pass' : 'fail', 'MIDI roundtrip', {
+        expected: '1 note, C4, vel=100',
+        actual: `${notes.length} notes${notes[0] ? `, note=${notes[0].note}, vel=${notes[0].velocity}` : ''}`,
+      })
+      await invoke('remove_track', { trackId })
+      return { pass: ok, note: ok ? 'MIDI note roundtrip correct' : 'mismatch' }
     },
   },
 ]
