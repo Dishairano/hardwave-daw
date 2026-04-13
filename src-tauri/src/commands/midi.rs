@@ -22,6 +22,7 @@ pub fn create_midi_clip(
     position_ticks: Option<u64>,
     length_ticks: Option<u64>,
 ) -> Result<String, String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let clip_id = uuid::Uuid::new_v4().to_string();
     let midi_clip_id = uuid::Uuid::new_v4().to_string();
@@ -106,6 +107,7 @@ pub fn add_midi_note(
     duration_ticks: u64,
     velocity: Option<f32>,
 ) -> Result<usize, String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     let track = project
@@ -147,6 +149,7 @@ pub fn update_midi_note(
     velocity: Option<f32>,
     muted: Option<bool>,
 ) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     let track = project
@@ -192,6 +195,7 @@ pub fn delete_midi_note(
     clip_id: String,
     note_index: usize,
 ) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     let track = project

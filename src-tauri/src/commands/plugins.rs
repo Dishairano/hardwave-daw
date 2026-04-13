@@ -22,6 +22,7 @@ pub fn add_plugin_to_track(
     track_id: String,
     plugin_id: String,
 ) -> Result<String, String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     let scanner = engine.plugin_scanner.lock();
@@ -52,6 +53,7 @@ pub fn remove_plugin_from_track(
     track_id: String,
     slot_id: String,
 ) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
 

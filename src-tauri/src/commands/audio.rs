@@ -24,6 +24,7 @@ pub fn import_audio_file(
     file_path: String,
     position_ticks: Option<u64>,
 ) -> Result<ImportedClip, String> {
+    state.engine.lock().snapshot_before_mutation();
     let path = PathBuf::from(&file_path);
     let file_name = path
         .file_stem()
@@ -184,6 +185,7 @@ pub fn set_clip_gain(
     clip_id: String,
     gain_db: f64,
 ) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
         ac.gain_db = gain_db.clamp(-60.0, 12.0);
@@ -202,6 +204,7 @@ pub fn set_clip_fades(
     fade_in_ticks: u64,
     fade_out_ticks: u64,
 ) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     // Fades may not sum to more than the clip length — clamp for safety.
     let length_ticks = {
@@ -245,6 +248,7 @@ pub fn toggle_clip_reverse(
     track_id: String,
     clip_id: String,
 ) -> Result<bool, String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let new_value = with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
         ac.reversed = !ac.reversed;
@@ -314,6 +318,7 @@ pub fn move_clip(
     clip_id: String,
     new_position_ticks: u64,
 ) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     let track = project
@@ -343,6 +348,7 @@ pub fn resize_clip(
     clip_id: String,
     new_length_ticks: u64,
 ) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     let track = project
@@ -371,6 +377,7 @@ pub fn duplicate_clip(
     track_id: String,
     clip_id: String,
 ) -> Result<String, String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     let track = project
@@ -409,6 +416,7 @@ pub fn split_clip(
     clip_id: String,
     at_ticks: u64,
 ) -> Result<String, String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     let track = project
@@ -471,6 +479,7 @@ pub fn delete_clip(
     track_id: String,
     clip_id: String,
 ) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     let track = project

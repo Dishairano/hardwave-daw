@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod dev;
 pub mod engine;
+pub mod history;
 pub mod midi;
 pub mod plugins;
 pub mod project;

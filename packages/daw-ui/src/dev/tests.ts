@@ -2242,4 +2242,78 @@ export const TESTS: TestDef[] = [
       return { pass: ok, note: `${after.length} clips after overlap move` }
     },
   },
+  {
+    id: 'p2r5_undo_restores_clip_position',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Undo/Redo',
+    title: 'undo reverts a move_clip to the prior position',
+    instructions: 'Move a clip, call undo, and verify its position is the original.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      const originalPos = c.position_ticks
+      await invoke('move_clip', { trackId, clipId: c.id, newPositionTicks: originalPos + 9600 })
+      let after = await invoke<any[]>('get_track_clips', { trackId })
+      const moved = after[0].position_ticks
+      const undone = await invoke<boolean>('undo')
+      after = await invoke<any[]>('get_track_clips', { trackId })
+      const restored = after[0].position_ticks
+      const ok = undone && moved === originalPos + 9600 && restored === originalPos
+      log(ok ? 'pass' : 'fail', 'undo', { expected: `${originalPos}→${originalPos + 9600}→${originalPos}`, actual: `${originalPos}→${moved}→${restored}` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `moved=${moved} restored=${restored}` }
+    },
+  },
+  {
+    id: 'p2r5_redo_reapplies_change',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Undo/Redo',
+    title: 'redo reapplies an undone change',
+    instructions: 'Mutate, undo, then redo — the final state must match the post-mutation state.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('set_clip_gain', { trackId, clipId: c.id, gainDb: 6 })
+      await invoke('undo')
+      const midGain = (await invoke<any[]>('get_track_clips', { trackId }))[0].gainDb
+      const redone = await invoke<boolean>('redo')
+      const finalGain = (await invoke<any[]>('get_track_clips', { trackId }))[0].gainDb
+      const ok = redone && Math.abs(midGain - c.gainDb) < 0.01 && Math.abs(finalGain - 6) < 0.01
+      log(ok ? 'pass' : 'fail', 'redo', { expected: `undone=${c.gainDb}, redone=6`, actual: `undone=${midGain}, redone=${finalGain}` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `undone=${midGain} redone=${finalGain}` }
+    },
+  },
+  {
+    id: 'p2r5_history_sizes',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Undo/Redo',
+    title: 'history_sizes reflects stack depth',
+    instructions: 'After a mutation the undo depth grows; after undo the redo depth grows.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      const [u0, r0] = await invoke<[number, number]>('history_sizes')
+      await invoke('set_clip_gain', { trackId, clipId: c.id, gainDb: -3 })
+      const [u1, r1] = await invoke<[number, number]>('history_sizes')
+      await invoke('undo')
+      const [u2, r2] = await invoke<[number, number]>('history_sizes')
+      const ok = u1 === u0 + 1 && r1 === 0 && u2 === u0 && r2 === 1
+      log(ok ? 'pass' : 'fail', 'history_sizes', { expected: `(u+1,0) then (u,1)`, actual: `(${u1},${r1}) then (${u2},${r2})` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `u:${u0}→${u1}→${u2} r:${r0}→${r1}→${r2}` }
+    },
+  },
 ]

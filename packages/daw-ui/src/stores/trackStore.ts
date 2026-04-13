@@ -84,6 +84,8 @@ interface TrackState {
   setClipGain: (trackId: string, clipId: string, gainDb: number) => Promise<void>
   setClipFades: (trackId: string, clipId: string, fadeInTicks: number, fadeOutTicks: number) => Promise<void>
   toggleClipReverse: (trackId: string, clipId: string) => Promise<void>
+  undo: () => Promise<boolean>
+  redo: () => Promise<boolean>
   getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<[number, number][]>
 }
 
@@ -290,6 +292,18 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   toggleClipReverse: async (trackId, clipId) => {
     await invoke('toggle_clip_reverse', { trackId, clipId })
     await get().fetchTracks()
+  },
+
+  undo: async () => {
+    const ok = await invoke<boolean>('undo')
+    if (ok) await get().fetchTracks()
+    return ok
+  },
+
+  redo: async () => {
+    const ok = await invoke<boolean>('redo')
+    if (ok) await get().fetchTracks()
+    return ok
   },
 
   getWaveformPeaks: async (sourceId, numBuckets) => {

@@ -42,6 +42,7 @@ pub fn get_tracks(state: State<AppState>) -> Vec<TrackInfo> {
 
 #[tauri::command]
 pub fn add_audio_track(state: State<AppState>, name: String) -> String {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let id = {
         let mut project = engine.project.lock();
@@ -54,6 +55,7 @@ pub fn add_audio_track(state: State<AppState>, name: String) -> String {
 
 #[tauri::command]
 pub fn add_midi_track(state: State<AppState>, name: String) -> String {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let id = {
         let mut project = engine.project.lock();
@@ -66,6 +68,7 @@ pub fn add_midi_track(state: State<AppState>, name: String) -> String {
 
 #[tauri::command]
 pub fn remove_track(state: State<AppState>, track_id: String) {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();
@@ -77,6 +80,7 @@ pub fn remove_track(state: State<AppState>, track_id: String) {
 
 #[tauri::command]
 pub fn set_track_volume(state: State<AppState>, track_id: String, volume_db: f64) {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();
@@ -89,6 +93,7 @@ pub fn set_track_volume(state: State<AppState>, track_id: String, volume_db: f64
 
 #[tauri::command]
 pub fn set_track_pan(state: State<AppState>, track_id: String, pan: f64) {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();
@@ -101,6 +106,7 @@ pub fn set_track_pan(state: State<AppState>, track_id: String, pan: f64) {
 
 #[tauri::command]
 pub fn toggle_mute(state: State<AppState>, track_id: String) {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();
@@ -113,6 +119,7 @@ pub fn toggle_mute(state: State<AppState>, track_id: String) {
 
 #[tauri::command]
 pub fn toggle_solo(state: State<AppState>, track_id: String) {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();
@@ -126,6 +133,7 @@ pub fn toggle_solo(state: State<AppState>, track_id: String) {
 /// Exclusive solo: solo only this track, unsolo all others.
 #[tauri::command]
 pub fn set_exclusive_solo(state: State<AppState>, track_id: String) {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();
@@ -148,6 +156,7 @@ pub fn set_exclusive_solo(state: State<AppState>, track_id: String) {
 
 #[tauri::command]
 pub fn toggle_arm(state: State<AppState>, track_id: String) {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();
@@ -160,6 +169,7 @@ pub fn toggle_arm(state: State<AppState>, track_id: String) {
 
 #[tauri::command]
 pub fn reorder_track(state: State<AppState>, track_id: String, new_index: usize) {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();
@@ -189,6 +199,7 @@ pub fn reorder_track(state: State<AppState>, track_id: String, new_index: usize)
 
 #[tauri::command]
 pub fn toggle_solo_safe(state: State<AppState>, track_id: String) {
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();

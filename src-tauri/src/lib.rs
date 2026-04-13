@@ -88,6 +88,10 @@ pub fn run() {
             commands::midi::add_midi_note,
             commands::midi::update_midi_note,
             commands::midi::delete_midi_note,
+            // Undo/redo
+            commands::history::undo,
+            commands::history::redo,
+            commands::history::history_sizes,
             // Dev panel (stripped before merge to master)
             commands::dev::dev_dump_state,
             commands::dev::dev_force_device_error,

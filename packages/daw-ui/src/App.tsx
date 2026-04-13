@@ -206,6 +206,18 @@ export function App() {
               tracks.pasteClipsAtPosition(pasteAt)
             }
             return
+          case 'z':
+            e.preventDefault()
+            if (e.shiftKey) {
+              tracks.redo()
+            } else {
+              tracks.undo()
+            }
+            return
+          case 'y':
+            e.preventDefault()
+            tracks.redo()
+            return
         }
       }
 

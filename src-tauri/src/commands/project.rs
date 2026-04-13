@@ -16,8 +16,12 @@ pub struct ProjectInfo {
 #[tauri::command]
 pub fn new_project(state: State<AppState>) {
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    *project = Project::default();
+    {
+        let mut project = engine.project.lock();
+        *project = Project::default();
+    }
+    engine.reset_history();
+    engine.rebuild_graph();
 }
 
 #[tauri::command]
@@ -33,8 +37,12 @@ pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> 
 pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> {
     let loaded = Project::load(&PathBuf::from(path)).map_err(|e| e.to_string())?;
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    *project = loaded;
+    {
+        let mut project = engine.project.lock();
+        *project = loaded;
+    }
+    engine.reset_history();
+    engine.rebuild_graph();
     Ok(())
 }
 

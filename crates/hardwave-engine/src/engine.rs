@@ -22,6 +22,67 @@ use crate::transport::{TransportCommand, TransportState};
 /// Shared per-track meter map. Rebuilt when the audio graph is rebuilt.
 pub type TrackMeterMap = Arc<Mutex<HashMap<String, Arc<TrackMeterState>>>>;
 
+/// Maximum number of snapshots kept on each side of the history.
+const HISTORY_CAP: usize = 256;
+
+/// Snapshot-based undo/redo. A snapshot is a full `Project` clone; the struct is
+/// small (track/clip metadata only — audio samples live in the AudioPool and are
+/// referenced by source id), so cloning is cheap.
+pub struct History {
+    undo: Vec<Project>,
+    redo: Vec<Project>,
+}
+
+impl History {
+    pub fn new() -> Self {
+        Self {
+            undo: Vec::new(),
+            redo: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self, snapshot: Project) {
+        self.undo.push(snapshot);
+        if self.undo.len() > HISTORY_CAP {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    pub fn undo(&mut self, current: Project) -> Option<Project> {
+        let prev = self.undo.pop()?;
+        self.redo.push(current);
+        if self.redo.len() > HISTORY_CAP {
+            self.redo.remove(0);
+        }
+        Some(prev)
+    }
+
+    pub fn redo(&mut self, current: Project) -> Option<Project> {
+        let next = self.redo.pop()?;
+        self.undo.push(current);
+        if self.undo.len() > HISTORY_CAP {
+            self.undo.remove(0);
+        }
+        Some(next)
+    }
+
+    pub fn sizes(&self) -> (usize, usize) {
+        (self.undo.len(), self.redo.len())
+    }
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Main DAW engine.
 pub struct DawEngine {
     pub transport: TransportState,
@@ -39,6 +100,9 @@ pub struct DawEngine {
 
     /// Per-track post-fader meter state, keyed by track id.
     pub track_meters: TrackMeterMap,
+
+    /// Undo/redo history. Take a snapshot BEFORE mutating the project.
+    pub history: Arc<Mutex<History>>,
 }
 
 /// Commands sent from UI thread to audio thread.
@@ -64,7 +128,50 @@ impl DawEngine {
             meter_consumer: None,
             meter_cache: MeterSnapshot::default(),
             track_meters: Arc::new(Mutex::new(HashMap::new())),
+            history: Arc::new(Mutex::new(History::new())),
         }
+    }
+
+    /// Snapshot the project before a mutation. Call this as the first line of any
+    /// command that changes `Project`. Redo stack is cleared on new edits.
+    pub fn snapshot_before_mutation(&self) {
+        let snap = self.project.lock().clone();
+        self.history.lock().push(snap);
+    }
+
+    /// Roll the project back to the most recent snapshot. Returns true when a snapshot
+    /// was consumed. The caller is responsible for calling `rebuild_graph()` afterwards.
+    pub fn undo(&self) -> bool {
+        let current = self.project.lock().clone();
+        let prev = self.history.lock().undo(current);
+        if let Some(p) = prev {
+            *self.project.lock() = p;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Re-apply the most recently undone mutation. Returns true on success.
+    pub fn redo(&self) -> bool {
+        let current = self.project.lock().clone();
+        let next = self.history.lock().redo(current);
+        if let Some(p) = next {
+            *self.project.lock() = p;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Reset the history — e.g. after loading or creating a new project.
+    pub fn reset_history(&self) {
+        self.history.lock().clear();
+    }
+
+    /// (undoDepth, redoDepth) — exposed so the UI can enable/disable menu entries.
+    pub fn history_sizes(&self) -> (usize, usize) {
+        self.history.lock().sizes()
     }
 
     /// Start the audio engine.
