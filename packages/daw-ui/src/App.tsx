@@ -177,6 +177,33 @@ export function App() {
               project.saveProject()
             }
             return
+          case 'a':
+            e.preventDefault()
+            tracks.selectAllClips()
+            return
+          case 'd':
+            if (e.shiftKey) break // handled below for dev panel
+            e.preventDefault()
+            {
+              const sel = tracks.selectedClipId
+              if (sel) {
+                const t = tracks.tracks.find(tr => tr.clips.some(c => c.id === sel))
+                if (t) tracks.duplicateClip(t.id, sel)
+              }
+            }
+            return
+          case 'c':
+            e.preventDefault()
+            tracks.copySelectedClips()
+            return
+          case 'v':
+            e.preventDefault()
+            {
+              const sr = transport.sampleRate || 48000
+              const playheadTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
+              tracks.pasteClipsAtPosition(playheadTicks)
+            }
+            return
         }
       }
 
@@ -188,7 +215,23 @@ export function App() {
         case 'Delete':
         case 'Backspace':
           e.preventDefault()
-          tracks.deleteSelectedClip()
+          tracks.deleteSelectedClips()
+          break
+        case 'KeyS':
+          if (e.ctrlKey || e.metaKey) break
+          e.preventDefault()
+          {
+            const sel = tracks.selectedClipId
+            if (!sel) break
+            const t = tracks.tracks.find(tr => tr.clips.some(c => c.id === sel))
+            if (!t) break
+            const sr = transport.sampleRate || 48000
+            const atTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
+            const clip = t.clips.find(c => c.id === sel)
+            if (clip && atTicks > clip.position_ticks && atTicks < clip.position_ticks + clip.length_ticks) {
+              tracks.splitClip(t.id, sel, atTicks)
+            }
+          }
           break
         case 'Home':
           e.preventDefault()

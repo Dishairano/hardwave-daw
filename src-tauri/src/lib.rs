@@ -77,6 +77,8 @@ pub fn run() {
             commands::audio::move_clip,
             commands::audio::resize_clip,
             commands::audio::delete_clip,
+            commands::audio::duplicate_clip,
+            commands::audio::split_clip,
             // MIDI
             commands::midi::create_midi_clip,
             commands::midi::get_midi_notes,
@@ -104,7 +106,7 @@ pub fn run() {
                     std::thread::sleep(std::time::Duration::from_millis(33));
                     // Poll for device hot-swap once per second.
                     tick = tick.wrapping_add(1);
-                    if tick % 30 == 0 {
+                    if tick.is_multiple_of(30) {
                         let new_fp = engine.lock().output_device_fingerprint();
                         if new_fp != device_fp {
                             device_fp = new_fp;

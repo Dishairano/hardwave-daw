@@ -47,6 +47,8 @@ interface TrackState {
   tracks: TrackWithClips[]
   selectedTrackId: string | null
   selectedClipId: string | null
+  selectedClipIds: Set<string>
+  clipboard: ClipInfo[]
 
   fetchTracks: () => Promise<void>
   selectTrack: (id: string) => void
@@ -67,6 +69,14 @@ interface TrackState {
   resizeClip: (trackId: string, clipId: string, newLengthTicks: number) => Promise<void>
   deleteClip: (trackId: string, clipId: string) => Promise<void>
   deleteSelectedClip: () => Promise<void>
+  deleteSelectedClips: () => Promise<void>
+  duplicateClip: (trackId: string, clipId: string) => Promise<string>
+  splitClip: (trackId: string, clipId: string, atTicks: number) => Promise<string>
+  toggleClipSelection: (clipId: string) => void
+  clearSelection: () => void
+  selectAllClips: () => void
+  copySelectedClips: () => void
+  pasteClipsAtPosition: (positionTicks: number, targetTrackId?: string) => Promise<void>
   getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<[number, number][]>
 }
 
@@ -74,6 +84,8 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   tracks: [],
   selectedTrackId: null,
   selectedClipId: null,
+  selectedClipIds: new Set(),
+  clipboard: [],
 
   fetchTracks: async () => {
     const trackList = await invoke<TrackInfo[]>('get_tracks')
@@ -90,7 +102,24 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   selectClip: (clipId, trackId) => set({
     selectedClipId: clipId,
+    selectedClipIds: clipId ? new Set([clipId]) : new Set(),
     ...(trackId ? { selectedTrackId: trackId } : {}),
+  }),
+
+  toggleClipSelection: (clipId) => set(s => {
+    const next = new Set(s.selectedClipIds)
+    if (next.has(clipId)) next.delete(clipId); else next.add(clipId)
+    const primary = next.has(s.selectedClipId || '') ? s.selectedClipId : (next.values().next().value ?? null)
+    return { selectedClipIds: next, selectedClipId: primary as string | null }
+  }),
+
+  clearSelection: () => set({ selectedClipId: null, selectedClipIds: new Set() }),
+
+  selectAllClips: () => set(s => {
+    const ids = new Set<string>()
+    for (const t of s.tracks) for (const c of t.clips) ids.add(c.id)
+    const primary = ids.values().next().value ?? null
+    return { selectedClipIds: ids, selectedClipId: primary as string | null }
   }),
 
   addAudioTrack: async (name) => {
@@ -180,6 +209,65 @@ export const useTrackStore = create<TrackState>((set, get) => ({
         return
       }
     }
+  },
+
+  deleteSelectedClips: async () => {
+    const ids = Array.from(get().selectedClipIds)
+    if (ids.length === 0) { await get().deleteSelectedClip(); return }
+    const { tracks } = get()
+    const toDelete: Array<{ trackId: string; clipId: string }> = []
+    for (const track of tracks) {
+      for (const clip of track.clips) {
+        if (ids.includes(clip.id)) toDelete.push({ trackId: track.id, clipId: clip.id })
+      }
+    }
+    for (const { trackId, clipId } of toDelete) {
+      await invoke('delete_clip', { trackId, clipId })
+    }
+    set({ selectedClipId: null, selectedClipIds: new Set() })
+    await get().fetchTracks()
+  },
+
+  duplicateClip: async (trackId, clipId) => {
+    const newId = await invoke<string>('duplicate_clip', { trackId, clipId })
+    await get().fetchTracks()
+    return newId
+  },
+
+  splitClip: async (trackId, clipId, atTicks) => {
+    const newId = await invoke<string>('split_clip', { trackId, clipId, atTicks })
+    await get().fetchTracks()
+    return newId
+  },
+
+  copySelectedClips: () => {
+    const { selectedClipIds, tracks } = get()
+    const ids = Array.from(selectedClipIds)
+    const collected: ClipInfo[] = []
+    for (const t of tracks) for (const c of t.clips) if (ids.includes(c.id)) collected.push(c)
+    set({ clipboard: collected })
+  },
+
+  pasteClipsAtPosition: async (positionTicks, targetTrackId) => {
+    const { clipboard, tracks, selectedTrackId } = get()
+    if (clipboard.length === 0) return
+    const trackId = targetTrackId || selectedTrackId
+    if (!trackId) return
+    const track = tracks.find(t => t.id === trackId)
+    if (!track) return
+    // Normalize: earliest clip aligns to positionTicks; others preserve relative offset.
+    const earliest = clipboard.reduce((m, c) => Math.min(m, c.position_ticks), Infinity)
+    for (const c of clipboard) {
+      const offset = c.position_ticks - earliest
+      const newPos = positionTicks + offset
+      try {
+        const newId = await invoke<string>('duplicate_clip', { trackId, clipId: c.id })
+        await invoke('move_clip', { trackId, clipId: newId, newPositionTicks: newPos })
+      } catch (e) {
+        console.warn('paste failed for clip', c.id, e)
+      }
+    }
+    await get().fetchTracks()
   },
 
   getWaveformPeaks: async (sourceId, numBuckets) => {

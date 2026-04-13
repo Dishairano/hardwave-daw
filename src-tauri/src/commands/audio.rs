@@ -248,6 +248,106 @@ pub fn resize_clip(
     Ok(())
 }
 
+/// Duplicate a clip within the same track, placing the copy immediately after it.
+#[tauri::command]
+pub fn duplicate_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+) -> Result<String, String> {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    let track = project
+        .track_mut(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+
+    let original = track
+        .clips
+        .iter()
+        .find(|c| match &c.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+            hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
+        })
+        .ok_or_else(|| format!("Clip not found: {}", clip_id))?
+        .clone();
+
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let mut copy = original.clone();
+    copy.position_ticks = original.position_ticks + original.length_ticks;
+    match &mut copy.content {
+        hardwave_project::clip::ClipContent::Audio(ac) => ac.id = new_id.clone(),
+        hardwave_project::clip::ClipContent::Midi(mc) => mc.id = new_id.clone(),
+    }
+    track.clips.push(copy);
+    drop(project);
+    engine.rebuild_graph();
+    Ok(new_id)
+}
+
+/// Split a clip at the given absolute timeline tick position.
+/// Returns the id of the newly created right-hand clip.
+#[tauri::command]
+pub fn split_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    at_ticks: u64,
+) -> Result<String, String> {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    let track = project
+        .track_mut(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+
+    let idx = track
+        .clips
+        .iter()
+        .position(|c| match &c.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+            hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
+        })
+        .ok_or_else(|| format!("Clip not found: {}", clip_id))?;
+
+    let original = track.clips[idx].clone();
+    let start = original.position_ticks;
+    let end = start + original.length_ticks;
+    if at_ticks <= start || at_ticks >= end {
+        return Err(format!(
+            "split position {} outside clip [{}, {})",
+            at_ticks, start, end
+        ));
+    }
+    let first_ticks = at_ticks - start;
+    let second_ticks = end - at_ticks;
+
+    // Shrink the original to the left half.
+    track.clips[idx].length_ticks = first_ticks;
+
+    // Build the right-hand clip.
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let mut right = original.clone();
+    right.position_ticks = at_ticks;
+    right.length_ticks = second_ticks;
+    match &mut right.content {
+        hardwave_project::clip::ClipContent::Audio(ac) => {
+            // Proportionally advance the source_start for the right half.
+            let total_src = ac.source_end.saturating_sub(ac.source_start) as u128;
+            let offset =
+                (total_src * first_ticks as u128 / (original.length_ticks.max(1)) as u128) as u64;
+            ac.source_start = ac.source_start.saturating_add(offset);
+            ac.id = new_id.clone();
+        }
+        hardwave_project::clip::ClipContent::Midi(mc) => {
+            mc.id = new_id.clone();
+        }
+    }
+    track.clips.push(right);
+
+    drop(project);
+    engine.rebuild_graph();
+    Ok(new_id)
+}
+
 /// Delete a clip from a track.
 #[tauri::command]
 pub fn delete_clip(

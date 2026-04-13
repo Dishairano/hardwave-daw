@@ -9,15 +9,25 @@ const PIXELS_PER_SECOND_BASE = 100
 const RESIZE_HANDLE_PX = 6
 const RULER_HEIGHT = 22
 
-type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left'
+type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left' | 'rubber' | 'scrub'
 
 interface DragState {
   mode: DragMode
   clipId: string
   trackId: string
   startMouseX: number
+  startMouseY: number
+  currentMouseX: number
+  currentMouseY: number
   originalPositionTicks: number
   originalLengthTicks: number
+}
+
+interface ContextMenuState {
+  x: number
+  y: number
+  trackId: string
+  clipId: string
 }
 
 const waveformData = new Map<string, [number, number][]>()
@@ -34,7 +44,11 @@ export function Arrangement() {
   const dragRef = useRef<DragState | null>(null)
   const [, forceRender] = useState(0)
 
-  const { tracks, selectedClipId, selectClip, moveClip, resizeClip, getWaveformPeaks } = useTrackStore()
+  const {
+    tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
+    moveClip, resizeClip, getWaveformPeaks, duplicateClip, splitClip, deleteClip,
+  } = useTrackStore()
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const {
     positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
@@ -255,7 +269,7 @@ export function Arrangement() {
       ctx.fill()
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -275,7 +289,7 @@ export function Arrangement() {
     const y = trackY + pad
     const w = clipW
     const h = trackHeight - pad * 2
-    const isSelected = clip.id === selectedClipId
+    const isSelected = clip.id === selectedClipId || selectedClipIds.has(clip.id)
     const color = clip.muted ? '#1a1a24' : baseColor
 
     // Clip body
@@ -381,34 +395,56 @@ export function Arrangement() {
   }, [positionSamples, sampleRate])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button === 2) return // right-click handled by onContextMenu
+    setContextMenu(null)
     const rect = (e.target as HTMLElement).getBoundingClientRect()
     const mouseX = e.clientX - rect.left
     const mouseY = e.clientY - rect.top
     const scrollOffset = getScrollOffset()
 
-    // Clicking the ruler strip seeks the transport to that position.
+    // Clicking the ruler strip seeks the transport (and enables scrubbing while held).
     if (mouseY < RULER_HEIGHT) {
       const seconds = Math.max(0, (mouseX + scrollOffset) / PIXELS_PER_SECOND)
       const samples = Math.round(seconds * (sampleRate || 48000))
       setPosition(samples)
+      dragRef.current = {
+        mode: 'scrub', clipId: '', trackId: '',
+        startMouseX: mouseX, startMouseY: mouseY, currentMouseX: mouseX, currentMouseY: mouseY,
+        originalPositionTicks: 0, originalLengthTicks: 0,
+      }
       return
     }
 
     const hit = hitTest(mouseX, mouseY, scrollOffset)
     if (hit) {
-      selectClip(hit.clip.id, hit.trackId)
+      if (e.ctrlKey || e.metaKey) {
+        toggleClipSelection(hit.clip.id)
+      } else if (!selectedClipIds.has(hit.clip.id)) {
+        selectClip(hit.clip.id, hit.trackId)
+      } else {
+        selectClip(hit.clip.id, hit.trackId)
+      }
       dragRef.current = {
         mode: hit.edge === 'right' ? 'resize-right' : hit.edge === 'left' ? 'resize-left' : 'move',
         clipId: hit.clip.id,
         trackId: hit.trackId,
         startMouseX: mouseX,
+        startMouseY: mouseY,
+        currentMouseX: mouseX,
+        currentMouseY: mouseY,
         originalPositionTicks: hit.clip.position_ticks,
         originalLengthTicks: hit.clip.length_ticks,
       }
     } else {
-      selectClip(null)
+      if (!(e.ctrlKey || e.metaKey)) clearSelection()
+      dragRef.current = {
+        mode: 'rubber', clipId: '', trackId: '',
+        startMouseX: mouseX, startMouseY: mouseY, currentMouseX: mouseX, currentMouseY: mouseY,
+        originalPositionTicks: 0, originalLengthTicks: 0,
+      }
+      forceRender(n => n + 1)
     }
-  }, [hitTest, selectClip, getScrollOffset])
+  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const drag = dragRef.current
@@ -432,10 +468,25 @@ export function Arrangement() {
 
     const rect = (e.target as HTMLElement).getBoundingClientRect()
     const mouseX = e.clientX - rect.left
+    const mouseY = e.clientY - rect.top
+    drag.currentMouseX = mouseX
+    drag.currentMouseY = mouseY
     const dx = mouseX - drag.startMouseX
     const dTicks = Math.round(dx / pixelsPerTick)
 
     const minLen = snapTicks > 0 ? snapTicks : PPQ
+
+    if (drag.mode === 'scrub') {
+      const scrollOffset = getScrollOffset()
+      const seconds = Math.max(0, (mouseX + scrollOffset) / PIXELS_PER_SECOND)
+      setPosition(Math.round(seconds * (sampleRate || 48000)))
+      return
+    }
+
+    if (drag.mode === 'rubber') {
+      forceRender(n => n + 1)
+      return
+    }
 
     if (drag.mode === 'move') {
       const newPos = Math.max(0, drag.originalPositionTicks + dTicks)
@@ -456,8 +507,52 @@ export function Arrangement() {
   }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, resizeClip, snapTicks])
 
   const handleMouseUp = useCallback(() => {
+    const drag = dragRef.current
+    if (drag && drag.mode === 'rubber') {
+      // Finalize rubber-band selection — any clip intersecting the box is selected.
+      const scrollOffset = getScrollOffset()
+      const x1 = Math.min(drag.startMouseX, drag.currentMouseX)
+      const x2 = Math.max(drag.startMouseX, drag.currentMouseX)
+      const y1 = Math.min(drag.startMouseY, drag.currentMouseY)
+      const y2 = Math.max(drag.startMouseY, drag.currentMouseY)
+      const picked: string[] = []
+      for (let i = 0; i < audioTracks.length; i++) {
+        const y = RULER_HEIGHT + i * trackHeight
+        if (y + trackHeight < y1 || y > y2) continue
+        for (const clip of audioTracks[i].clips) {
+          const cx = clip.position_ticks * pixelsPerTick - scrollOffset
+          const cw = clip.length_ticks * pixelsPerTick
+          if (cx + cw < x1 || cx > x2) continue
+          picked.push(clip.id)
+        }
+      }
+      if (picked.length > 0) {
+        useTrackStore.setState(s => {
+          const next = new Set(s.selectedClipIds)
+          for (const id of picked) next.add(id)
+          return { selectedClipIds: next, selectedClipId: picked[0] }
+        })
+      }
+    }
     dragRef.current = null
-  }, [])
+    forceRender(n => n + 1)
+  }, [audioTracks, pixelsPerTick, trackHeight, getScrollOffset])
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const rect = (e.target as HTMLElement).getBoundingClientRect()
+    const mouseX = e.clientX - rect.left
+    const mouseY = e.clientY - rect.top
+    const hit = hitTest(mouseX, mouseY, getScrollOffset())
+    if (hit) {
+      if (!selectedClipIds.has(hit.clip.id)) {
+        selectClip(hit.clip.id, hit.trackId)
+      }
+      setContextMenu({ x: e.clientX, y: e.clientY, trackId: hit.trackId, clipId: hit.clip.id })
+    } else {
+      setContextMenu(null)
+    }
+  }, [hitTest, getScrollOffset, selectClip, selectedClipIds])
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     // Ctrl+Shift+Wheel: vertical zoom (change track height)
@@ -552,8 +647,54 @@ export function Arrangement() {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onContextMenu={handleContextMenu}
         onWheel={handleWheel}
       />
+      {dragRef.current && dragRef.current.mode === 'rubber' && (() => {
+        const d = dragRef.current
+        const x = Math.min(d.startMouseX, d.currentMouseX)
+        const y = Math.min(d.startMouseY, d.currentMouseY)
+        const w = Math.abs(d.currentMouseX - d.startMouseX)
+        const h = Math.abs(d.currentMouseY - d.startMouseY)
+        return (
+          <div
+            data-testid="rubber-band"
+            style={{
+              position: 'absolute', left: x, top: y, width: w, height: h,
+              background: 'rgba(220,38,38,0.08)',
+              border: '1px solid rgba(220,38,38,0.6)',
+              pointerEvents: 'none',
+            }}
+          />
+        )
+      })()}
+      {contextMenu && (
+        <div
+          data-testid="clip-context-menu"
+          onMouseLeave={() => setContextMenu(null)}
+          style={{
+            position: 'fixed', left: contextMenu.x, top: contextMenu.y,
+            background: '#12121a', border: `1px solid ${hw.border}`,
+            borderRadius: 6, padding: 4, minWidth: 160, zIndex: 1000,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+          }}
+        >
+          <MenuItem label="Duplicate (Ctrl+D)" onClick={async () => {
+            await duplicateClip(contextMenu.trackId, contextMenu.clipId)
+            setContextMenu(null)
+          }} />
+          <MenuItem label="Split at playhead (S)" onClick={async () => {
+            const sr = sampleRate || 48000
+            const atTicks = Math.round((positionSamples / sr) * (bpm / 60) * 960)
+            try { await splitClip(contextMenu.trackId, contextMenu.clipId, atTicks) } catch {}
+            setContextMenu(null)
+          }} />
+          <MenuItem label="Delete" danger onClick={async () => {
+            await deleteClip(contextMenu.trackId, contextMenu.clipId)
+            setContextMenu(null)
+          }} />
+        </div>
+      )}
       {looping && loopEnd > loopStart && (
         <div
           data-testid="loop-region-overlay"
@@ -569,6 +710,23 @@ export function Arrangement() {
         </div>
       )}
     </div>
+  )
+}
+
+function MenuItem({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+      style={{
+        display: 'block', width: '100%', textAlign: 'left',
+        padding: '5px 10px', fontSize: 11, color: danger ? '#EF4444' : '#e4e4e7',
+        background: 'transparent', border: 'none', cursor: 'pointer', borderRadius: 4,
+      }}
+    >
+      {label}
+    </button>
   )
 }
 

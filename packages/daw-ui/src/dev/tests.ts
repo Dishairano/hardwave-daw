@@ -1944,4 +1944,161 @@ export const TESTS: TestDef[] = [
       return { pass: ok, note: 'set + clear round-trip' }
     },
   },
+
+  // -------------------------------------------------------------------------
+  // Phase 2 Round 2 — Clip editing (multi-select, duplicate, split, paste)
+  // -------------------------------------------------------------------------
+  {
+    id: 'p2r2_duplicate_clip',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip duplicate: Ctrl+D',
+    title: 'duplicate_clip adds a copy immediately after the source',
+    instructions: 'Duplicating a clip must produce a second clip on the same track at position = original end.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      let clips = await invoke<any[]>('get_track_clips', { trackId })
+      if (clips.length !== 1) return { pass: false, note: `expected 1 clip, got ${clips.length}` }
+      const original = clips[0]
+      await invoke('duplicate_clip', { trackId, clipId: original.id })
+      clips = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = clips.length === 2
+      const copy = clips.find((c) => c.id !== original.id)
+      const posOk = copy && copy.position_ticks === original.position_ticks + original.length_ticks
+      log(ok && posOk ? 'pass' : 'fail', 'duplicate', {
+        expected: `2 clips, copy at ${original.position_ticks + original.length_ticks}`,
+        actual: `${clips.length} clips, copy at ${copy?.position_ticks}`,
+      })
+      await clearTrackClips(trackId)
+      return { pass: !!(ok && posOk), note: `${clips.length} clips after duplicate` }
+    },
+  },
+  {
+    id: 'p2r2_split_clip',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip split at playhead: S key',
+    title: 'split_clip divides a clip into two contiguous halves',
+    instructions: 'Splitting at the midpoint must yield two clips whose lengths sum to the original.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const clips = await invoke<any[]>('get_track_clips', { trackId })
+      if (clips.length !== 1) return { pass: false, note: `expected 1 clip, got ${clips.length}` }
+      const c = clips[0]
+      const mid = c.position_ticks + Math.floor(c.length_ticks / 2)
+      await invoke('split_clip', { trackId, clipId: c.id, atTicks: mid })
+      const after = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = after.length === 2
+      const totalLen = after.reduce((s, x) => s + x.length_ticks, 0)
+      const lenMatches = totalLen === c.length_ticks
+      log(ok && lenMatches ? 'pass' : 'fail', 'split', {
+        expected: `2 clips totalling ${c.length_ticks}`,
+        actual: `${after.length} clips totalling ${totalLen}`,
+      })
+      await clearTrackClips(trackId)
+      return { pass: !!(ok && lenMatches), note: `${after.length} clips, total ${totalLen}` }
+    },
+  },
+  {
+    id: 'p2r2_split_rejects_out_of_range',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip split at playhead: S key',
+    title: 'split_clip rejects a position outside the clip',
+    instructions: 'Requesting a split at a tick before or after the clip must return an error and leave the clip unchanged.',
+    run: async ({ ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      let errored = false
+      try {
+        await invoke('split_clip', { trackId, clipId: c.id, atTicks: c.position_ticks + c.length_ticks + 1000 })
+      } catch { errored = true }
+      const after = await invoke<any[]>('get_track_clips', { trackId })
+      await clearTrackClips(trackId)
+      const ok = errored && after.length === 1
+      return { pass: ok, note: ok ? 'rejected cleanly' : `errored=${errored} clips=${after.length}` }
+    },
+  },
+  {
+    id: 'p2r2_select_all_clips',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip selection: Ctrl+A select all',
+    title: 'selectAllClips populates selectedClipIds with every clip in every track',
+    instructions: 'After Ctrl+A the store\'s selectedClipIds set must contain every clip id.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const { useTrackStore } = await import('../stores/trackStore')
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      await useTrackStore.getState().fetchTracks()
+      const totalClips = useTrackStore.getState().tracks.flatMap((t) => t.clips).length
+      useTrackStore.getState().selectAllClips()
+      const selected = useTrackStore.getState().selectedClipIds.size
+      const ok = selected === totalClips && totalClips >= 2
+      log(ok ? 'pass' : 'fail', 'select all', { expected: totalClips, actual: selected })
+      useTrackStore.getState().clearSelection()
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `selected ${selected} of ${totalClips}` }
+    },
+  },
+  {
+    id: 'p2r2_toggle_clip_selection',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip selection: Ctrl+click to add to selection',
+    title: 'toggleClipSelection adds then removes a clip id from the set',
+    instructions: 'Calling toggleClipSelection twice with the same id must leave the set unchanged.',
+    run: async ({ log }) => {
+      const { useTrackStore } = await import('../stores/trackStore')
+      const s = useTrackStore.getState()
+      const before = s.selectedClipIds.size
+      s.toggleClipSelection('synthetic-clip-id-aaa')
+      const mid = useTrackStore.getState().selectedClipIds.size
+      s.toggleClipSelection('synthetic-clip-id-aaa')
+      const after = useTrackStore.getState().selectedClipIds.size
+      const ok = mid === before + 1 && after === before
+      log(ok ? 'pass' : 'fail', 'toggle', { expected: `${before + 1}→${before}`, actual: `${mid}→${after}` })
+      useTrackStore.getState().clearSelection()
+      return { pass: ok, note: 'add then remove restores size' }
+    },
+  },
+  {
+    id: 'p2r2_copy_paste_clips',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip copy/paste: Ctrl+C / Ctrl+V',
+    title: 'copySelectedClips + pasteClipsAtPosition places new clip at given position',
+    instructions: 'Copy a single clip, paste at a specific tick position; the new clip must exist at that tick.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const { useTrackStore } = await import('../stores/trackStore')
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      await useTrackStore.getState().fetchTracks()
+      const track = useTrackStore.getState().tracks.find((t) => t.id === trackId)!
+      const clip = track.clips[0]
+      useTrackStore.getState().selectClip(clip.id, trackId)
+      useTrackStore.getState().copySelectedClips()
+      const pasteAt = 960 * 8 // bar 3
+      await useTrackStore.getState().pasteClipsAtPosition(pasteAt, trackId)
+      const after = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = after.length === 2 && after.some((c) => c.position_ticks === pasteAt)
+      log(ok ? 'pass' : 'fail', 'paste', { expected: `2 clips, one at ${pasteAt}`, actual: `${after.length} clips` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `${after.length} clips post-paste` }
+    },
+  },
 ]
