@@ -41,6 +41,12 @@ pub struct ClipRegion {
     pub gain: f32,
     /// Whether this clip is muted.
     pub muted: bool,
+    /// Linear fade-in length in samples (0 = no fade).
+    pub fade_in_samples: u64,
+    /// Linear fade-out length in samples (0 = no fade).
+    pub fade_out_samples: u64,
+    /// Play source backwards when true.
+    pub reversed: bool,
 }
 
 /// Audio node for a single track. Holds references to its clips and the shared audio pool.
@@ -157,6 +163,8 @@ impl AudioNode for TrackNode {
             let out_l = &mut out_left[0];
             let out_r = &mut out_rest[0];
 
+            let clip_length = clip.timeline_end.saturating_sub(clip.timeline_start);
+
             for frame in 0..buf_size {
                 let timeline_sample = pos + frame as u64;
 
@@ -164,16 +172,39 @@ impl AudioNode for TrackNode {
                     continue;
                 }
 
-                let source_frame =
-                    (timeline_sample - clip.timeline_start + clip.source_offset) as usize;
+                let into_clip = timeline_sample - clip.timeline_start;
+
+                let source_frame = if clip.reversed {
+                    let end_frame = clip.source_offset + clip_length;
+                    if end_frame == 0 {
+                        continue;
+                    }
+                    let sf = end_frame.saturating_sub(1).saturating_sub(into_clip);
+                    sf as usize
+                } else {
+                    (into_clip + clip.source_offset) as usize
+                };
 
                 if source_frame >= audio_buf.num_frames {
                     continue;
                 }
 
-                let l = audio_buf.sample(0, source_frame) * clip.gain;
+                // Linear fade-in / fade-out envelope.
+                let mut env = 1.0_f32;
+                if clip.fade_in_samples > 0 && into_clip < clip.fade_in_samples {
+                    env *= into_clip as f32 / clip.fade_in_samples as f32;
+                }
+                if clip.fade_out_samples > 0 {
+                    let to_end = clip_length.saturating_sub(into_clip);
+                    if to_end < clip.fade_out_samples {
+                        env *= to_end as f32 / clip.fade_out_samples as f32;
+                    }
+                }
+
+                let scaled_gain = clip.gain * env;
+                let l = audio_buf.sample(0, source_frame) * scaled_gain;
                 let r = if num_channels > 1 {
-                    audio_buf.sample(1, source_frame) * clip.gain
+                    audio_buf.sample(1, source_frame) * scaled_gain
                 } else {
                     l // mono → duplicate to both channels
                 };

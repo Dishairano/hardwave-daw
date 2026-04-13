@@ -497,6 +497,10 @@ impl EngineCallback {
                         } else {
                             10.0_f64.powf(audio_clip.gain_db / 20.0) as f32
                         };
+                        let fade_in_samples =
+                            tempo_map.tick_to_samples(audio_clip.fade_in_ticks, sample_rate);
+                        let fade_out_samples =
+                            tempo_map.tick_to_samples(audio_clip.fade_out_ticks, sample_rate);
                         Some(ClipRegion {
                             source_id: audio_clip.source_path.clone(),
                             timeline_start,
@@ -504,6 +508,9 @@ impl EngineCallback {
                             source_offset: audio_clip.source_start,
                             gain,
                             muted: audio_clip.muted,
+                            fade_in_samples,
+                            fade_out_samples,
+                            reversed: audio_clip.reversed,
                         })
                     }
                     _ => None,

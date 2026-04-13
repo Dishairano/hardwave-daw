@@ -57,6 +57,7 @@ pub fn import_audio_file(
         fade_in_ticks: 0,
         fade_out_ticks: 0,
         muted: false,
+        reversed: false,
     };
 
     let placement = hardwave_project::clip::ClipPlacement {
@@ -114,6 +115,10 @@ pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo
                 position_ticks: clip.position_ticks,
                 length_ticks: clip.length_ticks,
                 muted: ac.muted,
+                gain_db: ac.gain_db,
+                fade_in_ticks: ac.fade_in_ticks,
+                fade_out_ticks: ac.fade_out_ticks,
+                reversed: ac.reversed,
             },
             hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
                 id: mc.id.clone(),
@@ -123,6 +128,10 @@ pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo
                 position_ticks: clip.position_ticks,
                 length_ticks: clip.length_ticks,
                 muted: false,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                reversed: false,
             },
         })
         .collect()
@@ -137,6 +146,113 @@ pub struct ClipInfo {
     position_ticks: u64,
     length_ticks: u64,
     muted: bool,
+    #[serde(rename = "gainDb")]
+    gain_db: f64,
+    #[serde(rename = "fadeInTicks")]
+    fade_in_ticks: u64,
+    #[serde(rename = "fadeOutTicks")]
+    fade_out_ticks: u64,
+    reversed: bool,
+}
+
+fn with_audio_clip_mut<R>(
+    engine: &hardwave_engine::DawEngine,
+    track_id: &str,
+    clip_id: &str,
+    f: impl FnOnce(&mut hardwave_project::clip::AudioClip) -> R,
+) -> Result<R, String> {
+    let mut project = engine.project.lock();
+    let track = project
+        .track_mut(track_id)
+        .ok_or_else(|| format!("Track not found: {track_id}"))?;
+    let clip = track
+        .clips
+        .iter_mut()
+        .find_map(|c| match &mut c.content {
+            hardwave_project::clip::ClipContent::Audio(ac) if ac.id == clip_id => Some(ac),
+            _ => None,
+        })
+        .ok_or_else(|| format!("Audio clip not found: {clip_id}"))?;
+    Ok(f(clip))
+}
+
+/// Set the gain (in dB) of an audio clip.
+#[tauri::command]
+pub fn set_clip_gain(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    gain_db: f64,
+) -> Result<(), String> {
+    let engine = state.engine.lock();
+    with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
+        ac.gain_db = gain_db.clamp(-60.0, 12.0);
+    })?;
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// Set the fade-in / fade-out lengths (in ticks) for an audio clip.
+#[tauri::command]
+pub fn set_clip_fades(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    fade_in_ticks: u64,
+    fade_out_ticks: u64,
+) -> Result<(), String> {
+    let engine = state.engine.lock();
+    // Fades may not sum to more than the clip length — clamp for safety.
+    let length_ticks = {
+        let project = engine.project.lock();
+        project
+            .track(&track_id)
+            .and_then(|t| {
+                t.clips.iter().find_map(|c| match &c.content {
+                    hardwave_project::clip::ClipContent::Audio(ac) if ac.id == clip_id => {
+                        Some(c.length_ticks)
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or(u64::MAX)
+    };
+    let total = fade_in_ticks.saturating_add(fade_out_ticks);
+    let (fi, fo) = if total > length_ticks {
+        // Scale both down proportionally so they just fit.
+        let ratio = length_ticks as f64 / total.max(1) as f64;
+        (
+            (fade_in_ticks as f64 * ratio) as u64,
+            (fade_out_ticks as f64 * ratio) as u64,
+        )
+    } else {
+        (fade_in_ticks, fade_out_ticks)
+    };
+    with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
+        ac.fade_in_ticks = fi;
+        ac.fade_out_ticks = fo;
+    })?;
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// Toggle the reverse flag of an audio clip.
+#[tauri::command]
+pub fn toggle_clip_reverse(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+) -> Result<bool, String> {
+    let engine = state.engine.lock();
+    let new_value = with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
+        ac.reversed = !ac.reversed;
+        ac.reversed
+    })?;
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(new_value)
 }
 
 /// Get downsampled waveform peaks for an audio source.

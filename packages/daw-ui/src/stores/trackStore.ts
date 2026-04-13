@@ -9,6 +9,10 @@ export interface ClipInfo {
   position_ticks: number
   length_ticks: number
   muted: boolean
+  gainDb: number
+  fadeInTicks: number
+  fadeOutTicks: number
+  reversed: boolean
 }
 
 export interface TrackInfo {
@@ -77,6 +81,9 @@ interface TrackState {
   selectAllClips: () => void
   copySelectedClips: () => void
   pasteClipsAtPosition: (positionTicks: number, targetTrackId?: string) => Promise<void>
+  setClipGain: (trackId: string, clipId: string, gainDb: number) => Promise<void>
+  setClipFades: (trackId: string, clipId: string, fadeInTicks: number, fadeOutTicks: number) => Promise<void>
+  toggleClipReverse: (trackId: string, clipId: string) => Promise<void>
   getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<[number, number][]>
 }
 
@@ -267,6 +274,21 @@ export const useTrackStore = create<TrackState>((set, get) => ({
         console.warn('paste failed for clip', c.id, e)
       }
     }
+    await get().fetchTracks()
+  },
+
+  setClipGain: async (trackId, clipId, gainDb) => {
+    await invoke('set_clip_gain', { trackId, clipId, gainDb })
+    await get().fetchTracks()
+  },
+
+  setClipFades: async (trackId, clipId, fadeInTicks, fadeOutTicks) => {
+    await invoke('set_clip_fades', { trackId, clipId, fadeInTicks, fadeOutTicks })
+    await get().fetchTracks()
+  },
+
+  toggleClipReverse: async (trackId, clipId) => {
+    await invoke('toggle_clip_reverse', { trackId, clipId })
     await get().fetchTracks()
   },
 

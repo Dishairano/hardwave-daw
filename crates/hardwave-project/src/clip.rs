@@ -23,6 +23,9 @@ pub struct AudioClip {
     /// Fade out length in ticks.
     pub fade_out_ticks: u64,
     pub muted: bool,
+    /// Play this clip with the source read backwards.
+    #[serde(default)]
+    pub reversed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

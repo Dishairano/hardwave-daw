@@ -8,11 +8,17 @@ const CLIP_PALETTE = [
 ]
 
 export function Inspector() {
-  const { tracks, selectedTrackId, selectedClipId, setVolume, setPan, removeTrack } = useTrackStore()
+  const {
+    tracks, selectedTrackId, selectedClipId, setVolume, setPan, removeTrack,
+    setClipGain, setClipFades, toggleClipReverse,
+  } = useTrackStore()
   const { clipColorOverrides, setClipColor } = useTransportStore()
   const track = tracks.find(t => t.id === selectedTrackId)
-  const selectedClip = selectedClipId
-    ? tracks.flatMap(t => t.clips).find(c => c.id === selectedClipId) || null
+  const clipOwner = selectedClipId
+    ? tracks.find(t => t.clips.some(c => c.id === selectedClipId)) || null
+    : null
+  const selectedClip = selectedClipId && clipOwner
+    ? clipOwner.clips.find(c => c.id === selectedClipId) || null
     : null
 
   if (!track) {
@@ -49,9 +55,61 @@ export function Inspector() {
         Inserts: {track.insert_count}
       </div>
 
-      {selectedClip && (
+      {selectedClip && clipOwner && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${hw.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: hw.textSecondary }}>Clip: {selectedClip.name}</div>
+
+          {selectedClip.kind === 'audio' && (
+            <>
+              <label style={labelStyle} data-testid="clip-gain-label">
+                Gain
+                <input
+                  type="range" min={-60} max={12} step={0.1}
+                  value={selectedClip.gainDb}
+                  onChange={(e) => setClipGain(clipOwner.id, selectedClip.id, parseFloat(e.target.value))}
+                  style={{ width: '100%' }}
+                  data-testid="clip-gain-input"
+                />
+                <span style={{ fontSize: 9, color: hw.textFaint }}>{selectedClip.gainDb.toFixed(1)} dB</span>
+              </label>
+
+              <label style={labelStyle}>
+                Fade In (ticks)
+                <input
+                  type="number" min={0} step={60}
+                  value={selectedClip.fadeInTicks}
+                  onChange={(e) => setClipFades(clipOwner.id, selectedClip.id, Math.max(0, parseInt(e.target.value) || 0), selectedClip.fadeOutTicks)}
+                  style={numStyle}
+                  data-testid="clip-fade-in-input"
+                />
+              </label>
+              <label style={labelStyle}>
+                Fade Out (ticks)
+                <input
+                  type="number" min={0} step={60}
+                  value={selectedClip.fadeOutTicks}
+                  onChange={(e) => setClipFades(clipOwner.id, selectedClip.id, selectedClip.fadeInTicks, Math.max(0, parseInt(e.target.value) || 0))}
+                  style={numStyle}
+                  data-testid="clip-fade-out-input"
+                />
+              </label>
+
+              <button
+                onClick={() => toggleClipReverse(clipOwner.id, selectedClip.id)}
+                data-testid="clip-reverse-btn"
+                style={{
+                  padding: '4px 8px', fontSize: 10,
+                  background: selectedClip.reversed ? hw.accent : 'transparent',
+                  color: selectedClip.reversed ? '#000' : hw.textMuted,
+                  border: `1px solid ${hw.borderDark}`, borderRadius: 4,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >
+                {selectedClip.reversed ? 'Reversed ✓' : 'Reverse'}
+              </button>
+            </>
+          )}
+
           <div style={{ fontSize: 9, color: hw.textFaint }}>Color</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             {CLIP_PALETTE.map(c => {
@@ -102,4 +160,11 @@ export function Inspector() {
 
 const labelStyle: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 2, fontSize: 10, color: hw.textMuted,
+}
+
+const numStyle: React.CSSProperties = {
+  width: '100%', fontSize: 10, padding: '2px 4px',
+  background: 'rgba(0,0,0,0.3)', color: '#fff',
+  border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 3,
+  fontFamily: 'inherit',
 }

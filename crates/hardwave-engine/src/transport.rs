@@ -121,7 +121,7 @@ mod tests {
         t.advance(2000);
         let pos = t.position();
         assert!(
-            pos >= 48000 && pos < 96000,
+            (48000..96000).contains(&pos),
             "position should wrap to loop region, got {}",
             pos
         );

@@ -79,6 +79,9 @@ pub fn run() {
             commands::audio::delete_clip,
             commands::audio::duplicate_clip,
             commands::audio::split_clip,
+            commands::audio::set_clip_gain,
+            commands::audio::set_clip_fades,
+            commands::audio::toggle_clip_reverse,
             // MIDI
             commands::midi::create_midi_clip,
             commands::midi::get_midi_notes,

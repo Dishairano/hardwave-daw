@@ -2101,4 +2101,83 @@ export const TESTS: TestDef[] = [
       return { pass: ok, note: `${after.length} clips post-paste` }
     },
   },
+  {
+    id: 'p2r3_clip_gain_roundtrip',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip gain knob',
+    title: 'set_clip_gain persists and clamps to -60..+12 dB',
+    instructions: 'Setting gain to +20 dB should clamp at +12; -200 should clamp at -60.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('set_clip_gain', { trackId, clipId: c.id, gainDb: 20 })
+      let after = await invoke<any[]>('get_track_clips', { trackId })
+      const hi = after[0].gainDb
+      await invoke('set_clip_gain', { trackId, clipId: c.id, gainDb: -200 })
+      after = await invoke<any[]>('get_track_clips', { trackId })
+      const lo = after[0].gainDb
+      const ok = Math.abs(hi - 12) < 0.01 && Math.abs(lo - -60) < 0.01
+      log(ok ? 'pass' : 'fail', 'gain', { expected: 'hi=12, lo=-60', actual: `hi=${hi}, lo=${lo}` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `hi=${hi} lo=${lo}` }
+    },
+  },
+  {
+    id: 'p2r3_clip_fades_roundtrip',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip fade-in handle',
+    title: 'set_clip_fades stores values and clamps to clip length',
+    instructions: 'Fade-in + fade-out greater than clip length must be scaled down proportionally.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('set_clip_fades', { trackId, clipId: c.id, fadeInTicks: 200, fadeOutTicks: 300 })
+      let after = await invoke<any[]>('get_track_clips', { trackId })
+      const inOk = after[0].fadeInTicks === 200 && after[0].fadeOutTicks === 300
+      // Overflow: fades summing past clip length should scale down to <= length
+      const huge = c.length_ticks
+      await invoke('set_clip_fades', { trackId, clipId: c.id, fadeInTicks: huge, fadeOutTicks: huge })
+      after = await invoke<any[]>('get_track_clips', { trackId })
+      const sum = after[0].fadeInTicks + after[0].fadeOutTicks
+      const clamped = sum <= c.length_ticks
+      const ok = inOk && clamped
+      log(ok ? 'pass' : 'fail', 'fades', { expected: `stored + sum<=${c.length_ticks}`, actual: `stored=${inOk} sum=${sum}` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `stored=${inOk} clamp-sum=${sum}/${c.length_ticks}` }
+    },
+  },
+  {
+    id: 'p2r3_clip_reverse_toggle',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip reverse toggle',
+    title: 'toggle_clip_reverse flips the reversed flag',
+    instructions: 'Calling toggle twice must return the flag to its original state.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      const before = c.reversed
+      await invoke('toggle_clip_reverse', { trackId, clipId: c.id })
+      let after = await invoke<any[]>('get_track_clips', { trackId })
+      const mid = after[0].reversed
+      await invoke('toggle_clip_reverse', { trackId, clipId: c.id })
+      after = await invoke<any[]>('get_track_clips', { trackId })
+      const end = after[0].reversed
+      const ok = mid !== before && end === before
+      log(ok ? 'pass' : 'fail', 'reverse', { expected: `${before}→${!before}→${before}`, actual: `${before}→${mid}→${end}` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `${before}→${mid}→${end}` }
+    },
+  },
 ]

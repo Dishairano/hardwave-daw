@@ -348,6 +348,41 @@ export function Arrangement() {
       ctx.restore()
     }
 
+    // Fade-in / fade-out overlays (triangular gradients)
+    if (clip.fadeInTicks > 0 || clip.fadeOutTicks > 0) {
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(x, y + headerH, w, h - headerH)
+      ctx.clip()
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'
+      if (clip.fadeInTicks > 0) {
+        const fw = Math.min(w, clip.fadeInTicks * pxPerTick)
+        ctx.beginPath()
+        ctx.moveTo(x, y + headerH)
+        ctx.lineTo(x + fw, y + headerH)
+        ctx.lineTo(x, y + h)
+        ctx.closePath()
+        ctx.fill()
+      }
+      if (clip.fadeOutTicks > 0) {
+        const fw = Math.min(w, clip.fadeOutTicks * pxPerTick)
+        ctx.beginPath()
+        ctx.moveTo(x + w, y + headerH)
+        ctx.lineTo(x + w - fw, y + headerH)
+        ctx.lineTo(x + w, y + h)
+        ctx.closePath()
+        ctx.fill()
+      }
+      ctx.restore()
+    }
+
+    // Reverse indicator
+    if (clip.reversed) {
+      ctx.fillStyle = '#EF4444'
+      ctx.font = 'bold 8px Inter, ui-sans-serif, sans-serif'
+      ctx.fillText('◄', x + w - 10, y + 10)
+    }
+
     // Border
     if (isSelected) {
       ctx.strokeStyle = '#EF4444'
