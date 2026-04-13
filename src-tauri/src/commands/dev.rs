@@ -51,6 +51,7 @@ pub struct DevTrackMeter {
     pub peak_l_db: f32,
     pub peak_r_db: f32,
     pub rms_db: f32,
+    pub pre_fader_peak_db: f32,
 }
 
 #[tauri::command]
@@ -96,11 +97,12 @@ pub fn dev_dump_state(state: State<AppState>) -> DevState {
         master_clipped: meter.clipped,
         tracks: track_meters
             .into_iter()
-            .map(|(id, pl, pr, rms)| DevTrackMeter {
+            .map(|(id, pl, pr, rms, pre_fader)| DevTrackMeter {
                 id,
                 peak_l_db: pl,
                 peak_r_db: pr,
                 rms_db: rms,
+                pre_fader_peak_db: pre_fader,
             })
             .collect(),
     }

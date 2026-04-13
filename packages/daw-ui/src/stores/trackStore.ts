@@ -58,6 +58,10 @@ interface TrackState {
   setPan: (id: string, pan: number) => Promise<void>
   toggleMute: (id: string) => Promise<void>
   toggleSolo: (id: string) => Promise<void>
+  toggleArm: (id: string) => Promise<void>
+  reorderTrack: (id: string, newIndex: number) => Promise<void>
+  trackHeights: Record<string, number>
+  setTrackHeight: (id: string, height: number) => void
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
   moveClip: (trackId: string, clipId: string, newPositionTicks: number) => Promise<void>
   resizeClip: (trackId: string, clipId: string, newLengthTicks: number) => Promise<void>
@@ -125,6 +129,20 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     await invoke('toggle_solo', { trackId: id })
     await get().fetchTracks()
   },
+
+  toggleArm: async (id) => {
+    await invoke('toggle_arm', { trackId: id })
+    await get().fetchTracks()
+  },
+
+  reorderTrack: async (id, newIndex) => {
+    await invoke('reorder_track', { trackId: id, newIndex })
+    await get().fetchTracks()
+  },
+
+  trackHeights: {},
+  setTrackHeight: (id, height) =>
+    set(s => ({ trackHeights: { ...s.trackHeights, [id]: Math.max(24, Math.min(240, height)) } })),
 
   importAudioFile: async (trackId, filePath, positionTicks) => {
     const result = await invoke<ImportedClip>('import_audio_file', {

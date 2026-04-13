@@ -118,8 +118,9 @@ impl DawEngine {
         &self,
         path: &std::path::Path,
     ) -> Result<(String, hardwave_dsp::AudioFileInfo), String> {
-        let (info, channels) =
-            hardwave_dsp::AudioFileReader::read(path).map_err(|e| e.to_string())?;
+        let target_sr = self.audio_device.sample_rate;
+        let (info, channels) = hardwave_dsp::AudioFileReader::read_resampled(path, Some(target_sr))
+            .map_err(|e| e.to_string())?;
 
         let num_frames = channels.first().map(|c| c.len()).unwrap_or(0);
         let source_id = format!("{:x}", md5_hash(path.to_string_lossy().as_bytes()));
@@ -159,7 +160,8 @@ impl DawEngine {
     }
 
     /// Snapshot per-track post-fader meters.
-    pub fn track_meter_snapshots(&self) -> Vec<(String, f32, f32, f32)> {
+    /// Returns (id, peak_l, peak_r, rms, pre_fader_peak).
+    pub fn track_meter_snapshots(&self) -> Vec<(String, f32, f32, f32, f32)> {
         use std::sync::atomic::Ordering;
         let meters = self.track_meters.lock();
         meters
@@ -170,6 +172,7 @@ impl DawEngine {
                     m.peak_db_l.load(Ordering::Relaxed),
                     m.peak_db_r.load(Ordering::Relaxed),
                     m.rms_db.load(Ordering::Relaxed),
+                    m.pre_fader_peak_db.load(Ordering::Relaxed),
                 )
             })
             .collect()
@@ -215,6 +218,34 @@ impl DawEngine {
     /// Get a reference to the audio device manager for device listing.
     pub fn audio_device_manager(&self) -> &AudioDeviceManager {
         &self.audio_device
+    }
+
+    /// Fingerprint of the current output device set — used by the UI thread
+    /// to detect hot-plug events.
+    pub fn output_device_fingerprint(&self) -> u64 {
+        self.audio_device.output_device_fingerprint()
+    }
+
+    /// List audio host backends available in this build.
+    pub fn list_audio_hosts() -> Vec<String> {
+        AudioDeviceManager::list_hosts()
+    }
+
+    /// Name of the currently active audio host backend.
+    pub fn audio_host_name(&self) -> String {
+        self.audio_device.host_name()
+    }
+
+    /// Switch audio host backend. Restarts the stream if it was running.
+    pub fn set_audio_host(&mut self, host_name: &str) -> Result<(), String> {
+        let was_running = self.audio_device.is_running();
+        self.audio_device
+            .set_host(host_name)
+            .map_err(|e| e.to_string())?;
+        if was_running {
+            self.start()?;
+        }
+        Ok(())
     }
 
     /// Get current audio config.

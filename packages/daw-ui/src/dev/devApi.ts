@@ -5,6 +5,7 @@ export interface DevTrackMeter {
   peakLDb: number
   peakRDb: number
   rmsDb: number
+  preFaderPeakDb: number
 }
 
 export interface DevState {
@@ -65,6 +66,7 @@ function fromSnake(raw: any): DevState {
       peakLDb: t.peak_l_db,
       peakRDb: t.peak_r_db,
       rmsDb: t.rms_db,
+      preFaderPeakDb: t.pre_fader_peak_db ?? -100,
     })),
   }
 }

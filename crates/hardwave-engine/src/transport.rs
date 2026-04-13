@@ -103,6 +103,69 @@ impl TransportState {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loop_wraps_position_in_song_mode() {
+        let t = TransportState::default();
+        t.looping.store(true, Ordering::Relaxed);
+        t.loop_start.store(48000, Ordering::Relaxed);
+        t.loop_end.store(96000, Ordering::Relaxed);
+        t.playing.store(true, Ordering::Relaxed);
+        t.pattern_mode.store(false, Ordering::Relaxed);
+        // Set position just before loop end
+        t.set_position(95000);
+        // Advance past loop end
+        t.advance(2000);
+        let pos = t.position();
+        assert!(
+            pos >= 48000 && pos < 96000,
+            "position should wrap to loop region, got {}",
+            pos
+        );
+    }
+
+    #[test]
+    fn no_wrap_without_loop() {
+        let t = TransportState::default();
+        t.looping.store(false, Ordering::Relaxed);
+        t.playing.store(true, Ordering::Relaxed);
+        t.pattern_mode.store(false, Ordering::Relaxed);
+        t.set_position(100000);
+        t.advance(5000);
+        assert_eq!(t.position(), 105000);
+    }
+
+    #[test]
+    fn pattern_mode_wraps_at_4_bars() {
+        let t = TransportState::default();
+        t.pattern_mode.store(true, Ordering::Relaxed);
+        t.bpm.store(120.0, Ordering::Relaxed);
+        t.sample_rate.store(48000, Ordering::Relaxed);
+        t.time_sig.store(pack_time_sig(4, 4), Ordering::Relaxed);
+        // At 120 BPM, 4/4: 1 beat = 24000 samples, 4 bars = 16 beats = 384000 samples
+        t.set_position(380000);
+        t.advance(10000);
+        let pos = t.position();
+        assert!(
+            pos < 384000,
+            "pattern mode should wrap at 4-bar boundary, got {}",
+            pos
+        );
+    }
+
+    #[test]
+    fn time_sig_pack_unpack() {
+        for (num, den) in [(4, 4), (3, 4), (7, 8), (12, 16)] {
+            let packed = pack_time_sig(num, den);
+            let (n, d) = unpack_time_sig(packed);
+            assert_eq!((n, d), (num, den));
+        }
+    }
+}
+
 /// Commands sent from UI thread to engine.
 #[derive(Debug, Clone)]
 pub enum TransportCommand {

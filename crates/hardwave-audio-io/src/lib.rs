@@ -62,6 +62,36 @@ pub struct AudioDeviceManager {
 }
 
 impl AudioDeviceManager {
+    /// List audio host backends the current build can speak to. On Linux this
+    /// will include ALSA and (if the `jack` feature was enabled) JACK; on
+    /// Windows, WASAPI (+ ASIO if built with the ASIO SDK); on macOS, CoreAudio.
+    pub fn list_hosts() -> Vec<String> {
+        cpal::available_hosts()
+            .into_iter()
+            .map(|id| id.name().to_string())
+            .collect()
+    }
+
+    /// Current host backend name.
+    pub fn host_name(&self) -> String {
+        self.host.id().name().to_string()
+    }
+
+    /// Switch to a different host backend by name (e.g. "JACK", "ALSA",
+    /// "WASAPI", "CoreAudio"). Stops the stream if running; caller is
+    /// responsible for restarting.
+    pub fn set_host(&mut self, host_name: &str) -> Result<(), AudioIoError> {
+        let id = cpal::available_hosts()
+            .into_iter()
+            .find(|id| id.name().eq_ignore_ascii_case(host_name))
+            .ok_or_else(|| AudioIoError::Device(format!("Unknown host: {host_name}")))?;
+        let host = cpal::host_from_id(id).map_err(|e| AudioIoError::Device(e.to_string()))?;
+        self.stop();
+        self.host = host;
+        self.selected_device = None;
+        Ok(())
+    }
+
     pub fn new() -> Self {
         let host = cpal::default_host();
         Self {
@@ -155,6 +185,25 @@ impl AudioDeviceManager {
         self.host
             .default_output_device()
             .ok_or(AudioIoError::NoOutputDevice)
+    }
+
+    /// Cheap fingerprint of currently-visible output devices. Used by the UI
+    /// thread to detect hot-plug events without re-sending the full list.
+    pub fn output_device_fingerprint(&self) -> u64 {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        if let Ok(devices) = self.host.output_devices() {
+            for d in devices {
+                if let Ok(name) = d.name() {
+                    for &byte in name.as_bytes() {
+                        hash ^= byte as u64;
+                        hash = hash.wrapping_mul(0x100000001b3);
+                    }
+                    hash ^= 0xff;
+                    hash = hash.wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+        hash
     }
 
     /// List available output devices.

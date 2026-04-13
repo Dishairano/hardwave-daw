@@ -1,5 +1,6 @@
 //! Audio file reading via symphonia (WAV, FLAC, MP3, OGG, AAC).
 
+use rubato::{FftFixedIn, Resampler};
 use std::path::Path;
 use symphonia::core::audio::{AudioBufferRef, Signal};
 use symphonia::core::codecs::DecoderOptions;
@@ -33,6 +34,79 @@ pub struct AudioFileInfo {
 pub struct AudioFileReader;
 
 impl AudioFileReader {
+    /// Read a file, resampling to `target_sample_rate` if provided and different
+    /// from the file's native rate. Returns the (possibly updated) info and
+    /// deinterleaved f32 channels.
+    pub fn read_resampled(
+        path: &Path,
+        target_sample_rate: Option<u32>,
+    ) -> Result<(AudioFileInfo, Vec<Vec<f32>>), AudioFileError> {
+        let (mut info, channels) = Self::read(path)?;
+        let Some(target) = target_sample_rate else {
+            return Ok((info, channels));
+        };
+        if target == info.sample_rate || channels.is_empty() {
+            return Ok((info, channels));
+        }
+
+        // Offline resample with rubato's FFT fixed-in converter.
+        let chunk_size = 1024_usize;
+        let num_channels = channels.len();
+        let mut resampler = FftFixedIn::<f32>::new(
+            info.sample_rate as usize,
+            target as usize,
+            chunk_size,
+            2,
+            num_channels,
+        )
+        .map_err(|e| AudioFileError::Decode(format!("resampler init: {e}")))?;
+
+        let input_frames = channels[0].len();
+        let mut out: Vec<Vec<f32>> = (0..num_channels).map(|_| Vec::new()).collect();
+        let mut cursor = 0_usize;
+
+        while cursor + chunk_size <= input_frames {
+            let input_slices: Vec<&[f32]> = channels
+                .iter()
+                .map(|ch| &ch[cursor..cursor + chunk_size])
+                .collect();
+            let processed = resampler
+                .process(&input_slices, None)
+                .map_err(|e| AudioFileError::Decode(format!("resample: {e}")))?;
+            for (ch_idx, chunk) in processed.into_iter().enumerate() {
+                out[ch_idx].extend_from_slice(&chunk);
+            }
+            cursor += chunk_size;
+        }
+        // Flush remaining frames (pad the final partial chunk with zeros).
+        if cursor < input_frames {
+            let remaining = input_frames - cursor;
+            let mut padded: Vec<Vec<f32>> = channels
+                .iter()
+                .map(|ch| {
+                    let mut v = ch[cursor..].to_vec();
+                    v.resize(chunk_size, 0.0);
+                    v
+                })
+                .collect();
+            let input_slices: Vec<&[f32]> = padded.iter_mut().map(|v| v.as_slice()).collect();
+            if let Ok(processed) = resampler.process(&input_slices, None) {
+                // Keep only the proportionally relevant output frames.
+                let ratio = target as f64 / info.sample_rate as f64;
+                let keep = (remaining as f64 * ratio).round() as usize;
+                for (ch_idx, chunk) in processed.into_iter().enumerate() {
+                    let take = keep.min(chunk.len());
+                    out[ch_idx].extend_from_slice(&chunk[..take]);
+                }
+            }
+        }
+
+        info.sample_rate = target;
+        info.total_frames = out.first().map(|c| c.len() as u64).unwrap_or(0);
+        info.duration_secs = info.total_frames as f64 / target as f64;
+        Ok((info, out))
+    }
+
     pub fn read(path: &Path) -> Result<(AudioFileInfo, Vec<Vec<f32>>), AudioFileError> {
         let file = std::fs::File::open(path)
             .map_err(|_| AudioFileError::NotFound(path.display().to_string()))?;

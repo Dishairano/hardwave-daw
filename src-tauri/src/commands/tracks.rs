@@ -123,6 +123,70 @@ pub fn toggle_solo(state: State<AppState>, track_id: String) {
     engine.rebuild_graph();
 }
 
+/// Exclusive solo: solo only this track, unsolo all others.
+#[tauri::command]
+pub fn set_exclusive_solo(state: State<AppState>, track_id: String) {
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        let target_currently_soloed = project.track(&track_id).map(|t| t.soloed).unwrap_or(false);
+
+        for track in &mut project.tracks {
+            if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
+                continue;
+            }
+            if track.id == track_id {
+                // If already the only soloed track, unsolo it (toggle off).
+                track.soloed = !target_currently_soloed;
+            } else {
+                track.soloed = false;
+            }
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn toggle_arm(state: State<AppState>, track_id: String) {
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.armed = !track.armed;
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn reorder_track(state: State<AppState>, track_id: String, new_index: usize) {
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        // Master must stay last; clamp new_index to non-master range.
+        let old_idx = match project.tracks.iter().position(|t| t.id == track_id) {
+            Some(i) => i,
+            None => return,
+        };
+        if matches!(
+            project.tracks[old_idx].kind,
+            hardwave_project::track::TrackKind::Master
+        ) {
+            return;
+        }
+        let master_count = project
+            .tracks
+            .iter()
+            .filter(|t| matches!(t.kind, hardwave_project::track::TrackKind::Master))
+            .count();
+        let max_idx = project.tracks.len().saturating_sub(1 + master_count);
+        let target = new_index.min(max_idx);
+        let track = project.tracks.remove(old_idx);
+        project.tracks.insert(target, track);
+    }
+    engine.rebuild_graph();
+}
+
 #[tauri::command]
 pub fn toggle_solo_safe(state: State<AppState>, track_id: String) {
     let engine = state.engine.lock();

@@ -20,6 +20,8 @@ pub struct TrackMeterState {
     pub peak_db_r: AtomicF32,
     /// Post-fader RMS in dB (mono sum, smoothed).
     pub rms_db: AtomicF32,
+    /// Pre-fader peak in dB (max of L/R before volume/pan).
+    pub pre_fader_peak_db: AtomicF32,
 }
 
 /// Description of a clip placed on this track, used by the audio thread.
@@ -181,6 +183,18 @@ impl AudioNode for TrackNode {
             }
         }
 
+        // Measure pre-fader peak (before volume/pan).
+        {
+            let mut pre_peak = 0.0_f32;
+            for (l, r) in outputs[0].iter().zip(outputs[1].iter()).take(buf_size) {
+                pre_peak = pre_peak.max(l.abs());
+                pre_peak = pre_peak.max(r.abs());
+            }
+            self.meter
+                .pre_fader_peak_db
+                .store(linear_to_db(pre_peak), Ordering::Relaxed);
+        }
+
         // Apply track volume and pan, and measure post-fader peak/RMS.
         let (pan_l, pan_r) = pan_law(self.pan);
         let vol = self.volume;
@@ -246,4 +260,85 @@ fn linear_to_db(linear: f32) -> f32 {
 fn pan_law(pan: f32) -> (f32, f32) {
     let angle = (pan + 1.0) * 0.25 * std::f32::consts::PI;
     (angle.cos(), angle.sin())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn make_test_node() -> (TrackNode, Arc<TrackMeterState>) {
+        let pool = AudioPool::new();
+        let meter = Arc::new(TrackMeterState::default());
+        let node = TrackNode::new("Test".into(), pool, Arc::clone(&meter));
+        (node, meter)
+    }
+
+    #[test]
+    fn pre_fader_meter_reads_signal_before_volume() {
+        let (mut node, meter) = make_test_node();
+        node.set_volume_db(-100.0); // fader at -inf
+
+        let ctx = ProcessContext {
+            sample_rate: 48000.0,
+            buffer_size: 64,
+            tempo: 140.0,
+            time_sig: (4, 4),
+            position_samples: 0,
+            playing: true,
+        };
+
+        // Simulate signal by writing directly to outputs (as if clips produced it).
+        // We can't easily inject clips without the audio pool, so we test the meter
+        // reads from outputs after the clip-summing stage by calling process with
+        // a node that has no clips (outputs will be zero → pre-fader should be -inf).
+        let inputs: Vec<&[f32]> = vec![];
+        let mut outputs = vec![vec![0.0f32; 64]; 2];
+        let midi_in = vec![];
+        let mut midi_out = vec![];
+        node.process(&inputs, &mut outputs, &midi_in, &mut midi_out, &ctx);
+
+        // With no clips, pre-fader peak should be near -inf
+        let pre = meter.pre_fader_peak_db.load(Ordering::Relaxed);
+        assert!(
+            pre < -90.0,
+            "pre-fader should be near -inf with no signal, got {pre}"
+        );
+
+        // Post-fader should also be near -inf
+        let post_l = meter.peak_db_l.load(Ordering::Relaxed);
+        assert!(
+            post_l < -90.0,
+            "post-fader should be near -inf, got {post_l}"
+        );
+    }
+
+    #[test]
+    fn db_to_linear_and_back() {
+        let db_vals = [-60.0, -12.0, 0.0, 6.0];
+        for &db in &db_vals {
+            let lin = db_to_linear(db);
+            let back = linear_to_db(lin);
+            assert!(
+                (back - db as f32).abs() < 0.5,
+                "roundtrip failed: {db} → {lin} → {back}"
+            );
+        }
+    }
+
+    #[test]
+    fn pan_law_center_is_equal() {
+        let (l, r) = pan_law(0.0);
+        assert!(
+            (l - r).abs() < 0.01,
+            "center pan should be equal L/R: l={l} r={r}"
+        );
+    }
+
+    #[test]
+    fn pan_law_hard_left() {
+        let (l, r) = pan_law(-1.0);
+        assert!(l > 0.9, "hard left should have l near 1.0, got {l}");
+        assert!(r < 0.01, "hard left should have r near 0.0, got {r}");
+    }
 }

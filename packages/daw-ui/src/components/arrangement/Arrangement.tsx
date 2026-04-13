@@ -5,7 +5,6 @@ import { useTransportStore } from '../../stores/transportStore'
 import { hw } from '../../theme'
 
 const PPQ = 960
-const TRACK_HEIGHT = 56
 const PIXELS_PER_SECOND = 100
 const RESIZE_HANDLE_PX = 6
 const RULER_HEIGHT = 22
@@ -36,7 +35,7 @@ export function Arrangement() {
   const [, forceRender] = useState(0)
 
   const { tracks, selectedClipId, selectClip, moveClip, resizeClip, getWaveformPeaks } = useTrackStore()
-  const { positionSamples, playing, bpm, sampleRate, setPosition } = useTransportStore()
+  const { positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd, trackHeight, setTrackHeight } = useTransportStore()
 
   const audioTracks = tracks.filter(t => t.kind !== 'Master')
   const beatsPerSecond = bpm / 60
@@ -132,27 +131,72 @@ export function Arrangement() {
 
     // Track lane backgrounds
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * TRACK_HEIGHT
+      const y = RULER_HEIGHT + i * trackHeight
       ctx.fillStyle = i % 2 === 0 ? '#0a0a0f' : '#0c0c11'
-      ctx.fillRect(0, y, w, TRACK_HEIGHT)
+      ctx.fillRect(0, y, w, trackHeight)
 
       ctx.strokeStyle = 'rgba(255,255,255,0.03)'
       ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.moveTo(0, y + TRACK_HEIGHT)
-      ctx.lineTo(w, y + TRACK_HEIGHT)
+      ctx.moveTo(0, y + trackHeight)
+      ctx.lineTo(w, y + trackHeight)
       ctx.stroke()
     }
 
     // Clips
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * TRACK_HEIGHT
+      const y = RULER_HEIGHT + i * trackHeight
       const track = audioTracks[i]
       const clipColor = CLIP_COLORS[i % CLIP_COLORS.length]
 
       for (const clip of track.clips) {
         drawClip(ctx, clip, clipColor, y, scrollOffset, w, pixelsPerTick)
       }
+    }
+
+    // Loop region overlay
+    if (looping && loopEnd > loopStart && sampleRate > 0) {
+      const loopStartSecs = loopStart / sampleRate
+      const loopEndSecs = loopEnd / sampleRate
+      const loopX1 = loopStartSecs * PIXELS_PER_SECOND - scrollOffset
+      const loopX2 = loopEndSecs * PIXELS_PER_SECOND - scrollOffset
+
+      // Shaded region across all tracks
+      ctx.fillStyle = 'rgba(220, 38, 38, 0.06)'
+      ctx.fillRect(loopX1, RULER_HEIGHT, loopX2 - loopX1, h - RULER_HEIGHT)
+
+      // Ruler highlight
+      ctx.fillStyle = 'rgba(220, 38, 38, 0.15)'
+      ctx.fillRect(loopX1, 0, loopX2 - loopX1, RULER_HEIGHT)
+
+      // Loop boundary lines
+      ctx.strokeStyle = 'rgba(220, 38, 38, 0.5)'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([4, 3])
+      ctx.beginPath()
+      ctx.moveTo(loopX1, 0)
+      ctx.lineTo(loopX1, h)
+      ctx.moveTo(loopX2, 0)
+      ctx.lineTo(loopX2, h)
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      // Loop marker triangles on ruler
+      ctx.fillStyle = '#DC2626'
+      // Start marker — right-pointing triangle
+      ctx.beginPath()
+      ctx.moveTo(loopX1, 0)
+      ctx.lineTo(loopX1 + 6, RULER_HEIGHT / 2)
+      ctx.lineTo(loopX1, RULER_HEIGHT)
+      ctx.closePath()
+      ctx.fill()
+      // End marker — left-pointing triangle
+      ctx.beginPath()
+      ctx.moveTo(loopX2, 0)
+      ctx.lineTo(loopX2 - 6, RULER_HEIGHT / 2)
+      ctx.lineTo(loopX2, RULER_HEIGHT)
+      ctx.closePath()
+      ctx.fill()
     }
 
     // Playhead — red
@@ -182,7 +226,7 @@ export function Arrangement() {
       ctx.fill()
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, looping, loopStart, loopEnd, trackHeight])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -201,7 +245,7 @@ export function Arrangement() {
     const x = clipX
     const y = trackY + pad
     const w = clipW
-    const h = TRACK_HEIGHT - pad * 2
+    const h = trackHeight - pad * 2
     const isSelected = clip.id === selectedClipId
     const color = clip.muted ? '#1a1a24' : baseColor
 
@@ -283,8 +327,8 @@ export function Arrangement() {
     clip: ClipInfo, trackId: string, edge: 'body' | 'right'
   } | null => {
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * TRACK_HEIGHT
-      if (mouseY < y + 2 || mouseY > y + TRACK_HEIGHT - 2) continue
+      const y = RULER_HEIGHT + i * trackHeight
+      if (mouseY < y + 2 || mouseY > y + trackHeight - 2) continue
       const track = audioTracks[i]
       for (const clip of track.clips) {
         const clipX = clip.position_ticks * pixelsPerTick - scrollOffset
@@ -373,6 +417,15 @@ export function Arrangement() {
     dragRef.current = null
   }, [])
 
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    // Ctrl+Shift+Wheel: vertical zoom (change track height)
+    if (e.ctrlKey && e.shiftKey) {
+      e.preventDefault()
+      const delta = e.deltaY < 0 ? 8 : -8
+      setTrackHeight(trackHeight + delta)
+    }
+  }, [trackHeight, setTrackHeight])
+
   // Drag-and-drop
   const [dropHighlight, setDropHighlight] = useState(false)
 
@@ -444,12 +497,20 @@ export function Arrangement() {
       <canvas
         ref={canvasRef}
         data-testid="arrangement-canvas"
+        data-track-height={trackHeight}
         style={{ position: 'absolute', top: 0, left: 0 }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onWheel={handleWheel}
       />
+      {looping && loopEnd > loopStart && (
+        <div
+          data-testid="loop-region-overlay"
+          style={{ position: 'absolute', top: 0, left: 0, width: 0, height: 0, pointerEvents: 'none' }}
+        />
+      )}
       {audioTracks.length === 0 && (
         <div style={{
           position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',

@@ -3,8 +3,15 @@ name = "hardwave-audio-io"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+# Enable JACK support (Linux/FreeBSD). Requires libjack-dev at build time.
+jack = ["cpal/jack"]
+# Enable ASIO support (Windows). Requires the Steinberg ASIO SDK.
+asio = ["cpal/asio"]
+
 [dependencies]
-cpal.workspace = true
+cpal = { workspace = true, default-features = true }
 rtrb.workspace = true
 parking_lot.workspace = true
 log.workspace = true

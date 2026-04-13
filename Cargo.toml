@@ -19,8 +19,12 @@ license = "MIT"
 authors = ["Hardwave Studios"]
 
 [workspace.dependencies]
-# Audio I/O
-cpal = "0.15"
+# Audio I/O. cpal's default build handles WASAPI on Windows, CoreAudio on
+# macOS, and ALSA on Linux. JACK (Linux) and ASIO (Windows) are opt-in via
+# the hardwave-audio-io crate's `jack` / `asio` features, since they require
+# system libraries (libjack-dev) or SDKs (Steinberg ASIO) that aren't always
+# present on build machines.
+cpal = { version = "0.15", default-features = false }
 
 # Lock-free communication
 rtrb = "0.3"

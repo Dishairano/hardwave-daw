@@ -15,6 +15,7 @@ interface TransportState {
   timeSigNumerator: number
   timeSigDenominator: number
   patternMode: boolean
+  trackHeight: number
 
   play: () => void
   stop: () => void
@@ -26,6 +27,7 @@ interface TransportState {
   setMasterVolume: (db: number) => void
   setTimeSignature: (num: number, den: number) => void
   setPatternMode: (enabled: boolean) => void
+  setTrackHeight: (height: number) => void
   tapTempo: () => void
   startListening: () => void
 }
@@ -46,6 +48,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   timeSigNumerator: 4,
   timeSigDenominator: 4,
   patternMode: false,
+  trackHeight: 56,
 
   play: () => { invoke('play'); set({ playing: true }) },
   stop: () => { invoke('stop') },
@@ -74,6 +77,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     invoke('set_pattern_mode', { enabled })
     set({ patternMode: enabled })
   },
+  setTrackHeight: (height) => set({ trackHeight: Math.min(200, Math.max(24, height)) }),
   tapTempo: () => {
     const now = Date.now()
     if (tapTimes.length > 0 && now - tapTimes[tapTimes.length - 1] > TAP_WINDOW_MS) {
@@ -102,6 +106,9 @@ export const useTransportStore = create<TransportState>((set, get) => ({
       masterVolumeDb: number
       timeSig: [number, number]
       patternMode: boolean
+      looping: boolean
+      loopStart: number
+      loopEnd: number
     }>('daw:transport', (event) => {
       set({
         positionSamples: event.payload.position,
@@ -111,6 +118,9 @@ export const useTransportStore = create<TransportState>((set, get) => ({
         timeSigNumerator: event.payload.timeSig[0],
         timeSigDenominator: event.payload.timeSig[1],
         patternMode: event.payload.patternMode,
+        looping: event.payload.looping,
+        loopStart: event.payload.loopStart,
+        loopEnd: event.payload.loopEnd,
       })
     })
   },

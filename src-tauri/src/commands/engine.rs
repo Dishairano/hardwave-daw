@@ -60,6 +60,21 @@ pub fn get_audio_config(state: State<AppState>) -> AudioConfig {
 }
 
 #[tauri::command]
+pub fn list_audio_hosts() -> Vec<String> {
+    hardwave_engine::DawEngine::list_audio_hosts()
+}
+
+#[tauri::command]
+pub fn get_audio_host(state: State<AppState>) -> String {
+    state.engine.lock().audio_host_name()
+}
+
+#[tauri::command]
+pub fn set_audio_host(state: State<AppState>, host_name: String) -> Result<(), String> {
+    state.engine.lock().set_audio_host(&host_name)
+}
+
+#[tauri::command]
 pub fn set_audio_config(
     state: State<AppState>,
     device: Option<String>,

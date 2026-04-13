@@ -80,7 +80,10 @@ pub fn set_loop(state: State<AppState>, start: u64, end: u64) {
 pub fn set_master_volume(state: State<AppState>, db: f64) {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
-    engine.transport.master_volume_db.store(db, Ordering::Relaxed);
+    engine
+        .transport
+        .master_volume_db
+        .store(db, Ordering::Relaxed);
     engine.send_command(TransportCommand::SetMasterVolume(db));
 }
 
@@ -99,7 +102,10 @@ pub fn set_time_signature(state: State<AppState>, numerator: u32, denominator: u
 pub fn set_pattern_mode(state: State<AppState>, enabled: bool) {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
-    engine.transport.pattern_mode.store(enabled, Ordering::Relaxed);
+    engine
+        .transport
+        .pattern_mode
+        .store(enabled, Ordering::Relaxed);
     engine.send_command(TransportCommand::SetPatternMode(enabled));
 }
 
