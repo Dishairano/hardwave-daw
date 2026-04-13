@@ -81,7 +81,7 @@ function dbToPct(db: number) {
 function DbScale() {
   const marks = [6, 0, -6, -12, -24, -36, -48, -60]
   return (
-    <div style={{
+    <div data-testid="db-scale" style={{
       width: 18, flexShrink: 0, position: 'relative',
       display: 'flex', flexDirection: 'column',
       paddingTop: 22 /* match color bar + header area so ticks align with meter top */,
@@ -95,7 +95,7 @@ function DbScale() {
           // Meters in Strip occupy the "fader row" area. We map db→pct of that area.
           const pct = 100 - dbToPct(db)
           return (
-            <div key={db} style={{
+            <div key={db} data-testid={`db-mark-${db}`} style={{
               position: 'absolute', right: 1, left: 0, top: `${pct}%`,
               transform: 'translateY(-50%)',
               display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
@@ -131,7 +131,7 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rms
   const meterColor = (db: number) => db > -3 ? hw.red : db > -12 ? hw.yellow : hw.green
 
   return (
-    <div style={{
+    <div data-testid={`mixer-strip-${isMaster ? 'master' : name}`} style={{
       width: 62, minWidth: 62,
       display: 'flex', flexDirection: 'column',
       background: 'rgba(255,255,255,0.03)', border: `1px solid ${hw.border}`,
@@ -184,19 +184,19 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rms
             { db: peakL, label: 'L' },
             { db: peakR, label: 'R' },
           ].map(({ db, label }) => (
-            <div key={label} style={{
+            <div key={label} data-testid={`meter-${isMaster ? 'master' : name}-${label}`} style={{
               flex: 1, background: 'rgba(255,255,255,0.03)', position: 'relative',
               border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
               overflow: 'hidden',
             }}>
               {/* Peak bar */}
-              <div style={{
+              <div data-testid={`meter-peak-${isMaster ? 'master' : name}-${label}`} data-db={db.toFixed(2)} style={{
                 position: 'absolute', bottom: 0, left: 0, right: 0,
                 height: `${dbToPct(db)}%`, background: meterColor(db),
                 transition: 'height 60ms',
               }} />
               {/* RMS overlay (translucent lighter band) */}
-              <div style={{
+              <div data-testid={`meter-rms-${isMaster ? 'master' : name}-${label}`} data-db={rmsDb.toFixed(2)} style={{
                 position: 'absolute', bottom: 0, left: 0, right: 0,
                 height: `${dbToPct(rmsDb)}%`,
                 background: 'rgba(255,255,255,0.35)',

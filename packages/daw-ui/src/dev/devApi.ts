@@ -85,3 +85,96 @@ export async function devListTestAssets(): Promise<string[]> {
 export async function devResolveTestAsset(name: string): Promise<string> {
   return invoke<string>('dev_resolve_test_asset', { name })
 }
+
+/** Query a DOM element by data-testid. */
+export function queryTestId(id: string): HTMLElement | null {
+  return document.querySelector(`[data-testid="${id}"]`)
+}
+
+/** Get the numeric data-db attribute from a meter element. */
+export function getMeterDb(testId: string): number | null {
+  const el = queryTestId(testId)
+  if (!el) return null
+  const val = el.getAttribute('data-db')
+  return val !== null ? parseFloat(val) : null
+}
+
+/** Capture a screenshot of the entire window as a base64 PNG data URL. */
+export async function captureScreenshot(): Promise<string> {
+  const canvas = document.createElement('canvas')
+  const rect = document.documentElement.getBoundingClientRect()
+  canvas.width = window.innerWidth
+  canvas.height = window.innerHeight
+  const ctx = canvas.getContext('2d')!
+
+  // Use html2canvas-style approach: draw the document to an offscreen canvas
+  // via SVG foreignObject serialization
+  const svgData = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}">
+      <foreignObject width="100%" height="100%">
+        ${new XMLSerializer().serializeToString(document.documentElement)}
+      </foreignObject>
+    </svg>`
+  const img = new Image()
+  const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+
+  return new Promise((resolve) => {
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0)
+      URL.revokeObjectURL(url)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      resolve('')
+    }
+    img.src = url
+  })
+}
+
+/** Capture a specific element's bounding rect as a cropped PNG data URL. */
+export async function captureElement(testId: string): Promise<string> {
+  const el = queryTestId(testId)
+  if (!el) return ''
+  const rect = el.getBoundingClientRect()
+  const full = await captureScreenshot()
+  if (!full) return ''
+
+  const img = new Image()
+  return new Promise((resolve) => {
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = rect.width * devicePixelRatio
+      canvas.height = rect.height * devicePixelRatio
+      const ctx = canvas.getContext('2d')!
+      ctx.drawImage(img,
+        rect.x * devicePixelRatio, rect.y * devicePixelRatio,
+        rect.width * devicePixelRatio, rect.height * devicePixelRatio,
+        0, 0, canvas.width, canvas.height)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.onerror = () => resolve('')
+    img.src = full
+  })
+}
+
+/** Simulate a mouse click at (x, y) on a canvas element. */
+export function clickCanvas(testId: string, x: number, y: number) {
+  const canvas = queryTestId(testId) as HTMLCanvasElement | null
+  if (!canvas) return false
+  const rect = canvas.getBoundingClientRect()
+  const evt = new MouseEvent('mousedown', {
+    clientX: rect.left + x,
+    clientY: rect.top + y,
+    bubbles: true,
+  })
+  canvas.dispatchEvent(evt)
+  const up = new MouseEvent('mouseup', {
+    clientX: rect.left + x,
+    clientY: rect.top + y,
+    bubbles: true,
+  })
+  canvas.dispatchEvent(up)
+  return true
+}

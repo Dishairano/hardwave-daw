@@ -443,6 +443,7 @@ export function Arrangement() {
     >
       <canvas
         ref={canvasRef}
+        data-testid="arrangement-canvas"
         style={{ position: 'absolute', top: 0, left: 0 }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}

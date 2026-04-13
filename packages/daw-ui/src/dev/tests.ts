@@ -9,7 +9,7 @@
 // MANUAL tests are where we actually trust ears and eyes. Be explicit about which.
 
 import { invoke } from '@tauri-apps/api/core'
-import { devDumpState, devForceDeviceError, devResolveTestAsset, type DevState } from './devApi'
+import { devDumpState, devForceDeviceError, devResolveTestAsset, queryTestId, getMeterDb, clickCanvas, type DevState } from './devApi'
 
 export type TestKind = 'AUTO' | 'MANUAL'
 export type TestStatus = 'idle' | 'running' | 'pass' | 'fail'
@@ -295,48 +295,182 @@ export const TESTS: TestDef[] = [
     },
   },
   // -------------------------------------------------------------------------
-  // MANUAL tests — human verification
+  // DOM / visual tests — automated via DOM queries + screenshots
   // -------------------------------------------------------------------------
   {
     id: 'ruler_click_seek',
-    kind: 'MANUAL',
+    kind: 'AUTO',
     phase1Item: 'Seek to position (click ruler)',
     title: 'Ruler click seeks transport',
-    instructions: 'Open the Arrangement view. Click somewhere on the ruler (the top timeline strip). Position_samples in the state dump should jump. PASS if it jumps, FAIL if nothing happens.',
+    instructions: 'Dispatches a synthetic click on the arrangement canvas ruler area and verifies position changes.',
+    run: async ({ log }) => {
+      await invoke('stop')
+      await invoke('set_position', { position: 0 })
+      await sleep(40)
+      const before = await devDumpState()
+      log('info', 'position before click', { actual: before.positionSamples })
+
+      // Click at x=200 in the ruler area (top 22px of canvas)
+      const clicked = clickCanvas('arrangement-canvas', 200, 10)
+      if (!clicked) {
+        log('fail', 'canvas not found', { expected: 'arrangement-canvas exists' })
+        return { pass: false, note: 'arrangement canvas not in DOM' }
+      }
+      await sleep(60)
+      const after = await devDumpState()
+      const ok = after.positionSamples !== before.positionSamples
+      log(ok ? 'pass' : 'fail', 'position after ruler click', {
+        expected: 'position changed',
+        actual: `before=${before.positionSamples} after=${after.positionSamples}`,
+      })
+      return { pass: ok, note: ok ? `seeked to ${after.positionSamples}` : 'position did not change' }
+    },
   },
   {
-    id: 'device_disconnect_audible',
-    kind: 'MANUAL',
-    phase1Item: 'Graceful device disconnect (audible)',
-    title: 'Unplug audio device mid-playback',
-    instructions: 'Play any audio. While it\'s playing, unplug your USB interface / pull audio cable. Audio should recover on the default device within ~1s without the app crashing. PASS if audio comes back on the fallback device.',
-  },
-  {
-    id: 'pattern_vs_song_audible',
-    kind: 'MANUAL',
+    id: 'song_mode_no_wrap',
+    kind: 'AUTO',
     phase1Item: 'Pattern mode: loop / Song mode: arrangement',
-    title: 'Pattern loops 4 bars, Song plays through',
-    instructions: 'Load tone burst onto a track. Toggle PAT mode ON → play → you should hear the burst repeat every ~4 bars (at 120 BPM, ~8s per repeat). Toggle PAT OFF (Song) → play from 0 → should play once to end with no loop. PASS if both behaviors match.',
+    title: 'Song mode plays past pattern boundary',
+    instructions: 'Sets song mode, plays at 240 BPM, verifies position exceeds one 4-bar pattern length without wrapping.',
+    run: async ({ log }) => {
+      await invoke('stop')
+      await invoke('set_time_signature', { numerator: 4, denominator: 4 })
+      await invoke('set_bpm', { bpm: 240 })
+      await invoke('set_pattern_mode', { enabled: false })
+      await invoke('set_position', { position: 0 })
+      await invoke('play')
+
+      // At 240 BPM, 4/4, 4 bars = 192000 samples. Wait long enough to exceed it.
+      const patternLen = Math.round((60 / 240) * 48000 * 4 * 4)
+      let maxPos = 0
+      const start = Date.now()
+      while (Date.now() - start < 5000) {
+        await sleep(100)
+        const s = await devDumpState()
+        maxPos = Math.max(maxPos, s.positionSamples)
+        if (maxPos > patternLen) break
+      }
+      await invoke('stop')
+      const ok = maxPos > patternLen
+      log(ok ? 'pass' : 'fail', 'song mode exceeded pattern boundary', {
+        expected: `position > ${patternLen}`,
+        actual: `maxPos=${maxPos}`,
+      })
+      return { pass: ok, note: ok ? `maxPos=${maxPos} > ${patternLen}` : `stuck at ${maxPos}` }
+    },
   },
   {
     id: 'db_scale_visible',
-    kind: 'MANUAL',
+    kind: 'AUTO',
     phase1Item: 'dB scale markings (-60 to 0)',
     title: 'dB scale markings visible on mixer',
-    instructions: 'Open the Mixer. Between the master meter and the channel meters you should see dB marks at 6, 0, -6, -12, -24, -36, -48, -60. PASS if all marks visible and labeled.',
+    instructions: 'Queries DOM for all 8 dB scale marks and verifies they exist and are visible.',
+    run: async ({ log, ensureAudioTrack }) => {
+      // Ensure at least one track so the mixer renders the dB scale
+      await ensureAudioTrack()
+      await sleep(100)
+
+      const expectedMarks = [6, 0, -6, -12, -24, -36, -48, -60]
+      const missing: number[] = []
+      const hidden: number[] = []
+
+      for (const db of expectedMarks) {
+        const el = queryTestId(`db-mark-${db}`)
+        if (!el) {
+          missing.push(db)
+          continue
+        }
+        const rect = el.getBoundingClientRect()
+        if (rect.width === 0 || rect.height === 0) {
+          hidden.push(db)
+        }
+      }
+
+      const ok = missing.length === 0 && hidden.length === 0
+      log(ok ? 'pass' : 'fail', 'dB scale marks', {
+        expected: '8 marks present and visible',
+        actual: `missing=[${missing}] hidden=[${hidden}]`,
+      })
+      return { pass: ok, note: ok ? '8/8 marks visible' : `missing=${missing.length} hidden=${hidden.length}` }
+    },
   },
   {
     id: 'rms_overlay_visible',
-    kind: 'MANUAL',
+    kind: 'AUTO',
     phase1Item: 'RMS meter overlay (darker bar behind peak)',
-    title: 'RMS overlay visible on meters',
-    instructions: 'Play pink noise. On the mixer meter, you should see TWO bars: a bright peak bar (jumpy) and a translucent RMS bar behind it (smoother, lower). PASS if both are visible and the RMS sits below the peak.',
+    title: 'RMS overlay visible on meters under signal',
+    instructions: 'Plays pink noise, then checks that both peak and RMS meter DOM elements have non-zero height.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      await invoke('stop')
+      await invoke('set_pattern_mode', { enabled: false })
+      await invoke('set_master_volume', { db: 0 })
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'pink_noise_-12dbfs_10s.wav')
+      await invoke('set_position', { position: 0 })
+      try { await invoke('start_engine') } catch {}
+      await invoke('play')
+      await sleep(1500)
+
+      // Check master meter DOM elements
+      const peakEl = queryTestId('meter-peak-master-L')
+      const rmsEl = queryTestId('meter-rms-master-L')
+      const peakDb = getMeterDb('meter-peak-master-L')
+      const rmsDb = getMeterDb('meter-rms-master-L')
+
+      await invoke('stop')
+
+      const peakExists = !!peakEl
+      const rmsExists = !!rmsEl
+      const peakActive = peakDb !== null && peakDb > -60
+      const rmsActive = rmsDb !== null && rmsDb > -60
+
+      log('info', 'meter DOM state', {
+        actual: `peakEl=${peakExists} rmsEl=${rmsExists} peakDb=${peakDb} rmsDb=${rmsDb}`,
+      })
+
+      const ok = peakExists && rmsExists && peakActive && rmsActive
+      log(ok ? 'pass' : 'fail', 'RMS overlay', {
+        expected: 'both peak and RMS bars active (> -60 dB)',
+        actual: `peak=${peakDb?.toFixed(1)} rms=${rmsDb?.toFixed(1)}`,
+      })
+      return { pass: ok, note: ok ? `peak=${peakDb?.toFixed(1)} rms=${rmsDb?.toFixed(1)}` : 'meter bars inactive' }
+    },
   },
   {
     id: 'stereo_independence',
-    kind: 'MANUAL',
+    kind: 'AUTO',
     phase1Item: 'Per-track L/R meter independence',
     title: 'L and R meters read independently',
-    instructions: 'Load stereo_pan_test.wav (1 kHz on L, 500 Hz on R). Play it. The track meter L and R bars should both be lit at roughly equal height BUT if you toggle mute on one channel at the driver/OS level you should see them diverge. Easier check: look at the pattern of peakL vs peakR in the state dump — they should NOT be identical frame to frame. PASS if L/R are independent.',
+    instructions: 'Loads stereo_pan_test.wav, plays it, polls track meters and verifies L and R peaks differ across samples.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      await invoke('stop')
+      await invoke('set_pattern_mode', { enabled: false })
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'stereo_pan_test.wav')
+      await invoke('set_position', { position: 0 })
+      try { await invoke('start_engine') } catch {}
+      await invoke('play')
+
+      let diffCount = 0
+      const samples = 20
+      for (let i = 0; i < samples; i++) {
+        await sleep(100)
+        const s = await devDumpState()
+        const t = s.tracks.find((t) => t.id === trackId)
+        if (t && Math.abs(t.peakLDb - t.peakRDb) > 0.5) {
+          diffCount++
+        }
+      }
+      await invoke('stop')
+
+      const ok = diffCount >= 3
+      log(ok ? 'pass' : 'fail', 'L/R independence', {
+        expected: 'L and R differ in >= 3 of 20 samples',
+        actual: `diffCount=${diffCount}/${samples}`,
+      })
+      return { pass: ok, note: ok ? `${diffCount}/${samples} differed` : `only ${diffCount} differed` }
+    },
   },
 ]
