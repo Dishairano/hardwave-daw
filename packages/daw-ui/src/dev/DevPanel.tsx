@@ -381,7 +381,14 @@ function AssetLoader() {
 // ─── Main panel ───────────────────────────────────────────────────────────────
 
 export function DevPanel({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<'tests' | 'state' | 'log' | 'assets'>('tests')
+  // Discover phases from the test suite, plus fixed non-test tabs.
+  const phases = Array.from(
+    new Set(TESTS.map((t) => t.phase ?? 1)),
+  ).sort((a, b) => a - b)
+  type Tab = `phase${number}` | 'state' | 'log' | 'assets'
+  const [tab, setTab] = useState<Tab>(`phase${phases[0] ?? 1}` as Tab)
+  const activePhase = tab.startsWith('phase') ? Number(tab.replace('phase', '')) : null
+  const testsForTab = activePhase != null ? TESTS.filter((t) => (t.phase ?? 1) === activePhase) : []
   const [statuses, setStatuses] = useState<Record<string, TestStatus>>({})
   const append = useLogStore((s) => s.append)
   const exportText = useLogStore((s) => s.exportText)
@@ -462,12 +469,17 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
   )
 
   const runAllAuto = useCallback(async () => {
-    for (const test of TESTS) {
+    // Run AUTO tests only for the currently selected phase tab (if any),
+    // otherwise fall back to running every AUTO test.
+    const pool = activePhase != null
+      ? TESTS.filter((t) => (t.phase ?? 1) === activePhase)
+      : TESTS
+    for (const test of pool) {
       if (test.kind === 'AUTO' && test.run) {
         await runTest(test)
       }
     }
-  }, [runTest])
+  }, [runTest, activePhase])
 
   const copyLog = useCallback(() => {
     const text = exportText()
@@ -485,7 +497,7 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
   return (
     <div style={PANEL}>
       <div style={HEADER}>
-        <span>Dev Panel — Phase 1 Verification</span>
+        <span>Dev Panel — Roadmap Verification</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ color: hw.green, fontSize: 10 }}>{passed}P</span>
           <span style={{ color: hw.red, fontSize: 10 }}>{failed}F</span>
@@ -507,7 +519,18 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
       </div>
 
       <div style={TABS}>
-        <Tab label="Tests" active={tab === 'tests'} onClick={() => setTab('tests')} />
+        {phases.map((p) => {
+          const count = TESTS.filter((t) => (t.phase ?? 1) === p).length
+          const key = `phase${p}` as Tab
+          return (
+            <Tab
+              key={key}
+              label={`Phase ${p} (${count})`}
+              active={tab === key}
+              onClick={() => setTab(key)}
+            />
+          )
+        })}
         <Tab label="State" active={tab === 'state'} onClick={() => setTab('state')} />
         <Tab label="Log" active={tab === 'log'} onClick={() => setTab('log')} />
         <Tab label="Assets" active={tab === 'assets'} onClick={() => setTab('assets')} />
@@ -563,8 +586,8 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
       </div>
 
       <div style={SCROLL}>
-        {tab === 'tests' &&
-          TESTS.map((t) => (
+        {activePhase != null &&
+          testsForTab.map((t) => (
             <TestRow
               key={t.id}
               test={t}
@@ -573,6 +596,11 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
               onManualResult={(pass) => manualResult(t, pass)}
             />
           ))}
+        {activePhase != null && testsForTab.length === 0 && (
+          <div style={{ padding: 20, color: hw.textFaint, fontSize: 10 }}>
+            No tests yet for Phase {activePhase}.
+          </div>
+        )}
         {tab === 'state' && <StateDump />}
         {tab === 'log' && <EventLog />}
         {tab === 'assets' && <AssetLoader />}

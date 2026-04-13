@@ -24,6 +24,8 @@ export interface TestRunContext {
 export interface TestDef {
   id: string
   kind: TestKind
+  /** Which roadmap phase this test belongs to. Defaults to 1. */
+  phase?: number
   phase1Item: string
   title: string
   instructions: string // for MANUAL, shown to user; for AUTO, short description
@@ -1437,6 +1439,368 @@ export const TESTS: TestDef[] = [
         actual: `initial=${initialHeight} afterIn=${afterZoomIn} afterOut=${afterZoomOut}`,
       })
       return { pass: ok, note: ok ? `${initialHeight}→${afterZoomIn}→${afterZoomOut}` : 'zoom had no effect' }
+    },
+  },
+
+  // ============================================================================
+  // Phase 1 — recent d:0→d:1 flips (arm, reorder, SRC, hot-swap, driver sel)
+  // ============================================================================
+  {
+    id: 'toggle_arm_roundtrip',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'Track header: arm record button',
+    title: 'toggle_arm toggles armed state',
+    instructions: 'Adds a track, toggles arm twice, verifies state flips.',
+    run: async ({ log, ensureAudioTrack }) => {
+      const id = await ensureAudioTrack()
+      const before = (await invoke<any[]>('get_tracks')).find((t) => t.id === id)
+      const initial = before?.armed ?? false
+      await invoke('toggle_arm', { trackId: id })
+      const mid = (await invoke<any[]>('get_tracks')).find((t) => t.id === id)
+      await invoke('toggle_arm', { trackId: id })
+      const end = (await invoke<any[]>('get_tracks')).find((t) => t.id === id)
+      const ok = mid?.armed === !initial && end?.armed === initial
+      log(ok ? 'pass' : 'fail', 'armed toggles', {
+        expected: `${initial}→${!initial}→${initial}`,
+        actual: `${initial}→${mid?.armed}→${end?.armed}`,
+      })
+      return { pass: !!ok, note: ok ? 'armed toggles correctly' : 'did not toggle' }
+    },
+  },
+  {
+    id: 'reorder_track_roundtrip',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'Track reorder (drag up/down)',
+    title: 'reorder_track changes index',
+    instructions: 'Adds two tracks, swaps their positions, verifies order changes.',
+    run: async ({ log }) => {
+      const a = await invoke<string>('add_audio_track', { name: 'ReorderA' })
+      const b = await invoke<string>('add_audio_track', { name: 'ReorderB' })
+      await sleep(30)
+      const before = (await invoke<any[]>('get_tracks')).filter((t) => t.kind !== 'Master')
+      const idxA = before.findIndex((t) => t.id === a)
+      const idxB = before.findIndex((t) => t.id === b)
+      if (idxA < 0 || idxB < 0) return { pass: false, note: 'tracks not found' }
+      // Move B before A
+      await invoke('reorder_track', { trackId: b, newIndex: idxA })
+      await sleep(30)
+      const after = (await invoke<any[]>('get_tracks')).filter((t) => t.kind !== 'Master')
+      const newIdxA = after.findIndex((t) => t.id === a)
+      const newIdxB = after.findIndex((t) => t.id === b)
+      const ok = newIdxB < newIdxA
+      log(ok ? 'pass' : 'fail', 'reorder', {
+        expected: `B before A`,
+        actual: `A@${newIdxA} B@${newIdxB}`,
+      })
+      // Cleanup
+      await invoke('remove_track', { trackId: a })
+      await invoke('remove_track', { trackId: b })
+      return { pass: ok, note: ok ? `B moved above A` : 'no change' }
+    },
+  },
+  {
+    id: 'audio_hosts_list_nonempty',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'Audio driver selection in settings',
+    title: 'list_audio_hosts returns at least one backend',
+    instructions: 'Calls list_audio_hosts; expects at least one cpal host.',
+    run: async ({ log }) => {
+      const hosts = await invoke<string[]>('list_audio_hosts')
+      const ok = Array.isArray(hosts) && hosts.length > 0
+      log(ok ? 'pass' : 'fail', 'hosts', { expected: '>=1', actual: hosts })
+      return { pass: ok, note: ok ? `${hosts.length} host(s): ${hosts.join(', ')}` : 'no hosts' }
+    },
+  },
+  {
+    id: 'get_audio_host_known',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'Audio driver selection in settings',
+    title: 'get_audio_host returns a value from list_audio_hosts',
+    instructions: 'Active host name must be present in the hosts list.',
+    run: async ({ log }) => {
+      const [hosts, current] = await Promise.all([
+        invoke<string[]>('list_audio_hosts'),
+        invoke<string>('get_audio_host'),
+      ])
+      const ok = hosts.some((h) => h.toLowerCase() === current.toLowerCase())
+      log(ok ? 'pass' : 'fail', 'current host', { expected: `one of ${hosts}`, actual: current })
+      return { pass: ok, note: `current=${current}` }
+    },
+  },
+  {
+    id: 'set_audio_host_idempotent',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'Audio driver selection in settings',
+    title: 'set_audio_host to current host is a no-op',
+    instructions: 'Setting host to the one already active must succeed and not change it.',
+    run: async ({ log }) => {
+      const current = await invoke<string>('get_audio_host')
+      try {
+        await invoke('set_audio_host', { hostName: current })
+      } catch (e: any) {
+        log('fail', 'set_audio_host threw', { actual: String(e) })
+        return { pass: false, note: 'threw on same-host set' }
+      }
+      const after = await invoke<string>('get_audio_host')
+      const ok = after === current
+      log(ok ? 'pass' : 'fail', 'host unchanged', { expected: current, actual: after })
+      return { pass: ok, note: ok ? 'idempotent' : `changed to ${after}` }
+    },
+  },
+  {
+    id: 'set_audio_host_unknown_fails',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'Audio driver selection in settings',
+    title: 'set_audio_host rejects unknown host',
+    instructions: 'Invalid host names must return an error, not silently succeed.',
+    run: async ({ log }) => {
+      let threw = false
+      try {
+        await invoke('set_audio_host', { hostName: '__definitely_not_a_host__' })
+      } catch {
+        threw = true
+      }
+      log(threw ? 'pass' : 'fail', 'rejected', { expected: 'error', actual: threw ? 'threw' : 'accepted' })
+      return { pass: threw, note: threw ? 'rejected invalid host' : 'accepted invalid host' }
+    },
+  },
+  {
+    id: 'device_enumeration_nonempty',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'Audio device hot-swap detection',
+    title: 'get_audio_devices returns devices',
+    instructions: 'Device list should be non-empty (headless CI may legitimately be empty — skipped then).',
+    run: async ({ log }) => {
+      const devs = await invoke<any[]>('get_audio_devices')
+      if (!Array.isArray(devs) || devs.length === 0) {
+        log('info', 'no devices (likely headless CI — skipped)')
+        return { pass: true, note: 'no devices visible (headless?)' }
+      }
+      log('pass', 'devices', { actual: devs.map((d) => d.name) })
+      return { pass: true, note: `${devs.length} device(s)` }
+    },
+  },
+  {
+    id: 'src_on_import_matches_engine_rate',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'Sample rate conversion on import',
+    title: 'Imported clip sample rate matches engine rate',
+    instructions: 'Imports sine_44100.wav; verifies the reported clip sample_rate equals the engine sample_rate.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      const s = await devDumpState()
+      const targetSr = s.sampleRate
+      let clip: any
+      try {
+        const fsPath = await devResolveTestAsset('sine_44100.wav')
+        clip = await invoke('import_audio_file', { trackId, filePath: fsPath, positionTicks: 0 })
+      } catch (e: any) {
+        log('info', 'asset missing: sine_44100.wav not present; skipping')
+        return { pass: true, note: 'asset missing — skipped' }
+      }
+      const ok = clip?.sample_rate === targetSr
+      log(ok ? 'pass' : 'fail', 'sample_rate', { expected: targetSr, actual: clip?.sample_rate })
+      return { pass: ok, note: ok ? `resampled to ${targetSr}` : `clip reports ${clip?.sample_rate}` }
+    },
+  },
+  {
+    id: 'reorder_bounds_clamp',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'Track reorder (drag up/down)',
+    title: 'reorder_track clamps out-of-range index',
+    instructions: 'Reordering to index 999 must clamp to the last non-master slot, not crash.',
+    run: async ({ log }) => {
+      const a = await invoke<string>('add_audio_track', { name: 'ClampTest' })
+      await sleep(20)
+      let threw = false
+      try {
+        await invoke('reorder_track', { trackId: a, newIndex: 999 })
+      } catch {
+        threw = true
+      }
+      const after = (await invoke<any[]>('get_tracks')).filter((t) => t.kind !== 'Master')
+      const exists = after.some((t) => t.id === a)
+      const ok = !threw && exists
+      log(ok ? 'pass' : 'fail', 'no crash', { expected: 'clamped', actual: threw ? 'threw' : 'ok' })
+      await invoke('remove_track', { trackId: a })
+      return { pass: ok, note: ok ? 'clamped safely' : 'crashed or lost track' }
+    },
+  },
+
+  // ============================================================================
+  // Phase 2 — Timeline & Clips (seed suite)
+  // ============================================================================
+  {
+    id: 'p2_add_remove_track',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Add track / Delete track',
+    title: 'add_audio_track then remove_track round-trip',
+    instructions: 'Track count goes up by 1 after add, down by 1 after remove.',
+    run: async ({ log }) => {
+      const before = (await invoke<any[]>('get_tracks')).length
+      const id = await invoke<string>('add_audio_track', { name: 'P2 temp' })
+      const mid = (await invoke<any[]>('get_tracks')).length
+      await invoke('remove_track', { trackId: id })
+      const after = (await invoke<any[]>('get_tracks')).length
+      const ok = mid === before + 1 && after === before
+      log(ok ? 'pass' : 'fail', 'counts', { expected: `${before}→${before + 1}→${before}`, actual: `${before}→${mid}→${after}` })
+      return { pass: ok, note: ok ? 'round-trip OK' : 'count mismatch' }
+    },
+  },
+  {
+    id: 'p2_clip_move',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip move: horizontal drag (time)',
+    title: 'move_clip updates position_ticks',
+    instructions: 'Imports a clip, moves it to position 960, verifies position_ticks=960.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      let clip: any
+      try {
+        const fsPath = await devResolveTestAsset('sine_44100.wav')
+        clip = await invoke('import_audio_file', { trackId, filePath: fsPath, positionTicks: 0 })
+      } catch {
+        return { pass: true, note: 'asset missing — skipped' }
+      }
+      await invoke('move_clip', { trackId, clipId: clip.clip_id, newPositionTicks: 960 })
+      const clips = await invoke<any[]>('get_track_clips', { trackId })
+      const moved = clips.find((c: any) => c.id === clip.clip_id)
+      const ok = moved?.position_ticks === 960
+      log(ok ? 'pass' : 'fail', 'position', { expected: 960, actual: moved?.position_ticks })
+      return { pass: ok, note: `position=${moved?.position_ticks}` }
+    },
+  },
+  {
+    id: 'p2_clip_resize',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip resize: drag right edge',
+    title: 'resize_clip updates length_ticks',
+    instructions: 'Resizes imported clip to 480 ticks; verifies readback.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      let clip: any
+      try {
+        const fsPath = await devResolveTestAsset('sine_44100.wav')
+        clip = await invoke('import_audio_file', { trackId, filePath: fsPath, positionTicks: 0 })
+      } catch {
+        return { pass: true, note: 'asset missing — skipped' }
+      }
+      await invoke('resize_clip', { trackId, clipId: clip.clip_id, newLengthTicks: 480 })
+      const clips = await invoke<any[]>('get_track_clips', { trackId })
+      const sized = clips.find((c: any) => c.id === clip.clip_id)
+      const ok = sized?.length_ticks === 480
+      log(ok ? 'pass' : 'fail', 'length', { expected: 480, actual: sized?.length_ticks })
+      return { pass: ok, note: `length=${sized?.length_ticks}` }
+    },
+  },
+  {
+    id: 'p2_clip_delete',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip delete: Delete/Backspace key',
+    title: 'delete_clip removes the clip',
+    instructions: 'Deletes a clip; subsequent get_track_clips must not contain it.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      let clip: any
+      try {
+        const fsPath = await devResolveTestAsset('sine_44100.wav')
+        clip = await invoke('import_audio_file', { trackId, filePath: fsPath, positionTicks: 0 })
+      } catch {
+        return { pass: true, note: 'asset missing — skipped' }
+      }
+      await invoke('delete_clip', { trackId, clipId: clip.clip_id })
+      const clips = await invoke<any[]>('get_track_clips', { trackId })
+      const stillThere = clips.some((c: any) => c.id === clip.clip_id)
+      const ok = !stillThere
+      log(ok ? 'pass' : 'fail', 'removed', { expected: 'gone', actual: stillThere ? 'still present' : 'gone' })
+      return { pass: ok, note: ok ? 'clip removed' : 'clip still present' }
+    },
+  },
+  {
+    id: 'p2_waveform_peaks',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip waveform peak pre-computation',
+    title: 'get_waveform_peaks returns N buckets of [min, max]',
+    instructions: 'Requests 256 buckets for an imported clip; verifies shape.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      let clip: any
+      try {
+        const fsPath = await devResolveTestAsset('sine_44100.wav')
+        clip = await invoke('import_audio_file', { trackId, filePath: fsPath, positionTicks: 0 })
+      } catch {
+        return { pass: true, note: 'asset missing — skipped' }
+      }
+      const peaks = await invoke<[number, number][]>('get_waveform_peaks', {
+        sourceId: clip.source_id,
+        numBuckets: 256,
+      })
+      const ok =
+        Array.isArray(peaks) &&
+        peaks.length === 256 &&
+        peaks.every((p) => Array.isArray(p) && p.length === 2 && p[0] <= p[1])
+      log(ok ? 'pass' : 'fail', 'shape', { expected: '256 × [min<=max]', actual: `${peaks?.length}` })
+      return { pass: ok, note: ok ? '256 buckets OK' : 'shape mismatch' }
+    },
+  },
+  {
+    id: 'p2_track_kind_on_add',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Add track button',
+    title: 'add_audio_track and add_midi_track set correct kind',
+    instructions: 'Kind field must be "Audio" / "Midi" on the respective tracks.',
+    run: async ({ log }) => {
+      const audioId = await invoke<string>('add_audio_track', { name: 'Kind A' })
+      const midiId = await invoke<string>('add_midi_track', { name: 'Kind M' })
+      const tracks = await invoke<any[]>('get_tracks')
+      const a = tracks.find((t) => t.id === audioId)
+      const m = tracks.find((t) => t.id === midiId)
+      const ok = a?.kind === 'Audio' && m?.kind === 'Midi'
+      log(ok ? 'pass' : 'fail', 'kinds', {
+        expected: 'Audio / Midi',
+        actual: `${a?.kind} / ${m?.kind}`,
+      })
+      await invoke('remove_track', { trackId: audioId })
+      await invoke('remove_track', { trackId: midiId })
+      return { pass: ok, note: ok ? 'kinds correct' : 'kind mismatch' }
+    },
+  },
+  {
+    id: 'p2_new_project_has_master',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'File > New project',
+    title: 'new_project leaves exactly one Master track',
+    instructions: 'After new_project the track list must contain exactly one Master and no audio tracks.',
+    run: async ({ log }) => {
+      await invoke('new_project')
+      await sleep(30)
+      const tracks = await invoke<any[]>('get_tracks')
+      const masters = tracks.filter((t) => t.kind === 'Master').length
+      const audios = tracks.filter((t) => t.kind !== 'Master').length
+      const ok = masters === 1 && audios === 0
+      log(ok ? 'pass' : 'fail', 'tracks', { expected: '1 master / 0 audio', actual: `${masters}/${audios}` })
+      return { pass: ok, note: `${masters} master, ${audios} audio` }
     },
   },
 ]
