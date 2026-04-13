@@ -201,7 +201,9 @@ export function App() {
             {
               const sr = transport.sampleRate || 48000
               const playheadTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
-              tracks.pasteClipsAtPosition(playheadTicks)
+              // Prefer the edit cursor when set, so Ctrl+V pastes where the user clicked.
+              const pasteAt = transport.editCursorTicks != null ? transport.editCursorTicks : playheadTicks
+              tracks.pasteClipsAtPosition(pasteAt)
             }
             return
         }
@@ -226,7 +228,8 @@ export function App() {
             const t = tracks.tracks.find(tr => tr.clips.some(c => c.id === sel))
             if (!t) break
             const sr = transport.sampleRate || 48000
-            const atTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
+            const playheadTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
+            const atTicks = transport.editCursorTicks != null ? transport.editCursorTicks : playheadTicks
             const clip = t.clips.find(c => c.id === sel)
             if (clip && atTicks > clip.position_ticks && atTicks < clip.position_ticks + clip.length_ticks) {
               tracks.splitClip(t.id, sel, atTicks)

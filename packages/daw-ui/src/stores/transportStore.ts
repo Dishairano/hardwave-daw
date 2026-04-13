@@ -53,6 +53,7 @@ interface TransportState {
   snapEnabled: boolean
   horizontalZoom: number
   clipColorOverrides: Record<string, string>
+  editCursorTicks: number | null
 
   play: () => void
   stop: () => void
@@ -70,6 +71,7 @@ interface TransportState {
   setHorizontalZoom: (z: number) => void
   zoomToFit: () => void
   setClipColor: (clipId: string, color: string | null) => void
+  setEditCursor: (ticks: number | null) => void
   tapTempo: () => void
   startListening: () => void
 }
@@ -95,6 +97,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   snapEnabled: true,
   horizontalZoom: 1,
   clipColorOverrides: {},
+  editCursorTicks: null,
 
   play: () => { invoke('play'); set({ playing: true }) },
   stop: () => { invoke('stop') },
@@ -128,6 +131,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   toggleSnap: () => set(s => ({ snapEnabled: !s.snapEnabled })),
   setHorizontalZoom: (z) => set({ horizontalZoom: Math.max(0.1, Math.min(16, z)) }),
   zoomToFit: () => set({ horizontalZoom: 1 }),
+  setEditCursor: (ticks) => set({ editCursorTicks: ticks == null ? null : Math.max(0, Math.floor(ticks)) }),
   setClipColor: (clipId, color) => set(s => {
     const next = { ...s.clipColorOverrides }
     if (color == null) delete next[clipId]; else next[clipId] = color

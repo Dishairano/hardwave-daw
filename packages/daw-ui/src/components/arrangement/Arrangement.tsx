@@ -9,7 +9,7 @@ const PIXELS_PER_SECOND_BASE = 100
 const RESIZE_HANDLE_PX = 6
 const RULER_HEIGHT = 22
 
-type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left' | 'rubber' | 'scrub'
+type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left' | 'fade-in' | 'fade-out' | 'rubber' | 'scrub'
 
 interface DragState {
   mode: DragMode
@@ -21,6 +21,8 @@ interface DragState {
   currentMouseY: number
   originalPositionTicks: number
   originalLengthTicks: number
+  originalFadeInTicks: number
+  originalFadeOutTicks: number
 }
 
 interface ContextMenuState {
@@ -30,7 +32,17 @@ interface ContextMenuState {
   clipId: string
 }
 
+// Cache keyed by `${sourceId}:${bucketTier}` so zooming in fetches a higher-resolution
+// peak set instead of upscaling the existing one.
 const waveformData = new Map<string, [number, number][]>()
+const FADE_HANDLE_PX = 10
+const HEADER_H = 14
+
+function bucketTier(desired: number): number {
+  // Quantise to powers of two so we don't hammer the backend on tiny zoom changes.
+  const clamped = Math.max(100, Math.min(4000, Math.ceil(desired)))
+  return 1 << Math.ceil(Math.log2(clamped))
+}
 
 // Hardwave clip palette — vibrant on near-black
 const CLIP_COLORS = [
@@ -46,13 +58,13 @@ export function Arrangement() {
 
   const {
     tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
-    moveClip, resizeClip, getWaveformPeaks, duplicateClip, splitClip, deleteClip,
+    moveClip, resizeClip, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const {
     positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
-    clipColorOverrides,
+    clipColorOverrides, editCursorTicks, setEditCursor,
   } = useTransportStore()
 
   const audioTracks = tracks.filter(t => t.kind !== 'Master')
@@ -63,20 +75,24 @@ export function Arrangement() {
   const snapTicks = snapToTicks(snapValue, snapEnabled)
   const applySnap = (ticks: number): number => snapTicks > 0 ? Math.round(ticks / snapTicks) * snapTicks : ticks
 
-  // Load waveforms
+  // Load waveforms. Multi-zoom tiering: cache by (sourceId, tier) so zooming in refetches
+  // a higher-resolution peak set rather than stretching the existing buckets.
   useEffect(() => {
     for (const track of audioTracks) {
       for (const clip of track.clips) {
-        if (clip.source_id && !waveformData.has(clip.source_id)) {
-          const numBuckets = Math.max(100, Math.ceil(clip.length_ticks * pixelsPerTick / 2))
-          getWaveformPeaks(clip.source_id, Math.min(numBuckets, 2000)).then(peaks => {
-            waveformData.set(clip.source_id, peaks)
+        if (!clip.source_id) continue
+        const desired = Math.max(100, Math.ceil(clip.length_ticks * pixelsPerTick / 2))
+        const tier = bucketTier(desired)
+        const key = `${clip.source_id}:${tier}`
+        if (!waveformData.has(key)) {
+          getWaveformPeaks(clip.source_id, tier).then(peaks => {
+            waveformData.set(key, peaks)
             forceRender(n => n + 1)
           })
         }
       }
     }
-  }, [tracks])
+  }, [tracks, horizontalZoom])
 
   // Draw
   useEffect(() => {
@@ -197,6 +213,37 @@ export function Arrangement() {
       }
     }
 
+    // Crossfade overlay — shade any overlap between adjacent clips on the same track.
+    for (let i = 0; i < audioTracks.length; i++) {
+      const y = RULER_HEIGHT + i * trackHeight
+      const clips = [...audioTracks[i].clips].sort((a, b) => a.position_ticks - b.position_ticks)
+      for (let j = 1; j < clips.length; j++) {
+        const prev = clips[j - 1]
+        const cur = clips[j]
+        const prevEnd = prev.position_ticks + prev.length_ticks
+        if (cur.position_ticks < prevEnd) {
+          const overlapTicks = prevEnd - cur.position_ticks
+          const xStart = cur.position_ticks * pixelsPerTick - scrollOffset
+          const width = overlapTicks * pixelsPerTick
+          if (xStart + width >= 0 && xStart <= w) {
+            ctx.save()
+            ctx.fillStyle = 'rgba(20, 184, 166, 0.12)'
+            ctx.fillRect(xStart, y + 2, width, trackHeight - 4)
+            ctx.strokeStyle = 'rgba(20, 184, 166, 0.45)'
+            ctx.lineWidth = 1
+            // X mark
+            ctx.beginPath()
+            ctx.moveTo(xStart, y + 2)
+            ctx.lineTo(xStart + width, y + trackHeight - 2)
+            ctx.moveTo(xStart + width, y + 2)
+            ctx.lineTo(xStart, y + trackHeight - 2)
+            ctx.stroke()
+            ctx.restore()
+          }
+        }
+      }
+    }
+
     // Loop region overlay
     if (looping && loopEnd > loopStart && sampleRate > 0) {
       const loopStartSecs = loopStart / sampleRate
@@ -269,7 +316,30 @@ export function Arrangement() {
       ctx.fill()
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides])
+    // Edit cursor (dashed teal line, separate from red playhead)
+    if (editCursorTicks != null) {
+      const ecX = editCursorTicks * pixelsPerTick - scrollOffset
+      if (ecX >= -2 && ecX <= w + 2) {
+        ctx.strokeStyle = '#14B8A6'
+        ctx.lineWidth = 1
+        ctx.setLineDash([4, 3])
+        ctx.beginPath()
+        ctx.moveTo(ecX, RULER_HEIGHT)
+        ctx.lineTo(ecX, h)
+        ctx.stroke()
+        ctx.setLineDash([])
+        // Tiny caret in ruler
+        ctx.fillStyle = '#14B8A6'
+        ctx.beginPath()
+        ctx.moveTo(ecX - 4, RULER_HEIGHT - 6)
+        ctx.lineTo(ecX + 4, RULER_HEIGHT - 6)
+        ctx.lineTo(ecX, RULER_HEIGHT)
+        ctx.closePath()
+        ctx.fill()
+      }
+    }
+
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -319,8 +389,16 @@ export function Arrangement() {
     ctx.fillText(clip.name, x + 4, y + 10)
     ctx.restore()
 
-    // Waveform
-    const peaks = waveformData.get(clip.source_id)
+    // Waveform — pick the best available tier: prefer the current one, else fallback
+    // to any other tier we've already fetched so we render something during refetch.
+    const desired = Math.max(100, Math.ceil(clip.length_ticks * pxPerTick / 2))
+    const tier = bucketTier(desired)
+    let peaks = waveformData.get(`${clip.source_id}:${tier}`)
+    if (!peaks) {
+      for (const [k, v] of waveformData) {
+        if (k.startsWith(`${clip.source_id}:`)) { peaks = v; break }
+      }
+    }
     if (peaks && peaks.length > 0 && !clip.muted) {
       ctx.save()
       ctx.beginPath()
@@ -402,7 +480,7 @@ export function Arrangement() {
 
   // Hit test
   const hitTest = useCallback((mouseX: number, mouseY: number, scrollOffset: number): {
-    clip: ClipInfo, trackId: string, edge: 'body' | 'left' | 'right'
+    clip: ClipInfo, trackId: string, edge: 'body' | 'left' | 'right' | 'fade-in' | 'fade-out'
   } | null => {
     for (let i = 0; i < audioTracks.length; i++) {
       const y = RULER_HEIGHT + i * trackHeight
@@ -411,12 +489,22 @@ export function Arrangement() {
       for (const clip of track.clips) {
         const clipX = clip.position_ticks * pixelsPerTick - scrollOffset
         const clipW = clip.length_ticks * pixelsPerTick
-        if (mouseX >= clipX && mouseX <= clipX + clipW) {
-          let edge: 'body' | 'left' | 'right' = 'body'
-          if (mouseX > clipX + clipW - RESIZE_HANDLE_PX) edge = 'right'
-          else if (mouseX < clipX + RESIZE_HANDLE_PX) edge = 'left'
-          return { clip, trackId: track.id, edge }
+        if (mouseX < clipX || mouseX > clipX + clipW) continue
+        const localY = mouseY - (y + 2)
+        const withinFadeBand = localY >= HEADER_H && localY <= HEADER_H + FADE_HANDLE_PX && clipW > FADE_HANDLE_PX * 3
+        // Fade handles take priority over resize edges within the narrow top band.
+        if (withinFadeBand) {
+          if (mouseX <= clipX + RESIZE_HANDLE_PX + FADE_HANDLE_PX) {
+            return { clip, trackId: track.id, edge: 'fade-in' }
+          }
+          if (mouseX >= clipX + clipW - RESIZE_HANDLE_PX - FADE_HANDLE_PX) {
+            return { clip, trackId: track.id, edge: 'fade-out' }
+          }
         }
+        let edge: 'body' | 'left' | 'right' = 'body'
+        if (mouseX > clipX + clipW - RESIZE_HANDLE_PX) edge = 'right'
+        else if (mouseX < clipX + RESIZE_HANDLE_PX) edge = 'left'
+        return { clip, trackId: track.id, edge }
       }
     }
     return null
@@ -446,6 +534,7 @@ export function Arrangement() {
         mode: 'scrub', clipId: '', trackId: '',
         startMouseX: mouseX, startMouseY: mouseY, currentMouseX: mouseX, currentMouseY: mouseY,
         originalPositionTicks: 0, originalLengthTicks: 0,
+        originalFadeInTicks: 0, originalFadeOutTicks: 0,
       }
       return
     }
@@ -459,8 +548,14 @@ export function Arrangement() {
       } else {
         selectClip(hit.clip.id, hit.trackId)
       }
+      const mode: DragMode =
+        hit.edge === 'right' ? 'resize-right' :
+        hit.edge === 'left' ? 'resize-left' :
+        hit.edge === 'fade-in' ? 'fade-in' :
+        hit.edge === 'fade-out' ? 'fade-out' :
+        'move'
       dragRef.current = {
-        mode: hit.edge === 'right' ? 'resize-right' : hit.edge === 'left' ? 'resize-left' : 'move',
+        mode,
         clipId: hit.clip.id,
         trackId: hit.trackId,
         startMouseX: mouseX,
@@ -469,17 +564,24 @@ export function Arrangement() {
         currentMouseY: mouseY,
         originalPositionTicks: hit.clip.position_ticks,
         originalLengthTicks: hit.clip.length_ticks,
+        originalFadeInTicks: hit.clip.fadeInTicks,
+        originalFadeOutTicks: hit.clip.fadeOutTicks,
       }
     } else {
       if (!(e.ctrlKey || e.metaKey)) clearSelection()
+      // Place the edit cursor at the clicked tick (snapped). It may be replaced by a
+      // rubber-band selection if the user drags.
+      const tickAt = Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick))
+      setEditCursor(applySnap(tickAt))
       dragRef.current = {
         mode: 'rubber', clipId: '', trackId: '',
         startMouseX: mouseX, startMouseY: mouseY, currentMouseX: mouseX, currentMouseY: mouseY,
         originalPositionTicks: 0, originalLengthTicks: 0,
+        originalFadeInTicks: 0, originalFadeOutTicks: 0,
       }
       forceRender(n => n + 1)
     }
-  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition])
+  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const drag = dragRef.current
@@ -492,10 +594,12 @@ export function Arrangement() {
       if (canvas) {
         if (mouseY < RULER_HEIGHT) {
           canvas.style.cursor = 'pointer'
+        } else if (hit) {
+          if (hit.edge === 'right' || hit.edge === 'left') canvas.style.cursor = 'ew-resize'
+          else if (hit.edge === 'fade-in' || hit.edge === 'fade-out') canvas.style.cursor = 'ns-resize'
+          else canvas.style.cursor = 'grab'
         } else {
-          canvas.style.cursor = hit
-            ? (hit.edge === 'right' || hit.edge === 'left' ? 'ew-resize' : 'grab')
-            : 'default'
+          canvas.style.cursor = 'default'
         }
       }
       return
@@ -523,6 +627,17 @@ export function Arrangement() {
       return
     }
 
+    if (drag.mode === 'fade-in') {
+      const newFade = Math.max(0, Math.min(drag.originalLengthTicks, drag.originalFadeInTicks + dTicks))
+      setClipFades(drag.trackId, drag.clipId, newFade, drag.originalFadeOutTicks)
+      return
+    }
+    if (drag.mode === 'fade-out') {
+      // Dragging left shortens fade-out from the right edge, so invert dx.
+      const newFade = Math.max(0, Math.min(drag.originalLengthTicks, drag.originalFadeOutTicks - dTicks))
+      setClipFades(drag.trackId, drag.clipId, drag.originalFadeInTicks, newFade)
+      return
+    }
     if (drag.mode === 'move') {
       const newPos = Math.max(0, drag.originalPositionTicks + dTicks)
       moveClip(drag.trackId, drag.clipId, applySnap(newPos))
@@ -539,7 +654,7 @@ export function Arrangement() {
       moveClip(drag.trackId, drag.clipId, newPos)
       resizeClip(drag.trackId, drag.clipId, newLen)
     }
-  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, resizeClip, snapTicks])
+  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, resizeClip, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition])
 
   const handleMouseUp = useCallback(() => {
     const drag = dragRef.current

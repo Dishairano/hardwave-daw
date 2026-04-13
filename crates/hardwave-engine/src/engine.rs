@@ -482,8 +482,13 @@ impl EngineCallback {
             node.set_muted(effective_mute);
             node.set_soloed(track.soloed);
 
-            // Convert clip placements to sample-based ClipRegions
-            let regions: Vec<ClipRegion> = track
+            // Convert clip placements to sample-based ClipRegions.
+            // Clips are visited in their project-defined order, then any overlap between
+            // adjacent audio clips is promoted to an equal-length crossfade: the earlier
+            // clip gets a fade-out across the overlap and the later clip gets a fade-in.
+            // User-authored fades take precedence when they are already longer than the
+            // auto-computed value.
+            let mut regions: Vec<ClipRegion> = track
                 .clips
                 .iter()
                 .filter_map(|clip| match &clip.content {
@@ -516,6 +521,31 @@ impl EngineCallback {
                     _ => None,
                 })
                 .collect();
+
+            // Apply auto-crossfade across overlapping, unmuted audio clips.
+            // We sort indices by timeline_start so adjacency maps to timeline order,
+            // without losing the original positions inside `regions`.
+            let mut order: Vec<usize> = (0..regions.len()).collect();
+            order.sort_by_key(|&i| regions[i].timeline_start);
+            for w in order.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                if regions[a].muted || regions[b].muted {
+                    continue;
+                }
+                if regions[b].timeline_start < regions[a].timeline_end {
+                    let overlap = regions[a]
+                        .timeline_end
+                        .saturating_sub(regions[b].timeline_start);
+                    if overlap > 0 {
+                        if regions[a].fade_out_samples < overlap {
+                            regions[a].fade_out_samples = overlap;
+                        }
+                        if regions[b].fade_in_samples < overlap {
+                            regions[b].fade_in_samples = overlap;
+                        }
+                    }
+                }
+            }
 
             node.set_clips(regions);
 

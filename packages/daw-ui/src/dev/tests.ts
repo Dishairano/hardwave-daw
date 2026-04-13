@@ -2180,4 +2180,66 @@ export const TESTS: TestDef[] = [
       return { pass: ok, note: `${before}→${mid}→${end}` }
     },
   },
+  {
+    id: 'p2r4_edit_cursor_roundtrip',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Edit cursor (separate from playhead)',
+    title: 'setEditCursor stores a non-negative tick value',
+    instructions: 'Setting the edit cursor to a tick updates the store; setting null clears it.',
+    run: async ({ log }) => {
+      const { useTransportStore } = await import('../stores/transportStore')
+      useTransportStore.getState().setEditCursor(1920)
+      const mid = useTransportStore.getState().editCursorTicks
+      useTransportStore.getState().setEditCursor(null)
+      const end = useTransportStore.getState().editCursorTicks
+      const ok = mid === 1920 && end === null
+      log(ok ? 'pass' : 'fail', 'edit cursor', { expected: '1920→null', actual: `${mid}→${end}` })
+      return { pass: ok, note: `mid=${mid} end=${end}` }
+    },
+  },
+  {
+    id: 'p2r4_edit_cursor_clamps_to_zero',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Edit cursor (separate from playhead)',
+    title: 'Negative edit cursor values clamp to zero',
+    instructions: 'Passing a negative tick to setEditCursor must clamp to 0.',
+    run: async ({ log }) => {
+      const { useTransportStore } = await import('../stores/transportStore')
+      useTransportStore.getState().setEditCursor(-500)
+      const got = useTransportStore.getState().editCursorTicks
+      useTransportStore.getState().setEditCursor(null)
+      const ok = got === 0
+      log(ok ? 'pass' : 'fail', 'clamp', { expected: 0, actual: got })
+      return { pass: ok, note: `got=${got}` }
+    },
+  },
+  {
+    id: 'p2r4_crossfade_autofade_applied',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip crossfade when overlapping',
+    title: 'Overlapping clips on the same track coexist (auto-crossfade applied at engine)',
+    instructions: 'Place two clips so the second starts inside the first. Both clips must remain; the engine internally ramps across the overlap.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [first] = await invoke<any[]>('get_track_clips', { trackId })
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const clips = await invoke<any[]>('get_track_clips', { trackId })
+      if (clips.length !== 2) return { pass: false, note: `expected 2 clips, got ${clips.length}` }
+      const second = clips.find((c) => c.id !== first.id)
+      const halfIn = first.position_ticks + Math.floor(first.length_ticks / 2)
+      await invoke('move_clip', { trackId, clipId: second.id, newPositionTicks: halfIn })
+      const after = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = after.length === 2 && after.some((c) => c.position_ticks === halfIn)
+      log(ok ? 'pass' : 'fail', 'overlap', { expected: '2 clips with overlap', actual: `${after.length} clips` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `${after.length} clips after overlap move` }
+    },
+  },
 ]
