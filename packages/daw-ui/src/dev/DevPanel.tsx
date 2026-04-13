@@ -413,7 +413,8 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
       },
       ensureAudioTrack: async () => {
         const tracks = await invoke<any[]>('get_tracks')
-        if (tracks.length > 0) return tracks[0].id
+        const audioTrack = tracks.find((t) => t.kind !== 'Master')
+        if (audioTrack) return audioTrack.id
         return invoke<string>('add_audio_track', { name: 'Test Track' })
       },
       importAsset: async (trackId, assetName) => {

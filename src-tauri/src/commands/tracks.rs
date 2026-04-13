@@ -47,6 +47,7 @@ pub fn add_audio_track(state: State<AppState>, name: String) -> String {
         let mut project = engine.project.lock();
         project.add_audio_track(name)
     };
+    engine.sync_track_meters();
     engine.rebuild_graph();
     id
 }
@@ -58,6 +59,7 @@ pub fn add_midi_track(state: State<AppState>, name: String) -> String {
         let mut project = engine.project.lock();
         project.add_midi_track(name)
     };
+    engine.sync_track_meters();
     engine.rebuild_graph();
     id
 }
@@ -69,6 +71,7 @@ pub fn remove_track(state: State<AppState>, track_id: String) {
         let mut project = engine.project.lock();
         project.remove_track(&track_id);
     }
+    engine.sync_track_meters();
     engine.rebuild_graph();
 }
 

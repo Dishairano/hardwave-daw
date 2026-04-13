@@ -135,6 +135,29 @@ impl DawEngine {
         Ok((source_id, info))
     }
 
+    /// Ensure every non-master track in the project has an entry in the
+    /// track meter map. Called from the UI thread so that `dev_dump_state`
+    /// can see newly added tracks before the audio thread rebuilds.
+    pub fn sync_track_meters(&self) {
+        let project = self.project.lock();
+        let mut meters = self.track_meters.lock();
+        for track in &project.tracks {
+            if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
+                continue;
+            }
+            meters
+                .entry(track.id.clone())
+                .or_insert_with(|| Arc::new(TrackMeterState::default()));
+        }
+        let live_ids: std::collections::HashSet<String> = project
+            .tracks
+            .iter()
+            .filter(|t| !matches!(t.kind, hardwave_project::track::TrackKind::Master))
+            .map(|t| t.id.clone())
+            .collect();
+        meters.retain(|id, _| live_ids.contains(id));
+    }
+
     /// Snapshot per-track post-fader meters.
     pub fn track_meter_snapshots(&self) -> Vec<(String, f32, f32, f32)> {
         use std::sync::atomic::Ordering;

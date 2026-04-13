@@ -20,12 +20,27 @@ pub struct TransportInfo {
 
 #[tauri::command]
 pub fn play(state: State<AppState>) {
-    state.engine.lock().send_command(TransportCommand::Play);
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    engine.transport.playing.store(true, Ordering::Relaxed);
+    engine.send_command(TransportCommand::Play);
 }
 
 #[tauri::command]
 pub fn stop(state: State<AppState>) {
-    state.engine.lock().send_command(TransportCommand::Stop);
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    let was_playing = engine.transport.playing.swap(false, Ordering::Relaxed);
+    if !was_playing {
+        let loop_start = if engine.transport.looping.load(Ordering::Relaxed) {
+            engine.transport.loop_start.load(Ordering::Relaxed)
+        } else {
+            0
+        };
+        engine.transport.set_position(loop_start);
+    }
+    engine.transport.recording.store(false, Ordering::Relaxed);
+    engine.send_command(TransportCommand::Stop);
 }
 
 #[tauri::command]
