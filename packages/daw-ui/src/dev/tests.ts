@@ -2390,3 +2390,466 @@ export const TESTS: TestDef[] = [
     },
   },
 ]
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2 Round 7: extensive parametric test matrix.
+// Each generator returns many individual TestDef entries so the dev panel shows
+// fine-grained pass/fail across the full Phase 2 surface area.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function genBpmRoundtrips(): TestDef[] {
+  const targets = [60, 70, 80, 90, 100, 110, 120, 125, 128, 130, 140, 150, 160, 170, 174, 180, 190, 200, 220, 240]
+  return targets.map((bpm) => ({
+    id: `p2r7_bpm_${bpm}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'BPM display (editable)',
+    title: `BPM roundtrip ${bpm}`,
+    instructions: `set_bpm ${bpm} -> dev_dump_state matches`,
+    run: async ({ log }) => {
+      await invoke('set_bpm', { bpm })
+      await sleep(30)
+      const s = await devDumpState()
+      const ok = approx(s.bpm, bpm, 0.01)
+      log(ok ? 'pass' : 'fail', 'bpm', { expected: bpm, actual: s.bpm })
+      return { pass: ok, note: `bpm=${s.bpm}` }
+    },
+  }))
+}
+
+function genMasterVolumeRoundtrips(): TestDef[] {
+  const targets = [-60, -48, -36, -24, -18, -12, -9, -6, -3, -1, 0, 1, 3, 6]
+  return targets.map((db) => ({
+    id: `p2r7_master_vol_${db.toString().replace('-', 'n')}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Master volume control',
+    title: `Master volume ${db} dB`,
+    instructions: `set_master_volume ${db}`,
+    run: async ({ log }) => {
+      await invoke('set_master_volume', { db })
+      await sleep(30)
+      const s = await devDumpState()
+      const ok = approx(s.masterVolumeDb, db, 0.05)
+      log(ok ? 'pass' : 'fail', 'master vol', { expected: db, actual: s.masterVolumeDb })
+      return { pass: ok, note: `${s.masterVolumeDb}` }
+    },
+  }))
+}
+
+function genTimeSigRoundtrips(): TestDef[] {
+  const combos: Array<[number, number]> = [
+    [4, 4], [3, 4], [6, 8], [7, 8], [5, 4], [9, 8], [12, 8], [2, 4],
+    [3, 8], [11, 8], [5, 8], [7, 4], [6, 4], [15, 16], [12, 16],
+  ]
+  return combos.map(([num, den]) => ({
+    id: `p2r7_timesig_${num}_${den}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Time signature numerator/denominator',
+    title: `Time sig ${num}/${den}`,
+    instructions: `set_time_signature ${num}/${den}`,
+    run: async ({ log }) => {
+      await invoke('set_time_signature', { numerator: num, denominator: den })
+      await sleep(30)
+      const s = await devDumpState()
+      const ok = s.timeSigNumerator === num && s.timeSigDenominator === den
+      log(ok ? 'pass' : 'fail', 'timesig', { expected: `${num}/${den}`, actual: `${s.timeSigNumerator}/${s.timeSigDenominator}` })
+      return { pass: ok, note: `${s.timeSigNumerator}/${s.timeSigDenominator}` }
+    },
+  }))
+}
+
+function genSnapPure(): TestDef[] {
+  const expected: Array<[SnapValueLite, number]> = [
+    ['Off', 0], ['1/1', 3840], ['1/2', 1920], ['1/4', 960], ['1/8', 480],
+    ['1/16', 240], ['1/32', 120], ['1/64', 60],
+    ['1/4T', 640], ['1/8T', 320], ['1/16T', 160],
+    ['1/4D', 1440], ['1/8D', 720],
+  ]
+  return expected.map(([snap, ticks]) => ({
+    id: `p2r7_snap_${snap.replace('/', '_').replace('Off', 'off')}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: `Snap: ${snap}`,
+    title: `snapToTicks(${snap})`,
+    instructions: `Pure JS: snapToTicks('${snap}', true) should be ${ticks}`,
+    run: async ({ log }) => {
+      const got = snapToTicks(snap as any, snap !== 'Off')
+      const ok = got === ticks
+      log(ok ? 'pass' : 'fail', `snap ${snap}`, { expected: ticks, actual: got })
+      return { pass: ok, note: `${snap}→${got}t` }
+    },
+  }))
+}
+type SnapValueLite = 'Off' | '1/1' | '1/2' | '1/4' | '1/8' | '1/16' | '1/32' | '1/64' | '1/4T' | '1/8T' | '1/16T' | '1/4D' | '1/8D'
+
+function genClipPitchMatrix(): TestDef[] {
+  const values = [-24, -19, -14, -12, -9, -7, -5, -3, -2, -1, 0, 1, 2, 3, 5, 7, 9, 12, 14, 19, 24]
+  return values.map((p) => ({
+    id: `p2r7_pitch_${p.toString().replace('-', 'n')}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Clip pitch shift (semitones)',
+    title: `Pitch ${p} st roundtrip`,
+    instructions: `set_clip_pitch ${p}`,
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(30)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('set_clip_pitch', { trackId, clipId: c.id, pitchSemitones: p })
+      const [after] = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = Math.abs(after.pitchSemitones - p) < 0.01
+      log(ok ? 'pass' : 'fail', 'pitch', { expected: p, actual: after.pitchSemitones })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `${after.pitchSemitones}st` }
+    },
+  }))
+}
+
+function genClipStretchMatrix(): TestDef[] {
+  const values = [0.25, 0.33, 0.5, 0.66, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0]
+  return values.map((r) => ({
+    id: `p2r7_stretch_${r.toString().replace('.', '_')}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Clip time stretch (warping)',
+    title: `Stretch ${r}x roundtrip`,
+    instructions: `set_clip_stretch ${r}`,
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(30)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('set_clip_stretch', { trackId, clipId: c.id, stretchRatio: r })
+      const [after] = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = Math.abs(after.stretchRatio - r) < 0.01
+      log(ok ? 'pass' : 'fail', 'stretch', { expected: r, actual: after.stretchRatio })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `${after.stretchRatio}x` }
+    },
+  }))
+}
+
+function genClipGainMatrix(): TestDef[] {
+  const values = [-60, -48, -36, -24, -18, -12, -9, -6, -3, -1, 0, 1, 3, 6, 9, 12]
+  return values.map((db) => ({
+    id: `p2r7_clip_gain_${db.toString().replace('-', 'n')}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Clip gain knob (per-clip volume)',
+    title: `Clip gain ${db} dB roundtrip`,
+    instructions: `set_clip_gain ${db}`,
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(30)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('set_clip_gain', { trackId, clipId: c.id, gainDb: db })
+      const [after] = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = Math.abs(after.gainDb - db) < 0.01
+      log(ok ? 'pass' : 'fail', 'gain', { expected: db, actual: after.gainDb })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `${after.gainDb}dB` }
+    },
+  }))
+}
+
+function genClipMoveMatrix(): TestDef[] {
+  const positions = [0, 120, 240, 480, 720, 960, 1440, 1920, 2880, 3840, 5760, 7680, 9600, 11520, 15360, 19200]
+  return positions.map((pos) => ({
+    id: `p2r7_move_${pos}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Clip move: horizontal drag (time)',
+    title: `Clip move to tick ${pos}`,
+    instructions: `move_clip newPositionTicks=${pos}`,
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(30)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('move_clip', { trackId, clipId: c.id, newPositionTicks: pos })
+      const [after] = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = after.position_ticks === pos
+      log(ok ? 'pass' : 'fail', 'move', { expected: pos, actual: after.position_ticks })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `pos=${after.position_ticks}` }
+    },
+  }))
+}
+
+function genClipResizeMatrix(): TestDef[] {
+  const lens = [120, 240, 480, 960, 1440, 1920, 2400, 2880, 3360, 3840, 4800, 5760, 7680, 9600, 11520]
+  return lens.map((len) => ({
+    id: `p2r7_resize_${len}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Clip resize: drag right edge',
+    title: `Clip resize to ${len}t`,
+    instructions: `resize_clip newLengthTicks=${len}`,
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(30)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('resize_clip', { trackId, clipId: c.id, newLengthTicks: len })
+      const [after] = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = after.length_ticks === len
+      log(ok ? 'pass' : 'fail', 'resize', { expected: len, actual: after.length_ticks })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `len=${after.length_ticks}` }
+    },
+  }))
+}
+
+function genClipFadeMatrix(): TestDef[] {
+  const pairs: Array<[number, number]> = [
+    [60, 60], [120, 120], [240, 240], [480, 480], [960, 0], [0, 960],
+    [120, 480], [480, 120], [240, 720], [720, 240], [60, 900], [900, 60],
+  ]
+  return pairs.map(([fi, fo]) => ({
+    id: `p2r7_fade_${fi}_${fo}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Clip fade-in handle (drag corner)',
+    title: `Fades in=${fi} out=${fo}`,
+    instructions: `set_clip_fades in=${fi} out=${fo}`,
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(30)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('set_clip_fades', { trackId, clipId: c.id, fadeInTicks: fi, fadeOutTicks: fo })
+      const [after] = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = after.fadeInTicks === fi && after.fadeOutTicks === fo
+      log(ok ? 'pass' : 'fail', 'fades', { expected: `${fi}/${fo}`, actual: `${after.fadeInTicks}/${after.fadeOutTicks}` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `${after.fadeInTicks}/${after.fadeOutTicks}` }
+    },
+  }))
+}
+
+function genTrackVolumeMatrix(): TestDef[] {
+  const values = [-60, -48, -36, -24, -18, -12, -9, -6, -3, 0, 3, 6, 9, 12]
+  return values.map((db) => ({
+    id: `p2r7_trackvol_${db.toString().replace('-', 'n')}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Track header: volume fader',
+    title: `Track volume ${db} dB`,
+    instructions: `set_track_volume ${db}`,
+    run: async ({ log, ensureAudioTrack }) => {
+      const trackId = await ensureAudioTrack()
+      await invoke('set_track_volume', { trackId, volumeDb: db })
+      const tracks = await invoke<any[]>('get_tracks')
+      const t = tracks.find((x) => x.id === trackId)!
+      const ok = Math.abs(t.volume_db - db) < 0.01
+      log(ok ? 'pass' : 'fail', 'track vol', { expected: db, actual: t.volume_db })
+      return { pass: ok, note: `${t.volume_db}dB` }
+    },
+  }))
+}
+
+function genTrackPanMatrix(): TestDef[] {
+  const values = [-1, -0.75, -0.5, -0.25, -0.1, 0, 0.1, 0.25, 0.5, 0.75, 1]
+  return values.map((pan) => ({
+    id: `p2r7_trackpan_${pan.toString().replace('-', 'n').replace('.', '_')}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Track header: pan knob',
+    title: `Track pan ${pan}`,
+    instructions: `set_track_pan ${pan}`,
+    run: async ({ log, ensureAudioTrack }) => {
+      const trackId = await ensureAudioTrack()
+      await invoke('set_track_pan', { trackId, pan })
+      const tracks = await invoke<any[]>('get_tracks')
+      const t = tracks.find((x) => x.id === trackId)!
+      const ok = Math.abs(t.pan - pan) < 0.01
+      log(ok ? 'pass' : 'fail', 'track pan', { expected: pan, actual: t.pan })
+      return { pass: ok, note: `${t.pan}` }
+    },
+  }))
+}
+
+function genUndoRedoChain(): TestDef[] {
+  const steps = [1, 2, 3, 5, 8, 13, 21, 34]
+  return steps.map((n) => ({
+    id: `p2r7_undo_chain_${n}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Undo stack (256+ levels)',
+    title: `Undo chain of ${n} edits`,
+    instructions: `Apply ${n} gain edits, undo ${n} times, original restored`,
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(30)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      const original = c.gainDb
+      for (let i = 0; i < n; i++) {
+        await invoke('set_clip_gain', { trackId, clipId: c.id, gainDb: -i - 1 })
+      }
+      for (let i = 0; i < n; i++) {
+        await invoke('undo')
+      }
+      const [after] = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = Math.abs(after.gainDb - original) < 0.01
+      log(ok ? 'pass' : 'fail', 'undo chain', { expected: original, actual: after.gainDb })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `n=${n} final=${after.gainDb}` }
+    },
+  }))
+}
+
+function genWaveformPeaksMatrix(): TestDef[] {
+  const buckets = [16, 32, 64, 128, 256, 512, 1024, 2048]
+  return buckets.map((b) => ({
+    id: `p2r7_peaks_${b}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Clip waveform peak pre-computation',
+    title: `get_waveform_peaks ${b} buckets`,
+    instructions: `Returns exactly ${b} peak pairs`,
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(30)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      const peaks = await invoke<[number, number][]>('get_waveform_peaks', { sourceId: c.source_id, numBuckets: b })
+      const ok = peaks.length === b
+      log(ok ? 'pass' : 'fail', 'peaks', { expected: b, actual: peaks.length })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `got ${peaks.length}` }
+    },
+  }))
+}
+
+function genDuplicateChain(): TestDef[] {
+  const counts = [1, 2, 3, 5, 8]
+  return counts.map((n) => ({
+    id: `p2r7_duplicate_chain_${n}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Clip duplicate: Ctrl+D',
+    title: `Duplicate ${n} times`,
+    instructions: `Expect ${n + 1} clips after chain`,
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(30)
+      let [c] = await invoke<any[]>('get_track_clips', { trackId })
+      let currentId = c.id
+      for (let i = 0; i < n; i++) {
+        currentId = await invoke<string>('duplicate_clip', { trackId, clipId: currentId })
+      }
+      const after = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = after.length === n + 1
+      log(ok ? 'pass' : 'fail', 'dup count', { expected: n + 1, actual: after.length })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `${after.length} clips` }
+    },
+  }))
+}
+
+function genTrackAddRemove(): TestDef[] {
+  const counts = [1, 2, 3, 5, 8, 13]
+  return counts.map((n) => ({
+    id: `p2r7_add_remove_${n}`,
+    kind: 'AUTO' as const,
+    phase: 2,
+    phase1Item: 'Add track button',
+    title: `Add+remove ${n} tracks`,
+    instructions: `Add ${n}, remove ${n}, initial count preserved`,
+    run: async ({ log }) => {
+      const initial = (await invoke<any[]>('get_tracks')).length
+      const ids: string[] = []
+      for (let i = 0; i < n; i++) {
+        await invoke('add_audio_track', { name: `TestTrack${i}` })
+      }
+      const mid = await invoke<any[]>('get_tracks')
+      const added = mid.slice(-n)
+      for (const t of added) ids.push(t.id)
+      for (const id of ids) {
+        await invoke('remove_track', { trackId: id })
+      }
+      const final = (await invoke<any[]>('get_tracks')).length
+      const ok = mid.length === initial + n && final === initial
+      log(ok ? 'pass' : 'fail', 'add/remove', { expected: `${initial}→${initial + n}→${initial}`, actual: `${initial}→${mid.length}→${final}` })
+      return { pass: ok, note: `${initial}/${mid.length}/${final}` }
+    },
+  }))
+}
+
+function genMuteSoloMatrix(): TestDef[] {
+  const tests: TestDef[] = []
+  for (let i = 0; i < 4; i++) {
+    tests.push({
+      id: `p2r7_mute_toggle_${i}`,
+      kind: 'AUTO',
+      phase: 2,
+      phase1Item: 'Track header: mute button',
+      title: `Mute toggle ${i}`,
+      instructions: `toggle_mute flips the flag`,
+      run: async ({ log, ensureAudioTrack }) => {
+        const trackId = await ensureAudioTrack()
+        const before = (await invoke<any[]>('get_tracks')).find((t: any) => t.id === trackId)!.muted
+        await invoke('toggle_mute', { trackId })
+        const after = (await invoke<any[]>('get_tracks')).find((t: any) => t.id === trackId)!.muted
+        const ok = after === !before
+        log(ok ? 'pass' : 'fail', 'mute', { expected: !before, actual: after })
+        await invoke('toggle_mute', { trackId })
+        return { pass: ok, note: `${before}→${after}` }
+      },
+    })
+    tests.push({
+      id: `p2r7_solo_toggle_${i}`,
+      kind: 'AUTO',
+      phase: 2,
+      phase1Item: 'Track header: solo button',
+      title: `Solo toggle ${i}`,
+      instructions: `toggle_solo flips the flag`,
+      run: async ({ log, ensureAudioTrack }) => {
+        const trackId = await ensureAudioTrack()
+        const before = (await invoke<any[]>('get_tracks')).find((t: any) => t.id === trackId)!.soloed
+        await invoke('toggle_solo', { trackId })
+        const after = (await invoke<any[]>('get_tracks')).find((t: any) => t.id === trackId)!.soloed
+        const ok = after === !before
+        log(ok ? 'pass' : 'fail', 'solo', { expected: !before, actual: after })
+        await invoke('toggle_solo', { trackId })
+        return { pass: ok, note: `${before}→${after}` }
+      },
+    })
+  }
+  return tests
+}
+
+TESTS.push(
+  ...genBpmRoundtrips(),
+  ...genMasterVolumeRoundtrips(),
+  ...genTimeSigRoundtrips(),
+  ...genSnapPure(),
+  ...genClipPitchMatrix(),
+  ...genClipStretchMatrix(),
+  ...genClipGainMatrix(),
+  ...genClipMoveMatrix(),
+  ...genClipResizeMatrix(),
+  ...genClipFadeMatrix(),
+  ...genTrackVolumeMatrix(),
+  ...genTrackPanMatrix(),
+  ...genUndoRedoChain(),
+  ...genWaveformPeaksMatrix(),
+  ...genDuplicateChain(),
+  ...genTrackAddRemove(),
+  ...genMuteSoloMatrix(),
+)
