@@ -108,70 +108,64 @@ pub fn run() {
             let engine = Arc::clone(&state.engine);
             let app_handle = app.handle().clone();
 
-            std::thread::spawn(move || {
-                let mut device_fp: u64 = 0;
-                let mut tick: u32 = 0;
-                loop {
-                    std::thread::sleep(std::time::Duration::from_millis(33));
-                    // Poll for device hot-swap once per second.
-                    tick = tick.wrapping_add(1);
-                    if tick.is_multiple_of(30) {
-                        let new_fp = engine.lock().output_device_fingerprint();
+            // Device hot-plug polling runs on its own thread at a slow cadence
+            // because cpal's device enumeration can block for hundreds of ms on
+            // some backends. Keeping it off the meter thread prevents UI hitches.
+            {
+                let engine_hp = Arc::clone(&engine);
+                let app_handle_hp = app_handle.clone();
+                std::thread::spawn(move || {
+                    let mut device_fp: u64 = 0;
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                        let new_fp = engine_hp.lock().output_device_fingerprint();
                         if new_fp != device_fp {
                             device_fp = new_fp;
-                            let _ = app_handle.emit("daw:audioDevicesChanged", &new_fp);
+                            let _ = app_handle_hp.emit("daw:audioDevicesChanged", &new_fp);
                         }
                     }
-                    // Check audio-device health; if the stream failed (e.g. USB unplug),
-                    // the engine will transparently restart on the default device.
-                    if let Err(e) = engine.lock().poll_audio_health() {
-                        log::error!("Audio health check failed: {e}");
-                    }
-                    let meters = engine.lock().master_meter();
-                    let _ = app_handle.emit("daw:meters", &meters);
+                });
+            }
 
-                    let track_meters = engine.lock().track_meter_snapshots();
-                    let track_payload: Vec<_> = track_meters
-                        .into_iter()
-                        .map(|(id, pl, pr, rms, pre_fader)| {
-                            serde_json::json!({
-                                "id": id,
-                                "peakL": pl,
-                                "peakR": pr,
-                                "rms": rms,
-                                "preFaderPeak": pre_fader,
-                            })
-                        })
-                        .collect();
-                    let _ = app_handle.emit("daw:trackMeters", &track_payload);
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(33));
 
-                    let pos;
-                    let playing;
-                    let bpm;
-                    let master_db;
-                    let (num, den);
-                    let pattern_mode;
-                    let looping;
-                    let loop_start;
-                    let loop_end;
-                    {
+                    // Single lock acquisition per tick — coalesces what used to be
+                    // four separate engine.lock() calls and eliminates per-tick
+                    // contention with command handlers.
+                    let (meters, track_payload, transport_payload) = {
                         use std::sync::atomic::Ordering;
-                        let eng = engine.lock();
-                        pos = eng.transport.position();
-                        playing = eng.transport.is_playing();
-                        bpm = eng.transport.bpm.load(Ordering::Relaxed);
-                        master_db = eng.transport.master_volume_db.load(Ordering::Relaxed);
-                        (num, den) = hardwave_engine::transport::unpack_time_sig(
+                        let mut eng = engine.lock();
+                        if let Err(e) = eng.poll_audio_health() {
+                            log::error!("Audio health check failed: {e}");
+                        }
+                        let meters = eng.master_meter();
+                        let track_payload: Vec<_> = eng
+                            .track_meter_snapshots()
+                            .into_iter()
+                            .map(|(id, pl, pr, rms, pre_fader)| {
+                                serde_json::json!({
+                                    "id": id,
+                                    "peakL": pl,
+                                    "peakR": pr,
+                                    "rms": rms,
+                                    "preFaderPeak": pre_fader,
+                                })
+                            })
+                            .collect();
+                        let pos = eng.transport.position();
+                        let playing = eng.transport.is_playing();
+                        let bpm = eng.transport.bpm.load(Ordering::Relaxed);
+                        let master_db = eng.transport.master_volume_db.load(Ordering::Relaxed);
+                        let (num, den) = hardwave_engine::transport::unpack_time_sig(
                             eng.transport.time_sig.load(Ordering::Relaxed),
                         );
-                        pattern_mode = eng.transport.pattern_mode.load(Ordering::Relaxed);
-                        looping = eng.transport.looping.load(Ordering::Relaxed);
-                        loop_start = eng.transport.loop_start.load(Ordering::Relaxed);
-                        loop_end = eng.transport.loop_end.load(Ordering::Relaxed);
-                    }
-                    let _ = app_handle.emit(
-                        "daw:transport",
-                        serde_json::json!({
+                        let pattern_mode = eng.transport.pattern_mode.load(Ordering::Relaxed);
+                        let looping = eng.transport.looping.load(Ordering::Relaxed);
+                        let loop_start = eng.transport.loop_start.load(Ordering::Relaxed);
+                        let loop_end = eng.transport.loop_end.load(Ordering::Relaxed);
+                        let transport_payload = serde_json::json!({
                             "position": pos,
                             "playing": playing,
                             "bpm": bpm,
@@ -181,8 +175,13 @@ pub fn run() {
                             "looping": looping,
                             "loopStart": loop_start,
                             "loopEnd": loop_end,
-                        }),
-                    );
+                        });
+                        (meters, track_payload, transport_payload)
+                    };
+
+                    let _ = app_handle.emit("daw:meters", &meters);
+                    let _ = app_handle.emit("daw:trackMeters", &track_payload);
+                    let _ = app_handle.emit("daw:transport", &transport_payload);
                 }
             });
 
