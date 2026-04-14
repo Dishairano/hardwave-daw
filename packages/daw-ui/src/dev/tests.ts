@@ -1285,10 +1285,16 @@ export const TESTS: TestDef[] = [
       try { await invoke('start_engine') } catch {}
       await invoke('play')
 
-      const { ok, value } = await poll(devDumpState, (s) => {
+      const { ok, value: _firstHit } = await poll(devDumpState, (s) => {
         const t = s.tracks.find((t) => t.id === trackId)
         return !!t && t.preFaderPeakDb !== undefined && t.preFaderPeakDb > -30
       }, 2500)
+      void _firstHit
+      // After signal is confirmed flowing, give the volume command a few
+      // blocks to apply — set_track_volume is async via the command queue,
+      // so the first post-fader meter writes can still reflect the old fader.
+      await sleep(250)
+      const value = await devDumpState()
       await invoke('stop')
       await invoke('set_track_volume', { trackId, volumeDb: 0 })
 
