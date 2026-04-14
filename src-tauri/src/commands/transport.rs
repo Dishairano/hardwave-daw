@@ -54,6 +54,10 @@ pub fn set_position(state: State<AppState>, position: u64) {
 #[tauri::command]
 pub fn set_bpm(state: State<AppState>, bpm: f64) {
     use std::sync::atomic::Ordering;
+    if !bpm.is_finite() {
+        return;
+    }
+    let bpm = bpm.clamp(20.0, 999.0);
     let engine = state.engine.lock();
     engine.transport.bpm.store(bpm, Ordering::Relaxed);
     engine.send_command(TransportCommand::SetBpm(bpm));
@@ -84,6 +88,10 @@ pub fn set_loop(state: State<AppState>, start: u64, end: u64) {
 #[tauri::command]
 pub fn set_master_volume(state: State<AppState>, db: f64) {
     use std::sync::atomic::Ordering;
+    if !db.is_finite() {
+        return;
+    }
+    let db = db.clamp(-100.0, 12.0);
     let engine = state.engine.lock();
     engine
         .transport

@@ -93,6 +93,10 @@ pub fn set_track_volume(state: State<AppState>, track_id: String, volume_db: f64
 
 #[tauri::command]
 pub fn set_track_pan(state: State<AppState>, track_id: String, pan: f64) {
+    if !pan.is_finite() {
+        return;
+    }
+    let pan = pan.clamp(-1.0, 1.0);
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {

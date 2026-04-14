@@ -3239,7 +3239,7 @@ TESTS.push(
       const before = (await invoke<any[]>('get_tracks')).length
       const ids: string[] = []
       for (let i = 0; i < 50; i++) {
-        const id = await invoke<string>('add_track', { name: `Stress${i}`, kind: 'Audio' })
+        const id = await invoke<string>('add_audio_track', { name: `Stress${i}` })
         ids.push(id)
       }
       const mid = (await invoke<any[]>('get_tracks')).length
