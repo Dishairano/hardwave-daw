@@ -108,24 +108,12 @@ pub fn run() {
             let engine = Arc::clone(&state.engine);
             let app_handle = app.handle().clone();
 
-            // Device hot-plug polling runs on its own thread at a slow cadence
-            // because cpal's device enumeration can block for hundreds of ms on
-            // some backends. Keeping it off the meter thread prevents UI hitches.
-            {
-                let engine_hp = Arc::clone(&engine);
-                let app_handle_hp = app_handle.clone();
-                std::thread::spawn(move || {
-                    let mut device_fp: u64 = 0;
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_secs(3));
-                        let new_fp = engine_hp.lock().output_device_fingerprint();
-                        if new_fp != device_fp {
-                            device_fp = new_fp;
-                            let _ = app_handle_hp.emit("daw:audioDevicesChanged", &new_fp);
-                        }
-                    }
-                });
-            }
+            // Hot-plug polling removed: cpal's device enumeration takes
+            // hundreds of ms and blocks the engine lock, which stalls the
+            // meter/transport broadcast and every UI command on a regular
+            // cadence. Device loss is still detected via the stream-error
+            // recovery path in `poll_audio_health`, and the device list is
+            // re-fetched on demand when the Audio Settings panel opens.
 
             std::thread::spawn(move || {
                 loop {

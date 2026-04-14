@@ -2862,3 +2862,394 @@ TESTS.push(
   ...genTrackAddRemove(),
   ...genMuteSoloMatrix(),
 )
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2 Round 9: edge cases, error paths, and concurrency stress.
+// Each test targets a boundary, failure mode, or rapid-fire race that the
+// happy-path suite doesn't exercise.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TESTS.push(
+  {
+    id: 'bpm_clamp_below_min',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'BPM boundary clamping',
+    title: 'BPM clamps at 20 when set below',
+    instructions: 'Sets BPM to 5 and verifies the readback is clamped to 20 (engine minimum).',
+    run: async ({ log }) => {
+      await invoke('set_bpm', { bpm: 5 })
+      await sleep(40)
+      const s = await devDumpState()
+      const ok = s.bpm >= 20
+      log(ok ? 'pass' : 'fail', 'bpm clamped', { expected: '>= 20', actual: s.bpm })
+      await invoke('set_bpm', { bpm: 140 })
+      return { pass: ok, note: `bpm=${s.bpm}` }
+    },
+  },
+  {
+    id: 'bpm_clamp_above_max',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'BPM boundary clamping',
+    title: 'BPM clamps at 999 when set above',
+    instructions: 'Sets BPM to 5000 and verifies the readback is clamped to 999.',
+    run: async ({ log }) => {
+      await invoke('set_bpm', { bpm: 5000 })
+      await sleep(40)
+      const s = await devDumpState()
+      const ok = s.bpm <= 999
+      log(ok ? 'pass' : 'fail', 'bpm clamped', { expected: '<= 999', actual: s.bpm })
+      await invoke('set_bpm', { bpm: 140 })
+      return { pass: ok, note: `bpm=${s.bpm}` }
+    },
+  },
+  {
+    id: 'bpm_nan_rejected',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'NaN input hardening',
+    title: 'BPM NaN leaves state valid',
+    instructions: 'Passes NaN to set_bpm and verifies the engine does not end up in a NaN state.',
+    run: async ({ log }) => {
+      await invoke('set_bpm', { bpm: 120 })
+      try { await invoke('set_bpm', { bpm: Number.NaN }) } catch { /* expected */ }
+      await sleep(40)
+      const s = await devDumpState()
+      const ok = Number.isFinite(s.bpm) && s.bpm > 0
+      log(ok ? 'pass' : 'fail', 'bpm finite', { expected: 'finite > 0', actual: s.bpm })
+      await invoke('set_bpm', { bpm: 140 })
+      return { pass: ok, note: `bpm=${s.bpm}` }
+    },
+  },
+  {
+    id: 'master_volume_clamp',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Master volume clamping',
+    title: 'Master volume clamps to sane range',
+    instructions: 'Sets master volume to +100 and -500; verifies readback stays within engine range.',
+    run: async ({ log }) => {
+      await invoke('set_master_volume', { db: 100 })
+      await sleep(40)
+      const hi = (await devDumpState()).masterVolumeDb
+      await invoke('set_master_volume', { db: -500 })
+      await sleep(40)
+      const lo = (await devDumpState()).masterVolumeDb
+      const ok = hi <= 12 && lo >= -100
+      log(ok ? 'pass' : 'fail', 'master clamped', { expected: 'hi<=12 lo>=-100', actual: `hi=${hi} lo=${lo}` })
+      await invoke('set_master_volume', { db: 0 })
+      return { pass: ok, note: `hi=${hi} lo=${lo}` }
+    },
+  },
+  {
+    id: 'track_pan_clamp',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Track pan clamping',
+    title: 'Track pan clamps to [-1, 1]',
+    instructions: 'Sets pan to 5 and -5; verifies both clamp into [-1, 1].',
+    run: async ({ log, ensureAudioTrack }) => {
+      const id = await ensureAudioTrack()
+      await invoke('set_track_pan', { trackId: id, pan: 5 })
+      const hi = (await invoke<any[]>('get_tracks')).find((t) => t.id === id)?.pan ?? 0
+      await invoke('set_track_pan', { trackId: id, pan: -5 })
+      const lo = (await invoke<any[]>('get_tracks')).find((t) => t.id === id)?.pan ?? 0
+      const ok = hi <= 1.0 + 1e-6 && lo >= -1.0 - 1e-6
+      log(ok ? 'pass' : 'fail', 'pan clamped', { expected: '[-1,1]', actual: `hi=${hi} lo=${lo}` })
+      await invoke('set_track_pan', { trackId: id, pan: 0 })
+      return { pass: ok, note: `hi=${hi} lo=${lo}` }
+    },
+  },
+  {
+    id: 'loop_start_after_end',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Loop region validation',
+    title: 'Loop with start > end does not crash',
+    instructions: 'Sets loop start=10000, end=100 and verifies engine remains responsive.',
+    run: async ({ log }) => {
+      await invoke('set_loop', { start: 10000, end: 100 })
+      await sleep(40)
+      const s = await devDumpState()
+      const ok = Number.isFinite(s.bpm)
+      log(ok ? 'pass' : 'fail', 'engine alive', { expected: 'valid state', actual: `bpm=${s.bpm}` })
+      await invoke('set_loop', { start: 0, end: 48000 })
+      return { pass: ok, note: `loop=${s.loopStart}..${s.loopEnd}` }
+    },
+  },
+  {
+    id: 'loop_zero_length',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Loop region validation',
+    title: 'Zero-length loop region does not hang playback',
+    instructions: 'Sets loop start=end, enables loop, plays briefly, verifies position advances or stays stable.',
+    run: async ({ log }) => {
+      await invoke('stop')
+      await invoke('set_loop', { start: 48000, end: 48000 })
+      if (!(await devDumpState()).looping) await invoke('toggle_loop')
+      await invoke('set_position', { position: 0 })
+      try { await invoke('start_engine') } catch {}
+      await invoke('play')
+      await sleep(300)
+      const s = await devDumpState()
+      await invoke('stop')
+      if ((await devDumpState()).looping) await invoke('toggle_loop')
+      const ok = Number.isFinite(s.positionSamples)
+      log(ok ? 'pass' : 'fail', 'no hang', { expected: 'finite position', actual: s.positionSamples })
+      return { pass: ok, note: `pos=${s.positionSamples}` }
+    },
+  },
+  {
+    id: 'set_position_huge',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Position boundary handling',
+    title: 'set_position with huge value does not crash',
+    instructions: 'Sets position near u64 max and verifies engine still responds.',
+    run: async ({ log }) => {
+      await invoke('stop')
+      try { await invoke('set_position', { position: 1_000_000_000_000 }) } catch {}
+      await sleep(40)
+      const s = await devDumpState()
+      const ok = Number.isFinite(s.bpm)
+      log(ok ? 'pass' : 'fail', 'engine alive', { expected: 'responsive', actual: `bpm=${s.bpm}` })
+      await invoke('set_position', { position: 0 })
+      return { pass: ok, note: `pos=${s.positionSamples}` }
+    },
+  },
+  {
+    id: 'rapid_set_bpm_spam',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Command queue robustness',
+    title: '100 rapid set_bpm calls land on final value',
+    instructions: 'Fires 100 set_bpm commands back-to-back and verifies the last value is eventually observed.',
+    run: async ({ log }) => {
+      for (let i = 0; i < 100; i++) {
+        invoke('set_bpm', { bpm: 60 + (i % 300) })
+      }
+      await invoke('set_bpm', { bpm: 135 })
+      await sleep(150)
+      const s = await devDumpState()
+      const ok = Math.abs(s.bpm - 135) < 0.5
+      log(ok ? 'pass' : 'fail', 'final bpm', { expected: 135, actual: s.bpm })
+      await invoke('set_bpm', { bpm: 140 })
+      return { pass: ok, note: `bpm=${s.bpm}` }
+    },
+  },
+  {
+    id: 'rapid_play_stop_spam',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Command queue robustness',
+    title: '50 rapid play/stop toggles leave engine in stop state',
+    instructions: 'Alternates play/stop 50 times, waits, verifies playing=false.',
+    run: async ({ log }) => {
+      for (let i = 0; i < 50; i++) {
+        invoke(i % 2 === 0 ? 'play' : 'stop')
+      }
+      await invoke('stop')
+      await sleep(200)
+      const s = await devDumpState()
+      const ok = !s.playing
+      log(ok ? 'pass' : 'fail', 'final stopped', { expected: false, actual: s.playing })
+      return { pass: ok, note: `playing=${s.playing}` }
+    },
+  },
+  {
+    id: 'rapid_volume_spam',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Command queue robustness',
+    title: '100 rapid set_track_volume calls settle on final value',
+    instructions: 'Fires 100 volume changes on one track and verifies the last value lands.',
+    run: async ({ log, ensureAudioTrack }) => {
+      const id = await ensureAudioTrack()
+      for (let i = 0; i < 100; i++) {
+        invoke('set_track_volume', { trackId: id, volumeDb: -i * 0.1 })
+      }
+      await invoke('set_track_volume', { trackId: id, volumeDb: -3.0 })
+      await sleep(150)
+      const t = (await invoke<any[]>('get_tracks')).find((t) => t.id === id)
+      const ok = t && Math.abs(t.volume_db - -3.0) < 0.1
+      log(ok ? 'pass' : 'fail', 'final volume', { expected: -3.0, actual: t?.volume_db })
+      await invoke('set_track_volume', { trackId: id, volumeDb: 0 })
+      return { pass: !!ok, note: `vol=${t?.volume_db}` }
+    },
+  },
+  {
+    id: 'remove_nonexistent_track',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Error handling',
+    title: 'remove_track on unknown id does not crash',
+    instructions: 'Invokes remove_track with a fabricated UUID; verifies engine stays healthy.',
+    run: async ({ log }) => {
+      try { await invoke('remove_track', { trackId: '00000000-0000-0000-0000-000000000000' }) } catch { /* expected */ }
+      const s = await devDumpState()
+      const ok = Number.isFinite(s.bpm)
+      log(ok ? 'pass' : 'fail', 'engine alive', { expected: 'responsive', actual: `bpm=${s.bpm}` })
+      return { pass: ok, note: 'survived' }
+    },
+  },
+  {
+    id: 'load_nonexistent_project',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Error handling',
+    title: 'load_project with missing file returns error',
+    instructions: 'Attempts to load a path that does not exist; expects a rejected invoke and an intact engine.',
+    run: async ({ log }) => {
+      let threw = false
+      try {
+        await invoke('load_project', { path: 'C:/__definitely_does_not_exist__/missing.hwdaw' })
+      } catch {
+        threw = true
+      }
+      const s = await devDumpState()
+      const ok = threw && Number.isFinite(s.bpm)
+      log(ok ? 'pass' : 'fail', 'error surfaced', { expected: 'threw + alive', actual: `threw=${threw} bpm=${s.bpm}` })
+      return { pass: ok, note: threw ? 'rejected cleanly' : 'silently succeeded' }
+    },
+  },
+  {
+    id: 'import_nonexistent_audio',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Error handling',
+    title: 'import_audio_file with missing path returns error',
+    instructions: 'Passes a nonexistent wav path to import_audio_file; expects a rejected invoke.',
+    run: async ({ log, ensureAudioTrack }) => {
+      const id = await ensureAudioTrack()
+      let threw = false
+      try {
+        await invoke('import_audio_file', { trackId: id, path: 'C:/__nope__/ghost.wav' })
+      } catch {
+        threw = true
+      }
+      log(threw ? 'pass' : 'fail', 'rejected missing file', { expected: 'threw', actual: threw })
+      return { pass: threw, note: threw ? 'rejected' : 'no error' }
+    },
+  },
+  {
+    id: 'reorder_negative_index',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Index boundary handling',
+    title: 'reorder_track with negative index is safe',
+    instructions: 'Calls reorder_track with a negative/huge newIndex; verifies no crash.',
+    run: async ({ log, ensureAudioTrack }) => {
+      const id = await ensureAudioTrack()
+      try { await invoke('reorder_track', { trackId: id, newIndex: -5 }) } catch {}
+      try { await invoke('reorder_track', { trackId: id, newIndex: 99999 }) } catch {}
+      const s = await devDumpState()
+      const ok = Number.isFinite(s.bpm)
+      log(ok ? 'pass' : 'fail', 'engine alive', { expected: 'responsive', actual: s.bpm })
+      return { pass: ok, note: 'no crash' }
+    },
+  },
+  {
+    id: 'undo_past_start',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Undo boundary handling',
+    title: 'Many undos past history start do not crash',
+    instructions: 'Invokes undo 200 times beyond available history; verifies engine still responds.',
+    run: async ({ log }) => {
+      for (let i = 0; i < 200; i++) {
+        try { await invoke('undo') } catch { /* no-op when empty */ }
+      }
+      const s = await devDumpState()
+      const ok = Number.isFinite(s.bpm)
+      log(ok ? 'pass' : 'fail', 'engine alive', { expected: 'responsive', actual: s.bpm })
+      return { pass: ok, note: 'survived' }
+    },
+  },
+  {
+    id: 'redo_without_undo',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Redo boundary handling',
+    title: 'redo with empty redo-stack is a no-op',
+    instructions: 'After a fresh project, invokes redo 20 times; verifies engine is unchanged and alive.',
+    run: async ({ log }) => {
+      for (let i = 0; i < 20; i++) {
+        try { await invoke('redo') } catch { /* expected when empty */ }
+      }
+      const s = await devDumpState()
+      const ok = Number.isFinite(s.bpm)
+      log(ok ? 'pass' : 'fail', 'engine alive', { expected: 'responsive', actual: s.bpm })
+      return { pass: ok, note: 'survived' }
+    },
+  },
+  {
+    id: 'pitch_clamp_extreme',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip pitch clamping',
+    title: 'set_clip_pitch clamps extreme semitone values',
+    instructions: 'Sets clip pitch to +200 and -200 semitones; verifies clamp to ±24.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      const id = await ensureAudioTrack()
+      await clearTrackClips(id)
+      await importAsset(id, 'sine_1khz_-6dbfs_stereo_5s.wav')
+      const [c] = await invoke<any[]>('get_track_clips', { trackId: id })
+      await invoke('set_clip_pitch', { trackId: id, clipId: c.id, pitchSemitones: 200 })
+      const hi = (await invoke<any[]>('get_track_clips', { trackId: id }))[0].pitchSemitones
+      await invoke('set_clip_pitch', { trackId: id, clipId: c.id, pitchSemitones: -200 })
+      const lo = (await invoke<any[]>('get_track_clips', { trackId: id }))[0].pitchSemitones
+      const ok = hi <= 24 + 1e-6 && lo >= -24 - 1e-6
+      log(ok ? 'pass' : 'fail', 'pitch clamped', { expected: '±24', actual: `hi=${hi} lo=${lo}` })
+      await clearTrackClips(id)
+      return { pass: ok, note: `hi=${hi} lo=${lo}` }
+    },
+  },
+  {
+    id: 'stretch_clamp_zero',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip stretch clamping',
+    title: 'set_clip_stretch clamps zero/negative ratios',
+    instructions: 'Sets stretch ratio to 0 and -5; verifies the readback is a positive finite value.',
+    run: async ({ log, ensureAudioTrack, clearTrackClips, importAsset }) => {
+      const id = await ensureAudioTrack()
+      await clearTrackClips(id)
+      await importAsset(id, 'sine_1khz_-6dbfs_stereo_5s.wav')
+      const [c] = await invoke<any[]>('get_track_clips', { trackId: id })
+      await invoke('set_clip_stretch', { trackId: id, clipId: c.id, stretchRatio: 0 })
+      const z = (await invoke<any[]>('get_track_clips', { trackId: id }))[0].stretchRatio
+      await invoke('set_clip_stretch', { trackId: id, clipId: c.id, stretchRatio: -5 })
+      const n = (await invoke<any[]>('get_track_clips', { trackId: id }))[0].stretchRatio
+      const ok = Number.isFinite(z) && z > 0 && Number.isFinite(n) && n > 0
+      log(ok ? 'pass' : 'fail', 'stretch clamped', { expected: '> 0', actual: `z=${z} n=${n}` })
+      await clearTrackClips(id)
+      return { pass: ok, note: `z=${z} n=${n}` }
+    },
+  },
+  {
+    id: 'stress_add_many_tracks',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Resource stress',
+    title: 'Adding 50 tracks and removing them stays responsive',
+    instructions: 'Adds 50 audio tracks, verifies count, then removes them; engine must remain responsive.',
+    run: async ({ log }) => {
+      const before = (await invoke<any[]>('get_tracks')).length
+      const ids: string[] = []
+      for (let i = 0; i < 50; i++) {
+        const id = await invoke<string>('add_track', { name: `Stress${i}`, kind: 'Audio' })
+        ids.push(id)
+      }
+      const mid = (await invoke<any[]>('get_tracks')).length
+      for (const id of ids) {
+        try { await invoke('remove_track', { trackId: id }) } catch {}
+      }
+      const after = (await invoke<any[]>('get_tracks')).length
+      const ok = mid === before + 50 && after === before
+      log(ok ? 'pass' : 'fail', 'track count', { expected: `${before}→${before + 50}→${before}`, actual: `${before}→${mid}→${after}` })
+      return { pass: ok, note: `${before}→${mid}→${after}` }
+    },
+  },
+)
