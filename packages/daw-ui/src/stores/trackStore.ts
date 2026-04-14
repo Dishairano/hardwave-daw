@@ -13,6 +13,8 @@ export interface ClipInfo {
   fadeInTicks: number
   fadeOutTicks: number
   reversed: boolean
+  pitchSemitones: number
+  stretchRatio: number
 }
 
 export interface TrackInfo {
@@ -84,6 +86,8 @@ interface TrackState {
   setClipGain: (trackId: string, clipId: string, gainDb: number) => Promise<void>
   setClipFades: (trackId: string, clipId: string, fadeInTicks: number, fadeOutTicks: number) => Promise<void>
   toggleClipReverse: (trackId: string, clipId: string) => Promise<void>
+  setClipPitch: (trackId: string, clipId: string, pitchSemitones: number) => Promise<void>
+  setClipStretch: (trackId: string, clipId: string, stretchRatio: number) => Promise<void>
   undo: () => Promise<boolean>
   redo: () => Promise<boolean>
   getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<[number, number][]>
@@ -291,6 +295,16 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   toggleClipReverse: async (trackId, clipId) => {
     await invoke('toggle_clip_reverse', { trackId, clipId })
+    await get().fetchTracks()
+  },
+
+  setClipPitch: async (trackId, clipId, pitchSemitones) => {
+    await invoke('set_clip_pitch', { trackId, clipId, pitchSemitones })
+    await get().fetchTracks()
+  },
+
+  setClipStretch: async (trackId, clipId, stretchRatio) => {
+    await invoke('set_clip_stretch', { trackId, clipId, stretchRatio })
     await get().fetchTracks()
   },
 

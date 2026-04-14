@@ -26,6 +26,16 @@ pub struct AudioClip {
     /// Play this clip with the source read backwards.
     #[serde(default)]
     pub reversed: bool,
+    /// Pitch shift in semitones. Combined with stretch via resampling.
+    #[serde(default)]
+    pub pitch_semitones: f64,
+    /// Time-stretch ratio. 1.0 = realtime, 2.0 = half speed (longer), 0.5 = double speed.
+    #[serde(default = "default_stretch_ratio")]
+    pub stretch_ratio: f64,
+}
+
+fn default_stretch_ratio() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -10,7 +10,7 @@ const CLIP_PALETTE = [
 export function Inspector() {
   const {
     tracks, selectedTrackId, selectedClipId, setVolume, setPan, removeTrack,
-    setClipGain, setClipFades, toggleClipReverse,
+    setClipGain, setClipFades, toggleClipReverse, setClipPitch, setClipStretch,
   } = useTrackStore()
   const { clipColorOverrides, setClipColor } = useTransportStore()
   const track = tracks.find(t => t.id === selectedTrackId)
@@ -92,6 +92,30 @@ export function Inspector() {
                   style={numStyle}
                   data-testid="clip-fade-out-input"
                 />
+              </label>
+
+              <label style={labelStyle}>
+                Pitch (semitones)
+                <input
+                  type="range" min={-24} max={24} step={1}
+                  value={selectedClip.pitchSemitones ?? 0}
+                  onChange={(e) => setClipPitch(clipOwner.id, selectedClip.id, parseFloat(e.target.value))}
+                  style={{ width: '100%' }}
+                  data-testid="clip-pitch-input"
+                />
+                <span style={{ fontSize: 9, color: hw.textFaint }}>{(selectedClip.pitchSemitones ?? 0).toFixed(0)} st</span>
+              </label>
+
+              <label style={labelStyle}>
+                Stretch
+                <input
+                  type="range" min={0.25} max={4} step={0.05}
+                  value={selectedClip.stretchRatio ?? 1}
+                  onChange={(e) => setClipStretch(clipOwner.id, selectedClip.id, parseFloat(e.target.value))}
+                  style={{ width: '100%' }}
+                  data-testid="clip-stretch-input"
+                />
+                <span style={{ fontSize: 9, color: hw.textFaint }}>{(selectedClip.stretchRatio ?? 1).toFixed(2)}x</span>
               </label>
 
               <button

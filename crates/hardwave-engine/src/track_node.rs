@@ -47,6 +47,9 @@ pub struct ClipRegion {
     pub fade_out_samples: u64,
     /// Play source backwards when true.
     pub reversed: bool,
+    /// Source-frames consumed per timeline sample. 1.0 = realtime, >1 = pitched up/faster.
+    /// Combines pitch shift and time stretch via resampling.
+    pub source_step: f64,
 }
 
 /// Audio node for a single track. Holds references to its clips and the shared audio pool.
@@ -174,20 +177,27 @@ impl AudioNode for TrackNode {
 
                 let into_clip = timeline_sample - clip.timeline_start;
 
-                let source_frame = if clip.reversed {
-                    let end_frame = clip.source_offset + clip_length;
+                // Fractional source position for pitch/stretch resampling.
+                let into_src = into_clip as f64 * clip.source_step;
+                let source_pos = if clip.reversed {
+                    let end_frame = clip.source_offset.saturating_add(clip_length);
                     if end_frame == 0 {
                         continue;
                     }
-                    let sf = end_frame.saturating_sub(1).saturating_sub(into_clip);
-                    sf as usize
+                    (end_frame as f64 - 1.0) - into_src
                 } else {
-                    (into_clip + clip.source_offset) as usize
+                    clip.source_offset as f64 + into_src
                 };
 
-                if source_frame >= audio_buf.num_frames {
+                if source_pos < 0.0 {
                     continue;
                 }
+                let idx0 = source_pos.floor() as usize;
+                if idx0 >= audio_buf.num_frames {
+                    continue;
+                }
+                let idx1 = (idx0 + 1).min(audio_buf.num_frames - 1);
+                let frac = (source_pos - idx0 as f64) as f32;
 
                 // Linear fade-in / fade-out envelope.
                 let mut env = 1.0_f32;
@@ -202,11 +212,15 @@ impl AudioNode for TrackNode {
                 }
 
                 let scaled_gain = clip.gain * env;
-                let l = audio_buf.sample(0, source_frame) * scaled_gain;
+                let l0 = audio_buf.sample(0, idx0);
+                let l1 = audio_buf.sample(0, idx1);
+                let l = (l0 + (l1 - l0) * frac) * scaled_gain;
                 let r = if num_channels > 1 {
-                    audio_buf.sample(1, source_frame) * scaled_gain
+                    let r0 = audio_buf.sample(1, idx0);
+                    let r1 = audio_buf.sample(1, idx1);
+                    (r0 + (r1 - r0) * frac) * scaled_gain
                 } else {
-                    l // mono → duplicate to both channels
+                    l
                 };
 
                 out_l[frame] += l;

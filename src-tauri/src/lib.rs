@@ -82,6 +82,8 @@ pub fn run() {
             commands::audio::set_clip_gain,
             commands::audio::set_clip_fades,
             commands::audio::toggle_clip_reverse,
+            commands::audio::set_clip_pitch,
+            commands::audio::set_clip_stretch,
             // MIDI
             commands::midi::create_midi_clip,
             commands::midi::get_midi_notes,

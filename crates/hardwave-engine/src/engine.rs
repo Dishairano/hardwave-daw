@@ -613,6 +613,15 @@ impl EngineCallback {
                             tempo_map.tick_to_samples(audio_clip.fade_in_ticks, sample_rate);
                         let fade_out_samples =
                             tempo_map.tick_to_samples(audio_clip.fade_out_ticks, sample_rate);
+                        // source_step combines pitch and stretch via resampling.
+                        // pitch +12 semitones = 2x source step; stretch_ratio 2.0 = half step.
+                        let pitch_factor = 2.0_f64.powf(audio_clip.pitch_semitones / 12.0);
+                        let stretch = if audio_clip.stretch_ratio <= 0.01 {
+                            1.0
+                        } else {
+                            audio_clip.stretch_ratio
+                        };
+                        let source_step = pitch_factor / stretch;
                         Some(ClipRegion {
                             source_id: audio_clip.source_path.clone(),
                             timeline_start,
@@ -623,6 +632,7 @@ impl EngineCallback {
                             fade_in_samples,
                             fade_out_samples,
                             reversed: audio_clip.reversed,
+                            source_step,
                         })
                     }
                     _ => None,

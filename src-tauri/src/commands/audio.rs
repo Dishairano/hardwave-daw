@@ -59,6 +59,8 @@ pub fn import_audio_file(
         fade_out_ticks: 0,
         muted: false,
         reversed: false,
+        pitch_semitones: 0.0,
+        stretch_ratio: 1.0,
     };
 
     let placement = hardwave_project::clip::ClipPlacement {
@@ -120,6 +122,8 @@ pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo
                 fade_in_ticks: ac.fade_in_ticks,
                 fade_out_ticks: ac.fade_out_ticks,
                 reversed: ac.reversed,
+                pitch_semitones: ac.pitch_semitones,
+                stretch_ratio: ac.stretch_ratio,
             },
             hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
                 id: mc.id.clone(),
@@ -133,6 +137,8 @@ pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo
                 fade_in_ticks: 0,
                 fade_out_ticks: 0,
                 reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
             },
         })
         .collect()
@@ -154,6 +160,10 @@ pub struct ClipInfo {
     #[serde(rename = "fadeOutTicks")]
     fade_out_ticks: u64,
     reversed: bool,
+    #[serde(rename = "pitchSemitones")]
+    pitch_semitones: f64,
+    #[serde(rename = "stretchRatio")]
+    stretch_ratio: f64,
 }
 
 fn with_audio_clip_mut<R>(
@@ -235,6 +245,42 @@ pub fn set_clip_fades(
     with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
         ac.fade_in_ticks = fi;
         ac.fade_out_ticks = fo;
+    })?;
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// Set clip pitch shift in semitones (range -24..+24).
+#[tauri::command]
+pub fn set_clip_pitch(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    pitch_semitones: f64,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
+        ac.pitch_semitones = pitch_semitones.clamp(-24.0, 24.0);
+    })?;
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// Set clip time-stretch ratio (range 0.25..4.0). 1.0 = realtime.
+#[tauri::command]
+pub fn set_clip_stretch(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    stretch_ratio: f64,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
+        ac.stretch_ratio = stretch_ratio.clamp(0.25, 4.0);
     })?;
     drop(engine);
     state.engine.lock().rebuild_graph();

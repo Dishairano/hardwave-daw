@@ -2316,4 +2316,77 @@ export const TESTS: TestDef[] = [
       return { pass: ok, note: `u:${u0}→${u1}→${u2} r:${r0}→${r1}→${r2}` }
     },
   },
+  {
+    id: 'p2r6_clip_pitch_roundtrip',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip pitch shift (semitones)',
+    title: 'set_clip_pitch persists and clamps to -24..+24 semitones',
+    instructions: 'Setting pitch to +50 should clamp at +24; -50 should clamp at -24.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('set_clip_pitch', { trackId, clipId: c.id, pitchSemitones: 50 })
+      let after = await invoke<any[]>('get_track_clips', { trackId })
+      const hi = after[0].pitchSemitones
+      await invoke('set_clip_pitch', { trackId, clipId: c.id, pitchSemitones: -50 })
+      after = await invoke<any[]>('get_track_clips', { trackId })
+      const lo = after[0].pitchSemitones
+      const ok = Math.abs(hi - 24) < 0.01 && Math.abs(lo - -24) < 0.01
+      log(ok ? 'pass' : 'fail', 'pitch', { expected: 'hi=24, lo=-24', actual: `hi=${hi}, lo=${lo}` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `hi=${hi} lo=${lo}` }
+    },
+  },
+  {
+    id: 'p2r6_clip_stretch_roundtrip',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Clip time stretch (warping)',
+    title: 'set_clip_stretch persists and clamps to 0.25..4.0',
+    instructions: 'Setting stretch to 10 should clamp at 4.0; 0.01 should clamp at 0.25.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      await invoke('set_clip_stretch', { trackId, clipId: c.id, stretchRatio: 10 })
+      let after = await invoke<any[]>('get_track_clips', { trackId })
+      const hi = after[0].stretchRatio
+      await invoke('set_clip_stretch', { trackId, clipId: c.id, stretchRatio: 0.01 })
+      after = await invoke<any[]>('get_track_clips', { trackId })
+      const lo = after[0].stretchRatio
+      const ok = Math.abs(hi - 4.0) < 0.01 && Math.abs(lo - 0.25) < 0.01
+      log(ok ? 'pass' : 'fail', 'stretch', { expected: 'hi=4, lo=0.25', actual: `hi=${hi}, lo=${lo}` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `hi=${hi} lo=${lo}` }
+    },
+  },
+  {
+    id: 'p2r6_pitch_stretch_undoable',
+    kind: 'AUTO',
+    phase: 2,
+    phase1Item: 'Undo: clip move/resize/delete',
+    title: 'Pitch and stretch edits are captured by undo stack',
+    instructions: 'After set_clip_pitch, undo must restore original pitch.',
+    run: async ({ log, ensureAudioTrack, importAsset, clearTrackClips }) => {
+      const trackId = await ensureAudioTrack()
+      await clearTrackClips(trackId)
+      await importAsset(trackId, 'sine-440-1s.wav')
+      await sleep(50)
+      const [c] = await invoke<any[]>('get_track_clips', { trackId })
+      const orig = c.pitchSemitones ?? 0
+      await invoke('set_clip_pitch', { trackId, clipId: c.id, pitchSemitones: 7 })
+      await invoke('undo')
+      const [after] = await invoke<any[]>('get_track_clips', { trackId })
+      const ok = Math.abs((after.pitchSemitones ?? 0) - orig) < 0.01
+      log(ok ? 'pass' : 'fail', 'undo pitch', { expected: `${orig}`, actual: `${after.pitchSemitones}` })
+      await clearTrackClips(trackId)
+      return { pass: ok, note: `pitch ${after.pitchSemitones}` }
+    },
+  },
 ]
