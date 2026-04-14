@@ -140,5 +140,7 @@ pub fn dev_list_test_assets() -> Vec<&'static str> {
         "pink_noise_-12dbfs_10s.wav",
         "tone_burst_silence.wav",
         "stereo_pan_test.wav",
+        "sine-440-1s.wav",
+        "sine_44100.wav",
     ]
 }
