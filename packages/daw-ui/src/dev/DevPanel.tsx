@@ -427,12 +427,16 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
       importAsset: async (trackId, assetName) => {
         const fsPath = await devResolveTestAsset(assetName)
         await invoke('import_audio_file', { trackId, filePath: fsPath, positionTicks: 0 })
+        const { useTrackStore } = await import('../stores/trackStore')
+        await useTrackStore.getState().fetchTracks()
       },
       clearTrackClips: async (trackId) => {
         const clips = await invoke<any[]>('get_track_clips', { trackId })
         for (const c of clips) {
           await invoke('delete_clip', { trackId, clipId: c.id })
         }
+        const { useTrackStore } = await import('../stores/trackStore')
+        await useTrackStore.getState().fetchTracks()
       },
     }),
     [],

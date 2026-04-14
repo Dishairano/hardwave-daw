@@ -15,11 +15,20 @@ pub struct ProjectInfo {
 
 #[tauri::command]
 pub fn new_project(state: State<AppState>) {
+    use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
-    {
+    let new_bpm = {
         let mut project = engine.project.lock();
         *project = Project::default();
-    }
+        project
+            .tempo_map
+            .entries
+            .first()
+            .map(|e| e.bpm)
+            .unwrap_or(140.0)
+    };
+    engine.transport.bpm.store(new_bpm, Ordering::Relaxed);
+    engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
     engine.reset_history();
     engine.rebuild_graph();
 }
@@ -35,12 +44,21 @@ pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> 
 
 #[tauri::command]
 pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
     let loaded = Project::load(&PathBuf::from(path)).map_err(|e| e.to_string())?;
     let engine = state.engine.lock();
+    let new_bpm = loaded
+        .tempo_map
+        .entries
+        .first()
+        .map(|e| e.bpm)
+        .unwrap_or(140.0);
     {
         let mut project = engine.project.lock();
         *project = loaded;
     }
+    engine.transport.bpm.store(new_bpm, Ordering::Relaxed);
+    engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
     engine.reset_history();
     engine.rebuild_graph();
     Ok(())

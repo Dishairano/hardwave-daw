@@ -57,6 +57,11 @@ pub fn set_bpm(state: State<AppState>, bpm: f64) {
     let engine = state.engine.lock();
     engine.transport.bpm.store(bpm, Ordering::Relaxed);
     engine.send_command(TransportCommand::SetBpm(bpm));
+    // Persist to project so save_project sees the current BPM.
+    let mut project = engine.project.lock();
+    if let Some(entry) = project.tempo_map.entries.get_mut(0) {
+        entry.bpm = bpm;
+    }
 }
 
 #[tauri::command]

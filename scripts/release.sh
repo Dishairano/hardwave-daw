@@ -22,11 +22,33 @@ NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
 
 echo "Version: $CURRENT -> $NEW_VERSION"
 
-# Generate changelog from commits since last tag.
-# For each commit: if the body has bullet points (- lines), use those.
-# Otherwise use the subject line as a single bullet.
+# Generate changelog from commits since last tag, categorized into 3 sections.
+# Bullet convention in commit bodies:
+#   - feat: ...       → New features
+#   - fix: ...        → Bug fixes
+#   - improve: ...    → Improvements (also: perf:, refactor:, ui:, ux:)
+# Bullets without a recognized prefix fall into Improvements.
 LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-CHANGELOG=""
+FEATURES=""
+FIXES=""
+IMPROVEMENTS=""
+
+classify() {
+  local line="$1"
+  # Strip leading "- " and whitespace
+  local stripped="${line#- }"
+  stripped="${stripped#* }"
+  case "$line" in
+    -\ feat:*|-\ feature:*|-\ add:*|-\ new:*)
+      FEATURES="${FEATURES}- ${line#*: }"$'\n' ;;
+    -\ fix:*|-\ bug:*|-\ bugfix:*)
+      FIXES="${FIXES}- ${line#*: }"$'\n' ;;
+    -\ improve:*|-\ perf:*|-\ refactor:*|-\ ui:*|-\ ux:*|-\ chore:*)
+      IMPROVEMENTS="${IMPROVEMENTS}- ${line#*: }"$'\n' ;;
+    *)
+      IMPROVEMENTS="${IMPROVEMENTS}${line}"$'\n' ;;
+  esac
+}
 
 while IFS= read -r hash || [[ -n "$hash" ]]; do
   [ -z "$hash" ] && continue
@@ -36,10 +58,7 @@ while IFS= read -r hash || [[ -n "$hash" ]]; do
   # Skip internal commits (version bumps, CI fixes, formatting, refactors)
   [[ "$SUBJECT" =~ ^(Release|v[0-9]|Fix\ rust|Fix\ clippy|Fix\ fmt|Merge) ]] && continue
 
-  # Extract bullet points from body
-  BULLETS=$(echo "$BODY" | grep '^\s*[-*]' | sed 's/^\s*//' || true)
-
-  # Filter out technical/internal bullets
+  BULLETS=$(echo "$BODY" | grep '^\s*[-*]' | sed 's/^\s*//; s/^\*/-/' || true)
   if [ -n "$BULLETS" ]; then
     BULLETS=$(echo "$BULLETS" | grep -iv \
       -e 'rustfmt\|clippy\|sccache\|RUSTC_WRAPPER\|tformat\|trailing newline' \
@@ -49,9 +68,12 @@ while IFS= read -r hash || [[ -n "$hash" ]]; do
   fi
 
   if [ -n "$BULLETS" ]; then
-    CHANGELOG="${CHANGELOG}${BULLETS}"$'\n'
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      classify "$line"
+    done <<< "$BULLETS"
   elif ! echo "$SUBJECT" | grep -qiE 'fmt|clippy|sccache|ci|rustfmt|changelog|fallback|cache'; then
-    CHANGELOG="${CHANGELOG}- ${SUBJECT}"$'\n'
+    classify "- ${SUBJECT}"
   fi
 done < <(
   if [ -n "$LAST_TAG" ]; then
@@ -61,17 +83,34 @@ done < <(
   fi
 )
 
-# Deduplicate
-CHANGELOG=$(echo "$CHANGELOG" | awk '!seen[$0]++' | sed '/^$/d')
+# Deduplicate each section
+FEATURES=$(echo "$FEATURES" | awk '!seen[$0]++' | sed '/^$/d')
+FIXES=$(echo "$FIXES" | awk '!seen[$0]++' | sed '/^$/d')
+IMPROVEMENTS=$(echo "$IMPROVEMENTS" | awk '!seen[$0]++' | sed '/^$/d')
 
-# Write changelog to file for CI to pick up
 CHANGELOG_FILE="RELEASE_CHANGELOG.md"
 {
-  echo "## Changes"
-  if [ -n "$CHANGELOG" ]; then
-    echo "$CHANGELOG"
-  else
-    echo "- Bug fixes and improvements"
+  HAS_ANY=0
+  if [ -n "$FEATURES" ]; then
+    echo "### New features"
+    echo "$FEATURES"
+    echo
+    HAS_ANY=1
+  fi
+  if [ -n "$FIXES" ]; then
+    echo "### Bug fixes"
+    echo "$FIXES"
+    echo
+    HAS_ANY=1
+  fi
+  if [ -n "$IMPROVEMENTS" ]; then
+    echo "### Improvements"
+    echo "$IMPROVEMENTS"
+    HAS_ANY=1
+  fi
+  if [ "$HAS_ANY" -eq 0 ]; then
+    echo "### Improvements"
+    echo "- Internal maintenance and stability updates"
   fi
 } > "$CHANGELOG_FILE"
 
