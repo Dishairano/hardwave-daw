@@ -140,8 +140,16 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          choco install llvm --version=18.1.8 -y --no-progress
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          # windows-latest GitHub runners ship with LLVM pre-installed. Point
+          # bindgen at it rather than re-installing (choco refuses to downgrade).
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvmBin\libclang.dll")) {
+            Write-Host "LLVM not found at $llvmBin — installing via choco"
+            choco install llvm -y --no-progress --force
+          } else {
+            Write-Host "LLVM already present at $llvmBin"
+          }
+          echo "LIBCLANG_PATH=$llvmBin" >> $env:GITHUB_ENV
 
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli@latest
