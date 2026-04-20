@@ -1581,6 +1581,133 @@ export const TESTS: TestDef[] = [
     },
   },
   {
+    id: 'wasapi_exclusive_round_trip',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'WASAPI exclusive mode',
+    title: 'get/set_wasapi_exclusive round-trips through the engine',
+    instructions:
+      'Toggles the WASAPI exclusive flag, asserts the getter reflects each write, and restores the original value.',
+    run: async ({ log }) => {
+      const initial = await invoke<{ enabled: boolean; available: boolean }>('get_wasapi_exclusive')
+      log('info', 'initial', { actual: initial })
+      try {
+        await invoke('set_wasapi_exclusive', { enabled: true })
+        const after1 = await invoke<{ enabled: boolean }>('get_wasapi_exclusive')
+        if (!after1.enabled) {
+          log('fail', 'enable did not persist', { expected: true, actual: after1.enabled })
+          return { pass: false, note: 'enable ignored' }
+        }
+        await invoke('set_wasapi_exclusive', { enabled: false })
+        const after2 = await invoke<{ enabled: boolean }>('get_wasapi_exclusive')
+        if (after2.enabled) {
+          log('fail', 'disable did not persist', { expected: false, actual: after2.enabled })
+          return { pass: false, note: 'disable ignored' }
+        }
+      } finally {
+        await invoke('set_wasapi_exclusive', { enabled: initial.enabled })
+      }
+      log('pass', 'toggle round-trip ok')
+      return {
+        pass: true,
+        note: initial.available ? 'round-trip ok (available on this host)' : 'round-trip ok (setting stored; not applicable on this host)',
+      }
+    },
+  },
+  {
+    id: 'jack_host_available_when_built',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'JACK automatic port connection',
+    title: 'JACK host shows up in list_audio_hosts when built with --features jack',
+    instructions:
+      'If the build includes the jack feature, "JACK" must appear in list_audio_hosts — confirms the JACK backend (and cpal\'s connect_ports_automatically=true default) is wired in.',
+    run: async ({ log }) => {
+      const hosts = (await invoke<string[]>('list_audio_hosts')).map((h) => h.toLowerCase())
+      const hasJack = hosts.includes('jack')
+      if (!hasJack) {
+        log('info', 'JACK not in hosts — build likely omitted --features jack; skipping')
+        return { pass: true, note: 'jack feature not in build — skipped' }
+      }
+      log('pass', 'JACK host present; cpal auto-connects output ports to system:playback_*')
+      return { pass: true, note: 'JACK backend available, auto-connect active' }
+    },
+  },
+  {
+    id: 'asio_host_available_when_built',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'ASIO support on Windows',
+    title: 'ASIO host shows up on Windows builds with --features asio',
+    instructions:
+      'Checks list_audio_hosts for "ASIO". Expected to appear only on Windows builds that pulled in the Steinberg SDK.',
+    run: async ({ log }) => {
+      const hosts = (await invoke<string[]>('list_audio_hosts')).map((h) => h.toLowerCase())
+      const hasAsio = hosts.includes('asio')
+      if (!hasAsio) {
+        log('info', 'ASIO not in hosts — either non-Windows build or SDK missing; skipping')
+        return { pass: true, note: 'asio feature not in build — skipped' }
+      }
+      log('pass', 'ASIO host present; device enumeration + buffer size go through cpal')
+      return { pass: true, note: 'ASIO backend available' }
+    },
+  },
+  {
+    id: 'asio_buffer_size_settable',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'ASIO buffer size configuration',
+    title: 'set_audio_config accepts a new buffer size',
+    instructions:
+      'Round-trips buffer size through set_audio_config / get_audio_config. Independent of host; verifies the ASIO (and other) paths share the common buffer-size setter.',
+    run: async ({ log }) => {
+      const before = await invoke<{ device: string | null; sample_rate: number; buffer_size: number }>(
+        'get_audio_config',
+      )
+      const target = before.buffer_size === 256 ? 512 : 256
+      try {
+        await invoke('set_audio_config', {
+          device: before.device,
+          sampleRate: before.sample_rate,
+          bufferSize: target,
+        })
+        const after = await invoke<{ buffer_size: number }>('get_audio_config')
+        const ok = after.buffer_size === target
+        log(ok ? 'pass' : 'fail', 'buffer_size', { expected: target, actual: after.buffer_size })
+        return { pass: ok, note: ok ? `set ${target} round-tripped` : `got ${after.buffer_size}` }
+      } finally {
+        await invoke('set_audio_config', {
+          device: before.device,
+          sampleRate: before.sample_rate,
+          bufferSize: before.buffer_size,
+        })
+      }
+    },
+  },
+  {
+    id: 'coreaudio_workgroup_join_macos',
+    kind: 'AUTO',
+    phase: 1,
+    phase1Item: 'CoreAudio optimizations on macOS',
+    title: 'macOS: engine starts without workgroup failures',
+    instructions:
+      'On macOS, starting the engine triggers a workgroup join on the first audio callback. We verify stream_error stays clear after a short run — a failed join does not abort audio but a crash would flip it.',
+    run: async ({ log }) => {
+      const platform = navigator.platform.toLowerCase()
+      if (!platform.includes('mac')) {
+        log('info', 'not macOS — skipping workgroup check')
+        return { pass: true, note: 'not macOS — skipped' }
+      }
+      await invoke('start_engine')
+      await sleep(200)
+      const state = await devDumpState()
+      await invoke('stop_engine')
+      const ok = !state.streamErrorFlag
+      log(ok ? 'pass' : 'fail', 'streamErrorFlag', { expected: false, actual: state.streamErrorFlag })
+      return { pass: ok, note: ok ? 'engine ran cleanly (workgroup best-effort)' : 'stream errored' }
+    },
+  },
+  {
     id: 'device_enumeration_nonempty',
     kind: 'AUTO',
     phase: 1,

@@ -116,14 +116,72 @@ jobs:
             librsvg2-dev \
             patchelf \
             libasound2-dev \
+            libjack-jackd2-dev \
             libgtk-3-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
 
+      - name: Fetch ASIO SDK (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          # Steinberg ASIO SDK is redistributable under the developer agreement.
+          # cpal's asio feature expects CPAL_ASIO_DIR to point at the extracted SDK.
+          $url = 'https://www.steinberg.net/asiosdk'
+          $dest = "$env:RUNNER_TEMP\asiosdk.zip"
+          $out  = "$env:RUNNER_TEMP\asiosdk"
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          Expand-Archive -Path $dest -DestinationPath $out -Force
+          $sdkRoot = Get-ChildItem -Path $out -Directory | Select-Object -First 1
+          echo "CPAL_ASIO_DIR=$($sdkRoot.FullName)" >> $env:GITHUB_ENV
+          echo "Extracted ASIO SDK to $($sdkRoot.FullName)"
+
+      - name: Install LLVM (Windows — required for cpal/asio bindgen)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install llvm --version=18.1.8 -y --no-progress
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli@latest
 
-      - name: Build Tauri app
+      - name: Build Tauri app (Linux — with JACK)
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Hardwave DAW ${{ github.ref_name }}'
+          releaseBody: ${{ needs.changelog.outputs.body }}
+          releaseDraft: false
+          prerelease: true
+          tauriScript: tauri
+          args: --target ${{ matrix.target }} --features jack
+
+      - name: Build Tauri app (Windows — with ASIO)
+        if: matrix.platform == 'windows-latest'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CPAL_ASIO_DIR: ${{ env.CPAL_ASIO_DIR }}
+          LIBCLANG_PATH: ${{ env.LIBCLANG_PATH }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Hardwave DAW ${{ github.ref_name }}'
+          releaseBody: ${{ needs.changelog.outputs.body }}
+          releaseDraft: false
+          prerelease: true
+          tauriScript: tauri
+          args: --target ${{ matrix.target }} --features asio
+
+      - name: Build Tauri app (macOS)
+        if: matrix.platform == 'macos-latest'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

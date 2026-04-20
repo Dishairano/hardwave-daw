@@ -3,6 +3,11 @@ name = "hardwave-daw"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+jack = ["hardwave-engine/jack"]
+asio = ["hardwave-engine/asio"]
+
 [build-dependencies]
 tauri-build.workspace = true
 

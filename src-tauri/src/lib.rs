@@ -70,6 +70,8 @@ pub fn run() {
             commands::engine::list_audio_hosts,
             commands::engine::get_audio_host,
             commands::engine::set_audio_host,
+            commands::engine::get_wasapi_exclusive,
+            commands::engine::set_wasapi_exclusive,
             // Audio
             commands::audio::import_audio_file,
             commands::audio::get_track_clips,

@@ -15,6 +15,11 @@ interface AudioConfig {
   buffer_size: number
 }
 
+interface WasapiExclusiveStatus {
+  enabled: boolean
+  available: boolean
+}
+
 interface AudioSettingsProps {
   onClose: () => void
 }
@@ -29,19 +34,33 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [selectedBuffer, setSelectedBuffer] = useState(512)
   const [applying, setApplying] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [exclusive, setExclusive] = useState<WasapiExclusiveStatus>({ enabled: false, available: false })
 
   useEffect(() => {
     Promise.all([
       invoke<AudioDevice[]>('get_audio_devices'),
       invoke<AudioConfig>('get_audio_config'),
-    ]).then(([devs, cfg]) => {
+      invoke<WasapiExclusiveStatus>('get_wasapi_exclusive'),
+    ]).then(([devs, cfg, excl]) => {
       setDevices(devs)
       setConfig(cfg)
       setSelectedDevice(cfg.device)
       setSelectedRate(cfg.sample_rate)
       setSelectedBuffer(cfg.buffer_size)
+      setExclusive(excl)
     })
   }, [])
+
+  const toggleExclusive = async () => {
+    const next = !exclusive.enabled
+    setError(null)
+    try {
+      await invoke('set_wasapi_exclusive', { enabled: next })
+      setExclusive(s => ({ ...s, enabled: next }))
+    } catch (e: any) {
+      setError(String(e))
+    }
+  }
 
   const currentDevice = devices.find(d =>
     selectedDevice ? d.name === selectedDevice : d.is_default
@@ -169,6 +188,41 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
             <span style={{ fontSize: 12, fontWeight: 600, color: hw.textPrimary, fontFamily: "'Consolas', monospace" }}>
               {latencyMs} ms
             </span>
+          </div>
+
+          {/* WASAPI exclusive-mode toggle (Windows only) */}
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            marginTop: 8, padding: '8px 12px',
+            background: hw.bgPanel, borderRadius: hw.radius.sm,
+            border: `1px solid ${hw.borderDark}`,
+            opacity: exclusive.available ? 1 : 0.5,
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span style={{ fontSize: 11, color: hw.textMuted }}>WASAPI Exclusive Mode</span>
+              <span style={{ fontSize: 10, color: hw.textFaint }}>
+                {exclusive.available
+                  ? 'Lowest latency, locks the output device to the DAW'
+                  : 'Only available on Windows with WASAPI host'}
+              </span>
+            </div>
+            <button
+              disabled={!exclusive.available}
+              onClick={toggleExclusive}
+              style={{
+                width: 38, height: 20,
+                borderRadius: 10, border: 'none',
+                background: exclusive.enabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                cursor: exclusive.available ? 'pointer' : 'default',
+                position: 'relative', transition: 'background 150ms ease',
+              }}
+            >
+              <span style={{
+                position: 'absolute', top: 2, left: exclusive.enabled ? 20 : 2,
+                width: 16, height: 16, borderRadius: '50%',
+                background: '#fff', transition: 'left 150ms ease',
+              }} />
+            </button>
           </div>
 
           {error && (

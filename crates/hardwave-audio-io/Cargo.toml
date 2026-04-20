@@ -16,3 +16,14 @@ rtrb.workspace = true
 parking_lot.workspace = true
 log.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Direct WASAPI bindings for exclusive-mode output. cpal 0.15 only exposes
+# shared mode, so the exclusive path is built on IAudioClient via this crate.
+wasapi = "0.15"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+] }

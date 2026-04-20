@@ -355,6 +355,33 @@ impl DawEngine {
         Ok(())
     }
 
+    /// Whether WASAPI exclusive mode is currently requested.
+    pub fn wasapi_exclusive(&self) -> bool {
+        self.audio_device.wasapi_exclusive
+    }
+
+    /// Whether WASAPI exclusive mode is applicable on this host (Windows + WASAPI).
+    pub fn wasapi_exclusive_available(&self) -> bool {
+        self.audio_device.exclusive_available()
+    }
+
+    /// Enable/disable WASAPI exclusive mode. Restarts the stream if running
+    /// so the change takes effect immediately.
+    pub fn set_wasapi_exclusive(&mut self, enabled: bool) -> Result<(), String> {
+        if self.audio_device.wasapi_exclusive == enabled {
+            return Ok(());
+        }
+        let was_running = self.audio_device.is_running();
+        if was_running {
+            self.audio_device.stop();
+        }
+        self.audio_device.wasapi_exclusive = enabled;
+        if was_running {
+            self.start()?;
+        }
+        Ok(())
+    }
+
     /// Get current audio config.
     pub fn audio_config(&self) -> (Option<String>, u32, u32) {
         (

@@ -6,6 +6,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 
+#[cfg(target_os = "windows")]
+mod wasapi_exclusive;
+
+#[cfg(target_os = "macos")]
+mod coreaudio_workgroup;
+
 #[derive(Error, Debug)]
 pub enum AudioIoError {
     #[error("No output device available")]
@@ -48,6 +54,8 @@ pub trait AudioCallback: Send + 'static {
 pub struct AudioDeviceManager {
     host: Host,
     output_stream: Option<cpal::Stream>,
+    #[cfg(target_os = "windows")]
+    wasapi_stream: Option<wasapi_exclusive::WasapiExclusiveStream>,
     running: Arc<AtomicBool>,
     /// Set by the cpal error callback when the device fails at runtime
     /// (e.g. USB interface unplugged). Polled by the engine to trigger
@@ -59,6 +67,13 @@ pub struct AudioDeviceManager {
     pub selected_device: Option<String>,
     /// Name of the device currently running (set after successful start()).
     active_device_name: Option<String>,
+    /// Request WASAPI exclusive mode (Windows only). When true and the active
+    /// host is WASAPI, the next stream start tries to acquire the endpoint
+    /// exclusively for lower latency and bit-perfect output. No effect on
+    /// other platforms or host backends.
+    pub wasapi_exclusive: bool,
+    /// True once an exclusive-mode WASAPI stream is live (for UI reporting).
+    active_exclusive: bool,
 }
 
 impl AudioDeviceManager {
@@ -97,13 +112,27 @@ impl AudioDeviceManager {
         Self {
             host,
             output_stream: None,
+            #[cfg(target_os = "windows")]
+            wasapi_stream: None,
             running: Arc::new(AtomicBool::new(false)),
             stream_error: Arc::new(AtomicBool::new(false)),
             sample_rate: 48000,
             buffer_size: 512,
             selected_device: None,
             active_device_name: None,
+            wasapi_exclusive: false,
+            active_exclusive: false,
         }
+    }
+
+    /// Whether the current stream is running in WASAPI exclusive mode.
+    pub fn is_exclusive_active(&self) -> bool {
+        self.active_exclusive
+    }
+
+    /// Whether WASAPI exclusive mode is applicable (Windows + WASAPI host).
+    pub fn exclusive_available(&self) -> bool {
+        cfg!(target_os = "windows") && self.host.id().name().eq_ignore_ascii_case("WASAPI")
     }
 
     /// Whether the stream reported an error since the last check.
@@ -246,7 +275,7 @@ impl AudioDeviceManager {
     }
 
     /// Start the output audio stream with the given callback.
-    pub fn start<C: AudioCallback>(&mut self, mut callback: C) -> Result<(), AudioIoError> {
+    pub fn start<C: AudioCallback>(&mut self, callback: C) -> Result<(), AudioIoError> {
         let device = self.resolve_output_device()?;
 
         // Negotiate sample rate: check if the requested rate is supported,
@@ -264,36 +293,87 @@ impl AudioDeviceManager {
             }
         }
 
+        let resolved_name = device.name().unwrap_or_default();
+        let exclusive_requested =
+            self.wasapi_exclusive && self.host.id().name().eq_ignore_ascii_case("WASAPI");
+        log::info!(
+            "Starting audio: device={}, sr={}, buf={}, exclusive={}",
+            resolved_name,
+            self.sample_rate,
+            self.buffer_size,
+            exclusive_requested,
+        );
+        self.active_device_name = Some(resolved_name.clone());
+
+        self.running.store(true, Ordering::Relaxed);
+        self.stream_error.store(false, Ordering::Relaxed);
+
+        #[cfg(target_os = "windows")]
+        {
+            if exclusive_requested {
+                // User explicitly asked for exclusive mode. If we can't get it
+                // (format rejection, device locked by another app), surface a
+                // hard error — silently downgrading to shared mode would
+                // contradict the toggle state they just set.
+                let stream = wasapi_exclusive::WasapiExclusiveStream::start(
+                    self.selected_device.as_deref(),
+                    self.sample_rate,
+                    callback,
+                    Arc::clone(&self.stream_error),
+                )?;
+                self.wasapi_stream = Some(stream);
+                self.active_exclusive = true;
+                return Ok(());
+            }
+            self.active_exclusive = false;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            if exclusive_requested {
+                log::warn!(
+                    "WASAPI exclusive mode requested but current platform is not Windows — ignoring"
+                );
+            }
+            self.active_exclusive = false;
+        }
+
         let config = StreamConfig {
             channels: 2,
             sample_rate: SampleRate(self.sample_rate),
             buffer_size: cpal::BufferSize::Fixed(self.buffer_size),
         };
-
-        let resolved_name = device.name().unwrap_or_default();
-        log::info!(
-            "Starting audio: device={}, sr={}, buf={}",
-            resolved_name,
-            self.sample_rate,
-            self.buffer_size,
-        );
-        self.active_device_name = Some(resolved_name);
-
-        self.running.store(true, Ordering::Relaxed);
-        self.stream_error.store(false, Ordering::Relaxed);
         let running = Arc::clone(&self.running);
         let stream_error = Arc::clone(&self.stream_error);
+        let mut cb = callback;
+
+        // On macOS, the first invocation of the callback (which runs on the
+        // CoreAudio IOProc thread) joins the device's IO workgroup so the
+        // kernel co-schedules us with the rest of the audio pipeline. The
+        // membership handle is held for the stream's lifetime and released
+        // when the closure drops.
+        #[cfg(target_os = "macos")]
+        let mut workgroup: Option<coreaudio_workgroup::WorkgroupMembership> = None;
+        #[cfg(target_os = "macos")]
+        let mut workgroup_joined = false;
 
         let stream = device
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+                    #[cfg(target_os = "macos")]
+                    {
+                        if !workgroup_joined {
+                            workgroup = coreaudio_workgroup::join_default_output_workgroup();
+                            workgroup_joined = true;
+                        }
+                    }
+
                     if !running.load(Ordering::Relaxed) {
                         data.fill(0.0);
                         return;
                     }
                     let num_frames = data.len() / 2;
-                    callback.process(data, num_frames, 2);
+                    cb.process(data, num_frames, 2);
                 },
                 move |err| {
                     log::error!("Audio stream error: {}", err);
@@ -331,12 +411,28 @@ impl AudioDeviceManager {
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         self.output_stream = None;
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(stream) = self.wasapi_stream.take() {
+                stream.stop();
+            }
+        }
         self.active_device_name = None;
+        self.active_exclusive = false;
         log::info!("Audio stream stopped");
     }
 
     pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::Relaxed)
+        if self.running.load(Ordering::Relaxed) {
+            return true;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if self.wasapi_stream.is_some() {
+                return true;
+            }
+        }
+        false
     }
 }
 

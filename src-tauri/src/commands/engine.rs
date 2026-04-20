@@ -74,6 +74,26 @@ pub fn set_audio_host(state: State<AppState>, host_name: String) -> Result<(), S
     state.engine.lock().set_audio_host(&host_name)
 }
 
+#[derive(Serialize)]
+pub struct WasapiExclusiveStatus {
+    pub enabled: bool,
+    pub available: bool,
+}
+
+#[tauri::command]
+pub fn get_wasapi_exclusive(state: State<AppState>) -> WasapiExclusiveStatus {
+    let engine = state.engine.lock();
+    WasapiExclusiveStatus {
+        enabled: engine.wasapi_exclusive(),
+        available: engine.wasapi_exclusive_available(),
+    }
+}
+
+#[tauri::command]
+pub fn set_wasapi_exclusive(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    state.engine.lock().set_wasapi_exclusive(enabled)
+}
+
 #[tauri::command]
 pub fn set_audio_config(
     state: State<AppState>,

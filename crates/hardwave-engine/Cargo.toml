@@ -3,6 +3,11 @@ name = "hardwave-engine"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+jack = ["hardwave-audio-io/jack"]
+asio = ["hardwave-audio-io/asio"]
+
 [dependencies]
 hardwave-audio-io = { path = "../hardwave-audio-io" }
 hardwave-midi = { path = "../hardwave-midi" }
