@@ -10,6 +10,8 @@ async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: strin
   return r
 }
 
+export type FadeCurveKind = 'linear' | 'equal_power' | 's_curve' | 'logarithmic'
+
 export interface ClipInfo {
   id: string
   name: string
@@ -24,6 +26,8 @@ export interface ClipInfo {
   reversed: boolean
   pitchSemitones: number
   stretchRatio: number
+  fadeInCurve: FadeCurveKind
+  fadeOutCurve: FadeCurveKind
 }
 
 export interface TrackInfo {
@@ -102,6 +106,7 @@ interface TrackState {
   pasteClipsAtPosition: (positionTicks: number, targetTrackId?: string) => Promise<void>
   setClipGain: (trackId: string, clipId: string, gainDb: number) => Promise<void>
   setClipFades: (trackId: string, clipId: string, fadeInTicks: number, fadeOutTicks: number) => Promise<void>
+  setClipFadeCurves: (trackId: string, clipId: string, fadeInCurve: FadeCurveKind, fadeOutCurve: FadeCurveKind) => Promise<void>
   toggleClipReverse: (trackId: string, clipId: string) => Promise<void>
   setClipPitch: (trackId: string, clipId: string, pitchSemitones: number) => Promise<void>
   setClipStretch: (trackId: string, clipId: string, stretchRatio: number) => Promise<void>
@@ -372,6 +377,11 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   setClipFades: async (trackId, clipId, fadeInTicks, fadeOutTicks) => {
     await mut('set_clip_fades', { trackId, clipId, fadeInTicks, fadeOutTicks }, 'Edit clip fades')
+    await get().fetchTracks()
+  },
+
+  setClipFadeCurves: async (trackId, clipId, fadeInCurve, fadeOutCurve) => {
+    await mut('set_clip_fade_curves', { trackId, clipId, fadeInCurve, fadeOutCurve }, 'Edit clip fade curves')
     await get().fetchTracks()
   },
 

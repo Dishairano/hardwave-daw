@@ -658,6 +658,8 @@ impl EngineCallback {
                             muted: audio_clip.muted,
                             fade_in_samples,
                             fade_out_samples,
+                            fade_in_curve: audio_clip.fade_in_curve,
+                            fade_out_curve: audio_clip.fade_out_curve,
                             reversed: audio_clip.reversed,
                             source_step,
                         })

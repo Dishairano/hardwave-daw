@@ -94,6 +94,7 @@ pub fn run() {
             commands::audio::split_clip,
             commands::audio::set_clip_gain,
             commands::audio::set_clip_fades,
+            commands::audio::set_clip_fade_curves,
             commands::audio::toggle_clip_reverse,
             commands::audio::set_clip_pitch,
             commands::audio::set_clip_stretch,

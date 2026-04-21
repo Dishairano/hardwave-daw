@@ -61,6 +61,8 @@ pub fn import_audio_file(
         reversed: false,
         pitch_semitones: 0.0,
         stretch_ratio: 1.0,
+        fade_in_curve: Default::default(),
+        fade_out_curve: Default::default(),
     };
 
     let placement = hardwave_project::clip::ClipPlacement {
@@ -124,6 +126,8 @@ pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo
                 reversed: ac.reversed,
                 pitch_semitones: ac.pitch_semitones,
                 stretch_ratio: ac.stretch_ratio,
+                fade_in_curve: fade_curve_name(ac.fade_in_curve),
+                fade_out_curve: fade_curve_name(ac.fade_out_curve),
             },
             hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
                 id: mc.id.clone(),
@@ -139,6 +143,8 @@ pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo
                 reversed: false,
                 pitch_semitones: 0.0,
                 stretch_ratio: 1.0,
+                fade_in_curve: "linear".into(),
+                fade_out_curve: "linear".into(),
             },
         })
         .collect()
@@ -164,6 +170,32 @@ pub struct ClipInfo {
     pitch_semitones: f64,
     #[serde(rename = "stretchRatio")]
     stretch_ratio: f64,
+    #[serde(rename = "fadeInCurve")]
+    fade_in_curve: String,
+    #[serde(rename = "fadeOutCurve")]
+    fade_out_curve: String,
+}
+
+fn fade_curve_name(curve: hardwave_project::clip::FadeCurve) -> String {
+    use hardwave_project::clip::FadeCurve;
+    match curve {
+        FadeCurve::Linear => "linear",
+        FadeCurve::EqualPower => "equal_power",
+        FadeCurve::SCurve => "s_curve",
+        FadeCurve::Logarithmic => "logarithmic",
+    }
+    .into()
+}
+
+fn fade_curve_from_name(name: &str) -> Result<hardwave_project::clip::FadeCurve, String> {
+    use hardwave_project::clip::FadeCurve;
+    Ok(match name {
+        "linear" => FadeCurve::Linear,
+        "equal_power" => FadeCurve::EqualPower,
+        "s_curve" => FadeCurve::SCurve,
+        "logarithmic" => FadeCurve::Logarithmic,
+        other => return Err(format!("Unknown fade curve: {other}")),
+    })
 }
 
 fn with_audio_clip_mut<R>(
@@ -245,6 +277,28 @@ pub fn set_clip_fades(
     with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
         ac.fade_in_ticks = fi;
         ac.fade_out_ticks = fo;
+    })?;
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// Set fade-in and fade-out curve shapes for an audio clip.
+#[tauri::command]
+pub fn set_clip_fade_curves(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    fade_in_curve: String,
+    fade_out_curve: String,
+) -> Result<(), String> {
+    let fi = fade_curve_from_name(&fade_in_curve)?;
+    let fo = fade_curve_from_name(&fade_out_curve)?;
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
+        ac.fade_in_curve = fi;
+        ac.fade_out_curve = fo;
     })?;
     drop(engine);
     state.engine.lock().rebuild_graph();

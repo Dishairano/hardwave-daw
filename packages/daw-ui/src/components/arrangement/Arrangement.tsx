@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
-import { useTrackStore, ClipInfo } from '../../stores/trackStore'
+import { useTrackStore, ClipInfo, FadeCurveKind } from '../../stores/trackStore'
 import { useTransportStore, snapToTicks } from '../../stores/transportStore'
 import { useMarkerStore } from '../../stores/markerStore'
 import { useClipGroupStore } from '../../stores/clipGroupStore'
@@ -63,7 +63,7 @@ export function Arrangement() {
   const {
     tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
     moveClip, resizeClip, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
-    toggleClipReverse, setClipGain, setClipPitch, setClipStretch,
+    setClipFadeCurves, toggleClipReverse, setClipGain, setClipPitch, setClipStretch,
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [markerCtx, setMarkerCtx] = useState<{ x: number; y: number; markerId: string | null; tick: number } | null>(null)
@@ -1180,6 +1180,44 @@ export function Arrangement() {
             await setClipFades(contextMenu.trackId, contextMenu.clipId, 0, 0)
             setContextMenu(null)
           }} />
+          {(() => {
+            const track = tracks.find(t => t.id === contextMenu.trackId)
+            const clip = track?.clips.find(c => c.id === contextMenu.clipId)
+            if (!clip || clip.kind !== 'audio') return null
+            const curves: Array<{ value: FadeCurveKind; label: string }> = [
+              { value: 'linear', label: 'Linear' },
+              { value: 'equal_power', label: 'Equal power' },
+              { value: 's_curve', label: 'S-curve' },
+              { value: 'logarithmic', label: 'Logarithmic' },
+            ]
+            const fi = clip.fadeInCurve ?? 'linear'
+            const fo = clip.fadeOutCurve ?? 'linear'
+            return (
+              <>
+                <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
+                <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                  Fade in curve
+                </div>
+                {curves.map(c => (
+                  <MenuItem key={`fi_${c.value}`} label={`${c.value === fi ? '● ' : '   '}${c.label}`}
+                    onClick={async () => {
+                      await setClipFadeCurves(contextMenu.trackId, contextMenu.clipId, c.value, fo)
+                      setContextMenu(null)
+                    }} />
+                ))}
+                <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                  Fade out curve
+                </div>
+                {curves.map(c => (
+                  <MenuItem key={`fo_${c.value}`} label={`${c.value === fo ? '● ' : '   '}${c.label}`}
+                    onClick={async () => {
+                      await setClipFadeCurves(contextMenu.trackId, contextMenu.clipId, fi, c.value)
+                      setContextMenu(null)
+                    }} />
+                ))}
+              </>
+            )
+          })()}
           <MenuItem label="Reset pitch (0 st)" onClick={async () => {
             await setClipPitch(contextMenu.trackId, contextMenu.clipId, 0)
             setContextMenu(null)

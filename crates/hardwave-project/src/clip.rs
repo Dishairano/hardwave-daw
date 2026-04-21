@@ -4,6 +4,16 @@ use crate::track::TrackId;
 
 pub type ClipId = String;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FadeCurve {
+    #[default]
+    Linear,
+    EqualPower,
+    SCurve,
+    Logarithmic,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioClip {
     pub id: ClipId,
@@ -32,6 +42,10 @@ pub struct AudioClip {
     /// Time-stretch ratio. 1.0 = realtime, 2.0 = half speed (longer), 0.5 = double speed.
     #[serde(default = "default_stretch_ratio")]
     pub stretch_ratio: f64,
+    #[serde(default)]
+    pub fade_in_curve: FadeCurve,
+    #[serde(default)]
+    pub fade_out_curve: FadeCurve,
 }
 
 fn default_stretch_ratio() -> f64 {

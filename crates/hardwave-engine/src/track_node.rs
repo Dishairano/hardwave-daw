@@ -41,15 +41,41 @@ pub struct ClipRegion {
     pub gain: f32,
     /// Whether this clip is muted.
     pub muted: bool,
-    /// Linear fade-in length in samples (0 = no fade).
+    /// Fade-in length in samples (0 = no fade).
     pub fade_in_samples: u64,
-    /// Linear fade-out length in samples (0 = no fade).
+    /// Fade-out length in samples (0 = no fade).
     pub fade_out_samples: u64,
+    /// Fade-in curve shape.
+    pub fade_in_curve: hardwave_project::clip::FadeCurve,
+    /// Fade-out curve shape.
+    pub fade_out_curve: hardwave_project::clip::FadeCurve,
     /// Play source backwards when true.
     pub reversed: bool,
     /// Source-frames consumed per timeline sample. 1.0 = realtime, >1 = pitched up/faster.
     /// Combines pitch shift and time stretch via resampling.
     pub source_step: f64,
+}
+
+/// Map a normalized 0..=1 progress to a fade gain following the given curve.
+#[inline]
+fn fade_shape(t: f32, curve: hardwave_project::clip::FadeCurve) -> f32 {
+    use hardwave_project::clip::FadeCurve;
+    let t = t.clamp(0.0, 1.0);
+    match curve {
+        FadeCurve::Linear => t,
+        FadeCurve::EqualPower => (t * std::f32::consts::FRAC_PI_2).sin(),
+        FadeCurve::SCurve => {
+            let x = t * 2.0 - 1.0;
+            (x * std::f32::consts::FRAC_PI_2).sin() * 0.5 + 0.5
+        }
+        FadeCurve::Logarithmic => {
+            if t <= 0.0 {
+                0.0
+            } else {
+                (1.0 + (t * 99.0).log10() / 2.0).clamp(0.0, 1.0)
+            }
+        }
+    }
 }
 
 /// Audio node for a single track. Holds references to its clips and the shared audio pool.
@@ -199,15 +225,17 @@ impl AudioNode for TrackNode {
                 let idx1 = (idx0 + 1).min(audio_buf.num_frames - 1);
                 let frac = (source_pos - idx0 as f64) as f32;
 
-                // Linear fade-in / fade-out envelope.
+                // Fade-in / fade-out envelope with selectable curve shape.
                 let mut env = 1.0_f32;
                 if clip.fade_in_samples > 0 && into_clip < clip.fade_in_samples {
-                    env *= into_clip as f32 / clip.fade_in_samples as f32;
+                    let t = into_clip as f32 / clip.fade_in_samples as f32;
+                    env *= fade_shape(t, clip.fade_in_curve);
                 }
                 if clip.fade_out_samples > 0 {
                     let to_end = clip_length.saturating_sub(into_clip);
                     if to_end < clip.fade_out_samples {
-                        env *= to_end as f32 / clip.fade_out_samples as f32;
+                        let t = to_end as f32 / clip.fade_out_samples as f32;
+                        env *= fade_shape(t, clip.fade_out_curve);
                     }
                 }
 
