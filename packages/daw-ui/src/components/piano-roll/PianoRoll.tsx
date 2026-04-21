@@ -149,6 +149,7 @@ export function PianoRoll() {
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number; additive: boolean } | null>(null)
   const [hoverInfo, setHoverInfo] = useState<{ x: number; y: number; label: string } | null>(null)
+  const [chordPreview, setChordPreview] = useState<{ rootPitch: number; startTick: number } | null>(null)
   const clipboardRef = useRef<Note[]>([])
   const focusedRef = useRef(false)
   const dragRef = useRef<{
@@ -338,6 +339,35 @@ export function PianoRoll() {
       ctx.restore()
     }
 
+    if (tool === 'chord' && chordPreview) {
+      const baseIntervals = chordType === 'custom'
+        ? Array.from(customChordSet).sort((a, b) => a - b)
+        : CHORD_TYPES[chordType].intervals
+      const intervals = applyInversion(baseIntervals.length > 0 ? baseIntervals : [0], chordInversion)
+      const noteW = snap * pixelsPerTick
+      ctx.save()
+      ctx.setLineDash([3, 2])
+      ctx.lineWidth = 1
+      for (const iv of intervals) {
+        const p = chordPreview.rootPitch + iv
+        if (p < 0 || p > 127) continue
+        const x = xFromTick(chordPreview.startTick) - KEYBOARD_WIDTH
+        const y = yFromPitch(p)
+        if (x + noteW < 0 || x > w || y + noteHeight < 0 || y > h) continue
+        ctx.globalAlpha = 0.18
+        ctx.fillStyle = hw.accent
+        ctx.beginPath()
+        ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), noteHeight - 2, 4)
+        ctx.fill()
+        ctx.globalAlpha = 0.7
+        ctx.strokeStyle = hw.accent
+        ctx.beginPath()
+        ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), noteHeight - 2, 4)
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+
     for (const note of notes) {
       const x = xFromTick(note.startTick) - KEYBOARD_WIDTH
       const y = yFromPitch(note.pitch)
@@ -403,7 +433,7 @@ export function PianoRoll() {
       ctx.strokeRect(mx + 0.5, my + 0.5, mw, mh)
       ctx.setLineDash([])
     }
-  }, [notes, scrollX, scrollY, pixelsPerTick, selectedNotes, marquee, scaleRoot, scaleType, ghostMode, ghostNotes, noteHeight])
+  }, [notes, scrollX, scrollY, pixelsPerTick, selectedNotes, marquee, scaleRoot, scaleType, ghostMode, ghostNotes, noteHeight, chordPreview, tool, chordType, chordInversion, customChordSet, snap])
 
   useEffect(() => { draw() }, [draw])
 
@@ -577,6 +607,23 @@ export function PianoRoll() {
       const rect = canvasRef.current!.getBoundingClientRect()
       const mx = e.clientX - rect.left
       const my = e.clientY - rect.top
+
+      if (tool === 'chord') {
+        const tick = tickFromX(mx + KEYBOARD_WIDTH)
+        const pitch = pitchFromY(my + RULER_HEIGHT)
+        if (pitch >= 0 && pitch < 128 && tick >= 0) {
+          const snappedTick = Math.max(0, snapTick(tick))
+          const rootPitch = snapToScale && scaleType !== 'chromatic'
+            ? snapPitchToScale(pitch, scaleRoot, scaleType)
+            : pitch
+          setChordPreview({ rootPitch, startTick: snappedTick })
+        } else if (chordPreview) {
+          setChordPreview(null)
+        }
+      } else if (chordPreview) {
+        setChordPreview(null)
+      }
+
       let found: Note | null = null
       for (const note of notes) {
         const nx = xFromTick(note.startTick) - KEYBOARD_WIDTH
