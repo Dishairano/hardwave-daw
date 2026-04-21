@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { useTransportStore, SNAP_VALUES } from '../../stores/transportStore'
 import { useTrackStore } from '../../stores/trackStore'
@@ -397,6 +398,11 @@ export function Toolbar(props: ToolbarProps) {
 
       <Sep />
 
+      {/* 14b. MIDI activity LED */}
+      <MidiActivityLed onEnter={hint} onLeave={clear} />
+
+      <Sep />
+
       {/* 15. Mini scope */}
       <div style={{
         width: 60, height: 24,
@@ -512,6 +518,72 @@ function CpuPolyMeters({ onEnter, onLeave }: { onEnter: (text: string) => () => 
             borderRadius: hw.radius.sm, transition: 'width 0.2s, background 0.3s',
           }} />
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Polls the MIDI activity endpoint once a second and uses its `ms_since_last_event`
+// reading to drive a fast-decaying LED. The LED glows green while any port is
+// open and pulses red on an incoming event.
+function MidiActivityLed({ onEnter, onLeave }: {
+  onEnter: (text: string) => () => void; onLeave: () => void
+}) {
+  const [openPorts, setOpenPorts] = useState<string[]>([])
+  const [recentEvent, setRecentEvent] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    let lastMs: number | null = null
+    const tick = async () => {
+      if (cancelled) return
+      try {
+        const snap = await invoke<{
+          open_ports: string[]
+          ms_since_last_event: number | null
+        }>('get_midi_activity')
+        if (cancelled) return
+        setOpenPorts(snap.open_ports)
+        const ms = snap.ms_since_last_event
+        // Flash red for ~250ms after any new event arrives.
+        if (ms !== null && ms < 250 && ms !== lastMs) {
+          setRecentEvent(true)
+          window.setTimeout(() => setRecentEvent(false), 150)
+        }
+        lastMs = ms
+      } catch {
+        /* engine may be mid-restart */
+      }
+    }
+    tick()
+    const id = window.setInterval(tick, 100)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
+  const hasOpen = openPorts.length > 0
+  const label = hasOpen ? `MIDI · ${openPorts.length} open` : 'MIDI · idle'
+  const ledColor = recentEvent
+    ? hw.red
+    : hasOpen
+      ? hw.green
+      : 'rgba(255,255,255,0.15)'
+  return (
+    <div
+      style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+      onMouseEnter={onEnter(label)}
+      onMouseLeave={onLeave}
+      data-testid="toolbar-midi-led"
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+        <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>MIDI</span>
+        <div style={{
+          width: 8, height: 8, borderRadius: '50%',
+          background: ledColor,
+          boxShadow: recentEvent || hasOpen ? `0 0 6px ${ledColor}` : 'none',
+          border: `1px solid ${hw.borderDark}`,
+          transition: 'background 80ms linear, box-shadow 80ms linear',
+        }} />
       </div>
     </div>
   )

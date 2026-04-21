@@ -4,6 +4,7 @@ pub mod dev;
 pub mod engine;
 pub mod history;
 pub mod midi;
+pub mod midi_input;
 pub mod plugins;
 pub mod project;
 pub mod tracks;

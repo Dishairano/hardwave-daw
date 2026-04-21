@@ -55,6 +55,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [monitor, setMonitor] = useState<InputMeterSnapshot | null>(null)
   const [monitorOn, setMonitorOn] = useState(false)
   const peakDecayRef = useRef({ l: 0, r: 0 })
+  const [midiPorts, setMidiPorts] = useState<string[]>([])
+  const [midiOpen, setMidiOpen] = useState<string[]>([])
+  const [midiBusy, setMidiBusy] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -63,7 +66,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       invoke<AudioConfig>('get_audio_config'),
       invoke<AudioInputConfig>('get_audio_input_config'),
       invoke<WasapiExclusiveStatus>('get_wasapi_exclusive'),
-    ]).then(([devs, inputs, cfg, inCfg, excl]) => {
+      invoke<string[]>('list_midi_inputs'),
+      invoke<{ open_ports: string[] }>('get_midi_activity'),
+    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity]) => {
       setDevices(devs)
       setInputDevices(inputs)
       setConfig(cfg)
@@ -74,8 +79,36 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setSelectedRate(cfg.sample_rate)
       setSelectedBuffer(cfg.buffer_size)
       setExclusive(excl)
+      setMidiPorts(ports)
+      setMidiOpen(activity.open_ports)
     })
   }, [])
+
+  const toggleMidiPort = async (port: string) => {
+    setError(null)
+    setMidiBusy(true)
+    try {
+      if (midiOpen.includes(port)) {
+        await invoke('close_midi_input', { portName: port })
+        setMidiOpen(list => list.filter(p => p !== port))
+      } else {
+        await invoke('open_midi_input', { portName: port })
+        setMidiOpen(list => [...list, port])
+      }
+    } catch (e: any) {
+      setError(String(e))
+    }
+    setMidiBusy(false)
+  }
+
+  const rescanMidi = async () => {
+    try {
+      const ports = await invoke<string[]>('list_midi_inputs')
+      setMidiPorts(ports)
+    } catch (e: any) {
+      setError(String(e))
+    }
+  }
 
   // Poll the input meter at ~30 Hz while monitoring is on. Decay the bar
   // smoothly on the UI side so brief silences don't make it flicker.
@@ -338,6 +371,71 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 {selectedInputChannels === 2 && (
                   <MeterBar label="R" peak={monitor?.peak_r ?? 0} />
                 )}
+              </div>
+            )}
+          </div>
+
+          {/* MIDI Inputs */}
+          <div style={{
+            marginBottom: 10, padding: '8px 12px',
+            background: hw.bgPanel, borderRadius: hw.radius.sm,
+            border: `1px solid ${hw.borderDark}`,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: midiPorts.length > 0 ? 6 : 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textMuted }}>MIDI Inputs</span>
+                <span style={{ fontSize: 10, color: hw.textFaint }}>
+                  {midiPorts.length === 0
+                    ? 'No MIDI input ports detected'
+                    : `${midiOpen.length} of ${midiPorts.length} open`}
+                </span>
+              </div>
+              <button
+                onClick={rescanMidi}
+                style={{
+                  padding: '4px 10px', fontSize: 11, fontWeight: 600,
+                  borderRadius: hw.radius.sm, border: 'none',
+                  cursor: 'pointer',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: hw.textSecondary,
+                  fontFamily: 'inherit',
+                }}
+              >
+                Rescan
+              </button>
+            </div>
+            {midiPorts.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {midiPorts.map(port => {
+                  const open = midiOpen.includes(port)
+                  return (
+                    <div key={port} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '4px 8px',
+                      background: 'rgba(0,0,0,0.25)',
+                      borderRadius: hw.radius.sm,
+                      border: `1px solid ${open ? hw.accent : hw.borderDark}`,
+                    }}>
+                      <span style={{ fontSize: 11, color: hw.textSecondary, fontFamily: 'inherit' }}>
+                        {port}
+                      </span>
+                      <button
+                        disabled={midiBusy}
+                        onClick={() => toggleMidiPort(port)}
+                        style={{
+                          padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                          borderRadius: hw.radius.sm, border: 'none',
+                          cursor: midiBusy ? 'default' : 'pointer',
+                          background: open ? hw.accent : 'rgba(255,255,255,0.08)',
+                          color: open ? '#fff' : hw.textSecondary,
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        {open ? 'Connected' : 'Connect'}
+                      </button>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>

@@ -1,5 +1,8 @@
 //! Hardwave MIDI — MIDI I/O, event types, and quantization.
 
+pub mod input;
+pub use input::MidiInputManager;
+
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------

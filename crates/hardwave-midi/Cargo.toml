@@ -9,3 +9,4 @@ rtrb.workspace = true
 serde.workspace = true
 log.workspace = true
 thiserror.workspace = true
+parking_lot.workspace = true

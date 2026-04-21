@@ -143,6 +143,12 @@ pub fn run() {
             commands::midi::add_midi_note,
             commands::midi::update_midi_note,
             commands::midi::delete_midi_note,
+            // MIDI input (live)
+            commands::midi_input::list_midi_inputs,
+            commands::midi_input::open_midi_input,
+            commands::midi_input::close_midi_input,
+            commands::midi_input::close_all_midi_inputs,
+            commands::midi_input::get_midi_activity,
             // Undo/redo
             commands::history::undo,
             commands::history::redo,

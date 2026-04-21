@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use hardwave_audio_io::{AudioCallback, AudioDeviceManager};
 use hardwave_metering::{ChannelMeter, MeterSnapshot};
+use hardwave_midi::MidiInputManager;
 use hardwave_plugin_host::PluginScanner;
 use hardwave_project::Project;
 use rtrb::RingBuffer;
@@ -88,6 +89,7 @@ pub struct DawEngine {
     pub transport: TransportState,
     pub project: Arc<Mutex<Project>>,
     pub plugin_scanner: Arc<Mutex<PluginScanner>>,
+    pub midi_input: Arc<Mutex<MidiInputManager>>,
     pub audio_pool: AudioPool,
 
     audio_device: AudioDeviceManager,
@@ -121,6 +123,7 @@ impl DawEngine {
             transport: TransportState::default(),
             project: Arc::new(Mutex::new(Project::default())),
             plugin_scanner: Arc::new(Mutex::new(PluginScanner::new())),
+            midi_input: Arc::new(Mutex::new(MidiInputManager::new())),
             audio_pool: AudioPool::new(),
             audio_device: AudioDeviceManager::new(),
             command_tx: tx,
