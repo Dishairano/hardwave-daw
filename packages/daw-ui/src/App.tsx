@@ -16,7 +16,7 @@ import { FloatingWindow } from './components/FloatingWindow'
 import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChangesDialog'
 import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
 import { useUserTemplateStore } from './stores/userTemplateStore'
-import { WelcomeScreen } from './components/WelcomeScreen'
+import { WelcomeScreen, shouldSkipWelcome } from './components/WelcomeScreen'
 import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecoveryDialog'
 import { ShortcutsPanel } from './components/ShortcutsPanel'
 import { invoke } from '@tauri-apps/api/core'
@@ -61,8 +61,10 @@ export function App() {
   const [showSplash, setShowSplash] = useState(true)
   const [dataReady, setDataReady] = useState(false)
 
-  // Welcome screen — shown on startup unless dismissed this session
+  // Welcome screen — shown on startup unless user has ticked "Don't show again"
+  // (persistent) or already dismissed in this session.
   const [showWelcome, setShowWelcome] = useState(() => {
+    if (shouldSkipWelcome()) return false
     try { return sessionStorage.getItem('hardwave.daw.welcomeDismissed') !== '1' } catch { return true }
   })
   const dismissWelcome = useCallback(() => {

@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { hw } from '../theme'
 
+const SKIP_KEY = 'hardwave.daw.welcomeSkip'
+
+export function shouldSkipWelcome() {
+  try { return localStorage.getItem(SKIP_KEY) === '1' } catch { return false }
+}
+
 interface Props {
   recentProjects: string[]
   onOpenRecent: (path: string) => void
@@ -17,7 +23,13 @@ export function WelcomeScreen({
   onDismiss,
 }: Props) {
   const [mounted, setMounted] = useState(false)
+  const [skipNext, setSkipNext] = useState<boolean>(() => shouldSkipWelcome())
   useEffect(() => { setMounted(true) }, [])
+
+  const dismiss = () => {
+    try { localStorage.setItem(SKIP_KEY, skipNext ? '1' : '0') } catch {}
+    onDismiss()
+  }
 
   return (
     <div style={{
@@ -60,19 +72,19 @@ export function WelcomeScreen({
               Get started
             </div>
             <button
-              onClick={() => { onNewProject(); onDismiss() }}
+              onClick={() => { onNewProject(); dismiss() }}
               style={actionBtn(true)}
             >
               New project
             </button>
             <button
-              onClick={() => { onOpenProject(); onDismiss() }}
+              onClick={() => { onOpenProject(); dismiss() }}
               style={actionBtn(false)}
             >
               Open project…
             </button>
             <button
-              onClick={onDismiss}
+              onClick={dismiss}
               style={{ ...actionBtn(false), marginTop: 18 }}
             >
               Close this screen
@@ -94,7 +106,7 @@ export function WelcomeScreen({
                   return (
                     <button
                       key={p}
-                      onClick={() => { onOpenRecent(p); onDismiss() }}
+                      onClick={() => { onOpenRecent(p); dismiss() }}
                       style={recentBtn}
                       title={p}
                     >
@@ -109,9 +121,74 @@ export function WelcomeScreen({
             )}
           </div>
         </div>
+
+        <div style={{
+          marginTop: 24, paddingTop: 16,
+          borderTop: `1px solid ${hw.border}`,
+        }}>
+          <div style={{
+            fontSize: 11, color: hw.textFaint,
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10,
+          }}>
+            Quick tour
+          </div>
+          <div style={{
+            display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 18px',
+            fontSize: 11, color: hw.textSecondary,
+          }}>
+            <PanelHint shortcut="F5" label="Playlist" hint="Arrange clips on a timeline" />
+            <PanelHint shortcut="F6" label="Channel Rack" hint="Step-sequence drums and loops" />
+            <PanelHint shortcut="F7" label="Piano Roll" hint="Draw and edit MIDI notes" />
+            <PanelHint shortcut="F8" label="Browser" hint="Find samples and plugins" />
+            <PanelHint shortcut="F9" label="Mixer" hint="Levels, routing and FX chains" />
+            <PanelHint shortcut="?" label="Shortcuts" hint="Full keyboard cheat sheet" />
+          </div>
+        </div>
+
+        <div style={{
+          marginTop: 20, display: 'flex', alignItems: 'center', gap: 8,
+          fontSize: 11, color: hw.textMuted,
+        }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={skipNext}
+              onChange={e => setSkipNext(e.target.checked)}
+              style={{ accentColor: hw.accent }}
+            />
+            Don't show this on startup
+          </label>
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 10, color: hw.textFaint }}>
+            Press <kbd style={kbdStyle}>?</kbd> anytime for shortcuts
+          </span>
+        </div>
       </div>
     </div>
   )
+}
+
+function PanelHint({ shortcut, label, hint }: { shortcut: string; label: string; hint: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+      <kbd style={kbdStyle}>{shortcut}</kbd>
+      <span style={{ fontWeight: 600, color: hw.textPrimary }}>{label}</span>
+      <span style={{ color: hw.textFaint, fontSize: 10 }}>{hint}</span>
+    </div>
+  )
+}
+
+const kbdStyle: React.CSSProperties = {
+  display: 'inline-block',
+  minWidth: 22,
+  padding: '1px 5px',
+  fontSize: 10,
+  fontFamily: 'ui-monospace, Menlo, monospace',
+  color: hw.accent,
+  background: 'rgba(255,255,255,0.05)',
+  border: `1px solid ${hw.border}`,
+  borderRadius: 4,
+  textAlign: 'center',
 }
 
 function actionBtn(primary: boolean): React.CSSProperties {
