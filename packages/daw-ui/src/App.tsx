@@ -27,6 +27,7 @@ import { useSampleEditorStore } from './stores/sampleEditorStore'
 import { BeatSlicer } from './components/beat-slicer/BeatSlicer'
 import { useBeatSlicerStore } from './stores/beatSlicerStore'
 import { LoudnessMeter } from './components/LoudnessMeter'
+import { PrecountOverlay } from './components/transport/PrecountOverlay'
 import { invoke } from '@tauri-apps/api/core'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
@@ -647,6 +648,7 @@ export function App() {
       {sampleEditorPath && <SampleEditor path={sampleEditorPath} onClose={closeSampleEditor} />}
       {beatSlicerPath && <BeatSlicer path={beatSlicerPath} onClose={closeBeatSlicer} />}
       {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}
+      <PrecountOverlay />
       {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}
 
       {savePromptAction && (

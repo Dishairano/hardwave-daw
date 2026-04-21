@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { useMetronomeStore } from './metronomeStore'
 
 export type SnapValue =
   | 'Off' | '1/1' | '1/2' | '1/4' | '1/8' | '1/16' | '1/32' | '1/64'
@@ -12,6 +13,77 @@ export const SNAP_VALUES: SnapValue[] = [
 ]
 
 const PPQ_TICKS = 960
+
+// ── Pre-count metronome ──────────────────────────────────────────────────
+let precountCtx: AudioContext | null = null
+let precountCancel: (() => void) | null = null
+let precountState: { beat: number; total: number } | null = null
+const precountListeners = new Set<(s: typeof precountState) => void>()
+
+export function subscribePrecount(cb: (s: typeof precountState) => void) {
+  precountListeners.add(cb)
+  cb(precountState)
+  return () => { precountListeners.delete(cb) }
+}
+
+function notifyPrecount() {
+  for (const cb of precountListeners) cb(precountState)
+}
+
+function cancelPrecount() {
+  if (precountCancel) { precountCancel(); precountCancel = null }
+  precountState = null
+  notifyPrecount()
+}
+
+function runPrecountClicks(totalBeats: number, bpb: number, beatSec: number, volume: number, accent: boolean): Promise<void> {
+  return new Promise<void>((resolve) => {
+    cancelPrecount()
+    const AC: typeof AudioContext | undefined = (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }).AudioContext
+      || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AC) { resolve(); return }
+    const ctx = precountCtx ?? new AC()
+    precountCtx = ctx
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {})
+    const startAt = ctx.currentTime + 0.05
+    for (let i = 0; i < totalBeats; i++) {
+      const t = startAt + i * beatSec
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = (accent && i % bpb === 0) ? 1500 : 800
+      const peak = Math.max(0.0001, volume) * 0.6
+      gain.gain.setValueAtTime(0, t)
+      gain.gain.linearRampToValueAtTime(peak, t + 0.002)
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.055)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t); osc.stop(t + 0.08)
+    }
+    precountState = { beat: 0, total: totalBeats }
+    notifyPrecount()
+    const tickInterval = setInterval(() => {
+      if (!precountState) return
+      const elapsed = ctx.currentTime - startAt
+      const b = Math.max(0, Math.min(totalBeats, Math.floor(elapsed / beatSec)))
+      if (precountState.beat !== b) {
+        precountState = { beat: b, total: totalBeats }
+        notifyPrecount()
+      }
+    }, 30)
+    const done = setTimeout(() => {
+      clearInterval(tickInterval)
+      precountState = null
+      precountCancel = null
+      notifyPrecount()
+      resolve()
+    }, totalBeats * beatSec * 1000 + 80)
+    precountCancel = () => {
+      clearTimeout(done)
+      clearInterval(tickInterval)
+      resolve()
+    }
+  })
+}
 // Returns tick count for a given snap value, or 0 when snap is disabled.
 export function snapToTicks(snap: SnapValue, enabled: boolean): number {
   if (!enabled || snap === 'Off') return 0
@@ -99,8 +171,24 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   clipColorOverrides: {},
   editCursorTicks: null,
 
-  play: () => { invoke('play'); set({ playing: true }) },
-  stop: () => { invoke('stop') },
+  play: () => {
+    const m = useMetronomeStore.getState()
+    if (m.precountBars > 0 && m.enabled) {
+      const { bpm, timeSigNumerator } = get()
+      const bpb = timeSigNumerator > 0 ? timeSigNumerator : 4
+      const totalBeats = m.precountBars * bpb
+      const beatSec = 60 / Math.max(1, bpm)
+      runPrecountClicks(totalBeats, bpb, beatSec, m.volume, m.accent)
+        .then(() => {
+          if (get().playing) return
+          invoke('play'); set({ playing: true })
+        })
+      set({ playing: false })
+      return
+    }
+    invoke('play'); set({ playing: true })
+  },
+  stop: () => { cancelPrecount(); invoke('stop') },
   togglePlayback: () => {
     if (get().playing) { get().stop() } else { get().play() }
   },

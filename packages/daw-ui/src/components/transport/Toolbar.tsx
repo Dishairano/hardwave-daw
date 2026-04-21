@@ -513,10 +513,12 @@ function MetronomeButton({ onEnter, onLeave }: {
   const volume = useMetronomeStore(s => s.volume)
   const accent = useMetronomeStore(s => s.accent)
   const recordOnly = useMetronomeStore(s => s.recordOnly)
+  const precountBars = useMetronomeStore(s => s.precountBars)
   const toggleEnabled = useMetronomeStore(s => s.toggleEnabled)
   const setVolume = useMetronomeStore(s => s.setVolume)
   const setAccent = useMetronomeStore(s => s.setAccent)
   const setRecordOnly = useMetronomeStore(s => s.setRecordOnly)
+  const setPrecountBars = useMetronomeStore(s => s.setPrecountBars)
   const [open, setOpen] = useState(false)
   useEffect(() => {
     if (!open) return
@@ -584,6 +586,29 @@ function MetronomeButton({ onEnter, onLeave }: {
             <input type="checkbox" checked={recordOnly} onChange={(e) => setRecordOnly(e.target.checked)} />
             Only during recording
           </label>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
+              <span>Pre-count</span>
+              <span style={{ color: hw.textPrimary, fontWeight: 600 }}>
+                {precountBars === 0 ? 'off' : `${precountBars} bar${precountBars === 1 ? '' : 's'}`}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 2 }}>
+              {[0, 1, 2, 4].map(n => (
+                <button key={n}
+                  onClick={() => setPrecountBars(n)}
+                  style={{
+                    flex: 1, padding: '3px 0', fontSize: 9, fontWeight: 600,
+                    color: precountBars === n ? hw.accent : hw.textFaint,
+                    background: precountBars === n ? hw.accentDim : 'transparent',
+                    border: `1px solid ${precountBars === n ? hw.accentGlow : hw.border}`,
+                    borderRadius: hw.radius.sm, cursor: 'pointer',
+                  }}>
+                  {n === 0 ? 'off' : `${n}b`}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
