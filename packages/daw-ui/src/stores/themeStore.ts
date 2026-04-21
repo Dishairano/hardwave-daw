@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
 export const STORAGE_KEY = 'hardwave.daw.theme'
+export const CUSTOM_KEY = 'hardwave.daw.theme.customs'
 
 export interface ThemePalette {
   id: string
@@ -15,6 +16,7 @@ export interface ThemePalette {
   selection: string
   selectionDim: string
   glowRed: string
+  custom?: boolean
 }
 
 export const THEME_PRESETS: ThemePalette[] = [
@@ -90,29 +92,120 @@ export const THEME_PRESETS: ThemePalette[] = [
   },
 ]
 
+function loadCustomPalettes(): ThemePalette[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(isValidPalette).map(p => ({ ...p, custom: true }))
+  } catch {
+    return []
+  }
+}
+
+function saveCustomPalettes(customs: ThemePalette[]) {
+  try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(customs)) } catch { /* ignore */ }
+}
+
+const PALETTE_COLOR_KEYS = [
+  'accent', 'accentLight', 'accentDim', 'accentGlow',
+  'secondary', 'secondaryDim', 'selection', 'selectionDim', 'glowRed',
+] as const
+
+export function isValidPalette(v: any): v is ThemePalette {
+  if (!v || typeof v !== 'object') return false
+  if (typeof v.id !== 'string' || !v.id) return false
+  if (typeof v.name !== 'string' || !v.name) return false
+  for (const k of PALETTE_COLOR_KEYS) {
+    if (typeof v[k] !== 'string') return false
+  }
+  return true
+}
+
+export function allPalettes(): ThemePalette[] {
+  return [...THEME_PRESETS, ...loadCustomPalettes()]
+}
+
 export function getActiveThemeId(): string {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw && THEME_PRESETS.some(p => p.id === raw)) return raw
+    if (raw && allPalettes().some(p => p.id === raw)) return raw
   } catch { /* ignore */ }
   return 'hardwaveRed'
 }
 
 export function getActiveTheme(): ThemePalette {
   const id = getActiveThemeId()
-  return THEME_PRESETS.find(p => p.id === id) ?? THEME_PRESETS[0]
+  return allPalettes().find(p => p.id === id) ?? THEME_PRESETS[0]
+}
+
+export function derivePaletteFromAccent(
+  id: string, name: string, description: string, accent: string, secondary: string,
+): ThemePalette {
+  const toRgba = (hex: string, alpha: number) => {
+    const m = hex.replace('#', '')
+    const r = parseInt(m.length === 3 ? m[0] + m[0] : m.slice(0, 2), 16)
+    const g = parseInt(m.length === 3 ? m[1] + m[1] : m.slice(2, 4), 16)
+    const b = parseInt(m.length === 3 ? m[2] + m[2] : m.slice(4, 6), 16)
+    return `rgba(${r},${g},${b},${alpha})`
+  }
+  const lighten = (hex: string) => {
+    const m = hex.replace('#', '')
+    const r = Math.min(255, parseInt(m.slice(0, 2), 16) + 30)
+    const g = Math.min(255, parseInt(m.slice(2, 4), 16) + 30)
+    const b = Math.min(255, parseInt(m.slice(4, 6), 16) + 30)
+    return `#${[r, g, b].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+  }
+  return {
+    id, name, description,
+    accent,
+    accentLight: lighten(accent),
+    accentDim: toRgba(accent, 0.15),
+    accentGlow: toRgba(accent, 0.3),
+    secondary,
+    secondaryDim: toRgba(secondary, 0.15),
+    selection: accent,
+    selectionDim: toRgba(accent, 0.12),
+    glowRed: `0 0 40px ${toRgba(accent, 0.08)}, 0 0 80px ${toRgba(accent, 0.04)}`,
+    custom: true,
+  }
 }
 
 interface ThemeState {
   activeId: string
+  customs: ThemePalette[]
   setTheme: (id: string) => void
+  addCustom: (palette: ThemePalette) => boolean
+  removeCustom: (id: string) => void
+  reloadCustoms: () => void
 }
 
-export const useThemeStore = create<ThemeState>((set) => ({
+export const useThemeStore = create<ThemeState>((set, get) => ({
   activeId: getActiveThemeId(),
+  customs: loadCustomPalettes(),
   setTheme: (id) => {
-    if (!THEME_PRESETS.some(p => p.id === id)) return
+    if (!allPalettes().some(p => p.id === id)) return
     try { localStorage.setItem(STORAGE_KEY, id) } catch { /* ignore */ }
     set({ activeId: id })
   },
+  addCustom: (palette) => {
+    if (!isValidPalette(palette)) return false
+    if (THEME_PRESETS.some(p => p.id === palette.id)) return false
+    const customs = get().customs.filter(c => c.id !== palette.id)
+    const next = [...customs, { ...palette, custom: true }]
+    saveCustomPalettes(next)
+    set({ customs: next })
+    return true
+  },
+  removeCustom: (id) => {
+    const next = get().customs.filter(c => c.id !== id)
+    saveCustomPalettes(next)
+    const activeId = get().activeId === id ? 'hardwaveRed' : get().activeId
+    if (activeId !== get().activeId) {
+      try { localStorage.setItem(STORAGE_KEY, activeId) } catch { /* ignore */ }
+    }
+    set({ customs: next, activeId })
+  },
+  reloadCustoms: () => set({ customs: loadCustomPalettes() }),
 }))
