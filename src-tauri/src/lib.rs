@@ -50,6 +50,8 @@ pub fn run() {
             commands::tracks::toggle_solo_safe,
             commands::tracks::toggle_arm,
             commands::tracks::reorder_track,
+            commands::tracks::set_track_name,
+            commands::tracks::set_track_color,
             // Plugins
             commands::plugins::scan_plugins,
             commands::plugins::get_plugins,

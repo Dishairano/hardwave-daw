@@ -202,6 +202,34 @@ pub fn reorder_track(state: State<AppState>, track_id: String, new_index: usize)
 }
 
 #[tauri::command]
+pub fn set_track_name(state: State<AppState>, track_id: String, name: String) {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.name = trimmed.to_string();
+        }
+    }
+}
+
+#[tauri::command]
+pub fn set_track_color(state: State<AppState>, track_id: String, color: String) {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.color = color;
+        }
+    }
+}
+
+#[tauri::command]
 pub fn toggle_solo_safe(state: State<AppState>, track_id: String) {
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();

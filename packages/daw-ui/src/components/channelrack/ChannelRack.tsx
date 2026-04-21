@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { usePatternStore, STEPS_PER_PATTERN } from '../../stores/patternStore'
@@ -7,9 +7,52 @@ import { DetachButton } from '../FloatingWindow'
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
 
+const CHANNEL_COLORS = [
+  '#DC2626', '#EF4444', '#F59E0B', '#EAB308', '#10B981', '#06B6D4',
+  '#3B82F6', '#8B5CF6', '#A855F7', '#EC4899', '#F43F5E', '#64748B',
+]
+
 export function ChannelRack() {
-  const { tracks, selectedTrackId, selectTrack, toggleMute } = useTrackStore()
+  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack } = useTrackStore()
   const channels = tracks.filter(t => t.kind !== 'Master')
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string } | null>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (renamingId && renameInputRef.current) {
+      renameInputRef.current.focus()
+      renameInputRef.current.select()
+    }
+  }, [renamingId])
+
+  useEffect(() => {
+    if (!ctxMenu) return
+    const close = () => setCtxMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('contextmenu', close)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('contextmenu', close)
+    }
+  }, [ctxMenu])
+
+  const startRename = (id: string, currentName: string) => {
+    setRenamingId(id)
+    setRenameValue(currentName)
+  }
+
+  const commitRename = async () => {
+    const id = renamingId
+    const val = renameValue
+    setRenamingId(null)
+    if (id && val.trim()) {
+      await renameTrack(id, val)
+    }
+  }
+
+  const cancelRename = () => setRenamingId(null)
   const activePattern = usePatternStore(s => s.patterns.find(p => p.id === s.activeId) || s.patterns[0])
   const patternCount = usePatternStore(s => s.patterns.length)
   const patternIndex = usePatternStore(s => s.patterns.findIndex(p => p.id === s.activeId))
@@ -199,6 +242,12 @@ export function ChannelRack() {
               {/* 5. Channel name */}
               <div
                 onClick={() => selectTrack(ch.id)}
+                onDoubleClick={(e) => { e.stopPropagation(); startRename(ch.id, ch.name) }}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setCtxMenu({ x: e.clientX, y: e.clientY, trackId: ch.id })
+                }}
                 style={{
                   width: 110, minWidth: 110, display: 'flex', alignItems: 'center',
                   padding: '0 6px', cursor: 'default',
@@ -211,13 +260,32 @@ export function ChannelRack() {
                   width: 3, height: 18, borderRadius: 1,
                   background: ch.color, flexShrink: 0,
                 }} />
-                <span style={{
-                  fontSize: 10, color: selected ? hw.textBright : hw.textPrimary,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  fontWeight: selected ? 600 : 400,
-                }}>
-                  {ch.name}
-                </span>
+                {renamingId === ch.id ? (
+                  <input
+                    ref={renameInputRef}
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+                      if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+                    }}
+                    style={{
+                      flex: 1, minWidth: 0, fontSize: 10,
+                      background: hw.bg, color: hw.textBright,
+                      border: `1px solid ${hw.accent}`, borderRadius: hw.radius.sm,
+                      padding: '0 4px', outline: 'none',
+                    }}
+                  />
+                ) : (
+                  <span style={{
+                    fontSize: 10, color: selected ? hw.textBright : hw.textPrimary,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    fontWeight: selected ? 600 : 400,
+                  }}>
+                    {ch.name}
+                  </span>
+                )}
               </div>
 
               {/* 6. Channel select dot */}
@@ -332,8 +400,100 @@ export function ChannelRack() {
           Add
         </button>
       </div>
+
+      {ctxMenu && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, zIndex: 10000,
+            minWidth: 168,
+            background: 'rgba(12,12,18,0.96)',
+            border: `1px solid ${hw.borderLight}`,
+            borderRadius: hw.radius.md,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+            padding: 4,
+            backdropFilter: hw.blur.md,
+          }}
+        >
+          <MenuItem
+            label="Rename"
+            shortcut="F2"
+            onClick={() => {
+              const id = ctxMenu.trackId
+              const t = channels.find(c => c.id === id)
+              setCtxMenu(null)
+              if (t) startRename(id, t.name)
+            }}
+          />
+          <MenuSep />
+          <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            Color
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 2, padding: '2px 6px 4px' }}>
+            {CHANNEL_COLORS.map(c => (
+              <button
+                key={c}
+                title={c}
+                onClick={async () => {
+                  const id = ctxMenu.trackId
+                  setCtxMenu(null)
+                  await setTrackColor(id, c)
+                }}
+                style={{
+                  width: 18, height: 18, borderRadius: hw.radius.sm,
+                  background: c, border: '1px solid rgba(255,255,255,0.12)',
+                  cursor: 'pointer', padding: 0,
+                }}
+              />
+            ))}
+          </div>
+          <MenuSep />
+          <MenuItem
+            label="Delete"
+            shortcut="Del"
+            danger
+            onClick={async () => {
+              const id = ctxMenu.trackId
+              setCtxMenu(null)
+              await removeTrack(id)
+            }}
+          />
+        </div>
+      )}
     </div>
   )
+}
+
+function MenuItem({ label, shortcut, danger, onClick }: {
+  label: string
+  shortcut?: string
+  danger?: boolean
+  onClick: () => void
+}) {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={onClick}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '5px 8px', border: 'none', background: hover ? hw.accentDim : 'transparent',
+        color: danger ? hw.red : (hover ? hw.textBright : hw.textPrimary),
+        fontSize: 10, cursor: 'pointer', borderRadius: hw.radius.sm, textAlign: 'left',
+      }}
+    >
+      <span>{label}</span>
+      {shortcut && (
+        <span style={{ fontSize: 9, color: hw.textFaint, marginLeft: 12 }}>{shortcut}</span>
+      )}
+    </button>
+  )
+}
+
+function MenuSep() {
+  return <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
 }
 
 function MiniKnob({ value, color, size }: { value: number; color: string; size: number }) {
@@ -362,9 +522,27 @@ function PatternSwitcher() {
   const patterns = usePatternStore(s => s.patterns)
   const activeId = usePatternStore(s => s.activeId)
   const setActive = usePatternStore(s => s.setActive)
+  const renamePattern = usePatternStore(s => s.renamePattern)
   const prev = usePatternStore(s => s.prevPattern)
   const next = usePatternStore(s => s.nextPattern)
   const active = patterns.find(p => p.id === activeId) || patterns[0]
+  const [renaming, setRenaming] = useState(false)
+  const [draft, setDraft] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (renaming && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [renaming])
+
+  const commit = () => {
+    const v = draft.trim()
+    setRenaming(false)
+    if (v && v !== active.name) renamePattern(active.id, v)
+  }
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
       <button onClick={prev} title="Previous pattern" style={{
@@ -372,23 +550,50 @@ function PatternSwitcher() {
       }}>
         ‹
       </button>
-      <select
-        value={active.id}
-        onChange={(e) => setActive(e.target.value)}
-        data-testid="pattern-select"
-        style={{
-          fontSize: 10, color: hw.textPrimary, fontWeight: 600,
-          background: 'rgba(255,255,255,0.04)',
-          border: `1px solid ${hw.border}`,
-          borderRadius: hw.radius.sm,
-          padding: '2px 6px', outline: 'none', appearance: 'none',
-          minWidth: 100, cursor: 'pointer',
-        }}
-      >
-        {patterns.map(p => (
-          <option key={p.id} value={p.id}>{p.name}</option>
-        ))}
-      </select>
+      {renaming ? (
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commit() }
+            if (e.key === 'Escape') { e.preventDefault(); setRenaming(false) }
+          }}
+          style={{
+            fontSize: 10, color: hw.textBright, fontWeight: 600,
+            background: hw.bg,
+            border: `1px solid ${hw.accent}`,
+            borderRadius: hw.radius.sm,
+            padding: '2px 6px', outline: 'none',
+            minWidth: 100,
+          }}
+        />
+      ) : (
+        <select
+          value={active.id}
+          onChange={(e) => setActive(e.target.value)}
+          onDoubleClick={(e) => {
+            e.preventDefault()
+            setDraft(active.name)
+            setRenaming(true)
+          }}
+          title="Double-click to rename"
+          data-testid="pattern-select"
+          style={{
+            fontSize: 10, color: hw.textPrimary, fontWeight: 600,
+            background: 'rgba(255,255,255,0.04)',
+            border: `1px solid ${hw.border}`,
+            borderRadius: hw.radius.sm,
+            padding: '2px 6px', outline: 'none', appearance: 'none',
+            minWidth: 100, cursor: 'pointer',
+          }}
+        >
+          {patterns.map(p => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+      )}
       <button onClick={next} title="Next pattern" style={{
         ...topBtn, width: 16, fontSize: 10, color: hw.textMuted,
       }}>

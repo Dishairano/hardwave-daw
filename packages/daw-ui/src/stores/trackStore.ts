@@ -79,6 +79,8 @@ interface TrackState {
   toggleSolo: (id: string) => Promise<void>
   toggleArm: (id: string) => Promise<void>
   reorderTrack: (id: string, newIndex: number) => Promise<void>
+  renameTrack: (id: string, name: string) => Promise<void>
+  setTrackColor: (id: string, color: string) => Promise<void>
   trackHeights: Record<string, number>
   setTrackHeight: (id: string, height: number) => void
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
@@ -210,6 +212,18 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   reorderTrack: async (id, newIndex) => {
     await mut('reorder_track', { trackId: id, newIndex })
+    await get().fetchTracks()
+  },
+
+  renameTrack: async (id, name) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    await mut('set_track_name', { trackId: id, name: trimmed })
+    await get().fetchTracks()
+  },
+
+  setTrackColor: async (id, color) => {
+    await mut('set_track_color', { trackId: id, color })
     await get().fetchTracks()
   },
 
