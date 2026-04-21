@@ -151,6 +151,7 @@ export function PianoRoll() {
   const [hoverInfo, setHoverInfo] = useState<{ x: number; y: number; label: string } | null>(null)
   const [chordPreview, setChordPreview] = useState<{ rootPitch: number; startTick: number } | null>(null)
   const [noteCtx, setNoteCtx] = useState<{ x: number; y: number; noteIndex: number } | null>(null)
+  const [velFromY, setVelFromY] = useState(false)
   const clipboardRef = useRef<Note[]>([])
   const focusedRef = useRef(false)
   const dragRef = useRef<{
@@ -569,6 +570,12 @@ export function PianoRoll() {
     if (tool === 'draw' && pitch >= 0 && pitch < 128) {
       const snappedTick = Math.max(0, snapTick(tick))
       const drawPitch = snapToScale ? snapPitchToScale(pitch, scaleRoot, scaleType) : pitch
+      let drawVelocity = 0.8
+      if (velFromY) {
+        const pitchY = yFromPitch(drawPitch)
+        const within = Math.max(0, Math.min(1, (my - pitchY) / noteHeight))
+        drawVelocity = Math.max(0.1, Math.min(1, 1 - within * 0.9))
+      }
       try {
         const newIndex = await invoke<number>('add_midi_note', {
           trackId: activeTrackId,
@@ -576,7 +583,7 @@ export function PianoRoll() {
           pitch: drawPitch,
           startTick: snappedTick,
           durationTicks: snap,
-          velocity: 0.8,
+          velocity: drawVelocity,
         })
         useProjectStore.getState().markDirty()
         const draftNote: Note = {
@@ -584,7 +591,7 @@ export function PianoRoll() {
           startTick: snappedTick,
           durationTicks: snap,
           pitch: drawPitch,
-          velocity: 0.8,
+          velocity: drawVelocity,
           muted: false,
         }
         setNotes(prev => [...prev, draftNote])
@@ -603,7 +610,7 @@ export function PianoRoll() {
       setMarquee({ x1: mx, y1: my, x2: mx, y2: my })
       if (!e.shiftKey) setSelectedNotes(new Set())
     }
-  }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes, snapToScale, scaleRoot, scaleType, chordType, chordInversion, customChordSet, noteHeight, ghostMode, ghostNotes])
+  }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes, snapToScale, scaleRoot, scaleType, chordType, chordInversion, customChordSet, noteHeight, ghostMode, ghostNotes, velFromY])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (marqueeRef.current) {
@@ -1430,6 +1437,19 @@ export function PianoRoll() {
           }}
         >
           GHOST{ghostMode === 'track' ? ':T' : ghostMode === 'all' ? ':A' : ''}
+        </button>
+        <button
+          onClick={() => setVelFromY(v => !v)}
+          title="Velocity from vertical click position inside the note row"
+          style={{
+            padding: '1px 6px', fontSize: 9, fontWeight: 600,
+            color: velFromY ? hw.accent : hw.textFaint,
+            background: velFromY ? hw.accentDim : 'rgba(255,255,255,0.04)',
+            border: `1px solid ${velFromY ? hw.accentGlow : hw.border}`,
+            borderRadius: hw.radius.sm,
+          }}
+        >
+          VEL-Y
         </button>
 
         <div style={{ position: 'relative' }}>

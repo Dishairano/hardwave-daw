@@ -144,7 +144,7 @@ interface StripProps {
   onMute?: () => void; onSolo: () => void
 }
 
-function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onMute, onSolo }: StripProps) {
+function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo }: StripProps) {
   const [clipped, setClipped] = useState(false)
   const resetClip = useCallback(() => setClipped(false), [])
   useEffect(() => { if (peakL >= 0 || peakR >= 0) setClipped(true) }, [peakL, peakR])
@@ -174,15 +174,36 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rms
     return () => window.removeEventListener('click', close)
   }, [colorOpen])
 
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
+  useEffect(() => {
+    if (!ctxMenu) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-strip-ctx-menu]')) return
+      setCtxMenu(null)
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [ctxMenu])
+
   const meterColor = (db: number) => db > -3 ? hw.red : db > -12 ? hw.yellow : hw.green
 
   return (
-    <div data-testid={`mixer-strip-${isMaster ? 'master' : name}`} style={{
-      width: 62, minWidth: 62,
-      display: 'flex', flexDirection: 'column',
-      background: 'rgba(255,255,255,0.03)', border: `1px solid ${hw.border}`,
-      borderRadius: hw.radius.lg, flexShrink: 0, overflow: 'hidden',
-    }}>
+    <div
+      data-testid={`mixer-strip-${isMaster ? 'master' : name}`}
+      onContextMenu={e => {
+        if (isMaster) return
+        e.preventDefault()
+        setCtxMenu({ x: e.clientX, y: e.clientY })
+      }}
+      style={{
+        width: 62, minWidth: 62,
+        display: 'flex', flexDirection: 'column',
+        background: 'rgba(255,255,255,0.03)', border: `1px solid ${hw.border}`,
+        borderRadius: hw.radius.lg, flexShrink: 0, overflow: 'hidden',
+        position: 'relative',
+      }}
+    >
       {/* Color bar */}
       <div
         onClick={e => { if (!isMaster && onColorChange) { e.stopPropagation(); setColorOpen(v => !v) } }}
@@ -344,7 +365,68 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rms
           background: soloed ? hw.yellowDim : 'rgba(255,255,255,0.03)',
         }}>S</button>
       </div>
+      {ctxMenu && !isMaster && (
+        <div
+          data-strip-ctx-menu
+          onMouseDown={e => e.stopPropagation()}
+          style={{
+            position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, zIndex: 10000,
+            minWidth: 180, padding: 4,
+            background: 'rgba(12,12,18,0.96)',
+            border: `1px solid ${hw.borderLight}`,
+            borderRadius: hw.radius.md,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+            backdropFilter: hw.blur.md,
+          }}
+        >
+          <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            {name}
+          </div>
+          <StripMenuItem label="Rename" shortcut="F2" onClick={() => { setCtxMenu(null); setEditing(true) }} />
+          <StripMenuItem label="Reset volume (0 dB)" onClick={() => { setCtxMenu(null); onVolume?.(0) }} />
+          <StripMenuItem label="Reset pan (center)" onClick={() => { setCtxMenu(null); onPan(0) }} />
+          <StripMenuItem label={muted ? 'Unmute' : 'Mute'} onClick={() => { setCtxMenu(null); onMute?.() }} />
+          <StripMenuItem label={soloed ? 'Unsolo' : 'Solo'} onClick={() => { setCtxMenu(null); onSolo() }} />
+          <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+          <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            Color
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 2, padding: '2px 6px 6px' }}>
+            {PATTERN_COLORS.map(c => (
+              <button key={c} title={c}
+                onClick={() => { setCtxMenu(null); onColorChange?.(c) }}
+                style={{
+                  width: 18, height: 18, borderRadius: hw.radius.sm,
+                  background: c, border: c === color ? '2px solid #fff' : '1px solid rgba(255,255,255,0.12)',
+                  cursor: 'pointer', padding: 0,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
+  )
+}
+
+function StripMenuItem({ label, shortcut, onClick }: {
+  label: string; shortcut?: string; onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'center',
+        padding: '5px 8px', gap: 8, border: 'none',
+        background: 'transparent', color: hw.textSecondary,
+        fontSize: 11, cursor: 'pointer', borderRadius: hw.radius.sm,
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)' }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+    >
+      <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
+      {shortcut && <span style={{ fontSize: 9, color: hw.textFaint }}>{shortcut}</span>}
+    </button>
   )
 }
 
