@@ -65,6 +65,20 @@ pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> 
 }
 
 #[tauri::command]
+pub fn get_channel_rack_state(state: State<AppState>) -> Option<String> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    project.channel_rack_state.clone()
+}
+
+#[tauri::command]
+pub fn set_channel_rack_state(state: State<AppState>, payload: Option<String>) {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    project.channel_rack_state = payload;
+}
+
+#[tauri::command]
 pub fn get_project_info(state: State<AppState>) -> ProjectInfo {
     let engine = state.engine.lock();
     let project = engine.project.lock();

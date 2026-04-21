@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import { usePatternStore } from './patternStore'
 
 interface ProjectInfo {
   name: string
@@ -49,10 +50,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   newProject: async () => {
     await invoke('new_project')
+    usePatternStore.getState().hydrate(null)
+    await invoke('set_channel_rack_state', { payload: null })
     set({ filePath: null, projectName: 'Untitled', dirty: false })
   },
 
   saveProject: async (path?: string) => {
+    await invoke('set_channel_rack_state', { payload: usePatternStore.getState().serialize() })
     const savePath = path || get().filePath
     if (!savePath) {
       const { save } = await import('@tauri-apps/plugin-dialog')
@@ -73,6 +77,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   loadProject: async (path: string) => {
     await invoke('load_project', { path })
+    const rackState = await invoke<string | null>('get_channel_rack_state')
+    usePatternStore.getState().hydrate(rackState)
     const name = path.split(/[\\/]/).pop()?.replace('.hwp', '') || 'Untitled'
     set({ filePath: path, projectName: name, dirty: false })
     get().pushRecent(path)

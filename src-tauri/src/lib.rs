@@ -60,6 +60,8 @@ pub fn run() {
             commands::project::save_project,
             commands::project::load_project,
             commands::project::get_project_info,
+            commands::project::get_channel_rack_state,
+            commands::project::set_channel_rack_state,
             // Engine
             commands::engine::start_engine,
             commands::engine::stop_engine,

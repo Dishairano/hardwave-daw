@@ -23,6 +23,9 @@ interface PatternState {
 
   setStep: (channelId: string, stepIndex: number, velocity: number) => void
   clearChannel: (channelId: string) => void
+
+  serialize: () => string
+  hydrate: (json: string | null) => void
 }
 
 function emptyPattern(n: number): Pattern {
@@ -110,4 +113,29 @@ export const usePatternStore = create<PatternState>((set, get) => ({
     patterns[idx] = pat
     return { patterns }
   }),
+
+  serialize: () => {
+    const { patterns, activeId } = get()
+    return JSON.stringify({ v: 1, patterns, activeId })
+  },
+
+  hydrate: (json) => {
+    if (!json) {
+      const fresh = emptyPattern(1)
+      set({ patterns: [fresh], activeId: fresh.id })
+      return
+    }
+    try {
+      const parsed = JSON.parse(json)
+      if (parsed && Array.isArray(parsed.patterns) && parsed.patterns.length > 0) {
+        const activeId = typeof parsed.activeId === 'string' && parsed.patterns.some((p: Pattern) => p.id === parsed.activeId)
+          ? parsed.activeId
+          : parsed.patterns[0].id
+        set({ patterns: parsed.patterns, activeId })
+        return
+      }
+    } catch {}
+    const fresh = emptyPattern(1)
+    set({ patterns: [fresh], activeId: fresh.id })
+  },
 }))

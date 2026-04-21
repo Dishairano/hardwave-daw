@@ -19,6 +19,10 @@ pub struct Project {
     pub metadata: ProjectMetadata,
     pub tempo_map: TempoMap,
     pub tracks: Vec<Track>,
+    /// Opaque JSON state for the UI-side channel rack (patterns, per-step velocity, etc).
+    /// Stored as a string so schema changes in the UI don't require project-crate updates.
+    #[serde(default)]
+    pub channel_rack_state: Option<String>,
 }
 
 impl Default for Project {
@@ -34,6 +38,7 @@ impl Default for Project {
             },
             tempo_map: TempoMap::default(),
             tracks: vec![Track::new_master("master".into())],
+            channel_rack_state: None,
         }
     }
 }
