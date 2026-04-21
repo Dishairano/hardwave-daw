@@ -72,7 +72,7 @@ export function Arrangement() {
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
     clipColorOverrides, editCursorTicks, setEditCursor, setClipColor,
   } = useTransportStore()
-  const { markers, addMarker, removeMarker, updateMarker, jumpToNext, jumpToPrev } = useMarkerStore()
+  const { markers, addMarker, addTempoMarker, addTimeSigMarker, removeMarker, updateMarker, jumpToNext, jumpToPrev } = useMarkerStore()
   const clipToGroup = useClipGroupStore(s => s.clipToGroup)
   const groupColors = useClipGroupStore(s => s.groupColors)
   const groupClipsAction = useClipGroupStore(s => s.groupClips)
@@ -327,7 +327,8 @@ export function Arrangement() {
       ctx.fill()
     }
 
-    // Markers on ruler — colored flag + label
+    // Markers on ruler — colored flag + label. Tempo/time-sig markers render as
+    // pill badges rather than flags so they read as metadata, not navigation points.
     for (const m of markers) {
       const mx = m.tick * pixelsPerTick - scrollOffset
       if (mx < -60 || mx > w + 2) continue
@@ -341,23 +342,54 @@ export function Arrangement() {
       ctx.stroke()
       ctx.setLineDash([])
 
-      // Flag on ruler
-      ctx.fillStyle = m.color
-      ctx.beginPath()
-      ctx.moveTo(mx, 1)
-      ctx.lineTo(mx + 10, 1)
-      ctx.lineTo(mx + 10, RULER_HEIGHT - 10)
-      ctx.lineTo(mx + 4, RULER_HEIGHT - 6)
-      ctx.lineTo(mx, RULER_HEIGHT - 10)
-      ctx.closePath()
-      ctx.fill()
-
-      // Label (skip if being renamed inline — we show an input overlay for that case)
-      if (renamingMarker?.id !== m.id) {
-        ctx.fillStyle = '#d4d4d8'
+      const kind = m.kind ?? 'generic'
+      if (kind === 'tempo' || kind === 'timesig') {
+        const text = kind === 'tempo'
+          ? `♩=${m.bpm != null ? (m.bpm % 1 === 0 ? m.bpm.toFixed(0) : m.bpm.toFixed(1)) : '?'}`
+          : `${m.timeSigNum ?? '?'}/${m.timeSigDen ?? '?'}`
         ctx.font = '9px Inter, ui-sans-serif, sans-serif'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(m.label, mx + 13, 8)
+        const padX = 4
+        const textW = ctx.measureText(text).width
+        const pillW = Math.ceil(textW + padX * 2)
+        const pillH = Math.min(RULER_HEIGHT - 3, 14)
+        const pillY = 2
+        ctx.fillStyle = m.color
+        ctx.beginPath()
+        const r = 3
+        ctx.moveTo(mx + r, pillY)
+        ctx.lineTo(mx + pillW - r, pillY)
+        ctx.quadraticCurveTo(mx + pillW, pillY, mx + pillW, pillY + r)
+        ctx.lineTo(mx + pillW, pillY + pillH - r)
+        ctx.quadraticCurveTo(mx + pillW, pillY + pillH, mx + pillW - r, pillY + pillH)
+        ctx.lineTo(mx + r, pillY + pillH)
+        ctx.quadraticCurveTo(mx, pillY + pillH, mx, pillY + pillH - r)
+        ctx.lineTo(mx, pillY + r)
+        ctx.quadraticCurveTo(mx, pillY, mx + r, pillY)
+        ctx.closePath()
+        ctx.fill()
+        if (renamingMarker?.id !== m.id) {
+          ctx.fillStyle = '#0a0a0f'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(text, mx + padX, pillY + pillH / 2 + 0.5)
+        }
+      } else {
+        // Flag on ruler
+        ctx.fillStyle = m.color
+        ctx.beginPath()
+        ctx.moveTo(mx, 1)
+        ctx.lineTo(mx + 10, 1)
+        ctx.lineTo(mx + 10, RULER_HEIGHT - 10)
+        ctx.lineTo(mx + 4, RULER_HEIGHT - 6)
+        ctx.lineTo(mx, RULER_HEIGHT - 10)
+        ctx.closePath()
+        ctx.fill()
+
+        if (renamingMarker?.id !== m.id) {
+          ctx.fillStyle = '#d4d4d8'
+          ctx.font = '9px Inter, ui-sans-serif, sans-serif'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(m.label, mx + 13, 8)
+        }
       }
       ctx.restore()
     }
@@ -1173,33 +1205,85 @@ export function Arrangement() {
               {hit ? hit.label : `Tick ${markerCtx.tick}`}
             </div>
             {!hit && (
-              <MenuItem label="Add marker here" onClick={() => {
-                addMarker(markerCtx.tick)
-                setMarkerCtx(null)
-              }} />
+              <>
+                <MenuItem label="Add marker here" onClick={() => {
+                  addMarker(markerCtx.tick)
+                  setMarkerCtx(null)
+                }} />
+                <MenuItem label="Add tempo change…" onClick={() => {
+                  const raw = window.prompt('Tempo (BPM):', String(bpm))
+                  if (raw == null) { setMarkerCtx(null); return }
+                  const parsed = parseFloat(raw)
+                  if (Number.isFinite(parsed) && parsed > 0) addTempoMarker(markerCtx.tick, parsed)
+                  setMarkerCtx(null)
+                }} />
+                <MenuItem label="Add time signature change…" onClick={() => {
+                  const raw = window.prompt('Time signature (e.g. 4/4, 6/8, 7/8):', '4/4')
+                  if (raw == null) { setMarkerCtx(null); return }
+                  const m = raw.trim().match(/^(\d+)\s*\/\s*(\d+)$/)
+                  if (m) addTimeSigMarker(markerCtx.tick, parseInt(m[1], 10), parseInt(m[2], 10))
+                  setMarkerCtx(null)
+                }} />
+              </>
             )}
             {hit && (
               <>
-                <MenuItem label="Rename" onClick={() => {
-                  setRenamingMarker({ id: hit.id, draft: hit.label })
-                  setMarkerCtx(null)
-                }} />
-                <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
-                <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                  Color
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 2, padding: '2px 6px 4px' }}>
-                  {['#3B82F6', '#10B981', '#F59E0B', '#A855F7', '#EC4899', '#06B6D4'].map(c => (
-                    <button key={c} title={c}
-                      onClick={() => { updateMarker(hit.id, { color: c }); setMarkerCtx(null) }}
-                      style={{
-                        width: 18, height: 18, borderRadius: 3, background: c,
-                        border: hit.color === c ? '2px solid #fff' : '1px solid rgba(255,255,255,0.12)',
-                        cursor: 'pointer', padding: 0,
-                      }}
-                    />
-                  ))}
-                </div>
+                {hit.kind === 'tempo' && (
+                  <MenuItem label="Edit tempo…" onClick={() => {
+                    const raw = window.prompt('Tempo (BPM):', String(hit.bpm ?? bpm))
+                    if (raw == null) { setMarkerCtx(null); return }
+                    const parsed = parseFloat(raw)
+                    if (Number.isFinite(parsed) && parsed > 0) {
+                      const clamped = Math.max(20, Math.min(999, parsed))
+                      updateMarker(hit.id, {
+                        bpm: clamped,
+                        label: `${clamped.toFixed(clamped % 1 === 0 ? 0 : 2)} BPM`,
+                      })
+                    }
+                    setMarkerCtx(null)
+                  }} />
+                )}
+                {hit.kind === 'timesig' && (
+                  <MenuItem label="Edit time signature…" onClick={() => {
+                    const current = `${hit.timeSigNum ?? 4}/${hit.timeSigDen ?? 4}`
+                    const raw = window.prompt('Time signature (e.g. 4/4, 6/8):', current)
+                    if (raw == null) { setMarkerCtx(null); return }
+                    const m = raw.trim().match(/^(\d+)\s*\/\s*(\d+)$/)
+                    if (m) {
+                      const n = Math.max(1, Math.min(32, parseInt(m[1], 10)))
+                      const dRaw = parseInt(m[2], 10)
+                      const d = [1, 2, 4, 8, 16, 32].includes(dRaw) ? dRaw : 4
+                      updateMarker(hit.id, { timeSigNum: n, timeSigDen: d, label: `${n}/${d}` })
+                    }
+                    setMarkerCtx(null)
+                  }} />
+                )}
+                {(!hit.kind || hit.kind === 'generic') && (
+                  <MenuItem label="Rename" onClick={() => {
+                    setRenamingMarker({ id: hit.id, draft: hit.label })
+                    setMarkerCtx(null)
+                  }} />
+                )}
+                {(!hit.kind || hit.kind === 'generic') && (
+                  <>
+                    <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
+                    <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                      Color
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 2, padding: '2px 6px 4px' }}>
+                      {['#3B82F6', '#10B981', '#F59E0B', '#A855F7', '#EC4899', '#06B6D4'].map(c => (
+                        <button key={c} title={c}
+                          onClick={() => { updateMarker(hit.id, { color: c }); setMarkerCtx(null) }}
+                          style={{
+                            width: 18, height: 18, borderRadius: 3, background: c,
+                            border: hit.color === c ? '2px solid #fff' : '1px solid rgba(255,255,255,0.12)',
+                            cursor: 'pointer', padding: 0,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
                 <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
                 <MenuItem label="Delete marker" danger onClick={() => {
                   removeMarker(hit.id)
