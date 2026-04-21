@@ -899,6 +899,98 @@ interface FileInfo {
   channels: number
   sizeBytes: number
   bpm: number | null
+  key: string | null
+}
+
+const PITCH_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'] as const
+
+// Krumhansl-Schmuckler major/minor key profiles.
+const MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+const MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+
+function goertzelMagnitude(samples: Float32Array, start: number, n: number, k: number): number {
+  const w = (2 * Math.PI * k) / n
+  const coeff = 2 * Math.cos(w)
+  let q1 = 0
+  let q2 = 0
+  for (let i = 0; i < n; i++) {
+    const q0 = coeff * q1 - q2 + samples[start + i]
+    q2 = q1
+    q1 = q0
+  }
+  const real = q1 - q2 * Math.cos(w)
+  const imag = q2 * Math.sin(w)
+  return Math.sqrt(real * real + imag * imag)
+}
+
+function pearson(a: number[], b: number[]): number {
+  const n = a.length
+  let sa = 0, sb = 0
+  for (let i = 0; i < n; i++) { sa += a[i]; sb += b[i] }
+  const ma = sa / n, mb = sb / n
+  let num = 0, da = 0, db = 0
+  for (let i = 0; i < n; i++) {
+    const xa = a[i] - ma
+    const xb = b[i] - mb
+    num += xa * xb
+    da += xa * xa
+    db += xb * xb
+  }
+  const denom = Math.sqrt(da * db)
+  return denom === 0 ? 0 : num / denom
+}
+
+// Build a 12-bin chromagram via Goertzel at pitch-class frequencies across
+// octaves 3-6, then correlate against major/minor key profiles at each of
+// the 12 rotations. Returns the best-matching root + mode.
+function estimateKey(buffer: AudioBuffer): string | null {
+  const sr = buffer.sampleRate
+  const ch0 = buffer.getChannelData(0)
+  if (ch0.length < sr) return null
+  const N = 4096
+  const HOP = N
+  const maxSamples = Math.min(ch0.length, sr * 8)
+  const chroma = new Array(12).fill(0) as number[]
+  let frames = 0
+  const A4 = 440
+  const pitchFreqs: number[] = []
+  for (let pc = 0; pc < 12; pc++) {
+    for (let oct = 3; oct <= 6; oct++) {
+      const midi = pc + 12 * (oct + 1)
+      pitchFreqs.push(A4 * Math.pow(2, (midi - 69) / 12))
+    }
+  }
+  const sourceArr = ch0 as Float32Array
+  for (let start = 0; start + N <= maxSamples; start += HOP) {
+    let idx = 0
+    for (let pc = 0; pc < 12; pc++) {
+      let mag = 0
+      for (let oct = 3; oct <= 6; oct++) {
+        const freq = pitchFreqs[idx++]
+        const k = (freq * N) / sr
+        if (k < 2 || k > N / 2 - 1) continue
+        mag += goertzelMagnitude(sourceArr, start, N, k)
+      }
+      chroma[pc] += mag
+    }
+    frames++
+    if (frames > 64) break
+  }
+  if (frames === 0) return null
+  const total = chroma.reduce((a, b) => a + b, 0)
+  if (total === 0) return null
+  for (let i = 0; i < 12; i++) chroma[i] /= total
+  let bestScore = -Infinity
+  let bestLabel: string | null = null
+  for (let root = 0; root < 12; root++) {
+    const rotated = new Array(12).fill(0) as number[]
+    for (let i = 0; i < 12; i++) rotated[i] = chroma[(i + root) % 12]
+    const maj = pearson(rotated, MAJOR_PROFILE)
+    const min = pearson(rotated, MINOR_PROFILE)
+    if (maj > bestScore) { bestScore = maj; bestLabel = `${PITCH_NAMES[root]} maj` }
+    if (min > bestScore) { bestScore = min; bestLabel = `${PITCH_NAMES[root]} min` }
+  }
+  return bestScore > 0.3 ? bestLabel : null
 }
 
 // Onset-envelope autocorrelation BPM estimator.
@@ -995,6 +1087,7 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
           channels: decoded.numberOfChannels,
           sizeBytes: buf.byteLength,
           bpm: estimateBpm(decoded),
+          key: estimateKey(decoded),
         }
         ctx.close().catch(() => {})
         if (!cancelled) {
@@ -1078,6 +1171,11 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
           {info.bpm !== null && (
             <span title="Estimated BPM from onset autocorrelation" style={{ color: hw.accent }}>
               ~{info.bpm} BPM
+            </span>
+          )}
+          {info.key && (
+            <span title="Estimated musical key (chroma vs. Krumhansl-Schmuckler profile)" style={{ color: hw.accent }}>
+              {info.key}
             </span>
           )}
           <span title="File size" style={{ marginLeft: 'auto' }}>{formatBytes(info.sizeBytes)}</span>
