@@ -437,13 +437,41 @@ function useCpuEstimate(): number {
   return pct
 }
 
+const POLY_MAX = 32
+const PPQ = 960
+
+// Active-clip count as a polyphony proxy. Counts clips whose
+// [position_ticks, position_ticks + length_ticks) contains the playhead,
+// across every non-master track.
+function usePolyphonyEstimate(): number {
+  const playing = useTransportStore(s => s.playing)
+  const positionSamples = useTransportStore(s => s.positionSamples)
+  const sampleRate = useTransportStore(s => s.sampleRate)
+  const bpm = useTransportStore(s => s.bpm)
+  const tracks = useTrackStore(s => s.tracks)
+  if (!playing) return 0
+  const sr = sampleRate || 48000
+  const tick = Math.round((positionSamples / sr) * (bpm / 60) * PPQ)
+  let count = 0
+  for (const t of tracks) {
+    if (t.kind === 'Master') continue
+    for (const c of t.clips) {
+      if (tick >= c.position_ticks && tick < c.position_ticks + c.length_ticks) count++
+    }
+  }
+  return count
+}
+
 function CpuPolyMeters({ onEnter, onLeave }: { onEnter: (text: string) => () => void; onLeave: () => void }) {
   const cpu = useCpuEstimate()
+  const poly = usePolyphonyEstimate()
   const cpuColor = cpu > 80 ? hw.red : cpu > 50 ? hw.yellow : hw.green
+  const polyPct = Math.max(2, Math.min(100, Math.round((poly / POLY_MAX) * 100)))
+  const polyColor = poly > POLY_MAX * 0.75 ? hw.red : poly > POLY_MAX * 0.5 ? hw.yellow : hw.green
   return (
     <div
       style={{ display: 'flex', alignItems: 'center', gap: 4 }}
-      onMouseEnter={onEnter(`CPU ${cpu}% / Polyphony`)}
+      onMouseEnter={onEnter(`CPU ${cpu}% · Polyphony ${poly}`)}
       onMouseLeave={onLeave}
     >
       <div
@@ -459,10 +487,17 @@ function CpuPolyMeters({ onEnter, onLeave }: { onEnter: (text: string) => () => 
           }} />
         </div>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-        <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>POLY</span>
+      <div
+        data-testid="toolbar-poly"
+        title={`${poly} active clip${poly === 1 ? '' : 's'} at playhead`}
+        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}
+      >
+        <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>POLY {poly}</span>
         <div style={{ width: 30, height: 4, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
-          <div style={{ width: '5%', height: '100%', background: hw.green, borderRadius: hw.radius.sm }} />
+          <div style={{
+            width: `${polyPct}%`, height: '100%', background: polyColor,
+            borderRadius: hw.radius.sm, transition: 'width 0.2s, background 0.3s',
+          }} />
         </div>
       </div>
     </div>
