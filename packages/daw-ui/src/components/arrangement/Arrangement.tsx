@@ -59,12 +59,13 @@ export function Arrangement() {
   const {
     tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
     moveClip, resizeClip, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
+    toggleClipReverse, setClipGain, setClipPitch, setClipStretch,
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const {
     positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
-    clipColorOverrides, editCursorTicks, setEditCursor,
+    clipColorOverrides, editCursorTicks, setEditCursor, setClipColor,
   } = useTransportStore()
 
   const audioTracks = tracks.filter(t => t.kind !== 'Master')
@@ -835,17 +836,25 @@ export function Arrangement() {
           />
         )
       })()}
-      {contextMenu && (
+      {contextMenu && (() => {
+        const menuTrack = tracks.find(t => t.id === contextMenu.trackId)
+        const menuClip = menuTrack?.clips.find(c => c.id === contextMenu.clipId)
+        return (
         <div
           data-testid="clip-context-menu"
           onMouseLeave={() => setContextMenu(null)}
           style={{
             position: 'fixed', left: contextMenu.x, top: contextMenu.y,
             background: '#12121a', border: `1px solid ${hw.border}`,
-            borderRadius: 6, padding: 4, minWidth: 160, zIndex: 1000,
+            borderRadius: 6, padding: 4, minWidth: 200, zIndex: 1000,
             boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
           }}
         >
+          {menuClip && (
+            <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+              {menuClip.name}
+            </div>
+          )}
           <MenuItem label="Duplicate (Ctrl+D)" onClick={async () => {
             await duplicateClip(contextMenu.trackId, contextMenu.clipId)
             setContextMenu(null)
@@ -856,12 +865,58 @@ export function Arrangement() {
             try { await splitClip(contextMenu.trackId, contextMenu.clipId, atTicks) } catch {}
             setContextMenu(null)
           }} />
+          <MenuItem label={menuClip?.reversed ? 'Un-reverse' : 'Reverse audio'} onClick={async () => {
+            await toggleClipReverse(contextMenu.trackId, contextMenu.clipId)
+            setContextMenu(null)
+          }} />
+          <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
+          <MenuItem label="Reset gain (0 dB)" onClick={async () => {
+            await setClipGain(contextMenu.trackId, contextMenu.clipId, 0)
+            setContextMenu(null)
+          }} />
+          <MenuItem label="Reset fades" onClick={async () => {
+            await setClipFades(contextMenu.trackId, contextMenu.clipId, 0, 0)
+            setContextMenu(null)
+          }} />
+          <MenuItem label="Reset pitch (0 st)" onClick={async () => {
+            await setClipPitch(contextMenu.trackId, contextMenu.clipId, 0)
+            setContextMenu(null)
+          }} />
+          <MenuItem label="Reset stretch (1.00×)" onClick={async () => {
+            await setClipStretch(contextMenu.trackId, contextMenu.clipId, 1)
+            setContextMenu(null)
+          }} />
+          <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
+          <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            Color
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 2, padding: '2px 6px 4px' }}>
+            {CLIP_COLORS.map(c => {
+              const active = clipColorOverrides[contextMenu.clipId] === c
+              return (
+                <button key={c} title={c}
+                  onClick={() => { setClipColor(contextMenu.clipId, c); setContextMenu(null) }}
+                  style={{
+                    width: 18, height: 18, borderRadius: 3, background: c,
+                    border: active ? '2px solid #fff' : '1px solid rgba(255,255,255,0.12)',
+                    cursor: 'pointer', padding: 0,
+                  }}
+                />
+              )
+            })}
+          </div>
+          <MenuItem label="Clear color override" onClick={() => {
+            setClipColor(contextMenu.clipId, null)
+            setContextMenu(null)
+          }} />
+          <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
           <MenuItem label="Delete" danger onClick={async () => {
             await deleteClip(contextMenu.trackId, contextMenu.clipId)
             setContextMenu(null)
           }} />
         </div>
-      )}
+        )
+      })()}
       {looping && loopEnd > loopStart && (
         <div
           data-testid="loop-region-overlay"
