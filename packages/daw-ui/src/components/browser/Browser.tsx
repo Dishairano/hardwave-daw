@@ -722,11 +722,10 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
 
   return (
     <div
-      draggable={isFavorite}
+      draggable
       onDragStart={(e) => {
-        if (!isFavorite) return
         e.dataTransfer.setData('application/x-hw-browser', `file:${path}`)
-        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.effectAllowed = isFavorite ? 'copyMove' : 'copy'
       }}
       onContextMenu={(e) => {
         e.preventDefault()
@@ -736,7 +735,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
         padding: `3px 8px 3px ${16 + depth * 12}px`,
         display: 'flex', alignItems: 'center', gap: 4,
         transition: 'background 0.15s',
-        cursor: isFavorite ? 'grab' : 'default',
+        cursor: 'grab',
         position: 'relative',
       }}
       onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}

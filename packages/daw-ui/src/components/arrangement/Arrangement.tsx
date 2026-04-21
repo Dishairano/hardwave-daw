@@ -780,6 +780,59 @@ export function Arrangement() {
     }
   }, [hitTest, getScrollOffset, selectClip, selectedClipIds, markers, pixelsPerTick, applySnap])
 
+  const handleBrowserDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('application/x-hw-browser')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setDropHighlight(true)
+  }, [])
+
+  const handleBrowserDragLeave = useCallback((e: React.DragEvent) => {
+    const rt = e.relatedTarget as Node | null
+    if (rt && containerRef.current?.contains(rt)) return
+    setDropHighlight(false)
+  }, [])
+
+  const handleBrowserDrop = useCallback(async (e: React.DragEvent) => {
+    const data = e.dataTransfer.getData('application/x-hw-browser')
+    if (!data.startsWith('file:')) return
+    e.preventDefault()
+    setDropHighlight(false)
+    const path = data.slice('file:'.length)
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const mouseX = e.clientX - rect.left
+    const mouseY = e.clientY - rect.top
+    const scrollOffset = getScrollOffset()
+
+    const state = useTrackStore.getState()
+    const audio = state.tracks.filter(t => t.kind === 'Audio')
+    const idx = Math.max(0, Math.floor((mouseY - RULER_HEIGHT) / trackHeight))
+    const dropped = audioTracks[idx]
+    let trackId: string | null = null
+    if (dropped && dropped.kind === 'Audio') {
+      trackId = dropped.id
+    } else if (audio.length > 0) {
+      const sel = state.selectedTrackId
+      trackId = sel && audio.some(t => t.id === sel) ? sel : audio[0].id
+    } else {
+      await state.addAudioTrack()
+      trackId = useTrackStore.getState().tracks.find(t => t.kind === 'Audio')?.id ?? null
+    }
+    if (!trackId) return
+
+    const rawTicks = Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick))
+    const positionTicks = applySnap(rawTicks)
+
+    try {
+      await useTrackStore.getState().importAudioFile(trackId, path, positionTicks)
+      const { useBrowserStore } = await import('../../stores/browserStore')
+      useBrowserStore.getState().pushFileRecent(path)
+    } catch (err) {
+      console.error('browser drop import failed:', path, err)
+    }
+  }, [audioTracks, pixelsPerTick, trackHeight, getScrollOffset, applySnap])
+
   const handleWheel = useCallback((e: React.WheelEvent) => {
     // Ctrl+Shift+Wheel: vertical zoom (change track height)
     if (e.ctrlKey && e.shiftKey) {
@@ -901,6 +954,9 @@ export function Arrangement() {
   return (
     <div
       ref={containerRef}
+      onDragOver={handleBrowserDragOver}
+      onDragLeave={handleBrowserDragLeave}
+      onDrop={handleBrowserDrop}
       style={{
         flex: 1,
         position: 'relative',
