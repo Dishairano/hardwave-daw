@@ -1,13 +1,15 @@
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { useMeterStore, DEFAULT_TRACK_METER } from '../../stores/meterStore'
+import { PATTERN_COLORS } from '../../stores/patternStore'
 import { DetachButton } from '../FloatingWindow'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 
 export function MixerPanel() {
-  const { tracks, setVolume, setPan, toggleMute, toggleSolo } = useTrackStore()
+  const { tracks, setVolume, setPan, toggleMute, toggleSolo, renameTrack, setTrackColor } = useTrackStore()
   const { master, tracks: trackMeters, startListening } = useMeterStore()
   useEffect(() => { startListening() }, [])
+  const [clipResetNonce, setClipResetNonce] = useState(0)
 
   const allTracks = tracks.filter(t => t.kind !== 'Master')
   const masterTrack = tracks.find(t => t.kind === 'Master')
@@ -19,6 +21,16 @@ export function MixerPanel() {
         display: 'flex', alignItems: 'center', padding: '0 4px 0 8px', gap: 4,
       }}>
         <span style={{ flex: 1, fontSize: 10, fontWeight: 600, color: hw.textMuted }}>Mixer</span>
+        <button
+          data-testid="mixer-reset-meters"
+          onClick={() => setClipResetNonce(n => n + 1)}
+          title="Reset all clip indicators"
+          style={{
+            height: 16, padding: '0 6px', fontSize: 8, fontWeight: 600,
+            color: hw.textMuted, background: 'rgba(255,255,255,0.04)',
+            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, cursor: 'pointer',
+          }}
+        >RESET</button>
         <DetachButton panelId="mixer" />
       </div>
 
@@ -38,6 +50,9 @@ export function MixerPanel() {
               volumeDb={track.volume_db} pan={track.pan}
               muted={track.muted} soloed={track.soloed}
               peakL={meter.peakL} peakR={meter.peakR} rmsDb={meter.rms}
+              clipResetNonce={clipResetNonce}
+              onRename={name => renameTrack(track.id, name)}
+              onColorChange={color => setTrackColor(track.id, color)}
               onVolume={db => setVolume(track.id, db)}
               onPan={p => setPan(track.id, p)}
               onMute={() => toggleMute(track.id)}
@@ -55,6 +70,7 @@ export function MixerPanel() {
           peakL={master.peak_db} peakR={master.peak_db}
           rmsDb={master.rms_db}
           peakHoldDb={master.peak_hold_db}
+          clipResetNonce={clipResetNonce}
           isMaster
           onVolume={masterTrack ? db => setVolume(masterTrack.id, db) : undefined}
           onPan={() => {}} onMute={masterTrack ? () => toggleMute(masterTrack.id) : undefined}
@@ -120,15 +136,43 @@ interface StripProps {
   volumeDb: number; pan: number; muted: boolean; soloed: boolean
   peakL: number; peakR: number; rmsDb: number
   peakHoldDb?: number
+  clipResetNonce?: number
   isMaster?: boolean
+  onRename?: (name: string) => void
+  onColorChange?: (color: string) => void
   onVolume?: (db: number) => void; onPan: (p: number) => void
   onMute?: () => void; onSolo: () => void
 }
 
-function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rmsDb, peakHoldDb, isMaster, onVolume, onMute, onSolo }: StripProps) {
+function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onMute, onSolo }: StripProps) {
   const [clipped, setClipped] = useState(false)
   const resetClip = useCallback(() => setClipped(false), [])
   useEffect(() => { if (peakL >= 0 || peakR >= 0) setClipped(true) }, [peakL, peakR])
+  useEffect(() => { setClipped(false) }, [clipResetNonce])
+
+  const [editing, setEditing] = useState(false)
+  const [draftName, setDraftName] = useState(name)
+  useEffect(() => { setDraftName(name) }, [name])
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { if (editing) inputRef.current?.select() }, [editing])
+  const commitName = () => {
+    const trimmed = draftName.trim()
+    if (trimmed && trimmed !== name) onRename?.(trimmed)
+    else setDraftName(name)
+    setEditing(false)
+  }
+
+  const [colorOpen, setColorOpen] = useState(false)
+  useEffect(() => {
+    if (!colorOpen) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-color-popover]')) return
+      setColorOpen(false)
+    }
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [colorOpen])
 
   const meterColor = (db: number) => db > -3 ? hw.red : db > -12 ? hw.yellow : hw.green
 
@@ -140,15 +184,65 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rms
       borderRadius: hw.radius.lg, flexShrink: 0, overflow: 'hidden',
     }}>
       {/* Color bar */}
-      <div style={{ height: 2, background: color }} />
+      <div
+        onClick={e => { if (!isMaster && onColorChange) { e.stopPropagation(); setColorOpen(v => !v) } }}
+        title={!isMaster && onColorChange ? 'Click to change track color' : undefined}
+        style={{
+          height: 4, background: color, cursor: !isMaster && onColorChange ? 'pointer' : 'default',
+          position: 'relative',
+        }}
+      >
+        {colorOpen && !isMaster && (
+          <div data-color-popover style={{
+            position: 'absolute', top: 6, left: 0, zIndex: 20,
+            display: 'grid', gridTemplateColumns: 'repeat(4, 14px)', gap: 2, padding: 4,
+            background: '#111', border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+          }}>
+            {PATTERN_COLORS.map(c => (
+              <button key={c} onClick={() => { onColorChange?.(c); setColorOpen(false) }}
+                style={{
+                  width: 14, height: 14, background: c, border: c === color ? '2px solid #fff' : '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 3, padding: 0, cursor: 'pointer',
+                }}
+                title={c}
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Header */}
       <div style={{ padding: '3px 3px 2px', textAlign: 'center', borderBottom: `1px solid ${hw.border}` }}>
         <div style={{ fontSize: 8, color: hw.textFaint }}>{isMaster ? 'M' : number}</div>
-        <div style={{
-          fontSize: 9, fontWeight: 500, color: hw.textPrimary,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{name}</div>
+        {editing && !isMaster ? (
+          <input
+            ref={inputRef}
+            value={draftName}
+            onChange={e => setDraftName(e.target.value)}
+            onBlur={commitName}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commitName()
+              else if (e.key === 'Escape') { setDraftName(name); setEditing(false) }
+            }}
+            style={{
+              width: '100%', fontSize: 9, fontWeight: 500, textAlign: 'center',
+              color: hw.textPrimary, background: 'rgba(255,255,255,0.08)',
+              border: `1px solid ${hw.accent}`, borderRadius: 2, padding: '1px 2px',
+              outline: 'none', boxSizing: 'border-box',
+            }}
+          />
+        ) : (
+          <div
+            onDoubleClick={() => { if (!isMaster && onRename) setEditing(true) }}
+            title={!isMaster && onRename ? 'Double-click to rename' : undefined}
+            style={{
+              fontSize: 9, fontWeight: 500, color: hw.textPrimary,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              cursor: !isMaster && onRename ? 'text' : 'default',
+            }}
+          >{name}</div>
+        )}
       </div>
 
       {/* FX slots */}
