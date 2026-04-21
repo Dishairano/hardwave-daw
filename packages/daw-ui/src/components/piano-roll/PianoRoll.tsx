@@ -75,7 +75,10 @@ const CHORD_TYPES: Record<string, { name: string; intervals: number[] }> = {
   min9:     { name: 'Min 9',       intervals: [0, 3, 7, 10, 14] },
   maj9:     { name: 'Maj 9',       intervals: [0, 4, 7, 11, 14] },
   power:    { name: 'Power (5)',   intervals: [0, 7] },
+  custom:   { name: 'Custom…',     intervals: [0, 4, 7] },
 }
+
+const INTERVAL_LABELS = ['R', 'b2', '2', 'b3', '3', '4', 'b5', '5', 'b6', '6', 'b7', '7']
 
 function applyInversion(intervals: number[], inv: number): number[] {
   if (inv <= 0 || intervals.length < 2) return intervals
@@ -139,6 +142,7 @@ export function PianoRoll() {
   const [tool, setTool] = useState<'draw' | 'select' | 'erase' | 'chord'>('draw')
   const [chordType, setChordType] = useState<keyof typeof CHORD_TYPES>('maj')
   const [chordInversion, setChordInversion] = useState<number>(0)
+  const [customChordSet, setCustomChordSet] = useState<Set<number>>(new Set([0, 4, 7]))
   const [scaleRoot, setScaleRoot] = useState<number>(0)
   const [scaleType, setScaleType] = useState<keyof typeof SCALE_TYPES>('chromatic')
   const [snapToScale, setSnapToScale] = useState(false)
@@ -489,7 +493,10 @@ export function PianoRoll() {
       const rootPitch = snapToScale && scaleType !== 'chromatic'
         ? snapPitchToScale(pitch, scaleRoot, scaleType)
         : pitch
-      const intervals = applyInversion(CHORD_TYPES[chordType].intervals, chordInversion)
+      const baseIntervals = chordType === 'custom'
+        ? Array.from(customChordSet).sort((a, b) => a - b)
+        : CHORD_TYPES[chordType].intervals
+      const intervals = applyInversion(baseIntervals.length > 0 ? baseIntervals : [0], chordInversion)
       const newIndices: number[] = []
       try {
         for (const iv of intervals) {
@@ -549,7 +556,7 @@ export function PianoRoll() {
       setMarquee({ x1: mx, y1: my, x2: mx, y2: my })
       if (!e.shiftKey) setSelectedNotes(new Set())
     }
-  }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes, snapToScale, scaleRoot, scaleType, chordType, chordInversion, noteHeight])
+  }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes, snapToScale, scaleRoot, scaleType, chordType, chordInversion, customChordSet, noteHeight])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (marqueeRef.current) {
@@ -1169,6 +1176,34 @@ export function PianoRoll() {
               <option value={2}>2nd inv</option>
               <option value={3}>3rd inv</option>
             </select>
+            {chordType === 'custom' && (
+              <div style={{ display: 'flex', gap: 1, padding: '0 2px' }} title="Select intervals (semitones) to stamp">
+                {INTERVAL_LABELS.map((label, iv) => {
+                  const on = customChordSet.has(iv)
+                  return (
+                    <button
+                      key={iv}
+                      onClick={() => setCustomChordSet(prev => {
+                        const next = new Set(prev)
+                        if (next.has(iv)) next.delete(iv); else next.add(iv)
+                        if (next.size === 0) next.add(0)
+                        return next
+                      })}
+                      title={`${label} (${iv} st)`}
+                      style={{
+                        width: 16, height: 14, fontSize: 8, fontWeight: 600,
+                        color: on ? hw.textBright : hw.textFaint,
+                        background: on ? hw.accentDim : 'rgba(255,255,255,0.04)',
+                        border: `1px solid ${on ? hw.accentGlow : hw.border}`,
+                        borderRadius: 2, padding: 0, cursor: 'pointer',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </>
         )}
 
