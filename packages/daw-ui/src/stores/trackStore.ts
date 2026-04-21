@@ -105,6 +105,7 @@ interface TrackState {
   toggleClipReverse: (trackId: string, clipId: string) => Promise<void>
   setClipPitch: (trackId: string, clipId: string, pitchSemitones: number) => Promise<void>
   setClipStretch: (trackId: string, clipId: string, stretchRatio: number) => Promise<void>
+  autoCrossfadeOverlaps: (trackId?: string) => Promise<number>
   undo: () => Promise<boolean>
   redo: () => Promise<boolean>
   getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<[number, number][]>
@@ -387,6 +388,40 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   setClipStretch: async (trackId, clipId, stretchRatio) => {
     await mut('set_clip_stretch', { trackId, clipId, stretchRatio }, `Set clip stretch ${stretchRatio.toFixed(2)}×`)
     await get().fetchTracks()
+  },
+
+  autoCrossfadeOverlaps: async (trackId) => {
+    const { tracks } = get()
+    const targets = trackId ? tracks.filter(t => t.id === trackId) : tracks
+    let pairs = 0
+    let firstLabel = true
+    for (const track of targets) {
+      if (track.kind === 'Master') continue
+      const clips = [...track.clips].sort((a, b) => a.position_ticks - b.position_ticks)
+      for (let j = 1; j < clips.length; j++) {
+        const prev = clips[j - 1]
+        const cur = clips[j]
+        const prevEnd = prev.position_ticks + prev.length_ticks
+        if (cur.position_ticks < prevEnd) {
+          const overlap = prevEnd - cur.position_ticks
+          const fadeOut = Math.min(overlap, prev.length_ticks)
+          const fadeIn = Math.min(overlap, cur.length_ticks)
+          await mut(
+            'set_clip_fades',
+            { trackId: track.id, clipId: prev.id, fadeInTicks: prev.fadeInTicks, fadeOutTicks: fadeOut },
+            firstLabel ? 'Auto-crossfade overlaps' : undefined,
+          )
+          firstLabel = false
+          await mut(
+            'set_clip_fades',
+            { trackId: track.id, clipId: cur.id, fadeInTicks: fadeIn, fadeOutTicks: cur.fadeOutTicks },
+          )
+          pairs++
+        }
+      }
+    }
+    if (pairs > 0) await get().fetchTracks()
+    return pairs
   },
 
   undo: async () => {

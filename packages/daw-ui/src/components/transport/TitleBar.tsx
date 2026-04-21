@@ -53,6 +53,7 @@ interface TitleBarProps {
   onOpenHistory: () => void
   onExportAudio: () => void
   onSaveAsTemplate: () => void
+  onAutoCrossfade: () => void
   recentProjects: string[]
   onOpenRecentProject: (path: string) => void
   onClearRecentProjects: () => void
@@ -72,7 +73,7 @@ export function TitleBar(props: TitleBarProps) {
     onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
     onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
     onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onOpenHistory, onExportAudio,
-    onSaveAsTemplate,
+    onSaveAsTemplate, onAutoCrossfade,
     recentProjects, onOpenRecentProject, onClearRecentProjects,
     showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
   } = props
@@ -140,6 +141,8 @@ export function TitleBar(props: TitleBarProps) {
         { label: 'Duplicate', shortcut: 'Ctrl+D', action: onDuplicate },
         { separator: true, label: '' },
         { label: 'Select all', shortcut: 'Ctrl+A', action: onSelectAll },
+        { separator: true, label: '' },
+        { label: 'Auto-crossfade overlaps', action: onAutoCrossfade },
       ],
     },
     {

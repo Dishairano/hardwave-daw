@@ -36,6 +36,7 @@ import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
 import { useProjectStore } from './stores/projectStore'
 import { useShortcutsStore } from './stores/shortcutsStore'
+import { useNotificationStore } from './stores/notificationStore'
 import { applyCustomBg, useThemeStore } from './stores/themeStore'
 import { hw } from './theme'
 
@@ -608,6 +609,12 @@ export function App() {
         onOpenHistory={() => setShowHistory(true)}
         onExportAudio={handleExportAudio}
         onSaveAsTemplate={handleSaveAsTemplate}
+        onAutoCrossfade={async () => {
+          const pairs = await useTrackStore.getState().autoCrossfadeOverlaps()
+          const notify = useNotificationStore.getState().push
+          if (pairs === 0) notify('info', 'No overlapping clips found')
+          else notify('info', `Auto-crossfaded ${pairs} overlap${pairs === 1 ? '' : 's'}`)
+        }}
         recentProjects={recentProjects}
         onOpenRecentProject={handleOpenRecent}
         onClearRecentProjects={() => useProjectStore.getState().clearRecent()}
