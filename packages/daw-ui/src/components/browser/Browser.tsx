@@ -638,6 +638,29 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, onToggleFavorite,
 }) {
   const name = path.split(/[\\/]/).pop() || path
   const dir = path.slice(0, path.length - name.length).replace(/[\\/]+$/, '')
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    if (!ctxMenu) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-file-ctx-menu]')) return
+      setCtxMenu(null)
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [ctxMenu])
+
+  const copyPath = async () => {
+    setCtxMenu(null)
+    try { await navigator.clipboard.writeText(path) } catch { /* ignore */ }
+  }
+
+  const copyFilename = async () => {
+    setCtxMenu(null)
+    try { await navigator.clipboard.writeText(name) } catch { /* ignore */ }
+  }
+
   return (
     <div
       draggable={isFavorite}
@@ -646,11 +669,16 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, onToggleFavorite,
         e.dataTransfer.setData('application/x-hw-browser', `file:${path}`)
         e.dataTransfer.effectAllowed = 'move'
       }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        setCtxMenu({ x: e.clientX, y: e.clientY })
+      }}
       style={{
         padding: `3px 8px 3px ${16 + depth * 12}px`,
         display: 'flex', alignItems: 'center', gap: 4,
         transition: 'background 0.15s',
         cursor: isFavorite ? 'grab' : 'default',
+        position: 'relative',
       }}
       onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
@@ -707,7 +735,57 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, onToggleFavorite,
       >
         ×
       </button>
+      {ctxMenu && (
+        <div
+          data-file-ctx-menu
+          onMouseDown={e => e.stopPropagation()}
+          style={{
+            position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, zIndex: 10000,
+            minWidth: 200, padding: 4,
+            background: 'rgba(12,12,18,0.96)',
+            border: `1px solid ${hw.borderLight}`,
+            borderRadius: hw.radius.md,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+            backdropFilter: hw.blur.md,
+          }}
+        >
+          <div style={{
+            padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint,
+            letterSpacing: 0.5, textTransform: 'uppercase',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {name}
+          </div>
+          <FileMenuItem label={isPreviewing ? 'Stop preview' : 'Preview'} onClick={() => { setCtxMenu(null); onPreview() }} />
+          <FileMenuItem label="Import to selected track" onClick={() => { setCtxMenu(null); onImport() }} />
+          <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+          <FileMenuItem label={isFavorite ? 'Remove favorite' : 'Add to favorites'} onClick={() => { setCtxMenu(null); onToggleFavorite() }} />
+          <FileMenuItem label="Copy full path" onClick={copyPath} />
+          <FileMenuItem label="Copy filename" onClick={copyFilename} />
+          <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+          <FileMenuItem label="Remove from list" danger onClick={() => { setCtxMenu(null); onRemove() }} />
+        </div>
+      )}
     </div>
+  )
+}
+
+function FileMenuItem({ label, danger, onClick }: { label: string; danger?: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'center',
+        padding: '5px 8px', gap: 8, border: 'none',
+        background: 'transparent', color: danger ? hw.red : hw.textSecondary,
+        fontSize: 11, cursor: 'pointer', borderRadius: hw.radius.sm,
+        textAlign: 'left',
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)' }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+    >
+      {label}
+    </button>
   )
 }
 

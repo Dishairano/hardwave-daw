@@ -161,6 +161,17 @@ export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () =
             }}
           />
           <button
+            onClick={() => printShortcuts(filtered)}
+            title="Open a printable cheat sheet in a new window"
+            style={{
+              padding: '3px 10px', fontSize: 10, fontWeight: 600,
+              color: hw.textMuted, background: 'rgba(255,255,255,0.04)',
+              border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, cursor: 'pointer',
+            }}
+          >
+            Print
+          </button>
+          <button
             onClick={onClose}
             style={{
               padding: '3px 10px', fontSize: 10, fontWeight: 600,
@@ -208,4 +219,43 @@ export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () =
       </div>
     </div>
   )
+}
+
+function printShortcuts(cats: Category[]) {
+  const win = window.open('', '_blank', 'width=720,height=900')
+  if (!win) return
+  const rows = cats
+    .map(c => {
+      const items = c.items
+        .map(it => `<tr><td class="k">${escapeHtml(it.keys)}</td><td>${escapeHtml(it.label)}</td></tr>`)
+        .join('')
+      return `<h2>${escapeHtml(c.name)}</h2><table>${items}</table>`
+    })
+    .join('')
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>Hardwave DAW — Keyboard Shortcuts</title>
+<style>
+body{font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:#111;padding:24px;max-width:720px;margin:0 auto}
+h1{font-size:18px;margin:0 0 4px}
+.sub{color:#666;font-size:11px;margin-bottom:18px}
+h2{font-size:13px;margin:18px 0 6px;padding-bottom:2px;border-bottom:1px solid #ccc;text-transform:uppercase;letter-spacing:0.05em;color:#333}
+table{width:100%;border-collapse:collapse;margin-bottom:10px}
+td{padding:3px 6px;border-bottom:1px solid #eee;vertical-align:top}
+td.k{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#b91c1c;width:220px}
+@media print{body{padding:12px}h2{page-break-after:avoid}table{page-break-inside:auto}tr{page-break-inside:avoid}}
+</style></head><body>
+<h1>Hardwave DAW — Keyboard shortcuts</h1>
+<div class="sub">Generated from the in-app shortcuts panel.</div>
+${rows}
+</body></html>`)
+  win.document.close()
+  win.focus()
+  setTimeout(() => {
+    try { win.print() } catch { /* ignore popup blocker quirks */ }
+  }, 150)
+}
+
+function escapeHtml(s: string) {
+  return s.replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch] as string))
 }
