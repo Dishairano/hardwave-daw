@@ -4,6 +4,7 @@ import { useTrackStore, ClipInfo } from '../../stores/trackStore'
 import { useTransportStore, snapToTicks } from '../../stores/transportStore'
 import { useMarkerStore } from '../../stores/markerStore'
 import { useClipGroupStore } from '../../stores/clipGroupStore'
+import { useTrackFolderStore } from '../../stores/trackFolderStore'
 import { hw } from '../../theme'
 
 const PPQ = 960
@@ -79,7 +80,10 @@ export function Arrangement() {
   const groupClipsAction = useClipGroupStore(s => s.groupClips)
   const ungroupClipAction = useClipGroupStore(s => s.ungroupClip)
 
-  const audioTracks = tracks.filter(t => t.kind !== 'Master')
+  const folders = useTrackFolderStore(s => s.folders)
+  const hiddenTrackIds = new Set<string>()
+  for (const f of folders) if (f.collapsed) for (const tid of f.trackIds) hiddenTrackIds.add(tid)
+  const audioTracks = tracks.filter(t => t.kind !== 'Master' && !hiddenTrackIds.has(t.id))
   const PIXELS_PER_SECOND = PIXELS_PER_SECOND_BASE * horizontalZoom
   const beatsPerSecond = bpm / 60
   const pixelsPerBeat = PIXELS_PER_SECOND / beatsPerSecond

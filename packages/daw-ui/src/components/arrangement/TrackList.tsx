@@ -4,6 +4,7 @@ import { useTrackStore } from '../../stores/trackStore'
 import { useTransportStore } from '../../stores/transportStore'
 import { PATTERN_COLORS } from '../../stores/patternStore'
 import { useTrackTemplateStore } from '../../stores/trackTemplateStore'
+import { useTrackFolderStore, type TrackFolder } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { DetachButton } from '../FloatingWindow'
 
@@ -16,6 +17,27 @@ export function TrackList() {
   } = useTrackStore()
   const defaultHeight = useTransportStore(s => s.trackHeight)
   const audioTracks = tracks.filter(t => t.kind !== 'Master')
+  const folders = useTrackFolderStore(s => s.folders)
+  const toggleCollapsed = useTrackFolderStore(s => s.toggleCollapsed)
+  const createFolder = useTrackFolderStore(s => s.createFolder)
+  const deleteFolder = useTrackFolderStore(s => s.deleteFolder)
+  const renameFolder = useTrackFolderStore(s => s.renameFolder)
+  const setFolderColor = useTrackFolderStore(s => s.setFolderColor)
+  const addTrackToFolder = useTrackFolderStore(s => s.addTrackToFolder)
+  const removeTrackFromFolder = useTrackFolderStore(s => s.removeTrackFromFolder)
+
+  const folderByTrack = new Map<string, TrackFolder>()
+  for (const f of folders) for (const tid of f.trackIds) folderByTrack.set(tid, f)
+  const shownSeqFolderIds = new Set<string>()
+  const rows: Array<{ kind: 'folderHeader'; folder: TrackFolder } | { kind: 'track'; trackIdx: number }> = []
+  audioTracks.forEach((t, trackIdx) => {
+    const f = folderByTrack.get(t.id)
+    if (f && !shownSeqFolderIds.has(f.id)) {
+      rows.push({ kind: 'folderHeader', folder: f })
+      shownSeqFolderIds.add(f.id)
+    }
+    if (!f || !f.collapsed) rows.push({ kind: 'track', trackIdx })
+  })
 
   const [dragId, setDragId] = useState<string | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
@@ -99,7 +121,55 @@ export function TrackList() {
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {audioTracks.map((track, idx) => {
+        {rows.map((row, rowKey) => {
+          if (row.kind === 'folderHeader') {
+            const f = row.folder
+            return (
+              <div
+                key={`fld_${f.id}`}
+                onClick={() => toggleCollapsed(f.id)}
+                onDoubleClick={e => {
+                  e.stopPropagation()
+                  const next = window.prompt('Folder name:', f.name)?.trim()
+                  if (next) renameFolder(f.id, next)
+                }}
+                onContextMenu={e => {
+                  e.preventDefault()
+                  const next = window.prompt(
+                    `Folder "${f.name}" — enter new name, a 6-digit hex color (e.g. #A855F7), or leave blank to delete the folder:`,
+                    f.name,
+                  )
+                  if (next == null) return
+                  const trimmed = next.trim()
+                  if (trimmed === '') { deleteFolder(f.id); return }
+                  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) { setFolderColor(f.id, trimmed); return }
+                  renameFolder(f.id, trimmed)
+                }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '3px 6px',
+                  borderBottom: `1px solid ${hw.border}`,
+                  background: `linear-gradient(90deg, ${f.color}22, transparent 80%)`,
+                  cursor: 'pointer',
+                }}
+                title="Click to expand/collapse. Double-click to rename. Right-click for name/color/delete."
+              >
+                <svg width="8" height="8" viewBox="0 0 8 8" style={{ transform: f.collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.12s' }}>
+                  <path d="M1 2l3 3.5L7 2" fill="none" stroke={f.color} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <div style={{ width: 4, height: 14, background: f.color, borderRadius: 1 }} />
+                <span style={{ fontSize: 10, fontWeight: 600, color: hw.textPrimary, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {f.name}
+                </span>
+                <span style={{ fontSize: 8, color: hw.textFaint }}>
+                  {f.trackIds.length}
+                </span>
+              </div>
+            )
+          }
+          const track = audioTracks[row.trackIdx]
+          const idx = row.trackIdx
+          const inFolder = folderByTrack.get(track.id) != null
           const h = trackHeights[track.id] ?? defaultHeight
           const isDragOver = dragOverIdx === idx && dragId && dragId !== track.id
           return (
@@ -142,6 +212,7 @@ export function TrackList() {
               transition: 'background 0.1s',
               opacity: dragId === track.id ? 0.5 : 1,
               position: 'relative',
+              paddingLeft: inFolder ? 8 : 0,
             }}
           >
             <div style={{ width: 3, background: track.color, flexShrink: 0 }} />
@@ -285,6 +356,41 @@ export function TrackList() {
                 />
               ))}
             </div>
+            <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+            <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+              Folder
+            </div>
+            <TrackMenuItem label="New folder from this track" onClick={() => {
+              setCtxMenu(null)
+              const name = window.prompt('Folder name:', `Group ${folders.length + 1}`)?.trim()
+              if (!name) return
+              createFolder([t.id], name)
+            }} />
+            {folders.length > 0 && (() => {
+              const currentFolder = folderByTrack.get(t.id)
+              const targets = folders.filter(f => f.id !== currentFolder?.id)
+              if (targets.length === 0) return null
+              return (
+                <>
+                  {targets.map(f => (
+                    <TrackMenuItem
+                      key={`addto_${f.id}`}
+                      label={`Add to "${f.name}"`}
+                      onClick={() => {
+                        setCtxMenu(null)
+                        addTrackToFolder(t.id, f.id)
+                      }}
+                    />
+                  ))}
+                </>
+              )
+            })()}
+            {folderByTrack.get(t.id) && (
+              <TrackMenuItem label="Remove from folder" onClick={() => {
+                setCtxMenu(null)
+                removeTrackFromFolder(t.id)
+              }} />
+            )}
             <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
             <TrackMenuItem label="Save as track template…" onClick={() => {
               setCtxMenu(null)
