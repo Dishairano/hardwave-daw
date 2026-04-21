@@ -8,9 +8,15 @@ interface PianoKeyboardProps {
   noteHeight: number
   scrollY: number
   totalNotes: number
+  scaleRoot?: number
+  scaleIntervals?: number[]
+  showScale?: boolean
 }
 
-export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoKeyboardProps) {
+export function PianoKeyboard({
+  width, noteHeight, scrollY, totalNotes,
+  scaleRoot = 0, scaleIntervals, showScale = false,
+}: PianoKeyboardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -34,12 +40,19 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
     ctx.fillStyle = '#0a0a0f'
     ctx.fillRect(0, 0, width, h)
 
+    const inScale = (pitch: number) => {
+      if (!showScale || !scaleIntervals) return true
+      const rel = ((pitch - scaleRoot) % 12 + 12) % 12
+      return scaleIntervals.includes(rel)
+    }
+
     for (let pitch = 0; pitch < totalNotes; pitch++) {
       const y = (totalNotes - 1 - pitch) * noteHeight - scrollY
       if (y + noteHeight < 0 || y > h) continue
 
       const black = isBlack(pitch)
       const isC = pitch % 12 === 0
+      const rootHere = showScale && ((pitch - scaleRoot) % 12 + 12) % 12 === 0
 
       if (black) {
         ctx.fillStyle = '#08080d'
@@ -49,6 +62,15 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
       } else {
         ctx.fillStyle = isC ? '#0d0d12' : '#0a0a0f'
         ctx.fillRect(0, y, width, noteHeight)
+      }
+
+      if (showScale && !inScale(pitch)) {
+        ctx.fillStyle = 'rgba(0,0,0,0.45)'
+        ctx.fillRect(0, y, width, noteHeight)
+      }
+      if (rootHere) {
+        ctx.fillStyle = 'rgba(220,38,38,0.18)'
+        ctx.fillRect(0, y, 3, noteHeight)
       }
 
       // Key border
@@ -73,7 +95,7 @@ export function PianoKeyboard({ width, noteHeight, scrollY, totalNotes }: PianoK
     // Right border
     ctx.fillStyle = 'rgba(255,255,255,0.04)'
     ctx.fillRect(width - 1, 0, 1, h)
-  }, [width, noteHeight, scrollY, totalNotes])
+  }, [width, noteHeight, scrollY, totalNotes, scaleRoot, scaleIntervals, showScale])
 
   useEffect(() => { draw() }, [draw])
 

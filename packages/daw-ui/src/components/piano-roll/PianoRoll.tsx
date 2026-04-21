@@ -16,6 +16,45 @@ const VELOCITY_LANE_HEIGHT = 80
 const TOTAL_NOTES = 128
 const DEFAULT_SNAP = PPQ / 4
 
+const SCALE_TYPES: Record<string, { name: string; intervals: number[] }> = {
+  chromatic: { name: 'Chromatic', intervals: [0,1,2,3,4,5,6,7,8,9,10,11] },
+  major:     { name: 'Major',     intervals: [0,2,4,5,7,9,11] },
+  minor:     { name: 'Natural Minor', intervals: [0,2,3,5,7,8,10] },
+  harmonic:  { name: 'Harmonic Minor', intervals: [0,2,3,5,7,8,11] },
+  melodic:   { name: 'Melodic Minor', intervals: [0,2,3,5,7,9,11] },
+  dorian:    { name: 'Dorian',    intervals: [0,2,3,5,7,9,10] },
+  phrygian:  { name: 'Phrygian',  intervals: [0,1,3,5,7,8,10] },
+  lydian:    { name: 'Lydian',    intervals: [0,2,4,6,7,9,11] },
+  mixolydian:{ name: 'Mixolydian', intervals: [0,2,4,5,7,9,10] },
+  locrian:   { name: 'Locrian',   intervals: [0,1,3,5,6,8,10] },
+  pentMajor: { name: 'Pentatonic Major', intervals: [0,2,4,7,9] },
+  pentMinor: { name: 'Pentatonic Minor', intervals: [0,3,5,7,10] },
+  blues:     { name: 'Blues',     intervals: [0,3,5,6,7,10] },
+  wholeTone: { name: 'Whole Tone', intervals: [0,2,4,6,8,10] },
+  hungarian: { name: 'Hungarian Minor', intervals: [0,2,3,6,7,8,11] },
+}
+
+function isPitchInScale(pitch: number, root: number, type: keyof typeof SCALE_TYPES) {
+  const rel = ((pitch - root) % 12 + 12) % 12
+  return SCALE_TYPES[type].intervals.includes(rel)
+}
+
+function snapPitchToScale(pitch: number, root: number, type: keyof typeof SCALE_TYPES) {
+  if (type === 'chromatic') return pitch
+  const intervals = SCALE_TYPES[type].intervals
+  const octave = Math.floor((pitch - root) / 12)
+  const rel = ((pitch - root) % 12 + 12) % 12
+  let best = intervals[0]
+  let bestDist = 12
+  for (const iv of intervals) {
+    const d = Math.abs(rel - iv)
+    if (d < bestDist) { bestDist = d; best = iv }
+  }
+  return root + octave * 12 + best
+}
+
+const NOTE_NAMES_SHARP = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
+
 interface Note {
   index: number
   startTick: number
@@ -58,6 +97,9 @@ export function PianoRoll() {
   const [snap, setSnap] = useState(DEFAULT_SNAP)
   const [selectedNotes, setSelectedNotes] = useState<Set<number>>(new Set())
   const [tool, setTool] = useState<'draw' | 'select' | 'erase'>('draw')
+  const [scaleRoot, setScaleRoot] = useState<number>(0)
+  const [scaleType, setScaleType] = useState<keyof typeof SCALE_TYPES>('chromatic')
+  const [snapToScale, setSnapToScale] = useState(false)
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number; additive: boolean } | null>(null)
   const clipboardRef = useRef<Note[]>([])
@@ -126,6 +168,7 @@ export function PianoRoll() {
     ctx.fillStyle = '#0a0a0f'
     ctx.fillRect(0, 0, w, h)
 
+    const highlightScale = scaleType !== 'chromatic'
     for (let pitch = 0; pitch < TOTAL_NOTES; pitch++) {
       const y = yFromPitch(pitch)
       if (y + NOTE_HEIGHT < 0 || y > h) continue
@@ -136,6 +179,16 @@ export function PianoRoll() {
       if (pitch % 12 === 0) {
         ctx.fillStyle = 'rgba(220,38,38,0.02)'
         ctx.fillRect(0, y, w, NOTE_HEIGHT)
+      }
+      if (highlightScale) {
+        const inScale = isPitchInScale(pitch, scaleRoot, scaleType)
+        if (!inScale) {
+          ctx.fillStyle = 'rgba(0,0,0,0.35)'
+          ctx.fillRect(0, y, w, NOTE_HEIGHT)
+        } else if (((pitch - scaleRoot) % 12 + 12) % 12 === 0) {
+          ctx.fillStyle = 'rgba(220,38,38,0.05)'
+          ctx.fillRect(0, y, w, NOTE_HEIGHT)
+        }
       }
     }
 
@@ -232,7 +285,7 @@ export function PianoRoll() {
       ctx.strokeRect(mx + 0.5, my + 0.5, mw, mh)
       ctx.setLineDash([])
     }
-  }, [notes, scrollX, scrollY, pixelsPerTick, selectedNotes, marquee])
+  }, [notes, scrollX, scrollY, pixelsPerTick, selectedNotes, marquee, scaleRoot, scaleType])
 
   useEffect(() => { draw() }, [draw])
 
@@ -293,11 +346,12 @@ export function PianoRoll() {
 
     if (tool === 'draw' && pitch >= 0 && pitch < 128) {
       const snappedTick = Math.max(0, snapTick(tick))
+      const drawPitch = snapToScale ? snapPitchToScale(pitch, scaleRoot, scaleType) : pitch
       try {
         const newIndex = await invoke<number>('add_midi_note', {
           trackId: activeTrackId,
           clipId: activeClipId,
-          pitch,
+          pitch: drawPitch,
           startTick: snappedTick,
           durationTicks: snap,
           velocity: 0.8,
@@ -307,7 +361,7 @@ export function PianoRoll() {
           index: newIndex,
           startTick: snappedTick,
           durationTicks: snap,
-          pitch,
+          pitch: drawPitch,
           velocity: 0.8,
           muted: false,
         }
@@ -316,7 +370,7 @@ export function PianoRoll() {
         dragRef.current = {
           mode: 'draw', noteIndex: newIndex,
           startX: e.clientX, startY: e.clientY,
-          origTick: snappedTick, origPitch: pitch,
+          origTick: snappedTick, origPitch: drawPitch,
           origDuration: snap,
           committed: false,
         }
@@ -326,7 +380,7 @@ export function PianoRoll() {
       setMarquee({ x1: mx, y1: my, x2: mx, y2: my })
       if (!e.shiftKey) setSelectedNotes(new Set())
     }
-  }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes])
+  }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes, snapToScale, scaleRoot, scaleType])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (marqueeRef.current) {
@@ -754,6 +808,49 @@ export function PianoRoll() {
         </div>
 
         <select
+          value={scaleRoot}
+          onChange={e => setScaleRoot(Number(e.target.value))}
+          title="Scale root note"
+          style={{
+            fontSize: 9, background: 'rgba(255,255,255,0.04)', color: hw.textMuted,
+            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '1px 4px',
+          }}
+        >
+          {NOTE_NAMES_SHARP.map((n, i) => (
+            <option key={i} value={i}>{n}</option>
+          ))}
+        </select>
+        <select
+          value={scaleType}
+          onChange={e => setScaleType(e.target.value as keyof typeof SCALE_TYPES)}
+          title="Scale type"
+          style={{
+            fontSize: 9, background: 'rgba(255,255,255,0.04)',
+            color: scaleType === 'chromatic' ? hw.textFaint : hw.accent,
+            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '1px 4px',
+          }}
+        >
+          {Object.entries(SCALE_TYPES).map(([k, v]) => (
+            <option key={k} value={k}>{v.name}</option>
+          ))}
+        </select>
+        <button
+          onClick={() => setSnapToScale(v => !v)}
+          title="Snap new notes to scale"
+          disabled={scaleType === 'chromatic'}
+          style={{
+            padding: '1px 5px', fontSize: 9, fontWeight: 600,
+            color: snapToScale ? hw.accent : hw.textFaint,
+            background: snapToScale ? hw.accentDim : 'transparent',
+            border: `1px solid ${snapToScale ? hw.accentGlow : hw.border}`,
+            borderRadius: hw.radius.sm,
+            opacity: scaleType === 'chromatic' ? 0.4 : 1,
+          }}
+        >
+          SNAP
+        </button>
+
+        <select
           value={snap}
           onChange={e => setSnap(Number(e.target.value))}
           style={{
@@ -837,6 +934,9 @@ export function PianoRoll() {
           noteHeight={NOTE_HEIGHT}
           scrollY={scrollY}
           totalNotes={TOTAL_NOTES}
+          scaleRoot={scaleRoot}
+          scaleIntervals={SCALE_TYPES[scaleType].intervals}
+          showScale={scaleType !== 'chromatic'}
         />
 
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
