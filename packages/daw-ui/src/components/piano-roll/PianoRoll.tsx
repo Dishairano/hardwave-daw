@@ -59,6 +59,19 @@ function snapPitchToScale(pitch: number, root: number, type: keyof typeof SCALE_
 
 const NOTE_NAMES_SHARP = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
 
+// QWERTY → semitone offset from C of the current typing octave.
+// Lower row plays the current octave; upper row plays the next octave up.
+const QWERTY_MAP: Record<string, number> = {
+  // Lower row — octave N
+  KeyZ: 0, KeyS: 1, KeyX: 2, KeyD: 3, KeyC: 4, KeyV: 5,
+  KeyG: 6, KeyB: 7, KeyH: 8, KeyN: 9, KeyJ: 10, KeyM: 11,
+  Comma: 12, KeyL: 13, Period: 14, Semicolon: 15, Slash: 16,
+  // Upper row — octave N+1
+  KeyQ: 12, Digit2: 13, KeyW: 14, Digit3: 15, KeyE: 16, KeyR: 17,
+  Digit5: 18, KeyT: 19, Digit6: 20, KeyY: 21, Digit7: 22, KeyU: 23,
+  KeyI: 24, Digit9: 25, KeyO: 26, Digit0: 27, KeyP: 28,
+}
+
 const CHORD_TYPES: Record<string, { name: string; intervals: number[] }> = {
   maj:      { name: 'Major',       intervals: [0, 4, 7] },
   min:      { name: 'Minor',       intervals: [0, 3, 7] },
@@ -152,6 +165,22 @@ export function PianoRoll() {
   const [chordPreview, setChordPreview] = useState<{ rootPitch: number; startTick: number } | null>(null)
   const [noteCtx, setNoteCtx] = useState<{ x: number; y: number; noteIndex: number } | null>(null)
   const [velFromY, setVelFromY] = useState(false)
+  const [qwertyEnabled, setQwertyEnabled] = useState<boolean>(() => {
+    try { return localStorage.getItem('hardwave.daw.pianoRollQwerty') === '1' } catch { return false }
+  })
+  const [qwertyOctave, setQwertyOctave] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem('hardwave.daw.pianoRollQwertyOctave') || '', 10)
+      return Number.isFinite(v) && v >= 0 && v <= 9 ? v : 4
+    } catch { return 4 }
+  })
+  const [qwertyVelocity, setQwertyVelocity] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem('hardwave.daw.pianoRollQwertyVelocity') || '', 10)
+      return Number.isFinite(v) && v >= 1 && v <= 127 ? v : 100
+    } catch { return 100 }
+  })
+  const [qwertyMenuOpen, setQwertyMenuOpen] = useState(false)
   const clipboardRef = useRef<Note[]>([])
   const focusedRef = useRef(false)
   const dragRef = useRef<{
@@ -1184,11 +1213,100 @@ export function PianoRoll() {
   }, [handleKeyDown])
 
   useEffect(() => {
+    try { localStorage.setItem('hardwave.daw.pianoRollQwerty', qwertyEnabled ? '1' : '0') } catch {}
+  }, [qwertyEnabled])
+  useEffect(() => {
+    try { localStorage.setItem('hardwave.daw.pianoRollQwertyOctave', String(qwertyOctave)) } catch {}
+  }, [qwertyOctave])
+  useEffect(() => {
+    try { localStorage.setItem('hardwave.daw.pianoRollQwertyVelocity', String(qwertyVelocity)) } catch {}
+  }, [qwertyVelocity])
+
+  // QWERTY step-record: capture-phase handler so keys consumed here
+  // don't trigger global shortcuts like 'S' (split clip).
+  const handleQwertyKeyDown = useCallback(async (e: KeyboardEvent) => {
+    if (!qwertyEnabled) return
+    if (!focusedRef.current) return
+    if (!activeTrackId || !activeClipId) return
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
+    if (e.repeat) return
+    const target = e.target as HTMLElement
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return
+
+    if (e.code === 'BracketLeft') {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      setQwertyOctave(o => Math.max(0, o - 1))
+      return
+    }
+    if (e.code === 'BracketRight') {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      setQwertyOctave(o => Math.min(9, o + 1))
+      return
+    }
+
+    const offset = QWERTY_MAP[e.code]
+    if (offset === undefined) return
+    const pitch = qwertyOctave * 12 + offset
+    if (pitch < 0 || pitch > 127) return
+
+    e.preventDefault()
+    e.stopImmediatePropagation()
+
+    const ts = useTransportStore.getState()
+    let originTick: number
+    if (ts.editCursorTicks != null) {
+      originTick = ts.editCursorTicks
+    } else {
+      const sr = ts.sampleRate || 48000
+      const samplesPerTick = (sr * 60) / (ts.bpm * PPQ)
+      originTick = Math.round(ts.positionSamples / samplesPerTick)
+    }
+    const snappedTick = Math.max(0, Math.round(originTick / snap) * snap)
+    const velocity = Math.max(0.01, Math.min(1, qwertyVelocity / 127))
+
+    try {
+      const newIndex = await invoke<number>('add_midi_note', {
+        trackId: activeTrackId,
+        clipId: activeClipId,
+        pitch,
+        startTick: snappedTick,
+        durationTicks: snap,
+        velocity,
+      })
+      useProjectStore.getState().markDirty()
+      const draftNote: Note = {
+        index: newIndex,
+        startTick: snappedTick,
+        durationTicks: snap,
+        pitch,
+        velocity,
+        muted: false,
+      }
+      setNotes(prev => [...prev, draftNote])
+      ts.setEditCursor(snappedTick + snap)
+    } catch (err) { console.warn('qwerty add_midi_note failed', err) }
+  }, [qwertyEnabled, qwertyOctave, qwertyVelocity, activeTrackId, activeClipId, snap])
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleQwertyKeyDown, true)
+    return () => window.removeEventListener('keydown', handleQwertyKeyDown, true)
+  }, [handleQwertyKeyDown])
+
+  useEffect(() => {
     if (!toolsOpen) return
     const close = () => setToolsOpen(false)
     window.addEventListener('click', close)
     return () => window.removeEventListener('click', close)
   }, [toolsOpen])
+
+  useEffect(() => {
+    if (!qwertyMenuOpen) return
+    const close = () => setQwertyMenuOpen(false)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [qwertyMenuOpen])
 
   const zoomToFit = useCallback(() => {
     const subject = selectedNotes.size > 0
@@ -1475,6 +1593,79 @@ export function PianoRoll() {
         >
           VEL-Y
         </button>
+
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={(e) => {
+              if (e.shiftKey) { setQwertyMenuOpen(v => !v); return }
+              setQwertyEnabled(v => !v)
+            }}
+            onContextMenu={(e) => { e.preventDefault(); setQwertyMenuOpen(v => !v) }}
+            title={qwertyEnabled
+              ? `QWERTY typing ON — octave ${qwertyOctave}, velocity ${qwertyVelocity}. Click to disable, shift-click for options, [ / ] to shift octave.`
+              : 'Click to enable QWERTY typing (Z=C, S=C#, X=D…; Q row an octave up)'}
+            style={{
+              padding: '1px 6px', fontSize: 9, fontWeight: 600,
+              color: qwertyEnabled ? hw.accent : hw.textFaint,
+              background: qwertyEnabled ? hw.accentDim : 'rgba(255,255,255,0.04)',
+              border: `1px solid ${qwertyEnabled ? hw.accentGlow : hw.border}`,
+              borderRadius: hw.radius.sm,
+            }}
+          >
+            TYPE{qwertyEnabled ? `:${qwertyOctave}` : ''}
+          </button>
+          {qwertyMenuOpen && (
+            <div
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute', top: 22, right: 0, zIndex: 500,
+                minWidth: 220, padding: 10,
+                background: 'rgba(12,12,18,0.96)',
+                border: `1px solid ${hw.borderLight}`,
+                borderRadius: hw.radius.md,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+                backdropFilter: hw.blur.md,
+                display: 'flex', flexDirection: 'column', gap: 8,
+              }}
+            >
+              <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                QWERTY typing
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: hw.textMuted }}>
+                <input
+                  type="checkbox"
+                  checked={qwertyEnabled}
+                  onChange={(e) => setQwertyEnabled(e.target.checked)}
+                />
+                Enable
+              </label>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
+                  <span>Octave</span>
+                  <span style={{ color: hw.textPrimary, fontWeight: 600 }}>{qwertyOctave}</span>
+                </div>
+                <input type="range" min={0} max={9} step={1} value={qwertyOctave}
+                  onChange={(e) => setQwertyOctave(Number(e.target.value))}
+                  style={{ width: '100%', accentColor: hw.accent }} />
+              </div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
+                  <span>Velocity</span>
+                  <span style={{ color: hw.textPrimary, fontWeight: 600 }}>{qwertyVelocity}</span>
+                </div>
+                <input type="range" min={1} max={127} step={1} value={qwertyVelocity}
+                  onChange={(e) => setQwertyVelocity(Number(e.target.value))}
+                  style={{ width: '100%', accentColor: hw.accent }} />
+              </div>
+              <div style={{ fontSize: 8, color: hw.textFaint, lineHeight: 1.4 }}>
+                Z row = octave {qwertyOctave} · Q row = octave {qwertyOctave + 1}
+                <br />
+                <kbd style={{ fontSize: 8 }}>[</kbd> / <kbd style={{ fontSize: 8 }}>]</kbd> shift octave · notes added at edit cursor
+              </div>
+            </div>
+          )}
+        </div>
 
         <div style={{ position: 'relative' }}>
           <button
