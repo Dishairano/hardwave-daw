@@ -490,6 +490,13 @@ export function App() {
         return
       }
 
+      // F1 is a dedicated help key — always opens the shortcuts panel as the canonical entry point.
+      if (e.code === 'F1') {
+        e.preventDefault()
+        setShowShortcuts(v => !v)
+        return
+      }
+
       // Capture mode swallows every keypress so it can bind a new shortcut.
       if (useShortcutsStore.getState().capturingFor) return
 

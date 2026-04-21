@@ -190,11 +190,19 @@ export function TitleBar(props: TitleBarProps) {
     {
       label: 'HELP',
       items: [
-        { label: 'Keyboard shortcuts', shortcut: '?', action: onToggleShortcuts },
+        { label: 'Keyboard shortcuts', shortcut: 'F1', action: onToggleShortcuts },
         { label: 'Roadmap', action: onToggleRoadmap },
         { label: 'Check for updates...', action: onCheckForUpdates },
         { separator: true, label: '' },
-        { label: 'Documentation', action: () => openExternal('https://github.com/Dishairano/hardwave-daw#readme') },
+        { label: 'Online user manual', action: () => openExternal('https://github.com/Dishairano/hardwave-daw/wiki') },
+        { label: 'Video tutorials', submenu: [
+          { label: 'Getting started', action: () => openExternal('https://www.youtube.com/@hardwavestudios') },
+          { label: 'Piano Roll basics', action: () => openExternal('https://www.youtube.com/@hardwavestudios') },
+          { label: 'Mixing workflow', action: () => openExternal('https://www.youtube.com/@hardwavestudios') },
+          { label: 'Sampling & slicing', action: () => openExternal('https://www.youtube.com/@hardwavestudios') },
+          { separator: true, label: '' },
+          { label: 'All tutorials →', action: () => openExternal('https://www.youtube.com/@hardwavestudios') },
+        ]},
         { label: 'Release notes', action: () => openExternal('https://github.com/Dishairano/hardwave-daw/releases') },
         { label: 'Report an issue', action: () => openExternal('https://github.com/Dishairano/hardwave-daw/issues') },
         { separator: true, label: '' },
