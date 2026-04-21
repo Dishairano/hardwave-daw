@@ -10,6 +10,7 @@ import { ChannelRack } from './components/channelrack/ChannelRack'
 import { PianoRoll } from './components/piano-roll/PianoRoll'
 import { Roadmap } from './components/roadmap/Roadmap'
 import { AudioSettings } from './components/settings/AudioSettings'
+import { ThemePicker } from './components/settings/ThemePicker'
 import { UpdateModal } from './components/UpdateModal'
 import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow } from './components/FloatingWindow'
@@ -55,6 +56,7 @@ export function App() {
   const [showPianoRoll, setShowPianoRoll] = useState(false)
   const [showRoadmap, setShowRoadmap] = useState(false)
   const [showAudioSettings, setShowAudioSettings] = useState(false)
+  const [showThemePicker, setShowThemePicker] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [showDevPanel, setShowDevPanel] = useState(false) // DEV ONLY
@@ -647,6 +649,7 @@ export function App() {
         onToggleMixer={() => setShowMixer(v => !v)}
         onToggleRoadmap={() => setShowRoadmap(v => !v)}
         onOpenAudioSettings={() => setShowAudioSettings(true)}
+        onOpenThemePicker={() => setShowThemePicker(true)}
         onCheckForUpdates={checkForUpdates}
         onToggleAbout={() => setShowAbout(v => !v)}
         onToggleShortcuts={() => setShowShortcuts(v => !v)}
@@ -700,6 +703,7 @@ export function App() {
       {/* Floating detached panels */}
       {showRoadmap && <Roadmap onClose={() => setShowRoadmap(false)} />}
       {showAudioSettings && <AudioSettings onClose={() => setShowAudioSettings(false)} />}
+      {showThemePicker && <ThemePicker onClose={() => setShowThemePicker(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
       <ShortcutsPanel open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}

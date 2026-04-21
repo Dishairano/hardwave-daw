@@ -45,6 +45,7 @@ interface TitleBarProps {
   onToggleMixer: () => void
   onToggleRoadmap: () => void
   onOpenAudioSettings: () => void
+  onOpenThemePicker: () => void
   onCheckForUpdates: () => void
   onToggleAbout: () => void
   onToggleShortcuts: () => void
@@ -68,7 +69,7 @@ export function TitleBar(props: TitleBarProps) {
     onCut, onCopy, onPaste, onDuplicate, onSelectAll,
     onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
     onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
-    onToggleRoadmap, onOpenAudioSettings, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onExportAudio,
+    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onExportAudio,
     onSaveAsTemplate,
     recentProjects, onOpenRecentProject, onClearRecentProjects,
     showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
@@ -164,6 +165,7 @@ export function TitleBar(props: TitleBarProps) {
         { label: 'Audio settings...', action: onOpenAudioSettings },
         { label: 'MIDI settings...', disabled: true },
         { separator: true, label: '' },
+        { label: 'Theme...', action: onOpenThemePicker },
         { label: 'UI scale', submenu: uiScaleItems },
       ],
     },

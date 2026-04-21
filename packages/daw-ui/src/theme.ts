@@ -1,4 +1,8 @@
 /** Hardwave DAW — Suite-matched dark glassmorphic theme with red accents */
+import { getActiveTheme } from './stores/themeStore'
+
+const palette = getActiveTheme()
+
 export const hw = {
   // ─── Backgrounds ─────────────────────────────────────────────────────────────
   bg: '#08080c',              // root / deepest background (Suite base)
@@ -25,15 +29,15 @@ export const hw = {
   borderLight: 'rgba(255,255,255,0.08)',
   borderDark: 'rgba(255,255,255,0.04)',
 
-  // ─── Accent — Hardwave Red (matches Suite) ──────────────────────────────────
-  accent: '#DC2626',          // red-600
-  accentLight: '#EF4444',     // red-500
-  accentDim: 'rgba(220,38,38,0.15)',
-  accentGlow: 'rgba(220,38,38,0.3)',
+  // ─── Accent — themeable ─────────────────────────────────────────────────────
+  accent: palette.accent,
+  accentLight: palette.accentLight,
+  accentDim: palette.accentDim,
+  accentGlow: palette.accentGlow,
 
-  // ─── Secondary — Red-700 ────────────────────────────────────────────────────
-  secondary: '#B91C1C',       // red-700
-  secondaryDim: 'rgba(185,28,28,0.15)',
+  // ─── Secondary — themeable ──────────────────────────────────────────────────
+  secondary: palette.secondary,
+  secondaryDim: palette.secondaryDim,
 
   // ─── Meters / Success — Emerald ──────────────────────────────────────────────
   green: '#10B981',           // emerald-500
@@ -52,18 +56,18 @@ export const hw = {
   // ─── Info — Violet ───────────────────────────────────────────────────────────
   blue: '#7C3AED',            // violet-600
 
-  // ─── Selection ───────────────────────────────────────────────────────────────
-  selection: '#DC2626',
-  selectionDim: 'rgba(220,38,38,0.12)',
+  // ─── Selection — themeable ──────────────────────────────────────────────────
+  selection: palette.selection,
+  selectionDim: palette.selectionDim,
 
-  // ─── Playhead ────────────────────────────────────────────────────────────────
-  orange: '#DC2626',          // legacy alias — now red
-  orangeLight: '#EF4444',
-  orangeDim: 'rgba(220,38,38,0.2)',
+  // ─── Playhead — follows accent ──────────────────────────────────────────────
+  orange: palette.accent,
+  orangeLight: palette.accentLight,
+  orangeDim: palette.accentGlow,
 
   // ─── Clip Colors — Vibrant on dark ───────────────────────────────────────────
   clips: [
-    '#DC2626', '#10B981', '#A855F7', '#F59E0B',
+    palette.accent, '#10B981', '#A855F7', '#F59E0B',
     '#3B82F6', '#EC4899', '#06B6D4', '#84CC16',
   ],
 
@@ -76,6 +80,6 @@ export const hw = {
     md: 'blur(8px)',
   },
 
-  // ─── Glow ────────────────────────────────────────────────────────────────────
-  glowRed: '0 0 40px rgba(220,38,38,0.08), 0 0 80px rgba(220,38,38,0.04)',
-} as const
+  // ─── Glow — follows accent ──────────────────────────────────────────────────
+  glowRed: palette.glowRed,
+}
