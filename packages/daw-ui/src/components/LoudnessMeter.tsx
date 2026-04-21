@@ -45,6 +45,22 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
     setHistory(Array.from({ length: HISTORY_LEN }, () => ({ m: null, s: null, i: null })))
   }
 
+  const [copied, setCopied] = useState(false)
+  const copyReadings = async () => {
+    const rows = [
+      `Momentary:  ${formatLufs(master.lufs_m)} LUFS`,
+      `Short-term: ${formatLufs(master.lufs_s)} LUFS`,
+      `Integrated: ${formatLufs(master.lufs_i)} LUFS`,
+      `True Peak:  ${isFinite(master.true_peak_db) ? master.true_peak_db.toFixed(1) : '—'} dBTP`,
+      `Target:     ${target.toFixed(1)} LUFS`,
+    ]
+    try {
+      await navigator.clipboard.writeText(rows.join('\n'))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1200)
+    } catch { /* ignore */ }
+  }
+
   return (
     <div
       style={{
@@ -69,6 +85,14 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
           <div style={{ fontSize: 12, fontWeight: 600 }}>Loudness Meter</div>
           <div style={{ fontSize: 9, color: hw.textFaint }}>BS.1770 · 30s history</div>
           <div style={{ flex: 1 }} />
+          <button onClick={copyReadings} style={{
+            padding: '3px 10px', fontSize: 10, background: 'transparent',
+            border: `1px solid ${copied ? hw.accent : hw.border}`, borderRadius: hw.radius.sm,
+            color: copied ? hw.accent : hw.textSecondary, cursor: 'pointer',
+            transition: 'color 0.15s, border-color 0.15s',
+          }}>
+            {copied ? 'Copied!' : 'Copy readings'}
+          </button>
           <button onClick={reset} style={{
             padding: '3px 10px', fontSize: 10, background: 'transparent',
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
