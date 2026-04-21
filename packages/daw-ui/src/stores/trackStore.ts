@@ -1,10 +1,12 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { useProjectStore } from './projectStore'
+import { useHistoryStore } from './historyStore'
 
-async function mut<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: string): Promise<T> {
   const r = await invoke<T>(cmd, args)
   useProjectStore.getState().markDirty()
+  if (label) useHistoryStore.getState().push(label)
   return r
 }
 
@@ -172,65 +174,77 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   addAudioTrack: async (name) => {
     const n = get().tracks.filter(t => t.kind === 'Audio').length + 1
-    await mut('add_audio_track', { name: name || `Audio ${n}` })
+    const finalName = name || `Audio ${n}`
+    await mut('add_audio_track', { name: finalName }, `Add audio track "${finalName}"`)
     await get().fetchTracks()
   },
 
   addMidiTrack: async (name) => {
     const n = get().tracks.filter(t => t.kind === 'Midi').length + 1
-    await mut('add_midi_track', { name: name || `MIDI ${n}` })
+    const finalName = name || `MIDI ${n}`
+    await mut('add_midi_track', { name: finalName }, `Add MIDI track "${finalName}"`)
     await get().fetchTracks()
   },
 
   removeTrack: async (id) => {
-    await mut('remove_track', { trackId: id })
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('remove_track', { trackId: id }, `Remove track "${name}"`)
     await get().fetchTracks()
   },
 
   setVolume: async (id, db) => {
-    await mut('set_track_volume', { trackId: id, volumeDb: db })
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_volume', { trackId: id, volumeDb: db }, `Set "${name}" volume to ${db.toFixed(1)} dB`)
     await get().fetchTracks()
   },
 
   setPan: async (id, pan) => {
-    await mut('set_track_pan', { trackId: id, pan })
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_pan', { trackId: id, pan }, `Set "${name}" pan to ${pan.toFixed(2)}`)
     await get().fetchTracks()
   },
 
   toggleMute: async (id) => {
-    await mut('toggle_mute', { trackId: id })
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('toggle_mute', { trackId: id }, `Toggle mute on "${name}"`)
     await get().fetchTracks()
   },
 
   toggleSolo: async (id) => {
-    await mut('toggle_solo', { trackId: id })
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('toggle_solo', { trackId: id }, `Toggle solo on "${name}"`)
     await get().fetchTracks()
   },
 
   toggleArm: async (id) => {
-    await mut('toggle_arm', { trackId: id })
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('toggle_arm', { trackId: id }, `Toggle arm on "${name}"`)
     await get().fetchTracks()
   },
 
   toggleSoloSafe: async (id) => {
-    await mut('toggle_solo_safe', { trackId: id })
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('toggle_solo_safe', { trackId: id }, `Toggle solo-safe on "${name}"`)
     await get().fetchTracks()
   },
 
   reorderTrack: async (id, newIndex) => {
-    await mut('reorder_track', { trackId: id, newIndex })
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('reorder_track', { trackId: id, newIndex }, `Move "${name}"`)
     await get().fetchTracks()
   },
 
   renameTrack: async (id, name) => {
     const trimmed = name.trim()
     if (!trimmed) return
-    await mut('set_track_name', { trackId: id, name: trimmed })
+    const prev = get().tracks.find(t => t.id === id)?.name ?? ''
+    await mut('set_track_name', { trackId: id, name: trimmed }, `Rename "${prev}" to "${trimmed}"`)
     await get().fetchTracks()
   },
 
   setTrackColor: async (id, color) => {
-    await mut('set_track_color', { trackId: id, color })
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_color', { trackId: id, color }, `Recolor "${name}"`)
     await get().fetchTracks()
   },
 
@@ -240,11 +254,12 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   importAudioFile: async (trackId, filePath, positionTicks) => {
     try {
+      const name = filePath.split(/[\\/]/).pop() || filePath
       const result = await mut<ImportedClip>('import_audio_file', {
         trackId,
         filePath,
         positionTicks: positionTicks ?? null,
-      })
+      }, `Import "${name}"`)
       await get().fetchTracks()
       return result
     } catch (err) {
@@ -259,17 +274,17 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   },
 
   moveClip: async (trackId, clipId, newPositionTicks) => {
-    await mut('move_clip', { trackId, clipId, newPositionTicks })
+    await mut('move_clip', { trackId, clipId, newPositionTicks }, 'Move clip')
     await get().fetchTracks()
   },
 
   resizeClip: async (trackId, clipId, newLengthTicks) => {
-    await mut('resize_clip', { trackId, clipId, newLengthTicks })
+    await mut('resize_clip', { trackId, clipId, newLengthTicks }, 'Resize clip')
     await get().fetchTracks()
   },
 
   deleteClip: async (trackId, clipId) => {
-    await mut('delete_clip', { trackId, clipId })
+    await mut('delete_clip', { trackId, clipId }, 'Delete clip')
     set({ selectedClipId: null })
     await get().fetchTracks()
   },
@@ -296,21 +311,23 @@ export const useTrackStore = create<TrackState>((set, get) => ({
         if (ids.includes(clip.id)) toDelete.push({ trackId: track.id, clipId: clip.id })
       }
     }
-    for (const { trackId, clipId } of toDelete) {
-      await mut('delete_clip', { trackId, clipId })
+    const label = toDelete.length === 1 ? 'Delete clip' : `Delete ${toDelete.length} clips`
+    for (let i = 0; i < toDelete.length; i++) {
+      const { trackId, clipId } = toDelete[i]
+      await mut('delete_clip', { trackId, clipId }, i === 0 ? label : undefined)
     }
     set({ selectedClipId: null, selectedClipIds: new Set() })
     await get().fetchTracks()
   },
 
   duplicateClip: async (trackId, clipId) => {
-    const newId = await mut<string>('duplicate_clip', { trackId, clipId })
+    const newId = await mut<string>('duplicate_clip', { trackId, clipId }, 'Duplicate clip')
     await get().fetchTracks()
     return newId
   },
 
   splitClip: async (trackId, clipId, atTicks) => {
-    const newId = await mut<string>('split_clip', { trackId, clipId, atTicks })
+    const newId = await mut<string>('split_clip', { trackId, clipId, atTicks }, 'Split clip')
     await get().fetchTracks()
     return newId
   },
@@ -332,11 +349,13 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     if (!track) return
     // Normalize: earliest clip aligns to positionTicks; others preserve relative offset.
     const earliest = clipboard.reduce((m, c) => Math.min(m, c.position_ticks), Infinity)
-    for (const c of clipboard) {
+    const pasteLabel = clipboard.length === 1 ? 'Paste clip' : `Paste ${clipboard.length} clips`
+    for (let i = 0; i < clipboard.length; i++) {
+      const c = clipboard[i]
       const offset = c.position_ticks - earliest
       const newPos = positionTicks + offset
       try {
-        const newId = await mut<string>('duplicate_clip', { trackId, clipId: c.id })
+        const newId = await mut<string>('duplicate_clip', { trackId, clipId: c.id }, i === 0 ? pasteLabel : undefined)
         await mut('move_clip', { trackId, clipId: newId, newPositionTicks: newPos })
       } catch (e) {
         console.warn('paste failed for clip', c.id, e)
@@ -346,27 +365,27 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   },
 
   setClipGain: async (trackId, clipId, gainDb) => {
-    await mut('set_clip_gain', { trackId, clipId, gainDb })
+    await mut('set_clip_gain', { trackId, clipId, gainDb }, `Set clip gain to ${gainDb.toFixed(1)} dB`)
     await get().fetchTracks()
   },
 
   setClipFades: async (trackId, clipId, fadeInTicks, fadeOutTicks) => {
-    await mut('set_clip_fades', { trackId, clipId, fadeInTicks, fadeOutTicks })
+    await mut('set_clip_fades', { trackId, clipId, fadeInTicks, fadeOutTicks }, 'Edit clip fades')
     await get().fetchTracks()
   },
 
   toggleClipReverse: async (trackId, clipId) => {
-    await mut('toggle_clip_reverse', { trackId, clipId })
+    await mut('toggle_clip_reverse', { trackId, clipId }, 'Reverse clip')
     await get().fetchTracks()
   },
 
   setClipPitch: async (trackId, clipId, pitchSemitones) => {
-    await mut('set_clip_pitch', { trackId, clipId, pitchSemitones })
+    await mut('set_clip_pitch', { trackId, clipId, pitchSemitones }, `Pitch clip ${pitchSemitones >= 0 ? '+' : ''}${pitchSemitones} st`)
     await get().fetchTracks()
   },
 
   setClipStretch: async (trackId, clipId, stretchRatio) => {
-    await mut('set_clip_stretch', { trackId, clipId, stretchRatio })
+    await mut('set_clip_stretch', { trackId, clipId, stretchRatio }, `Set clip stretch ${stretchRatio.toFixed(2)}×`)
     await get().fetchTracks()
   },
 
@@ -374,6 +393,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const ok = await invoke<boolean>('undo')
     if (ok) {
       useProjectStore.getState().markDirty()
+      useHistoryStore.getState().undoOne()
       await get().fetchTracks()
     }
     return ok
@@ -383,6 +403,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const ok = await invoke<boolean>('redo')
     if (ok) {
       useProjectStore.getState().markDirty()
+      useHistoryStore.getState().redoOne()
       await get().fetchTracks()
     }
     return ok

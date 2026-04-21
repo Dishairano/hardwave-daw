@@ -50,6 +50,7 @@ interface TitleBarProps {
   onCheckForUpdates: () => void
   onToggleAbout: () => void
   onToggleShortcuts: () => void
+  onOpenHistory: () => void
   onExportAudio: () => void
   onSaveAsTemplate: () => void
   recentProjects: string[]
@@ -70,7 +71,7 @@ export function TitleBar(props: TitleBarProps) {
     onCut, onCopy, onPaste, onDuplicate, onSelectAll,
     onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
     onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
-    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onExportAudio,
+    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onOpenHistory, onExportAudio,
     onSaveAsTemplate,
     recentProjects, onOpenRecentProject, onClearRecentProjects,
     showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
@@ -131,6 +132,7 @@ export function TitleBar(props: TitleBarProps) {
       items: [
         { label: 'Undo', shortcut: 'Ctrl+Z', action: onUndo },
         { label: 'Redo', shortcut: 'Ctrl+Y', action: onRedo },
+        { label: 'History...', action: onOpenHistory },
         { separator: true, label: '' },
         { label: 'Cut', shortcut: 'Ctrl+X', action: onCut },
         { label: 'Copy', shortcut: 'Ctrl+C', action: onCopy },
