@@ -17,6 +17,8 @@ import { FloatingWindow } from './components/FloatingWindow'
 import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChangesDialog'
 import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
 import { useUserTemplateStore } from './stores/userTemplateStore'
+import { useTrackTemplateStore } from './stores/trackTemplateStore'
+import { TrackTemplateManager } from './components/TrackTemplateManager'
 import { WelcomeScreen, shouldSkipWelcome } from './components/WelcomeScreen'
 import { NotificationHost } from './components/NotificationHost'
 import { MetronomeScheduler } from './components/transport/MetronomeScheduler'
@@ -71,6 +73,7 @@ export function App() {
   const [showAbout, setShowAbout] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
+  const [showTrackTemplateManager, setShowTrackTemplateManager] = useState(false)
   const [showLoudness, setShowLoudness] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
@@ -483,6 +486,22 @@ export function App() {
     } catch {}
   }, [])
 
+  const applyTrackTemplate = useCallback(async (templateId: string) => {
+    const template = useTrackTemplateStore.getState().get(templateId)
+    if (!template) return
+    const tracks = useTrackStore.getState()
+    const before = new Set(tracks.tracks.map(t => t.id))
+    if (template.kind === 'Midi') await tracks.addMidiTrack(template.trackName)
+    else await tracks.addAudioTrack(template.trackName)
+    const after = useTrackStore.getState().tracks
+    const created = after.find(t => !before.has(t.id))
+    if (!created) return
+    await useTrackStore.getState().setTrackColor(created.id, template.color)
+    await useTrackStore.getState().setVolume(created.id, template.volumeDb)
+    await useTrackStore.getState().setPan(created.id, template.pan)
+    useNotificationStore.getState().push('info', `Added track from template "${template.name}"`)
+  }, [])
+
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -597,6 +616,8 @@ export function App() {
         onAddAudioTrack={() => useTrackStore.getState().addAudioTrack()}
         onAddInstrumentTrack={() => useTrackStore.getState().addMidiTrack()}
         onAddAutomationTrack={handleAddAutomationTrack}
+        onApplyTrackTemplate={applyTrackTemplate}
+        onManageTrackTemplates={() => setShowTrackTemplateManager(true)}
         onToggleBrowser={() => setShowBrowser(v => !v)}
         onTogglePlaylist={() => setShowPlaylist(v => !v)}
         onToggleChannelRack={() => setShowChannelRack(v => !v)}
@@ -671,6 +692,7 @@ export function App() {
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
       <ShortcutsPanel open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <HelpOverlay open={showHelp} onClose={() => setShowHelp(false)} />
+      <TrackTemplateManager open={showTrackTemplateManager} onClose={() => setShowTrackTemplateManager(false)} />
       {sampleEditorPath && <SampleEditor path={sampleEditorPath} onClose={closeSampleEditor} />}
       {beatSlicerPath && <BeatSlicer path={beatSlicerPath} onClose={closeBeatSlicer} />}
       {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}

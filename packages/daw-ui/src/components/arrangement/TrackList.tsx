@@ -3,6 +3,8 @@ import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { useTransportStore } from '../../stores/transportStore'
 import { PATTERN_COLORS } from '../../stores/patternStore'
+import { useTrackTemplateStore } from '../../stores/trackTemplateStore'
+import { useNotificationStore } from '../../stores/notificationStore'
 import { DetachButton } from '../FloatingWindow'
 
 export function TrackList() {
@@ -283,6 +285,22 @@ export function TrackList() {
                 />
               ))}
             </div>
+            <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+            <TrackMenuItem label="Save as track template…" onClick={() => {
+              setCtxMenu(null)
+              const name = window.prompt('Template name:', t.name)?.trim()
+              if (!name) return
+              const kind = t.kind === 'Midi' ? 'Midi' : 'Audio'
+              useTrackTemplateStore.getState().save({
+                name,
+                kind,
+                trackName: t.name,
+                color: t.color,
+                volumeDb: t.volume_db,
+                pan: t.pan,
+              })
+              useNotificationStore.getState().push('info', `Saved track template "${name}"`)
+            }} />
             <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
             <TrackMenuItem label="Delete" shortcut="Del" danger onClick={async () => {
               setCtxMenu(null)

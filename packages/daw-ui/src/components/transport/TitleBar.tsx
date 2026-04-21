@@ -3,6 +3,7 @@ import { hw } from '../../theme'
 import { usePatternStore } from '../../stores/patternStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { useUiPreferencesStore, UI_SCALE_OPTIONS, type UiScale } from '../../stores/uiPreferencesStore'
+import { useTrackTemplateStore } from '../../stores/trackTemplateStore'
 
 function openExternal(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer')
@@ -38,6 +39,8 @@ interface TitleBarProps {
   onAddAudioTrack: () => void
   onAddInstrumentTrack: () => void
   onAddAutomationTrack: () => void
+  onApplyTrackTemplate: (templateId: string) => void
+  onManageTrackTemplates: () => void
   onToggleBrowser: () => void
   onTogglePlaylist: () => void
   onToggleChannelRack: () => void
@@ -72,6 +75,7 @@ export function TitleBar(props: TitleBarProps) {
     onUndo, onRedo,
     onCut, onCopy, onPaste, onDuplicate, onSelectAll,
     onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
+    onApplyTrackTemplate, onManageTrackTemplates,
     onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
     onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onToggleHelp, onOpenHistory, onExportAudio,
     onSaveAsTemplate, onAutoCrossfade,
@@ -88,6 +92,7 @@ export function TitleBar(props: TitleBarProps) {
   const uiScaleMode = useUiPreferencesStore(s => s.mode)
   const effectiveScale = useUiPreferencesStore(s => s.effectiveScale)
   const setUiScaleMode = useUiPreferencesStore(s => s.setUiScaleMode)
+  const trackTemplates = useTrackTemplateStore(s => s.templates)
 
   const uiScaleItems: MenuItem[] = [
     {
@@ -152,6 +157,20 @@ export function TitleBar(props: TitleBarProps) {
         { label: 'Audio track', action: onAddAudioTrack },
         { label: 'Instrument track', action: onAddInstrumentTrack },
         { label: 'Automation track', action: onAddAutomationTrack },
+        { separator: true, label: '' },
+        {
+          label: 'Track from template',
+          submenu: trackTemplates.length === 0
+            ? [{ label: '(no templates yet)', disabled: true }]
+            : [
+                ...trackTemplates.map(t => ({
+                  label: `${t.name} — ${t.kind}`,
+                  action: () => onApplyTrackTemplate(t.id),
+                })),
+                { separator: true, label: '' },
+                { label: 'Manage templates…', action: onManageTrackTemplates },
+              ],
+        },
         { separator: true, label: '' },
         { label: 'Plugin...', disabled: true },
       ],
