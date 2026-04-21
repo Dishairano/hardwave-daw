@@ -1,7 +1,26 @@
-use crate::AppState;
+use crate::{AppState, AudioPrefs};
 use hardwave_metering::MeterSnapshot;
 use serde::Serialize;
 use tauri::State;
+
+/// Snapshot the current engine audio config into a pref struct and write it to
+/// disk. Called from every setter so the on-disk prefs stay aligned with the
+/// running engine state.
+fn persist_audio_prefs(state: &State<AppState>) {
+    let engine = state.engine.lock();
+    let (output_device, sample_rate, buffer_size) = engine.audio_config();
+    let (input_device, input_channels) = engine.input_config();
+    let prefs = AudioPrefs {
+        output_device,
+        sample_rate,
+        buffer_size,
+        wasapi_exclusive: engine.wasapi_exclusive(),
+        input_device,
+        input_channels,
+    };
+    drop(engine);
+    prefs.save();
+}
 
 #[derive(Serialize)]
 pub struct AudioDeviceInfo {
@@ -91,7 +110,9 @@ pub fn get_wasapi_exclusive(state: State<AppState>) -> WasapiExclusiveStatus {
 
 #[tauri::command]
 pub fn set_wasapi_exclusive(state: State<AppState>, enabled: bool) -> Result<(), String> {
-    state.engine.lock().set_wasapi_exclusive(enabled)
+    state.engine.lock().set_wasapi_exclusive(enabled)?;
+    persist_audio_prefs(&state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -104,7 +125,9 @@ pub fn set_audio_config(
     state
         .engine
         .lock()
-        .set_audio_config(device, sample_rate, buffer_size)
+        .set_audio_config(device, sample_rate, buffer_size)?;
+    persist_audio_prefs(&state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -142,4 +165,5 @@ pub fn set_audio_input_config(
     channels: u16,
 ) {
     state.engine.lock().set_input_config(device, channels);
+    persist_audio_prefs(&state);
 }

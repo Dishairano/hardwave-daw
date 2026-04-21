@@ -1575,6 +1575,7 @@ dependencies = [
 name = "hardwave-daw"
 version = "0.1.0"
 dependencies = [
+ "dirs 5.0.1",
  "env_logger",
  "hardwave-dsp",
  "hardwave-engine",

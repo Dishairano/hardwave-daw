@@ -3,8 +3,10 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 mod commands;
+mod prefs;
 
 use hardwave_engine::DawEngine;
+pub use prefs::AudioPrefs;
 
 /// Shared engine state accessible from Tauri commands.
 pub struct AppState {
@@ -15,7 +17,24 @@ pub struct AppState {
 pub fn run() {
     env_logger::init();
 
-    let engine = DawEngine::new();
+    let mut engine = DawEngine::new();
+    // Apply persisted audio preferences before the engine starts so the first
+    // stream honors the user's last device choice instead of the default.
+    let prefs = AudioPrefs::load();
+    if let Err(e) = engine.set_audio_config(
+        prefs.output_device.clone(),
+        prefs.sample_rate,
+        prefs.buffer_size,
+    ) {
+        log::warn!("Failed to apply saved audio output prefs: {e}");
+    }
+    engine.set_input_config(prefs.input_device.clone(), prefs.input_channels);
+    #[cfg(target_os = "windows")]
+    if prefs.wasapi_exclusive {
+        if let Err(e) = engine.set_wasapi_exclusive(true) {
+            log::warn!("Failed to apply saved WASAPI exclusive pref: {e}");
+        }
+    }
     let state = AppState {
         engine: Arc::new(Mutex::new(engine)),
     };
