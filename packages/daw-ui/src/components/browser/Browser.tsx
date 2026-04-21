@@ -192,12 +192,19 @@ function FilesTab() {
     const v = raw ? parseFloat(raw) : 0.7
     return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.7
   })
+  const [autoPreview, setAutoPreview] = useState<boolean>(() => {
+    return localStorage.getItem('hardwave.daw.autoPreview') === '1'
+  })
   const currentAudioRef = useRef<HTMLAudioElement | null>(null)
 
   useEffect(() => {
     localStorage.setItem('hardwave.daw.previewVolume', String(previewVolume))
     if (currentAudioRef.current) currentAudioRef.current.volume = previewVolume
   }, [previewVolume])
+
+  useEffect(() => {
+    localStorage.setItem('hardwave.daw.autoPreview', autoPreview ? '1' : '0')
+  }, [autoPreview])
 
   const q = query.trim().toLowerCase()
   const filter = (p: string) => !q || p.toLowerCase().includes(q)
@@ -307,6 +314,7 @@ function FilesTab() {
             key={p} path={p} depth={depth + 1}
             isFavorite
             isPreviewing={previewing === p}
+            autoPreview={autoPreview}
             onToggleFavorite={() => toggleFav(p)}
             onPreview={() => preview(p)}
             onImport={() => importOne(p)}
@@ -376,6 +384,22 @@ function FilesTab() {
         <span style={{ minWidth: 24, textAlign: 'right' }}>
           {Math.round(previewVolume * 100)}%
         </span>
+        <button
+          onClick={() => setAutoPreview(v => !v)}
+          title={autoPreview
+            ? 'Auto-preview ON: click a filename to hear it (double-click to import)'
+            : 'Auto-preview OFF: click a filename to import it to the selected track'}
+          data-testid="auto-preview-toggle"
+          style={{
+            padding: '2px 6px', fontSize: 9, fontWeight: 600,
+            color: autoPreview ? hw.accent : hw.textFaint,
+            background: autoPreview ? 'rgba(124,201,255,0.12)' : 'transparent',
+            border: `1px solid ${autoPreview ? hw.accent : hw.border}`,
+            borderRadius: hw.radius.sm, cursor: 'pointer',
+          }}
+        >
+          Auto
+        </button>
       </div>
 
       {previewing && (
@@ -408,6 +432,7 @@ function FilesTab() {
               key={p} path={p} depth={0}
               isFavorite
               isPreviewing={previewing === p}
+              autoPreview={autoPreview}
               onToggleFavorite={() => toggleFav(p)}
               onPreview={() => preview(p)}
               onImport={() => importOne(p)}
@@ -435,6 +460,7 @@ function FilesTab() {
             key={p} path={p} depth={0}
             isFavorite={false}
             isPreviewing={previewing === p}
+            autoPreview={autoPreview}
             onToggleFavorite={() => toggleFav(p)}
             onPreview={() => preview(p)}
             onImport={() => importOne(p)}
@@ -631,8 +657,9 @@ function PluginItem({ plugin, canAdd, isFavorite, onToggleFavorite }: {
   )
 }
 
-function FileItem({ path, depth = 0, isFavorite, isPreviewing, onToggleFavorite, onPreview, onImport, onRemove }: {
+function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = false, onToggleFavorite, onPreview, onImport, onRemove }: {
   path: string; depth?: number; isFavorite: boolean; isPreviewing: boolean;
+  autoPreview?: boolean;
   onToggleFavorite: () => void; onPreview: () => void;
   onImport: () => void; onRemove: () => void;
 }) {
@@ -683,7 +710,14 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, onToggleFavorite,
       onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
     >
-      <div style={{ flex: 1, minWidth: 0 }} onClick={onImport} title={`Import to selected track\n${path}`}>
+      <div
+        style={{ flex: 1, minWidth: 0 }}
+        onClick={autoPreview ? onPreview : onImport}
+        onDoubleClick={autoPreview ? onImport : undefined}
+        title={autoPreview
+          ? `Preview (double-click to import)\n${path}`
+          : `Import to selected track\n${path}`}
+      >
         <div style={{
           fontSize: 10, color: hw.textPrimary,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
