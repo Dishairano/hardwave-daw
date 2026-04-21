@@ -62,10 +62,14 @@ interface TrackState {
   selectedClipId: string | null
   selectedClipIds: Set<string>
   clipboard: ClipInfo[]
+  activeMidiTrackId: string | null
+  activeMidiClipId: string | null
 
   fetchTracks: () => Promise<void>
   selectTrack: (id: string) => void
   selectClip: (clipId: string | null, trackId?: string) => void
+  setActiveMidiClip: (trackId: string | null, clipId: string | null) => void
+  ensureMidiClipOnTrack: (trackId: string) => Promise<string | null>
   addAudioTrack: (name?: string) => Promise<void>
   addMidiTrack: (name?: string) => Promise<void>
   removeTrack: (id: string) => Promise<void>
@@ -106,6 +110,26 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   selectedClipId: null,
   selectedClipIds: new Set(),
   clipboard: [],
+  activeMidiTrackId: null,
+  activeMidiClipId: null,
+
+  setActiveMidiClip: (trackId, clipId) => set({ activeMidiTrackId: trackId, activeMidiClipId: clipId }),
+
+  ensureMidiClipOnTrack: async (trackId) => {
+    const state = get()
+    const track = state.tracks.find(t => t.id === trackId)
+    if (!track || track.kind !== 'Midi') return null
+    const existing = track.clips.find(c => c.kind === 'midi')
+    if (existing) return existing.id
+    const newClipId = await mut<string>('create_midi_clip', {
+      trackId,
+      name: 'MIDI Clip',
+      positionTicks: 0,
+      lengthTicks: null,
+    })
+    await get().fetchTracks()
+    return newClipId
+  },
 
   fetchTracks: async () => {
     const trackList = await invoke<TrackInfo[]>('get_tracks')

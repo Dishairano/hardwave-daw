@@ -70,6 +70,28 @@ export function App() {
   // Crash recovery
   const [crashInfo, setCrashInfo] = useState<{ path: string; modified_unix: number } | null>(null)
 
+  // Open Piano Roll on request from arrangement double-click.
+  useEffect(() => {
+    const onOpen = () => setShowPianoRoll(true)
+    window.addEventListener('daw:openPianoRoll', onOpen)
+    return () => window.removeEventListener('daw:openPianoRoll', onOpen)
+  }, [])
+
+  // When Piano Roll opens with no active clip but a MIDI track is selected,
+  // ensure a default clip exists and bind it.
+  useEffect(() => {
+    if (!showPianoRoll) return
+    const ts = useTrackStore.getState()
+    if (ts.activeMidiClipId) return
+    const trackId = ts.selectedTrackId
+    if (!trackId) return
+    const track = ts.tracks.find(t => t.id === trackId)
+    if (!track || track.kind !== 'Midi') return
+    ts.ensureMidiClipOnTrack(trackId).then(clipId => {
+      if (clipId) ts.setActiveMidiClip(trackId, clipId)
+    }).catch(() => {})
+  }, [showPianoRoll])
+
   // Hint bar text
   const [hintText, setHintText] = useState('')
 

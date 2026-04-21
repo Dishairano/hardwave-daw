@@ -688,6 +688,19 @@ export function Arrangement() {
     forceRender(n => n + 1)
   }, [audioTracks, pixelsPerTick, trackHeight, getScrollOffset])
 
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    const rect = (e.target as HTMLElement).getBoundingClientRect()
+    const mouseX = e.clientX - rect.left
+    const mouseY = e.clientY - rect.top
+    if (mouseY < RULER_HEIGHT) return
+    const hit = hitTest(mouseX, mouseY, getScrollOffset())
+    if (!hit) return
+    if (hit.clip.kind === 'midi') {
+      useTrackStore.getState().setActiveMidiClip(hit.trackId, hit.clip.id)
+      window.dispatchEvent(new CustomEvent('daw:openPianoRoll'))
+    }
+  }, [hitTest, getScrollOffset])
+
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     const rect = (e.target as HTMLElement).getBoundingClientRect()
@@ -800,6 +813,7 @@ export function Arrangement() {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
         onWheel={handleWheel}
       />
