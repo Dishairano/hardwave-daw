@@ -55,6 +55,12 @@ pub fn run() {
             // Plugins
             commands::plugins::scan_plugins,
             commands::plugins::get_plugins,
+            commands::plugins::get_last_scan_diff,
+            commands::plugins::get_plugin_blocklist,
+            commands::plugins::set_plugin_blocklist,
+            commands::plugins::get_custom_scan_paths,
+            commands::plugins::set_custom_scan_paths,
+            commands::plugins::plugin_cache_path,
             commands::plugins::add_plugin_to_track,
             commands::plugins::remove_plugin_from_track,
             // Project
@@ -121,6 +127,34 @@ pub fn run() {
             let state = app.state::<AppState>();
             let engine = Arc::clone(&state.engine);
             let app_handle = app.handle().clone();
+
+            // Load the plugin cache from disk, then kick off a background
+            // rescan so added/removed plugins are detected on startup without
+            // blocking the UI. Persists the fresh cache after the scan.
+            {
+                let engine_for_scan = Arc::clone(&state.engine);
+                std::thread::spawn(move || {
+                    let cache_path = hardwave_plugin_host::PluginScanner::default_cache_path();
+                    if let Some(ref path) = cache_path {
+                        let eng = engine_for_scan.lock();
+                        let mut scanner = eng.plugin_scanner.lock();
+                        match scanner.load_cache_from_disk(path) {
+                            Ok(n) => log::info!("Loaded plugin cache: {n} entries"),
+                            Err(e) => log::warn!("Failed to load plugin cache: {e}"),
+                        }
+                    }
+                    {
+                        let eng = engine_for_scan.lock();
+                        let mut scanner = eng.plugin_scanner.lock();
+                        scanner.scan();
+                        if let Some(ref path) = cache_path {
+                            if let Err(e) = scanner.save_cache_to_disk(path) {
+                                log::warn!("Failed to save plugin cache: {e}");
+                            }
+                        }
+                    }
+                });
+            }
 
             // Hot-plug polling removed: cpal's device enumeration takes
             // hundreds of ms and blocks the engine lock, which stalls the

@@ -1,12 +1,20 @@
 use crate::AppState;
+use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::PluginDescriptor;
+use std::path::PathBuf;
 use tauri::State;
 
 #[tauri::command]
 pub fn scan_plugins(state: State<AppState>) -> Vec<PluginDescriptor> {
     let engine = state.engine.lock();
     let mut scanner = engine.plugin_scanner.lock();
-    scanner.scan().to_vec()
+    let result = scanner.scan().to_vec();
+    if let Some(path) = hardwave_plugin_host::PluginScanner::default_cache_path() {
+        if let Err(e) = scanner.save_cache_to_disk(&path) {
+            log::warn!("Failed to persist plugin cache: {e}");
+        }
+    }
+    result
 }
 
 #[tauri::command]
@@ -14,6 +22,59 @@ pub fn get_plugins(state: State<AppState>) -> Vec<PluginDescriptor> {
     let engine = state.engine.lock();
     let scanner = engine.plugin_scanner.lock();
     scanner.plugins().to_vec()
+}
+
+#[tauri::command]
+pub fn get_last_scan_diff(state: State<AppState>) -> ScanDiff {
+    let engine = state.engine.lock();
+    let scanner = engine.plugin_scanner.lock();
+    scanner.last_diff().clone()
+}
+
+#[tauri::command]
+pub fn get_plugin_blocklist(state: State<AppState>) -> Vec<String> {
+    let engine = state.engine.lock();
+    let scanner = engine.plugin_scanner.lock();
+    let mut list: Vec<String> = scanner.blocklist.iter().cloned().collect();
+    list.sort();
+    list
+}
+
+#[tauri::command]
+pub fn set_plugin_blocklist(state: State<AppState>, ids: Vec<String>) {
+    let engine = state.engine.lock();
+    let mut scanner = engine.plugin_scanner.lock();
+    scanner.blocklist = ids.into_iter().collect();
+}
+
+#[tauri::command]
+pub fn get_custom_scan_paths(state: State<AppState>) -> (Vec<String>, Vec<String>) {
+    let engine = state.engine.lock();
+    let scanner = engine.plugin_scanner.lock();
+    let vst3 = scanner
+        .custom_vst3_paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    let clap = scanner
+        .custom_clap_paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    (vst3, clap)
+}
+
+#[tauri::command]
+pub fn set_custom_scan_paths(state: State<AppState>, vst3: Vec<String>, clap: Vec<String>) {
+    let engine = state.engine.lock();
+    let mut scanner = engine.plugin_scanner.lock();
+    scanner.custom_vst3_paths = vst3.into_iter().map(PathBuf::from).collect();
+    scanner.custom_clap_paths = clap.into_iter().map(PathBuf::from).collect();
+}
+
+#[tauri::command]
+pub fn plugin_cache_path() -> Option<String> {
+    hardwave_plugin_host::PluginScanner::default_cache_path().map(|p| p.display().to_string())
 }
 
 #[tauri::command]
