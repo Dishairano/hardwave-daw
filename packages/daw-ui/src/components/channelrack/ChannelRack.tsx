@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
-import { usePatternStore, STEPS_PER_PATTERN } from '../../stores/patternStore'
+import { usePatternStore, STEPS_PER_PATTERN, PATTERN_COLORS } from '../../stores/patternStore'
 import { DetachButton } from '../FloatingWindow'
 
 const STEPS = STEPS_PER_PATTERN
@@ -56,6 +56,8 @@ export function ChannelRack() {
   const activePattern = usePatternStore(s => s.patterns.find(p => p.id === s.activeId) || s.patterns[0])
   const patternCount = usePatternStore(s => s.patterns.length)
   const patternIndex = usePatternStore(s => s.patterns.findIndex(p => p.id === s.activeId))
+  const getEffectiveLength = usePatternStore(s => s.getEffectiveLength)
+  const activePatternLength = getEffectiveLength(activePattern.id)
   const setStep = usePatternStore(s => s.setStep)
   const clearChannel = usePatternStore(s => s.clearChannel)
   const addPattern = usePatternStore(s => s.addPattern)
@@ -310,6 +312,7 @@ export function ChannelRack() {
                   const active = vel > 0
                   const groupIdx = Math.floor(i / 4)
                   const isOddGroup = groupIdx % 2 === 1
+                  const inRange = i < activePatternLength
                   return (
                     <button
                       key={i}
@@ -333,6 +336,7 @@ export function ChannelRack() {
                         overflow: 'hidden',
                         transition: 'background 0.05s',
                         padding: 0,
+                        opacity: inRange ? 1 : 0.3,
                       }}
                     >
                       {active && (
@@ -523,12 +527,28 @@ function PatternSwitcher() {
   const activeId = usePatternStore(s => s.activeId)
   const setActive = usePatternStore(s => s.setActive)
   const renamePattern = usePatternStore(s => s.renamePattern)
+  const setPatternColor = usePatternStore(s => s.setPatternColor)
+  const setPatternLength = usePatternStore(s => s.setPatternLength)
+  const getEffectiveLength = usePatternStore(s => s.getEffectiveLength)
   const prev = usePatternStore(s => s.prevPattern)
   const next = usePatternStore(s => s.nextPattern)
   const active = patterns.find(p => p.id === activeId) || patterns[0]
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState('')
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const paletteRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!paletteOpen) return
+    const onDoc = (e: MouseEvent) => {
+      if (paletteRef.current && !paletteRef.current.contains(e.target as Node)) {
+        setPaletteOpen(false)
+      }
+    }
+    window.addEventListener('mousedown', onDoc)
+    return () => window.removeEventListener('mousedown', onDoc)
+  }, [paletteOpen])
 
   useEffect(() => {
     if (renaming && inputRef.current) {
@@ -543,8 +563,49 @@ function PatternSwitcher() {
     if (v && v !== active.name) renamePattern(active.id, v)
   }
 
+  const activeColor = active.color || PATTERN_COLORS[0]
+  const effectiveLen = getEffectiveLength(active.id)
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2, position: 'relative' }}>
+      <div ref={paletteRef} style={{ position: 'relative' }}>
+        <button
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setPaletteOpen(v => !v) }}
+          title="Pattern color"
+          style={{
+            width: 14, height: 14, padding: 0,
+            background: activeColor,
+            border: `1px solid ${hw.border}`,
+            borderRadius: hw.radius.sm,
+            cursor: 'pointer', flexShrink: 0,
+          }}
+        />
+        {paletteOpen && (
+          <div style={{
+            position: 'absolute', top: 18, left: 0, zIndex: 50,
+            display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 3,
+            padding: 4,
+            background: 'rgba(12,12,18,0.96)',
+            border: `1px solid ${hw.border}`,
+            borderRadius: hw.radius.sm,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+          }}>
+            {PATTERN_COLORS.map(c => (
+              <button
+                key={c}
+                onClick={() => { setPatternColor(active.id, c); setPaletteOpen(false) }}
+                style={{
+                  width: 16, height: 16, padding: 0,
+                  background: c,
+                  border: active.color === c ? `1.5px solid ${hw.textBright}` : `1px solid ${hw.border}`,
+                  borderRadius: hw.radius.sm,
+                  cursor: 'pointer',
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
       <button onClick={prev} title="Previous pattern" style={{
         ...topBtn, width: 16, fontSize: 10, color: hw.textMuted,
       }}>
@@ -599,6 +660,28 @@ function PatternSwitcher() {
       }}>
         ›
       </button>
+      <input
+        type="number"
+        min={1}
+        max={64}
+        value={active.length ?? effectiveLen}
+        onChange={(e) => {
+          const v = parseInt(e.target.value, 10)
+          setPatternLength(active.id, Number.isFinite(v) && v > 0 ? v : undefined)
+        }}
+        onDoubleClick={() => setPatternLength(active.id, undefined)}
+        title={active.length
+          ? `Pattern length: ${active.length} steps (double-click to auto)`
+          : `Auto length: ${effectiveLen} steps (edit to override)`}
+        style={{
+          width: 32, fontSize: 9, color: active.length ? hw.accent : hw.textFaint,
+          background: 'rgba(255,255,255,0.04)',
+          border: `1px solid ${hw.border}`,
+          borderRadius: hw.radius.sm,
+          padding: '1px 3px', outline: 'none', textAlign: 'center',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      />
     </div>
   )
 }
