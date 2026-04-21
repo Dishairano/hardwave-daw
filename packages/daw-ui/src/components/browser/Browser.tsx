@@ -3,6 +3,7 @@ import { hw } from '../../theme'
 import { usePluginStore } from '../../stores/pluginStore'
 import { useTrackStore } from '../../stores/trackStore'
 import { useBrowserStore, type FolderNode } from '../../stores/browserStore'
+import { useSampleEditorStore } from '../../stores/sampleEditorStore'
 import { DetachButton } from '../FloatingWindow'
 
 type Tab = 'plugins' | 'files' | 'project'
@@ -846,6 +847,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           </div>
           <FileMenuItem label={isPreviewing ? 'Stop preview' : 'Preview'} onClick={() => { setCtxMenu(null); onPreview() }} />
           <FileMenuItem label="Import to selected track" onClick={() => { setCtxMenu(null); onImport() }} />
+          <FileMenuItem label="Edit sample…" onClick={() => { setCtxMenu(null); useSampleEditorStore.getState().open(path) }} />
           <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
           <FileMenuItem label={isFavorite ? 'Remove favorite' : 'Add to favorites'} onClick={() => { setCtxMenu(null); onToggleFavorite() }} />
           <FileMenuItem label="Copy full path" onClick={copyPath} />

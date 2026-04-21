@@ -22,6 +22,8 @@ import { NotificationHost } from './components/NotificationHost'
 import { MetronomeScheduler } from './components/transport/MetronomeScheduler'
 import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecoveryDialog'
 import { ShortcutsPanel } from './components/ShortcutsPanel'
+import { SampleEditor } from './components/sample-editor/SampleEditor'
+import { useSampleEditorStore } from './stores/sampleEditorStore'
 import { invoke } from '@tauri-apps/api/core'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
@@ -60,6 +62,8 @@ export function App() {
   const [showThemePicker, setShowThemePicker] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const sampleEditorPath = useSampleEditorStore(s => s.openPath)
+  const closeSampleEditor = useSampleEditorStore(s => s.close)
   const [showDevPanel, setShowDevPanel] = useState(false) // DEV ONLY
 
   // Splash screen
@@ -633,6 +637,7 @@ export function App() {
       {showThemePicker && <ThemePicker onClose={() => setShowThemePicker(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
       <ShortcutsPanel open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+      {sampleEditorPath && <SampleEditor path={sampleEditorPath} onClose={closeSampleEditor} />}
       {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}
 
       {savePromptAction && (
