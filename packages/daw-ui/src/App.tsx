@@ -15,6 +15,7 @@ import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow } from './components/FloatingWindow'
 import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChangesDialog'
 import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
+import { WelcomeScreen } from './components/WelcomeScreen'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
 import { useTransportStore } from './stores/transportStore'
@@ -54,6 +55,15 @@ export function App() {
   // Splash screen
   const [showSplash, setShowSplash] = useState(true)
   const [dataReady, setDataReady] = useState(false)
+
+  // Welcome screen — shown on startup unless dismissed this session
+  const [showWelcome, setShowWelcome] = useState(() => {
+    try { return sessionStorage.getItem('hardwave.daw.welcomeDismissed') !== '1' } catch { return true }
+  })
+  const dismissWelcome = useCallback(() => {
+    setShowWelcome(false)
+    try { sessionStorage.setItem('hardwave.daw.welcomeDismissed', '1') } catch {}
+  }, [])
 
   // Hint bar text
   const [hintText, setHintText] = useState('')
@@ -562,6 +572,16 @@ export function App() {
         <TemplateDialog
           onPick={handlePickTemplate}
           onCancel={() => setShowTemplateDialog(false)}
+        />
+      )}
+
+      {showWelcome && !showSplash && (
+        <WelcomeScreen
+          recentProjects={recentProjects}
+          onOpenRecent={handleOpenRecent}
+          onNewProject={handleNewProject}
+          onOpenProject={handleOpenProject}
+          onDismiss={dismissWelcome}
         />
       )}
 
