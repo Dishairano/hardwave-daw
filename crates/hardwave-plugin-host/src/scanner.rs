@@ -235,34 +235,99 @@ impl PluginScanner {
 
             if ext == "clap" {
                 log::debug!("Found CLAP: {}", path.display());
-                let name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Unknown")
-                    .to_string();
-
                 if let Some(cb) = progress.as_deref_mut() {
                     cb(self.cache.len(), &path.display().to_string());
                 }
-
-                self.cache.push(PluginDescriptor {
-                    id: format!("clap:{}", name.to_lowercase().replace(' ', "-")),
-                    name,
-                    vendor: "Unknown".into(),
-                    version: "1.0.0".into(),
-                    format: PluginFormat::Clap,
-                    path: path.clone(),
-                    category: PluginCategory::Effect,
-                    num_inputs: 2,
-                    num_outputs: 2,
-                    has_midi_input: false,
-                    has_editor: true,
-                });
+                for d in parse_clap_library(&path) {
+                    self.cache.push(d);
+                }
             } else if path.is_dir() {
                 self.scan_clap_dir(&path, progress.as_deref_mut());
             }
         }
     }
+}
+
+/// Load a `.clap` shared library, read its plugin descriptors, and convert
+/// them to [`PluginDescriptor`]. Falls back to a filename-only stub if the
+/// library cannot be loaded or exposes no plugins — so broken CLAPs still
+/// appear in the browser (marked Unknown) where they can be blocklisted.
+fn parse_clap_library(library_path: &Path) -> Vec<PluginDescriptor> {
+    let fallback_name = library_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    match crate::clap_ffi::read_clap_descriptors(library_path) {
+        Some(list) if !list.is_empty() => list
+            .into_iter()
+            .map(|d| {
+                let name = if d.name.is_empty() { fallback_name.clone() } else { d.name };
+                let vendor = if d.vendor.is_empty() { "Unknown".into() } else { d.vendor };
+                let version = if d.version.is_empty() { "0.0.0".into() } else { d.version };
+                let id = if d.id.is_empty() {
+                    format!("clap:{}", name.to_lowercase().replace(' ', "-"))
+                } else {
+                    format!("clap:{}", d.id)
+                };
+                let (category, has_midi_input) = classify_clap(&d.features);
+                PluginDescriptor {
+                    id,
+                    name,
+                    vendor,
+                    version,
+                    format: PluginFormat::Clap,
+                    path: library_path.to_path_buf(),
+                    category,
+                    num_inputs: 2,
+                    num_outputs: 2,
+                    has_midi_input,
+                    has_editor: true,
+                }
+            })
+            .collect(),
+        _ => vec![PluginDescriptor {
+            id: format!("clap:{}", fallback_name.to_lowercase().replace(' ', "-")),
+            name: fallback_name,
+            vendor: "Unknown".into(),
+            version: "0.0.0".into(),
+            format: PluginFormat::Clap,
+            path: library_path.to_path_buf(),
+            category: PluginCategory::Effect,
+            num_inputs: 2,
+            num_outputs: 2,
+            has_midi_input: false,
+            has_editor: true,
+        }],
+    }
+}
+
+fn classify_clap(features: &[String]) -> (PluginCategory, bool) {
+    // CLAP feature strings are lowercase dotted identifiers. See
+    // "clap/plugin-features.h" in the CLAP SDK for the full list.
+    let mut is_instrument = false;
+    let mut is_analyzer = false;
+    let mut has_midi_input = false;
+    for f in features {
+        match f.as_str() {
+            "instrument" | "synthesizer" | "drum" | "drum-machine" | "sampler" => {
+                is_instrument = true;
+                has_midi_input = true;
+            }
+            "analyzer" => is_analyzer = true,
+            "note-effect" | "note-detector" => has_midi_input = true,
+            _ => {}
+        }
+    }
+    let cat = if is_instrument {
+        PluginCategory::Instrument
+    } else if is_analyzer {
+        PluginCategory::Analyzer
+    } else {
+        PluginCategory::Effect
+    };
+    (cat, has_midi_input)
 }
 
 /// Read a VST3 bundle and return one descriptor per audio-module class.
