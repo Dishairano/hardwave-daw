@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { hw } from '../../theme'
 import { useTransportStore, SNAP_VALUES } from '../../stores/transportStore'
 import { useTrackStore } from '../../stores/trackStore'
@@ -380,20 +380,7 @@ export function Toolbar(props: ToolbarProps) {
       <Sep />
 
       {/* 14. CPU / Polyphony */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} onMouseEnter={hint('CPU / Polyphony')} onMouseLeave={clear}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-          <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>CPU</span>
-          <div style={{ width: 30, height: 4, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
-            <div style={{ width: '12%', height: '100%', background: hw.green, borderRadius: hw.radius.sm }} />
-          </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-          <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>POLY</span>
-          <div style={{ width: 30, height: 4, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
-            <div style={{ width: '5%', height: '100%', background: hw.green, borderRadius: hw.radius.sm }} />
-          </div>
-        </div>
-      </div>
+      <CpuPolyMeters onEnter={hint} onLeave={clear} />
 
       <Sep />
 
@@ -414,6 +401,73 @@ export function Toolbar(props: ToolbarProps) {
 }
 
 /* --- Sub-components --- */
+
+// Frame-time based CPU approximation. Samples the interval between rAF callbacks
+// and compares it to a 16.67ms target (60fps). A slowdown below 60fps indicates
+// either the audio thread or other main-thread work is eating CPU.
+function useCpuEstimate(): number {
+  const [pct, setPct] = useState(0)
+  const samples = useRef<number[]>([])
+  const lastTs = useRef<number>(0)
+  const rafId = useRef<number>(0)
+  const lastUpdate = useRef<number>(0)
+  useEffect(() => {
+    const TARGET_MS = 1000 / 60
+    const tick = (ts: number) => {
+      if (lastTs.current > 0) {
+        const dt = ts - lastTs.current
+        samples.current.push(dt)
+        if (samples.current.length > 60) samples.current.shift()
+      }
+      lastTs.current = ts
+      if (ts - lastUpdate.current > 500) {
+        lastUpdate.current = ts
+        const arr = samples.current
+        if (arr.length > 10) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length
+          const load = Math.max(0, Math.min(100, Math.round((1 - TARGET_MS / avg) * 100)))
+          setPct(load)
+        }
+      }
+      rafId.current = requestAnimationFrame(tick)
+    }
+    rafId.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId.current)
+  }, [])
+  return pct
+}
+
+function CpuPolyMeters({ onEnter, onLeave }: { onEnter: (text: string) => () => void; onLeave: () => void }) {
+  const cpu = useCpuEstimate()
+  const cpuColor = cpu > 80 ? hw.red : cpu > 50 ? hw.yellow : hw.green
+  return (
+    <div
+      style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+      onMouseEnter={onEnter(`CPU ${cpu}% / Polyphony`)}
+      onMouseLeave={onLeave}
+    >
+      <div
+        data-testid="toolbar-cpu"
+        title={`CPU load ~${cpu}% (frame-time estimate)`}
+        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}
+      >
+        <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>CPU</span>
+        <div style={{ width: 30, height: 4, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
+          <div style={{
+            width: `${cpu}%`, height: '100%', background: cpuColor,
+            borderRadius: hw.radius.sm, transition: 'width 0.3s, background 0.3s',
+          }} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+        <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1 }}>POLY</span>
+        <div style={{ width: 30, height: 4, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}` }}>
+          <div style={{ width: '5%', height: '100%', background: hw.green, borderRadius: hw.radius.sm }} />
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function Sep() {
   return <div style={{ width: 1, height: 26, background: hw.border, margin: '0 3px' }} />
