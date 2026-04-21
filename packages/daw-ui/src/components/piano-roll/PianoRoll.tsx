@@ -3,7 +3,14 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { PianoKeyboard } from './PianoKeyboard'
 import { VelocityLane } from './VelocityLane'
+import { CcLane, CcTool } from './CcLane'
 import { Minimap } from './Minimap'
+import {
+  BUILT_IN_CC_LANES,
+  customCcLane,
+  CcLaneDefinition,
+  useMidiCcStore,
+} from '../../stores/midiCcStore'
 import { DetachButton } from '../FloatingWindow'
 import { useTrackStore } from '../../stores/trackStore'
 import { useProjectStore } from '../../stores/projectStore'
@@ -165,6 +172,32 @@ export function PianoRoll() {
   const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number; additive: boolean } | null>(null)
   const [hoverInfo, setHoverInfo] = useState<{ x: number; y: number; label: string } | null>(null)
   const [chordPreview, setChordPreview] = useState<{ rootPitch: number; startTick: number } | null>(null)
+  const [ccTool, setCcTool] = useState<CcTool>('pencil')
+  const [customCcNumber, setCustomCcNumber] = useState<string>('')
+  const visibleCcLaneIds = useMidiCcStore(s => (activeClipId ? s.visibleLanes[activeClipId] ?? [] : []))
+  const ccLaneHeight = useMidiCcStore(s => (activeClipId ? s.laneHeight[activeClipId] ?? 70 : 70))
+  const addCcLane = useMidiCcStore(s => s.addLane)
+  const removeCcLane = useMidiCcStore(s => s.removeLane)
+  const clearCcLane = useMidiCcStore(s => s.clearLane)
+  const setCcLaneHeight = useMidiCcStore(s => s.setLaneHeight)
+  const ccLaneResize = useRef<{ startY: number; startH: number } | null>(null)
+  const onCcLaneResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    if (!activeClipId) return
+    ccLaneResize.current = { startY: e.clientY, startH: ccLaneHeight }
+    const onMove = (ev: MouseEvent) => {
+      if (!ccLaneResize.current || !activeClipId) return
+      const dy = ccLaneResize.current.startY - ev.clientY
+      setCcLaneHeight(activeClipId, ccLaneResize.current.startH + dy)
+    }
+    const onUp = () => {
+      ccLaneResize.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [activeClipId, ccLaneHeight, setCcLaneHeight])
   const [noteCtx, setNoteCtx] = useState<{ x: number; y: number; noteIndex: number } | null>(null)
   const [velFromY, setVelFromY] = useState(false)
   const [qwertyEnabled, setQwertyEnabled] = useState<boolean>(() => {
@@ -2005,6 +2038,167 @@ export function PianoRoll() {
         onVelocityChange={handleVelocityChange}
       />
 
+      {activeClipId && visibleCcLaneIds.length > 0 && (() => {
+        const clipForLen = activeTrackId
+          ? tracks.find(t => t.id === activeTrackId)?.clips.find(c => c.id === activeClipId)
+          : undefined
+        const clipLengthTicks = clipForLen?.length_ticks ?? PPQ * 16
+        const allDefs: CcLaneDefinition[] = [
+          ...BUILT_IN_CC_LANES,
+          ...visibleCcLaneIds
+            .filter(id => !BUILT_IN_CC_LANES.some(b => b.id === id) && id.startsWith('cc'))
+            .map(id => {
+              const n = parseInt(id.slice(2), 10)
+              return customCcLane(isNaN(n) ? 0 : n)
+            }),
+        ]
+        return (
+          <div>
+            <div
+              onMouseDown={onCcLaneResizeStart}
+              title="Drag to resize CC lanes"
+              style={{
+                height: 4,
+                cursor: 'ns-resize',
+                background: 'rgba(255,255,255,0.02)',
+                borderTop: '1px solid rgba(255,255,255,0.05)',
+                borderBottom: '1px solid rgba(255,255,255,0.05)',
+              }}
+            />
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '3px 8px', background: hw.bgPanel,
+              borderBottom: `1px solid rgba(255,255,255,0.04)`,
+              fontSize: 10, color: hw.textFaint,
+            }}>
+              <span style={{ color: hw.textSecondary, fontWeight: 600 }}>CC</span>
+              <div style={{ display: 'flex', gap: 2 }}>
+                {(['pencil', 'line', 'curve'] as CcTool[]).map(t => (
+                  <button
+                    key={t}
+                    onClick={() => setCcTool(t)}
+                    style={{
+                      padding: '2px 7px', fontSize: 9,
+                      background: ccTool === t ? hw.accent : 'transparent',
+                      color: ccTool === t ? '#fff' : hw.textSecondary,
+                      border: `1px solid ${ccTool === t ? hw.accent : hw.border}`,
+                      borderRadius: 3, cursor: 'pointer',
+                      textTransform: 'uppercase', letterSpacing: 0.4,
+                    }}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+              <div style={{ flex: 1 }} />
+              <input
+                type="number"
+                min={0}
+                max={127}
+                placeholder="Custom CC#"
+                value={customCcNumber}
+                onChange={e => setCustomCcNumber(e.target.value)}
+                style={{
+                  width: 70, fontSize: 10, padding: '2px 4px',
+                  background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
+                  border: `1px solid ${hw.border}`, borderRadius: 3,
+                }}
+              />
+              <button
+                onClick={() => {
+                  const n = parseInt(customCcNumber, 10)
+                  if (!activeClipId || isNaN(n) || n < 0 || n > 127) return
+                  addCcLane(activeClipId, `cc${n}`)
+                  setCustomCcNumber('')
+                }}
+                style={laneAddBtn}
+              >
+                Add CC
+              </button>
+              <select
+                value=""
+                onChange={e => {
+                  if (!e.target.value || !activeClipId) return
+                  addCcLane(activeClipId, e.target.value)
+                  e.target.value = ''
+                }}
+                style={{
+                  fontSize: 10, padding: '2px 4px',
+                  background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
+                  border: `1px solid ${hw.border}`, borderRadius: 3,
+                }}
+              >
+                <option value="">+ Preset lane…</option>
+                {BUILT_IN_CC_LANES.filter(d => !visibleCcLaneIds.includes(d.id)).map(d => (
+                  <option key={d.id} value={d.id}>{d.label}</option>
+                ))}
+              </select>
+            </div>
+            {visibleCcLaneIds.map(laneId => {
+              let def = allDefs.find(d => d.id === laneId)
+              if (!def) {
+                if (laneId.startsWith('cc')) {
+                  const n = parseInt(laneId.slice(2), 10)
+                  def = customCcLane(isNaN(n) ? 0 : n)
+                } else {
+                  return null
+                }
+              }
+              return (
+                <CcLane
+                  key={laneId}
+                  clipId={activeClipId}
+                  def={def}
+                  height={ccLaneHeight}
+                  keyboardWidth={KEYBOARD_WIDTH}
+                  scrollX={scrollX}
+                  pixelsPerTick={pixelsPerTick}
+                  clipLengthTicks={clipLengthTicks}
+                  tool={ccTool}
+                  onRemove={() => removeCcLane(activeClipId, laneId)}
+                  onClear={() => clearCcLane(activeClipId, laneId)}
+                  onChangeLane={(newId) => {
+                    if (newId === laneId) return
+                    removeCcLane(activeClipId, laneId)
+                    addCcLane(activeClipId, newId)
+                  }}
+                  allDefs={allDefs}
+                />
+              )
+            })}
+          </div>
+        )
+      })()}
+
+      {activeClipId && visibleCcLaneIds.length === 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '3px 8px', background: hw.bgPanel,
+          borderTop: `1px solid rgba(255,255,255,0.04)`,
+          fontSize: 10, color: hw.textFaint,
+        }}>
+          <select
+            value=""
+            onChange={e => {
+              if (!e.target.value || !activeClipId) return
+              addCcLane(activeClipId, e.target.value)
+              e.target.value = ''
+            }}
+            style={{
+              fontSize: 10, padding: '2px 4px',
+              background: 'rgba(255,255,255,0.04)', color: hw.textSecondary,
+              border: `1px solid ${hw.border}`, borderRadius: 3,
+            }}
+          >
+            <option value="">+ Add CC lane…</option>
+            {BUILT_IN_CC_LANES.map(d => (
+              <option key={d.id} value={d.id}>{d.label}</option>
+            ))}
+          </select>
+          <span>Pitch bend, mod wheel, expression and more</span>
+        </div>
+      )}
+
       {showMinimap && (
         <Minimap
           notes={notes}
@@ -2153,6 +2347,13 @@ function NoteMenuItem({ label, shortcut, danger, onClick }: {
       {shortcut && <span style={{ fontSize: 9, color: hw.textFaint }}>{shortcut}</span>}
     </button>
   )
+}
+
+const laneAddBtn: React.CSSProperties = {
+  padding: '2px 7px', fontSize: 9,
+  background: 'transparent', color: hw.textSecondary,
+  border: `1px solid ${hw.border}`, borderRadius: 3, cursor: 'pointer',
+  textTransform: 'uppercase', letterSpacing: 0.4,
 }
 
 function ToolMenuItem({ label, hint, onClick }: { label: string; hint: string; onClick: () => void }) {
