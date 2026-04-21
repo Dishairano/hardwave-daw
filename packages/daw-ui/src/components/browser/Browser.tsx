@@ -789,20 +789,31 @@ function FileMenuItem({ label, danger, onClick }: { label: string; danger?: bool
   )
 }
 
+interface FileInfo {
+  durationSec: number
+  sampleRate: number
+  channels: number
+  sizeBytes: number
+}
+
 const waveformCache = new Map<string, number[]>()
+const infoCache = new Map<string, FileInfo>()
 
 function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [peaks, setPeaks] = useState<number[] | null>(() => waveformCache.get(path) ?? null)
+  const [info, setInfo] = useState<FileInfo | null>(() => infoCache.get(path) ?? null)
   const [err, setErr] = useState(false)
   const name = path.split(/[\\/]/).pop() || path
 
   useEffect(() => {
     let cancelled = false
     setErr(false)
-    const cached = waveformCache.get(path)
-    if (cached) { setPeaks(cached); return }
+    const cachedPeaks = waveformCache.get(path)
+    const cachedInfo = infoCache.get(path)
+    if (cachedPeaks && cachedInfo) { setPeaks(cachedPeaks); setInfo(cachedInfo); return }
     setPeaks(null)
+    setInfo(null)
     ;(async () => {
       try {
         const { convertFileSrc } = await import('@tauri-apps/api/core')
@@ -828,10 +839,18 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
           }
           out.push(max)
         }
+        const meta: FileInfo = {
+          durationSec: decoded.duration,
+          sampleRate: decoded.sampleRate,
+          channels: decoded.numberOfChannels,
+          sizeBytes: buf.byteLength,
+        }
         ctx.close().catch(() => {})
         if (!cancelled) {
           waveformCache.set(path, out)
+          infoCache.set(path, meta)
           setPeaks(out)
+          setInfo(meta)
         }
       } catch {
         if (!cancelled) setErr(true)
@@ -896,6 +915,32 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
             </div>
         }
       </div>
+      {info && (
+        <div style={{
+          display: 'flex', gap: 8, marginTop: 2,
+          fontSize: 9, color: hw.textFaint,
+          fontFamily: 'ui-monospace, Menlo, monospace',
+        }}>
+          <span title="Duration">{formatDuration(info.durationSec)}</span>
+          <span title="Sample rate">{(info.sampleRate / 1000).toFixed(1)} kHz</span>
+          <span title="Channels">{info.channels === 1 ? 'mono' : info.channels === 2 ? 'stereo' : `${info.channels}ch`}</span>
+          <span title="File size" style={{ marginLeft: 'auto' }}>{formatBytes(info.sizeBytes)}</span>
+        </div>
+      )}
     </div>
   )
+}
+
+function formatDuration(sec: number) {
+  if (!Number.isFinite(sec) || sec < 0) return '—'
+  const m = Math.floor(sec / 60)
+  const s = sec - m * 60
+  if (m === 0) return `${s.toFixed(2)}s`
+  return `${m}:${String(Math.floor(s)).padStart(2, '0')}`
+}
+
+function formatBytes(b: number) {
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
+  return `${(b / (1024 * 1024)).toFixed(1)} MB`
 }
