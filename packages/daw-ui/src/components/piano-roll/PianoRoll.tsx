@@ -6,6 +6,7 @@ import { VelocityLane } from './VelocityLane'
 import { DetachButton } from '../FloatingWindow'
 import { useTrackStore } from '../../stores/trackStore'
 import { useProjectStore } from '../../stores/projectStore'
+import { useTransportStore } from '../../stores/transportStore'
 
 const PPQ = 960
 const NOTE_HEIGHT = 14
@@ -57,6 +58,8 @@ export function PianoRoll() {
   const [snap, setSnap] = useState(DEFAULT_SNAP)
   const [selectedNotes, setSelectedNotes] = useState<Set<number>>(new Set())
   const [tool, setTool] = useState<'draw' | 'select' | 'erase'>('draw')
+  const clipboardRef = useRef<Note[]>([])
+  const focusedRef = useRef(false)
   const dragRef = useRef<{
     mode: 'none' | 'draw' | 'move' | 'resize'
     noteIndex: number
@@ -387,35 +390,165 @@ export function PianoRoll() {
     }
   }, [totalHeight])
 
+  const updateNotes = useCallback(async (
+    indices: number[],
+    patch: (n: Note) => Partial<Pick<Note, 'pitch' | 'startTick' | 'durationTicks' | 'velocity'>>,
+  ) => {
+    if (!activeTrackId || !activeClipId || indices.length === 0) return
+    try {
+      for (const idx of indices) {
+        const note = notes.find(n => n.index === idx)
+        if (!note) continue
+        const args: Record<string, unknown> = {
+          trackId: activeTrackId,
+          clipId: activeClipId,
+          noteIndex: idx,
+          ...patch(note),
+        }
+        await invoke('update_midi_note', args)
+      }
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+    } catch (err) { console.warn('update selection failed', err) }
+  }, [activeTrackId, activeClipId, notes, refreshNotes])
+
+  const insertNotesFromClipboard = useCallback(async (originTick: number) => {
+    if (!activeTrackId || !activeClipId) return
+    const clip = clipboardRef.current
+    if (clip.length === 0) return
+    const earliest = clip.reduce((m, n) => Math.min(m, n.startTick), Infinity)
+    const newIndices: number[] = []
+    try {
+      for (const n of clip) {
+        const offset = n.startTick - earliest
+        const newIndex = await invoke<number>('add_midi_note', {
+          trackId: activeTrackId,
+          clipId: activeClipId,
+          pitch: n.pitch,
+          startTick: Math.max(0, originTick + offset),
+          durationTicks: n.durationTicks,
+          velocity: n.velocity,
+        })
+        newIndices.push(newIndex)
+      }
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+      setSelectedNotes(new Set(newIndices))
+    } catch (err) { console.warn('paste failed', err) }
+  }, [activeTrackId, activeClipId, refreshNotes])
+
   const handleKeyDown = useCallback(async (e: KeyboardEvent) => {
     if (!activeTrackId || !activeClipId) return
-    if (selectedNotes.size === 0) return
+    if (!focusedRef.current) return
     const target = e.target as HTMLElement
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
 
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+    const consume = () => {
       e.preventDefault()
+      e.stopImmediatePropagation()
+    }
+
+    const ctrl = e.ctrlKey || e.metaKey
+
+    if (ctrl && e.key.toLowerCase() === 'a') {
+      consume()
       setSelectedNotes(new Set(notes.map(n => n.index)))
       return
     }
 
-    if (e.key === 'Delete' || e.key === 'Backspace') {
-      e.preventDefault()
+    if (ctrl && e.key.toLowerCase() === 'c') {
+      if (selectedNotes.size === 0) return
+      consume()
+      clipboardRef.current = notes.filter(n => selectedNotes.has(n.index)).map(n => ({ ...n }))
+      return
+    }
+
+    if (ctrl && e.key.toLowerCase() === 'x') {
+      if (selectedNotes.size === 0) return
+      consume()
+      clipboardRef.current = notes.filter(n => selectedNotes.has(n.index)).map(n => ({ ...n }))
       const indicesDesc = Array.from(selectedNotes).sort((a, b) => b - a)
       try {
         for (const idx of indicesDesc) {
-          await invoke('delete_midi_note', {
-            trackId: activeTrackId,
-            clipId: activeClipId,
-            noteIndex: idx,
-          })
+          await invoke('delete_midi_note', { trackId: activeTrackId, clipId: activeClipId, noteIndex: idx })
+        }
+        useProjectStore.getState().markDirty()
+        setSelectedNotes(new Set())
+        await refreshNotes()
+      } catch (err) { console.warn('cut failed', err) }
+      return
+    }
+
+    if (ctrl && e.key.toLowerCase() === 'v') {
+      consume()
+      const ts = useTransportStore.getState()
+      let originTick: number
+      if (ts.editCursorTicks != null) {
+        originTick = ts.editCursorTicks
+      } else {
+        const sr = ts.sampleRate || 48000
+        const samplesPerTick = (sr * 60) / (ts.bpm * PPQ)
+        originTick = Math.round(ts.positionSamples / samplesPerTick)
+      }
+      await insertNotesFromClipboard(originTick)
+      return
+    }
+
+    if (ctrl && e.key.toLowerCase() === 'd') {
+      if (selectedNotes.size === 0) return
+      consume()
+      const sel = notes.filter(n => selectedNotes.has(n.index))
+      const earliest = Math.min(...sel.map(n => n.startTick))
+      const latestEnd = Math.max(...sel.map(n => n.startTick + n.durationTicks))
+      const span = latestEnd - earliest
+      clipboardRef.current = sel.map(n => ({ ...n }))
+      await insertNotesFromClipboard(earliest + span)
+      return
+    }
+
+    if (ctrl && e.key.toLowerCase() === 'q') {
+      if (selectedNotes.size === 0) return
+      consume()
+      const indices = Array.from(selectedNotes)
+      await updateNotes(indices, n => ({
+        startTick: Math.round(n.startTick / snap) * snap,
+      }))
+      return
+    }
+
+    if (selectedNotes.size === 0) return
+
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      consume()
+      const indicesDesc = Array.from(selectedNotes).sort((a, b) => b - a)
+      try {
+        for (const idx of indicesDesc) {
+          await invoke('delete_midi_note', { trackId: activeTrackId, clipId: activeClipId, noteIndex: idx })
         }
         useProjectStore.getState().markDirty()
         setSelectedNotes(new Set())
         await refreshNotes()
       } catch (err) { console.warn('delete selected failed', err) }
+      return
     }
-  }, [activeTrackId, activeClipId, selectedNotes, refreshNotes, notes])
+
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      consume()
+      const step = ctrl ? 12 : 1
+      const dir = e.key === 'ArrowUp' ? 1 : -1
+      const indices = Array.from(selectedNotes)
+      await updateNotes(indices, n => ({ pitch: Math.max(0, Math.min(127, n.pitch + step * dir)) }))
+      return
+    }
+
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      consume()
+      const dir = e.key === 'ArrowRight' ? 1 : -1
+      const indices = Array.from(selectedNotes)
+      await updateNotes(indices, n => ({ startTick: Math.max(0, n.startTick + snap * dir) }))
+      return
+    }
+  }, [activeTrackId, activeClipId, selectedNotes, refreshNotes, notes, snap, updateNotes, insertNotesFromClipboard])
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown)
@@ -427,10 +560,13 @@ export function PianoRoll() {
     : null
 
   return (
-    <div ref={containerRef} style={{
-      flex: 1, display: 'flex', flexDirection: 'column',
-      background: 'rgba(255,255,255,0.02)', backdropFilter: hw.blur.sm, overflow: 'hidden',
-    }}>
+    <div ref={containerRef}
+      onMouseEnter={() => { focusedRef.current = true }}
+      onMouseLeave={() => { focusedRef.current = false }}
+      style={{
+        flex: 1, display: 'flex', flexDirection: 'column',
+        background: 'rgba(255,255,255,0.02)', backdropFilter: hw.blur.sm, overflow: 'hidden',
+      }}>
       <div style={{
         height: RULER_HEIGHT, background: 'rgba(255,255,255,0.01)',
         borderBottom: `1px solid ${hw.border}`,
@@ -440,6 +576,15 @@ export function PianoRoll() {
         <span style={{ fontSize: 9, color: hw.textFaint }}>
           {activeTrackId && activeClipId ? `${activeClipId.slice(0, 8)}…` : 'No clip selected'}
         </span>
+        {selectedNotes.size > 0 && (
+          <span style={{
+            fontSize: 9, fontWeight: 600, color: hw.accent,
+            background: hw.accentDim, padding: '1px 6px',
+            borderRadius: hw.radius.sm,
+          }}>
+            {selectedNotes.size} selected
+          </span>
+        )}
         <div style={{ flex: 1 }} />
 
         <div style={{ display: 'flex', gap: 1 }}>
