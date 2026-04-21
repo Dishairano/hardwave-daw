@@ -22,6 +22,7 @@ import { NotificationHost } from './components/NotificationHost'
 import { MetronomeScheduler } from './components/transport/MetronomeScheduler'
 import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecoveryDialog'
 import { ShortcutsPanel } from './components/ShortcutsPanel'
+import { HelpOverlay } from './components/HelpOverlay'
 import { SampleEditor } from './components/sample-editor/SampleEditor'
 import { useSampleEditorStore } from './stores/sampleEditorStore'
 import { BeatSlicer } from './components/beat-slicer/BeatSlicer'
@@ -69,6 +70,7 @@ export function App() {
   const [showThemePicker, setShowThemePicker] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
   const [showLoudness, setShowLoudness] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
@@ -497,10 +499,11 @@ export function App() {
         return
       }
 
-      // F1 is a dedicated help key — always opens the shortcuts panel as the canonical entry point.
+      // F1 opens the in-app help overlay (Shift+F1 opens the shortcuts panel).
       if (e.code === 'F1') {
         e.preventDefault()
-        setShowShortcuts(v => !v)
+        if (e.shiftKey) setShowShortcuts(v => !v)
+        else setShowHelp(v => !v)
         return
       }
 
@@ -606,6 +609,7 @@ export function App() {
         onCheckForUpdates={checkForUpdates}
         onToggleAbout={() => setShowAbout(v => !v)}
         onToggleShortcuts={() => setShowShortcuts(v => !v)}
+        onToggleHelp={() => setShowHelp(v => !v)}
         onOpenHistory={() => setShowHistory(true)}
         onExportAudio={handleExportAudio}
         onSaveAsTemplate={handleSaveAsTemplate}
@@ -666,6 +670,7 @@ export function App() {
       {showThemePicker && <ThemePicker onClose={() => setShowThemePicker(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
       <ShortcutsPanel open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+      <HelpOverlay open={showHelp} onClose={() => setShowHelp(false)} />
       {sampleEditorPath && <SampleEditor path={sampleEditorPath} onClose={closeSampleEditor} />}
       {beatSlicerPath && <BeatSlicer path={beatSlicerPath} onClose={closeBeatSlicer} />}
       {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}

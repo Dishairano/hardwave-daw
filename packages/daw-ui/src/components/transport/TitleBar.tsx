@@ -50,6 +50,7 @@ interface TitleBarProps {
   onCheckForUpdates: () => void
   onToggleAbout: () => void
   onToggleShortcuts: () => void
+  onToggleHelp: () => void
   onOpenHistory: () => void
   onExportAudio: () => void
   onSaveAsTemplate: () => void
@@ -72,7 +73,7 @@ export function TitleBar(props: TitleBarProps) {
     onCut, onCopy, onPaste, onDuplicate, onSelectAll,
     onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
     onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
-    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onOpenHistory, onExportAudio,
+    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onToggleHelp, onOpenHistory, onExportAudio,
     onSaveAsTemplate, onAutoCrossfade,
     recentProjects, onOpenRecentProject, onClearRecentProjects,
     showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
@@ -195,7 +196,8 @@ export function TitleBar(props: TitleBarProps) {
     {
       label: 'HELP',
       items: [
-        { label: 'Keyboard shortcuts', shortcut: 'F1', action: onToggleShortcuts },
+        { label: 'Help topics', shortcut: 'F1', action: onToggleHelp },
+        { label: 'Keyboard shortcuts', shortcut: 'Shift+F1', action: onToggleShortcuts },
         { label: 'Roadmap', action: onToggleRoadmap },
         { label: 'Check for updates...', action: onCheckForUpdates },
         { separator: true, label: '' },
