@@ -3,12 +3,14 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { PianoKeyboard } from './PianoKeyboard'
 import { VelocityLane } from './VelocityLane'
+import { Minimap } from './Minimap'
 import { DetachButton } from '../FloatingWindow'
 import { useTrackStore } from '../../stores/trackStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { useTransportStore } from '../../stores/transportStore'
 
 const PPQ = 960
+const MINIMAP_HEIGHT = 36
 const DEFAULT_NOTE_HEIGHT = 14
 const MIN_NOTE_HEIGHT = 6
 const MAX_NOTE_HEIGHT = 40
@@ -125,6 +127,8 @@ export function PianoRoll() {
   const [notes, setNotes] = useState<Note[]>([])
   const [ghostMode, setGhostMode] = useState<'off' | 'track' | 'all'>('off')
   const [ghostNotes, setGhostNotes] = useState<Array<Note & { color: string }>>([])
+  const [showMinimap, setShowMinimap] = useState(false)
+  const [viewportWidth, setViewportWidth] = useState(800)
   const [scrollX, setScrollX] = useState(0)
   const [noteHeight, setNoteHeight] = useState(DEFAULT_NOTE_HEIGHT)
   const [scrollY, setScrollY] = useState(DEFAULT_NOTE_HEIGHT * 60)
@@ -236,6 +240,7 @@ export function PianoRoll() {
     const rect = container.getBoundingClientRect()
     const w = rect.width - KEYBOARD_WIDTH
     const h = rect.height - RULER_HEIGHT - VELOCITY_LANE_HEIGHT
+    if (Math.abs(w - viewportWidth) > 1) setViewportWidth(w)
     canvas.width = w * devicePixelRatio
     canvas.height = h * devicePixelRatio
     canvas.style.width = `${w}px`
@@ -1255,6 +1260,19 @@ export function PianoRoll() {
           FOLLOW
         </button>
         <button
+          onClick={() => setShowMinimap(v => !v)}
+          title="Toggle minimap overview"
+          style={{
+            padding: '1px 6px', fontSize: 9, fontWeight: 600,
+            color: showMinimap ? hw.accent : hw.textFaint,
+            background: showMinimap ? hw.accentDim : 'rgba(255,255,255,0.04)',
+            border: `1px solid ${showMinimap ? hw.accentGlow : hw.border}`,
+            borderRadius: hw.radius.sm,
+          }}
+        >
+          MAP
+        </button>
+        <button
           onClick={() => setGhostMode(m => m === 'off' ? 'track' : m === 'track' ? 'all' : 'off')}
           title={
             ghostMode === 'off' ? 'Ghost notes: OFF (click to show same-track)' :
@@ -1478,6 +1496,19 @@ export function PianoRoll() {
         pixelsPerTick={pixelsPerTick}
         onVelocityChange={handleVelocityChange}
       />
+
+      {showMinimap && (
+        <Minimap
+          notes={notes}
+          height={MINIMAP_HEIGHT}
+          keyboardWidth={KEYBOARD_WIDTH}
+          scrollX={scrollX}
+          viewWidth={viewportWidth}
+          totalTicks={Math.max(PPQ * 32, notes.reduce((m, n) => Math.max(m, n.startTick + n.durationTicks), 0) + PPQ * 4)}
+          pixelsPerTick={pixelsPerTick}
+          onScroll={(sx) => setScrollX(Math.max(0, sx))}
+        />
+      )}
     </div>
   )
 }
