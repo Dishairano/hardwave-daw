@@ -106,3 +106,40 @@ pub fn set_audio_config(
         .lock()
         .set_audio_config(device, sample_rate, buffer_size)
 }
+
+#[tauri::command]
+pub fn get_audio_input_devices(state: State<AppState>) -> Vec<AudioDeviceInfo> {
+    let engine = state.engine.lock();
+    engine
+        .audio_device_manager()
+        .list_input_devices()
+        .into_iter()
+        .map(|d| AudioDeviceInfo {
+            name: d.name,
+            is_default: d.is_default,
+            sample_rates: d.sample_rates,
+            max_channels: d.max_channels,
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+pub struct AudioInputConfig {
+    pub device: Option<String>,
+    pub channels: u16,
+}
+
+#[tauri::command]
+pub fn get_audio_input_config(state: State<AppState>) -> AudioInputConfig {
+    let (device, channels) = state.engine.lock().input_config();
+    AudioInputConfig { device, channels }
+}
+
+#[tauri::command]
+pub fn set_audio_input_config(
+    state: State<AppState>,
+    device: Option<String>,
+    channels: u16,
+) {
+    state.engine.lock().set_input_config(device, channels);
+}

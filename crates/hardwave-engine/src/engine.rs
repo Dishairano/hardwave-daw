@@ -413,6 +413,22 @@ impl DawEngine {
 
         Ok(())
     }
+
+    /// Current input config: (selected device name, channels).
+    pub fn input_config(&self) -> (Option<String>, u16) {
+        (
+            self.audio_device.selected_input_device.clone(),
+            self.audio_device.input_channels,
+        )
+    }
+
+    /// Update the input device preferences. The engine does not restart any
+    /// input stream yet — recording isn't live — but the choice is stored so
+    /// the recording pipeline picks it up when we ship it.
+    pub fn set_input_config(&mut self, device: Option<String>, channels: u16) {
+        self.audio_device.selected_input_device = device;
+        self.audio_device.input_channels = channels.clamp(1, 2);
+    }
 }
 
 impl Default for DawEngine {

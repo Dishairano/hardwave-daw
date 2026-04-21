@@ -15,6 +15,11 @@ interface AudioConfig {
   buffer_size: number
 }
 
+interface AudioInputConfig {
+  device: string | null
+  channels: number
+}
+
 interface WasapiExclusiveStatus {
   enabled: boolean
   available: boolean
@@ -28,8 +33,12 @@ const BUFFER_SIZES = [64, 128, 256, 512, 1024, 2048, 4096]
 
 export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [devices, setDevices] = useState<AudioDevice[]>([])
+  const [inputDevices, setInputDevices] = useState<AudioDevice[]>([])
   const [config, setConfig] = useState<AudioConfig>({ device: null, sample_rate: 48000, buffer_size: 512 })
+  const [inputConfig, setInputConfig] = useState<AudioInputConfig>({ device: null, channels: 2 })
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null)
+  const [selectedInput, setSelectedInput] = useState<string | null>(null)
+  const [selectedInputChannels, setSelectedInputChannels] = useState(2)
   const [selectedRate, setSelectedRate] = useState(48000)
   const [selectedBuffer, setSelectedBuffer] = useState(512)
   const [applying, setApplying] = useState(false)
@@ -39,12 +48,18 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   useEffect(() => {
     Promise.all([
       invoke<AudioDevice[]>('get_audio_devices'),
+      invoke<AudioDevice[]>('get_audio_input_devices'),
       invoke<AudioConfig>('get_audio_config'),
+      invoke<AudioInputConfig>('get_audio_input_config'),
       invoke<WasapiExclusiveStatus>('get_wasapi_exclusive'),
-    ]).then(([devs, cfg, excl]) => {
+    ]).then(([devs, inputs, cfg, inCfg, excl]) => {
       setDevices(devs)
+      setInputDevices(inputs)
       setConfig(cfg)
+      setInputConfig(inCfg)
       setSelectedDevice(cfg.device)
+      setSelectedInput(inCfg.device)
+      setSelectedInputChannels(inCfg.channels)
       setSelectedRate(cfg.sample_rate)
       setSelectedBuffer(cfg.buffer_size)
       setExclusive(excl)
@@ -72,7 +87,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const hasChanges =
     selectedDevice !== config.device ||
     selectedRate !== config.sample_rate ||
-    selectedBuffer !== config.buffer_size
+    selectedBuffer !== config.buffer_size ||
+    selectedInput !== inputConfig.device ||
+    selectedInputChannels !== inputConfig.channels
 
   const apply = async () => {
     setApplying(true)
@@ -83,7 +100,12 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
         sampleRate: selectedRate,
         bufferSize: selectedBuffer,
       })
+      await invoke('set_audio_input_config', {
+        device: selectedInput,
+        channels: selectedInputChannels,
+      })
       setConfig({ device: selectedDevice, sample_rate: selectedRate, buffer_size: selectedBuffer })
+      setInputConfig({ device: selectedInput, channels: selectedInputChannels })
     } catch (e: any) {
       setError(String(e))
     }
@@ -174,6 +196,31 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 value: String(b),
                 label: `${b} samples`,
               }))}
+            />
+          </SettingRow>
+
+          {/* Input Device */}
+          <SettingRow label="Input Device">
+            <Select
+              value={selectedInput ?? ''}
+              onChange={v => setSelectedInput(v === '' ? null : v)}
+              options={[
+                { value: '', label: `System Default${inputDevices.find(d => d.is_default) ? ` (${inputDevices.find(d => d.is_default)!.name})` : ''}` },
+                ...inputDevices.map(d => ({ value: d.name, label: d.name })),
+                ...(inputDevices.length === 0 ? [{ value: '', label: 'No input devices found' }] : []),
+              ]}
+            />
+          </SettingRow>
+
+          {/* Input Channels */}
+          <SettingRow label="Input Channels">
+            <Select
+              value={String(selectedInputChannels)}
+              onChange={v => setSelectedInputChannels(Number(v))}
+              options={[
+                { value: '1', label: 'Mono (1 channel, summed)' },
+                { value: '2', label: 'Stereo (2 channels)' },
+              ]}
             />
           </SettingRow>
 

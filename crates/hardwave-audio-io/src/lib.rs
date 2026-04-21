@@ -67,6 +67,13 @@ pub struct AudioDeviceManager {
     pub selected_device: Option<String>,
     /// Name of the device currently running (set after successful start()).
     active_device_name: Option<String>,
+    /// Name of the selected input device (None = system default). Recorded here
+    /// so the engine can open an input stream with the user's preference; no
+    /// stream is created until the recording pipeline actually asks for one.
+    pub selected_input_device: Option<String>,
+    /// How many channels the engine should open on the input stream: 1 = mono
+    /// (sums), 2 = stereo. Devices with more channels are downmixed.
+    pub input_channels: u16,
     /// Request WASAPI exclusive mode (Windows only). When true and the active
     /// host is WASAPI, the next stream start tries to acquire the endpoint
     /// exclusively for lower latency and bit-perfect output. No effect on
@@ -120,6 +127,8 @@ impl AudioDeviceManager {
             buffer_size: 512,
             selected_device: None,
             active_device_name: None,
+            selected_input_device: None,
+            input_channels: 2,
             wasapi_exclusive: false,
             active_exclusive: false,
         }
