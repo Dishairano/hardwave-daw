@@ -13,6 +13,8 @@ import { AudioSettings } from './components/settings/AudioSettings'
 import { UpdateModal } from './components/UpdateModal'
 import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow } from './components/FloatingWindow'
+import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChangesDialog'
+import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
 import { useTransportStore } from './stores/transportStore'
@@ -159,46 +161,108 @@ export function App() {
     setUpdateInfo(prev => ({ ...prev, dismissed: true }))
   }, [])
 
+  const [savePromptAction, setSavePromptAction] = useState<string | null>(null)
+  const savePromptResolver = useRef<((c: SaveChangesChoice) => void) | null>(null)
+  const [showTemplateDialog, setShowTemplateDialog] = useState(false)
+
   const confirmDiscardIfDirty = useCallback(async (action: string): Promise<boolean> => {
     const { dirty } = useProjectStore.getState()
     if (!dirty) return true
+    const choice = await new Promise<SaveChangesChoice>(resolve => {
+      savePromptResolver.current = resolve
+      setSavePromptAction(action)
+    })
+    setSavePromptAction(null)
+    savePromptResolver.current = null
+    if (choice === 'cancel') return false
+    if (choice === 'save') {
+      try {
+        await useProjectStore.getState().saveProject()
+        if (useProjectStore.getState().dirty) return false
+      } catch (err) {
+        await showErrorDialog('Save failed', String(err))
+        return false
+      }
+    }
+    return true
+  }, [])
+
+  const showErrorDialog = useCallback(async (title: string, msg: string) => {
     try {
-      const { ask } = await import('@tauri-apps/plugin-dialog')
-      return await ask(`You have unsaved changes. ${action} anyway?`, {
-        title: 'Unsaved changes',
-        kind: 'warning',
-      })
+      const { message } = await import('@tauri-apps/plugin-dialog')
+      await message(msg, { title, kind: 'error' })
     } catch {
-      return window.confirm(`You have unsaved changes. ${action} anyway?`)
+      window.alert(`${title}\n\n${msg}`)
+    }
+  }, [])
+
+  const applyTemplate = useCallback(async (id: TemplateId) => {
+    const ts = useTrackStore.getState()
+    if (id === 'blank') return
+    if (id === 'beat4') {
+      await ts.addAudioTrack('Kick')
+      await ts.addAudioTrack('Snare')
+      await ts.addAudioTrack('Hi-Hat')
+      await ts.addAudioTrack('Bass')
+    } else if (id === 'vocal') {
+      await ts.addAudioTrack('Vocal')
+      await ts.addAudioTrack('Backing Vocals')
+      await ts.addAudioTrack('FX Return')
+    } else if (id === 'mixing') {
+      for (let i = 1; i <= 8; i++) await ts.addAudioTrack(`Track ${i}`)
+      await ts.addAudioTrack('Bus A')
+      await ts.addAudioTrack('Bus B')
     }
   }, [])
 
   const handleNewProject = useCallback(async () => {
-    if (!(await confirmDiscardIfDirty('Discard and create a new project'))) return
+    if (!(await confirmDiscardIfDirty('Save changes before creating a new project'))) return
+    setShowTemplateDialog(true)
+  }, [confirmDiscardIfDirty])
+
+  const handlePickTemplate = useCallback(async (id: TemplateId) => {
+    setShowTemplateDialog(false)
     await newProject()
     await fetchTracks()
-  }, [confirmDiscardIfDirty, newProject, fetchTracks])
+    await applyTemplate(id)
+    await fetchTracks()
+  }, [newProject, fetchTracks, applyTemplate])
 
   const handleOpenProject = useCallback(async () => {
-    if (!(await confirmDiscardIfDirty('Discard and open another project'))) return
+    if (!(await confirmDiscardIfDirty('Save changes before opening another project'))) return
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const selected = await open({
         filters: [{ name: 'Hardwave Project', extensions: ['hwp'] }],
         multiple: false,
       })
-      if (selected) {
-        await loadProject(selected as string)
+      if (!selected) return
+      const path = selected as string
+      try {
+        await loadProject(path)
         await fetchTracks()
+      } catch (err) {
+        useProjectStore.getState().removeRecent(path)
+        await showErrorDialog('Could not open project', `${path}\n\n${err}`)
       }
     } catch {}
-  }, [loadProject, fetchTracks, confirmDiscardIfDirty])
+  }, [loadProject, fetchTracks, confirmDiscardIfDirty, showErrorDialog])
 
   const handleSaveProjectAs = useCallback(async () => {
     try {
       await saveProject(undefined)
-    } catch {}
-  }, [saveProject])
+    } catch (err) {
+      await showErrorDialog('Save failed', String(err))
+    }
+  }, [saveProject, showErrorDialog])
+
+  const handleSaveProject = useCallback(async () => {
+    try {
+      await saveProject()
+    } catch (err) {
+      await showErrorDialog('Save failed', String(err))
+    }
+  }, [saveProject, showErrorDialog])
 
   const pasteAtPlayhead = useCallback(() => {
     const transport = useTransportStore.getState()
@@ -224,12 +288,15 @@ export function App() {
   }, [])
 
   const handleOpenRecent = useCallback(async (path: string) => {
-    if (!(await confirmDiscardIfDirty('Discard and open this recent project'))) return
+    if (!(await confirmDiscardIfDirty('Save changes before opening this recent project'))) return
     try {
       await loadProject(path)
       await fetchTracks()
-    } catch {}
-  }, [loadProject, fetchTracks, confirmDiscardIfDirty])
+    } catch (err) {
+      useProjectStore.getState().removeRecent(path)
+      await showErrorDialog('Could not open project', `${path}\n\nRemoved from recent projects.\n\n${err}`)
+    }
+  }, [loadProject, fetchTracks, confirmDiscardIfDirty, showErrorDialog])
 
   const handleExportAudio = useCallback(async () => {
     try {
@@ -259,7 +326,6 @@ export function App() {
 
       const transport = useTransportStore.getState()
       const tracks = useTrackStore.getState()
-      const project = useProjectStore.getState()
 
       // Ctrl/Cmd shortcuts
       if (e.ctrlKey || e.metaKey) {
@@ -277,7 +343,7 @@ export function App() {
             if (e.shiftKey) {
               handleSaveProjectAs()
             } else {
-              project.saveProject()
+              handleSaveProject()
             }
             return
           case 'a':
@@ -393,7 +459,7 @@ export function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [handleOpenProject, handleSaveProjectAs, fetchTracks, duplicateSelection, cutSelection, pasteAtPlayhead])
+  }, [handleNewProject, handleOpenProject, handleSaveProject, handleSaveProjectAs, fetchTracks, duplicateSelection, cutSelection, pasteAtPlayhead])
 
   return (
     <div style={{
@@ -413,7 +479,7 @@ export function App() {
       <TitleBar
         hintText={hintText}
         onNewProject={handleNewProject}
-        onSaveProject={() => saveProject()}
+        onSaveProject={handleSaveProject}
         onSaveProjectAs={handleSaveProjectAs}
         onOpenProject={handleOpenProject}
         onUndo={() => useTrackStore.getState().undo()}
@@ -484,6 +550,20 @@ export function App() {
       {showAudioSettings && <AudioSettings onClose={() => setShowAudioSettings(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
       {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}
+
+      {savePromptAction && (
+        <SaveChangesDialog
+          action={savePromptAction}
+          onChoice={(c) => savePromptResolver.current?.(c)}
+        />
+      )}
+
+      {showTemplateDialog && (
+        <TemplateDialog
+          onPick={handlePickTemplate}
+          onCancel={() => setShowTemplateDialog(false)}
+        />
+      )}
 
       {/* Update modal — same pattern as Hardwave Suite */}
       {updateInfo.available && !updateInfo.dismissed && (

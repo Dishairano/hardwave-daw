@@ -37,6 +37,7 @@ interface ProjectState {
   getInfo: () => Promise<ProjectInfo>
   markDirty: () => void
   pushRecent: (path: string) => void
+  removeRecent: (path: string) => void
   clearRecent: () => void
 }
 
@@ -85,6 +86,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   pushRecent: (path: string) => {
     const next = [path, ...get().recentProjects.filter(p => p !== path)].slice(0, RECENT_MAX)
+    saveRecent(next)
+    set({ recentProjects: next })
+  },
+
+  removeRecent: (path: string) => {
+    const next = get().recentProjects.filter(p => p !== path)
     saveRecent(next)
     set({ recentProjects: next })
   },
