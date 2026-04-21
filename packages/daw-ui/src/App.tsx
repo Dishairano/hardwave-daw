@@ -16,6 +16,8 @@ import { FloatingWindow } from './components/FloatingWindow'
 import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChangesDialog'
 import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
 import { WelcomeScreen } from './components/WelcomeScreen'
+import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecoveryDialog'
+import { invoke } from '@tauri-apps/api/core'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
 import { useTransportStore } from './stores/transportStore'
@@ -65,6 +67,9 @@ export function App() {
     try { sessionStorage.setItem('hardwave.daw.welcomeDismissed', '1') } catch {}
   }, [])
 
+  // Crash recovery
+  const [crashInfo, setCrashInfo] = useState<{ path: string; modified_unix: number } | null>(null)
+
   // Hint bar text
   const [hintText, setHintText] = useState('')
 
@@ -87,20 +92,35 @@ export function App() {
     initRan.current = true
     startListening()
     fetchTracks().finally(() => setDataReady(true))
+
+    // Crash detection: if the previous session didn't clear the alive marker,
+    // surface the newest auto-save as a recovery option.
+    ;(async () => {
+      try {
+        const crashed = await invoke<boolean>('autosave_detect_crash')
+        if (crashed) {
+          const latest = await invoke<{ path: string; modified_unix: number } | null>('autosave_latest')
+          if (latest) setCrashInfo(latest)
+        }
+        await invoke('autosave_mark_alive')
+      } catch {}
+    })()
+
     // Check for updates after a short delay
     const timer = setTimeout(checkForUpdates, 3000)
     return () => clearTimeout(timer)
   }, [])
 
-  // Auto-save: every 3 minutes, if project has been saved once and is dirty, save silently.
+  // Auto-save: every 2 minutes, if project is dirty, write to the cache dir.
+  // Keeps the last 3 snapshots. Independent of any user-chosen file path.
   useEffect(() => {
     const ENABLED = localStorage.getItem('hardwave.daw.autoSaveEnabled') !== 'false'
     if (!ENABLED) return
-    const INTERVAL_MS = 3 * 60 * 1000
+    const INTERVAL_MS = 2 * 60 * 1000
     const id = setInterval(() => {
-      const { dirty, filePath } = useProjectStore.getState()
-      if (dirty && filePath) {
-        useProjectStore.getState().saveProject(filePath).catch(() => {})
+      const { dirty } = useProjectStore.getState()
+      if (dirty) {
+        invoke('autosave_save').catch(() => {})
       }
     }, INTERVAL_MS)
     return () => clearInterval(id)
@@ -261,6 +281,7 @@ export function App() {
   const handleSaveProjectAs = useCallback(async () => {
     try {
       await saveProject(undefined)
+      await invoke('autosave_clear').catch(() => {})
     } catch (err) {
       await showErrorDialog('Save failed', String(err))
     }
@@ -269,10 +290,44 @@ export function App() {
   const handleSaveProject = useCallback(async () => {
     try {
       await saveProject()
+      await invoke('autosave_clear').catch(() => {})
     } catch (err) {
       await showErrorDialog('Save failed', String(err))
     }
   }, [saveProject, showErrorDialog])
+
+  const handleCrashChoice = useCallback(async (c: CrashChoice) => {
+    const info = crashInfo
+    setCrashInfo(null)
+    if (!info) return
+    if (c === 'discard') {
+      await invoke('autosave_clear').catch(() => {})
+      return
+    }
+    if (c === 'recover') {
+      try {
+        await loadProject(info.path)
+        await fetchTracks()
+        useProjectStore.getState().markDirty()
+      } catch (err) {
+        await showErrorDialog('Recovery failed', String(err))
+      }
+      return
+    }
+    if (c === 'open') {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog')
+        const selected = await open({
+          filters: [{ name: 'Hardwave Project', extensions: ['hwp'] }],
+          multiple: false,
+        })
+        if (selected) {
+          await loadProject(selected as string)
+          await fetchTracks()
+        }
+      } catch {}
+    }
+  }, [crashInfo, loadProject, fetchTracks, showErrorDialog])
 
   const pasteAtPlayhead = useCallback(() => {
     const transport = useTransportStore.getState()
@@ -575,13 +630,21 @@ export function App() {
         />
       )}
 
-      {showWelcome && !showSplash && (
+      {showWelcome && !showSplash && !crashInfo && (
         <WelcomeScreen
           recentProjects={recentProjects}
           onOpenRecent={handleOpenRecent}
           onNewProject={handleNewProject}
           onOpenProject={handleOpenProject}
           onDismiss={dismissWelcome}
+        />
+      )}
+
+      {crashInfo && !showSplash && (
+        <CrashRecoveryDialog
+          autosavePath={crashInfo.path}
+          modifiedUnix={crashInfo.modified_unix}
+          onChoice={handleCrashChoice}
         />
       )}
 

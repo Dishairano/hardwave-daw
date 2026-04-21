@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod autosave;
 pub mod dev;
 pub mod engine;
 pub mod history;

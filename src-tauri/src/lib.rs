@@ -62,6 +62,13 @@ pub fn run() {
             commands::project::get_project_info,
             commands::project::get_channel_rack_state,
             commands::project::set_channel_rack_state,
+            // Autosave / crash recovery
+            commands::autosave::autosave_save,
+            commands::autosave::autosave_latest,
+            commands::autosave::autosave_clear,
+            commands::autosave::autosave_mark_alive,
+            commands::autosave::autosave_clear_alive,
+            commands::autosave::autosave_detect_crash,
             // Engine
             commands::engine::start_engine,
             commands::engine::stop_engine,
@@ -178,6 +185,16 @@ pub fn run() {
             });
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // Reliable clean-shutdown hook: clear the alive marker so the
+                // next launch does not mistake this for a crash.
+                if let Ok(dir) = window.app_handle().path().app_cache_dir() {
+                    let marker = dir.join("autosaves").join("session.alive");
+                    let _ = std::fs::remove_file(marker);
+                }
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running Hardwave DAW");
