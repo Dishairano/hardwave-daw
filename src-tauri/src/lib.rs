@@ -1,4 +1,5 @@
 use parking_lot::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
@@ -11,6 +12,9 @@ pub use prefs::AudioPrefs;
 /// Shared engine state accessible from Tauri commands.
 pub struct AppState {
     pub engine: Arc<Mutex<DawEngine>>,
+    /// Flipped by `cancel_export` to halt an in-progress offline render.
+    /// The export command clears it on entry and checks it each block.
+    pub export_cancel: Arc<AtomicBool>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -37,6 +41,7 @@ pub fn run() {
     }
     let state = AppState {
         engine: Arc::new(Mutex::new(engine)),
+        export_cancel: Arc::new(AtomicBool::new(false)),
     };
 
     tauri::Builder::default()
@@ -167,6 +172,8 @@ pub fn run() {
             commands::history::history_sizes,
             // Export
             commands::export::export_project_wav,
+            commands::export::cancel_export,
+            commands::export::export_project_stems,
             // Dev panel (stripped before merge to master)
             commands::dev::dev_dump_state,
             commands::dev::dev_force_device_error,

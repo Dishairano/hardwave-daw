@@ -522,13 +522,28 @@ impl DawEngine {
         &self,
         sample_rate: u32,
         total_samples: u64,
-        mut on_block: impl FnMut(&[f32]),
+        on_block: impl FnMut(&[f32]) -> bool,
+    ) -> Result<(), String> {
+        self.render_offline_with(sample_rate, total_samples, |_| {}, on_block)
+    }
+
+    /// Like [`Self::render_offline`] but allows the caller to mutate the
+    /// project snapshot before rendering — used for stems (mute all tracks
+    /// except one) and similar isolation renders. The `on_block` callback
+    /// returns `false` to halt rendering early (used for user cancellation).
+    pub fn render_offline_with(
+        &self,
+        sample_rate: u32,
+        total_samples: u64,
+        prepare: impl FnOnce(&mut Project),
+        mut on_block: impl FnMut(&[f32]) -> bool,
     ) -> Result<(), String> {
         if total_samples == 0 {
             return Ok(());
         }
 
-        let project_snapshot = self.project.lock().clone();
+        let mut project_snapshot = self.project.lock().clone();
+        prepare(&mut project_snapshot);
         let initial_bpm = project_snapshot
             .tempo_map
             .entries
@@ -575,7 +590,9 @@ impl DawEngine {
             let slice = &mut buf[..frames * 2];
             slice.fill(0.0);
             callback.process(slice, frames, 2);
-            on_block(slice);
+            if !on_block(slice) {
+                break;
+            }
             remaining -= frames as u64;
         }
 

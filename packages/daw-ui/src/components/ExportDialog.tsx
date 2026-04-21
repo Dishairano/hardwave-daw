@@ -33,6 +33,9 @@ const LAST_EXPORT_DIR_KEY = 'hw.export.lastDir'
 const BIT_DEPTH_KEY = 'hw.export.bitDepth'
 const SAMPLE_RATE_KEY = 'hw.export.sampleRate'
 const TAIL_SECS_KEY = 'hw.export.tailSecs'
+const STEMS_KEY = 'hw.export.stems'
+const STEMS_INCLUDE_MASTER_KEY = 'hw.export.stemsIncludeMaster'
+const STEMS_RESPECT_MUTE_SOLO_KEY = 'hw.export.stemsRespectMuteSolo'
 
 function readNumber(key: string, fallback: number): number {
   try {
@@ -43,12 +46,24 @@ function readNumber(key: string, fallback: number): number {
   } catch { return fallback }
 }
 
+function readBool(key: string, fallback: boolean): boolean {
+  try {
+    const raw = localStorage.getItem(key)
+    if (raw === null) return fallback
+    return raw === '1' || raw === 'true'
+  } catch { return fallback }
+}
+
 export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) {
   const [bitDepth, setBitDepth] = useState<BitDepth>(() => readNumber(BIT_DEPTH_KEY, initial.bitDepth) as BitDepth)
   const [sampleRate, setSampleRate] = useState<SampleRate>(() => readNumber(SAMPLE_RATE_KEY, initial.sampleRate) as SampleRate)
   const [tailSecs, setTailSecs] = useState(() => readNumber(TAIL_SECS_KEY, initial.tailSecs))
+  const [stems, setStems] = useState<boolean>(() => readBool(STEMS_KEY, false))
+  const [includeMaster, setIncludeMaster] = useState<boolean>(() => readBool(STEMS_INCLUDE_MASTER_KEY, true))
+  const [respectMuteSolo, setRespectMuteSolo] = useState<boolean>(() => readBool(STEMS_RESPECT_MUTE_SOLO_KEY, false))
   const [exporting, setExporting] = useState(false)
   const [percent, setPercent] = useState(0)
+  const [stageLabel, setStageLabel] = useState<string | null>(null)
   const startBtn = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -63,8 +78,10 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
   useEffect(() => {
     if (!exporting) return
     let cancelled = false
-    const unlisten = listen<{ percent: number }>('export-progress', e => {
-      if (!cancelled) setPercent(Math.max(0, Math.min(100, e.payload.percent)))
+    const unlisten = listen<{ percent: number; label?: string | null }>('export-progress', e => {
+      if (cancelled) return
+      setPercent(Math.max(0, Math.min(100, e.payload.percent)))
+      if (e.payload.label !== undefined) setStageLabel(e.payload.label ?? null)
     })
     return () => {
       cancelled = true
@@ -72,9 +89,61 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     }
   }, [exporting])
 
+  const persistPrefs = () => {
+    try { localStorage.setItem(BIT_DEPTH_KEY, String(bitDepth)) } catch {}
+    try { localStorage.setItem(SAMPLE_RATE_KEY, String(sampleRate)) } catch {}
+    try { localStorage.setItem(TAIL_SECS_KEY, String(tailSecs)) } catch {}
+    try { localStorage.setItem(STEMS_KEY, stems ? '1' : '0') } catch {}
+    try { localStorage.setItem(STEMS_INCLUDE_MASTER_KEY, includeMaster ? '1' : '0') } catch {}
+    try { localStorage.setItem(STEMS_RESPECT_MUTE_SOLO_KEY, respectMuteSolo ? '1' : '0') } catch {}
+  }
+
   const handleStart = async () => {
-    const { save } = await import('@tauri-apps/plugin-dialog')
+    const { save, open } = await import('@tauri-apps/plugin-dialog')
     const lastDir = localStorage.getItem(LAST_EXPORT_DIR_KEY) || undefined
+
+    if (stems) {
+      const folder = await open({
+        title: 'Export stems to folder',
+        directory: true,
+        defaultPath: lastDir,
+      })
+      if (!folder) return
+      const folderPath = Array.isArray(folder) ? folder[0] : folder
+      localStorage.setItem(LAST_EXPORT_DIR_KEY, folderPath)
+      persistPrefs()
+
+      setExporting(true)
+      setPercent(0)
+      setStageLabel(null)
+      try {
+        const result = await invoke<{
+          folder: string
+          files: string[]
+          duration_secs: number
+          cancelled: boolean
+        }>('export_project_stems', {
+          folderPath,
+          projectName: initial.defaultName,
+          sampleRate,
+          bitDepth,
+          tailSecs,
+          includeMaster,
+          respectMuteSolo,
+        })
+        if (result.cancelled) {
+          onError('Export cancelled')
+        } else {
+          onComplete({ path: result.folder, duration_secs: result.duration_secs })
+        }
+      } catch (err) {
+        onError(String(err))
+      } finally {
+        setExporting(false)
+      }
+      return
+    }
+
     const defaultPath = lastDir
       ? `${lastDir}/${initial.defaultName}.wav`
       : `${initial.defaultName}.wav`
@@ -87,23 +156,31 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     const sep = path.includes('\\') ? '\\' : '/'
     const idx = path.lastIndexOf(sep)
     if (idx > 0) localStorage.setItem(LAST_EXPORT_DIR_KEY, path.slice(0, idx))
-    try { localStorage.setItem(BIT_DEPTH_KEY, String(bitDepth)) } catch {}
-    try { localStorage.setItem(SAMPLE_RATE_KEY, String(sampleRate)) } catch {}
-    try { localStorage.setItem(TAIL_SECS_KEY, String(tailSecs)) } catch {}
+    persistPrefs()
 
     setExporting(true)
     setPercent(0)
+    setStageLabel(null)
     try {
-      const result = await invoke<{ path: string; duration_secs: number }>(
-        'export_project_wav',
-        { path, sampleRate, bitDepth, tailSecs },
-      )
-      onComplete(result)
+      const result = await invoke<{
+        path: string
+        duration_secs: number
+        cancelled: boolean
+      }>('export_project_wav', { path, sampleRate, bitDepth, tailSecs })
+      if (result.cancelled) {
+        onError('Export cancelled')
+      } else {
+        onComplete(result)
+      }
     } catch (err) {
       onError(String(err))
     } finally {
       setExporting(false)
     }
+  }
+
+  const handleCancelRender = async () => {
+    try { await invoke('cancel_export') } catch {}
   }
 
   return createPortal(
@@ -171,13 +248,51 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           />
         </Row>
 
+        <Row label="Stems">
+          <label style={checkLabel}>
+            <input
+              type="checkbox"
+              checked={stems}
+              disabled={exporting}
+              onChange={e => setStems(e.target.checked)}
+            />
+            <span>Export each track to a separate file</span>
+          </label>
+        </Row>
+        {stems && (
+          <>
+            <Row label="">
+              <label style={checkLabel}>
+                <input
+                  type="checkbox"
+                  checked={includeMaster}
+                  disabled={exporting}
+                  onChange={e => setIncludeMaster(e.target.checked)}
+                />
+                <span>Include master bus stem</span>
+              </label>
+            </Row>
+            <Row label="">
+              <label style={checkLabel}>
+                <input
+                  type="checkbox"
+                  checked={respectMuteSolo}
+                  disabled={exporting}
+                  onChange={e => setRespectMuteSolo(e.target.checked)}
+                />
+                <span>Respect existing mute / solo state</span>
+              </label>
+            </Row>
+          </>
+        )}
+
         {exporting && (
           <div style={{ marginTop: 16 }}>
             <div style={{
               fontSize: 11, color: hw.textMuted, marginBottom: 6,
               display: 'flex', justifyContent: 'space-between',
             }}>
-              <span>Rendering…</span>
+              <span>{stageLabel ? `Rendering: ${stageLabel}` : 'Rendering…'}</span>
               <span>{percent.toFixed(0)}%</span>
             </div>
             <div style={{
@@ -198,31 +313,34 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
         )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-          <button
-            onClick={onCancel}
-            disabled={exporting}
-            style={{
-              ...btnStyle,
-              opacity: exporting ? 0.5 : 1,
-              cursor: exporting ? 'not-allowed' : 'pointer',
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            ref={startBtn}
-            onClick={handleStart}
-            disabled={exporting}
-            style={{
-              ...btnStyle,
-              background: exporting ? hw.bgElevated : hw.accent,
-              color: exporting ? hw.textMuted : '#fff',
-              border: `1px solid ${exporting ? hw.border : hw.accent}`,
-              cursor: exporting ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {exporting ? 'Rendering…' : 'Start export'}
-          </button>
+          {exporting ? (
+            <button
+              onClick={handleCancelRender}
+              style={{
+                ...btnStyle,
+                color: hw.red,
+                borderColor: hw.red,
+              }}
+            >
+              Cancel render
+            </button>
+          ) : (
+            <>
+              <button onClick={onCancel} style={btnStyle}>Cancel</button>
+              <button
+                ref={startBtn}
+                onClick={handleStart}
+                style={{
+                  ...btnStyle,
+                  background: hw.accent,
+                  color: '#fff',
+                  border: `1px solid ${hw.accent}`,
+                }}
+              >
+                {stems ? 'Export stems' : 'Start export'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>,
@@ -261,4 +379,14 @@ const btnStyle: React.CSSProperties = {
   border: `1px solid ${hw.border}`,
   borderRadius: hw.radius.md,
   minWidth: 110,
+  cursor: 'pointer',
+}
+
+const checkLabel: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  fontSize: 12,
+  color: hw.textSecondary,
+  cursor: 'pointer',
 }
