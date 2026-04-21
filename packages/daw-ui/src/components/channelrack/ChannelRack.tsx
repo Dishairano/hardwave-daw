@@ -407,26 +407,71 @@ export function ChannelRack() {
         )}
       </div>
 
-      {/* Graph editor */}
-      {graphEditor && (
-        <div style={{
-          height: 60, background: 'rgba(255,255,255,0.02)',
-          borderTop: `1px solid ${hw.border}`,
-          display: 'flex', alignItems: 'flex-end', padding: '4px 4px 2px',
-          gap: 1, marginLeft: 210,
-        }}>
-          {Array.from({ length: STEPS }, (_, i) => (
-            <div key={i} style={{
-              flex: 1, maxWidth: 28,
-              height: `${50 + Math.random() * 50}%`,
-              background: hw.accentDim,
-              border: `1px solid ${hw.accentGlow}`,
-              borderRadius: '2px 2px 0 0',
-              marginRight: i % 4 === 3 ? 4 : 0,
-            }} />
-          ))}
-        </div>
-      )}
+      {/* Graph editor — per-step velocity for the selected channel */}
+      {graphEditor && (() => {
+        const target = channels.find(c => c.id === selectedTrackId) || channels[0]
+        if (!target) return null
+        const targetSteps = getSteps(target.id)
+        return (
+          <div style={{
+            height: 72, background: 'rgba(255,255,255,0.02)',
+            borderTop: `1px solid ${hw.border}`,
+            display: 'flex', flexDirection: 'column', padding: '2px 4px',
+            gap: 2,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 12 }}>
+              <span style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                Graph
+              </span>
+              <span style={{ fontSize: 9, color: hw.accent, fontWeight: 600 }}>{target.name}</span>
+              <span style={{ fontSize: 8, color: hw.textFaint }}>velocity</span>
+            </div>
+            <div
+              style={{
+                flex: 1, display: 'flex', alignItems: 'flex-end',
+                gap: 1, marginLeft: 210 - 8,
+              }}
+              onMouseDown={(e) => {
+                const wrap = e.currentTarget as HTMLDivElement
+                const rect = wrap.getBoundingClientRect()
+                const setFromY = (clientX: number, clientY: number) => {
+                  const x = clientX - rect.left
+                  const y = clientY - rect.top
+                  const stepW = rect.width / STEPS
+                  const i = Math.max(0, Math.min(STEPS - 1, Math.floor(x / stepW)))
+                  const v = Math.max(0, Math.min(1, 1 - y / rect.height))
+                  setStep(target.id, i, v < 0.02 ? 0 : v)
+                }
+                setFromY(e.clientX, e.clientY)
+                const onMove = (ev: MouseEvent) => setFromY(ev.clientX, ev.clientY)
+                const onUp = () => {
+                  window.removeEventListener('mousemove', onMove)
+                  window.removeEventListener('mouseup', onUp)
+                }
+                window.addEventListener('mousemove', onMove)
+                window.addEventListener('mouseup', onUp)
+              }}
+            >
+              {Array.from({ length: STEPS }, (_, i) => {
+                const v = targetSteps[i] || 0
+                const inRange = i < activePatternLength
+                return (
+                  <div key={i} style={{
+                    flex: 1, maxWidth: 28,
+                    height: `${Math.round(v * 100)}%`,
+                    background: v > 0 ? hw.accentDim : 'transparent',
+                    border: v > 0 ? `1px solid ${hw.accentGlow}` : '1px solid rgba(255,255,255,0.05)',
+                    borderRadius: '2px 2px 0 0',
+                    marginRight: i % 4 === 3 ? 4 : 0,
+                    opacity: inRange ? 1 : 0.3,
+                    cursor: 'ns-resize',
+                  }} />
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Bottom bar */}
       <div style={{
@@ -782,6 +827,26 @@ function PatternSwitcher() {
           fontVariantNumeric: 'tabular-nums',
         }}
       />
+      {[4, 8, 16].map(n => {
+        const activeLen = active.length ?? effectiveLen
+        const on = activeLen === n
+        return (
+          <button
+            key={n}
+            onClick={() => setPatternLength(active.id, n)}
+            title={`${n} steps`}
+            style={{
+              minWidth: 18, height: 16, fontSize: 9, fontWeight: 600, padding: '0 3px',
+              color: on ? hw.accent : hw.textFaint,
+              background: on ? hw.accentDim : 'rgba(255,255,255,0.04)',
+              border: `1px solid ${on ? hw.accentGlow : hw.border}`,
+              borderRadius: hw.radius.sm, cursor: 'pointer',
+            }}
+          >
+            {n}
+          </button>
+        )
+      })}
     </div>
   )
 }
