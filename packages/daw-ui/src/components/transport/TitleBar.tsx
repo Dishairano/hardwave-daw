@@ -42,6 +42,7 @@ interface TitleBarProps {
   onOpenAudioSettings: () => void
   onCheckForUpdates: () => void
   onToggleAbout: () => void
+  onToggleShortcuts: () => void
   onExportAudio: () => void
   recentProjects: string[]
   onOpenRecentProject: (path: string) => void
@@ -61,7 +62,7 @@ export function TitleBar(props: TitleBarProps) {
     onCut, onCopy, onPaste, onDuplicate, onSelectAll,
     onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
     onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
-    onToggleRoadmap, onOpenAudioSettings, onCheckForUpdates, onToggleAbout, onExportAudio,
+    onToggleRoadmap, onOpenAudioSettings, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onExportAudio,
     recentProjects, onOpenRecentProject, onClearRecentProjects,
     showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
   } = props
@@ -159,6 +160,7 @@ export function TitleBar(props: TitleBarProps) {
     {
       label: 'HELP',
       items: [
+        { label: 'Keyboard shortcuts', shortcut: '?', action: onToggleShortcuts },
         { label: 'Roadmap', action: onToggleRoadmap },
         { label: 'Check for updates...', action: onCheckForUpdates },
         { separator: true, label: '' },

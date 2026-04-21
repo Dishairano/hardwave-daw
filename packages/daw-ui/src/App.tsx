@@ -17,6 +17,7 @@ import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChan
 import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
 import { WelcomeScreen } from './components/WelcomeScreen'
 import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecoveryDialog'
+import { ShortcutsPanel } from './components/ShortcutsPanel'
 import { invoke } from '@tauri-apps/api/core'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
@@ -52,6 +53,7 @@ export function App() {
   const [showRoadmap, setShowRoadmap] = useState(false)
   const [showAudioSettings, setShowAudioSettings] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
+  const [showShortcuts, setShowShortcuts] = useState(false)
   const [showDevPanel, setShowDevPanel] = useState(false) // DEV ONLY
 
   // Splash screen
@@ -536,6 +538,12 @@ export function App() {
           e.preventDefault()
           setShowMixer(v => !v)
           break
+        case 'Slash':
+          if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault()
+            setShowShortcuts(v => !v)
+          }
+          break
         case 'KeyD': // DEV ONLY — Ctrl+Shift+D toggles dev panel
           if (e.ctrlKey && e.shiftKey) {
             e.preventDefault()
@@ -588,6 +596,7 @@ export function App() {
         onOpenAudioSettings={() => setShowAudioSettings(true)}
         onCheckForUpdates={checkForUpdates}
         onToggleAbout={() => setShowAbout(v => !v)}
+        onToggleShortcuts={() => setShowShortcuts(v => !v)}
         onExportAudio={handleExportAudio}
         recentProjects={recentProjects}
         onOpenRecentProject={handleOpenRecent}
@@ -636,6 +645,7 @@ export function App() {
       {showRoadmap && <Roadmap onClose={() => setShowRoadmap(false)} />}
       {showAudioSettings && <AudioSettings onClose={() => setShowAudioSettings(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
+      <ShortcutsPanel open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}
 
       {savePromptAction && (
