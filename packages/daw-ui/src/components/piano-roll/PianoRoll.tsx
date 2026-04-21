@@ -831,7 +831,7 @@ export function PianoRoll() {
   const [swingPct, setSwingPct] = useState(0)
 
   const runTransform = useCallback(async (
-    kind: 'legato' | 'staccato' | 'humanizeTime' | 'humanizeVel' | 'humanizeLen' | 'flip' | 'reverse' | 'crescendo' | 'decrescendo' | 'velFull' | 'velDouble' | 'velHalf' | 'velReset',
+    kind: 'legato' | 'staccato' | 'humanizeTime' | 'humanizeVel' | 'humanizeLen' | 'flip' | 'reverse' | 'crescendo' | 'decrescendo' | 'velFull' | 'velDouble' | 'velHalf' | 'velReset' | 'grooveMpc60' | 'grooveSp1200' | 'grooveLogic' | 'grooveStraight',
   ) => {
     if (!activeTrackId || !activeClipId) return
     setToolsOpen(false)
@@ -895,6 +895,30 @@ export function PianoRoll() {
       for (const n of sorted) patches.set(n.index, { velocity: Math.max(0.05, n.velocity * 0.6) })
     } else if (kind === 'velReset') {
       for (const n of sorted) patches.set(n.index, { velocity: 0.8 })
+    } else if (kind === 'grooveMpc60' || kind === 'grooveSp1200' || kind === 'grooveLogic' || kind === 'grooveStraight') {
+      // Groove templates: re-position notes onto the snap grid and apply a swing curve
+      // on off-beats. Velocity accents also shift the groove feel.
+      const sixteenth = Math.max(1, Math.round(PPQ / 4))
+      const swingMap: Record<typeof kind, { swing: number; drunk: number; accent: number[] }> = {
+        grooveStraight: { swing: 0, drunk: 0, accent: [1.0, 0.85, 0.95, 0.85] },
+        grooveMpc60: { swing: 0.24, drunk: 0.02, accent: [1.0, 0.72, 0.88, 0.78] },
+        grooveSp1200: { swing: 0.08, drunk: 0.12, accent: [1.0, 0.75, 0.92, 0.82] },
+        grooveLogic: { swing: 0.16, drunk: 0.0, accent: [1.0, 0.82, 0.9, 0.85] },
+      }
+      const g = swingMap[kind]
+      for (const n of sorted) {
+        const snappedStart = Math.round(n.startTick / sixteenth) * sixteenth
+        const sixteenthIdx = Math.round(snappedStart / sixteenth)
+        let offset = 0
+        if (sixteenthIdx % 2 === 1) offset += Math.round(sixteenth * g.swing)
+        if (g.drunk > 0) offset += Math.round((Math.random() - 0.5) * sixteenth * g.drunk)
+        const accent = g.accent[sixteenthIdx % 4] ?? 0.9
+        const newVel = Math.max(0.1, Math.min(1, n.velocity * accent))
+        patches.set(n.index, {
+          startTick: Math.max(0, snappedStart + offset),
+          velocity: newVel,
+        })
+      }
     } else if (kind === 'crescendo' || kind === 'decrescendo') {
       const startVel = kind === 'crescendo' ? 0.3 : 1.0
       const endVel = kind === 'crescendo' ? 1.0 : 0.3
@@ -1571,6 +1595,11 @@ export function PianoRoll() {
                 [null, null, null],
                 ['Crescendo', 'crescendo' as const, 'Ramp velocity up'],
                 ['Decrescendo', 'decrescendo' as const, 'Ramp velocity down'],
+                [null, null, null],
+                ['Groove: Straight', 'grooveStraight' as const, 'No swing, even accents'],
+                ['Groove: MPC 60', 'grooveMpc60' as const, 'Classic MPC 62% swing'],
+                ['Groove: SP-1200', 'grooveSp1200' as const, 'Drunk swing with jitter'],
+                ['Groove: Logic Swing', 'grooveLogic' as const, 'Gentle 58% swing'],
                 [null, null, null],
                 ['Set velocity full', 'velFull' as const, 'velocity = 1.0'],
                 ['Scale velocity ×1.5', 'velDouble' as const, 'Boost velocity'],
