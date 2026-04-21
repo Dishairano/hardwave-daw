@@ -5,6 +5,23 @@ const LS_VOLUME = 'hardwave.daw.metronomeVolume'
 const LS_ACCENT = 'hardwave.daw.metronomeAccent'
 const LS_REC_ONLY = 'hardwave.daw.metronomeRecordOnly'
 const LS_PRECOUNT = 'hardwave.daw.metronomePrecountBars'
+const LS_CUSTOM_DOWN = 'hardwave.daw.metronomeCustomDownbeat'
+const LS_CUSTOM_ACCENT = 'hardwave.daw.metronomeCustomAccent'
+const LS_CUSTOM_DOWN_NAME = 'hardwave.daw.metronomeCustomDownbeatName'
+const LS_CUSTOM_ACCENT_NAME = 'hardwave.daw.metronomeCustomAccentName'
+
+function readString(key: string): string | null {
+  try {
+    const v = localStorage.getItem(key)
+    return v && v.length > 0 ? v : null
+  } catch { return null }
+}
+function writeString(key: string, v: string | null) {
+  try {
+    if (v == null) localStorage.removeItem(key)
+    else localStorage.setItem(key, v)
+  } catch {}
+}
 
 function readNumber(key: string, fallback: number): number {
   try {
@@ -28,6 +45,10 @@ interface MetronomeState {
   accent: boolean
   recordOnly: boolean
   precountBars: number
+  customDownbeat: string | null
+  customAccent: string | null
+  customDownbeatName: string | null
+  customAccentName: string | null
 
   setEnabled: (v: boolean) => void
   toggleEnabled: () => void
@@ -35,6 +56,8 @@ interface MetronomeState {
   setAccent: (v: boolean) => void
   setRecordOnly: (v: boolean) => void
   setPrecountBars: (v: number) => void
+  setCustomDownbeat: (dataUrl: string | null, name: string | null) => void
+  setCustomAccent: (dataUrl: string | null, name: string | null) => void
 }
 
 export const useMetronomeStore = create<MetronomeState>((set) => ({
@@ -43,6 +66,10 @@ export const useMetronomeStore = create<MetronomeState>((set) => ({
   accent: readBool(LS_ACCENT, true),
   recordOnly: readBool(LS_REC_ONLY, false),
   precountBars: Math.max(0, Math.min(4, Math.round(readNumber(LS_PRECOUNT, 0)))),
+  customDownbeat: readString(LS_CUSTOM_DOWN),
+  customAccent: readString(LS_CUSTOM_ACCENT),
+  customDownbeatName: readString(LS_CUSTOM_DOWN_NAME),
+  customAccentName: readString(LS_CUSTOM_ACCENT_NAME),
 
   setEnabled: (v) => { writeBool(LS_ENABLED, v); set({ enabled: v }) },
   toggleEnabled: () => set(s => { writeBool(LS_ENABLED, !s.enabled); return { enabled: !s.enabled } }),
@@ -52,5 +79,15 @@ export const useMetronomeStore = create<MetronomeState>((set) => ({
   setPrecountBars: (v) => {
     const c = Math.max(0, Math.min(4, Math.round(v)))
     writeNumber(LS_PRECOUNT, c); set({ precountBars: c })
+  },
+  setCustomDownbeat: (dataUrl, name) => {
+    writeString(LS_CUSTOM_DOWN, dataUrl)
+    writeString(LS_CUSTOM_DOWN_NAME, name)
+    set({ customDownbeat: dataUrl, customDownbeatName: name })
+  },
+  setCustomAccent: (dataUrl, name) => {
+    writeString(LS_CUSTOM_ACCENT, dataUrl)
+    writeString(LS_CUSTOM_ACCENT_NAME, name)
+    set({ customAccent: dataUrl, customAccentName: name })
   },
 }))

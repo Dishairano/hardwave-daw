@@ -514,12 +514,27 @@ function MetronomeButton({ onEnter, onLeave }: {
   const accent = useMetronomeStore(s => s.accent)
   const recordOnly = useMetronomeStore(s => s.recordOnly)
   const precountBars = useMetronomeStore(s => s.precountBars)
+  const customDownbeatName = useMetronomeStore(s => s.customDownbeatName)
+  const customAccentName = useMetronomeStore(s => s.customAccentName)
   const toggleEnabled = useMetronomeStore(s => s.toggleEnabled)
   const setVolume = useMetronomeStore(s => s.setVolume)
   const setAccent = useMetronomeStore(s => s.setAccent)
   const setRecordOnly = useMetronomeStore(s => s.setRecordOnly)
   const setPrecountBars = useMetronomeStore(s => s.setPrecountBars)
+  const setCustomDownbeat = useMetronomeStore(s => s.setCustomDownbeat)
+  const setCustomAccent = useMetronomeStore(s => s.setCustomAccent)
   const [open, setOpen] = useState(false)
+  const downInputRef = useRef<HTMLInputElement | null>(null)
+  const accentInputRef = useRef<HTMLInputElement | null>(null)
+
+  const readAsDataUrl = (file: File, apply: (dataUrl: string, name: string) => void) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result
+      if (typeof dataUrl === 'string') apply(dataUrl, file.name)
+    }
+    reader.readAsDataURL(file)
+  }
   useEffect(() => {
     if (!open) return
     const close = () => setOpen(false)
@@ -609,7 +624,94 @@ function MetronomeButton({ onEnter, onLeave }: {
               ))}
             </div>
           </div>
+          <div style={{ borderTop: `1px solid ${hw.border}`, paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+              Custom samples
+            </div>
+            <SampleSlot
+              label="Beat"
+              name={customDownbeatName}
+              onPick={() => downInputRef.current?.click()}
+              onClear={() => setCustomDownbeat(null, null)}
+            />
+            <SampleSlot
+              label="Accent"
+              name={customAccentName}
+              fallbackHint={customDownbeatName ? '(uses beat sample)' : '(uses sine tone)'}
+              onPick={() => accentInputRef.current?.click()}
+              onClear={() => setCustomAccent(null, null)}
+            />
+            <input
+              ref={downInputRef}
+              type="file"
+              accept=".wav,.mp3,.ogg,audio/*"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) readAsDataUrl(f, (url, name) => setCustomDownbeat(url, name))
+                e.target.value = ''
+              }}
+            />
+            <input
+              ref={accentInputRef}
+              type="file"
+              accept=".wav,.mp3,.ogg,audio/*"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) readAsDataUrl(f, (url, name) => setCustomAccent(url, name))
+                e.target.value = ''
+              }}
+            />
+          </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+function SampleSlot({ label, name, fallbackHint, onPick, onClear }: {
+  label: string
+  name: string | null
+  fallbackHint?: string
+  onPick: () => void
+  onClear: () => void
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9 }}>
+      <span style={{ width: 54, color: hw.textMuted }}>{label}</span>
+      <div
+        title={name ?? undefined}
+        style={{
+          flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          color: name ? hw.textPrimary : hw.textFaint,
+          fontStyle: name ? 'normal' : 'italic',
+        }}
+      >
+        {name ?? (fallbackHint ?? 'default tone')}
+      </div>
+      <button
+        onClick={onPick}
+        style={{
+          padding: '2px 6px', fontSize: 9, fontWeight: 600,
+          color: hw.textMuted, background: 'transparent',
+          border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, cursor: 'pointer',
+        }}
+      >
+        Load…
+      </button>
+      {name && (
+        <button
+          onClick={onClear}
+          title="Remove sample"
+          style={{
+            width: 18, padding: '2px 0', fontSize: 10, fontWeight: 700,
+            color: hw.textFaint, background: 'transparent',
+            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, cursor: 'pointer',
+          }}
+        >
+          ×
+        </button>
       )}
     </div>
   )
