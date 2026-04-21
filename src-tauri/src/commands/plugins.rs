@@ -2,13 +2,24 @@ use crate::AppState;
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::PluginDescriptor;
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
-pub fn scan_plugins(state: State<AppState>) -> Vec<PluginDescriptor> {
+pub fn scan_plugins(app: AppHandle, state: State<AppState>) -> Vec<PluginDescriptor> {
     let engine = state.engine.lock();
     let mut scanner = engine.plugin_scanner.lock();
-    let result = scanner.scan().to_vec();
+    let emitter = app.clone();
+    let progress: hardwave_plugin_host::scanner::ScanProgress = Box::new(move |count, label| {
+        let _ = emitter.emit(
+            "daw:pluginScanProgress",
+            serde_json::json!({ "count": count, "current": label }),
+        );
+    });
+    let result = scanner.scan_with_progress(Some(progress)).to_vec();
+    let _ = app.emit(
+        "daw:pluginScanComplete",
+        serde_json::json!({ "count": result.len() }),
+    );
     if let Some(path) = hardwave_plugin_host::PluginScanner::default_cache_path() {
         if let Err(e) = scanner.save_cache_to_disk(&path) {
             log::warn!("Failed to persist plugin cache: {e}");

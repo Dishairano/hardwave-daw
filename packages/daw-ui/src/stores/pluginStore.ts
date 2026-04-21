@@ -19,9 +19,15 @@ export interface ScanDiff {
   removed: string[]
 }
 
+interface ScanProgress {
+  count: number
+  current: string
+}
+
 interface PluginState {
   plugins: PluginDescriptor[]
   scanning: boolean
+  scanProgress: ScanProgress | null
   lastDiff: ScanDiff
   blocklist: string[]
   customVst3Paths: string[]
@@ -37,6 +43,7 @@ interface PluginState {
   loadCustomPaths: () => Promise<void>
   setCustomPaths: (vst3: string[], clap: string[]) => Promise<void>
   loadCachePath: () => Promise<void>
+  setScanProgress: (p: ScanProgress | null) => void
   addToTrack: (trackId: string, pluginId: string) => Promise<string>
   removeFromTrack: (trackId: string, slotId: string) => Promise<void>
 }
@@ -44,6 +51,7 @@ interface PluginState {
 export const usePluginStore = create<PluginState>((set, get) => ({
   plugins: [],
   scanning: false,
+  scanProgress: null,
   lastDiff: { added: [], removed: [] },
   blocklist: [],
   customVst3Paths: [],
@@ -51,11 +59,13 @@ export const usePluginStore = create<PluginState>((set, get) => ({
   cachePath: null,
 
   scanPlugins: async () => {
-    set({ scanning: true })
+    set({ scanning: true, scanProgress: { count: 0, current: '' } })
     const plugins = await invoke<PluginDescriptor[]>('scan_plugins')
     const lastDiff = await invoke<ScanDiff>('get_last_scan_diff')
-    set({ plugins, lastDiff, scanning: false })
+    set({ plugins, lastDiff, scanning: false, scanProgress: null })
   },
+
+  setScanProgress: (p) => set({ scanProgress: p }),
 
   loadCachedPlugins: async () => {
     const plugins = await invoke<PluginDescriptor[]>('get_plugins')

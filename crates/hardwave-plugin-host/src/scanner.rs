@@ -16,6 +16,41 @@ struct CachedScan {
     plugins: Vec<PluginDescriptor>,
 }
 
+/// Progress callback invoked as the scanner walks directories.
+/// `found` is the running count of plugins discovered; `current` is a human
+/// label for what is being scanned (usually a path).
+pub type ScanProgress = Box<dyn FnMut(usize, &str) + Send>;
+
+// Subset of the VST3 SDK moduleinfo.json schema we read. Field names match
+// the spec's JSON keys verbatim; unknown fields are ignored by serde.
+#[derive(Debug, Deserialize)]
+struct ModuleInfo {
+    #[serde(rename = "Factory Info", default)]
+    factory_info: Option<FactoryInfo>,
+    #[serde(rename = "Classes", default)]
+    classes: Vec<ModuleClass>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FactoryInfo {
+    #[serde(rename = "Vendor", default)]
+    vendor: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModuleClass {
+    #[serde(rename = "Category", default)]
+    category: String,
+    #[serde(rename = "Name", default)]
+    name: String,
+    #[serde(rename = "Vendor", default)]
+    vendor: String,
+    #[serde(rename = "Version", default)]
+    version: String,
+    #[serde(rename = "Sub Categories", default)]
+    sub_categories: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginScanner {
     pub vst3_paths: Vec<PathBuf>,
@@ -79,6 +114,14 @@ impl PluginScanner {
 
     /// Scan all configured paths for plugins. Computes a diff against the prior cache.
     pub fn scan(&mut self) -> &[PluginDescriptor] {
+        self.scan_with_progress(None)
+    }
+
+    /// Same as [`scan`] but invokes `progress` as each directory is walked.
+    pub fn scan_with_progress(
+        &mut self,
+        mut progress: Option<ScanProgress>,
+    ) -> &[PluginDescriptor] {
         let prior: HashSet<String> = self.cache.iter().map(|p| p.id.clone()).collect();
         self.cache.clear();
 
@@ -97,13 +140,19 @@ impl PluginScanner {
 
         for path in &vst3_paths {
             if path.exists() {
-                self.scan_vst3_dir(path);
+                if let Some(cb) = progress.as_mut() {
+                    cb(self.cache.len(), &path.display().to_string());
+                }
+                self.scan_vst3_dir(path, progress.as_mut());
             }
         }
 
         for path in &clap_paths {
             if path.exists() {
-                self.scan_clap_dir(path);
+                if let Some(cb) = progress.as_mut() {
+                    cb(self.cache.len(), &path.display().to_string());
+                }
+                self.scan_clap_dir(path, progress.as_mut());
             }
         }
 
@@ -142,7 +191,7 @@ impl PluginScanner {
         self.cache.iter().find(|p| p.id == id)
     }
 
-    fn scan_vst3_dir(&mut self, dir: &Path) {
+    fn scan_vst3_dir(&mut self, dir: &Path, mut progress: Option<&mut ScanProgress>) {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return,
@@ -153,39 +202,28 @@ impl PluginScanner {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
             if ext == "vst3" {
-                // VST3 bundles are directories on macOS/Linux, .dll on Windows
                 if path.is_dir() || path.is_file() {
                     log::debug!("Found VST3: {}", path.display());
-                    let name = path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("Unknown")
-                        .to_string();
-
-                    self.cache.push(PluginDescriptor {
-                        id: format!("vst3:{}", name.to_lowercase().replace(' ', "-")),
-                        name: name.clone(),
-                        vendor: "Unknown".into(),
-                        version: "1.0.0".into(),
-                        format: PluginFormat::Vst3,
-                        path: path.clone(),
-                        category: PluginCategory::Effect,
-                        num_inputs: 2,
-                        num_outputs: 2,
-                        has_midi_input: false,
-                        has_editor: true,
-                    });
+                    let descriptors = parse_vst3_bundle(&path);
+                    if let Some(cb) = progress.as_deref_mut() {
+                        cb(self.cache.len(), &path.display().to_string());
+                    }
+                    for d in descriptors {
+                        self.cache.push(d);
+                    }
                 }
 
-                // Recurse into VST3 bundles
-                if path.is_dir() {
-                    self.scan_vst3_dir(&path);
-                }
+                // Don't recurse into .vst3 bundles — moduleinfo parsing already
+                // enumerates their classes, and their Contents/ subtree can
+                // legitimately contain unrelated .vst3-named resources.
+            } else if path.is_dir() {
+                // Scan nested non-bundle directories (e.g. vendor subfolders).
+                self.scan_vst3_dir(&path, progress.as_deref_mut());
             }
         }
     }
 
-    fn scan_clap_dir(&mut self, dir: &Path) {
+    fn scan_clap_dir(&mut self, dir: &Path, mut progress: Option<&mut ScanProgress>) {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return,
@@ -203,6 +241,10 @@ impl PluginScanner {
                     .unwrap_or("Unknown")
                     .to_string();
 
+                if let Some(cb) = progress.as_deref_mut() {
+                    cb(self.cache.len(), &path.display().to_string());
+                }
+
                 self.cache.push(PluginDescriptor {
                     id: format!("clap:{}", name.to_lowercase().replace(' ', "-")),
                     name,
@@ -216,9 +258,130 @@ impl PluginScanner {
                     has_midi_input: false,
                     has_editor: true,
                 });
+            } else if path.is_dir() {
+                self.scan_clap_dir(&path, progress.as_deref_mut());
             }
         }
     }
+}
+
+/// Read a VST3 bundle and return one descriptor per audio-module class.
+/// Prefers `Contents/moduleinfo.json` (VST3 SDK ≥ 3.7) over the filename
+/// fallback so vendor, version, category, and I/O counts are accurate.
+fn parse_vst3_bundle(bundle_path: &Path) -> Vec<PluginDescriptor> {
+    let fallback_name = bundle_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    if let Some(info) = read_moduleinfo(bundle_path) {
+        let factory_vendor = info
+            .factory_info
+            .as_ref()
+            .map(|f| f.vendor.clone())
+            .unwrap_or_default();
+
+        let audio_classes: Vec<_> = info
+            .classes
+            .into_iter()
+            .filter(|c| c.category == "Audio Module Class")
+            .collect();
+
+        if !audio_classes.is_empty() {
+            return audio_classes
+                .into_iter()
+                .map(|c| {
+                    let name = if c.name.is_empty() { fallback_name.clone() } else { c.name };
+                    let vendor = if !c.vendor.is_empty() {
+                        c.vendor
+                    } else if !factory_vendor.is_empty() {
+                        factory_vendor.clone()
+                    } else {
+                        "Unknown".into()
+                    };
+                    let version = if c.version.is_empty() { "0.0.0".into() } else { c.version };
+                    let (category, has_midi_input) = classify_vst3(&c.sub_categories);
+                    PluginDescriptor {
+                        id: format!("vst3:{}", name.to_lowercase().replace(' ', "-")),
+                        name,
+                        vendor,
+                        version,
+                        format: PluginFormat::Vst3,
+                        path: bundle_path.to_path_buf(),
+                        category,
+                        num_inputs: 2,
+                        num_outputs: 2,
+                        has_midi_input,
+                        has_editor: true,
+                    }
+                })
+                .collect();
+        }
+    }
+
+    vec![PluginDescriptor {
+        id: format!("vst3:{}", fallback_name.to_lowercase().replace(' ', "-")),
+        name: fallback_name,
+        vendor: "Unknown".into(),
+        version: "1.0.0".into(),
+        format: PluginFormat::Vst3,
+        path: bundle_path.to_path_buf(),
+        category: PluginCategory::Effect,
+        num_inputs: 2,
+        num_outputs: 2,
+        has_midi_input: false,
+        has_editor: true,
+    }]
+}
+
+fn read_moduleinfo(bundle_path: &Path) -> Option<ModuleInfo> {
+    let candidates = [
+        bundle_path.join("Contents/moduleinfo.json"),
+        bundle_path.join("Contents/Resources/moduleinfo.json"),
+    ];
+    for candidate in candidates {
+        if let Ok(bytes) = std::fs::read(&candidate) {
+            // Strip BOM if present — some VST3 moduleinfo.json files ship with one.
+            let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+            match serde_json::from_slice::<ModuleInfo>(bytes) {
+                Ok(info) => return Some(info),
+                Err(e) => log::debug!(
+                    "Failed to parse {}: {e}",
+                    candidate.display()
+                ),
+            }
+        }
+    }
+    None
+}
+
+fn classify_vst3(sub_categories: &[String]) -> (PluginCategory, bool) {
+    let mut is_instrument = false;
+    let mut is_analyzer = false;
+    let mut has_midi_input = false;
+    for sub in sub_categories {
+        let lower = sub.to_ascii_lowercase();
+        if lower.contains("instrument") || lower.contains("synth") || lower.contains("drum") {
+            is_instrument = true;
+        }
+        if lower.contains("analyzer") {
+            is_analyzer = true;
+        }
+        // VST3 convention: the "Note Expression" / "Instrument" categories
+        // indicate the plugin consumes MIDI/note events.
+        if is_instrument || lower.contains("note") || lower.contains("midi") {
+            has_midi_input = true;
+        }
+    }
+    let cat = if is_instrument {
+        PluginCategory::Instrument
+    } else if is_analyzer {
+        PluginCategory::Analyzer
+    } else {
+        PluginCategory::Effect
+    };
+    (cat, has_midi_input)
 }
 
 impl Default for PluginScanner {

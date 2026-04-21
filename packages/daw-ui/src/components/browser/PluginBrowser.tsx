@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { usePluginStore } from '../../stores/pluginStore'
 import { useTrackStore } from '../../stores/trackStore'
 
@@ -6,6 +7,8 @@ export function PluginBrowser() {
   const {
     plugins,
     scanning,
+    scanProgress,
+    setScanProgress,
     scanPlugins,
     loadCachedPlugins,
     lastDiff,
@@ -30,6 +33,18 @@ export function PluginBrowser() {
     loadCustomPaths()
     loadCachePath()
   }, [loadCachedPlugins, loadBlocklist, loadCustomPaths, loadCachePath])
+
+  useEffect(() => {
+    const unlistenProgress = listen<{ count: number; current: string }>(
+      'daw:pluginScanProgress',
+      (e) => setScanProgress(e.payload)
+    )
+    const unlistenComplete = listen('daw:pluginScanComplete', () => setScanProgress(null))
+    return () => {
+      unlistenProgress.then((fn) => fn())
+      unlistenComplete.then((fn) => fn())
+    }
+  }, [setScanProgress])
 
   const blocked = useMemo(() => new Set(blocklist), [blocklist])
   const hasDiff = lastDiff.added.length + lastDiff.removed.length > 0
@@ -79,7 +94,18 @@ export function PluginBrowser() {
         </div>
       </div>
 
-      {hasDiff && (
+      {scanning && scanProgress && (
+        <div style={{
+          padding: '4px 12px', fontSize: 9, color: '#888',
+          background: 'rgba(255,255,255,0.02)',
+          borderBottom: '1px solid rgba(255,255,255,0.04)',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
+          Scanning… {scanProgress.count} found · {scanProgress.current || '…'}
+        </div>
+      )}
+
+      {!scanning && hasDiff && (
         <div style={{
           padding: '4px 12px', fontSize: 9, color: '#888',
           background: 'rgba(255,255,255,0.02)',
