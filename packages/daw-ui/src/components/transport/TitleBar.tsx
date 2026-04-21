@@ -82,13 +82,21 @@ export function TitleBar(props: TitleBarProps) {
   const clonePattern = usePatternStore(s => s.clonePattern)
   const deletePattern = usePatternStore(s => s.deletePattern)
   const patternCount = usePatternStore(s => s.patterns.length)
-  const uiScale = useUiPreferencesStore(s => s.uiScale)
-  const setUiScale = useUiPreferencesStore(s => s.setUiScale)
+  const uiScaleMode = useUiPreferencesStore(s => s.mode)
+  const effectiveScale = useUiPreferencesStore(s => s.effectiveScale)
+  const setUiScaleMode = useUiPreferencesStore(s => s.setUiScaleMode)
 
-  const uiScaleItems: MenuItem[] = UI_SCALE_OPTIONS.map(scale => ({
-    label: `${uiScale === scale ? '✓ ' : '   '}${scale}%`,
-    action: () => setUiScale(scale as UiScale),
-  }))
+  const uiScaleItems: MenuItem[] = [
+    {
+      label: `${uiScaleMode === 'auto' ? '✓ ' : '   '}Auto (detected: ${effectiveScale}%)`,
+      action: () => setUiScaleMode('auto'),
+    },
+    { separator: true, label: '' },
+    ...UI_SCALE_OPTIONS.map(scale => ({
+      label: `${uiScaleMode === scale ? '✓ ' : '   '}${scale}%`,
+      action: () => setUiScaleMode(scale as UiScale),
+    })),
+  ]
 
   const recentItems: MenuItem[] = recentProjects.length === 0
     ? [{ label: '(none)', disabled: true }]
