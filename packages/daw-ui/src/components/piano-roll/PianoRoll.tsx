@@ -150,6 +150,7 @@ export function PianoRoll() {
   const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number; additive: boolean } | null>(null)
   const [hoverInfo, setHoverInfo] = useState<{ x: number; y: number; label: string } | null>(null)
   const [chordPreview, setChordPreview] = useState<{ rootPitch: number; startTick: number } | null>(null)
+  const [noteCtx, setNoteCtx] = useState<{ x: number; y: number; noteIndex: number } | null>(null)
   const clipboardRef = useRef<Note[]>([])
   const focusedRef = useRef(false)
   const dragRef = useRef<{
@@ -1594,6 +1595,22 @@ export function PianoRoll() {
             onMouseUp={handleMouseUp}
             onMouseLeave={(e) => { handleMouseUp(); setHoverInfo(null); void e }}
             onWheel={handleWheel}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              const rect = canvasRef.current!.getBoundingClientRect()
+              const mx = e.clientX - rect.left
+              const my = e.clientY - rect.top
+              for (const n of notes) {
+                const nx = xFromTick(n.startTick) - KEYBOARD_WIDTH
+                const ny = yFromPitch(n.pitch)
+                const nw = n.durationTicks * pixelsPerTick
+                if (mx >= nx && mx <= nx + nw && my >= ny && my <= ny + noteHeight) {
+                  setNoteCtx({ x: e.clientX, y: e.clientY, noteIndex: n.index })
+                  return
+                }
+              }
+              setNoteCtx(null)
+            }}
             style={{ display: 'block', cursor: tool === 'draw' || tool === 'chord' ? 'crosshair' : tool === 'erase' ? 'not-allowed' : 'default' }}
           />
           {hoverInfo && (
@@ -1650,7 +1667,141 @@ export function PianoRoll() {
           onScroll={(sx) => setScrollX(Math.max(0, sx))}
         />
       )}
+      {noteCtx && (() => {
+        const note = notes.find(n => n.index === noteCtx.noteIndex)
+        if (!note) return null
+        const close = () => setNoteCtx(null)
+        const isInSel = selectedNotes.has(note.index)
+        const targetIndices = isInSel && selectedNotes.size > 1 ? Array.from(selectedNotes) : [note.index]
+        const setVel = async (v: number) => {
+          close()
+          await updateNotes(targetIndices, () => ({ velocity: v }))
+        }
+        const toggleMute = async () => {
+          close()
+          const next = !note.muted
+          if (!activeTrackId || !activeClipId) return
+          try {
+            for (const idx of targetIndices) {
+              await invoke('update_midi_note', {
+                trackId: activeTrackId, clipId: activeClipId,
+                noteIndex: idx, muted: next,
+              })
+            }
+            useProjectStore.getState().markDirty()
+            await refreshNotes()
+          } catch (err) { console.warn('toggle mute failed', err) }
+        }
+        const duplicate = async () => {
+          close()
+          if (!activeTrackId || !activeClipId) return
+          try {
+            const newIndices: number[] = []
+            for (const idx of targetIndices) {
+              const n = notes.find(x => x.index === idx)
+              if (!n) continue
+              const i = await invoke<number>('add_midi_note', {
+                trackId: activeTrackId, clipId: activeClipId,
+                pitch: n.pitch, startTick: n.startTick + n.durationTicks,
+                durationTicks: n.durationTicks, velocity: n.velocity,
+              })
+              newIndices.push(i)
+            }
+            useProjectStore.getState().markDirty()
+            await refreshNotes()
+            setSelectedNotes(new Set(newIndices))
+          } catch (err) { console.warn('duplicate failed', err) }
+        }
+        const quantize = async () => {
+          close()
+          await updateNotes(targetIndices, (n) => ({
+            startTick: Math.round(n.startTick / snap) * snap,
+          }))
+        }
+        const del = async () => {
+          close()
+          if (!activeTrackId || !activeClipId) return
+          const desc = targetIndices.slice().sort((a, b) => b - a)
+          try {
+            for (const idx of desc) {
+              await invoke('delete_midi_note', {
+                trackId: activeTrackId, clipId: activeClipId, noteIndex: idx,
+              })
+            }
+            useProjectStore.getState().markDirty()
+            setSelectedNotes(new Set())
+            await refreshNotes()
+          } catch (err) { console.warn('delete note failed', err) }
+        }
+        const label = targetIndices.length > 1 ? `${targetIndices.length} notes` : noteName(note.pitch)
+        return (
+          <>
+            <div
+              onMouseDown={close}
+              onContextMenu={(e) => { e.preventDefault(); close() }}
+              style={{ position: 'fixed', inset: 0, zIndex: 9999 }}
+            />
+            <div
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                position: 'fixed', left: noteCtx.x, top: noteCtx.y, zIndex: 10000,
+                minWidth: 180, padding: 4,
+                background: 'rgba(12,12,18,0.96)',
+                border: `1px solid ${hw.borderLight}`,
+                borderRadius: hw.radius.md,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+                backdropFilter: hw.blur.md,
+              }}
+            >
+              <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                {label}
+              </div>
+              <NoteMenuItem label={note.muted ? 'Unmute' : 'Mute'} onClick={toggleMute} />
+              <NoteMenuItem label="Duplicate" shortcut="Ctrl+D" onClick={duplicate} />
+              <NoteMenuItem label="Quantize" shortcut="Ctrl+Q" onClick={quantize} />
+              <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+              <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                Velocity
+              </div>
+              <div style={{ display: 'flex', gap: 2, padding: '0 4px 2px' }}>
+                {[0.25, 0.5, 0.75, 1.0].map(v => (
+                  <button key={v} onClick={() => setVel(v)}
+                    style={{
+                      flex: 1, height: 20, fontSize: 9, color: hw.textSecondary,
+                      background: 'rgba(255,255,255,0.04)', border: `1px solid ${hw.border}`,
+                      borderRadius: hw.radius.sm, cursor: 'pointer', padding: 0,
+                    }}
+                  >{Math.round(v * 100)}</button>
+                ))}
+              </div>
+              <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+              <NoteMenuItem label="Delete" shortcut="Del" danger onClick={del} />
+            </div>
+          </>
+        )
+      })()}
     </div>
+  )
+}
+
+function NoteMenuItem({ label, shortcut, danger, onClick }: {
+  label: string; shortcut?: string; danger?: boolean; onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'center',
+        padding: '5px 8px', gap: 8, border: 'none',
+        background: 'transparent', color: danger ? hw.red : hw.textSecondary,
+        fontSize: 11, cursor: 'pointer', borderRadius: hw.radius.sm,
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)' }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+    >
+      <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
+      {shortcut && <span style={{ fontSize: 9, color: hw.textFaint }}>{shortcut}</span>}
+    </button>
   )
 }
 
