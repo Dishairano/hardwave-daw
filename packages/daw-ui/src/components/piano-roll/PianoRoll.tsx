@@ -129,7 +129,7 @@ export function PianoRoll() {
   const tracks = useTrackStore(s => s.tracks)
   const [notes, setNotes] = useState<Note[]>([])
   const [ghostMode, setGhostMode] = useState<'off' | 'track' | 'all'>('off')
-  const [ghostNotes, setGhostNotes] = useState<Array<Note & { color: string }>>([])
+  const [ghostNotes, setGhostNotes] = useState<Array<Note & { color: string; trackId: string; clipId: string }>>([])
   const [showMinimap, setShowMinimap] = useState(false)
   const [viewportWidth, setViewportWidth] = useState(800)
   const [scrollX, setScrollX] = useState(0)
@@ -214,7 +214,7 @@ export function PianoRoll() {
           candidates.push({ trackId: t.id, clipId: c.id, color: t.color || '#64748b' })
         }
       }
-      const collected: Array<Note & { color: string }> = []
+      const collected: Array<Note & { color: string; trackId: string; clipId: string }> = []
       for (const { trackId, clipId, color } of candidates) {
         try {
           const data = await invoke<MidiNoteInfo[]>('get_midi_notes', { trackId, clipId })
@@ -227,6 +227,8 @@ export function PianoRoll() {
               velocity: n.velocity,
               muted: n.muted,
               color,
+              trackId,
+              clipId,
             })
           }
         } catch {}
@@ -320,18 +322,20 @@ export function PianoRoll() {
     }
 
     if (ghostMode !== 'off' && ghostNotes.length > 0) {
+      const highlight = scaleType !== 'chromatic'
       ctx.save()
       for (const note of ghostNotes) {
         const x = xFromTick(note.startTick) - KEYBOARD_WIDTH
         const y = yFromPitch(note.pitch)
         const noteW = note.durationTicks * pixelsPerTick
         if (x + noteW < 0 || x > w || y + noteHeight < 0 || y > h) continue
-        ctx.globalAlpha = 0.22
+        const inScale = !highlight || isPitchInScale(note.pitch, scaleRoot, scaleType)
+        ctx.globalAlpha = inScale ? 0.22 : 0.08
         ctx.fillStyle = note.color
         ctx.beginPath()
         ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), noteHeight - 2, 4)
         ctx.fill()
-        ctx.globalAlpha = 0.4
+        ctx.globalAlpha = inScale ? 0.4 : 0.18
         ctx.strokeStyle = note.color
         ctx.lineWidth = 0.5
         ctx.stroke()
@@ -518,6 +522,18 @@ export function PianoRoll() {
       }
     }
 
+    if (ghostMode !== 'off' && (tool === 'select' || e.altKey)) {
+      for (const g of ghostNotes) {
+        const gx = xFromTick(g.startTick) - KEYBOARD_WIDTH
+        const gy = yFromPitch(g.pitch)
+        const gw = g.durationTicks * pixelsPerTick
+        if (mx >= gx && mx <= gx + gw && my >= gy && my <= gy + noteHeight) {
+          useTrackStore.getState().setActiveMidiClip(g.trackId, g.clipId)
+          return
+        }
+      }
+    }
+
     if (tool === 'chord' && pitch >= 0 && pitch < 128) {
       const snappedTick = Math.max(0, snapTick(tick))
       const rootPitch = snapToScale && scaleType !== 'chromatic'
@@ -586,7 +602,7 @@ export function PianoRoll() {
       setMarquee({ x1: mx, y1: my, x2: mx, y2: my })
       if (!e.shiftKey) setSelectedNotes(new Set())
     }
-  }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes, snapToScale, scaleRoot, scaleType, chordType, chordInversion, customChordSet, noteHeight])
+  }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes, snapToScale, scaleRoot, scaleType, chordType, chordInversion, customChordSet, noteHeight, ghostMode, ghostNotes])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (marqueeRef.current) {
@@ -949,6 +965,29 @@ export function PianoRoll() {
     return () => window.removeEventListener('click', close)
   }, [qOpen])
 
+  const insertNotesInPlace = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    const clip = clipboardRef.current
+    if (clip.length === 0) return
+    const newIndices: number[] = []
+    try {
+      for (const n of clip) {
+        const newIndex = await invoke<number>('add_midi_note', {
+          trackId: activeTrackId,
+          clipId: activeClipId,
+          pitch: n.pitch,
+          startTick: Math.max(0, n.startTick),
+          durationTicks: n.durationTicks,
+          velocity: n.velocity,
+        })
+        newIndices.push(newIndex)
+      }
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+      setSelectedNotes(new Set(newIndices))
+    } catch (err) { console.warn('paste-in-place failed', err) }
+  }, [activeTrackId, activeClipId, refreshNotes])
+
   const insertNotesFromClipboard = useCallback(async (originTick: number) => {
     if (!activeTrackId || !activeClipId) return
     const clip = clipboardRef.current
@@ -1016,6 +1055,12 @@ export function PianoRoll() {
       return
     }
 
+    if (ctrl && e.shiftKey && e.key.toLowerCase() === 'v') {
+      consume()
+      await insertNotesInPlace()
+      return
+    }
+
     if (ctrl && e.key.toLowerCase() === 'v') {
       consume()
       const ts = useTransportStore.getState()
@@ -1028,6 +1073,20 @@ export function PianoRoll() {
         originTick = Math.round(ts.positionSamples / samplesPerTick)
       }
       await insertNotesFromClipboard(originTick)
+      return
+    }
+
+    if (ctrl && e.altKey && e.key.toLowerCase() === 'a') {
+      if (selectedNotes.size < 2) return
+      consume()
+      const sel = notes.filter(n => selectedNotes.has(n.index))
+      const sorted = [...sel].sort((a, b) => a.pitch - b.pitch)
+      const base = Math.min(...sel.map(n => n.startTick))
+      const orderByIndex = new Map(sorted.map((n, i) => [n.index, i]))
+      await updateNotes(Array.from(selectedNotes), (n) => {
+        const i = orderByIndex.get(n.index) ?? 0
+        return { startTick: base + i * snap }
+      })
       return
     }
 
@@ -1085,7 +1144,7 @@ export function PianoRoll() {
       await updateNotes(indices, n => ({ startTick: Math.max(0, n.startTick + snap * dir) }))
       return
     }
-  }, [activeTrackId, activeClipId, selectedNotes, refreshNotes, notes, snap, updateNotes, insertNotesFromClipboard])
+  }, [activeTrackId, activeClipId, selectedNotes, refreshNotes, notes, snap, updateNotes, insertNotesFromClipboard, insertNotesInPlace])
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown)
