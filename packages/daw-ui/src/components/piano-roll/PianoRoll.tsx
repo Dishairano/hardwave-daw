@@ -272,7 +272,17 @@ export function PianoRoll() {
       if (x + noteW < 0 || x > w || y + noteHeight < 0 || y > h) continue
 
       const isSelected = selectedNotes.has(note.index)
-      const color = note.muted ? '#52525b' : '#DC2626'
+      let color = '#DC2626'
+      if (note.muted) {
+        color = '#52525b'
+      } else {
+        // Velocity-driven lightness: 0.2 → dark maroon, 1.0 → bright red
+        const t = Math.max(0, Math.min(1, note.velocity))
+        const r = Math.round(100 + 155 * t)
+        const g = Math.round(20 + 38 * t)
+        const b = Math.round(20 + 38 * t)
+        color = `rgb(${r},${g},${b})`
+      }
 
       ctx.fillStyle = isSelected ? '#EF4444' : color
       ctx.globalAlpha = note.muted ? 0.4 : 0.85
@@ -615,9 +625,13 @@ export function PianoRoll() {
   }, [activeTrackId, activeClipId, notes, refreshNotes])
 
   const [toolsOpen, setToolsOpen] = useState(false)
+  const [qOpen, setQOpen] = useState(false)
+  const [qStrength, setQStrength] = useState(100)
+  const [qMode, setQMode] = useState<'start' | 'end' | 'both'>('start')
+  const [swingPct, setSwingPct] = useState(0)
 
   const runTransform = useCallback(async (
-    kind: 'legato' | 'staccato' | 'humanizeTime' | 'humanizeVel' | 'humanizeLen' | 'flip' | 'reverse' | 'crescendo' | 'decrescendo',
+    kind: 'legato' | 'staccato' | 'humanizeTime' | 'humanizeVel' | 'humanizeLen' | 'flip' | 'reverse' | 'crescendo' | 'decrescendo' | 'velFull' | 'velDouble' | 'velHalf' | 'velReset',
   ) => {
     if (!activeTrackId || !activeClipId) return
     setToolsOpen(false)
@@ -673,6 +687,14 @@ export function PianoRoll() {
         const newStart = Math.max(0, lo + (hi - (n.startTick + n.durationTicks)))
         if (newStart !== n.startTick) patches.set(n.index, { startTick: newStart })
       }
+    } else if (kind === 'velFull') {
+      for (const n of sorted) patches.set(n.index, { velocity: 1 })
+    } else if (kind === 'velDouble') {
+      for (const n of sorted) patches.set(n.index, { velocity: Math.min(1, n.velocity * 1.5) })
+    } else if (kind === 'velHalf') {
+      for (const n of sorted) patches.set(n.index, { velocity: Math.max(0.05, n.velocity * 0.6) })
+    } else if (kind === 'velReset') {
+      for (const n of sorted) patches.set(n.index, { velocity: 0.8 })
     } else if (kind === 'crescendo' || kind === 'decrescendo') {
       const startVel = kind === 'crescendo' ? 0.3 : 1.0
       const endVel = kind === 'crescendo' ? 1.0 : 0.3
@@ -698,6 +720,58 @@ export function PianoRoll() {
       await refreshNotes()
     } catch (err) { console.warn('transform failed', err) }
   }, [activeTrackId, activeClipId, notes, selectedNotes, snap, refreshNotes])
+
+  const runQuantize = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setQOpen(false)
+    const sel = selectedNotes.size > 0
+      ? notes.filter(n => selectedNotes.has(n.index))
+      : notes
+    if (sel.length === 0) return
+    const strength = qStrength / 100
+    const swing = swingPct / 100
+    try {
+      for (const n of sel) {
+        const snappedStart = Math.round(n.startTick / snap) * snap
+        let targetStart = snappedStart
+        if (swing !== 0) {
+          const beatIndex = Math.round(n.startTick / snap)
+          if (beatIndex % 2 === 1) {
+            targetStart = snappedStart + Math.round(snap * swing * 0.5)
+          }
+        }
+        const newStart = Math.round(n.startTick + (targetStart - n.startTick) * strength)
+
+        const end = n.startTick + n.durationTicks
+        const snappedEnd = Math.round(end / snap) * snap
+        const newEnd = Math.round(end + (snappedEnd - end) * strength)
+
+        const patch: Partial<Pick<Note, 'startTick' | 'durationTicks'>> = {}
+        if (qMode === 'start' || qMode === 'both') patch.startTick = Math.max(0, newStart)
+        if (qMode === 'end' || qMode === 'both') {
+          const anchor = patch.startTick ?? n.startTick
+          patch.durationTicks = Math.max(snap, newEnd - anchor)
+        }
+        if (Object.keys(patch).length === 0) continue
+        await invoke('update_midi_note', {
+          trackId: activeTrackId, clipId: activeClipId, noteIndex: n.index, ...patch,
+        })
+      }
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+    } catch (err) { console.warn('quantize failed', err) }
+  }, [activeTrackId, activeClipId, notes, selectedNotes, snap, qStrength, qMode, swingPct, refreshNotes])
+
+  useEffect(() => {
+    if (!qOpen) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-q-popover]')) return
+      setQOpen(false)
+    }
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [qOpen])
 
   const insertNotesFromClipboard = useCallback(async (originTick: number) => {
     if (!activeTrackId || !activeClipId) return
@@ -1066,6 +1140,85 @@ export function PianoRoll() {
 
         <div style={{ position: 'relative' }}>
           <button
+            onClick={(e) => { e.stopPropagation(); setQOpen(v => !v) }}
+            title="Quantize options (Ctrl+Q applies)"
+            style={{
+              padding: '1px 8px', fontSize: 9, fontWeight: 600,
+              color: qOpen ? hw.accent : hw.textMuted,
+              background: qOpen ? hw.accentDim : 'rgba(255,255,255,0.04)',
+              border: `1px solid ${qOpen ? hw.accentGlow : hw.border}`,
+              borderRadius: hw.radius.sm, textTransform: 'uppercase',
+            }}
+          >
+            Q ▾
+          </button>
+          {qOpen && (
+            <div
+              data-q-popover
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute', top: 22, right: 0, zIndex: 500,
+                minWidth: 220, padding: 10,
+                background: 'rgba(12,12,18,0.96)',
+                border: `1px solid ${hw.borderLight}`,
+                borderRadius: hw.radius.md,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+                backdropFilter: hw.blur.md,
+                display: 'flex', flexDirection: 'column', gap: 8,
+              }}
+            >
+              <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Quantize</div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
+                  <span>Strength</span>
+                  <span style={{ color: hw.textPrimary, fontWeight: 600 }}>{qStrength}%</span>
+                </div>
+                <input type="range" min={0} max={100} step={1} value={qStrength}
+                  onChange={(e) => setQStrength(Number(e.target.value))}
+                  style={{ width: '100%', accentColor: hw.accent }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 9, color: hw.textMuted, marginBottom: 2 }}>Apply to</div>
+                <div style={{ display: 'flex', gap: 2 }}>
+                  {(['start','end','both'] as const).map(m => (
+                    <button key={m} onClick={() => setQMode(m)} style={{
+                      flex: 1, padding: '3px 0', fontSize: 9, fontWeight: 600,
+                      color: qMode === m ? hw.accent : hw.textFaint,
+                      background: qMode === m ? hw.accentDim : 'transparent',
+                      border: `1px solid ${qMode === m ? hw.accentGlow : hw.border}`,
+                      borderRadius: hw.radius.sm, textTransform: 'uppercase',
+                    }}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
+                  <span>Swing</span>
+                  <span style={{ color: hw.textPrimary, fontWeight: 600 }}>{swingPct}%</span>
+                </div>
+                <input type="range" min={0} max={100} step={1} value={swingPct}
+                  onChange={(e) => setSwingPct(Number(e.target.value))}
+                  style={{ width: '100%', accentColor: hw.accent }} />
+              </div>
+              <button
+                onClick={runQuantize}
+                style={{
+                  padding: '5px 10px', fontSize: 10, fontWeight: 700,
+                  color: '#fff', background: hw.accent,
+                  border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
+                }}
+              >
+                Apply quantize
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div style={{ position: 'relative' }}>
+          <button
             onClick={() => setToolsOpen(v => !v)}
             title="Note tools: legato, humanize, flip, reverse…"
             style={{
@@ -1104,6 +1257,11 @@ export function PianoRoll() {
                 [null, null, null],
                 ['Crescendo', 'crescendo' as const, 'Ramp velocity up'],
                 ['Decrescendo', 'decrescendo' as const, 'Ramp velocity down'],
+                [null, null, null],
+                ['Set velocity full', 'velFull' as const, 'velocity = 1.0'],
+                ['Scale velocity ×1.5', 'velDouble' as const, 'Boost velocity'],
+                ['Scale velocity ×0.6', 'velHalf' as const, 'Reduce velocity'],
+                ['Reset velocity', 'velReset' as const, 'velocity = 0.8'],
               ].map(([label, key, hint], i) => {
                 if (label === null) {
                   return <div key={`s${i}`} style={{ height: 1, background: hw.border, margin: '3px 0' }} />

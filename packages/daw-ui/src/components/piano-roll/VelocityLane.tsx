@@ -105,6 +105,17 @@ export function VelocityLane({
   }, [draw])
 
   const draggingNoteRef = useRef<number | null>(null)
+  const curveModeRef = useRef(false)
+  const touchedIndicesRef = useRef<Set<number>>(new Set())
+
+  const findNoteAtX = useCallback((mx: number): number | null => {
+    const barW = Math.max(3, 6 * pixelsPerTick)
+    for (const note of notes) {
+      const x = note.startTick * pixelsPerTick - scrollX
+      if (mx >= x && mx <= x + barW) return note.index
+    }
+    return null
+  }, [notes, scrollX, pixelsPerTick])
 
   const applyVelAt = useCallback((clientX: number, clientY: number, draggedIdx?: number) => {
     const rect = canvasRef.current!.getBoundingClientRect()
@@ -117,34 +128,46 @@ export function VelocityLane({
       return
     }
 
-    const barW = Math.max(3, 6 * pixelsPerTick)
-    for (const note of notes) {
-      const x = note.startTick * pixelsPerTick - scrollX
-      if (mx >= x && mx <= x + barW) {
-        draggingNoteRef.current = note.index
-        onVelocityChange(note.index, newVel)
-        break
-      }
+    const idx = findNoteAtX(mx)
+    if (idx != null) {
+      draggingNoteRef.current = idx
+      onVelocityChange(idx, newVel)
     }
-  }, [notes, scrollX, pixelsPerTick, height, onVelocityChange])
+  }, [findNoteAtX, height, onVelocityChange])
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     draggingNoteRef.current = null
+    curveModeRef.current = e.shiftKey
+    touchedIndicesRef.current = new Set()
     applyVelAt(e.clientX, e.clientY)
-    if (draggingNoteRef.current == null) return
+
     const onMove = (ev: MouseEvent) => {
+      if (curveModeRef.current) {
+        const rect = canvasRef.current!.getBoundingClientRect()
+        const mx = ev.clientX - rect.left
+        const idx = findNoteAtX(mx)
+        if (idx != null && !touchedIndicesRef.current.has(idx)) {
+          touchedIndicesRef.current.add(idx)
+          applyVelAt(ev.clientX, ev.clientY, idx)
+        } else if (idx != null) {
+          applyVelAt(ev.clientX, ev.clientY, idx)
+        }
+        return
+      }
       const idx = draggingNoteRef.current
       if (idx == null) return
       applyVelAt(ev.clientX, ev.clientY, idx)
     }
     const onUp = () => {
       draggingNoteRef.current = null
+      curveModeRef.current = false
+      touchedIndicesRef.current = new Set()
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [applyVelAt])
+  }, [applyVelAt, findNoteAtX])
 
   return (
     <div ref={containerRef} data-testid="velocity-lane" style={{
@@ -155,6 +178,7 @@ export function VelocityLane({
       <canvas
         ref={canvasRef}
         onMouseDown={handleMouseDown}
+        title="Click/drag to set velocity, Shift+drag across notes to draw a curve"
         style={{ display: 'block', cursor: 'ns-resize' }}
       />
     </div>
