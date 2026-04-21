@@ -686,10 +686,12 @@ export function App() {
 
       <FloatingPanels
         showBrowser={showBrowser}
+        showPlaylist={showPlaylist}
         showChannelRack={showChannelRack}
         showPianoRoll={showPianoRoll}
         showMixer={showMixer}
         onHideBrowser={() => setShowBrowser(false)}
+        onHidePlaylist={() => setShowPlaylist(false)}
         onHideChannelRack={() => setShowChannelRack(false)}
         onHidePianoRoll={() => setShowPianoRoll(false)}
         onHideMixer={() => setShowMixer(false)}
@@ -766,6 +768,7 @@ function MainLayout({
   const channelRackDocked = showChannelRack && !layout.channelRack.floating
   const pianoRollDocked = showPianoRoll && !layout.pianoRoll.floating
   const mixerDocked = showMixer && !layout.mixer.floating
+  const playlistDocked = showPlaylist && !layout.playlist.floating
   return (
     <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
       {browserDocked && <div data-testid="panel-browser" style={{ width: 240, flexShrink: 0, display: 'flex' }}><Browser /></div>}
@@ -773,10 +776,10 @@ function MainLayout({
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {channelRackDocked && (
           <div data-testid="panel-channel-rack" style={{
-            flex: showPlaylist ? undefined : 1,
-            height: showPlaylist ? '55%' : undefined,
+            flex: playlistDocked ? undefined : 1,
+            height: playlistDocked ? '55%' : undefined,
             minHeight: 120,
-            borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
+            borderBottom: playlistDocked ? `1px solid ${hw.borderDark}` : undefined,
           }}>
             <ChannelRack />
           </div>
@@ -785,13 +788,13 @@ function MainLayout({
         {pianoRollDocked && (
           <div data-testid="panel-piano-roll" style={{
             flex: 1, minHeight: 200,
-            borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
+            borderBottom: playlistDocked ? `1px solid ${hw.borderDark}` : undefined,
           }}>
             <PianoRoll />
           </div>
         )}
 
-        {showPlaylist && (
+        {playlistDocked && (
           <div data-testid="panel-playlist" style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
             <TrackList />
             <Arrangement />
@@ -813,11 +816,13 @@ function MainLayout({
 }
 
 function FloatingPanels({
-  showBrowser, showChannelRack, showPianoRoll, showMixer,
-  onHideBrowser, onHideChannelRack, onHidePianoRoll, onHideMixer,
+  showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
+  onHideBrowser, onHidePlaylist, onHideChannelRack, onHidePianoRoll, onHideMixer,
 }: {
-  showBrowser: boolean; showChannelRack: boolean; showPianoRoll: boolean; showMixer: boolean;
-  onHideBrowser: () => void; onHideChannelRack: () => void; onHidePianoRoll: () => void; onHideMixer: () => void;
+  showBrowser: boolean; showPlaylist: boolean;
+  showChannelRack: boolean; showPianoRoll: boolean; showMixer: boolean;
+  onHideBrowser: () => void; onHidePlaylist: () => void;
+  onHideChannelRack: () => void; onHidePianoRoll: () => void; onHideMixer: () => void;
 }) {
   const layout = usePanelLayoutStore(s => s.layout)
   return (
@@ -825,6 +830,14 @@ function FloatingPanels({
       {showBrowser && layout.browser.floating && (
         <FloatingWindow panelId="browser" title="Browser" onClose={onHideBrowser}>
           <Browser />
+        </FloatingWindow>
+      )}
+      {showPlaylist && layout.playlist.floating && (
+        <FloatingWindow panelId="playlist" title="Playlist" onClose={onHidePlaylist}>
+          <div style={{ flex: 1, display: 'flex', minWidth: 0, overflow: 'hidden' }}>
+            <TrackList />
+            <Arrangement />
+          </div>
         </FloatingWindow>
       )}
       {showChannelRack && layout.channelRack.floating && (

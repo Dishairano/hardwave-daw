@@ -3,6 +3,7 @@ import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { useTransportStore } from '../../stores/transportStore'
 import { PATTERN_COLORS } from '../../stores/patternStore'
+import { DetachButton } from '../FloatingWindow'
 
 export function TrackList() {
   const {
@@ -73,9 +74,11 @@ export function TrackList() {
     }}>
       <div style={{
         height: 22, background: 'rgba(255,255,255,0.01)', borderBottom: `1px solid ${hw.border}`,
-        display: 'flex', alignItems: 'center', padding: '0 8px',
+        display: 'flex', alignItems: 'center', padding: '0 8px', gap: 4,
       }}>
         <span style={{ fontSize: 10, color: hw.textMuted }}>Playlist</span>
+        <div style={{ flex: 1 }} />
+        <DetachButton panelId="playlist" />
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
