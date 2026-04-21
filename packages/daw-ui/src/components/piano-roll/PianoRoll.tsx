@@ -8,6 +8,8 @@ import { DetachButton } from '../FloatingWindow'
 import { useTrackStore } from '../../stores/trackStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { useTransportStore } from '../../stores/transportStore'
+import { encodeSingleTrackMidi, decodeMidi, rescaleNotes } from '../../utils/midi'
+import { useNotificationStore } from '../../stores/notificationStore'
 
 const PPQ = 960
 const MINIMAP_HEIGHT = 36
@@ -854,6 +856,78 @@ export function PianoRoll() {
   }, [activeTrackId, activeClipId, notes, refreshNotes])
 
   const [toolsOpen, setToolsOpen] = useState(false)
+  const midiImportRef = useRef<HTMLInputElement>(null)
+
+  const exportMidi = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) {
+      useNotificationStore.getState().push('warning', 'No active clip to export')
+      return
+    }
+    try {
+      const data = await invoke<MidiNoteInfo[]>('get_midi_notes', {
+        trackId: activeTrackId, clipId: activeClipId,
+      })
+      if (data.length === 0) {
+        useNotificationStore.getState().push('info', 'Clip is empty — nothing to export')
+        return
+      }
+      const bpm = useTransportStore.getState().bpm
+      const blob = encodeSingleTrackMidi(
+        data.map(n => ({
+          pitch: n.pitch,
+          velocity: Math.max(1, Math.round(n.velocity * 127)),
+          startTicks: n.start_tick,
+          durationTicks: n.duration_ticks,
+        })),
+        PPQ,
+        bpm,
+      )
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `clip-${activeClipId.slice(0, 8)}.mid`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      useNotificationStore.getState().push('info', `Exported ${data.length} notes`)
+    } catch (e) {
+      useNotificationStore.getState().push('error', 'MIDI export failed', { detail: String(e) })
+    }
+  }, [activeTrackId, activeClipId])
+
+  const importMidi = useCallback(async (file: File) => {
+    if (!activeTrackId || !activeClipId) {
+      useNotificationStore.getState().push('warning', 'Select a MIDI clip first')
+      return
+    }
+    try {
+      const buf = await file.arrayBuffer()
+      const parsed = decodeMidi(buf)
+      const flat = parsed.tracks.flat()
+      if (flat.length === 0) {
+        useNotificationStore.getState().push('info', 'No notes found in file')
+        return
+      }
+      const rescaled = rescaleNotes(flat, parsed.ppq, PPQ)
+      for (const n of rescaled) {
+        await invoke<number>('add_midi_note', {
+          trackId: activeTrackId,
+          clipId: activeClipId,
+          startTick: n.startTicks,
+          durationTicks: n.durationTicks,
+          pitch: n.pitch,
+          velocity: n.velocity / 127,
+        })
+      }
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+      useNotificationStore.getState().push('info', `Imported ${rescaled.length} notes`)
+    } catch (e) {
+      useNotificationStore.getState().push('error', 'MIDI import failed', { detail: String(e) })
+    }
+  }, [activeTrackId, activeClipId, refreshNotes])
+
   const [qOpen, setQOpen] = useState(false)
   const [qStrength, setQStrength] = useState(100)
   const [qMode, setQMode] = useState<'start' | 'end' | 'both'>('start')
@@ -1745,6 +1819,42 @@ export function PianoRoll() {
             </div>
           )}
         </div>
+
+        <input
+          ref={midiImportRef}
+          type="file"
+          accept=".mid,.midi,audio/midi"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) importMidi(f)
+            if (midiImportRef.current) midiImportRef.current.value = ''
+          }}
+        />
+        <button
+          onClick={() => midiImportRef.current?.click()}
+          title="Import notes from a .mid file into the active clip"
+          style={{
+            padding: '1px 8px', fontSize: 9, fontWeight: 600,
+            color: hw.textMuted, background: 'rgba(255,255,255,0.04)',
+            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+            textTransform: 'uppercase',
+          }}
+        >
+          Import MIDI
+        </button>
+        <button
+          onClick={exportMidi}
+          title="Export active clip as a .mid file"
+          style={{
+            padding: '1px 8px', fontSize: 9, fontWeight: 600,
+            color: hw.textMuted, background: 'rgba(255,255,255,0.04)',
+            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+            textTransform: 'uppercase',
+          }}
+        >
+          Export MIDI
+        </button>
 
         <div style={{ position: 'relative' }}>
           <button
