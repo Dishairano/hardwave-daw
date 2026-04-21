@@ -5,6 +5,7 @@ import { useMeterStore, DEFAULT_TRACK_METER } from '../../stores/meterStore'
 import { PATTERN_COLORS } from '../../stores/patternStore'
 import { DetachButton } from '../FloatingWindow'
 import { ParameterContextMenu } from '../ParameterContextMenu'
+import { SendsEditor } from './SendsEditor'
 import { useEffect, useState, useCallback, useRef } from 'react'
 
 export function MixerPanel() {
@@ -305,6 +306,9 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
         trackId={isMaster ? undefined : trackId}
         inserts={inserts}
       />
+
+      {/* Sends */}
+      {!isMaster && trackId && <SendsEditor trackId={trackId} />}
 
       {/* Fader + meter */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 3, gap: 2, minHeight: 70 }}>

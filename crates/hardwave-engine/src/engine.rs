@@ -638,6 +638,9 @@ impl EngineCallback {
         let tempo_map = &project.tempo_map;
 
         let mut track_node_ids = Vec::new();
+        // Parallel map from project track id to graph node id, needed to
+        // connect send edges once every track node has been inserted.
+        let mut track_id_to_node: HashMap<String, crate::graph::NodeId> = HashMap::new();
 
         // Determine if any track is soloed — if so, mute all non-soloed tracks
         let any_soloed = project
@@ -758,6 +761,7 @@ impl EngineCallback {
 
             let node_id = self.graph.add_node(Box::new(node));
             track_node_ids.push(node_id);
+            track_id_to_node.insert(track.id.clone(), node_id);
         }
 
         // Add master node (reads volume from shared transport atomic — no rebuild on change)
@@ -768,6 +772,39 @@ impl EngineCallback {
         for &track_id in &track_node_ids {
             self.graph.connect(track_id, 0, master_id, 0); // Left
             self.graph.connect(track_id, 1, master_id, 1); // Right
+        }
+
+        // Wire send routing. Each enabled send contributes an extra edge from
+        // the source track's pre-fader tap (ports 2/3) or post-fader output
+        // (ports 0/1) into the target track's input (ports 0/1), with the
+        // send amount applied as per-edge gain.
+        for track in &project.tracks {
+            let src_node = match track_id_to_node.get(&track.id) {
+                Some(&id) => id,
+                None => continue,
+            };
+            for send in &track.sends {
+                if !send.enabled {
+                    continue;
+                }
+                let dst_node = match track_id_to_node.get(&send.target) {
+                    Some(&id) => id,
+                    None => continue,
+                };
+                if dst_node == src_node {
+                    continue;
+                }
+                let gain = if send.gain_db <= -100.0 {
+                    0.0
+                } else {
+                    10.0_f64.powf(send.gain_db / 20.0) as f32
+                };
+                let (src_l, src_r) = if send.pre_fader { (2, 3) } else { (0, 1) };
+                self.graph
+                    .connect_with_gain(src_node, src_l, dst_node, 0, gain);
+                self.graph
+                    .connect_with_gain(src_node, src_r, dst_node, 1, gain);
+            }
         }
 
         self.needs_rebuild = false;

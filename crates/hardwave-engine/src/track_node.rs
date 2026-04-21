@@ -181,7 +181,7 @@ impl AudioNode for TrackNode {
 
     fn process(
         &mut self,
-        _inputs: &[&[f32]],
+        inputs: &[&[f32]],
         outputs: &mut [Vec<f32>],
         _midi_in: &[hardwave_midi::MidiEvent],
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
@@ -189,17 +189,39 @@ impl AudioNode for TrackNode {
     ) {
         let buf_size = ctx.buffer_size as usize;
 
-        // Ensure outputs are sized
+        // Ensure outputs are sized. Channels 0/1 carry post-fader L/R; 2/3
+        // carry the pre-fader tap used by pre-fader sends. Downstream nodes
+        // that only need stereo ignore 2/3.
         if outputs.len() < 2 {
             return;
         }
-        outputs[0].resize(buf_size, 0.0);
-        outputs[1].resize(buf_size, 0.0);
-        outputs[0].fill(0.0);
-        outputs[1].fill(0.0);
+        for ch in outputs.iter_mut() {
+            ch.resize(buf_size, 0.0);
+            ch.fill(0.0);
+        }
 
         if self.muted || !ctx.playing {
             return;
+        }
+
+        // Mix in send inputs arriving at this track (return routing). Sends
+        // arrive at ports 0/1 and are treated as channel input — summed with
+        // the clip output before the pre-fader chain so the return track's
+        // own utilities, fader, and pan apply to the received signal too.
+        {
+            let (out_left, out_rest) = outputs.split_at_mut(1);
+            let out_l = &mut out_left[0];
+            let out_r = &mut out_rest[0];
+            if let Some(in_l) = inputs.first() {
+                for (o, s) in out_l.iter_mut().zip(in_l.iter()).take(buf_size) {
+                    *o += *s;
+                }
+            }
+            if let Some(in_r) = inputs.get(1) {
+                for (o, s) in out_r.iter_mut().zip(in_r.iter()).take(buf_size) {
+                    *o += *s;
+                }
+            }
         }
 
         let pos = ctx.position_samples;
@@ -352,7 +374,8 @@ impl AudioNode for TrackNode {
             }
         }
 
-        // Measure pre-fader peak (before volume/pan).
+        // Measure pre-fader peak and publish the pre-fader tap so pre-fader
+        // sends can read the signal before volume/pan.
         {
             let mut pre_peak = 0.0_f32;
             for (l, r) in outputs[0].iter().zip(outputs[1].iter()).take(buf_size) {
@@ -362,6 +385,17 @@ impl AudioNode for TrackNode {
             self.meter
                 .pre_fader_peak_db
                 .store(linear_to_db(pre_peak), Ordering::Relaxed);
+
+            // Copy pre-fader L/R into ports 2/3 if the buffer has them.
+            if outputs.len() >= 4 {
+                let (first_two, tail) = outputs.split_at_mut(2);
+                for (dst, src) in tail[0].iter_mut().zip(first_two[0].iter()).take(buf_size) {
+                    *dst = *src;
+                }
+                for (dst, src) in tail[1].iter_mut().zip(first_two[1].iter()).take(buf_size) {
+                    *dst = *src;
+                }
+            }
         }
 
         // Apply track volume and pan, and measure post-fader peak/RMS.

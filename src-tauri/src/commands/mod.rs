@@ -7,5 +7,6 @@ pub mod midi;
 pub mod midi_input;
 pub mod plugins;
 pub mod project;
+pub mod sends;
 pub mod tracks;
 pub mod transport;

@@ -33,6 +33,11 @@ pub trait AudioNode: Send {
     fn reset(&mut self) {}
 }
 
+/// Number of output channels every node gets. Tracks use 0/1 for post-fader
+/// stereo and 2/3 for the pre-fader tap that feeds pre-fader sends; other
+/// nodes simply leave 2/3 at zero.
+pub const NODE_CHANNELS: usize = 4;
+
 /// Edge in the audio graph.
 #[derive(Debug, Clone)]
 struct Edge {
@@ -40,6 +45,9 @@ struct Edge {
     source_port: usize,
     dest: NodeId,
     dest_port: usize,
+    /// Linear gain multiplier applied when mixing this edge into the dest buffer.
+    /// 1.0 is unity; used to implement send amounts without a per-send node.
+    gain: f32,
 }
 
 /// The audio graph. Nodes are stored in topological order for lock-free processing.
@@ -67,19 +75,32 @@ impl AudioGraph {
     pub fn add_node(&mut self, node: Box<dyn AudioNode>) -> NodeId {
         let id = self.nodes.len();
         self.nodes.push(node);
-        // Allocate 2-channel buffer for this node
-        self.buffers.push(vec![vec![0.0; self.buffer_size]; 2]);
+        self.buffers
+            .push(vec![vec![0.0; self.buffer_size]; NODE_CHANNELS]);
         self.rebuild_order();
         id
     }
 
-    /// Connect source node's output to dest node's input.
+    /// Connect source node's output to dest node's input with unity gain.
     pub fn connect(&mut self, source: NodeId, source_port: usize, dest: NodeId, dest_port: usize) {
+        self.connect_with_gain(source, source_port, dest, dest_port, 1.0);
+    }
+
+    /// Connect with a linear gain multiplier. Used for sends.
+    pub fn connect_with_gain(
+        &mut self,
+        source: NodeId,
+        source_port: usize,
+        dest: NodeId,
+        dest_port: usize,
+        gain: f32,
+    ) {
         self.edges.push(Edge {
             source,
             source_port,
             dest,
             dest_port,
+            gain,
         });
         self.rebuild_order();
     }
@@ -127,15 +148,16 @@ impl AudioGraph {
         for &node_id in &order {
             // Gather inputs from connected source nodes
             let inputs: Vec<Vec<f32>> = {
-                let mut ch_bufs: Vec<Vec<f32>> = vec![vec![0.0; self.buffer_size]; 2];
+                let mut ch_bufs: Vec<Vec<f32>> = vec![vec![0.0; self.buffer_size]; NODE_CHANNELS];
                 for edge in &self.edges {
                     if edge.dest == node_id {
                         if let Some(src_buf) = self.buffers.get(edge.source) {
                             if let Some(ch) = src_buf.get(edge.source_port) {
                                 if edge.dest_port < ch_bufs.len() {
+                                    let g = edge.gain;
                                     for (i, s) in ch.iter().enumerate() {
                                         if i < ch_bufs[edge.dest_port].len() {
-                                            ch_bufs[edge.dest_port][i] += s;
+                                            ch_bufs[edge.dest_port][i] += s * g;
                                         }
                                     }
                                 }
@@ -147,7 +169,7 @@ impl AudioGraph {
             };
 
             let input_refs: Vec<&[f32]> = inputs.iter().map(|v| v.as_slice()).collect();
-            let mut outputs = vec![vec![0.0f32; self.buffer_size]; 2];
+            let mut outputs = vec![vec![0.0f32; self.buffer_size]; NODE_CHANNELS];
             let mut midi_out = Vec::new();
 
             self.nodes[node_id].process(&input_refs, &mut outputs, &midi_empty, &mut midi_out, ctx);

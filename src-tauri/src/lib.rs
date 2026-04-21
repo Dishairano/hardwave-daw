@@ -75,6 +75,16 @@ pub fn run() {
             commands::tracks::set_track_swap_lr,
             commands::tracks::set_track_stereo_separation,
             commands::tracks::set_track_delay_samples,
+            // Sends
+            commands::sends::get_sends,
+            commands::sends::list_sends,
+            commands::sends::add_send,
+            commands::sends::remove_send,
+            commands::sends::set_send_target,
+            commands::sends::set_send_gain,
+            commands::sends::set_send_pre_fader,
+            commands::sends::set_send_enabled,
+            commands::sends::create_return_with_send,
             // Plugins
             commands::plugins::scan_plugins,
             commands::plugins::get_plugins,
