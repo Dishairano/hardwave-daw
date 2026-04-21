@@ -898,6 +898,52 @@ interface FileInfo {
   sampleRate: number
   channels: number
   sizeBytes: number
+  bpm: number | null
+}
+
+// Onset-envelope autocorrelation BPM estimator.
+// Downsamples the first channel to a ~100 Hz RMS envelope, takes the
+// positive derivative as an onset strength signal, and picks the
+// autocorrelation peak between 60 and 200 BPM. Folds stray octaves into
+// the 80-160 range so half- or double-time estimates get normalised.
+function estimateBpm(buffer: AudioBuffer): number | null {
+  const sr = buffer.sampleRate
+  const ch = buffer.getChannelData(0)
+  if (ch.length < sr) return null
+  const ENV_HZ = 100
+  const hop = Math.max(1, Math.floor(sr / ENV_HZ))
+  const env: number[] = []
+  for (let i = 0; i + hop <= ch.length; i += hop) {
+    let e = 0
+    for (let j = 0; j < hop; j++) {
+      const v = ch[i + j]
+      e += v * v
+    }
+    env.push(Math.sqrt(e / hop))
+  }
+  if (env.length < 100) return null
+  const onset: number[] = []
+  for (let i = 1; i < env.length; i++) {
+    const d = env[i] - env[i - 1]
+    onset.push(d > 0 ? d : 0)
+  }
+  const mean = onset.reduce((a, b) => a + b, 0) / onset.length
+  for (let i = 0; i < onset.length; i++) onset[i] -= mean
+  const minLag = Math.floor(ENV_HZ * 60 / 200)
+  const maxLag = Math.floor(ENV_HZ * 60 / 60)
+  let bestLag = -1
+  let bestR = -Infinity
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let r = 0
+    const limit = onset.length - lag
+    for (let i = 0; i < limit; i++) r += onset[i] * onset[i + lag]
+    if (r > bestR) { bestR = r; bestLag = lag }
+  }
+  if (bestLag <= 0 || !Number.isFinite(bestR)) return null
+  let bpm = (ENV_HZ * 60) / bestLag
+  while (bpm < 80) bpm *= 2
+  while (bpm > 160) bpm /= 2
+  return Math.round(bpm)
 }
 
 const waveformCache = new Map<string, number[]>()
@@ -948,6 +994,7 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
           sampleRate: decoded.sampleRate,
           channels: decoded.numberOfChannels,
           sizeBytes: buf.byteLength,
+          bpm: estimateBpm(decoded),
         }
         ctx.close().catch(() => {})
         if (!cancelled) {
@@ -1028,6 +1075,11 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
           <span title="Duration">{formatDuration(info.durationSec)}</span>
           <span title="Sample rate">{(info.sampleRate / 1000).toFixed(1)} kHz</span>
           <span title="Channels">{info.channels === 1 ? 'mono' : info.channels === 2 ? 'stereo' : `${info.channels}ch`}</span>
+          {info.bpm !== null && (
+            <span title="Estimated BPM from onset autocorrelation" style={{ color: hw.accent }}>
+              ~{info.bpm} BPM
+            </span>
+          )}
           <span title="File size" style={{ marginLeft: 'auto' }}>{formatBytes(info.sizeBytes)}</span>
         </div>
       )}
