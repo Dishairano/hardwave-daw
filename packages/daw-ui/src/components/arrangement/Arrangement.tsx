@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo } from '../../stores/trackStore'
 import { useTransportStore, snapToTicks } from '../../stores/transportStore'
 import { useMarkerStore } from '../../stores/markerStore'
+import { useClipGroupStore } from '../../stores/clipGroupStore'
 import { hw } from '../../theme'
 
 const PPQ = 960
@@ -24,6 +25,7 @@ interface DragState {
   originalLengthTicks: number
   originalFadeInTicks: number
   originalFadeOutTicks: number
+  groupMoveOriginals?: { clipId: string; trackId: string; origPos: number }[]
 }
 
 interface ContextMenuState {
@@ -71,6 +73,10 @@ export function Arrangement() {
     clipColorOverrides, editCursorTicks, setEditCursor, setClipColor,
   } = useTransportStore()
   const { markers, addMarker, removeMarker, updateMarker, jumpToNext, jumpToPrev } = useMarkerStore()
+  const clipToGroup = useClipGroupStore(s => s.clipToGroup)
+  const groupColors = useClipGroupStore(s => s.groupColors)
+  const groupClipsAction = useClipGroupStore(s => s.groupClips)
+  const ungroupClipAction = useClipGroupStore(s => s.ungroupClip)
 
   const audioTracks = tracks.filter(t => t.kind !== 'Master')
   const PIXELS_PER_SECOND = PIXELS_PER_SECOND_BASE * horizontalZoom
@@ -379,7 +385,7 @@ export function Arrangement() {
       }
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -516,6 +522,20 @@ export function Arrangement() {
     ctx.roundRect(x, y, w, h, 6)
     ctx.stroke()
     ctx.shadowBlur = 0
+
+    // Group indicator — tinted tab on top-left corner
+    const gid = clipToGroup[clip.id]
+    if (gid) {
+      const gColor = groupColors[gid] || '#DC2626'
+      ctx.save()
+      ctx.fillStyle = gColor
+      ctx.globalAlpha = 0.95
+      const tabW = Math.min(18, Math.max(8, w - 4))
+      ctx.beginPath()
+      ctx.roundRect(x + 2, y + 2, tabW, 3, [2, 2, 0, 0])
+      ctx.fill()
+      ctx.restore()
+    }
   }
 
   // Hit test
@@ -591,10 +611,21 @@ export function Arrangement() {
 
     const hit = hitTest(mouseX, mouseY, scrollOffset)
     if (hit) {
+      const gid = clipToGroup[hit.clip.id]
+      const groupMemberIds = gid
+        ? Object.keys(clipToGroup).filter(k => clipToGroup[k] === gid)
+        : [hit.clip.id]
       if (e.ctrlKey || e.metaKey) {
         toggleClipSelection(hit.clip.id)
       } else if (!selectedClipIds.has(hit.clip.id)) {
-        selectClip(hit.clip.id, hit.trackId)
+        if (gid && groupMemberIds.length > 1) {
+          useTrackStore.setState(s => {
+            const next = new Set<string>(groupMemberIds)
+            return { selectedClipIds: next, selectedClipId: hit.clip.id, selectedTrackId: hit.trackId }
+          })
+        } else {
+          selectClip(hit.clip.id, hit.trackId)
+        }
       } else {
         selectClip(hit.clip.id, hit.trackId)
       }
@@ -604,6 +635,18 @@ export function Arrangement() {
         hit.edge === 'fade-in' ? 'fade-in' :
         hit.edge === 'fade-out' ? 'fade-out' :
         'move'
+      let groupMoveOriginals: { clipId: string; trackId: string; origPos: number }[] | undefined
+      if (mode === 'move' && gid && groupMemberIds.length > 1) {
+        groupMoveOriginals = []
+        for (const t of tracks) {
+          for (const c of t.clips) {
+            if (c.id === hit.clip.id) continue
+            if (groupMemberIds.includes(c.id)) {
+              groupMoveOriginals.push({ clipId: c.id, trackId: t.id, origPos: c.position_ticks })
+            }
+          }
+        }
+      }
       dragRef.current = {
         mode,
         clipId: hit.clip.id,
@@ -616,6 +659,7 @@ export function Arrangement() {
         originalLengthTicks: hit.clip.length_ticks,
         originalFadeInTicks: hit.clip.fadeInTicks,
         originalFadeOutTicks: hit.clip.fadeOutTicks,
+        groupMoveOriginals,
       }
     } else {
       if (!(e.ctrlKey || e.metaKey)) clearSelection()
@@ -631,7 +675,7 @@ export function Arrangement() {
       }
       forceRender(n => n + 1)
     }
-  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks])
+  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const drag = dragRef.current
@@ -689,8 +733,15 @@ export function Arrangement() {
       return
     }
     if (drag.mode === 'move') {
-      const newPos = Math.max(0, drag.originalPositionTicks + dTicks)
-      moveClip(drag.trackId, drag.clipId, applySnap(newPos))
+      const snapped = applySnap(Math.max(0, drag.originalPositionTicks + dTicks))
+      const effectiveDelta = snapped - drag.originalPositionTicks
+      moveClip(drag.trackId, drag.clipId, snapped)
+      if (drag.groupMoveOriginals) {
+        for (const m of drag.groupMoveOriginals) {
+          const memberPos = Math.max(0, m.origPos + effectiveDelta)
+          moveClip(m.trackId, m.clipId, memberPos)
+        }
+      }
     } else if (drag.mode === 'resize-right') {
       const newLen = Math.max(minLen, drag.originalLengthTicks + dTicks)
       resizeClip(drag.trackId, drag.clipId, applySnap(newLen))
@@ -1029,6 +1080,31 @@ export function Arrangement() {
             await toggleClipReverse(contextMenu.trackId, contextMenu.clipId)
             setContextMenu(null)
           }} />
+          <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
+          {(() => {
+            const gid = clipToGroup[contextMenu.clipId]
+            const selectionIds = Array.from(selectedClipIds)
+            const canGroup = !gid && selectionIds.length >= 2 && selectionIds.includes(contextMenu.clipId)
+            return (
+              <>
+                {canGroup && (
+                  <MenuItem label={`Group ${selectionIds.length} clips`} onClick={() => {
+                    groupClipsAction(selectionIds)
+                    setContextMenu(null)
+                  }} />
+                )}
+                {!gid && !canGroup && (
+                  <MenuItem label="Group (select 2+ clips first)" onClick={() => setContextMenu(null)} />
+                )}
+                {gid && (
+                  <MenuItem label="Ungroup this clip" onClick={() => {
+                    ungroupClipAction(contextMenu.clipId)
+                    setContextMenu(null)
+                  }} />
+                )}
+              </>
+            )
+          })()}
           <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
           <MenuItem label="Reset gain (0 dB)" onClick={async () => {
             await setClipGain(contextMenu.trackId, contextMenu.clipId, 0)
