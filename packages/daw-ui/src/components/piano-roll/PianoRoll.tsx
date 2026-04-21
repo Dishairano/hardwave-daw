@@ -137,18 +137,20 @@ export function PianoRoll() {
   const [snapToScale, setSnapToScale] = useState(false)
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number; additive: boolean } | null>(null)
+  const [hoverInfo, setHoverInfo] = useState<{ x: number; y: number; label: string } | null>(null)
   const clipboardRef = useRef<Note[]>([])
   const focusedRef = useRef(false)
   const dragRef = useRef<{
-    mode: 'none' | 'draw' | 'move' | 'resize'
+    mode: 'none' | 'draw' | 'move' | 'resize' | 'resizeLeft'
     noteIndex: number
     startX: number
     startY: number
     origTick: number
     origPitch: number
     origDuration: number
+    freeMove: boolean
     committed: boolean
-  }>({ mode: 'none', noteIndex: -1, startX: 0, startY: 0, origTick: 0, origPitch: 0, origDuration: 0, committed: false })
+  }>({ mode: 'none', noteIndex: -1, startX: 0, startY: 0, origTick: 0, origPitch: 0, origDuration: 0, freeMove: false, committed: false })
 
   const totalHeight = TOTAL_NOTES * noteHeight
 
@@ -389,13 +391,16 @@ export function PianoRoll() {
           } catch (err) { console.warn('delete_midi_note failed', err) }
           return
         }
-        const resizing = mx >= nx + nw - 6
+        const resizingRight = mx >= nx + nw - 6
+        const resizingLeft = !resizingRight && mx <= nx + 6 && nw > 12
+        const mode = resizingRight ? 'resize' : resizingLeft ? 'resizeLeft' : 'move'
         dragRef.current = {
-          mode: resizing ? 'resize' : 'move',
+          mode,
           noteIndex: note.index,
           startX: e.clientX, startY: e.clientY,
           origTick: note.startTick, origPitch: note.pitch,
           origDuration: note.durationTicks,
+          freeMove: e.altKey,
           committed: false,
         }
         if (e.shiftKey) {
@@ -468,6 +473,7 @@ export function PianoRoll() {
           startX: e.clientX, startY: e.clientY,
           origTick: snappedTick, origPitch: drawPitch,
           origDuration: snap,
+          freeMove: e.altKey,
           committed: false,
         }
       } catch (err) { console.warn('add_midi_note failed', err) }
@@ -493,13 +499,39 @@ export function PianoRoll() {
     }
 
     const drag = dragRef.current
-    if (drag.mode === 'none') return
+    if (drag.mode === 'none') {
+      const rect = canvasRef.current!.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+      let found: Note | null = null
+      for (const note of notes) {
+        const nx = xFromTick(note.startTick) - KEYBOARD_WIDTH
+        const ny = yFromPitch(note.pitch)
+        const nw = note.durationTicks * pixelsPerTick
+        if (mx >= nx && mx <= nx + nw && my >= ny && my <= ny + noteHeight) {
+          found = note
+          break
+        }
+      }
+      if (found) {
+        const name = `${NOTE_NAMES_SHARP[found.pitch % 12]}${Math.floor(found.pitch / 12) - 1}`
+        setHoverInfo({
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
+          label: `${name} · v${Math.round(found.velocity * 127)} · ${found.durationTicks}t`,
+        })
+      } else if (hoverInfo) {
+        setHoverInfo(null)
+      }
+      return
+    }
 
     const dx = e.clientX - drag.startX
     const dy = e.clientY - drag.startY
 
     if (drag.mode === 'move') {
-      const tickDelta = snapTick(dx / pixelsPerTick)
+      const rawDelta = dx / pixelsPerTick
+      const tickDelta = drag.freeMove ? Math.round(rawDelta) : snapTick(rawDelta)
       const pitchDelta = -Math.round(dy / noteHeight)
       setNotes(prev => prev.map(n =>
         n.index === drag.noteIndex
@@ -507,13 +539,36 @@ export function PianoRoll() {
           : n
       ))
     } else if (drag.mode === 'resize' || drag.mode === 'draw') {
-      const tickDelta = snapTick(dx / pixelsPerTick)
+      const rawDelta = dx / pixelsPerTick
+      const tickDelta = drag.freeMove ? Math.round(rawDelta) : snapTick(rawDelta)
       const newDur = Math.max(snap, drag.origDuration + tickDelta)
+      if (drag.mode === 'draw') {
+        // During draw, also allow pitch adjust via vertical drag
+        const pitchDelta = -Math.round(dy / noteHeight)
+        setNotes(prev => prev.map(n =>
+          n.index === drag.noteIndex ? {
+            ...n,
+            durationTicks: newDur,
+            pitch: Math.max(0, Math.min(127, drag.origPitch + pitchDelta)),
+          } : n
+        ))
+      } else {
+        setNotes(prev => prev.map(n =>
+          n.index === drag.noteIndex ? { ...n, durationTicks: newDur } : n
+        ))
+      }
+    } else if (drag.mode === 'resizeLeft') {
+      const rawDelta = dx / pixelsPerTick
+      const tickDelta = drag.freeMove ? Math.round(rawDelta) : snapTick(rawDelta)
+      const newStart = Math.max(0, drag.origTick + tickDelta)
+      const maxStart = drag.origTick + drag.origDuration - snap
+      const clampedStart = Math.min(newStart, Math.max(0, maxStart))
+      const newDur = drag.origDuration + (drag.origTick - clampedStart)
       setNotes(prev => prev.map(n =>
-        n.index === drag.noteIndex ? { ...n, durationTicks: newDur } : n
+        n.index === drag.noteIndex ? { ...n, startTick: clampedStart, durationTicks: newDur } : n
       ))
     }
-  }, [pixelsPerTick, snap])
+  }, [pixelsPerTick, snap, noteHeight, notes, scrollX, scrollY, hoverInfo])
 
   const handleMouseUp = useCallback(async () => {
     if (marqueeRef.current) {
@@ -567,12 +622,12 @@ export function PianoRoll() {
         noteIndex: drag.noteIndex,
         pitch: note.pitch,
         startTick: note.startTick,
-        durationTicks: note.durationTicks,
+        durationTicks: Math.max(snap, note.durationTicks),
       })
       useProjectStore.getState().markDirty()
       await refreshNotes()
     } catch (err) { console.warn('update_midi_note failed', err) }
-  }, [notes, activeTrackId, activeClipId, refreshNotes])
+  }, [notes, activeTrackId, activeClipId, refreshNotes, snap])
 
   const handleVelocityChange = useCallback(async (noteIndex: number, velocity: number) => {
     if (!activeTrackId || !activeClipId) return
@@ -1299,10 +1354,29 @@ export function PianoRoll() {
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
+            onMouseLeave={(e) => { handleMouseUp(); setHoverInfo(null); void e }}
             onWheel={handleWheel}
             style={{ display: 'block', cursor: tool === 'draw' || tool === 'chord' ? 'crosshair' : tool === 'erase' ? 'not-allowed' : 'default' }}
           />
+          {hoverInfo && (
+            <div style={{
+              position: 'absolute',
+              left: Math.min(hoverInfo.x + 12, 9999),
+              top: Math.max(hoverInfo.y - 22, 4),
+              pointerEvents: 'none',
+              padding: '3px 6px',
+              background: 'rgba(12,12,18,0.95)',
+              border: `1px solid ${hw.borderLight}`,
+              borderRadius: hw.radius.sm,
+              color: hw.textBright,
+              fontSize: 10,
+              fontFamily: 'ui-monospace, monospace',
+              whiteSpace: 'nowrap',
+              zIndex: 10,
+            }}>
+              {hoverInfo.label}
+            </div>
+          )}
         </div>
 
         {emptyHint && (
