@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { usePatternStore, STEPS_PER_PATTERN, PATTERN_COLORS, STEP_GRAPH_RANGES, STEP_GRAPH_DEFAULTS, type StepGraphKind } from '../../stores/patternStore'
+import { useTrackFolderStore, type TrackFolder } from '../../stores/trackFolderStore'
 import { DetachButton } from '../FloatingWindow'
 import { ParameterContextMenu } from '../ParameterContextMenu'
 
@@ -15,7 +16,29 @@ const CHANNEL_COLORS = [
 
 export function ChannelRack() {
   const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan } = useTrackStore()
-  const channels = tracks.filter(t => t.kind !== 'Master')
+  const folders = useTrackFolderStore(s => s.folders)
+  const toggleFolderCollapsed = useTrackFolderStore(s => s.toggleCollapsed)
+  const allChannels = tracks.filter(t => t.kind !== 'Master')
+  const folderByTrack = new Map<string, TrackFolder>()
+  for (const f of folders) for (const tid of f.trackIds) folderByTrack.set(tid, f)
+  const channels = allChannels.filter(t => {
+    const f = folderByTrack.get(t.id)
+    return !(f && f.collapsed)
+  })
+  const shownFolderHeaders = new Set<string>()
+  const channelRows: Array<{ kind: 'folderHeader'; folder: TrackFolder } | { kind: 'channel'; channelIdx: number }> = []
+  let visibleIdx = 0
+  allChannels.forEach(t => {
+    const f = folderByTrack.get(t.id)
+    if (f && !shownFolderHeaders.has(f.id)) {
+      channelRows.push({ kind: 'folderHeader', folder: f })
+      shownFolderHeaders.add(f.id)
+    }
+    if (!f || !f.collapsed) {
+      channelRows.push({ kind: 'channel', channelIdx: visibleIdx })
+      visibleIdx += 1
+    }
+  })
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string } | null>(null)
@@ -217,7 +240,35 @@ export function ChannelRack() {
 
       {/* Channel rows */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {channels.map((ch, ci) => {
+        {channelRows.map((row, rowKey) => {
+          if (row.kind === 'folderHeader') {
+            const f = row.folder
+            return (
+              <div
+                key={`fld_${f.id}`}
+                onClick={() => toggleFolderCollapsed(f.id)}
+                style={{
+                  height: 18, display: 'flex', alignItems: 'center', gap: 5, padding: '0 6px',
+                  borderBottom: `1px solid ${hw.border}`,
+                  background: `linear-gradient(90deg, ${f.color}22, transparent 80%)`,
+                  cursor: 'pointer',
+                }}
+                title="Click to expand/collapse folder"
+              >
+                <svg width="8" height="8" viewBox="0 0 8 8" style={{ transform: f.collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.12s' }}>
+                  <path d="M1 2l3 3.5L7 2" fill="none" stroke={f.color} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <div style={{ width: 3, height: 12, background: f.color, borderRadius: 1 }} />
+                <span style={{ fontSize: 9, fontWeight: 600, color: hw.textPrimary, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {f.name}
+                </span>
+                <span style={{ fontSize: 8, color: hw.textFaint }}>{f.trackIds.length}</span>
+              </div>
+            )
+          }
+          const ch = channels[row.channelIdx]
+          const ci = row.channelIdx
+          const inFolder = folderByTrack.get(ch.id) != null
           const selected = selectedTrackId === ch.id
           const vol = dbToNorm(ch.volume_db)
           const pan = panToNorm(ch.pan)
@@ -255,6 +306,7 @@ export function ChannelRack() {
                 borderTop: dragOverIndex === ci ? `2px solid ${hw.accent}` : '2px solid transparent',
                 opacity: dragSource === ch.id ? 0.4 : 1,
                 background: selected ? hw.selectionDim : (ci % 2 === 1 ? 'transparent' : 'rgba(255,255,255,0.015)'),
+                paddingLeft: inFolder ? 6 : 0,
               }}
             >
               {/* 1. LED */}
@@ -647,6 +699,48 @@ export function ChannelRack() {
               />
             ))}
           </div>
+          <MenuSep />
+          <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            Folder
+          </div>
+          <MenuItem
+            label="New folder from this channel"
+            shortcut=""
+            onClick={() => {
+              const id = ctxMenu.trackId
+              setCtxMenu(null)
+              const name = window.prompt('Folder name:', `Group ${folders.length + 1}`)?.trim()
+              if (!name) return
+              useTrackFolderStore.getState().createFolder([id], name)
+            }}
+          />
+          {(() => {
+            const id = ctxMenu.trackId
+            const current = folderByTrack.get(id)
+            const targets = folders.filter(f => f.id !== current?.id)
+            return targets.map(f => (
+              <MenuItem
+                key={`addto_${f.id}`}
+                label={`Add to "${f.name}"`}
+                shortcut=""
+                onClick={() => {
+                  setCtxMenu(null)
+                  useTrackFolderStore.getState().addTrackToFolder(id, f.id)
+                }}
+              />
+            ))
+          })()}
+          {folderByTrack.get(ctxMenu.trackId) && (
+            <MenuItem
+              label="Remove from folder"
+              shortcut=""
+              onClick={() => {
+                const id = ctxMenu.trackId
+                setCtxMenu(null)
+                useTrackFolderStore.getState().removeTrackFromFolder(id)
+              }}
+            />
+          )}
           <MenuSep />
           <MenuItem
             label="Delete"
