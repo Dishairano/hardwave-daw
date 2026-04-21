@@ -24,6 +24,8 @@ import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecover
 import { ShortcutsPanel } from './components/ShortcutsPanel'
 import { SampleEditor } from './components/sample-editor/SampleEditor'
 import { useSampleEditorStore } from './stores/sampleEditorStore'
+import { BeatSlicer } from './components/beat-slicer/BeatSlicer'
+import { useBeatSlicerStore } from './stores/beatSlicerStore'
 import { invoke } from '@tauri-apps/api/core'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
@@ -64,6 +66,8 @@ export function App() {
   const [showShortcuts, setShowShortcuts] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
   const closeSampleEditor = useSampleEditorStore(s => s.close)
+  const beatSlicerPath = useBeatSlicerStore(s => s.openPath)
+  const closeBeatSlicer = useBeatSlicerStore(s => s.close)
   const [showDevPanel, setShowDevPanel] = useState(false) // DEV ONLY
 
   // Splash screen
@@ -638,6 +642,7 @@ export function App() {
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
       <ShortcutsPanel open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       {sampleEditorPath && <SampleEditor path={sampleEditorPath} onClose={closeSampleEditor} />}
+      {beatSlicerPath && <BeatSlicer path={beatSlicerPath} onClose={closeBeatSlicer} />}
       {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}
 
       {savePromptAction && (
