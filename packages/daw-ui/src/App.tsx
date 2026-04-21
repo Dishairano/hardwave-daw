@@ -15,6 +15,7 @@ import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow } from './components/FloatingWindow'
 import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChangesDialog'
 import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
+import { useUserTemplateStore } from './stores/userTemplateStore'
 import { WelcomeScreen } from './components/WelcomeScreen'
 import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecoveryDialog'
 import { ShortcutsPanel } from './components/ShortcutsPanel'
@@ -266,7 +267,55 @@ export function App() {
       for (let i = 1; i <= 8; i++) await ts.addAudioTrack(`Track ${i}`)
       await ts.addAudioTrack('Bus A')
       await ts.addAudioTrack('Bus B')
+    } else if (id.startsWith('user:')) {
+      const tpl = useUserTemplateStore.getState().get(id.slice(5))
+      if (!tpl) return
+      await ts.fetchTracks()
+      const existing = useTrackStore.getState().tracks.filter(t => t.kind !== 'Master')
+      for (let i = 0; i < tpl.tracks.length; i++) {
+        const def = tpl.tracks[i]
+        if (def.kind === 'Midi') {
+          await ts.addMidiTrack(def.name)
+        } else {
+          await ts.addAudioTrack(def.name)
+        }
+      }
+      await ts.fetchTracks()
+      const after = useTrackStore.getState().tracks.filter(t => t.kind !== 'Master')
+      const created = after.slice(existing.length)
+      for (let i = 0; i < created.length && i < tpl.tracks.length; i++) {
+        const def = tpl.tracks[i]
+        const tr = created[i]
+        if (tr.color !== def.color) await ts.setTrackColor(tr.id, def.color)
+        if (tr.volume_db !== def.volume_db) await ts.setVolume(tr.id, def.volume_db)
+        if (tr.pan !== def.pan) await ts.setPan(tr.id, def.pan)
+      }
+      if (tpl.bpm && tpl.bpm > 0) {
+        await useTransportStore.getState().setBpm(tpl.bpm)
+      }
     }
+  }, [])
+
+  const handleSaveAsTemplate = useCallback(async () => {
+    const name = window.prompt('Template name:')
+    if (name === null) return
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const tracks = useTrackStore.getState().tracks
+      .filter(t => t.kind !== 'Master')
+      .map(t => ({
+        name: t.name,
+        kind: t.kind,
+        color: t.color,
+        volume_db: t.volume_db,
+        pan: t.pan,
+      }))
+    if (tracks.length === 0) {
+      window.alert('No tracks to save. Add some tracks first.')
+      return
+    }
+    const bpm = useTransportStore.getState().bpm
+    useUserTemplateStore.getState().add(trimmed, tracks, bpm)
   }, [])
 
   const handleNewProject = useCallback(async () => {
@@ -598,6 +647,7 @@ export function App() {
         onToggleAbout={() => setShowAbout(v => !v)}
         onToggleShortcuts={() => setShowShortcuts(v => !v)}
         onExportAudio={handleExportAudio}
+        onSaveAsTemplate={handleSaveAsTemplate}
         recentProjects={recentProjects}
         onOpenRecentProject={handleOpenRecent}
         onClearRecentProjects={() => useProjectStore.getState().clearRecent()}

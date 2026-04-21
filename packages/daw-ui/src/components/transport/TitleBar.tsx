@@ -44,6 +44,7 @@ interface TitleBarProps {
   onToggleAbout: () => void
   onToggleShortcuts: () => void
   onExportAudio: () => void
+  onSaveAsTemplate: () => void
   recentProjects: string[]
   onOpenRecentProject: (path: string) => void
   onClearRecentProjects: () => void
@@ -63,6 +64,7 @@ export function TitleBar(props: TitleBarProps) {
     onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
     onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
     onToggleRoadmap, onOpenAudioSettings, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onExportAudio,
+    onSaveAsTemplate,
     recentProjects, onOpenRecentProject, onClearRecentProjects,
     showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
   } = props
@@ -95,6 +97,7 @@ export function TitleBar(props: TitleBarProps) {
         { separator: true, label: '' },
         { label: 'Save', shortcut: 'Ctrl+S', action: onSaveProject },
         { label: 'Save as...', shortcut: 'Ctrl+Shift+S', action: onSaveProjectAs },
+        { label: 'Save as template...', action: onSaveAsTemplate },
         { separator: true, label: '' },
         { label: 'Export audio...', action: onExportAudio },
         { separator: true, label: '' },
