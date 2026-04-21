@@ -34,6 +34,7 @@ export interface TrackInfo {
   muted: boolean
   soloed: boolean
   armed: boolean
+  solo_safe: boolean
   insert_count: number
 }
 
@@ -78,6 +79,7 @@ interface TrackState {
   toggleMute: (id: string) => Promise<void>
   toggleSolo: (id: string) => Promise<void>
   toggleArm: (id: string) => Promise<void>
+  toggleSoloSafe: (id: string) => Promise<void>
   reorderTrack: (id: string, newIndex: number) => Promise<void>
   renameTrack: (id: string, name: string) => Promise<void>
   setTrackColor: (id: string, color: string) => Promise<void>
@@ -207,6 +209,11 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   toggleArm: async (id) => {
     await mut('toggle_arm', { trackId: id })
+    await get().fetchTracks()
+  },
+
+  toggleSoloSafe: async (id) => {
+    await mut('toggle_solo_safe', { trackId: id })
     await get().fetchTracks()
   },
 

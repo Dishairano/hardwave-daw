@@ -6,7 +6,7 @@ import { DetachButton } from '../FloatingWindow'
 import { useEffect, useState, useCallback, useRef } from 'react'
 
 export function MixerPanel() {
-  const { tracks, setVolume, setPan, toggleMute, toggleSolo, renameTrack, setTrackColor } = useTrackStore()
+  const { tracks, setVolume, setPan, toggleMute, toggleSolo, toggleSoloSafe, renameTrack, setTrackColor } = useTrackStore()
   const { master, tracks: trackMeters, startListening } = useMeterStore()
   useEffect(() => { startListening() }, [])
   const [clipResetNonce, setClipResetNonce] = useState(0)
@@ -49,6 +49,7 @@ export function MixerPanel() {
               name={track.name} color={track.color} number={idx}
               volumeDb={track.volume_db} pan={track.pan}
               muted={track.muted} soloed={track.soloed}
+              soloSafe={track.solo_safe}
               peakL={meter.peakL} peakR={meter.peakR} rmsDb={meter.rms}
               clipResetNonce={clipResetNonce}
               onRename={name => renameTrack(track.id, name)}
@@ -57,6 +58,7 @@ export function MixerPanel() {
               onPan={p => setPan(track.id, p)}
               onMute={() => toggleMute(track.id)}
               onSolo={() => toggleSolo(track.id)}
+              onToggleSoloSafe={() => toggleSoloSafe(track.id)}
             />
           )
         })}
@@ -134,6 +136,7 @@ function DbScale() {
 interface StripProps {
   name: string; color: string; number: number
   volumeDb: number; pan: number; muted: boolean; soloed: boolean
+  soloSafe?: boolean
   peakL: number; peakR: number; rmsDb: number
   peakHoldDb?: number
   clipResetNonce?: number
@@ -142,9 +145,10 @@ interface StripProps {
   onColorChange?: (color: string) => void
   onVolume?: (db: number) => void; onPan: (p: number) => void
   onMute?: () => void; onSolo: () => void
+  onToggleSoloSafe?: () => void
 }
 
-function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo }: StripProps) {
+function Strip({ name, color, number, volumeDb, muted, soloed, soloSafe, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo, onToggleSoloSafe }: StripProps) {
   const [clipped, setClipped] = useState(false)
   const resetClip = useCallback(() => setClipped(false), [])
   useEffect(() => { if (peakL >= 0 || peakR >= 0) setClipped(true) }, [peakL, peakR])
@@ -360,10 +364,16 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rms
           ...sB, color: muted ? hw.red : hw.textMuted,
           background: muted ? hw.redDim : 'rgba(255,255,255,0.03)',
         }}>M</button>
-        <button onClick={onSolo} style={{
-          ...sB, color: soloed ? hw.yellow : hw.textMuted,
-          background: soloed ? hw.yellowDim : 'rgba(255,255,255,0.03)',
-        }}>S</button>
+        <button
+          onClick={onSolo}
+          title={soloSafe ? 'Solo (solo-safe on: ignores other solos)' : 'Solo'}
+          style={{
+            ...sB, color: soloed ? hw.yellow : hw.textMuted,
+            background: soloed ? hw.yellowDim : 'rgba(255,255,255,0.03)',
+            outline: soloSafe ? `1px solid ${hw.accent}` : undefined,
+            outlineOffset: soloSafe ? -2 : undefined,
+          }}
+        >S</button>
       </div>
       {ctxMenu && !isMaster && (
         <div
@@ -387,6 +397,12 @@ function Strip({ name, color, number, volumeDb, muted, soloed, peakL, peakR, rms
           <StripMenuItem label="Reset pan (center)" onClick={() => { setCtxMenu(null); onPan(0) }} />
           <StripMenuItem label={muted ? 'Unmute' : 'Mute'} onClick={() => { setCtxMenu(null); onMute?.() }} />
           <StripMenuItem label={soloed ? 'Unsolo' : 'Solo'} onClick={() => { setCtxMenu(null); onSolo() }} />
+          {onToggleSoloSafe && (
+            <StripMenuItem
+              label={soloSafe ? 'Disable solo-safe' : 'Solo-safe'}
+              onClick={() => { setCtxMenu(null); onToggleSoloSafe() }}
+            />
+          )}
           <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
             Color

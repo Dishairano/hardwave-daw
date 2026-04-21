@@ -7,7 +7,7 @@ import { PATTERN_COLORS } from '../../stores/patternStore'
 export function TrackList() {
   const {
     tracks, selectedTrackId, selectTrack,
-    toggleMute, toggleSolo, toggleArm, reorderTrack,
+    toggleMute, toggleSolo, toggleSoloSafe, toggleArm, reorderTrack,
     trackHeights, setTrackHeight,
     renameTrack, setTrackColor, removeTrack,
   } = useTrackStore()
@@ -169,10 +169,13 @@ export function TrackList() {
                 >M</button>
                 <button
                   onClick={e => { e.stopPropagation(); toggleSolo(track.id) }}
+                  title={track.solo_safe ? 'Solo (solo-safe on: ignores other solos)' : 'Solo'}
                   style={{
                     ...tb,
                     color: track.soloed ? hw.yellow : hw.textMuted,
                     background: track.soloed ? hw.yellowDim : 'rgba(255,255,255,0.04)',
+                    outline: track.solo_safe ? `1px solid ${hw.accent}` : undefined,
+                    outlineOffset: track.solo_safe ? -2 : undefined,
                   }}
                 >S</button>
                 <button
@@ -230,6 +233,18 @@ export function TrackList() {
             <TrackMenuItem label="Rename" shortcut="F2" onClick={() => {
               setCtxMenu(null)
               setRenaming({ id: t.id, draft: t.name })
+            }} />
+            <TrackMenuItem label={t.muted ? 'Unmute' : 'Mute'} onClick={async () => {
+              setCtxMenu(null)
+              await toggleMute(t.id)
+            }} />
+            <TrackMenuItem label={t.soloed ? 'Unsolo' : 'Solo'} onClick={async () => {
+              setCtxMenu(null)
+              await toggleSolo(t.id)
+            }} />
+            <TrackMenuItem label={t.solo_safe ? 'Disable solo-safe' : 'Solo-safe'} onClick={async () => {
+              setCtxMenu(null)
+              await toggleSoloSafe(t.id)
             }} />
             <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
             <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
