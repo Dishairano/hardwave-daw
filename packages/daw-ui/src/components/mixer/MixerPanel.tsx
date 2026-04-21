@@ -490,9 +490,11 @@ const sB: React.CSSProperties = {
 const MAX_VISIBLE_SLOTS = 10
 
 function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[] }) {
-  const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed } = usePluginStore()
+  const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed, addToTrack } = usePluginStore()
   const { fetchTracks } = useTrackStore()
   const [menu, setMenu] = useState<{ x: number; y: number; slotId: string } | null>(null)
+  const [dragOverSlotId, setDragOverSlotId] = useState<string | null>(null)
+  const [dragOverEmptyIdx, setDragOverEmptyIdx] = useState<number | null>(null)
 
   useEffect(() => {
     if (!menu) return
@@ -512,55 +514,126 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
     )
   }
 
+  const dragMime = {
+    slot: 'application/x-hardwave-fx-slot',
+    plugin: 'application/x-hardwave-plugin',
+  }
+
+  const handleDropOnSlot = async (targetIdx: number, e: React.DragEvent) => {
+    e.preventDefault()
+    const slotId = e.dataTransfer.getData(dragMime.slot)
+    const pluginId = e.dataTransfer.getData(dragMime.plugin)
+    if (slotId) {
+      await reorderInsert(trackId, slotId, targetIdx)
+      fetchTracks()
+    } else if (pluginId) {
+      // Replace: remove the existing slot at this index, then add at the same index.
+      const existing = inserts[targetIdx]
+      if (existing) {
+        await removeFromTrack(trackId, existing.id)
+      }
+      const newSlotId = await addToTrack(trackId, pluginId)
+      // The newly added slot lands at the end; move it to the target index.
+      await reorderInsert(trackId, newSlotId, targetIdx)
+      fetchTracks()
+    }
+    setDragOverSlotId(null)
+    setDragOverEmptyIdx(null)
+  }
+
+  const handleDropOnEmpty = async (e: React.DragEvent) => {
+    e.preventDefault()
+    const pluginId = e.dataTransfer.getData(dragMime.plugin)
+    if (pluginId) {
+      await addToTrack(trackId, pluginId)
+      fetchTracks()
+    }
+    setDragOverEmptyIdx(null)
+  }
+
   const allBypassed = inserts.length > 0 && inserts.every(i => !i.enabled)
   const visibleCount = Math.max(inserts.length, 3)
   const paddingCount = Math.max(0, Math.min(MAX_VISIBLE_SLOTS, visibleCount) - inserts.length)
 
   return (
     <div style={{ padding: '2px 3px', borderBottom: `1px solid ${hw.border}` }}>
-      {inserts.slice(0, MAX_VISIBLE_SLOTS).map((slot, idx) => (
-        <div
-          key={slot.id}
-          data-testid={`fx-slot-${trackId}-${slot.id}`}
-          onClick={async () => {
-            await setInsertEnabled(trackId, slot.id, !slot.enabled)
-            fetchTracks()
-          }}
-          onContextMenu={e => {
-            e.preventDefault()
-            setMenu({ x: e.clientX, y: e.clientY, slotId: slot.id })
-          }}
-          title={`${slot.pluginName} — click to ${slot.enabled ? 'disable' : 'enable'}`}
-          style={{
-            height: 11,
-            background: slot.enabled ? 'rgba(124, 58, 237, 0.18)' : 'rgba(255,255,255,0.03)',
-            border: `1px solid ${slot.enabled ? 'rgba(124, 58, 237, 0.4)' : hw.borderDark}`,
-            borderRadius: hw.radius.sm, marginBottom: 1,
-            display: 'flex', alignItems: 'center', padding: '0 3px', gap: 2,
-            cursor: 'pointer', overflow: 'hidden',
-            opacity: slot.enabled ? 1 : 0.55,
-          }}
-        >
-          <span style={{ fontSize: 7, color: hw.textFaint, flexShrink: 0 }}>{idx + 1}</span>
-          <span style={{
-            fontSize: 8, color: slot.enabled ? hw.textPrimary : hw.textMuted,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
-            textDecoration: slot.enabled ? 'none' : 'line-through',
-          }}>{slot.pluginName}</span>
-        </div>
-      ))}
-      {Array.from({ length: paddingCount }).map((_, i) => (
-        <div
-          key={`empty-${i}`}
-          style={{
-            height: 11, background: 'rgba(255,255,255,0.02)', border: `1px dashed ${hw.borderDark}`,
-            borderRadius: hw.radius.sm, marginBottom: 1,
-            display: 'flex', alignItems: 'center', padding: '0 3px',
-          }}
-        >
-          <span style={{ fontSize: 7, color: hw.textFaint }}>{inserts.length + i + 1}</span>
-        </div>
-      ))}
+      {inserts.slice(0, MAX_VISIBLE_SLOTS).map((slot, idx) => {
+        const isDragOver = dragOverSlotId === slot.id
+        return (
+          <div
+            key={slot.id}
+            data-testid={`fx-slot-${trackId}-${slot.id}`}
+            draggable
+            onDragStart={e => {
+              e.dataTransfer.setData(dragMime.slot, slot.id)
+              e.dataTransfer.effectAllowed = 'move'
+            }}
+            onDragOver={e => {
+              if (e.dataTransfer.types.includes(dragMime.slot) ||
+                  e.dataTransfer.types.includes(dragMime.plugin)) {
+                e.preventDefault()
+                setDragOverSlotId(slot.id)
+              }
+            }}
+            onDragLeave={() => { if (dragOverSlotId === slot.id) setDragOverSlotId(null) }}
+            onDrop={e => handleDropOnSlot(idx, e)}
+            onClick={async () => {
+              await setInsertEnabled(trackId, slot.id, !slot.enabled)
+              fetchTracks()
+            }}
+            onContextMenu={e => {
+              e.preventDefault()
+              setMenu({ x: e.clientX, y: e.clientY, slotId: slot.id })
+            }}
+            title={`${slot.pluginName} — click to ${slot.enabled ? 'disable' : 'enable'} · drag to reorder`}
+            style={{
+              height: 11,
+              background: isDragOver
+                ? 'rgba(255, 200, 80, 0.25)'
+                : slot.enabled ? 'rgba(124, 58, 237, 0.18)' : 'rgba(255,255,255,0.03)',
+              border: `1px solid ${isDragOver
+                ? 'rgba(255, 200, 80, 0.7)'
+                : slot.enabled ? 'rgba(124, 58, 237, 0.4)' : hw.borderDark}`,
+              borderRadius: hw.radius.sm, marginBottom: 1,
+              display: 'flex', alignItems: 'center', padding: '0 3px', gap: 2,
+              cursor: 'grab', overflow: 'hidden',
+              opacity: slot.enabled ? 1 : 0.55,
+            }}
+          >
+            <span style={{ fontSize: 7, color: hw.textFaint, flexShrink: 0 }}>{idx + 1}</span>
+            <span style={{
+              fontSize: 8, color: slot.enabled ? hw.textPrimary : hw.textMuted,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+              textDecoration: slot.enabled ? 'none' : 'line-through',
+            }}>{slot.pluginName}</span>
+          </div>
+        )
+      })}
+      {Array.from({ length: paddingCount }).map((_, i) => {
+        const isDragOver = dragOverEmptyIdx === i
+        return (
+          <div
+            key={`empty-${i}`}
+            onDragOver={e => {
+              if (e.dataTransfer.types.includes(dragMime.plugin)) {
+                e.preventDefault()
+                setDragOverEmptyIdx(i)
+              }
+            }}
+            onDragLeave={() => { if (dragOverEmptyIdx === i) setDragOverEmptyIdx(null) }}
+            onDrop={handleDropOnEmpty}
+            style={{
+              height: 11,
+              background: isDragOver ? 'rgba(255, 200, 80, 0.2)' : 'rgba(255,255,255,0.02)',
+              border: `1px dashed ${isDragOver ? 'rgba(255, 200, 80, 0.7)' : hw.borderDark}`,
+              borderRadius: hw.radius.sm, marginBottom: 1,
+              display: 'flex', alignItems: 'center', padding: '0 3px',
+            }}
+          >
+            <span style={{ fontSize: 7, color: hw.textFaint }}>{inserts.length + i + 1}</span>
+          </div>
+        )
+      })}
 
       {inserts.length > 0 && (
         <button

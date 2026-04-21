@@ -228,6 +228,12 @@ export function PluginBrowser() {
           return (
             <div
               key={plugin.id}
+              draggable={!isBlocked}
+              onDragStart={(e) => {
+                if (isBlocked) return
+                e.dataTransfer.setData('application/x-hardwave-plugin', plugin.id)
+                e.dataTransfer.effectAllowed = 'copy'
+              }}
               style={{
                 padding: '5px 12px',
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
