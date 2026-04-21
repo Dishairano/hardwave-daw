@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 export const STORAGE_KEY = 'hardwave.daw.theme'
 export const CUSTOM_KEY = 'hardwave.daw.theme.customs'
+export const CUSTOM_BG_KEY = 'hardwave.daw.theme.customBg'
 
 export interface ThemePalette {
   id: string
@@ -172,10 +173,29 @@ export function derivePaletteFromAccent(
   }
 }
 
+function loadCustomBg(): string {
+  try { return localStorage.getItem(CUSTOM_BG_KEY) ?? '' } catch { return '' }
+}
+
+function saveCustomBg(bg: string) {
+  try {
+    if (bg) localStorage.setItem(CUSTOM_BG_KEY, bg)
+    else localStorage.removeItem(CUSTOM_BG_KEY)
+  } catch { /* ignore */ }
+}
+
+export function applyCustomBg(bg: string) {
+  if (typeof document === 'undefined') return
+  if (bg) document.body.style.background = bg
+  else document.body.style.removeProperty('background')
+}
+
 interface ThemeState {
   activeId: string
   customs: ThemePalette[]
+  customBg: string
   setTheme: (id: string) => void
+  setCustomBg: (bg: string) => void
   addCustom: (palette: ThemePalette) => boolean
   removeCustom: (id: string) => void
   reloadCustoms: () => void
@@ -184,6 +204,13 @@ interface ThemeState {
 export const useThemeStore = create<ThemeState>((set, get) => ({
   activeId: getActiveThemeId(),
   customs: loadCustomPalettes(),
+  customBg: loadCustomBg(),
+  setCustomBg: (bg) => {
+    const trimmed = bg.trim()
+    saveCustomBg(trimmed)
+    applyCustomBg(trimmed)
+    set({ customBg: trimmed })
+  },
   setTheme: (id) => {
     if (!allPalettes().some(p => p.id === id)) return
     try { localStorage.setItem(STORAGE_KEY, id) } catch { /* ignore */ }

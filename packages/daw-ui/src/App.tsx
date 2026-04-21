@@ -36,6 +36,7 @@ import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
 import { useProjectStore } from './stores/projectStore'
 import { useShortcutsStore } from './stores/shortcutsStore'
+import { applyCustomBg, useThemeStore } from './stores/themeStore'
 import { hw } from './theme'
 
 interface UpdateInfo {
@@ -131,6 +132,9 @@ export function App() {
     error: null,
   })
   const initRan = useRef(false)
+
+  const customBg = useThemeStore(s => s.customBg)
+  useEffect(() => { applyCustomBg(customBg) }, [customBg])
 
   useEffect(() => {
     if (initRan.current) return
@@ -683,6 +687,11 @@ export function App() {
           onOpenRecent={handleOpenRecent}
           onNewProject={handleNewProject}
           onOpenProject={handleOpenProject}
+          onOpenSampleProject={async () => {
+            await newProject()
+            await applyTemplate('beat4')
+          }}
+          onOpenAudioSettings={() => setShowAudioSettings(true)}
           onDismiss={dismissWelcome}
         />
       )}

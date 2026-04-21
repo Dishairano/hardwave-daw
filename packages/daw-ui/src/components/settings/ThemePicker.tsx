@@ -18,6 +18,9 @@ export function ThemePicker({ onClose }: ThemePickerProps) {
   const customs = useThemeStore(s => s.customs)
   const addCustom = useThemeStore(s => s.addCustom)
   const removeCustom = useThemeStore(s => s.removeCustom)
+  const customBg = useThemeStore(s => s.customBg)
+  const setCustomBg = useThemeStore(s => s.setCustomBg)
+  const [bgDraft, setBgDraft] = useState(customBg)
   const [previewId, setPreviewId] = useState<string>(activeId)
   const [editorOpen, setEditorOpen] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
@@ -203,6 +206,56 @@ export function ThemePicker({ onClose }: ThemePickerProps) {
               Applying a theme reloads the window so every panel picks up the new accents.
             </div>
           )}
+
+          {/* Custom background */}
+          <div style={{
+            marginTop: 14, padding: 12,
+            background: hw.bgPanel, borderRadius: hw.radius.md,
+            border: `1px solid ${hw.borderDark}`,
+          }}>
+            <div style={{ fontSize: 10, color: hw.textFaint, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 }}>
+              Custom background
+            </div>
+            <div style={{ fontSize: 11, color: hw.textMuted, marginBottom: 8 }}>
+              Set any CSS background — a solid color, linear/radial gradient or <code style={{ color: hw.textSecondary }}>url(...)</code> image. Leave empty to restore the theme default.
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                value={bgDraft}
+                onChange={e => setBgDraft(e.target.value)}
+                placeholder="linear-gradient(135deg, #0a0a0e, #1a0505)"
+                style={{
+                  flex: 1, minWidth: 240,
+                  fontSize: 11, padding: '6px 8px',
+                  background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
+                  border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+                  fontFamily: 'ui-monospace, Menlo, monospace',
+                }}
+              />
+              <SmallBtn label="Apply" onClick={() => setCustomBg(bgDraft)} />
+              <SmallBtn label="Clear" onClick={() => { setBgDraft(''); setCustomBg('') }} />
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+              <SmallBtn label="Crimson fade" onClick={() => {
+                const v = 'radial-gradient(circle at 30% 20%, rgba(220,38,38,0.18), #06060a 55%)'
+                setBgDraft(v); setCustomBg(v)
+              }} />
+              <SmallBtn label="Midnight diagonal" onClick={() => {
+                const v = 'linear-gradient(135deg, #06060a 0%, #0b1226 60%, #06060a 100%)'
+                setBgDraft(v); setCustomBg(v)
+              }} />
+              <SmallBtn label="Neon city" onClick={() => {
+                const v = 'linear-gradient(180deg, #05060a 0%, #1a0530 50%, #030014 100%)'
+                setBgDraft(v); setCustomBg(v)
+              }} />
+              {customBg && (
+                <div style={{ alignSelf: 'center', fontSize: 10, color: hw.textFaint }}>
+                  Active: custom background
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Footer */}

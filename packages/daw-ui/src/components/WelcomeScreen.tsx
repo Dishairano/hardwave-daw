@@ -12,6 +12,8 @@ interface Props {
   onOpenRecent: (path: string) => void
   onNewProject: () => void
   onOpenProject: () => void
+  onOpenSampleProject: () => void
+  onOpenAudioSettings: () => void
   onDismiss: () => void
 }
 
@@ -20,6 +22,8 @@ export function WelcomeScreen({
   onOpenRecent,
   onNewProject,
   onOpenProject,
+  onOpenSampleProject,
+  onOpenAudioSettings,
   onDismiss,
 }: Props) {
   const [mounted, setMounted] = useState(false)
@@ -82,6 +86,20 @@ export function WelcomeScreen({
               style={actionBtn(false)}
             >
               Open project…
+            </button>
+            <button
+              onClick={() => { onOpenSampleProject(); dismiss() }}
+              style={actionBtn(false)}
+              title="Opens a 4-track beat template so you can explore the DAW right away"
+            >
+              Try sample project
+            </button>
+            <button
+              onClick={() => { onOpenAudioSettings() }}
+              style={actionBtn(false)}
+              title="Pick an output device, sample rate and buffer size"
+            >
+              Configure audio device…
             </button>
             <button
               onClick={dismiss}
