@@ -35,6 +35,7 @@ export interface InsertInfo {
   pluginId: string
   pluginName: string
   enabled: boolean
+  wet: number
 }
 
 export interface TrackInfo {

@@ -114,6 +114,7 @@ pub fn add_plugin_to_track(
         enabled: true,
         state: None,
         sidechain_source: None,
+        wet: 1.0,
     });
 
     Ok(slot_id)
@@ -188,6 +189,32 @@ pub fn reorder_insert(
         let slot = track.inserts.remove(from);
         track.inserts.insert(to, slot);
     }
+    drop(project);
+    engine.rebuild_graph();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_insert_wet(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    wet: f32,
+) -> Result<(), String> {
+    let wet = wet.clamp(0.0, 1.0);
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+
+    let track = project
+        .track_mut(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+    let slot = track
+        .inserts
+        .iter_mut()
+        .find(|s| s.id == slot_id)
+        .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
+    slot.wet = wet;
     drop(project);
     engine.rebuild_graph();
     Ok(())

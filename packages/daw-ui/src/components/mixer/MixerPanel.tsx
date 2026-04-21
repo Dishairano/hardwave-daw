@@ -490,7 +490,7 @@ const sB: React.CSSProperties = {
 const MAX_VISIBLE_SLOTS = 10
 
 function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[] }) {
-  const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed, addToTrack } = usePluginStore()
+  const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed, addToTrack, setInsertWet } = usePluginStore()
   const { fetchTracks } = useTrackStore()
   const [menu, setMenu] = useState<{ x: number; y: number; slotId: string } | null>(null)
   const [dragOverSlotId, setDragOverSlotId] = useState<string | null>(null)
@@ -606,6 +606,11 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
               textDecoration: slot.enabled ? 'none' : 'line-through',
             }}>{slot.pluginName}</span>
+            {slot.enabled && slot.wet < 0.999 && (
+              <span style={{ fontSize: 7, color: hw.textFaint, flexShrink: 0 }} title={`Wet ${Math.round(slot.wet * 100)}%`}>
+                {Math.round(slot.wet * 100)}%
+              </span>
+            )}
           </div>
         )
       })}
@@ -696,6 +701,28 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                   }}
                   style={{ ...menuBtnStyle, opacity: idx >= inserts.length - 1 ? 0.3 : 1 }}
                 >Move down</button>
+                <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
+                <div style={{ padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
+                    <span>Wet</span>
+                    <span>{Math.round(slot.wet * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round(slot.wet * 100)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value) / 100
+                      setInsertWet(trackId, slot.id, v).then(() => fetchTracks())
+                    }}
+                    onDoubleClick={() => {
+                      setInsertWet(trackId, slot.id, 1.0).then(() => fetchTracks())
+                    }}
+                    style={{ width: '100%', cursor: 'pointer' }}
+                    title="Drag to blend dry/wet · double-click to reset"
+                  />
+                </div>
                 <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
                 <button
                   onClick={async () => {

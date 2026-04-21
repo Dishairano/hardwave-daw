@@ -24,6 +24,13 @@ pub struct PluginSlot {
     pub state: Option<Vec<u8>>,
     /// Sidechain source track, if any.
     pub sidechain_source: Option<TrackId>,
+    /// Dry/wet mix for this slot in [0, 1]. 1.0 = fully processed, 0.0 = bypass audible effect.
+    #[serde(default = "default_wet")]
+    pub wet: f32,
+}
+
+fn default_wet() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -49,6 +49,7 @@ interface PluginState {
   setInsertEnabled: (trackId: string, slotId: string, enabled: boolean) => Promise<void>
   reorderInsert: (trackId: string, slotId: string, newIndex: number) => Promise<void>
   setFxChainBypassed: (trackId: string, bypassed: boolean) => Promise<void>
+  setInsertWet: (trackId: string, slotId: string, wet: number) => Promise<void>
 }
 
 export const usePluginStore = create<PluginState>((set, get) => ({
@@ -133,5 +134,9 @@ export const usePluginStore = create<PluginState>((set, get) => ({
 
   setFxChainBypassed: async (trackId, bypassed) => {
     await invoke('set_fx_chain_bypassed', { trackId, bypassed })
+  },
+
+  setInsertWet: async (trackId, slotId, wet) => {
+    await invoke('set_insert_wet', { trackId, slotId, wet })
   },
 }))

@@ -10,6 +10,7 @@ pub struct InsertInfo {
     #[serde(rename = "pluginName")]
     pub plugin_name: String,
     pub enabled: bool,
+    pub wet: f32,
 }
 
 #[derive(Serialize)]
@@ -40,6 +41,7 @@ fn track_to_info(
             plugin_id: s.plugin_id.clone(),
             plugin_name: plugin_name_lookup(&s.plugin_id),
             enabled: s.enabled,
+            wet: s.wet,
         })
         .collect();
     TrackInfo {
