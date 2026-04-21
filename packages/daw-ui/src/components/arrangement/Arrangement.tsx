@@ -71,6 +71,7 @@ export function Arrangement() {
     positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
     clipColorOverrides, editCursorTicks, setEditCursor, setClipColor,
+    punchEnabled, punchInTicks, punchOutTicks, setPunchIn, setPunchOut, clearPunch, setPunchRangeFromLoop,
   } = useTransportStore()
   const { markers, addMarker, addTempoMarker, addTimeSigMarker, removeMarker, updateMarker, jumpToNext, jumpToPrev } = useMarkerStore()
   const clipToGroup = useClipGroupStore(s => s.clipToGroup)
@@ -300,6 +301,35 @@ export function Arrangement() {
       ctx.fill()
     }
 
+    // Punch range overlay — teal brackets on the ruler, tinted strip below
+    if (punchEnabled && punchInTicks != null && punchOutTicks != null && punchOutTicks > punchInTicks) {
+      const pX1 = punchInTicks * pixelsPerTick - scrollOffset
+      const pX2 = punchOutTicks * pixelsPerTick - scrollOffset
+
+      ctx.fillStyle = 'rgba(20, 184, 166, 0.05)'
+      ctx.fillRect(pX1, RULER_HEIGHT, pX2 - pX1, h - RULER_HEIGHT)
+
+      ctx.fillStyle = 'rgba(20, 184, 166, 0.14)'
+      ctx.fillRect(pX1, 0, pX2 - pX1, RULER_HEIGHT)
+
+      ctx.strokeStyle = 'rgba(20, 184, 166, 0.7)'
+      ctx.lineWidth = 1
+      ctx.setLineDash([2, 2])
+      ctx.beginPath()
+      ctx.moveTo(pX1, 0); ctx.lineTo(pX1, h)
+      ctx.moveTo(pX2, 0); ctx.lineTo(pX2, h)
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      // Square brackets at the ruler top
+      ctx.strokeStyle = '#14B8A6'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.moveTo(pX1 + 6, 2); ctx.lineTo(pX1, 2); ctx.lineTo(pX1, RULER_HEIGHT - 2); ctx.lineTo(pX1 + 6, RULER_HEIGHT - 2)
+      ctx.moveTo(pX2 - 6, 2); ctx.lineTo(pX2, 2); ctx.lineTo(pX2, RULER_HEIGHT - 2); ctx.lineTo(pX2 - 6, RULER_HEIGHT - 2)
+      ctx.stroke()
+    }
+
     // Playhead — red
     const playheadX = playheadSecs * PIXELS_PER_SECOND - scrollOffset
     if (playing || positionSamples > 0) {
@@ -417,7 +447,7 @@ export function Arrangement() {
       }
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -1224,6 +1254,29 @@ export function Arrangement() {
                   if (m) addTimeSigMarker(markerCtx.tick, parseInt(m[1], 10), parseInt(m[2], 10))
                   setMarkerCtx(null)
                 }} />
+                <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
+                <MenuItem label="Set punch-in here" onClick={() => {
+                  setPunchIn(markerCtx.tick)
+                  if (punchOutTicks != null && punchOutTicks <= markerCtx.tick) setPunchOut(null)
+                  setMarkerCtx(null)
+                }} />
+                <MenuItem label="Set punch-out here" onClick={() => {
+                  setPunchOut(markerCtx.tick)
+                  if (punchInTicks != null && punchInTicks >= markerCtx.tick) setPunchIn(null)
+                  setMarkerCtx(null)
+                }} />
+                {looping && loopEnd > loopStart && (
+                  <MenuItem label="Set punch range from loop" onClick={() => {
+                    setPunchRangeFromLoop()
+                    setMarkerCtx(null)
+                  }} />
+                )}
+                {(punchInTicks != null || punchOutTicks != null) && (
+                  <MenuItem label="Clear punch range" onClick={() => {
+                    clearPunch()
+                    setMarkerCtx(null)
+                  }} />
+                )}
               </>
             )}
             {hit && (

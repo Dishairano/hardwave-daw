@@ -126,6 +126,9 @@ interface TransportState {
   horizontalZoom: number
   clipColorOverrides: Record<string, string>
   editCursorTicks: number | null
+  punchEnabled: boolean
+  punchInTicks: number | null
+  punchOutTicks: number | null
 
   play: () => void
   stop: () => void
@@ -144,12 +147,44 @@ interface TransportState {
   zoomToFit: () => void
   setClipColor: (clipId: string, color: string | null) => void
   setEditCursor: (ticks: number | null) => void
+  togglePunch: () => void
+  setPunchIn: (ticks: number | null) => void
+  setPunchOut: (ticks: number | null) => void
+  clearPunch: () => void
+  setPunchRangeFromLoop: () => void
   tapTempo: () => void
   startListening: () => void
 }
 
 const TAP_WINDOW_MS = 2000
 const tapTimes: number[] = []
+
+const LS_PUNCH_ENABLED = 'hardwave.daw.punchEnabled'
+const LS_PUNCH_IN = 'hardwave.daw.punchIn'
+const LS_PUNCH_OUT = 'hardwave.daw.punchOut'
+function readTicks(key: string): number | null {
+  try {
+    const v = localStorage.getItem(key)
+    if (v == null || v === '') return null
+    const n = parseInt(v, 10)
+    return Number.isFinite(n) && n >= 0 ? n : null
+  } catch { return null }
+}
+function writeTicks(key: string, v: number | null) {
+  try {
+    if (v == null) localStorage.removeItem(key); else localStorage.setItem(key, String(v))
+  } catch {}
+}
+function readBool(key: string, fallback: boolean): boolean {
+  try {
+    const raw = localStorage.getItem(key)
+    if (raw == null) return fallback
+    return raw === '1' || raw === 'true'
+  } catch { return fallback }
+}
+function writeBool(key: string, v: boolean) {
+  try { localStorage.setItem(key, v ? '1' : '0') } catch {}
+}
 
 export const useTransportStore = create<TransportState>((set, get) => ({
   playing: false,
@@ -170,6 +205,9 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   horizontalZoom: 1,
   clipColorOverrides: {},
   editCursorTicks: null,
+  punchEnabled: readBool(LS_PUNCH_ENABLED, false),
+  punchInTicks: readTicks(LS_PUNCH_IN),
+  punchOutTicks: readTicks(LS_PUNCH_OUT),
 
   play: () => {
     const m = useMetronomeStore.getState()
@@ -225,6 +263,36 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     if (color == null) delete next[clipId]; else next[clipId] = color
     return { clipColorOverrides: next }
   }),
+  togglePunch: () => {
+    const next = !get().punchEnabled
+    writeBool(LS_PUNCH_ENABLED, next)
+    set({ punchEnabled: next })
+  },
+  setPunchIn: (ticks) => {
+    const v = ticks == null ? null : Math.max(0, Math.floor(ticks))
+    writeTicks(LS_PUNCH_IN, v)
+    set({ punchInTicks: v })
+  },
+  setPunchOut: (ticks) => {
+    const v = ticks == null ? null : Math.max(0, Math.floor(ticks))
+    writeTicks(LS_PUNCH_OUT, v)
+    set({ punchOutTicks: v })
+  },
+  clearPunch: () => {
+    writeTicks(LS_PUNCH_IN, null)
+    writeTicks(LS_PUNCH_OUT, null)
+    set({ punchInTicks: null, punchOutTicks: null })
+  },
+  setPunchRangeFromLoop: () => {
+    const { loopStart, loopEnd, sampleRate, bpm } = get()
+    if (!(loopEnd > loopStart) || sampleRate <= 0 || bpm <= 0) return
+    const inTicks = Math.max(0, Math.round((loopStart / sampleRate) * (bpm / 60) * PPQ_TICKS))
+    const outTicks = Math.max(inTicks + 1, Math.round((loopEnd / sampleRate) * (bpm / 60) * PPQ_TICKS))
+    writeTicks(LS_PUNCH_IN, inTicks)
+    writeTicks(LS_PUNCH_OUT, outTicks)
+    writeBool(LS_PUNCH_ENABLED, true)
+    set({ punchInTicks: inTicks, punchOutTicks: outTicks, punchEnabled: true })
+  },
   tapTempo: () => {
     const now = Date.now()
     if (tapTimes.length > 0 && now - tapTimes[tapTimes.length - 1] > TAP_WINDOW_MS) {

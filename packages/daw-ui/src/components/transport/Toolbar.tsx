@@ -29,6 +29,7 @@ export function Toolbar(props: ToolbarProps) {
     setMasterVolume, setTimeSignature, setPatternMode,
     snapValue, snapEnabled, setSnapValue, toggleSnap,
     horizontalZoom, setHorizontalZoom, zoomToFit,
+    punchEnabled, togglePunch,
   } = useTransportStore()
   const undoTracks = useTrackStore(s => s.undo)
   const redoTracks = useTrackStore(s => s.redo)
@@ -160,6 +161,16 @@ export function Toolbar(props: ToolbarProps) {
           <svg width="12" height="10" viewBox="0 0 12 10">
             <path d="M3 1h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2z" fill="none" stroke={looping ? '#eab308' : hw.textMuted} strokeWidth="1.2"/>
             <path d="M8 1l2 1.5L8 4" fill="none" stroke={looping ? '#eab308' : hw.textMuted} strokeWidth="1"/>
+          </svg>
+        </button>
+        <button onClick={togglePunch} style={{
+          ...transportBtn,
+          background: punchEnabled ? 'rgba(20,184,166,0.15)' : transportBtn.background,
+          borderColor: punchEnabled ? 'rgba(20,184,166,0.4)' : 'rgba(255,255,255,0.06)',
+        }} onMouseEnter={hint(punchEnabled ? 'Punch range enabled' : 'Punch range (right-click ruler to set)')} onMouseLeave={clear}>
+          <svg width="12" height="10" viewBox="0 0 12 10" fill="none" stroke={punchEnabled ? '#14B8A6' : hw.textMuted} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 1.5H1.5V8.5H3" />
+            <path d="M9 1.5h1.5V8.5H9" />
           </svg>
         </button>
         <MetronomeButton onEnter={hint} onLeave={clear} />
