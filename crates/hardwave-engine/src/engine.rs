@@ -490,6 +490,97 @@ impl DawEngine {
             self.audio_device.input_active_buffer_size(),
         )
     }
+
+    /// End of the project timeline in samples — the latest clip end across all
+    /// tracks. Returns 0 when the project has no clips.
+    pub fn project_end_samples(&self, sample_rate: u32) -> u64 {
+        let project = self.project.lock();
+        let sr = sample_rate as f64;
+        let mut max_tick: u64 = 0;
+        for track in &project.tracks {
+            for clip in &track.clips {
+                let end = clip.position_ticks + clip.length_ticks;
+                if end > max_tick {
+                    max_tick = end;
+                }
+            }
+        }
+        if max_tick == 0 {
+            return 0;
+        }
+        project.tempo_map.tick_to_samples(max_tick, sr)
+    }
+
+    /// Offline-render the current project to an interleaved-stereo output
+    /// stream. `on_block` is invoked with each rendered block (length =
+    /// frames * 2). Rendering stops after `total_samples` frames.
+    ///
+    /// The render uses a private project snapshot and a fresh transport so
+    /// the live audio thread is unaffected. `on_block` is called on the UI
+    /// thread — typically it streams samples to disk.
+    pub fn render_offline(
+        &self,
+        sample_rate: u32,
+        total_samples: u64,
+        mut on_block: impl FnMut(&[f32]),
+    ) -> Result<(), String> {
+        if total_samples == 0 {
+            return Ok(());
+        }
+
+        let project_snapshot = self.project.lock().clone();
+        let initial_bpm = project_snapshot
+            .tempo_map
+            .entries
+            .first()
+            .map(|e| e.bpm)
+            .unwrap_or(140.0);
+        let project_arc = Arc::new(Mutex::new(project_snapshot));
+
+        let transport = TransportState::default();
+        use std::sync::atomic::Ordering;
+        transport
+            .sample_rate
+            .store(sample_rate as u64, Ordering::Relaxed);
+        transport.bpm.store(initial_bpm, Ordering::Relaxed);
+        transport.master_volume_db.store(
+            self.transport.master_volume_db.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        transport.set_position(0);
+        transport.playing.store(true, Ordering::Relaxed);
+
+        let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);
+        let (_command_tx, command_rx) = bounded::<EngineCommand>(4);
+        let track_meters: TrackMeterMap = Arc::new(Mutex::new(HashMap::new()));
+        let input_consumer: SharedInputConsumer = Arc::new(Mutex::new(None));
+
+        let buffer_size: usize = 1024;
+        let mut callback = EngineCallback::new(
+            transport,
+            project_arc,
+            meter_producer,
+            command_rx,
+            self.audio_pool.clone(),
+            track_meters,
+            input_consumer,
+            sample_rate,
+            buffer_size as u32,
+        );
+
+        let mut buf = vec![0.0_f32; buffer_size * 2];
+        let mut remaining = total_samples;
+        while remaining > 0 {
+            let frames = remaining.min(buffer_size as u64) as usize;
+            let slice = &mut buf[..frames * 2];
+            slice.fill(0.0);
+            callback.process(slice, frames, 2);
+            on_block(slice);
+            remaining -= frames as u64;
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for DawEngine {

@@ -2,6 +2,7 @@ pub mod audio;
 pub mod autosave;
 pub mod dev;
 pub mod engine;
+pub mod export;
 pub mod history;
 pub mod midi;
 pub mod midi_input;

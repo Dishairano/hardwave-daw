@@ -43,6 +43,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             // Transport
@@ -164,6 +165,8 @@ pub fn run() {
             commands::history::undo,
             commands::history::redo,
             commands::history::history_sizes,
+            // Export
+            commands::export::export_project_wav,
             // Dev panel (stripped before merge to master)
             commands::dev::dev_dump_state,
             commands::dev::dev_force_device_error,

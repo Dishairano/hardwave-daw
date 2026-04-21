@@ -468,11 +468,45 @@ export function App() {
 
   const handleExportAudio = useCallback(async () => {
     try {
-      const { message } = await import('@tauri-apps/plugin-dialog')
-      await message('Audio export is coming in a future release.', {
+      const { save, message } = await import('@tauri-apps/plugin-dialog')
+      const projectName = useProjectStore.getState().projectName || 'Untitled'
+      const path = await save({
         title: 'Export audio',
-        kind: 'info',
+        defaultPath: `${projectName}.wav`,
+        filters: [{ name: 'WAV audio', extensions: ['wav'] }],
       })
+      if (!path) return
+
+      const notif = useNotificationStore.getState()
+      const pendingId = notif.push('info', 'Exporting audio…', {
+        sticky: true,
+        detail: 'Rendering project offline at 48 kHz',
+      })
+
+      try {
+        const result = await invoke<{ path: string; duration_secs: number }>(
+          'export_project_wav',
+          {
+            path,
+            sampleRate: 48000,
+            bitDepth: 0,
+            tailSecs: 2.0,
+          },
+        )
+        notif.dismiss(pendingId)
+        const dur = result.duration_secs.toFixed(1)
+        notif.push('info', `Exported ${dur}s to WAV`, { detail: result.path })
+        try {
+          const { revealItemInDir } = await import('@tauri-apps/plugin-opener')
+          await revealItemInDir(result.path)
+        } catch {
+          // revealItemInDir is best-effort — silently ignore if the platform
+          // doesn't support it or the file manager is unavailable.
+        }
+      } catch (err) {
+        notif.dismiss(pendingId)
+        await message(`Export failed: ${err}`, { title: 'Export audio', kind: 'error' })
+      }
     } catch {}
   }, [])
 
