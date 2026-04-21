@@ -13,7 +13,7 @@ const CHANNEL_COLORS = [
 ]
 
 export function ChannelRack() {
-  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks } = useTrackStore()
+  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan } = useTrackStore()
   const channels = tracks.filter(t => t.kind !== 'Master')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -65,15 +65,15 @@ export function ChannelRack() {
   const addPattern = usePatternStore(s => s.addPattern)
   const clonePattern = usePatternStore(s => s.clonePattern)
   const deletePattern = usePatternStore(s => s.deletePattern)
-  const [channelVolumes] = useState<Record<string, number>>({})
-  const [channelPans] = useState<Record<string, number>>({})
   const [swing] = useState(0)
   const [graphEditor, setGraphEditor] = useState(false)
 
   const getSteps = (id: string): number[] =>
     activePattern.steps[id] || new Array(STEPS).fill(0)
-  const getVol = (id: string) => channelVolumes[id] ?? 0.78
-  const getPan = (id: string) => channelPans[id] ?? 0.5
+  const dbToNorm = (db: number) => Math.max(0, Math.min(1, (db + 60) / 72))
+  const normToDb = (v: number) => Math.max(-60, Math.min(12, v * 72 - 60))
+  const panToNorm = (pan: number) => Math.max(0, Math.min(1, (pan + 1) / 2))
+  const normToPan = (v: number) => Math.max(-1, Math.min(1, v * 2 - 1))
 
   const toggleStep = (id: string, i: number) => {
     const cur = getSteps(id)
@@ -198,8 +198,8 @@ export function ChannelRack() {
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {channels.map((ch, ci) => {
           const selected = selectedTrackId === ch.id
-          const vol = getVol(ch.id)
-          const pan = getPan(ch.id)
+          const vol = dbToNorm(ch.volume_db)
+          const pan = panToNorm(ch.pan)
           return (
             <div
               key={ch.id}
@@ -253,12 +253,26 @@ export function ChannelRack() {
 
               {/* 2. Pan knob */}
               <div style={{ width: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <MiniKnob value={pan} color={hw.yellow} size={14} />
+                <MiniKnob
+                  value={pan}
+                  color={hw.yellow}
+                  size={14}
+                  onChange={(v) => setPan(ch.id, normToPan(v))}
+                  onReset={() => setPan(ch.id, 0)}
+                  title={`Pan: ${ch.pan === 0 ? 'C' : (ch.pan > 0 ? `R${Math.round(ch.pan * 100)}` : `L${Math.round(-ch.pan * 100)}`)}`}
+                />
               </div>
 
               {/* 3. Volume knob */}
               <div style={{ width: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <MiniKnob value={vol} color={hw.green} size={14} />
+                <MiniKnob
+                  value={vol}
+                  color={hw.green}
+                  size={14}
+                  onChange={(v) => setVolume(ch.id, normToDb(v))}
+                  onReset={() => setVolume(ch.id, 0)}
+                  title={`Volume: ${ch.volume_db.toFixed(1)} dB`}
+                />
               </div>
 
               {/* 4. Mixer track # */}
@@ -553,7 +567,14 @@ function MenuSep() {
   return <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
 }
 
-function MiniKnob({ value, color, size }: { value: number; color: string; size: number }) {
+function MiniKnob({ value, color, size, onChange, onReset, title }: {
+  value: number
+  color: string
+  size: number
+  onChange?: (v: number) => void
+  onReset?: () => void
+  title?: string
+}) {
   const angle = -135 + value * 270
   const r = size / 2 - 1
   const cx = size / 2
@@ -562,8 +583,34 @@ function MiniKnob({ value, color, size }: { value: number; color: string; size: 
   const endX = cx + (r - 2) * Math.sin(rad)
   const endY = cy - (r - 2) * Math.cos(rad)
 
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!onChange) return
+    e.preventDefault()
+    e.stopPropagation()
+    const startY = e.clientY
+    const startV = value
+    const shift = e.shiftKey
+    const onMove = (ev: MouseEvent) => {
+      const dy = startY - ev.clientY
+      const delta = dy / (shift ? 400 : 120)
+      onChange(Math.max(0, Math.min(1, startV + delta)))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+    <svg
+      width={size} height={size} viewBox={`0 0 ${size} ${size}`}
+      onMouseDown={handleMouseDown}
+      onDoubleClick={(e) => { e.stopPropagation(); onReset?.() }}
+      style={{ cursor: onChange ? 'ns-resize' : 'default' }}
+    >
+      <title>{title}</title>
       <circle cx={cx} cy={cy} r={r} fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)" strokeWidth="0.5" />
       <line x1={cx} y1={cy} x2={endX} y2={endY} stroke={color} strokeWidth="1.2" strokeLinecap="round" />
       <circle cx={cx} cy={cy} r="1" fill={color} opacity="0.4" />
