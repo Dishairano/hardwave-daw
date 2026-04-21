@@ -15,6 +15,28 @@ function formatLufs(v: number | null | undefined) {
   return v.toFixed(1)
 }
 
+function computeLra(history: { s: number | null }[]): number | null {
+  const values: number[] = []
+  for (const row of history) {
+    const v = row.s
+    if (v === null || !isFinite(v)) continue
+    if (v < -70) continue
+    values.push(v)
+  }
+  if (values.length < 10) return null
+  values.sort((a, b) => a - b)
+  const pick = (p: number) => {
+    const idx = Math.min(values.length - 1, Math.max(0, Math.round(p * (values.length - 1))))
+    return values[idx]
+  }
+  return pick(0.95) - pick(0.10)
+}
+
+function formatLra(v: number | null) {
+  if (v === null || !isFinite(v)) return '—'
+  return v.toFixed(1)
+}
+
 export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
   const master = useMeterStore(s => s.master)
   const [target, setTarget] = useState(-14)
@@ -45,12 +67,15 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
     setHistory(Array.from({ length: HISTORY_LEN }, () => ({ m: null, s: null, i: null })))
   }
 
+  const lra = computeLra(history)
+
   const [copied, setCopied] = useState(false)
   const copyReadings = async () => {
     const rows = [
       `Momentary:  ${formatLufs(master.lufs_m)} LUFS`,
       `Short-term: ${formatLufs(master.lufs_s)} LUFS`,
       `Integrated: ${formatLufs(master.lufs_i)} LUFS`,
+      `LRA:        ${formatLra(lra)} LU`,
       `True Peak:  ${isFinite(master.true_peak_db) ? master.true_peak_db.toFixed(1) : '—'} dBTP`,
       `Target:     ${target.toFixed(1)} LUFS`,
     ]
@@ -109,10 +134,11 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
           </button>
         </div>
 
-        <div style={{ padding: 12, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+        <div style={{ padding: 12, display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
           <Reading label="Momentary" unit="LUFS" value={formatLufs(master.lufs_m)} target={target} dbValue={master.lufs_m} />
           <Reading label="Short-term" unit="LUFS" value={formatLufs(master.lufs_s)} target={target} dbValue={master.lufs_s} />
           <Reading label="Integrated" unit="LUFS" value={formatLufs(master.lufs_i)} target={target} dbValue={master.lufs_i} />
+          <Reading label="LRA" unit="LU" value={formatLra(lra)} target={target} dbValue={null} />
           <Reading label="True Peak" unit="dBTP"
             value={isFinite(master.true_peak_db) ? master.true_peak_db.toFixed(1) : '—'}
             target={0} dbValue={master.true_peak_db} invertTolerance />
