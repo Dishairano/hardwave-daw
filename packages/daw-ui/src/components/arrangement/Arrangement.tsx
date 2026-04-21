@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo } from '../../stores/trackStore'
 import { useTransportStore, snapToTicks } from '../../stores/transportStore'
+import { useMarkerStore } from '../../stores/markerStore'
 import { hw } from '../../theme'
 
 const PPQ = 960
@@ -62,11 +63,14 @@ export function Arrangement() {
     toggleClipReverse, setClipGain, setClipPitch, setClipStretch,
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [markerCtx, setMarkerCtx] = useState<{ x: number; y: number; markerId: string | null; tick: number } | null>(null)
+  const [renamingMarker, setRenamingMarker] = useState<{ id: string; draft: string } | null>(null)
   const {
     positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
     clipColorOverrides, editCursorTicks, setEditCursor, setClipColor,
   } = useTransportStore()
+  const { markers, addMarker, removeMarker, updateMarker, jumpToNext, jumpToPrev } = useMarkerStore()
 
   const audioTracks = tracks.filter(t => t.kind !== 'Master')
   const PIXELS_PER_SECOND = PIXELS_PER_SECOND_BASE * horizontalZoom
@@ -317,6 +321,41 @@ export function Arrangement() {
       ctx.fill()
     }
 
+    // Markers on ruler — colored flag + label
+    for (const m of markers) {
+      const mx = m.tick * pixelsPerTick - scrollOffset
+      if (mx < -60 || mx > w + 2) continue
+      ctx.save()
+      ctx.strokeStyle = m.color
+      ctx.lineWidth = 1
+      ctx.setLineDash([2, 3])
+      ctx.beginPath()
+      ctx.moveTo(mx, RULER_HEIGHT)
+      ctx.lineTo(mx, h)
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      // Flag on ruler
+      ctx.fillStyle = m.color
+      ctx.beginPath()
+      ctx.moveTo(mx, 1)
+      ctx.lineTo(mx + 10, 1)
+      ctx.lineTo(mx + 10, RULER_HEIGHT - 10)
+      ctx.lineTo(mx + 4, RULER_HEIGHT - 6)
+      ctx.lineTo(mx, RULER_HEIGHT - 10)
+      ctx.closePath()
+      ctx.fill()
+
+      // Label (skip if being renamed inline — we show an input overlay for that case)
+      if (renamingMarker?.id !== m.id) {
+        ctx.fillStyle = '#d4d4d8'
+        ctx.font = '9px Inter, ui-sans-serif, sans-serif'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(m.label, mx + 13, 8)
+      }
+      ctx.restore()
+    }
+
     // Edit cursor (dashed teal line, separate from red playhead)
     if (editCursorTicks != null) {
       const ecX = editCursorTicks * pixelsPerTick - scrollOffset
@@ -340,7 +379,7 @@ export function Arrangement() {
       }
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -528,6 +567,16 @@ export function Arrangement() {
 
     // Clicking the ruler strip seeks the transport (and enables scrubbing while held).
     if (mouseY < RULER_HEIGHT) {
+      // Marker flag hit test — flag sits between x and x+10, top half of the ruler.
+      const markerHit = markers.find(m => {
+        const mx = m.tick * pixelsPerTick - scrollOffset
+        return mouseX >= mx - 1 && mouseX <= mx + 11 && mouseY <= RULER_HEIGHT - 4
+      })
+      if (markerHit) {
+        const secs = markerHit.tick / PPQ / (bpm / 60)
+        setPosition(Math.round(secs * (sampleRate || 48000)))
+        return
+      }
       const seconds = Math.max(0, (mouseX + scrollOffset) / PIXELS_PER_SECOND)
       const samples = Math.round(seconds * (sampleRate || 48000))
       setPosition(samples)
@@ -707,16 +756,29 @@ export function Arrangement() {
     const rect = (e.target as HTMLElement).getBoundingClientRect()
     const mouseX = e.clientX - rect.left
     const mouseY = e.clientY - rect.top
-    const hit = hitTest(mouseX, mouseY, getScrollOffset())
+    const scrollOffset = getScrollOffset()
+    if (mouseY < RULER_HEIGHT) {
+      const tick = Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick))
+      const markerHit = markers.find(m => {
+        const mx = m.tick * pixelsPerTick - scrollOffset
+        return mouseX >= mx - 1 && mouseX <= mx + 11
+      })
+      setContextMenu(null)
+      setMarkerCtx({ x: e.clientX, y: e.clientY, markerId: markerHit ? markerHit.id : null, tick: applySnap(tick) })
+      return
+    }
+    const hit = hitTest(mouseX, mouseY, scrollOffset)
     if (hit) {
       if (!selectedClipIds.has(hit.clip.id)) {
         selectClip(hit.clip.id, hit.trackId)
       }
       setContextMenu({ x: e.clientX, y: e.clientY, trackId: hit.trackId, clipId: hit.clip.id })
+      setMarkerCtx(null)
     } else {
       setContextMenu(null)
+      setMarkerCtx(null)
     }
-  }, [hitTest, getScrollOffset, selectClip, selectedClipIds])
+  }, [hitTest, getScrollOffset, selectClip, selectedClipIds, markers, pixelsPerTick, applySnap])
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     // Ctrl+Shift+Wheel: vertical zoom (change track height)
@@ -733,6 +795,48 @@ export function Arrangement() {
       setHorizontalZoom(horizontalZoom * factor)
     }
   }, [trackHeight, setTrackHeight, horizontalZoom, setHorizontalZoom])
+
+  // Close marker context menu on outside mousedown
+  useEffect(() => {
+    if (!markerCtx) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-marker-ctx-menu]')) return
+      setMarkerCtx(null)
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [markerCtx])
+
+  // Marker navigation hotkeys
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      const sr = sampleRate || 48000
+      const playheadTicks = Math.round((positionSamples / sr) * (bpm / 60) * PPQ)
+      if (e.altKey && e.code === 'ArrowRight') {
+        e.preventDefault()
+        const next = jumpToNext(playheadTicks)
+        if (next) {
+          const secs = next.tick / PPQ / (bpm / 60)
+          setPosition(Math.round(secs * sr))
+        }
+      } else if (e.altKey && e.code === 'ArrowLeft') {
+        e.preventDefault()
+        const prev = jumpToPrev(playheadTicks)
+        if (prev) {
+          const secs = prev.tick / PPQ / (bpm / 60)
+          setPosition(Math.round(secs * sr))
+        }
+      } else if (e.shiftKey && e.code === 'KeyM' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        addMarker(playheadTicks)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [positionSamples, sampleRate, bpm, jumpToNext, jumpToPrev, addMarker, setPosition])
 
   // Drag-and-drop
   const [dropHighlight, setDropHighlight] = useState(false)
@@ -915,6 +1019,91 @@ export function Arrangement() {
             setContextMenu(null)
           }} />
         </div>
+        )
+      })()}
+      {markerCtx && (() => {
+        const hit = markerCtx.markerId ? markers.find(m => m.id === markerCtx.markerId) : null
+        return (
+          <div
+            data-marker-ctx-menu
+            onMouseDown={e => e.stopPropagation()}
+            style={{
+              position: 'fixed', left: markerCtx.x, top: markerCtx.y, zIndex: 10000,
+              minWidth: 180, padding: 4,
+              background: 'rgba(12,12,18,0.96)',
+              border: `1px solid ${hw.borderLight}`,
+              borderRadius: hw.radius.md,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+              backdropFilter: hw.blur.md,
+            }}
+          >
+            <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+              {hit ? hit.label : `Tick ${markerCtx.tick}`}
+            </div>
+            {!hit && (
+              <MenuItem label="Add marker here" onClick={() => {
+                addMarker(markerCtx.tick)
+                setMarkerCtx(null)
+              }} />
+            )}
+            {hit && (
+              <>
+                <MenuItem label="Rename" onClick={() => {
+                  setRenamingMarker({ id: hit.id, draft: hit.label })
+                  setMarkerCtx(null)
+                }} />
+                <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
+                <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                  Color
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 2, padding: '2px 6px 4px' }}>
+                  {['#3B82F6', '#10B981', '#F59E0B', '#A855F7', '#EC4899', '#06B6D4'].map(c => (
+                    <button key={c} title={c}
+                      onClick={() => { updateMarker(hit.id, { color: c }); setMarkerCtx(null) }}
+                      style={{
+                        width: 18, height: 18, borderRadius: 3, background: c,
+                        border: hit.color === c ? '2px solid #fff' : '1px solid rgba(255,255,255,0.12)',
+                        cursor: 'pointer', padding: 0,
+                      }}
+                    />
+                  ))}
+                </div>
+                <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
+                <MenuItem label="Delete marker" danger onClick={() => {
+                  removeMarker(hit.id)
+                  setMarkerCtx(null)
+                }} />
+              </>
+            )}
+          </div>
+        )
+      })()}
+      {renamingMarker && (() => {
+        const hit = markers.find(m => m.id === renamingMarker.id)
+        if (!hit) return null
+        const mx = hit.tick * pixelsPerTick - getScrollOffset() + 13
+        const commit = () => {
+          const trimmed = renamingMarker.draft.trim()
+          if (trimmed && trimmed !== hit.label) updateMarker(hit.id, { label: trimmed })
+          setRenamingMarker(null)
+        }
+        return (
+          <input
+            autoFocus
+            value={renamingMarker.draft}
+            onChange={e => setRenamingMarker({ id: hit.id, draft: e.target.value })}
+            onBlur={commit}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commit()
+              else if (e.key === 'Escape') setRenamingMarker(null)
+            }}
+            style={{
+              position: 'absolute', left: Math.max(4, mx), top: 2,
+              width: 120, fontSize: 10, color: hw.textPrimary,
+              background: 'rgba(0,0,0,0.85)', border: `1px solid ${hit.color}`,
+              borderRadius: 2, padding: '1px 3px', outline: 'none', zIndex: 100,
+            }}
+          />
         )
       })()}
       {looping && loopEnd > loopStart && (
