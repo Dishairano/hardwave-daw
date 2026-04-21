@@ -428,6 +428,44 @@ impl DawEngine {
     pub fn set_input_config(&mut self, device: Option<String>, channels: u16) {
         self.audio_device.selected_input_device = device;
         self.audio_device.input_channels = channels.clamp(1, 2);
+        // If monitoring is running, restart it so the new device/channel
+        // count takes effect immediately without the caller re-toggling.
+        if self.audio_device.is_input_running() {
+            let _ = self.audio_device.start_input_stream();
+        }
+    }
+
+    /// Open a cpal input stream that feeds the pre-record peak meter. No
+    /// audio is routed into the graph yet — this is for the Audio Settings
+    /// monitor and for verifying the input device choice before recording.
+    pub fn start_input_monitoring(&mut self) -> Result<(), String> {
+        self.audio_device
+            .start_input_stream()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Stop the input monitor stream.
+    pub fn stop_input_monitoring(&mut self) {
+        self.audio_device.stop_input_stream();
+    }
+
+    pub fn is_input_monitoring(&self) -> bool {
+        self.audio_device.is_input_running()
+    }
+
+    /// Read and reset the current input peak. Returns linear (0..1+) L/R
+    /// values.
+    pub fn input_peak_snapshot(&self) -> (f32, f32) {
+        self.audio_device.take_input_peak()
+    }
+
+    /// Sample rate / buffer size the input stream is currently running at.
+    /// Both are 0 when the monitor stream isn't active.
+    pub fn input_active_config(&self) -> (u32, u32) {
+        (
+            self.audio_device.input_active_sample_rate(),
+            self.audio_device.input_active_buffer_size(),
+        )
     }
 }
 

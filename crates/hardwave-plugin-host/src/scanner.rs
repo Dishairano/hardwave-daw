@@ -263,9 +263,21 @@ fn parse_clap_library(library_path: &Path) -> Vec<PluginDescriptor> {
         Some(list) if !list.is_empty() => list
             .into_iter()
             .map(|d| {
-                let name = if d.name.is_empty() { fallback_name.clone() } else { d.name };
-                let vendor = if d.vendor.is_empty() { "Unknown".into() } else { d.vendor };
-                let version = if d.version.is_empty() { "0.0.0".into() } else { d.version };
+                let name = if d.name.is_empty() {
+                    fallback_name.clone()
+                } else {
+                    d.name
+                };
+                let vendor = if d.vendor.is_empty() {
+                    "Unknown".into()
+                } else {
+                    d.vendor
+                };
+                let version = if d.version.is_empty() {
+                    "0.0.0".into()
+                } else {
+                    d.version
+                };
                 let id = if d.id.is_empty() {
                     format!("clap:{}", name.to_lowercase().replace(' ', "-"))
                 } else {
@@ -357,7 +369,11 @@ fn parse_vst3_bundle(bundle_path: &Path) -> Vec<PluginDescriptor> {
             return audio_classes
                 .into_iter()
                 .map(|c| {
-                    let name = if c.name.is_empty() { fallback_name.clone() } else { c.name };
+                    let name = if c.name.is_empty() {
+                        fallback_name.clone()
+                    } else {
+                        c.name
+                    };
                     let vendor = if !c.vendor.is_empty() {
                         c.vendor
                     } else if !factory_vendor.is_empty() {
@@ -365,7 +381,11 @@ fn parse_vst3_bundle(bundle_path: &Path) -> Vec<PluginDescriptor> {
                     } else {
                         "Unknown".into()
                     };
-                    let version = if c.version.is_empty() { "0.0.0".into() } else { c.version };
+                    let version = if c.version.is_empty() {
+                        "0.0.0".into()
+                    } else {
+                        c.version
+                    };
                     let (category, has_midi_input) = classify_vst3(&c.sub_categories);
                     PluginDescriptor {
                         id: format!("vst3:{}", name.to_lowercase().replace(' ', "-")),
@@ -411,10 +431,7 @@ fn read_moduleinfo(bundle_path: &Path) -> Option<ModuleInfo> {
             let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
             match serde_json::from_slice::<ModuleInfo>(bytes) {
                 Ok(info) => return Some(info),
-                Err(e) => log::debug!(
-                    "Failed to parse {}: {e}",
-                    candidate.display()
-                ),
+                Err(e) => log::debug!("Failed to parse {}: {e}", candidate.display()),
             }
         }
     }

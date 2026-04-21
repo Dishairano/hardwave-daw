@@ -35,8 +35,7 @@ pub struct ClapPluginDescriptor {
 
 #[repr(C)]
 pub struct ClapPluginFactory {
-    pub get_plugin_count:
-        unsafe extern "C" fn(factory: *const ClapPluginFactory) -> u32,
+    pub get_plugin_count: unsafe extern "C" fn(factory: *const ClapPluginFactory) -> u32,
     pub get_plugin_descriptor: unsafe extern "C" fn(
         factory: *const ClapPluginFactory,
         index: u32,
@@ -49,8 +48,7 @@ pub struct ClapPluginEntry {
     pub clap_version: ClapVersion,
     pub init: unsafe extern "C" fn(plugin_path: *const c_char) -> bool,
     pub deinit: unsafe extern "C" fn(),
-    pub get_factory:
-        unsafe extern "C" fn(factory_id: *const c_char) -> *const c_void,
+    pub get_factory: unsafe extern "C" fn(factory_id: *const c_char) -> *const c_void,
 }
 
 pub struct ReadDescriptor {
@@ -97,8 +95,7 @@ unsafe fn read_features(ptr: *const *const c_char) -> Vec<String> {
 pub fn read_clap_descriptors(library_path: &Path) -> Option<Vec<ReadDescriptor>> {
     unsafe {
         let lib = libloading::Library::new(library_path).ok()?;
-        let entry: libloading::Symbol<*const ClapPluginEntry> =
-            lib.get(b"clap_entry\0").ok()?;
+        let entry: libloading::Symbol<*const ClapPluginEntry> = lib.get(b"clap_entry\0").ok()?;
         let entry = *entry;
         if entry.is_null() {
             return None;
@@ -107,7 +104,10 @@ pub fn read_clap_descriptors(library_path: &Path) -> Option<Vec<ReadDescriptor>>
 
         let path_c = CString::new(library_path.to_string_lossy().as_bytes()).ok()?;
         if !(entry.init)(path_c.as_ptr()) {
-            log::warn!("clap_entry.init returned false for {}", library_path.display());
+            log::warn!(
+                "clap_entry.init returned false for {}",
+                library_path.display()
+            );
             return None;
         }
 

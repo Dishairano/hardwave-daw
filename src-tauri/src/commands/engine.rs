@@ -159,11 +159,45 @@ pub fn get_audio_input_config(state: State<AppState>) -> AudioInputConfig {
 }
 
 #[tauri::command]
-pub fn set_audio_input_config(
-    state: State<AppState>,
-    device: Option<String>,
-    channels: u16,
-) {
+pub fn set_audio_input_config(state: State<AppState>, device: Option<String>, channels: u16) {
     state.engine.lock().set_input_config(device, channels);
     persist_audio_prefs(&state);
+}
+
+#[derive(Serialize)]
+pub struct InputMeterSnapshot {
+    pub peak_l: f32,
+    pub peak_r: f32,
+    pub running: bool,
+    pub sample_rate: u32,
+    pub buffer_size: u32,
+}
+
+#[tauri::command]
+pub fn start_input_monitoring(state: State<AppState>) -> Result<(), String> {
+    state.engine.lock().start_input_monitoring()
+}
+
+#[tauri::command]
+pub fn stop_input_monitoring(state: State<AppState>) {
+    state.engine.lock().stop_input_monitoring();
+}
+
+#[tauri::command]
+pub fn get_input_meter(state: State<AppState>) -> InputMeterSnapshot {
+    let engine = state.engine.lock();
+    let running = engine.is_input_monitoring();
+    let (peak_l, peak_r) = if running {
+        engine.input_peak_snapshot()
+    } else {
+        (0.0, 0.0)
+    };
+    let (sample_rate, buffer_size) = engine.input_active_config();
+    InputMeterSnapshot {
+        peak_l,
+        peak_r,
+        running,
+        sample_rate,
+        buffer_size,
+    }
 }

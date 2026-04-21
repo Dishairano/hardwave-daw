@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 
@@ -25,6 +25,14 @@ interface WasapiExclusiveStatus {
   available: boolean
 }
 
+interface InputMeterSnapshot {
+  peak_l: number
+  peak_r: number
+  running: boolean
+  sample_rate: number
+  buffer_size: number
+}
+
 interface AudioSettingsProps {
   onClose: () => void
 }
@@ -44,6 +52,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [applying, setApplying] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [exclusive, setExclusive] = useState<WasapiExclusiveStatus>({ enabled: false, available: false })
+  const [monitor, setMonitor] = useState<InputMeterSnapshot | null>(null)
+  const [monitorOn, setMonitorOn] = useState(false)
+  const peakDecayRef = useRef({ l: 0, r: 0 })
 
   useEffect(() => {
     Promise.all([
@@ -65,6 +76,74 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setExclusive(excl)
     })
   }, [])
+
+  // Poll the input meter at ~30 Hz while monitoring is on. Decay the bar
+  // smoothly on the UI side so brief silences don't make it flicker.
+  useEffect(() => {
+    if (!monitorOn) {
+      peakDecayRef.current = { l: 0, r: 0 }
+      setMonitor(null)
+      return
+    }
+    let cancelled = false
+    const tick = async () => {
+      if (cancelled) return
+      try {
+        const snap = await invoke<InputMeterSnapshot>('get_input_meter')
+        if (cancelled) return
+        const decay = 0.85
+        peakDecayRef.current = {
+          l: Math.max(snap.peak_l, peakDecayRef.current.l * decay),
+          r: Math.max(snap.peak_r, peakDecayRef.current.r * decay),
+        }
+        setMonitor({
+          ...snap,
+          peak_l: peakDecayRef.current.l,
+          peak_r: peakDecayRef.current.r,
+        })
+      } catch {
+        /* engine may be mid-restart; retry next tick */
+      }
+    }
+    const id = window.setInterval(tick, 33)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [monitorOn])
+
+  // Stop monitoring when the dialog is closed.
+  useEffect(() => {
+    return () => {
+      invoke('stop_input_monitoring').catch(() => {})
+    }
+  }, [])
+
+  const toggleMonitor = async () => {
+    setError(null)
+    if (monitorOn) {
+      try {
+        await invoke('stop_input_monitoring')
+      } catch (e: any) {
+        setError(String(e))
+      }
+      setMonitorOn(false)
+      return
+    }
+    // Apply the currently-pending input device before starting the stream so
+    // the monitor reflects the user's visible choice, not the last-applied one.
+    try {
+      await invoke('set_audio_input_config', {
+        device: selectedInput,
+        channels: selectedInputChannels,
+      })
+      setInputConfig({ device: selectedInput, channels: selectedInputChannels })
+      await invoke('start_input_monitoring')
+      setMonitorOn(true)
+    } catch (e: any) {
+      setError(String(e))
+    }
+  }
 
   const toggleExclusive = async () => {
     const next = !exclusive.enabled
@@ -224,6 +303,45 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
             />
           </SettingRow>
 
+          {/* Input Monitor / pre-record level meter */}
+          <div style={{
+            marginBottom: 10, padding: '8px 12px',
+            background: hw.bgPanel, borderRadius: hw.radius.sm,
+            border: `1px solid ${hw.borderDark}`,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: monitorOn ? 6 : 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textMuted }}>Input Monitor</span>
+                <span style={{ fontSize: 10, color: hw.textFaint }}>
+                  {monitorOn && monitor?.running
+                    ? `Live — ${monitor.sample_rate} Hz, ${monitor.buffer_size} samples`
+                    : 'Preview input signal level before recording'}
+                </span>
+              </div>
+              <button
+                onClick={toggleMonitor}
+                style={{
+                  padding: '4px 12px', fontSize: 11, fontWeight: 600,
+                  borderRadius: hw.radius.sm, border: 'none',
+                  cursor: 'pointer',
+                  background: monitorOn ? hw.accent : 'rgba(255,255,255,0.08)',
+                  color: monitorOn ? '#fff' : hw.textSecondary,
+                  fontFamily: 'inherit',
+                }}
+              >
+                {monitorOn ? 'Stop' : 'Start'}
+              </button>
+            </div>
+            {monitorOn && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <MeterBar label="L" peak={monitor?.peak_l ?? 0} />
+                {selectedInputChannels === 2 && (
+                  <MeterBar label="R" peak={monitor?.peak_r ?? 0} />
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Latency readout */}
           <div style={{
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -324,6 +442,36 @@ function Select({ value, onChange, options }: {
         <option key={o.value} value={o.value} style={{ background: '#0c0c10' }}>{o.label}</option>
       ))}
     </select>
+  )
+}
+
+function MeterBar({ label, peak }: { label: string; peak: number }) {
+  // Convert linear peak to dB for display scaling. Map -60..+6 dB to 0..100%.
+  const db = peak > 0 ? 20 * Math.log10(peak) : -100
+  const pct = Math.max(0, Math.min(100, ((db + 60) / 66) * 100))
+  const clipping = peak >= 0.999
+  const color = clipping ? hw.red : db > -6 ? '#facc15' : hw.accent
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontSize: 9, color: hw.textFaint, width: 8 }}>{label}</span>
+      <div style={{
+        flex: 1, height: 6, background: 'rgba(0,0,0,0.4)',
+        borderRadius: 2, overflow: 'hidden', border: `1px solid ${hw.borderDark}`,
+      }}>
+        <div style={{
+          width: `${pct}%`, height: '100%',
+          background: color,
+          transition: 'width 50ms linear',
+        }} />
+      </div>
+      <span style={{
+        fontSize: 9, color: hw.textFaint,
+        width: 36, textAlign: 'right',
+        fontFamily: "'Consolas', monospace",
+      }}>
+        {db <= -60 ? '-∞' : `${db.toFixed(1)}`}
+      </span>
+    </div>
   )
 }
 

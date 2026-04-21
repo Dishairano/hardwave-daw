@@ -2,7 +2,7 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, SampleRate, StreamConfig, SupportedStreamConfigRange};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -48,6 +48,59 @@ pub trait AudioCallback: Send + 'static {
 }
 
 // ---------------------------------------------------------------------------
+// Input peak tracker
+// ---------------------------------------------------------------------------
+
+/// Lock-free peak meter shared between the cpal input callback and the UI
+/// thread. Each callback writes the block's max(|sample|) into the L/R slots
+/// using `fetch_max`; the UI reads and resets them on each poll. The stored
+/// values are f32 linear peaks, bit-punned through AtomicU32.
+#[derive(Default)]
+pub struct InputPeakTracker {
+    l_bits: AtomicU32,
+    r_bits: AtomicU32,
+}
+
+impl InputPeakTracker {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Merge a block peak into the latched value, keeping the max. Called
+    /// from the audio input callback.
+    fn record(&self, left: f32, right: f32) {
+        fn max_f32(slot: &AtomicU32, candidate: f32) {
+            let candidate = candidate.abs();
+            let mut current = slot.load(Ordering::Relaxed);
+            loop {
+                let current_f = f32::from_bits(current);
+                if candidate <= current_f {
+                    return;
+                }
+                match slot.compare_exchange_weak(
+                    current,
+                    candidate.to_bits(),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => return,
+                    Err(seen) => current = seen,
+                }
+            }
+        }
+        max_f32(&self.l_bits, left);
+        max_f32(&self.r_bits, right);
+    }
+
+    /// Read and reset both channel peaks. Returns linear peaks (0..1+).
+    pub fn take(&self) -> (f32, f32) {
+        let l = f32::from_bits(self.l_bits.swap(0, Ordering::Relaxed));
+        let r = f32::from_bits(self.r_bits.swap(0, Ordering::Relaxed));
+        (l, r)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Audio device manager
 // ---------------------------------------------------------------------------
 
@@ -81,6 +134,17 @@ pub struct AudioDeviceManager {
     pub wasapi_exclusive: bool,
     /// True once an exclusive-mode WASAPI stream is live (for UI reporting).
     active_exclusive: bool,
+    /// Active input stream (pre-record monitoring). Independent from the
+    /// output stream; started on demand by the recording/monitor UI.
+    input_stream: Option<cpal::Stream>,
+    /// Peak meter that the input callback writes into. Cloned into the
+    /// callback so the UI can poll it lock-free.
+    input_peaks: Arc<InputPeakTracker>,
+    /// Sample rate the input stream is actually running at (may differ from
+    /// `sample_rate` when the input device rejects the output's rate).
+    input_active_sample_rate: u32,
+    /// Buffer size the input stream is running at.
+    input_active_buffer_size: u32,
 }
 
 impl AudioDeviceManager {
@@ -131,6 +195,10 @@ impl AudioDeviceManager {
             input_channels: 2,
             wasapi_exclusive: false,
             active_exclusive: false,
+            input_stream: None,
+            input_peaks: Arc::new(InputPeakTracker::new()),
+            input_active_sample_rate: 0,
+            input_active_buffer_size: 0,
         }
     }
 
@@ -442,6 +510,159 @@ impl AudioDeviceManager {
             }
         }
         false
+    }
+
+    /// Resolve the input device — selected by name, or system default.
+    fn resolve_input_device(&self) -> Result<cpal::Device, AudioIoError> {
+        if let Some(ref name) = self.selected_input_device {
+            if let Ok(devices) = self.host.input_devices() {
+                for d in devices {
+                    if d.name().ok().as_deref() == Some(name) {
+                        return Ok(d);
+                    }
+                }
+            }
+            log::warn!(
+                "Selected input device '{}' not found, falling back to default",
+                name
+            );
+        }
+        self.host
+            .default_input_device()
+            .ok_or(AudioIoError::NoInputDevice)
+    }
+
+    /// Pick a sample rate the input device supports. Prefers the current
+    /// output rate (`self.sample_rate`) so the monitor path stays aligned,
+    /// then falls back to the device's default config.
+    fn negotiate_input_rate(&self, device: &cpal::Device) -> u32 {
+        let requested = self.sample_rate;
+        if let Ok(configs) = device.supported_input_configs() {
+            for c in configs {
+                if requested >= c.min_sample_rate().0 && requested <= c.max_sample_rate().0 {
+                    return requested;
+                }
+            }
+        }
+        device
+            .default_input_config()
+            .map(|c| c.sample_rate().0)
+            .unwrap_or(requested)
+    }
+
+    /// Start the input stream with pre-record level monitoring. Safe to call
+    /// again to restart with updated device/channels.
+    pub fn start_input_stream(&mut self) -> Result<(), AudioIoError> {
+        self.stop_input_stream();
+
+        let device = self.resolve_input_device()?;
+        let channels = self.input_channels.clamp(1, 2);
+        let sample_rate = self.negotiate_input_rate(&device);
+
+        // Prefer the output buffer size so the monitor latency tracks the
+        // rest of the engine. cpal falls back to the device default if the
+        // hint is rejected, which is fine for monitoring.
+        let buffer_size = self.buffer_size;
+        let config = StreamConfig {
+            channels,
+            sample_rate: SampleRate(sample_rate),
+            buffer_size: cpal::BufferSize::Fixed(buffer_size),
+        };
+
+        log::info!(
+            "Starting input stream: device={}, sr={}, buf={}, ch={}",
+            device.name().unwrap_or_default(),
+            sample_rate,
+            buffer_size,
+            channels,
+        );
+
+        let peaks = Arc::clone(&self.input_peaks);
+        let chans = channels;
+        let stream = device
+            .build_input_stream(
+                &config,
+                move |data: &[f32], _info: &cpal::InputCallbackInfo| {
+                    if data.is_empty() {
+                        return;
+                    }
+                    let mut max_l = 0.0_f32;
+                    let mut max_r = 0.0_f32;
+                    match chans {
+                        1 => {
+                            for &s in data {
+                                let a = s.abs();
+                                if a > max_l {
+                                    max_l = a;
+                                }
+                            }
+                            max_r = max_l;
+                        }
+                        _ => {
+                            // Interleaved stereo (or more; we only look at
+                            // the first two channels).
+                            let step = chans as usize;
+                            let mut i = 0;
+                            while i + 1 < data.len() {
+                                let l = data[i].abs();
+                                let r = data[i + 1].abs();
+                                if l > max_l {
+                                    max_l = l;
+                                }
+                                if r > max_r {
+                                    max_r = r;
+                                }
+                                i += step;
+                            }
+                        }
+                    }
+                    peaks.record(max_l, max_r);
+                },
+                move |err| {
+                    log::error!("Input stream error: {}", err);
+                },
+                None,
+            )
+            .map_err(|e| AudioIoError::Stream(e.to_string()))?;
+
+        stream
+            .play()
+            .map_err(|e| AudioIoError::Stream(e.to_string()))?;
+
+        self.input_stream = Some(stream);
+        self.input_active_sample_rate = sample_rate;
+        self.input_active_buffer_size = buffer_size;
+        Ok(())
+    }
+
+    /// Stop the input stream if running. Resets the peak tracker so the next
+    /// open of the meter starts from silence.
+    pub fn stop_input_stream(&mut self) {
+        if self.input_stream.take().is_some() {
+            log::info!("Input stream stopped");
+        }
+        let _ = self.input_peaks.take();
+        self.input_active_sample_rate = 0;
+        self.input_active_buffer_size = 0;
+    }
+
+    pub fn is_input_running(&self) -> bool {
+        self.input_stream.is_some()
+    }
+
+    /// Snapshot and reset the current input peak. Returns linear L/R peaks.
+    pub fn take_input_peak(&self) -> (f32, f32) {
+        self.input_peaks.take()
+    }
+
+    /// Sample rate the input stream is running at (0 when stopped).
+    pub fn input_active_sample_rate(&self) -> u32 {
+        self.input_active_sample_rate
+    }
+
+    /// Buffer size the input stream is running at (0 when stopped).
+    pub fn input_active_buffer_size(&self) -> u32 {
+        self.input_active_buffer_size
     }
 }
 
