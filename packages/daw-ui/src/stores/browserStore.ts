@@ -6,6 +6,7 @@ const FILE_RECENT_KEY = 'hardwave.daw.fileRecents'
 const FOLDERS_KEY = 'hardwave.daw.fileFolders'
 const FILE_FOLDER_MAP_KEY = 'hardwave.daw.fileFolderMap'
 const EXPANDED_FOLDERS_KEY = 'hardwave.daw.expandedFolders'
+const FILE_TAGS_KEY = 'hardwave.daw.fileTags'
 const RECENT_MAX = 25
 
 function loadList(key: string): string[] {
@@ -65,6 +66,8 @@ interface BrowserState {
   fileFolderMap: Record<string, string | null>
   expandedFolders: Set<string>
 
+  fileTags: Record<string, string[]>
+
   togglePluginFavorite: (id: string) => void
   toggleFileFavorite: (path: string) => void
   pushFileRecent: (path: string) => void
@@ -78,6 +81,10 @@ interface BrowserState {
   moveFile: (path: string, folderId: string | null) => void
   toggleFolderExpanded: (id: string) => void
   setFolderExpanded: (id: string, expanded: boolean) => void
+
+  addFileTag: (path: string, tag: string) => void
+  removeFileTag: (path: string, tag: string) => void
+  clearFileTags: (path: string) => void
 }
 
 export const useBrowserStore = create<BrowserState>((set, get) => ({
@@ -88,6 +95,8 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
   folders: loadJson<FolderNode[]>(FOLDERS_KEY, []),
   fileFolderMap: loadJson<Record<string, string | null>>(FILE_FOLDER_MAP_KEY, {}),
   expandedFolders: new Set(loadList(EXPANDED_FOLDERS_KEY)),
+
+  fileTags: loadJson<Record<string, string[]>>(FILE_TAGS_KEY, {}),
 
   togglePluginFavorite: (id) => {
     const next = new Set(get().pluginFavorites)
@@ -205,5 +214,33 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
     if (expanded) next.add(id); else next.delete(id)
     saveList(EXPANDED_FOLDERS_KEY, Array.from(next))
     set({ expandedFolders: next })
+  },
+
+  addFileTag: (path, tag) => {
+    const trimmed = tag.trim().toLowerCase()
+    if (!trimmed) return
+    const current = get().fileTags[path] ?? []
+    if (current.includes(trimmed)) return
+    const next = { ...get().fileTags, [path]: [...current, trimmed] }
+    saveJson(FILE_TAGS_KEY, next)
+    set({ fileTags: next })
+  },
+
+  removeFileTag: (path, tag) => {
+    const current = get().fileTags[path] ?? []
+    const filtered = current.filter(t => t !== tag)
+    const next = { ...get().fileTags }
+    if (filtered.length === 0) delete next[path]
+    else next[path] = filtered
+    saveJson(FILE_TAGS_KEY, next)
+    set({ fileTags: next })
+  },
+
+  clearFileTags: (path) => {
+    if (!(path in get().fileTags)) return
+    const next = { ...get().fileTags }
+    delete next[path]
+    saveJson(FILE_TAGS_KEY, next)
+    set({ fileTags: next })
   },
 }))

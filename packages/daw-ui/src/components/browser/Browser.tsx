@@ -183,6 +183,10 @@ function FilesTab() {
   const moveFolder = useBrowserStore(s => s.moveFolder)
   const moveFile = useBrowserStore(s => s.moveFile)
   const toggleFolderExpanded = useBrowserStore(s => s.toggleFolderExpanded)
+  const fileTags = useBrowserStore(s => s.fileTags)
+  const addFileTag = useBrowserStore(s => s.addFileTag)
+  const removeFileTag = useBrowserStore(s => s.removeFileTag)
+  const clearFileTags = useBrowserStore(s => s.clearFileTags)
   const { selectedTrackId, importAudioFile } = useTrackStore()
   const [query, setQuery] = useState('')
   const [previewing, setPreviewing] = useState<string | null>(null)
@@ -207,7 +211,19 @@ function FilesTab() {
   }, [autoPreview])
 
   const q = query.trim().toLowerCase()
-  const filter = (p: string) => !q || p.toLowerCase().includes(q)
+  const filter = (p: string) => {
+    if (!q) return true
+    if (p.toLowerCase().includes(q)) return true
+    const tags = fileTags[p]
+    if (tags && tags.some(t => t.includes(q))) return true
+    return false
+  }
+
+  const handleAddTag = (path: string) => {
+    const raw = window.prompt('Add tag (comma-separated for multiple)', '')
+    if (!raw) return
+    raw.split(',').map(t => t.trim()).filter(Boolean).forEach(t => addFileTag(path, t))
+  }
 
   const favoritePaths = useMemo(() => Array.from(fileFavorites).filter(filter), [fileFavorites, q])
   const recents = fileRecents.filter(p => !fileFavorites.has(p) && filter(p))
@@ -315,6 +331,10 @@ function FilesTab() {
             isFavorite
             isPreviewing={previewing === p}
             autoPreview={autoPreview}
+            tags={fileTags[p] ?? []}
+            onAddTag={() => handleAddTag(p)}
+            onRemoveTag={(t) => removeFileTag(p, t)}
+            onClearTags={() => clearFileTags(p)}
             onToggleFavorite={() => toggleFav(p)}
             onPreview={() => preview(p)}
             onImport={() => importOne(p)}
@@ -433,6 +453,10 @@ function FilesTab() {
               isFavorite
               isPreviewing={previewing === p}
               autoPreview={autoPreview}
+              tags={fileTags[p] ?? []}
+              onAddTag={() => handleAddTag(p)}
+              onRemoveTag={(t) => removeFileTag(p, t)}
+              onClearTags={() => clearFileTags(p)}
               onToggleFavorite={() => toggleFav(p)}
               onPreview={() => preview(p)}
               onImport={() => importOne(p)}
@@ -461,6 +485,10 @@ function FilesTab() {
             isFavorite={false}
             isPreviewing={previewing === p}
             autoPreview={autoPreview}
+            tags={fileTags[p] ?? []}
+            onAddTag={() => handleAddTag(p)}
+            onRemoveTag={(t) => removeFileTag(p, t)}
+            onClearTags={() => clearFileTags(p)}
             onToggleFavorite={() => toggleFav(p)}
             onPreview={() => preview(p)}
             onImport={() => importOne(p)}
@@ -657,9 +685,13 @@ function PluginItem({ plugin, canAdd, isFavorite, onToggleFavorite }: {
   )
 }
 
-function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = false, onToggleFavorite, onPreview, onImport, onRemove }: {
+function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = false, tags = [], onAddTag, onRemoveTag, onClearTags, onToggleFavorite, onPreview, onImport, onRemove }: {
   path: string; depth?: number; isFavorite: boolean; isPreviewing: boolean;
   autoPreview?: boolean;
+  tags?: string[];
+  onAddTag?: () => void;
+  onRemoveTag?: (tag: string) => void;
+  onClearTags?: () => void;
   onToggleFavorite: () => void; onPreview: () => void;
   onImport: () => void; onRemove: () => void;
 }) {
@@ -733,6 +765,29 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
             {dir}
           </div>
         )}
+        {tags.length > 0 && (
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 2,
+          }}>
+            {tags.map(t => (
+              <span
+                key={t}
+                onClick={(e) => { e.stopPropagation(); onRemoveTag?.(t) }}
+                title={`Remove tag "${t}"`}
+                style={{
+                  fontSize: 8, padding: '1px 5px',
+                  color: hw.accent,
+                  background: 'rgba(124,201,255,0.12)',
+                  border: `1px solid rgba(124,201,255,0.3)`,
+                  borderRadius: 8, cursor: 'pointer',
+                  lineHeight: 1.3,
+                }}
+              >
+                #{t}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       <button
         onClick={(e) => { e.stopPropagation(); onPreview() }}
@@ -796,6 +851,22 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           <FileMenuItem label={isFavorite ? 'Remove favorite' : 'Add to favorites'} onClick={() => { setCtxMenu(null); onToggleFavorite() }} />
           <FileMenuItem label="Copy full path" onClick={copyPath} />
           <FileMenuItem label="Copy filename" onClick={copyFilename} />
+          {onAddTag && (
+            <>
+              <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+              <FileMenuItem label="Add tag…" onClick={() => { setCtxMenu(null); onAddTag() }} />
+              {tags.map(t => (
+                <FileMenuItem
+                  key={`rm-${t}`}
+                  label={`Remove tag "${t}"`}
+                  onClick={() => { setCtxMenu(null); onRemoveTag?.(t) }}
+                />
+              ))}
+              {tags.length > 1 && onClearTags && (
+                <FileMenuItem label="Clear all tags" onClick={() => { setCtxMenu(null); onClearTags() }} />
+              )}
+            </>
+          )}
           <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
           <FileMenuItem label="Remove from list" danger onClick={() => { setCtxMenu(null); onRemove() }} />
         </div>
