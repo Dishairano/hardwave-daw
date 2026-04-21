@@ -3,6 +3,7 @@ import { useTrackStore } from '../../stores/trackStore'
 import { useMeterStore, DEFAULT_TRACK_METER } from '../../stores/meterStore'
 import { PATTERN_COLORS } from '../../stores/patternStore'
 import { DetachButton } from '../FloatingWindow'
+import { ParameterContextMenu } from '../ParameterContextMenu'
 import { useEffect, useState, useCallback, useRef } from 'react'
 
 export function MixerPanel() {
@@ -183,6 +184,7 @@ function Strip({ name, color, number, volumeDb, muted, soloed, soloSafe, armed, 
   }, [colorOpen])
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
+  const [faderCtx, setFaderCtx] = useState<{ x: number; y: number } | null>(null)
   useEffect(() => {
     if (!ctxMenu) return
     const close = (e: MouseEvent) => {
@@ -344,6 +346,12 @@ function Strip({ name, color, number, volumeDb, muted, soloed, soloSafe, armed, 
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <input type="range" min={-60} max={12} step={0.1} value={volumeDb}
             onChange={e => onVolume?.(parseFloat(e.target.value))}
+            onContextMenu={e => {
+              if (!onVolume) return
+              e.preventDefault()
+              e.stopPropagation()
+              setFaderCtx({ x: e.clientX, y: e.clientY })
+            }}
             style={{
               writingMode: 'vertical-lr' as any, direction: 'rtl',
               flex: 1, width: 16, appearance: 'none',
@@ -434,6 +442,21 @@ function Strip({ name, color, number, volumeDb, muted, soloed, soloSafe, armed, 
             ))}
           </div>
         </div>
+      )}
+      {faderCtx && onVolume && (
+        <ParameterContextMenu
+          x={faderCtx.x}
+          y={faderCtx.y}
+          label={isMaster ? 'Master volume' : `${name} volume`}
+          value={volumeDb}
+          defaultValue={0}
+          unit=" dB"
+          min={-60}
+          max={12}
+          decimals={1}
+          onSet={v => onVolume(v)}
+          onClose={() => setFaderCtx(null)}
+        />
       )}
     </div>
   )

@@ -3,6 +3,7 @@ import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { usePatternStore, STEPS_PER_PATTERN, PATTERN_COLORS, STEP_GRAPH_RANGES, STEP_GRAPH_DEFAULTS, type StepGraphKind } from '../../stores/patternStore'
 import { DetachButton } from '../FloatingWindow'
+import { ParameterContextMenu } from '../ParameterContextMenu'
 
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
@@ -18,6 +19,10 @@ export function ChannelRack() {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string } | null>(null)
+  const [paramCtx, setParamCtx] = useState<
+    | { x: number; y: number; kind: 'pan' | 'volume'; trackId: string }
+    | null
+  >(null)
   const [dragSource, setDragSource] = useState<string | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
@@ -275,6 +280,11 @@ export function ChannelRack() {
                   size={14}
                   onChange={(v) => setPan(ch.id, normToPan(v))}
                   onReset={() => setPan(ch.id, 0)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setParamCtx({ x: e.clientX, y: e.clientY, kind: 'pan', trackId: ch.id })
+                  }}
                   title={`Pan: ${ch.pan === 0 ? 'C' : (ch.pan > 0 ? `R${Math.round(ch.pan * 100)}` : `L${Math.round(-ch.pan * 100)}`)}`}
                 />
               </div>
@@ -287,6 +297,11 @@ export function ChannelRack() {
                   size={14}
                   onChange={(v) => setVolume(ch.id, normToDb(v))}
                   onReset={() => setVolume(ch.id, 0)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setParamCtx({ x: e.clientX, y: e.clientY, kind: 'volume', trackId: ch.id })
+                  }}
                   title={`Volume: ${ch.volume_db.toFixed(1)} dB`}
                 />
               </div>
@@ -645,6 +660,42 @@ export function ChannelRack() {
           />
         </div>
       )}
+      {paramCtx && (() => {
+        const ch = channels.find(c => c.id === paramCtx.trackId)
+        if (!ch) return null
+        if (paramCtx.kind === 'pan') {
+          return (
+            <ParameterContextMenu
+              x={paramCtx.x}
+              y={paramCtx.y}
+              label={`${ch.name} pan`}
+              value={ch.pan}
+              defaultValue={0}
+              unit=""
+              min={-1}
+              max={1}
+              decimals={2}
+              onSet={v => setPan(ch.id, v)}
+              onClose={() => setParamCtx(null)}
+            />
+          )
+        }
+        return (
+          <ParameterContextMenu
+            x={paramCtx.x}
+            y={paramCtx.y}
+            label={`${ch.name} volume`}
+            value={ch.volume_db}
+            defaultValue={0}
+            unit=" dB"
+            min={-60}
+            max={12}
+            decimals={1}
+            onSet={v => setVolume(ch.id, v)}
+            onClose={() => setParamCtx(null)}
+          />
+        )
+      })()}
     </div>
   )
 }
@@ -680,12 +731,13 @@ function MenuSep() {
   return <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
 }
 
-function MiniKnob({ value, color, size, onChange, onReset, title }: {
+function MiniKnob({ value, color, size, onChange, onReset, onContextMenu, title }: {
   value: number
   color: string
   size: number
   onChange?: (v: number) => void
   onReset?: () => void
+  onContextMenu?: (e: React.MouseEvent) => void
   title?: string
 }) {
   const angle = -135 + value * 270
@@ -721,6 +773,7 @@ function MiniKnob({ value, color, size, onChange, onReset, title }: {
       width={size} height={size} viewBox={`0 0 ${size} ${size}`}
       onMouseDown={handleMouseDown}
       onDoubleClick={(e) => { e.stopPropagation(); onReset?.() }}
+      onContextMenu={onContextMenu}
       style={{ cursor: onChange ? 'ns-resize' : 'default' }}
     >
       <title>{title}</title>
