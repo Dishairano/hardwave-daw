@@ -13,9 +13,33 @@ export interface Pattern {
   name: string
   /** channelId -> array of step velocities (0..1; 0 = off). */
   steps: Record<string, number[]>
+  /** channelId -> per-step pan (-1..1). Defaults to 0 when absent. */
+  panSteps?: Record<string, number[]>
+  /** channelId -> per-step pitch offset in semitones (-12..12). Defaults to 0. */
+  pitchSteps?: Record<string, number[]>
+  /** channelId -> per-step filter cutoff (0..1 normalized). Defaults to 1. */
+  filterSteps?: Record<string, number[]>
+  /** channelId -> per-step gate length (0..1 normalized). Defaults to 1. */
+  gateSteps?: Record<string, number[]>
   color?: string
   /** Pattern length in steps; when omitted, derives from longest channel or STEPS_PER_PATTERN. */
   length?: number
+}
+
+export type StepGraphKind = 'velocity' | 'pan' | 'pitch' | 'filter' | 'gate'
+
+export const STEP_GRAPH_DEFAULTS: Record<Exclude<StepGraphKind, 'velocity'>, number> = {
+  pan: 0,
+  pitch: 0,
+  filter: 1,
+  gate: 1,
+}
+
+export const STEP_GRAPH_RANGES: Record<Exclude<StepGraphKind, 'velocity'>, [number, number]> = {
+  pan: [-1, 1],
+  pitch: [-12, 12],
+  filter: [0, 1],
+  gate: [0, 1],
 }
 
 interface PatternState {
@@ -31,6 +55,11 @@ interface PatternState {
   renamePattern: (id: string, name: string) => void
 
   setStep: (channelId: string, stepIndex: number, velocity: number) => void
+  setPanStep: (channelId: string, stepIndex: number, pan: number) => void
+  setPitchStep: (channelId: string, stepIndex: number, semitones: number) => void
+  setFilterStep: (channelId: string, stepIndex: number, cutoff: number) => void
+  setGateStep: (channelId: string, stepIndex: number, gate: number) => void
+  getStepGraphValues: (channelId: string, kind: StepGraphKind) => number[]
   clearChannel: (channelId: string) => void
   setPatternColor: (id: string, color: string) => void
   setPatternLength: (id: string, length: number | undefined) => void
@@ -38,6 +67,29 @@ interface PatternState {
 
   serialize: () => string
   hydrate: (json: string | null) => void
+}
+
+type GraphKey = 'panSteps' | 'pitchSteps' | 'filterSteps' | 'gateSteps'
+
+function updateStepGraph(
+  s: PatternState,
+  channelId: string,
+  stepIndex: number,
+  key: GraphKey,
+  value: number,
+  defaultValue: number,
+) {
+  const idx = s.patterns.findIndex(p => p.id === s.activeId)
+  if (idx < 0) return {}
+  const patterns = s.patterns.slice()
+  const pat = { ...patterns[idx] }
+  const graph = { ...(pat[key] ?? {}) }
+  const cur = graph[channelId] ? [...graph[channelId]] : new Array(STEPS_PER_PATTERN).fill(defaultValue)
+  cur[stepIndex] = value
+  graph[channelId] = cur
+  pat[key] = graph
+  patterns[idx] = pat
+  return { patterns }
 }
 
 function emptyPattern(n: number): Pattern {
@@ -84,10 +136,16 @@ export const usePatternStore = create<PatternState>((set, get) => ({
     const { patterns, activeId } = get()
     const src = patterns.find(p => p.id === activeId)
     if (!src) return
+    const cloneMap = (m?: Record<string, number[]>) =>
+      m ? Object.fromEntries(Object.entries(m).map(([k, v]) => [k, [...v]])) : undefined
     const copy: Pattern = {
       id: `pat-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       name: `${src.name} (copy)`,
       steps: Object.fromEntries(Object.entries(src.steps).map(([k, v]) => [k, [...v]])),
+      panSteps: cloneMap(src.panSteps),
+      pitchSteps: cloneMap(src.pitchSteps),
+      filterSteps: cloneMap(src.filterSteps),
+      gateSteps: cloneMap(src.gateSteps),
       color: src.color,
       length: src.length,
     }
@@ -118,6 +176,20 @@ export const usePatternStore = create<PatternState>((set, get) => ({
     patterns[idx] = pat
     return { patterns }
   }),
+
+  setPanStep: (channelId, stepIndex, pan) => set(s => updateStepGraph(s, channelId, stepIndex, 'panSteps', Math.max(-1, Math.min(1, pan)), STEP_GRAPH_DEFAULTS.pan)),
+  setPitchStep: (channelId, stepIndex, semitones) => set(s => updateStepGraph(s, channelId, stepIndex, 'pitchSteps', Math.max(-12, Math.min(12, semitones)), STEP_GRAPH_DEFAULTS.pitch)),
+  setFilterStep: (channelId, stepIndex, cutoff) => set(s => updateStepGraph(s, channelId, stepIndex, 'filterSteps', Math.max(0, Math.min(1, cutoff)), STEP_GRAPH_DEFAULTS.filter)),
+  setGateStep: (channelId, stepIndex, gate) => set(s => updateStepGraph(s, channelId, stepIndex, 'gateSteps', Math.max(0, Math.min(1, gate)), STEP_GRAPH_DEFAULTS.gate)),
+
+  getStepGraphValues: (channelId, kind) => {
+    const pat = get().patterns.find(p => p.id === get().activeId)
+    if (!pat) return new Array(STEPS_PER_PATTERN).fill(0)
+    if (kind === 'velocity') return pat.steps[channelId] ?? new Array(STEPS_PER_PATTERN).fill(0)
+    const key = (`${kind}Steps`) as 'panSteps' | 'pitchSteps' | 'filterSteps' | 'gateSteps'
+    const def = STEP_GRAPH_DEFAULTS[kind as Exclude<StepGraphKind, 'velocity'>]
+    return pat[key]?.[channelId] ?? new Array(STEPS_PER_PATTERN).fill(def)
+  },
 
   setPatternColor: (id, color) => set(s => ({
     patterns: s.patterns.map(p => p.id === id ? { ...p, color } : p),

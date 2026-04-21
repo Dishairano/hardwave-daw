@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
-import { usePatternStore, STEPS_PER_PATTERN, PATTERN_COLORS } from '../../stores/patternStore'
+import { usePatternStore, STEPS_PER_PATTERN, PATTERN_COLORS, STEP_GRAPH_RANGES, STEP_GRAPH_DEFAULTS, type StepGraphKind } from '../../stores/patternStore'
 import { DetachButton } from '../FloatingWindow'
 
 const STEPS = STEPS_PER_PATTERN
@@ -67,6 +67,22 @@ export function ChannelRack() {
   const deletePattern = usePatternStore(s => s.deletePattern)
   const [swing] = useState(0)
   const [graphEditor, setGraphEditor] = useState(false)
+  const [graphMode, setGraphMode] = useState<StepGraphKind>('velocity')
+  const setPanStep = usePatternStore(s => s.setPanStep)
+  const setPitchStep = usePatternStore(s => s.setPitchStep)
+  const setFilterStep = usePatternStore(s => s.setFilterStep)
+  const setGateStep = usePatternStore(s => s.setGateStep)
+  const getStepGraphValues = usePatternStore(s => s.getStepGraphValues)
+
+  const setGraphStep = (channelId: string, i: number, value: number) => {
+    switch (graphMode) {
+      case 'velocity': setStep(channelId, i, value); break
+      case 'pan': setPanStep(channelId, i, value); break
+      case 'pitch': setPitchStep(channelId, i, value); break
+      case 'filter': setFilterStep(channelId, i, value); break
+      case 'gate': setGateStep(channelId, i, value); break
+    }
+  }
 
   const getSteps = (id: string): number[] =>
     activePattern.steps[id] || new Array(STEPS).fill(0)
@@ -407,29 +423,56 @@ export function ChannelRack() {
         )}
       </div>
 
-      {/* Graph editor — per-step velocity for the selected channel */}
+      {/* Graph editor — per-step value for the selected channel and graph mode */}
       {graphEditor && (() => {
         const target = channels.find(c => c.id === selectedTrackId) || channels[0]
         if (!target) return null
-        const targetSteps = getSteps(target.id)
+        const values = getStepGraphValues(target.id, graphMode)
+        const isBipolar = graphMode === 'pan' || graphMode === 'pitch'
+        const range = graphMode === 'velocity'
+          ? [0, 1] as [number, number]
+          : STEP_GRAPH_RANGES[graphMode]
+        const [rMin, rMax] = range
+        const fmt = (v: number) => {
+          if (graphMode === 'pitch') return `${v >= 0 ? '+' : ''}${v.toFixed(1)} st`
+          if (graphMode === 'pan') return v === 0 ? 'C' : (v > 0 ? `R${Math.round(v * 100)}` : `L${Math.round(-v * 100)}`)
+          return `${Math.round(v * 100)}%`
+        }
         return (
           <div style={{
-            height: 72, background: 'rgba(255,255,255,0.02)',
+            height: 96, background: 'rgba(255,255,255,0.02)',
             borderTop: `1px solid ${hw.border}`,
             display: 'flex', flexDirection: 'column', padding: '2px 4px',
             gap: 2,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 16 }}>
               <span style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
                 Graph
               </span>
               <span style={{ fontSize: 9, color: hw.accent, fontWeight: 600 }}>{target.name}</span>
-              <span style={{ fontSize: 8, color: hw.textFaint }}>velocity</span>
+              <div style={{ display: 'flex', gap: 2, marginLeft: 8 }}>
+                {(['velocity', 'pan', 'pitch', 'filter', 'gate'] as StepGraphKind[]).map(k => (
+                  <button
+                    key={k}
+                    onClick={() => setGraphMode(k)}
+                    style={{
+                      padding: '1px 6px', fontSize: 8, textTransform: 'capitalize',
+                      background: graphMode === k ? hw.accentDim : 'transparent',
+                      border: `1px solid ${graphMode === k ? hw.accent : hw.border}`,
+                      borderRadius: hw.radius.sm,
+                      color: graphMode === k ? hw.accent : hw.textMuted,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {k}
+                  </button>
+                ))}
+              </div>
             </div>
             <div
               style={{
-                flex: 1, display: 'flex', alignItems: 'flex-end',
-                gap: 1, marginLeft: 210 - 8,
+                flex: 1, display: 'flex', alignItems: 'stretch',
+                gap: 1, marginLeft: 202, position: 'relative',
               }}
               onMouseDown={(e) => {
                 const wrap = e.currentTarget as HTMLDivElement
@@ -439,8 +482,9 @@ export function ChannelRack() {
                   const y = clientY - rect.top
                   const stepW = rect.width / STEPS
                   const i = Math.max(0, Math.min(STEPS - 1, Math.floor(x / stepW)))
-                  const v = Math.max(0, Math.min(1, 1 - y / rect.height))
-                  setStep(target.id, i, v < 0.02 ? 0 : v)
+                  const norm = Math.max(0, Math.min(1, 1 - y / rect.height))
+                  const value = rMin + norm * (rMax - rMin)
+                  setGraphStep(target.id, i, graphMode === 'velocity' && value < 0.02 ? 0 : value)
                 }
                 setFromY(e.clientX, e.clientY)
                 const onMove = (ev: MouseEvent) => setFromY(ev.clientX, ev.clientY)
@@ -452,20 +496,44 @@ export function ChannelRack() {
                 window.addEventListener('mouseup', onUp)
               }}
             >
+              {isBipolar && (
+                <div style={{
+                  position: 'absolute', left: 0, right: 0, top: '50%',
+                  borderTop: `1px dashed ${hw.textFaint}`, pointerEvents: 'none',
+                }} />
+              )}
               {Array.from({ length: STEPS }, (_, i) => {
-                const v = targetSteps[i] || 0
+                const raw = values[i] ?? (graphMode === 'velocity' ? 0 : STEP_GRAPH_DEFAULTS[graphMode as Exclude<StepGraphKind, 'velocity'>])
+                const norm = (raw - rMin) / (rMax - rMin)
                 const inRange = i < activePatternLength
+                const velStep = graphMode === 'velocity' ? (getSteps(target.id)[i] || 0) : null
+                const active = velStep !== null ? velStep > 0 : true
+                let barTop = 0
+                let barBottom = 0
+                if (isBipolar) {
+                  if (norm >= 0.5) { barTop = (1 - norm) * 100; barBottom = 50 }
+                  else { barTop = 50; barBottom = norm * 100 }
+                } else {
+                  barTop = (1 - norm) * 100
+                  barBottom = 0
+                }
                 return (
                   <div key={i} style={{
-                    flex: 1, maxWidth: 28,
-                    height: `${Math.round(v * 100)}%`,
-                    background: v > 0 ? hw.accentDim : 'transparent',
-                    border: v > 0 ? `1px solid ${hw.accentGlow}` : '1px solid rgba(255,255,255,0.05)',
-                    borderRadius: '2px 2px 0 0',
+                    flex: 1, maxWidth: 28, position: 'relative',
                     marginRight: i % 4 === 3 ? 4 : 0,
-                    opacity: inRange ? 1 : 0.3,
+                    opacity: inRange ? (active ? 1 : 0.4) : 0.2,
                     cursor: 'ns-resize',
-                  }} />
+                  }}
+                    title={`Step ${i + 1}: ${fmt(raw)}`}
+                  >
+                    <div style={{
+                      position: 'absolute', left: 0, right: 0,
+                      top: `${barTop}%`, bottom: `${barBottom}%`,
+                      background: hw.accentDim,
+                      border: `1px solid ${hw.accentGlow}`,
+                      borderRadius: 2,
+                    }} />
+                  </div>
                 )
               })}
             </div>
