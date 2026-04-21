@@ -146,6 +146,38 @@ export function WelcomeScreen({
         </div>
 
         <div style={{
+          marginTop: 24, paddingTop: 16,
+          borderTop: `1px solid ${hw.border}`,
+        }}>
+          <div style={{
+            fontSize: 11, color: hw.textFaint,
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10,
+          }}>
+            Documentation & help
+          </div>
+          <div style={{
+            display: 'flex', gap: 18, flexWrap: 'wrap',
+            fontSize: 12,
+          }}>
+            <DocLink
+              href="https://github.com/Dishairano/hardwave-daw#readme"
+              label="Read the docs"
+              hint="Project README on GitHub"
+            />
+            <DocLink
+              href="https://github.com/Dishairano/hardwave-daw/releases"
+              label="Release notes"
+              hint="Changelog for every version"
+            />
+            <DocLink
+              href="https://github.com/Dishairano/hardwave-daw/issues"
+              label="Report an issue"
+              hint="Bug reports and feature requests"
+            />
+          </div>
+        </div>
+
+        <div style={{
           marginTop: 20, display: 'flex', alignItems: 'center', gap: 8,
           fontSize: 11, color: hw.textMuted,
         }}>
@@ -165,6 +197,34 @@ export function WelcomeScreen({
         </div>
       </div>
     </div>
+  )
+}
+
+function DocLink({ href, label, hint }: { href: string; label: string; hint: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 2,
+        padding: '8px 12px', textDecoration: 'none',
+        background: hw.bgElevated, border: `1px solid ${hw.border}`,
+        borderRadius: hw.radius.md, minWidth: 160,
+        transition: 'background 0.1s, border-color 0.1s',
+      }}
+      onMouseEnter={e => {
+        (e.currentTarget as HTMLElement).style.background = hw.accentDim
+        ;(e.currentTarget as HTMLElement).style.borderColor = hw.accentGlow
+      }}
+      onMouseLeave={e => {
+        (e.currentTarget as HTMLElement).style.background = hw.bgElevated
+        ;(e.currentTarget as HTMLElement).style.borderColor = hw.border
+      }}
+    >
+      <span style={{ fontSize: 12, fontWeight: 600, color: hw.textPrimary }}>{label} →</span>
+      <span style={{ fontSize: 10, color: hw.textFaint }}>{hint}</span>
+    </a>
   )
 }
 

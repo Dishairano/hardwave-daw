@@ -78,6 +78,21 @@ export function TrackList() {
       }}>
         <span style={{ fontSize: 10, color: hw.textMuted }}>Playlist</span>
         <div style={{ flex: 1 }} />
+        {audioTracks.some(t => t.armed) && (
+          <button
+            onClick={async () => {
+              for (const t of audioTracks) {
+                if (t.armed) await toggleArm(t.id)
+              }
+            }}
+            title="Disarm all armed tracks"
+            style={{
+              height: 14, padding: '0 6px', fontSize: 8, fontWeight: 700,
+              color: hw.red, background: hw.redDim,
+              border: `1px solid ${hw.red}`, borderRadius: hw.radius.sm, cursor: 'pointer',
+            }}
+          >DISARM</button>
+        )}
         <DetachButton panelId="playlist" />
       </div>
 

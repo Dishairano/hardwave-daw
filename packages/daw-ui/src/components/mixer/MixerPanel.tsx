@@ -6,7 +6,7 @@ import { DetachButton } from '../FloatingWindow'
 import { useEffect, useState, useCallback, useRef } from 'react'
 
 export function MixerPanel() {
-  const { tracks, setVolume, setPan, toggleMute, toggleSolo, toggleSoloSafe, renameTrack, setTrackColor } = useTrackStore()
+  const { tracks, setVolume, setPan, toggleMute, toggleSolo, toggleSoloSafe, toggleArm, renameTrack, setTrackColor } = useTrackStore()
   const { master, tracks: trackMeters, startListening } = useMeterStore()
   useEffect(() => { startListening() }, [])
   const [clipResetNonce, setClipResetNonce] = useState(0)
@@ -50,6 +50,7 @@ export function MixerPanel() {
               volumeDb={track.volume_db} pan={track.pan}
               muted={track.muted} soloed={track.soloed}
               soloSafe={track.solo_safe}
+              armed={track.armed}
               peakL={meter.peakL} peakR={meter.peakR} rmsDb={meter.rms}
               clipResetNonce={clipResetNonce}
               onRename={name => renameTrack(track.id, name)}
@@ -58,6 +59,7 @@ export function MixerPanel() {
               onPan={p => setPan(track.id, p)}
               onMute={() => toggleMute(track.id)}
               onSolo={() => toggleSolo(track.id)}
+              onArm={() => toggleArm(track.id)}
               onToggleSoloSafe={() => toggleSoloSafe(track.id)}
             />
           )
@@ -137,6 +139,7 @@ interface StripProps {
   name: string; color: string; number: number
   volumeDb: number; pan: number; muted: boolean; soloed: boolean
   soloSafe?: boolean
+  armed?: boolean
   peakL: number; peakR: number; rmsDb: number
   peakHoldDb?: number
   clipResetNonce?: number
@@ -145,10 +148,11 @@ interface StripProps {
   onColorChange?: (color: string) => void
   onVolume?: (db: number) => void; onPan: (p: number) => void
   onMute?: () => void; onSolo: () => void
+  onArm?: () => void
   onToggleSoloSafe?: () => void
 }
 
-function Strip({ name, color, number, volumeDb, muted, soloed, soloSafe, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo, onToggleSoloSafe }: StripProps) {
+function Strip({ name, color, number, volumeDb, muted, soloed, soloSafe, armed, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo, onArm, onToggleSoloSafe }: StripProps) {
   const [clipped, setClipped] = useState(false)
   const resetClip = useCallback(() => setClipped(false), [])
   useEffect(() => { if (peakL >= 0 || peakR >= 0) setClipped(true) }, [peakL, peakR])
@@ -358,7 +362,7 @@ function Strip({ name, color, number, volumeDb, muted, soloed, soloSafe, peakL, 
         </span>
       </div>
 
-      {/* M/S buttons */}
+      {/* M/S/R buttons */}
       <div style={{ display: 'flex', gap: 1, padding: '2px 3px 3px', justifyContent: 'center' }}>
         <button onClick={() => onMute?.()} style={{
           ...sB, color: muted ? hw.red : hw.textMuted,
@@ -374,6 +378,16 @@ function Strip({ name, color, number, volumeDb, muted, soloed, soloSafe, peakL, 
             outlineOffset: soloSafe ? -2 : undefined,
           }}
         >S</button>
+        {!isMaster && onArm && (
+          <button
+            onClick={onArm}
+            title="Arm for recording"
+            style={{
+              ...sB, color: armed ? hw.red : hw.textMuted,
+              background: armed ? hw.redDim : 'rgba(255,255,255,0.03)',
+            }}
+          >R</button>
+        )}
       </div>
       {ctxMenu && !isMaster && (
         <div
@@ -447,7 +461,7 @@ function StripMenuItem({ label, shortcut, onClick }: {
 }
 
 const sB: React.CSSProperties = {
-  width: 22, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
+  width: 17, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
   fontSize: 7, fontWeight: 700, borderRadius: 6, padding: 0,
   border: `1px solid rgba(255,255,255,0.06)`,
 }

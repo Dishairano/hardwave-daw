@@ -4,6 +4,10 @@ import { usePatternStore } from '../../stores/patternStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { useUiPreferencesStore, UI_SCALE_OPTIONS, type UiScale } from '../../stores/uiPreferencesStore'
 
+function openExternal(url: string) {
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 interface MenuItem {
   label: string
   shortcut?: string
@@ -176,6 +180,10 @@ export function TitleBar(props: TitleBarProps) {
         { label: 'Keyboard shortcuts', shortcut: '?', action: onToggleShortcuts },
         { label: 'Roadmap', action: onToggleRoadmap },
         { label: 'Check for updates...', action: onCheckForUpdates },
+        { separator: true, label: '' },
+        { label: 'Documentation', action: () => openExternal('https://github.com/Dishairano/hardwave-daw#readme') },
+        { label: 'Release notes', action: () => openExternal('https://github.com/Dishairano/hardwave-daw/releases') },
+        { label: 'Report an issue', action: () => openExternal('https://github.com/Dishairano/hardwave-daw/issues') },
         { separator: true, label: '' },
         { label: 'About Hardwave DAW', action: onToggleAbout },
       ],
