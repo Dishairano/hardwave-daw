@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { hw } from '../../theme'
 import { usePatternStore } from '../../stores/patternStore'
 import { useProjectStore } from '../../stores/projectStore'
+import { useUiPreferencesStore, UI_SCALE_OPTIONS, type UiScale } from '../../stores/uiPreferencesStore'
 
 interface MenuItem {
   label: string
@@ -75,6 +76,13 @@ export function TitleBar(props: TitleBarProps) {
   const clonePattern = usePatternStore(s => s.clonePattern)
   const deletePattern = usePatternStore(s => s.deletePattern)
   const patternCount = usePatternStore(s => s.patterns.length)
+  const uiScale = useUiPreferencesStore(s => s.uiScale)
+  const setUiScale = useUiPreferencesStore(s => s.setUiScale)
+
+  const uiScaleItems: MenuItem[] = UI_SCALE_OPTIONS.map(scale => ({
+    label: `${uiScale === scale ? '✓ ' : '   '}${scale}%`,
+    action: () => setUiScale(scale as UiScale),
+  }))
 
   const recentItems: MenuItem[] = recentProjects.length === 0
     ? [{ label: '(none)', disabled: true }]
@@ -151,6 +159,8 @@ export function TitleBar(props: TitleBarProps) {
       items: [
         { label: 'Audio settings...', action: onOpenAudioSettings },
         { label: 'MIDI settings...', disabled: true },
+        { separator: true, label: '' },
+        { label: 'UI scale', submenu: uiScaleItems },
       ],
     },
     {
