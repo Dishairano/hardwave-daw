@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { hw } from '../../theme'
+import { usePatternStore } from '../../stores/patternStore'
 
 interface MenuItem {
   label: string
@@ -7,6 +8,7 @@ interface MenuItem {
   action?: () => void
   separator?: boolean
   disabled?: boolean
+  submenu?: MenuItem[]
 }
 
 interface MenuDef {
@@ -22,6 +24,14 @@ interface TitleBarProps {
   onOpenProject: () => void
   onUndo: () => void
   onRedo: () => void
+  onCut: () => void
+  onCopy: () => void
+  onPaste: () => void
+  onDuplicate: () => void
+  onSelectAll: () => void
+  onAddAudioTrack: () => void
+  onAddInstrumentTrack: () => void
+  onAddAutomationTrack: () => void
   onToggleBrowser: () => void
   onTogglePlaylist: () => void
   onToggleChannelRack: () => void
@@ -29,6 +39,12 @@ interface TitleBarProps {
   onToggleMixer: () => void
   onToggleRoadmap: () => void
   onOpenAudioSettings: () => void
+  onCheckForUpdates: () => void
+  onToggleAbout: () => void
+  onExportAudio: () => void
+  recentProjects: string[]
+  onOpenRecentProject: (path: string) => void
+  onClearRecentProjects: () => void
   showBrowser: boolean
   showPlaylist: boolean
   showChannelRack: boolean
@@ -36,15 +52,36 @@ interface TitleBarProps {
   showMixer: boolean
 }
 
-export function TitleBar({
-  hintText,
-  onNewProject, onSaveProject, onSaveProjectAs, onOpenProject,
-  onUndo, onRedo,
-  onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer, onToggleRoadmap, onOpenAudioSettings,
-  showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
-}: TitleBarProps) {
+export function TitleBar(props: TitleBarProps) {
+  const {
+    hintText,
+    onNewProject, onSaveProject, onSaveProjectAs, onOpenProject,
+    onUndo, onRedo,
+    onCut, onCopy, onPaste, onDuplicate, onSelectAll,
+    onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
+    onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
+    onToggleRoadmap, onOpenAudioSettings, onCheckForUpdates, onToggleAbout, onExportAudio,
+    recentProjects, onOpenRecentProject, onClearRecentProjects,
+    showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
+  } = props
   const [openMenu, setOpenMenu] = useState<number | null>(null)
+  const [openSubmenu, setOpenSubmenu] = useState<number | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
+  const addPattern = usePatternStore(s => s.addPattern)
+  const clonePattern = usePatternStore(s => s.clonePattern)
+  const deletePattern = usePatternStore(s => s.deletePattern)
+  const patternCount = usePatternStore(s => s.patterns.length)
+
+  const recentItems: MenuItem[] = recentProjects.length === 0
+    ? [{ label: '(none)', disabled: true }]
+    : [
+        ...recentProjects.slice(0, 10).map((p) => ({
+          label: shortenPath(p),
+          action: () => onOpenRecentProject(p),
+        })),
+        { separator: true, label: '' },
+        { label: 'Clear recent', action: onClearRecentProjects },
+      ]
 
   const menus: MenuDef[] = [
     {
@@ -52,9 +89,12 @@ export function TitleBar({
       items: [
         { label: 'New project', shortcut: 'Ctrl+N', action: onNewProject },
         { label: 'Open project...', shortcut: 'Ctrl+O', action: onOpenProject },
+        { label: 'Recent projects', submenu: recentItems },
         { separator: true, label: '' },
         { label: 'Save', shortcut: 'Ctrl+S', action: onSaveProject },
         { label: 'Save as...', shortcut: 'Ctrl+Shift+S', action: onSaveProjectAs },
+        { separator: true, label: '' },
+        { label: 'Export audio...', action: onExportAudio },
         { separator: true, label: '' },
         { label: 'Exit', action: () => windowClose() },
       ],
@@ -62,15 +102,23 @@ export function TitleBar({
     {
       label: 'EDIT',
       items: [
-        { label: 'Undo', shortcut: 'Ctrl+Z', action: onUndo, disabled: true },
-        { label: 'Redo', shortcut: 'Ctrl+Y', action: onRedo, disabled: true },
+        { label: 'Undo', shortcut: 'Ctrl+Z', action: onUndo },
+        { label: 'Redo', shortcut: 'Ctrl+Y', action: onRedo },
+        { separator: true, label: '' },
+        { label: 'Cut', shortcut: 'Ctrl+X', action: onCut },
+        { label: 'Copy', shortcut: 'Ctrl+C', action: onCopy },
+        { label: 'Paste', shortcut: 'Ctrl+V', action: onPaste },
+        { label: 'Duplicate', shortcut: 'Ctrl+D', action: onDuplicate },
+        { separator: true, label: '' },
+        { label: 'Select all', shortcut: 'Ctrl+A', action: onSelectAll },
       ],
     },
     {
       label: 'ADD',
       items: [
-        { label: 'Audio track', disabled: true },
-        { label: 'Instrument track', disabled: true },
+        { label: 'Audio track', action: onAddAudioTrack },
+        { label: 'Instrument track', action: onAddInstrumentTrack },
+        { label: 'Automation track', action: onAddAutomationTrack },
         { separator: true, label: '' },
         { label: 'Plugin...', disabled: true },
       ],
@@ -78,9 +126,9 @@ export function TitleBar({
     {
       label: 'PATTERNS',
       items: [
-        { label: 'New pattern', disabled: true },
-        { label: 'Clone pattern', disabled: true },
-        { label: 'Delete pattern', disabled: true },
+        { label: 'New pattern', action: addPattern },
+        { label: 'Clone pattern', action: clonePattern },
+        { label: 'Delete pattern', action: deletePattern, disabled: patternCount <= 1 },
       ],
     },
     {
@@ -111,29 +159,32 @@ export function TitleBar({
       label: 'HELP',
       items: [
         { label: 'Roadmap', action: onToggleRoadmap },
+        { label: 'Check for updates...', action: onCheckForUpdates },
         { separator: true, label: '' },
-        { label: 'About Hardwave DAW', disabled: true },
+        { label: 'About Hardwave DAW', action: onToggleAbout },
       ],
     },
   ]
 
-  // Close menu when clicking outside
   useEffect(() => {
     if (openMenu === null) return
     const handler = (e: MouseEvent) => {
       if (barRef.current && !barRef.current.contains(e.target as Node)) {
         setOpenMenu(null)
+        setOpenSubmenu(null)
       }
     }
     window.addEventListener('mousedown', handler)
     return () => window.removeEventListener('mousedown', handler)
   }, [openMenu])
 
-  // Close menu on Escape
   useEffect(() => {
     if (openMenu === null) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpenMenu(null)
+      if (e.key === 'Escape') {
+        setOpenMenu(null)
+        setOpenSubmenu(null)
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -157,7 +208,6 @@ export function TitleBar({
         zIndex: 100,
       }}
     >
-      {/* Hardwave Logo */}
       <div style={{
         width: 20, height: 20, marginRight: 8,
         background: `linear-gradient(135deg, ${hw.secondary}, ${hw.accent})`,
@@ -170,12 +220,8 @@ export function TitleBar({
         <span style={{ fontSize: 10, fontWeight: 900, color: '#FFF' }}>H</span>
       </div>
 
-      {/* Menu items */}
       {menus.map((menu, idx) => (
-        <div
-          key={menu.label}
-          style={{ position: 'relative' }}
-        >
+        <div key={menu.label} style={{ position: 'relative' }}>
           <div
             style={{
               padding: '4px 8px',
@@ -191,10 +237,12 @@ export function TitleBar({
             onMouseDown={(e) => {
               e.stopPropagation()
               setOpenMenu(openMenu === idx ? null : idx)
+              setOpenSubmenu(null)
             }}
             onMouseEnter={(e) => {
               if (openMenu !== null && openMenu !== idx) {
                 setOpenMenu(idx)
+                setOpenSubmenu(null)
               }
               if (openMenu !== idx) {
                 e.currentTarget.style.background = 'rgba(255,255,255,0.06)'
@@ -211,70 +259,30 @@ export function TitleBar({
             {menu.label}
           </div>
 
-          {/* Dropdown */}
           {openMenu === idx && (
-            <div style={{
-              position: 'absolute',
-              top: '100%',
-              left: 0,
-              marginTop: 2,
-              minWidth: 200,
-              background: 'rgba(18,18,22,0.98)',
-              backdropFilter: 'blur(16px)',
-              border: `1px solid ${hw.borderLight}`,
-              borderRadius: hw.radius.md,
-              padding: '4px 0',
-              boxShadow: '0 12px 40px rgba(0,0,0,0.6), 0 0 1px rgba(255,255,255,0.05)',
-              zIndex: 200,
-            }}>
+            <div style={dropdownStyle}>
               {menu.items.map((item, i) =>
                 item.separator ? (
-                  <div key={i} style={{
-                    height: 1,
-                    margin: '4px 8px',
-                    background: hw.border,
-                  }} />
+                  <div key={i} style={{ height: 1, margin: '4px 8px', background: hw.border }} />
                 ) : (
-                  <div
+                  <MenuRow
                     key={i}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '5px 12px',
-                      fontSize: 12,
-                      color: item.disabled ? hw.textFaint : hw.textSecondary,
-                      cursor: item.disabled ? 'default' : 'pointer',
-                      transition: 'background 0.1s, color 0.1s',
-                    }}
-                    onMouseEnter={e => {
-                      if (!item.disabled) {
-                        e.currentTarget.style.background = hw.accentDim
-                        e.currentTarget.style.color = hw.textPrimary
-                      }
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.background = 'transparent'
-                      e.currentTarget.style.color = item.disabled ? hw.textFaint : hw.textSecondary
-                    }}
-                    onClick={() => {
-                      if (item.disabled || !item.action) return
-                      item.action()
+                    item={item}
+                    isSubmenuOpen={openSubmenu === i}
+                    onEnterSubmenu={() => item.submenu && setOpenSubmenu(i)}
+                    onLeaveSubmenu={() => setOpenSubmenu((s) => (s === i ? null : s))}
+                    onClickItem={() => {
+                      if (item.disabled) return
+                      if (item.submenu) return
+                      item.action?.()
                       setOpenMenu(null)
+                      setOpenSubmenu(null)
                     }}
-                  >
-                    <span>{item.label}</span>
-                    {item.shortcut && (
-                      <span style={{
-                        fontSize: 10,
-                        color: hw.textFaint,
-                        marginLeft: 24,
-                        fontFamily: "'Consolas', monospace",
-                      }}>
-                        {item.shortcut}
-                      </span>
-                    )}
-                  </div>
+                    onClickSubmenuItem={() => {
+                      setOpenMenu(null)
+                      setOpenSubmenu(null)
+                    }}
+                  />
                 )
               )}
             </div>
@@ -284,7 +292,6 @@ export function TitleBar({
 
       <div style={{ flex: 1 }} />
 
-      {/* Hint text */}
       <div style={{
         fontSize: 11,
         color: hw.textFaint,
@@ -297,17 +304,128 @@ export function TitleBar({
         {hintText || 'Hardwave DAW'}
       </div>
 
-      {/* Window controls */}
       <div style={{ display: 'flex', gap: 0, marginLeft: 8,
         // @ts-ignore
         WebkitAppRegion: 'no-drag',
       }}>
-        <WinBtn label={'\u2012'} onClick={windowMinimize} />
-        <WinBtn label={'\u25A1'} onClick={windowToggleMaximize} />
-        <WinBtn label={'\u00D7'} isClose onClick={windowClose} />
+        <WinBtn label={'‒'} onClick={windowMinimize} />
+        <WinBtn label={'□'} onClick={windowToggleMaximize} />
+        <WinBtn label={'×'} isClose onClick={windowClose} />
       </div>
     </div>
   )
+}
+
+const dropdownStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '100%',
+  left: 0,
+  marginTop: 2,
+  minWidth: 200,
+  background: 'rgba(18,18,22,0.98)',
+  backdropFilter: 'blur(16px)',
+  border: `1px solid ${hw.borderLight}`,
+  borderRadius: hw.radius.md,
+  padding: '4px 0',
+  boxShadow: '0 12px 40px rgba(0,0,0,0.6), 0 0 1px rgba(255,255,255,0.05)',
+  zIndex: 200,
+}
+
+interface MenuRowProps {
+  item: MenuItem
+  isSubmenuOpen: boolean
+  onEnterSubmenu: () => void
+  onLeaveSubmenu: () => void
+  onClickItem: () => void
+  onClickSubmenuItem: () => void
+}
+
+function MenuRow({ item, isSubmenuOpen, onEnterSubmenu, onLeaveSubmenu, onClickItem, onClickSubmenuItem }: MenuRowProps) {
+  return (
+    <div
+      style={{ position: 'relative' }}
+      onMouseEnter={() => { if (item.submenu) onEnterSubmenu(); else onLeaveSubmenu() }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '5px 12px',
+          fontSize: 12,
+          color: item.disabled ? hw.textFaint : hw.textSecondary,
+          cursor: item.disabled ? 'default' : 'pointer',
+          transition: 'background 0.1s, color 0.1s',
+          background: isSubmenuOpen ? hw.accentDim : 'transparent',
+        }}
+        onMouseEnter={(e) => {
+          if (!item.disabled) {
+            e.currentTarget.style.background = hw.accentDim
+            e.currentTarget.style.color = hw.textPrimary
+          }
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = isSubmenuOpen ? hw.accentDim : 'transparent'
+          e.currentTarget.style.color = item.disabled ? hw.textFaint : hw.textSecondary
+        }}
+        onClick={onClickItem}
+      >
+        <span>{item.label}</span>
+        {item.shortcut && (
+          <span style={{ fontSize: 10, color: hw.textFaint, marginLeft: 24, fontFamily: "'Consolas', monospace" }}>
+            {item.shortcut}
+          </span>
+        )}
+        {item.submenu && <span style={{ fontSize: 10, color: hw.textFaint, marginLeft: 24 }}>▶</span>}
+      </div>
+
+      {item.submenu && isSubmenuOpen && (
+        <div style={{ ...dropdownStyle, top: 0, left: '100%', marginTop: 0, marginLeft: 2 }}>
+          {item.submenu.map((sub, si) =>
+            sub.separator ? (
+              <div key={si} style={{ height: 1, margin: '4px 8px', background: hw.border }} />
+            ) : (
+              <div
+                key={si}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '5px 12px',
+                  fontSize: 12,
+                  color: sub.disabled ? hw.textFaint : hw.textSecondary,
+                  cursor: sub.disabled ? 'default' : 'pointer',
+                }}
+                onMouseEnter={(e) => {
+                  if (!sub.disabled) {
+                    e.currentTarget.style.background = hw.accentDim
+                    e.currentTarget.style.color = hw.textPrimary
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent'
+                  e.currentTarget.style.color = sub.disabled ? hw.textFaint : hw.textSecondary
+                }}
+                onClick={() => {
+                  if (sub.disabled || !sub.action) return
+                  sub.action()
+                  onClickSubmenuItem()
+                }}
+              >
+                <span>{sub.label}</span>
+              </div>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function shortenPath(p: string): string {
+  const parts = p.replace(/\\/g, '/').split('/')
+  const name = parts[parts.length - 1] || p
+  return name.length > 40 ? name.slice(0, 37) + '...' : name
 }
 
 function WinBtn({ label, isClose, onClick }: { label: string; isClose?: boolean; onClick: () => void }) {

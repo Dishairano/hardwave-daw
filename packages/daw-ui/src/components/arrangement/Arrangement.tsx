@@ -757,10 +757,13 @@ export function Arrangement() {
         }
       }
 
+      const { useBrowserStore } = await import('../../stores/browserStore')
+      const pushRecent = useBrowserStore.getState().pushFileRecent
       for (const file of files) {
         try {
           const result = await importAudioFile(trackId, file, offsetTicks)
           offsetTicks += result.length_ticks
+          pushRecent(file)
         } catch (e) {
           console.error('Failed to import:', file, e)
         }

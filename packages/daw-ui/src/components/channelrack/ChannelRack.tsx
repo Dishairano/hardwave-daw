@@ -1,27 +1,55 @@
 import { useState } from 'react'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
+import { usePatternStore, STEPS_PER_PATTERN } from '../../stores/patternStore'
+import { DetachButton } from '../FloatingWindow'
 
-const STEPS = 16
+const STEPS = STEPS_PER_PATTERN
+const DEFAULT_VEL = 0.85
 
 export function ChannelRack() {
   const { tracks, selectedTrackId, selectTrack, toggleMute } = useTrackStore()
   const channels = tracks.filter(t => t.kind !== 'Master')
-  const [steps, setSteps] = useState<Record<string, boolean[]>>({})
+  const activePattern = usePatternStore(s => s.patterns.find(p => p.id === s.activeId) || s.patterns[0])
+  const patternCount = usePatternStore(s => s.patterns.length)
+  const patternIndex = usePatternStore(s => s.patterns.findIndex(p => p.id === s.activeId))
+  const setStep = usePatternStore(s => s.setStep)
+  const clearChannel = usePatternStore(s => s.clearChannel)
+  const addPattern = usePatternStore(s => s.addPattern)
+  const clonePattern = usePatternStore(s => s.clonePattern)
+  const deletePattern = usePatternStore(s => s.deletePattern)
   const [channelVolumes] = useState<Record<string, number>>({})
   const [channelPans] = useState<Record<string, number>>({})
   const [swing] = useState(0)
   const [graphEditor, setGraphEditor] = useState(false)
 
-  const getSteps = (id: string): boolean[] => steps[id] || new Array(STEPS).fill(false)
+  const getSteps = (id: string): number[] =>
+    activePattern.steps[id] || new Array(STEPS).fill(0)
   const getVol = (id: string) => channelVolumes[id] ?? 0.78
   const getPan = (id: string) => channelPans[id] ?? 0.5
 
   const toggleStep = (id: string, i: number) => {
     const cur = getSteps(id)
-    const upd = [...cur]
-    upd[i] = !upd[i]
-    setSteps(prev => ({ ...prev, [id]: upd }))
+    setStep(id, i, cur[i] > 0 ? 0 : DEFAULT_VEL)
+  }
+
+  // Vertical drag on a step sets velocity 0..1.
+  const startVelocityDrag = (id: string, i: number, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const startY = e.clientY
+    const startV = getSteps(id)[i] || DEFAULT_VEL
+    const move = (ev: MouseEvent) => {
+      const dy = startY - ev.clientY
+      const v = Math.max(0.05, Math.min(1, startV + dy / 80))
+      setStep(id, i, v)
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
   }
 
   return (
@@ -83,13 +111,40 @@ export function ChannelRack() {
           Graph
         </button>
 
+        <PatternSwitcher />
+        <button
+          onClick={addPattern}
+          title="New pattern"
+          style={{ ...topBtn, width: 'auto', padding: '0 6px', fontSize: 9, color: hw.textMuted }}
+        >
+          +
+        </button>
+        <button
+          onClick={clonePattern}
+          title="Clone pattern"
+          style={{ ...topBtn, width: 'auto', padding: '0 6px', fontSize: 9, color: hw.textMuted }}
+        >
+          ⎘
+        </button>
+        <button
+          onClick={deletePattern}
+          disabled={patternCount <= 1}
+          title={patternCount <= 1 ? 'At least one pattern required' : 'Delete pattern'}
+          style={{
+            ...topBtn, width: 'auto', padding: '0 6px', fontSize: 9,
+            color: patternCount <= 1 ? hw.textFaint : hw.textMuted,
+            opacity: patternCount <= 1 ? 0.5 : 1,
+          }}
+        >
+          ×
+        </button>
         <span style={{
-          fontSize: 10, color: hw.textPrimary, fontWeight: 600,
-          background: 'rgba(255,255,255,0.04)', padding: '2px 10px', borderRadius: hw.radius.sm,
-          border: `1px solid ${hw.border}`,
+          fontSize: 9, color: hw.textFaint, fontFamily: "'Consolas', monospace",
+          marginLeft: 4,
         }}>
-          Pattern 1
+          {patternIndex + 1}/{patternCount}
         </span>
+        <DetachButton panelId="channelRack" />
       </div>
 
       {/* Channel rows */}
@@ -177,28 +232,52 @@ export function ChannelRack() {
                 }} />
               </div>
 
-              {/* 7. Step sequencer — RED buttons */}
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 4px', gap: 1, overflow: 'hidden' }}>
+              {/* 7. Step sequencer — velocity-aware buttons */}
+              <div
+                style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 4px', gap: 1, overflow: 'hidden' }}
+                onContextMenu={(e) => { e.preventDefault(); clearChannel(ch.id) }}
+              >
                 {Array.from({ length: STEPS }, (_, i) => {
-                  const active = getSteps(ch.id)[i]
+                  const vel = getSteps(ch.id)[i] || 0
+                  const active = vel > 0
                   const groupIdx = Math.floor(i / 4)
                   const isOddGroup = groupIdx % 2 === 1
                   return (
                     <button
                       key={i}
                       onClick={() => toggleStep(ch.id, i)}
+                      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setStep(ch.id, i, 0) }}
+                      onMouseDown={(e) => {
+                        if (e.button !== 0) return
+                        if (!active) return
+                        startVelocityDrag(ch.id, i, e)
+                      }}
+                      title={active ? `Velocity ${Math.round(vel * 127)} (drag up/down)` : 'Click to add step'}
                       style={{
-                        flex: 1, maxWidth: 28, height: 22,
+                        flex: 1, maxWidth: 28, height: 22, position: 'relative',
                         background: active
-                          ? hw.accent
+                          ? 'rgba(0,0,0,0.25)'
                           : (isOddGroup ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.03)'),
                         border: `1px solid ${active ? hw.accentLight : 'rgba(255,255,255,0.06)'}`,
                         borderRadius: hw.radius.sm,
                         boxShadow: active ? `0 0 8px ${hw.accentGlow}` : 'none',
                         marginRight: i % 4 === 3 ? 4 : 0,
+                        overflow: 'hidden',
                         transition: 'background 0.05s',
+                        padding: 0,
                       }}
-                    />
+                    >
+                      {active && (
+                        <div style={{
+                          position: 'absolute', left: 0, right: 0, bottom: 0,
+                          height: `${Math.round(vel * 100)}%`,
+                          background: `linear-gradient(180deg, ${hw.accentLight}, ${hw.accent})`,
+                          borderRadius: hw.radius.sm,
+                          opacity: 0.85 + vel * 0.15,
+                          pointerEvents: 'none',
+                        }} />
+                      )}
+                    </button>
                   )
                 })}
               </div>
@@ -277,6 +356,46 @@ function MiniKnob({ value, color, size }: { value: number; color: string; size: 
 
 function TbSep() {
   return <div style={{ width: 1, height: 14, background: hw.border, margin: '0 2px' }} />
+}
+
+function PatternSwitcher() {
+  const patterns = usePatternStore(s => s.patterns)
+  const activeId = usePatternStore(s => s.activeId)
+  const setActive = usePatternStore(s => s.setActive)
+  const prev = usePatternStore(s => s.prevPattern)
+  const next = usePatternStore(s => s.nextPattern)
+  const active = patterns.find(p => p.id === activeId) || patterns[0]
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+      <button onClick={prev} title="Previous pattern" style={{
+        ...topBtn, width: 16, fontSize: 10, color: hw.textMuted,
+      }}>
+        ‹
+      </button>
+      <select
+        value={active.id}
+        onChange={(e) => setActive(e.target.value)}
+        data-testid="pattern-select"
+        style={{
+          fontSize: 10, color: hw.textPrimary, fontWeight: 600,
+          background: 'rgba(255,255,255,0.04)',
+          border: `1px solid ${hw.border}`,
+          borderRadius: hw.radius.sm,
+          padding: '2px 6px', outline: 'none', appearance: 'none',
+          minWidth: 100, cursor: 'pointer',
+        }}
+      >
+        {patterns.map(p => (
+          <option key={p.id} value={p.id}>{p.name}</option>
+        ))}
+      </select>
+      <button onClick={next} title="Next pattern" style={{
+        ...topBtn, width: 16, fontSize: 10, color: hw.textMuted,
+      }}>
+        ›
+      </button>
+    </div>
+  )
 }
 
 const topBtn: React.CSSProperties = {

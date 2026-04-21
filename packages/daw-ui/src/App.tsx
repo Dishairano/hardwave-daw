@@ -11,6 +11,9 @@ import { PianoRoll } from './components/piano-roll/PianoRoll'
 import { Roadmap } from './components/roadmap/Roadmap'
 import { AudioSettings } from './components/settings/AudioSettings'
 import { UpdateModal } from './components/UpdateModal'
+import { AboutDialog } from './components/AboutDialog'
+import { FloatingWindow } from './components/FloatingWindow'
+import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
@@ -33,6 +36,7 @@ export function App() {
   const { startListening } = useTransportStore()
   const { fetchTracks } = useTrackStore()
   const { newProject, saveProject, loadProject } = useProjectStore()
+  const recentProjects = useProjectStore(s => s.recentProjects)
 
   // Panel visibility
   const [showBrowser, setShowBrowser] = useState(true)
@@ -42,6 +46,7 @@ export function App() {
   const [showPianoRoll, setShowPianoRoll] = useState(false)
   const [showRoadmap, setShowRoadmap] = useState(false)
   const [showAudioSettings, setShowAudioSettings] = useState(false)
+  const [showAbout, setShowAbout] = useState(false)
   const [showDevPanel, setShowDevPanel] = useState(false) // DEV ONLY
 
   // Splash screen
@@ -148,6 +153,56 @@ export function App() {
     } catch {}
   }, [saveProject])
 
+  const pasteAtPlayhead = useCallback(() => {
+    const transport = useTransportStore.getState()
+    const tracks = useTrackStore.getState()
+    const sr = transport.sampleRate || 48000
+    const playheadTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
+    const pasteAt = transport.editCursorTicks != null ? transport.editCursorTicks : playheadTicks
+    tracks.pasteClipsAtPosition(pasteAt)
+  }, [])
+
+  const duplicateSelection = useCallback(() => {
+    const tracks = useTrackStore.getState()
+    const sel = tracks.selectedClipId
+    if (!sel) return
+    const t = tracks.tracks.find(tr => tr.clips.some(c => c.id === sel))
+    if (t) tracks.duplicateClip(t.id, sel)
+  }, [])
+
+  const cutSelection = useCallback(async () => {
+    const tracks = useTrackStore.getState()
+    tracks.copySelectedClips()
+    await tracks.deleteSelectedClips()
+  }, [])
+
+  const handleOpenRecent = useCallback(async (path: string) => {
+    try {
+      await loadProject(path)
+      await fetchTracks()
+    } catch {}
+  }, [loadProject, fetchTracks])
+
+  const handleExportAudio = useCallback(async () => {
+    try {
+      const { message } = await import('@tauri-apps/plugin-dialog')
+      await message('Audio export is coming in a future release.', {
+        title: 'Export audio',
+        kind: 'info',
+      })
+    } catch {}
+  }, [])
+
+  const handleAddAutomationTrack = useCallback(async () => {
+    try {
+      const { message } = await import('@tauri-apps/plugin-dialog')
+      await message('Automation tracks are coming in a future release.', {
+        title: 'Add automation track',
+        kind: 'info',
+      })
+    } catch {}
+  }, [])
+
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -184,27 +239,19 @@ export function App() {
           case 'd':
             if (e.shiftKey) break // handled below for dev panel
             e.preventDefault()
-            {
-              const sel = tracks.selectedClipId
-              if (sel) {
-                const t = tracks.tracks.find(tr => tr.clips.some(c => c.id === sel))
-                if (t) tracks.duplicateClip(t.id, sel)
-              }
-            }
+            duplicateSelection()
             return
           case 'c':
             e.preventDefault()
             tracks.copySelectedClips()
             return
+          case 'x':
+            e.preventDefault()
+            cutSelection()
+            return
           case 'v':
             e.preventDefault()
-            {
-              const sr = transport.sampleRate || 48000
-              const playheadTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
-              // Prefer the edit cursor when set, so Ctrl+V pastes where the user clicked.
-              const pasteAt = transport.editCursorTicks != null ? transport.editCursorTicks : playheadTicks
-              tracks.pasteClipsAtPosition(pasteAt)
-            }
+            pasteAtPlayhead()
             return
           case 'z':
             e.preventDefault()
@@ -298,7 +345,7 @@ export function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [handleOpenProject, handleSaveProjectAs, fetchTracks])
+  }, [handleOpenProject, handleSaveProjectAs, fetchTracks, duplicateSelection, cutSelection, pasteAtPlayhead])
 
   return (
     <div style={{
@@ -321,8 +368,16 @@ export function App() {
         onSaveProject={() => saveProject()}
         onSaveProjectAs={handleSaveProjectAs}
         onOpenProject={handleOpenProject}
-        onUndo={() => {}}
-        onRedo={() => {}}
+        onUndo={() => useTrackStore.getState().undo()}
+        onRedo={() => useTrackStore.getState().redo()}
+        onCut={cutSelection}
+        onCopy={() => useTrackStore.getState().copySelectedClips()}
+        onPaste={pasteAtPlayhead}
+        onDuplicate={duplicateSelection}
+        onSelectAll={() => useTrackStore.getState().selectAllClips()}
+        onAddAudioTrack={() => useTrackStore.getState().addAudioTrack()}
+        onAddInstrumentTrack={() => useTrackStore.getState().addMidiTrack()}
+        onAddAutomationTrack={handleAddAutomationTrack}
         onToggleBrowser={() => setShowBrowser(v => !v)}
         onTogglePlaylist={() => setShowPlaylist(v => !v)}
         onToggleChannelRack={() => setShowChannelRack(v => !v)}
@@ -330,6 +385,12 @@ export function App() {
         onToggleMixer={() => setShowMixer(v => !v)}
         onToggleRoadmap={() => setShowRoadmap(v => !v)}
         onOpenAudioSettings={() => setShowAudioSettings(true)}
+        onCheckForUpdates={checkForUpdates}
+        onToggleAbout={() => setShowAbout(v => !v)}
+        onExportAudio={handleExportAudio}
+        recentProjects={recentProjects}
+        onOpenRecentProject={handleOpenRecent}
+        onClearRecentProjects={() => useProjectStore.getState().clearRecent()}
         showBrowser={showBrowser}
         showPlaylist={showPlaylist}
         showChannelRack={showChannelRack}
@@ -351,52 +412,29 @@ export function App() {
         onSetHint={setHintText}
       />
 
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {showBrowser && <div data-testid="panel-browser"><Browser /></div>}
+      <MainLayout
+        showBrowser={showBrowser}
+        showPlaylist={showPlaylist}
+        showChannelRack={showChannelRack}
+        showPianoRoll={showPianoRoll}
+        showMixer={showMixer}
+      />
 
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {showChannelRack && (
-            <div data-testid="panel-channel-rack" style={{
-              flex: showPlaylist ? undefined : 1,
-              height: showPlaylist ? '55%' : undefined,
-              minHeight: 120,
-              borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
-            }}>
-              <ChannelRack />
-            </div>
-          )}
-
-          {showPianoRoll && (
-            <div data-testid="panel-piano-roll" style={{
-              flex: 1, minHeight: 200,
-              borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
-            }}>
-              <PianoRoll />
-            </div>
-          )}
-
-          {showPlaylist && (
-            <div data-testid="panel-playlist" style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
-              <TrackList />
-              <Arrangement />
-            </div>
-          )}
-
-          {showMixer && (
-            <div data-testid="panel-mixer" style={{
-              height: (showPlaylist || showChannelRack || showPianoRoll) ? 220 : 'auto',
-              flex: (showPlaylist || showChannelRack || showPianoRoll) ? undefined : 1,
-              borderTop: `1px solid ${hw.borderDark}`,
-            }}>
-              <MixerPanel />
-            </div>
-          )}
-        </div>
-      </div>
+      <FloatingPanels
+        showBrowser={showBrowser}
+        showChannelRack={showChannelRack}
+        showPianoRoll={showPianoRoll}
+        showMixer={showMixer}
+        onHideBrowser={() => setShowBrowser(false)}
+        onHideChannelRack={() => setShowChannelRack(false)}
+        onHidePianoRoll={() => setShowPianoRoll(false)}
+        onHideMixer={() => setShowMixer(false)}
+      />
 
       {/* Floating detached panels */}
       {showRoadmap && <Roadmap onClose={() => setShowRoadmap(false)} />}
       {showAudioSettings && <AudioSettings onClose={() => setShowAudioSettings(false)} />}
+      {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
       {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}
 
       {/* Update modal — same pattern as Hardwave Suite */}
@@ -414,5 +452,96 @@ export function App() {
         />
       )}
     </div>
+  )
+}
+
+function MainLayout({
+  showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
+}: {
+  showBrowser: boolean; showPlaylist: boolean;
+  showChannelRack: boolean; showPianoRoll: boolean; showMixer: boolean;
+}) {
+  const layout = usePanelLayoutStore(s => s.layout)
+  const browserDocked = showBrowser && !layout.browser.floating
+  const channelRackDocked = showChannelRack && !layout.channelRack.floating
+  const pianoRollDocked = showPianoRoll && !layout.pianoRoll.floating
+  const mixerDocked = showMixer && !layout.mixer.floating
+  return (
+    <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+      {browserDocked && <div data-testid="panel-browser" style={{ width: 240, flexShrink: 0, display: 'flex' }}><Browser /></div>}
+
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {channelRackDocked && (
+          <div data-testid="panel-channel-rack" style={{
+            flex: showPlaylist ? undefined : 1,
+            height: showPlaylist ? '55%' : undefined,
+            minHeight: 120,
+            borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
+          }}>
+            <ChannelRack />
+          </div>
+        )}
+
+        {pianoRollDocked && (
+          <div data-testid="panel-piano-roll" style={{
+            flex: 1, minHeight: 200,
+            borderBottom: showPlaylist ? `1px solid ${hw.borderDark}` : undefined,
+          }}>
+            <PianoRoll />
+          </div>
+        )}
+
+        {showPlaylist && (
+          <div data-testid="panel-playlist" style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
+            <TrackList />
+            <Arrangement />
+          </div>
+        )}
+
+        {mixerDocked && (
+          <div data-testid="panel-mixer" style={{
+            height: (showPlaylist || channelRackDocked || pianoRollDocked) ? 220 : 'auto',
+            flex: (showPlaylist || channelRackDocked || pianoRollDocked) ? undefined : 1,
+            borderTop: `1px solid ${hw.borderDark}`,
+          }}>
+            <MixerPanel />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function FloatingPanels({
+  showBrowser, showChannelRack, showPianoRoll, showMixer,
+  onHideBrowser, onHideChannelRack, onHidePianoRoll, onHideMixer,
+}: {
+  showBrowser: boolean; showChannelRack: boolean; showPianoRoll: boolean; showMixer: boolean;
+  onHideBrowser: () => void; onHideChannelRack: () => void; onHidePianoRoll: () => void; onHideMixer: () => void;
+}) {
+  const layout = usePanelLayoutStore(s => s.layout)
+  return (
+    <>
+      {showBrowser && layout.browser.floating && (
+        <FloatingWindow panelId="browser" title="Browser" onClose={onHideBrowser}>
+          <Browser />
+        </FloatingWindow>
+      )}
+      {showChannelRack && layout.channelRack.floating && (
+        <FloatingWindow panelId="channelRack" title="Channel Rack" onClose={onHideChannelRack}>
+          <div style={{ flex: 1, minWidth: 0 }}><ChannelRack /></div>
+        </FloatingWindow>
+      )}
+      {showPianoRoll && layout.pianoRoll.floating && (
+        <FloatingWindow panelId="pianoRoll" title="Piano Roll" onClose={onHidePianoRoll}>
+          <div style={{ flex: 1, minWidth: 0 }}><PianoRoll /></div>
+        </FloatingWindow>
+      )}
+      {showMixer && layout.mixer.floating && (
+        <FloatingWindow panelId="mixer" title="Mixer" onClose={onHideMixer}>
+          <div style={{ flex: 1, minWidth: 0 }}><MixerPanel /></div>
+        </FloatingWindow>
+      )}
+    </>
   )
 }

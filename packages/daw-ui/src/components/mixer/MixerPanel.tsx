@@ -1,6 +1,7 @@
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { useMeterStore, DEFAULT_TRACK_METER } from '../../stores/meterStore'
+import { DetachButton } from '../FloatingWindow'
 import { useEffect, useState, useCallback } from 'react'
 
 export function MixerPanel() {
@@ -15,9 +16,10 @@ export function MixerPanel() {
     <div style={{ height: '100%', background: 'rgba(255,255,255,0.02)', backdropFilter: hw.blur.sm, display: 'flex', flexDirection: 'column' }}>
       <div style={{
         height: 22, background: 'rgba(255,255,255,0.01)', borderBottom: `1px solid ${hw.border}`,
-        display: 'flex', alignItems: 'center', padding: '0 8px',
+        display: 'flex', alignItems: 'center', padding: '0 4px 0 8px', gap: 4,
       }}>
-        <span style={{ fontSize: 10, fontWeight: 600, color: hw.textMuted }}>Mixer</span>
+        <span style={{ flex: 1, fontSize: 10, fontWeight: 600, color: hw.textMuted }}>Mixer</span>
+        <DetachButton panelId="mixer" />
       </div>
 
       <div style={{

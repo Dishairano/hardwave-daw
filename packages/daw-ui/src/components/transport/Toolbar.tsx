@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { hw } from '../../theme'
 import { useTransportStore, SNAP_VALUES } from '../../stores/transportStore'
+import { useTrackStore } from '../../stores/trackStore'
+import { usePatternStore } from '../../stores/patternStore'
 
 type Tool = 'draw' | 'paint' | 'delete' | 'mute' | 'slip' | 'slice' | 'select' | 'zoom'
 
@@ -27,6 +29,14 @@ export function Toolbar(props: ToolbarProps) {
     snapValue, snapEnabled, setSnapValue, toggleSnap,
     horizontalZoom, setHorizontalZoom, zoomToFit,
   } = useTransportStore()
+  const undoTracks = useTrackStore(s => s.undo)
+  const redoTracks = useTrackStore(s => s.redo)
+  const patterns = usePatternStore(s => s.patterns)
+  const activePatternId = usePatternStore(s => s.activeId)
+  const setActivePattern = usePatternStore(s => s.setActive)
+  const prevPattern = usePatternStore(s => s.prevPattern)
+  const nextPattern = usePatternStore(s => s.nextPattern)
+  const activePattern = patterns.find(p => p.id === activePatternId) || patterns[0]
   const [activeTool, setActiveTool] = useState<Tool>('draw')
 
   const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
@@ -65,17 +75,48 @@ export function Toolbar(props: ToolbarProps) {
 
       <Sep />
 
+      {/* 1b. Undo / Redo */}
+      <div style={{ display: 'flex', gap: 2 }}>
+        <ToolBtn onEnter={hint('Undo (Ctrl+Z)')} onLeave={clear} onClick={() => undoTracks()}>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3.5 4.5 1.5 4.5 1.5 2.5" />
+            <path d="M2 6.5a4 4 0 1 0 1.2-2.8L1.5 5.2" />
+          </svg>
+        </ToolBtn>
+        <ToolBtn onEnter={hint('Redo (Ctrl+Y)')} onLeave={clear} onClick={() => redoTracks()}>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="8.5 4.5 10.5 4.5 10.5 2.5" />
+            <path d="M10 6.5a4 4 0 1 1-1.2-2.8L10.5 5.2" />
+          </svg>
+        </ToolBtn>
+      </div>
+
+      <Sep />
+
       {/* 2. Pattern selector */}
       <div style={{ display: 'flex', alignItems: 'center' }}>
-        <button style={navBtn} onMouseEnter={hint('Previous pattern')} onMouseLeave={clear}>
+        <button onClick={prevPattern} style={navBtn} onMouseEnter={hint('Previous pattern')} onMouseLeave={clear}>
           <svg width="5" height="7" viewBox="0 0 5 7"><path d="M4 0.5L1 3.5L4 6.5" stroke={hw.textMuted} strokeWidth="1.2" fill="none"/></svg>
         </button>
         <div style={{
-          ...lcd, padding: '0 8px', minWidth: 80,
+          ...lcd, padding: '0 4px', minWidth: 80,
         }} onMouseEnter={hint('Select pattern')} onMouseLeave={clear}>
-          <span style={{ fontSize: 10, color: hw.textSecondary }}>Pattern 1</span>
+          <select
+            value={activePattern.id}
+            onChange={(e) => setActivePattern(e.target.value)}
+            data-testid="toolbar-pattern-select"
+            style={{
+              background: 'transparent', border: 'none', color: hw.textSecondary,
+              fontSize: 10, outline: 'none', appearance: 'none', cursor: 'pointer',
+              width: '100%', fontFamily: "'Consolas', monospace",
+            }}
+          >
+            {patterns.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
         </div>
-        <button style={navBtn} onMouseEnter={hint('Next pattern')} onMouseLeave={clear}>
+        <button onClick={nextPattern} style={navBtn} onMouseEnter={hint('Next pattern')} onMouseLeave={clear}>
           <svg width="5" height="7" viewBox="0 0 5 7"><path d="M1 0.5L4 3.5L1 6.5" stroke={hw.textMuted} strokeWidth="1.2" fill="none"/></svg>
         </button>
       </div>
@@ -378,11 +419,12 @@ function Sep() {
   return <div style={{ width: 1, height: 26, background: hw.border, margin: '0 3px' }} />
 }
 
-function ToolBtn({ children, onEnter, onLeave }: {
-  children: React.ReactNode; onEnter: () => void; onLeave: () => void
+function ToolBtn({ children, onEnter, onLeave, onClick }: {
+  children: React.ReactNode; onEnter: () => void; onLeave: () => void; onClick?: () => void
 }) {
   return (
     <button
+      onClick={onClick}
       onMouseEnter={e => { onEnter(); e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
       onMouseLeave={e => { onLeave(); e.currentTarget.style.background = 'transparent' }}
       style={{

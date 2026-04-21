@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { hw } from '../../theme'
 import { PianoKeyboard } from './PianoKeyboard'
 import { VelocityLane } from './VelocityLane'
+import { DetachButton } from '../FloatingWindow'
 
 const PPQ = 960
 const NOTE_HEIGHT = 14
@@ -343,6 +344,7 @@ export function PianoRoll({ trackId, clipId }: PianoRollProps) {
           <option value={PPQ / 3}>1/8T</option>
           <option value={PPQ / 6}>1/16T</option>
         </select>
+        <DetachButton panelId="pianoRoll" />
       </div>
 
       {/* Main area */}
