@@ -104,22 +104,47 @@ export function VelocityLane({
     return () => obs.disconnect()
   }, [draw])
 
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const draggingNoteRef = useRef<number | null>(null)
+
+  const applyVelAt = useCallback((clientX: number, clientY: number, draggedIdx?: number) => {
     const rect = canvasRef.current!.getBoundingClientRect()
-    const my = e.clientY - rect.top
-    const mx = e.clientX - rect.left
+    const my = clientY - rect.top
+    const mx = clientX - rect.left
+    const newVel = Math.max(0.01, Math.min(1, 1 - my / height))
+
+    if (draggedIdx != null) {
+      onVelocityChange(draggedIdx, newVel)
+      return
+    }
 
     const barW = Math.max(3, 6 * pixelsPerTick)
-
     for (const note of notes) {
       const x = note.startTick * pixelsPerTick - scrollX
       if (mx >= x && mx <= x + barW) {
-        const newVel = Math.max(0.01, Math.min(1, 1 - my / height))
+        draggingNoteRef.current = note.index
         onVelocityChange(note.index, newVel)
         break
       }
     }
   }, [notes, scrollX, pixelsPerTick, height, onVelocityChange])
+
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    draggingNoteRef.current = null
+    applyVelAt(e.clientX, e.clientY)
+    if (draggingNoteRef.current == null) return
+    const onMove = (ev: MouseEvent) => {
+      const idx = draggingNoteRef.current
+      if (idx == null) return
+      applyVelAt(ev.clientX, ev.clientY, idx)
+    }
+    const onUp = () => {
+      draggingNoteRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [applyVelAt])
 
   return (
     <div ref={containerRef} data-testid="velocity-lane" style={{

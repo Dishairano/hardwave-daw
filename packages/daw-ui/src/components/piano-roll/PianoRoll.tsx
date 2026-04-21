@@ -58,6 +58,8 @@ export function PianoRoll() {
   const [snap, setSnap] = useState(DEFAULT_SNAP)
   const [selectedNotes, setSelectedNotes] = useState<Set<number>>(new Set())
   const [tool, setTool] = useState<'draw' | 'select' | 'erase'>('draw')
+  const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number; additive: boolean } | null>(null)
   const clipboardRef = useRef<Note[]>([])
   const focusedRef = useRef(false)
   const dragRef = useRef<{
@@ -216,7 +218,21 @@ export function PianoRoll() {
       ctx.fillStyle = 'rgba(255, 255, 255, 0.2)'
       ctx.fillRect(x + noteW - 4, y + 3, 2, NOTE_HEIGHT - 6)
     }
-  }, [notes, scrollX, scrollY, pixelsPerTick, selectedNotes])
+
+    if (marquee) {
+      const mx = Math.min(marquee.x1, marquee.x2)
+      const my = Math.min(marquee.y1, marquee.y2)
+      const mw = Math.abs(marquee.x2 - marquee.x1)
+      const mh = Math.abs(marquee.y2 - marquee.y1)
+      ctx.fillStyle = 'rgba(220,38,38,0.10)'
+      ctx.fillRect(mx, my, mw, mh)
+      ctx.strokeStyle = 'rgba(239,68,68,0.85)'
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 3])
+      ctx.strokeRect(mx + 0.5, my + 0.5, mw, mh)
+      ctx.setLineDash([])
+    }
+  }, [notes, scrollX, scrollY, pixelsPerTick, selectedNotes, marquee])
 
   useEffect(() => { draw() }, [draw])
 
@@ -306,11 +322,26 @@ export function PianoRoll() {
         }
       } catch (err) { console.warn('add_midi_note failed', err) }
     } else if (tool === 'select') {
-      setSelectedNotes(new Set())
+      marqueeRef.current = { x1: mx, y1: my, x2: mx, y2: my, additive: e.shiftKey }
+      setMarquee({ x1: mx, y1: my, x2: mx, y2: my })
+      if (!e.shiftKey) setSelectedNotes(new Set())
     }
   }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (marqueeRef.current) {
+      const rect = canvasRef.current!.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+      marqueeRef.current.x2 = mx
+      marqueeRef.current.y2 = my
+      setMarquee({
+        x1: marqueeRef.current.x1, y1: marqueeRef.current.y1,
+        x2: mx, y2: my,
+      })
+      return
+    }
+
     const drag = dragRef.current
     if (drag.mode === 'none') return
 
@@ -335,6 +366,34 @@ export function PianoRoll() {
   }, [pixelsPerTick, snap])
 
   const handleMouseUp = useCallback(async () => {
+    if (marqueeRef.current) {
+      const m = marqueeRef.current
+      const additive = m.additive
+      marqueeRef.current = null
+      const xLo = Math.min(m.x1, m.x2)
+      const xHi = Math.max(m.x1, m.x2)
+      const yLo = Math.min(m.y1, m.y2)
+      const yHi = Math.max(m.y1, m.y2)
+      setMarquee(null)
+      if (Math.abs(xHi - xLo) < 3 && Math.abs(yHi - yLo) < 3) return
+      const hit = new Set<number>()
+      for (const note of notes) {
+        const nx = xFromTick(note.startTick) - KEYBOARD_WIDTH
+        const ny = yFromPitch(note.pitch)
+        const nw = note.durationTicks * pixelsPerTick
+        if (nx < xHi && nx + nw > xLo && ny < yHi && ny + NOTE_HEIGHT > yLo) {
+          hit.add(note.index)
+        }
+      }
+      setSelectedNotes(prev => {
+        if (!additive) return hit
+        const next = new Set(prev)
+        for (const i of hit) next.add(i)
+        return next
+      })
+      return
+    }
+
     const drag = dragRef.current
     if (drag.mode === 'none' || drag.committed) {
       dragRef.current.mode = 'none'
@@ -411,6 +470,91 @@ export function PianoRoll() {
       await refreshNotes()
     } catch (err) { console.warn('update selection failed', err) }
   }, [activeTrackId, activeClipId, notes, refreshNotes])
+
+  const [toolsOpen, setToolsOpen] = useState(false)
+
+  const runTransform = useCallback(async (
+    kind: 'legato' | 'staccato' | 'humanizeTime' | 'humanizeVel' | 'humanizeLen' | 'flip' | 'reverse' | 'crescendo' | 'decrescendo',
+  ) => {
+    if (!activeTrackId || !activeClipId) return
+    setToolsOpen(false)
+    const sel = selectedNotes.size > 0
+      ? notes.filter(n => selectedNotes.has(n.index))
+      : notes
+    if (sel.length === 0) return
+    const sorted = [...sel].sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch)
+
+    const patches = new Map<number, Partial<Pick<Note, 'pitch' | 'startTick' | 'durationTicks' | 'velocity'>>>()
+
+    if (kind === 'legato') {
+      for (let i = 0; i < sorted.length; i++) {
+        const cur = sorted[i]
+        const next = sorted.slice(i + 1).find(n => n.startTick > cur.startTick)
+        if (!next) continue
+        const newDur = Math.max(snap, next.startTick - cur.startTick)
+        if (newDur !== cur.durationTicks) patches.set(cur.index, { durationTicks: newDur })
+      }
+    } else if (kind === 'staccato') {
+      for (const n of sorted) {
+        const newDur = Math.max(snap, Math.round(n.durationTicks * 0.5))
+        patches.set(n.index, { durationTicks: newDur })
+      }
+    } else if (kind === 'humanizeTime') {
+      for (const n of sorted) {
+        const jitter = Math.round((Math.random() - 0.5) * (snap * 0.25))
+        patches.set(n.index, { startTick: Math.max(0, n.startTick + jitter) })
+      }
+    } else if (kind === 'humanizeVel') {
+      for (const n of sorted) {
+        const jitter = (Math.random() - 0.5) * 0.2
+        patches.set(n.index, { velocity: Math.max(0.05, Math.min(1, n.velocity + jitter)) })
+      }
+    } else if (kind === 'humanizeLen') {
+      for (const n of sorted) {
+        const jitter = Math.round((Math.random() - 0.5) * (snap * 0.25))
+        patches.set(n.index, { durationTicks: Math.max(snap, n.durationTicks + jitter) })
+      }
+    } else if (kind === 'flip') {
+      const pitches = sorted.map(n => n.pitch)
+      const lo = Math.min(...pitches)
+      const hi = Math.max(...pitches)
+      const center = (lo + hi) / 2
+      for (const n of sorted) {
+        const newPitch = Math.max(0, Math.min(127, Math.round(2 * center - n.pitch)))
+        if (newPitch !== n.pitch) patches.set(n.index, { pitch: newPitch })
+      }
+    } else if (kind === 'reverse') {
+      const lo = sorted[0].startTick
+      const hi = Math.max(...sorted.map(n => n.startTick + n.durationTicks))
+      for (const n of sorted) {
+        const newStart = Math.max(0, lo + (hi - (n.startTick + n.durationTicks)))
+        if (newStart !== n.startTick) patches.set(n.index, { startTick: newStart })
+      }
+    } else if (kind === 'crescendo' || kind === 'decrescendo') {
+      const startVel = kind === 'crescendo' ? 0.3 : 1.0
+      const endVel = kind === 'crescendo' ? 1.0 : 0.3
+      const span = Math.max(1, sorted.length - 1)
+      for (let i = 0; i < sorted.length; i++) {
+        const t = i / span
+        const v = startVel + (endVel - startVel) * t
+        patches.set(sorted[i].index, { velocity: Math.max(0.05, Math.min(1, v)) })
+      }
+    }
+
+    if (patches.size === 0) return
+    try {
+      for (const [idx, patch] of patches) {
+        await invoke('update_midi_note', {
+          trackId: activeTrackId,
+          clipId: activeClipId,
+          noteIndex: idx,
+          ...patch,
+        })
+      }
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+    } catch (err) { console.warn('transform failed', err) }
+  }, [activeTrackId, activeClipId, notes, selectedNotes, snap, refreshNotes])
 
   const insertNotesFromClipboard = useCallback(async (originTick: number) => {
     if (!activeTrackId || !activeClipId) return
@@ -555,6 +699,13 @@ export function PianoRoll() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [handleKeyDown])
 
+  useEffect(() => {
+    if (!toolsOpen) return
+    const close = () => setToolsOpen(false)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [toolsOpen])
+
   const emptyHint = !activeTrackId || !activeClipId
     ? 'Select a MIDI track or double-click a MIDI clip to edit notes.'
     : null
@@ -619,6 +770,64 @@ export function PianoRoll() {
           <option value={PPQ / 3}>1/8T</option>
           <option value={PPQ / 6}>1/16T</option>
         </select>
+
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setToolsOpen(v => !v)}
+            title="Note tools: legato, humanize, flip, reverse…"
+            style={{
+              padding: '1px 8px', fontSize: 9, fontWeight: 600,
+              color: toolsOpen ? hw.accent : hw.textMuted,
+              background: toolsOpen ? hw.accentDim : 'rgba(255,255,255,0.04)',
+              border: `1px solid ${toolsOpen ? hw.accentGlow : hw.border}`,
+              borderRadius: hw.radius.sm, textTransform: 'uppercase',
+            }}
+          >
+            Tools ▾
+          </button>
+          {toolsOpen && (
+            <div
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute', top: 22, right: 0, zIndex: 500,
+                minWidth: 200, padding: 4,
+                background: 'rgba(12,12,18,0.96)',
+                border: `1px solid ${hw.borderLight}`,
+                borderRadius: hw.radius.md,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+                backdropFilter: hw.blur.md,
+              }}
+            >
+              {[
+                ['Legato', 'legato' as const, 'Extend notes to next'],
+                ['Staccato', 'staccato' as const, 'Halve durations'],
+                [null, null, null],
+                ['Humanize timing', 'humanizeTime' as const, 'Jitter start ±25%'],
+                ['Humanize velocity', 'humanizeVel' as const, 'Jitter velocity ±0.1'],
+                ['Humanize length', 'humanizeLen' as const, 'Jitter duration ±25%'],
+                [null, null, null],
+                ['Flip vertical', 'flip' as const, 'Invert pitch around center'],
+                ['Reverse', 'reverse' as const, 'Mirror notes in time'],
+                [null, null, null],
+                ['Crescendo', 'crescendo' as const, 'Ramp velocity up'],
+                ['Decrescendo', 'decrescendo' as const, 'Ramp velocity down'],
+              ].map(([label, key, hint], i) => {
+                if (label === null) {
+                  return <div key={`s${i}`} style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+                }
+                return (
+                  <ToolMenuItem
+                    key={key as string}
+                    label={label as string}
+                    hint={hint as string}
+                    onClick={() => runTransform(key as Parameters<typeof runTransform>[0])}
+                  />
+                )
+              })}
+            </div>
+          )}
+        </div>
+
         <DetachButton panelId="pianoRoll" />
       </div>
 
@@ -663,5 +872,26 @@ export function PianoRoll() {
         onVelocityChange={handleVelocityChange}
       />
     </div>
+  )
+}
+
+function ToolMenuItem({ label, hint, onClick }: { label: string; hint: string; onClick: () => void }) {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={onClick}
+      style={{
+        width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
+        padding: '4px 8px', border: 'none',
+        background: hover ? hw.accentDim : 'transparent',
+        color: hover ? hw.textBright : hw.textPrimary,
+        borderRadius: hw.radius.sm, cursor: 'pointer', textAlign: 'left',
+      }}
+    >
+      <span style={{ fontSize: 10, fontWeight: 600 }}>{label}</span>
+      <span style={{ fontSize: 8, color: hw.textFaint, marginTop: 1 }}>{hint}</span>
+    </button>
   )
 }
