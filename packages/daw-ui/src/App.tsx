@@ -28,6 +28,7 @@ import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
 import { useProjectStore } from './stores/projectStore'
+import { useShortcutsStore } from './stores/shortcutsStore'
 import { hw } from './theme'
 
 interface UpdateInfo {
@@ -471,140 +472,66 @@ export function App() {
       const transport = useTransportStore.getState()
       const tracks = useTrackStore.getState()
 
-      // Ctrl/Cmd shortcuts
-      if (e.ctrlKey || e.metaKey) {
-        switch (e.key.toLowerCase()) {
-          case 'n':
-            e.preventDefault()
-            handleNewProject()
-            return
-          case 'o':
-            e.preventDefault()
-            handleOpenProject()
-            return
-          case 's':
-            e.preventDefault()
-            if (e.shiftKey) {
-              handleSaveProjectAs()
-            } else {
-              handleSaveProject()
-            }
-            return
-          case 'a':
-            e.preventDefault()
-            tracks.selectAllClips()
-            return
-          case 'd':
-            if (e.shiftKey) break // handled below for dev panel
-            e.preventDefault()
-            duplicateSelection()
-            return
-          case 'c':
-            e.preventDefault()
-            tracks.copySelectedClips()
-            return
-          case 'x':
-            e.preventDefault()
-            cutSelection()
-            return
-          case 'v':
-            e.preventDefault()
-            pasteAtPlayhead()
-            return
-          case 'z':
-            e.preventDefault()
-            if (e.shiftKey) {
-              tracks.redo()
-            } else {
-              tracks.undo()
-            }
-            return
-          case 'y':
-            e.preventDefault()
-            tracks.redo()
-            return
-        }
+      // Dev-only shortcut — hardcoded, not user-rebindable.
+      if (e.code === 'KeyD' && e.ctrlKey && e.shiftKey) {
+        e.preventDefault()
+        setShowDevPanel(v => !v)
+        return
       }
 
-      switch (e.code) {
-        case 'Space':
-          e.preventDefault()
-          transport.togglePlayback()
-          break
-        case 'Delete':
-        case 'Backspace':
-          e.preventDefault()
-          tracks.deleteSelectedClips()
-          break
-        case 'KeyS':
-          if (e.ctrlKey || e.metaKey) break
-          e.preventDefault()
-          {
-            const sel = tracks.selectedClipId
-            if (!sel) break
-            const t = tracks.tracks.find(tr => tr.clips.some(c => c.id === sel))
-            if (!t) break
+      // Capture mode swallows every keypress so it can bind a new shortcut.
+      if (useShortcutsStore.getState().capturingFor) return
+
+      const action = useShortcutsStore.getState().matchEvent(e)
+      if (!action) return
+      e.preventDefault()
+
+      switch (action) {
+        case 'newProject':  handleNewProject(); return
+        case 'openProject': handleOpenProject(); return
+        case 'save':        handleSaveProject(); return
+        case 'saveAs':      handleSaveProjectAs(); return
+        case 'selectAll':   tracks.selectAllClips(); return
+        case 'duplicate':   duplicateSelection(); return
+        case 'copy':        tracks.copySelectedClips(); return
+        case 'cut':         cutSelection(); return
+        case 'paste':       pasteAtPlayhead(); return
+        case 'undo':        tracks.undo(); return
+        case 'redo':        tracks.redo(); return
+        case 'togglePlay':  transport.togglePlayback(); return
+        case 'deleteSelection': tracks.deleteSelectedClips(); return
+        case 'splitClip': {
+          const sel = tracks.selectedClipId
+          if (!sel) return
+          const t = tracks.tracks.find(tr => tr.clips.some(c => c.id === sel))
+          if (!t) return
+          const sr = transport.sampleRate || 48000
+          const playheadTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
+          const atTicks = transport.editCursorTicks != null ? transport.editCursorTicks : playheadTicks
+          const clip = t.clips.find(c => c.id === sel)
+          if (clip && atTicks > clip.position_ticks && atTicks < clip.position_ticks + clip.length_ticks) {
+            tracks.splitClip(t.id, sel, atTicks)
+          }
+          return
+        }
+        case 'gotoStart': transport.setPosition(0); return
+        case 'gotoEnd': {
+          const allClips = tracks.tracks.flatMap(t => t.clips || [])
+          if (allClips.length > 0) {
+            const lastEnd = Math.max(...allClips.map(c => c.position_ticks + c.length_ticks))
             const sr = transport.sampleRate || 48000
-            const playheadTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
-            const atTicks = transport.editCursorTicks != null ? transport.editCursorTicks : playheadTicks
-            const clip = t.clips.find(c => c.id === sel)
-            if (clip && atTicks > clip.position_ticks && atTicks < clip.position_ticks + clip.length_ticks) {
-              tracks.splitClip(t.id, sel, atTicks)
-            }
+            const samplesPerTick = (sr * 60) / (transport.bpm * 960)
+            transport.setPosition(Math.round(lastEnd * samplesPerTick))
           }
-          break
-        case 'Home':
-          e.preventDefault()
-          transport.setPosition(0)
-          break
-        case 'End':
-          e.preventDefault()
-          {
-            const allClips = tracks.tracks.flatMap(t => t.clips || [])
-            if (allClips.length > 0) {
-              const lastEnd = Math.max(...allClips.map(c => c.position_ticks + c.length_ticks))
-              const sr = transport.sampleRate || 48000
-              const samplesPerTick = (sr * 60) / (transport.bpm * 960)
-              transport.setPosition(Math.round(lastEnd * samplesPerTick))
-            }
-          }
-          break
-        case 'KeyL':
-          e.preventDefault()
-          transport.toggleLoop()
-          break
-        case 'F5':
-          e.preventDefault()
-          setShowPlaylist(v => !v)
-          break
-        case 'F6':
-          e.preventDefault()
-          setShowChannelRack(v => !v)
-          break
-        case 'F7':
-          e.preventDefault()
-          setShowPianoRoll(v => !v)
-          break
-        case 'F8':
-          e.preventDefault()
-          setShowBrowser(v => !v)
-          break
-        case 'F9':
-          e.preventDefault()
-          setShowMixer(v => !v)
-          break
-        case 'Slash':
-          if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            e.preventDefault()
-            setShowShortcuts(v => !v)
-          }
-          break
-        case 'KeyD': // DEV ONLY — Ctrl+Shift+D toggles dev panel
-          if (e.ctrlKey && e.shiftKey) {
-            e.preventDefault()
-            setShowDevPanel(v => !v)
-          }
-          break
+          return
+        }
+        case 'toggleLoop':            transport.toggleLoop(); return
+        case 'togglePlaylist':        setShowPlaylist(v => !v); return
+        case 'toggleChannelRack':     setShowChannelRack(v => !v); return
+        case 'togglePianoRoll':       setShowPianoRoll(v => !v); return
+        case 'toggleBrowser':         setShowBrowser(v => !v); return
+        case 'toggleMixer':           setShowMixer(v => !v); return
+        case 'toggleShortcutsPanel':  setShowShortcuts(v => !v); return
       }
     }
     window.addEventListener('keydown', handler)

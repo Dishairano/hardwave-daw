@@ -1,127 +1,144 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { hw } from '../theme'
-
-interface Shortcut {
-  keys: string
-  label: string
-}
+import {
+  ACTIONS, PRESETS,
+  useShortcutsStore,
+  bindingLabel,
+  isReservedBinding,
+  type ActionId, type Binding,
+} from '../stores/shortcutsStore'
 
 interface Category {
   name: string
-  items: Shortcut[]
+  actions: typeof ACTIONS
 }
 
-const CATEGORIES: Category[] = [
-  {
-    name: 'Transport',
-    items: [
-      { keys: 'Space', label: 'Play / pause' },
-      { keys: 'Home', label: 'Return to start' },
-      { keys: 'End', label: 'Jump to project end' },
-      { keys: 'L', label: 'Toggle loop region' },
-      { keys: 'Alt + →', label: 'Jump to next marker' },
-      { keys: 'Alt + ←', label: 'Jump to previous marker' },
-      { keys: 'Shift + M', label: 'Drop marker at playhead' },
-    ],
-  },
-  {
-    name: 'Panels',
-    items: [
-      { keys: 'F5', label: 'Toggle Playlist' },
-      { keys: 'F6', label: 'Toggle Channel Rack' },
-      { keys: 'F7', label: 'Toggle Piano Roll' },
-      { keys: 'F8', label: 'Toggle Browser' },
-      { keys: 'F9', label: 'Toggle Mixer' },
-      { keys: '?', label: 'Toggle this help panel' },
-    ],
-  },
-  {
-    name: 'Project',
-    items: [
-      { keys: 'Ctrl + N', label: 'New project' },
-      { keys: 'Ctrl + O', label: 'Open project' },
-      { keys: 'Ctrl + S', label: 'Save project' },
-      { keys: 'Ctrl + Shift + S', label: 'Save project as…' },
-      { keys: 'Ctrl + Z', label: 'Undo' },
-      { keys: 'Ctrl + Shift + Z / Ctrl + Y', label: 'Redo' },
-    ],
-  },
-  {
-    name: 'Arrangement — clips',
-    items: [
-      { keys: 'Ctrl + C / X / V', label: 'Copy / cut / paste clips' },
-      { keys: 'Ctrl + D', label: 'Duplicate selected clip' },
-      { keys: 'Delete / Backspace', label: 'Delete selected clips' },
-      { keys: 'S', label: 'Split clip at playhead / edit cursor' },
-      { keys: 'Click ruler', label: 'Seek playhead' },
-      { keys: 'Right-click ruler', label: 'Marker menu / add marker' },
-      { keys: 'Ctrl + Scroll', label: 'Horizontal zoom' },
-      { keys: 'Ctrl + Shift + Scroll', label: 'Vertical zoom (track height)' },
-    ],
-  },
-  {
-    name: 'Piano Roll — notes',
-    items: [
-      { keys: 'Ctrl + A', label: 'Select all notes' },
-      { keys: 'Shift + Click', label: 'Toggle a note in the selection' },
-      { keys: 'Delete', label: 'Delete selected notes' },
-      { keys: '↑ / ↓', label: 'Transpose ±1 semitone' },
-      { keys: 'Ctrl + ↑ / ↓', label: 'Transpose ±1 octave' },
-      { keys: '← / →', label: 'Nudge by grid step' },
-      { keys: 'Ctrl + D', label: 'Duplicate selection' },
-      { keys: 'Ctrl + V', label: 'Paste at playhead' },
-      { keys: 'Ctrl + Shift + V', label: 'Paste at original position' },
-      { keys: 'Ctrl + Q', label: 'Quantize selection' },
-      { keys: 'Ctrl + Alt + A', label: 'Arpeggiate selection' },
-    ],
-  },
-  {
-    name: 'Piano Roll — tools',
-    items: [
-      { keys: 'D', label: 'Draw tool' },
-      { keys: 'S', label: 'Select tool' },
-      { keys: 'E', label: 'Eraser tool' },
-      { keys: 'C', label: 'Chord stamp' },
-      { keys: 'Alt + Click', label: 'Switch to ghost-note source pattern' },
-      { keys: 'Middle-mouse drag', label: 'Pan canvas' },
-    ],
-  },
-  {
-    name: 'Mixer & tracks',
-    items: [
-      { keys: 'Double-click track name', label: 'Rename track' },
-      { keys: 'Right-click track / strip', label: 'Open context menu (color, mute, delete…)' },
-      { keys: 'Click strip color bar', label: 'Change track color' },
-    ],
-  },
-]
+function groupByCategory(): Category[] {
+  const map = new Map<string, typeof ACTIONS>()
+  for (const a of ACTIONS) {
+    const list = map.get(a.category) ?? []
+    list.push(a)
+    map.set(a.category, list)
+  }
+  return Array.from(map.entries()).map(([name, actions]) => ({ name, actions }))
+}
+
+const CATEGORIES = groupByCategory()
 
 export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [query, setQuery] = useState('')
+  const bindings = useShortcutsStore(s => s.bindings)
+  const capturingFor = useShortcutsStore(s => s.capturingFor)
+  const startCapture = useShortcutsStore(s => s.startCapture)
+  const setBinding = useShortcutsStore(s => s.setBinding)
+  const resetAll = useShortcutsStore(s => s.resetAll)
+  const loadPreset = useShortcutsStore(s => s.loadPreset)
+  const exportJson = useShortcutsStore(s => s.exportJson)
+  const importJson = useShortcutsStore(s => s.importJson)
+  const findConflict = useShortcutsStore(s => s.findConflict)
 
+  const [banner, setBanner] = useState<{ kind: 'info' | 'error' | 'warn'; text: string } | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Escape to close, even while capturing (capture aborts first)
   useEffect(() => {
     if (!open) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); onClose() }
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      if (useShortcutsStore.getState().capturingFor) {
+        startCapture(null)
+      } else {
+        onClose()
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [open, onClose])
+  }, [open, onClose, startCapture])
 
-  const filtered = useMemo(() => {
+  // Capture handler — when a row is "capturing", swallow the next key event
+  useEffect(() => {
+    if (!open || !capturingFor) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') return // Escape already handled above (cancels capture)
+      // Ignore bare modifier presses — user is still composing the combo
+      if (['Control', 'Shift', 'Alt', 'Meta', 'OS'].includes(e.key)) return
+      e.preventDefault()
+      e.stopPropagation()
+      const b: Binding = {
+        code: e.code,
+        ctrl: e.ctrlKey || e.metaKey,
+        shift: e.shiftKey,
+        alt: e.altKey,
+      }
+      if (isReservedBinding(b)) {
+        setBanner({ kind: 'error', text: 'That combination cannot be used as a shortcut.' })
+        startCapture(null)
+        return
+      }
+      const conflict = findConflict(b, capturingFor)
+      if (conflict) {
+        const otherLabel = ACTIONS.find(a => a.id === conflict)?.label ?? conflict
+        setBanner({
+          kind: 'warn',
+          text: `${bindingLabel(b)} was bound to “${otherLabel}” — that shortcut is now unassigned (reset to default).`,
+        })
+        // Reset the conflicting action to its default; then assign new binding
+        setBinding(conflict, null)
+        setBinding(capturingFor, b)
+      } else {
+        setBanner(null)
+        setBinding(capturingFor, b)
+      }
+    }
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
+  }, [open, capturingFor, setBinding, startCapture, findConflict])
+
+  const filteredCategories = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return CATEGORIES
     return CATEGORIES
       .map(cat => ({
         ...cat,
-        items: cat.items.filter(it =>
-          it.keys.toLowerCase().includes(q) || it.label.toLowerCase().includes(q)
+        actions: cat.actions.filter(a =>
+          a.label.toLowerCase().includes(q)
+          || bindingLabel(bindings[a.id]).toLowerCase().includes(q),
         ),
       }))
-      .filter(cat => cat.items.length > 0)
-  }, [query])
+      .filter(cat => cat.actions.length > 0)
+  }, [query, bindings])
 
   if (!open) return null
+
+  const downloadJson = () => {
+    const blob = new Blob([exportJson()], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'hardwave-shortcuts.json'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setBanner({ kind: 'info', text: 'Shortcut map exported to hardwave-shortcuts.json.' })
+  }
+
+  const onImportFile = (file: File) => {
+    file.text().then(text => {
+      const result = importJson(text)
+      if (result.ok) {
+        setBanner({ kind: 'info', text: 'Shortcut map imported successfully.' })
+      } else {
+        setBanner({ kind: 'error', text: `Import failed: ${result.error}` })
+      }
+    })
+  }
+
+  const bannerColor =
+    banner?.kind === 'error' ? hw.red :
+    banner?.kind === 'warn' ? hw.yellow :
+    hw.accent
 
   return (
     <div
@@ -135,17 +152,18 @@ export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () =
       <div
         onMouseDown={e => e.stopPropagation()}
         style={{
-          width: 'min(720px, 92vw)', maxHeight: '80vh',
+          width: 'min(760px, 92vw)', maxHeight: '82vh',
           display: 'flex', flexDirection: 'column',
           background: 'rgba(12,12,18,0.98)', border: `1px solid ${hw.borderLight}`,
           borderRadius: hw.radius.lg, boxShadow: '0 16px 48px rgba(0,0,0,0.6)',
         }}
       >
+        {/* Header */}
         <div style={{
           padding: '12px 16px', borderBottom: `1px solid ${hw.border}`,
-          display: 'flex', alignItems: 'center', gap: 12,
+          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
         }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: hw.textPrimary }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: hw.textPrimary, marginRight: 'auto' }}>
             Keyboard shortcuts
           </div>
           <input
@@ -154,41 +172,88 @@ export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () =
             value={query}
             onChange={e => setQuery(e.target.value)}
             style={{
-              flex: 1, fontSize: 11, color: hw.textPrimary,
+              flex: '0 0 180px', fontSize: 11, color: hw.textPrimary,
               background: 'rgba(255,255,255,0.04)',
               border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
               padding: '4px 8px', outline: 'none',
             }}
           />
-          <button
-            onClick={() => printShortcuts(filtered)}
-            title="Open a printable cheat sheet in a new window"
+          <select
+            defaultValue=""
+            onChange={e => {
+              const id = e.target.value
+              if (!id) return
+              loadPreset(id)
+              setBanner({ kind: 'info', text: `Loaded preset: ${PRESETS.find(p => p.id === id)?.name}` })
+              e.target.value = ''
+            }}
             style={{
-              padding: '3px 10px', fontSize: 10, fontWeight: 600,
-              color: hw.textMuted, background: 'rgba(255,255,255,0.04)',
-              border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, cursor: 'pointer',
+              fontSize: 11, color: hw.textPrimary,
+              background: 'rgba(255,255,255,0.04)',
+              border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+              padding: '3px 6px', outline: 'none',
             }}
           >
-            Print
-          </button>
-          <button
-            onClick={onClose}
-            style={{
-              padding: '3px 10px', fontSize: 10, fontWeight: 600,
-              color: hw.textMuted, background: 'rgba(255,255,255,0.04)',
-              border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, cursor: 'pointer',
+            <option value="" disabled>Load preset…</option>
+            {PRESETS.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <HeaderBtn onClick={downloadJson}>Export</HeaderBtn>
+          <HeaderBtn onClick={() => fileInputRef.current?.click()}>Import</HeaderBtn>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            style={{ display: 'none' }}
+            onChange={e => {
+              const f = e.target.files?.[0]
+              if (f) onImportFile(f)
+              e.target.value = ''
             }}
-          >
-            Close
-          </button>
+          />
+          <HeaderBtn onClick={() => {
+            resetAll()
+            setBanner({ kind: 'info', text: 'All shortcuts reset to defaults.' })
+          }}>Reset</HeaderBtn>
+          <HeaderBtn onClick={() => printShortcuts(filteredCategories, bindings)}>Print</HeaderBtn>
+          <HeaderBtn onClick={onClose}>Close</HeaderBtn>
         </div>
+
+        {banner && (
+          <div style={{
+            padding: '8px 16px', fontSize: 11,
+            background: `${bannerColor}15`,
+            borderBottom: `1px solid ${bannerColor}40`,
+            color: bannerColor,
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span style={{ flex: 1 }}>{banner.text}</span>
+            <span
+              onClick={() => setBanner(null)}
+              style={{ cursor: 'pointer', opacity: 0.7, fontSize: 12 }}
+            >✕</span>
+          </div>
+        )}
+
+        {capturingFor && (
+          <div style={{
+            padding: '8px 16px', fontSize: 11,
+            background: hw.accentDim,
+            borderBottom: `1px solid ${hw.accent}40`,
+            color: hw.accentLight,
+          }}>
+            Press a key combo for <strong>{ACTIONS.find(a => a.id === capturingFor)?.label}</strong> — Esc to cancel.
+          </div>
+        )}
+
         <div style={{ overflowY: 'auto', padding: 12 }}>
-          {filtered.length === 0 && (
+          {filteredCategories.length === 0 && (
             <div style={{ padding: 24, textAlign: 'center', color: hw.textFaint, fontSize: 11 }}>
               No shortcuts match "{query}"
             </div>
           )}
-          {filtered.map(cat => (
+          {filteredCategories.map(cat => (
             <div key={cat.name} style={{ marginBottom: 14 }}>
               <div style={{
                 fontSize: 9, color: hw.textFaint, letterSpacing: 0.6,
@@ -196,23 +261,52 @@ export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () =
               }}>
                 {cat.name}
               </div>
-              {cat.items.map(it => (
-                <div key={it.keys + it.label} style={{
-                  display: 'flex', alignItems: 'center', gap: 12,
-                  padding: '4px 8px', borderRadius: hw.radius.sm,
-                  background: 'rgba(255,255,255,0.015)', marginBottom: 2,
-                }}>
-                  <span style={{
-                    fontSize: 10, fontFamily: 'ui-monospace, Menlo, monospace',
-                    color: hw.accent, minWidth: 180,
-                  }}>
-                    {it.keys}
-                  </span>
-                  <span style={{ fontSize: 11, color: hw.textSecondary, flex: 1 }}>
-                    {it.label}
-                  </span>
-                </div>
-              ))}
+              {cat.actions.map(a => {
+                const isCapturing = capturingFor === a.id
+                return (
+                  <div
+                    key={a.id}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      padding: '4px 8px', borderRadius: hw.radius.sm,
+                      background: isCapturing ? hw.accentDim : 'rgba(255,255,255,0.015)',
+                      border: `1px solid ${isCapturing ? hw.accent : 'transparent'}`,
+                      marginBottom: 2,
+                    }}
+                  >
+                    <span
+                      onClick={() => startCapture(isCapturing ? null : a.id)}
+                      style={{
+                        fontSize: 10, fontFamily: 'ui-monospace, Menlo, monospace',
+                        color: isCapturing ? hw.accentLight : hw.accent,
+                        minWidth: 200, padding: '2px 6px',
+                        background: isCapturing ? 'rgba(220,38,38,0.25)' : 'rgba(255,255,255,0.04)',
+                        border: `1px solid ${isCapturing ? hw.accent : hw.border}`,
+                        borderRadius: hw.radius.sm, cursor: 'pointer',
+                        textAlign: 'center',
+                      }}
+                      title="Click to rebind"
+                    >
+                      {isCapturing ? 'Press a key…' : bindingLabel(bindings[a.id])}
+                    </span>
+                    <span style={{ fontSize: 11, color: hw.textSecondary, flex: 1 }}>
+                      {a.label}
+                    </span>
+                    <span
+                      onClick={() => {
+                        setBinding(a.id, null)
+                        setBanner({ kind: 'info', text: `“${a.label}” restored to default.` })
+                      }}
+                      style={{
+                        fontSize: 9, color: hw.textFaint,
+                        padding: '2px 6px', borderRadius: hw.radius.sm,
+                        cursor: 'pointer', opacity: 0.6,
+                      }}
+                      title="Reset this shortcut to default"
+                    >↺</span>
+                  </div>
+                )
+              })}
             </div>
           ))}
         </div>
@@ -221,13 +315,28 @@ export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () =
   )
 }
 
-function printShortcuts(cats: Category[]) {
+function HeaderBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '3px 10px', fontSize: 10, fontWeight: 600,
+        color: hw.textMuted, background: 'rgba(255,255,255,0.04)',
+        border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, cursor: 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+function printShortcuts(cats: Category[], bindings: Record<ActionId, Binding>) {
   const win = window.open('', '_blank', 'width=720,height=900')
   if (!win) return
   const rows = cats
     .map(c => {
-      const items = c.items
-        .map(it => `<tr><td class="k">${escapeHtml(it.keys)}</td><td>${escapeHtml(it.label)}</td></tr>`)
+      const items = c.actions
+        .map(a => `<tr><td class="k">${escapeHtml(bindingLabel(bindings[a.id]))}</td><td>${escapeHtml(a.label)}</td></tr>`)
         .join('')
       return `<h2>${escapeHtml(c.name)}</h2><table>${items}</table>`
     })
