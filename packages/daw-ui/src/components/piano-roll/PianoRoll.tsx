@@ -55,6 +55,35 @@ function snapPitchToScale(pitch: number, root: number, type: keyof typeof SCALE_
 
 const NOTE_NAMES_SHARP = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
 
+const CHORD_TYPES: Record<string, { name: string; intervals: number[] }> = {
+  maj:      { name: 'Major',       intervals: [0, 4, 7] },
+  min:      { name: 'Minor',       intervals: [0, 3, 7] },
+  dim:      { name: 'Diminished',  intervals: [0, 3, 6] },
+  aug:      { name: 'Augmented',   intervals: [0, 4, 8] },
+  maj7:     { name: 'Maj 7',       intervals: [0, 4, 7, 11] },
+  min7:     { name: 'Min 7',       intervals: [0, 3, 7, 10] },
+  dom7:     { name: 'Dom 7',       intervals: [0, 4, 7, 10] },
+  dim7:     { name: 'Dim 7',       intervals: [0, 3, 6, 9] },
+  halfDim7: { name: 'Half-dim 7',  intervals: [0, 3, 6, 10] },
+  sus2:     { name: 'Sus 2',       intervals: [0, 2, 7] },
+  sus4:     { name: 'Sus 4',       intervals: [0, 5, 7] },
+  add9:     { name: 'Add 9',       intervals: [0, 4, 7, 14] },
+  min9:     { name: 'Min 9',       intervals: [0, 3, 7, 10, 14] },
+  maj9:     { name: 'Maj 9',       intervals: [0, 4, 7, 11, 14] },
+  power:    { name: 'Power (5)',   intervals: [0, 7] },
+}
+
+function applyInversion(intervals: number[], inv: number): number[] {
+  if (inv <= 0 || intervals.length < 2) return intervals
+  const n = Math.min(inv, intervals.length - 1)
+  const result = intervals.slice()
+  for (let i = 0; i < n; i++) {
+    const first = result.shift()!
+    result.push(first + 12)
+  }
+  return result
+}
+
 interface Note {
   index: number
   startTick: number
@@ -96,7 +125,9 @@ export function PianoRoll() {
   const [pixelsPerTick, setPixelsPerTick] = useState(0.12)
   const [snap, setSnap] = useState(DEFAULT_SNAP)
   const [selectedNotes, setSelectedNotes] = useState<Set<number>>(new Set())
-  const [tool, setTool] = useState<'draw' | 'select' | 'erase'>('draw')
+  const [tool, setTool] = useState<'draw' | 'select' | 'erase' | 'chord'>('draw')
+  const [chordType, setChordType] = useState<keyof typeof CHORD_TYPES>('maj')
+  const [chordInversion, setChordInversion] = useState<number>(0)
   const [scaleRoot, setScaleRoot] = useState<number>(0)
   const [scaleType, setScaleType] = useState<keyof typeof SCALE_TYPES>('chromatic')
   const [snapToScale, setSnapToScale] = useState(false)
@@ -344,6 +375,34 @@ export function PianoRoll() {
       }
     }
 
+    if (tool === 'chord' && pitch >= 0 && pitch < 128) {
+      const snappedTick = Math.max(0, snapTick(tick))
+      const rootPitch = snapToScale && scaleType !== 'chromatic'
+        ? snapPitchToScale(pitch, scaleRoot, scaleType)
+        : pitch
+      const intervals = applyInversion(CHORD_TYPES[chordType].intervals, chordInversion)
+      const newIndices: number[] = []
+      try {
+        for (const iv of intervals) {
+          const p = rootPitch + iv
+          if (p < 0 || p > 127) continue
+          const idx = await invoke<number>('add_midi_note', {
+            trackId: activeTrackId,
+            clipId: activeClipId,
+            pitch: p,
+            startTick: snappedTick,
+            durationTicks: snap,
+            velocity: 0.8,
+          })
+          newIndices.push(idx)
+        }
+        useProjectStore.getState().markDirty()
+        await refreshNotes()
+        setSelectedNotes(new Set(newIndices))
+      } catch (err) { console.warn('chord stamp failed', err) }
+      return
+    }
+
     if (tool === 'draw' && pitch >= 0 && pitch < 128) {
       const snappedTick = Math.max(0, snapTick(tick))
       const drawPitch = snapToScale ? snapPitchToScale(pitch, scaleRoot, scaleType) : pitch
@@ -380,7 +439,7 @@ export function PianoRoll() {
       setMarquee({ x1: mx, y1: my, x2: mx, y2: my })
       if (!e.shiftKey) setSelectedNotes(new Set())
     }
-  }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes, snapToScale, scaleRoot, scaleType])
+  }, [notes, tool, snap, scrollX, scrollY, pixelsPerTick, activeTrackId, activeClipId, refreshNotes, snapToScale, scaleRoot, scaleType, chordType, chordInversion])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (marqueeRef.current) {
@@ -793,7 +852,7 @@ export function PianoRoll() {
         <div style={{ flex: 1 }} />
 
         <div style={{ display: 'flex', gap: 1 }}>
-          {(['draw', 'select', 'erase'] as const).map(t => (
+          {(['draw', 'select', 'erase', 'chord'] as const).map(t => (
             <button key={t} onClick={() => setTool(t)} style={{
               padding: '1px 6px', fontSize: 9, fontWeight: 600,
               color: tool === t ? hw.accent : hw.textFaint,
@@ -806,6 +865,38 @@ export function PianoRoll() {
             </button>
           ))}
         </div>
+
+        {tool === 'chord' && (
+          <>
+            <select
+              value={chordType}
+              onChange={e => setChordType(e.target.value as keyof typeof CHORD_TYPES)}
+              title="Chord type"
+              style={{
+                fontSize: 9, background: 'rgba(255,255,255,0.04)', color: hw.accent,
+                border: `1px solid ${hw.accentGlow}`, borderRadius: hw.radius.sm, padding: '1px 4px',
+              }}
+            >
+              {Object.entries(CHORD_TYPES).map(([k, v]) => (
+                <option key={k} value={k}>{v.name}</option>
+              ))}
+            </select>
+            <select
+              value={chordInversion}
+              onChange={e => setChordInversion(Number(e.target.value))}
+              title="Chord inversion"
+              style={{
+                fontSize: 9, background: 'rgba(255,255,255,0.04)', color: hw.textMuted,
+                border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '1px 4px',
+              }}
+            >
+              <option value={0}>Root</option>
+              <option value={1}>1st inv</option>
+              <option value={2}>2nd inv</option>
+              <option value={3}>3rd inv</option>
+            </select>
+          </>
+        )}
 
         <select
           value={scaleRoot}
@@ -947,7 +1038,7 @@ export function PianoRoll() {
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
             onWheel={handleWheel}
-            style={{ display: 'block', cursor: tool === 'draw' ? 'crosshair' : tool === 'erase' ? 'not-allowed' : 'default' }}
+            style={{ display: 'block', cursor: tool === 'draw' || tool === 'chord' ? 'crosshair' : tool === 'erase' ? 'not-allowed' : 'default' }}
           />
         </div>
 
