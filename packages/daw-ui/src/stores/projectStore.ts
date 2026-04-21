@@ -82,6 +82,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const name = path.split(/[\\/]/).pop()?.replace('.hwp', '') || 'Untitled'
     set({ filePath: path, projectName: name, dirty: false })
     get().pushRecent(path)
+    reportMissingAudioSources().catch(() => {})
   },
 
   getInfo: async () => {
@@ -107,3 +108,45 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ recentProjects: [] })
   },
 }))
+
+// Scan current project's audio clips and warn about sources that can't be read.
+// Runs HEAD fetches through convertFileSrc — no backend changes required.
+async function reportMissingAudioSources() {
+  const [{ useTrackStore }, { useNotificationStore }, { convertFileSrc }] = await Promise.all([
+    import('./trackStore'),
+    import('./notificationStore'),
+    import('@tauri-apps/api/core'),
+  ])
+  await useTrackStore.getState().fetchTracks()
+  const tracks = useTrackStore.getState().tracks
+  const seen = new Set<string>()
+  const candidates: string[] = []
+  for (const t of tracks) {
+    if (t.kind !== 'Audio') continue
+    for (const c of t.clips) {
+      if (c.kind !== 'audio') continue
+      const p = c.source_id
+      if (!p || seen.has(p)) continue
+      seen.add(p)
+      candidates.push(p)
+    }
+  }
+  if (candidates.length === 0) return
+  const checks = await Promise.all(candidates.map(async (p) => {
+    try {
+      const resp = await fetch(convertFileSrc(p), { method: 'HEAD' })
+      return resp.ok ? null : p
+    } catch {
+      return p
+    }
+  }))
+  const missing = checks.filter((x): x is string => x !== null)
+  if (missing.length === 0) return
+  const { push } = useNotificationStore.getState()
+  const preview = missing.slice(0, 4).map(p => `• ${p.split(/[\\/]/).pop() || p}`).join('\n')
+  const more = missing.length > 4 ? `\n…and ${missing.length - 4} more` : ''
+  push('warning',
+    `${missing.length} audio file${missing.length === 1 ? '' : 's'} missing`,
+    { detail: preview + more, sticky: true },
+  )
+}

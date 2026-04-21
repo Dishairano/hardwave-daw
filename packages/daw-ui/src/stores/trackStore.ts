@@ -239,13 +239,23 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     set(s => ({ trackHeights: { ...s.trackHeights, [id]: Math.max(24, Math.min(240, height)) } })),
 
   importAudioFile: async (trackId, filePath, positionTicks) => {
-    const result = await mut<ImportedClip>('import_audio_file', {
-      trackId,
-      filePath,
-      positionTicks: positionTicks ?? null,
-    })
-    await get().fetchTracks()
-    return result
+    try {
+      const result = await mut<ImportedClip>('import_audio_file', {
+        trackId,
+        filePath,
+        positionTicks: positionTicks ?? null,
+      })
+      await get().fetchTracks()
+      return result
+    } catch (err) {
+      const { useNotificationStore } = await import('./notificationStore')
+      const name = filePath.split(/[\\/]/).pop() || filePath
+      useNotificationStore.getState().push('warning',
+        `Could not import "${name}"`,
+        { detail: String(err), sticky: true },
+      )
+      throw err
+    }
   },
 
   moveClip: async (trackId, clipId, newPositionTicks) => {

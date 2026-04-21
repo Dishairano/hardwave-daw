@@ -17,6 +17,7 @@ import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChan
 import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
 import { useUserTemplateStore } from './stores/userTemplateStore'
 import { WelcomeScreen, shouldSkipWelcome } from './components/WelcomeScreen'
+import { NotificationHost } from './components/NotificationHost'
 import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecoveryDialog'
 import { ShortcutsPanel } from './components/ShortcutsPanel'
 import { invoke } from '@tauri-apps/api/core'
@@ -731,6 +732,8 @@ export function App() {
           onChoice={handleCrashChoice}
         />
       )}
+
+      <NotificationHost />
 
       {/* Update modal — same pattern as Hardwave Suite */}
       {updateInfo.available && !updateInfo.dismissed && (
