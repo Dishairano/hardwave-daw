@@ -37,6 +37,10 @@ fn default_stereo_separation() -> f64 {
     1.0
 }
 
+fn default_monitor_input() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
@@ -52,6 +56,11 @@ pub struct Track {
     pub solo_safe: bool,
     pub armed: bool,
     pub output_bus: Option<TrackId>,
+    /// When `armed`, route audio input through this track (through its FX
+    /// chain) so the performer can hear themselves. Users can disable this
+    /// to arm a track without monitoring (e.g. when monitoring via hardware).
+    #[serde(default = "default_monitor_input")]
+    pub monitor_input: bool,
 
     /// Flip sample polarity on this track. Applied before the fader.
     #[serde(default)]
@@ -94,6 +103,7 @@ impl Track {
             solo_safe: false,
             armed: false,
             output_bus: None,
+            monitor_input: true,
             phase_invert: false,
             swap_lr: false,
             stereo_separation: 1.0,

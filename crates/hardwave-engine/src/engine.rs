@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 use crate::audio_pool::{AudioBuffer, AudioPool};
 use crate::graph::{AudioGraph, ProcessContext};
+use crate::input_node::{InputNode, SharedInputConsumer};
 use crate::master_node::MasterNode;
 use crate::track_node::{ClipRegion, TrackMeterState, TrackNode};
 use crate::transport::{TransportCommand, TransportState};
@@ -103,6 +104,13 @@ pub struct DawEngine {
     /// Per-track post-fader meter state, keyed by track id.
     pub track_meters: TrackMeterMap,
 
+    /// Shared consumer side of the input monitor ring buffer. The audio-io
+    /// input callback pushes interleaved stereo samples into the matching
+    /// producer; the graph's InputNode drains from this consumer. Held in a
+    /// Mutex<Option<_>> so we can swap it when the input stream is stopped
+    /// and restarted without rebuilding the whole engine.
+    input_consumer: SharedInputConsumer,
+
     /// Undo/redo history. Take a snapshot BEFORE mutating the project.
     pub history: Arc<Mutex<History>>,
 }
@@ -131,6 +139,7 @@ impl DawEngine {
             meter_consumer: None,
             meter_cache: MeterSnapshot::default(),
             track_meters: Arc::new(Mutex::new(HashMap::new())),
+            input_consumer: Arc::new(Mutex::new(None)),
             history: Arc::new(Mutex::new(History::new())),
         }
     }
@@ -201,6 +210,7 @@ impl DawEngine {
             command_rx,
             audio_pool,
             Arc::clone(&self.track_meters),
+            Arc::clone(&self.input_consumer),
             sample_rate,
             buffer_size,
         );
@@ -438,18 +448,28 @@ impl DawEngine {
         }
     }
 
-    /// Open a cpal input stream that feeds the pre-record peak meter. No
-    /// audio is routed into the graph yet — this is for the Audio Settings
-    /// monitor and for verifying the input device choice before recording.
+    /// Open a cpal input stream that feeds the pre-record peak meter AND
+    /// streams live samples into a ring buffer the graph's InputNode drains.
+    /// Armed tracks with `monitor_input` enabled then hear live input.
     pub fn start_input_monitoring(&mut self) -> Result<(), String> {
+        // Create a fresh ring buffer pair every time we (re)start — this
+        // guarantees no stale samples from a previous session survive into
+        // the new stream. Capacity is a few output blocks worth of stereo
+        // samples so small drift between input/output buffer sizes absorbs
+        // without audible glitching.
+        let (producer, consumer) = rtrb::RingBuffer::<f32>::new(16384);
+        self.audio_device.set_input_monitor_producer(Some(producer));
+        *self.input_consumer.lock() = Some(consumer);
         self.audio_device
             .start_input_stream()
             .map_err(|e| e.to_string())
     }
 
-    /// Stop the input monitor stream.
+    /// Stop the input monitor stream and detach the ring buffer.
     pub fn stop_input_monitoring(&mut self) {
         self.audio_device.stop_input_stream();
+        self.audio_device.set_input_monitor_producer(None);
+        *self.input_consumer.lock() = None;
     }
 
     pub fn is_input_monitoring(&self) -> bool {
@@ -500,10 +520,19 @@ struct EngineCallback {
     command_rx: Receiver<EngineCommand>,
     audio_pool: AudioPool,
     track_meters: TrackMeterMap,
+    input_consumer: SharedInputConsumer,
     graph: AudioGraph,
     meter: ChannelMeter,
     sample_rate: u32,
     needs_rebuild: bool,
+    /// Explicit id of the master node so we don't depend on its position in
+    /// the node vector — the input node is added after master when armed
+    /// tracks exist, so `node_count - 1` no longer identifies the master.
+    master_id: Option<crate::graph::NodeId>,
+    /// True when at least one track is armed with input monitoring enabled.
+    /// When false AND the transport isn't playing, we can short-circuit the
+    /// graph and emit silence to save CPU.
+    has_monitored_input: bool,
 }
 
 impl EngineCallback {
@@ -515,6 +544,7 @@ impl EngineCallback {
         command_rx: Receiver<EngineCommand>,
         audio_pool: AudioPool,
         track_meters: TrackMeterMap,
+        input_consumer: SharedInputConsumer,
         sample_rate: u32,
         buffer_size: u32,
     ) -> Self {
@@ -525,10 +555,13 @@ impl EngineCallback {
             command_rx,
             audio_pool,
             track_meters,
+            input_consumer,
             graph: AudioGraph::new(buffer_size as usize),
             meter: ChannelMeter::new(sample_rate as f64),
             sample_rate,
             needs_rebuild: true,
+            master_id: None,
+            has_monitored_input: false,
         };
         cb.rebuild_graph();
         cb
@@ -767,11 +800,37 @@ impl EngineCallback {
         // Add master node (reads volume from shared transport atomic — no rebuild on change)
         let master_node = MasterNode::new(Arc::clone(&self.transport.master_volume_db));
         let master_id = self.graph.add_node(Box::new(master_node));
+        self.master_id = Some(master_id);
 
         // Connect all track nodes → master (L→L, R→R)
         for &track_id in &track_node_ids {
             self.graph.connect(track_id, 0, master_id, 0); // Left
             self.graph.connect(track_id, 1, master_id, 1); // Right
+        }
+
+        // Wire armed-and-monitoring tracks to a single InputNode that drains
+        // the live-input ring buffer. Only build the node when at least one
+        // track actually needs it — unused, it would still drain the ring on
+        // every audio block and waste work.
+        let mut monitor_routes: Vec<crate::graph::NodeId> = Vec::new();
+        for track in &project.tracks {
+            if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
+                continue;
+            }
+            if track.armed && track.monitor_input {
+                if let Some(&node_id) = track_id_to_node.get(&track.id) {
+                    monitor_routes.push(node_id);
+                }
+            }
+        }
+        self.has_monitored_input = !monitor_routes.is_empty();
+        if self.has_monitored_input {
+            let input_node = InputNode::new(Arc::clone(&self.input_consumer));
+            let input_id = self.graph.add_node(Box::new(input_node));
+            for track_node_id in monitor_routes {
+                self.graph.connect(input_id, 0, track_node_id, 0);
+                self.graph.connect(input_id, 1, track_node_id, 1);
+            }
         }
 
         // Wire send routing. Each enabled send contributes an extra edge from
@@ -819,7 +878,10 @@ impl AudioCallback for EngineCallback {
             self.rebuild_graph();
         }
 
-        if !self.transport.is_playing() {
+        let playing = self.transport.is_playing();
+        // When transport is stopped AND nothing is monitoring live input,
+        // the graph can only produce silence — skip processing to save CPU.
+        if !playing && !self.has_monitored_input {
             output.fill(0.0);
             return;
         }
@@ -837,16 +899,19 @@ impl AudioCallback for EngineCallback {
                     .load(std::sync::atomic::Ordering::Relaxed),
             ),
             position_samples: self.transport.position(),
-            playing: true,
+            playing,
         };
 
         // Process the audio graph
         self.graph.process(&ctx);
 
-        // Get master output (last node in graph)
-        let node_count = self.graph.node_count();
-        if node_count > 0 {
-            if let Some(master_out) = self.graph.node_output(node_count - 1) {
+        // Pre-zero the output so any early-return / missing master silences
+        // the speakers instead of leaking last block's samples.
+        output.fill(0.0);
+
+        // Get master output
+        if let Some(master_id) = self.master_id {
+            if let Some(master_out) = self.graph.node_output(master_id) {
                 // Copy to interleaved output
                 for frame in 0..num_frames {
                     let l = master_out
@@ -881,11 +946,12 @@ impl AudioCallback for EngineCallback {
                 // Lock-free push; if the consumer is behind, drop the sample.
                 let _ = self.meter_producer.push(snapshot);
             }
-        } else {
-            output.fill(0.0);
         }
 
-        // Advance transport
-        self.transport.advance(num_frames as u64);
+        // Advance transport only when playing — input-monitoring alone must
+        // not move the playhead.
+        if playing {
+            self.transport.advance(num_frames as u64);
+        }
     }
 }

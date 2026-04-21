@@ -3,6 +3,7 @@
 pub mod audio_pool;
 pub mod engine;
 pub mod graph;
+pub mod input_node;
 pub mod master_node;
 pub mod track_node;
 pub mod transport;

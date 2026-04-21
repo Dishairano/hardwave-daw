@@ -2,9 +2,12 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, SampleRate, StreamConfig, SupportedStreamConfigRange};
+use parking_lot::Mutex as PlMutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
+
+pub use rtrb;
 
 #[cfg(target_os = "windows")]
 mod wasapi_exclusive;
@@ -140,6 +143,10 @@ pub struct AudioDeviceManager {
     /// Peak meter that the input callback writes into. Cloned into the
     /// callback so the UI can poll it lock-free.
     input_peaks: Arc<InputPeakTracker>,
+    /// Optional lock-free ring producer the input callback writes interleaved
+    /// stereo samples into. When set, the engine's InputNode drains from the
+    /// matching consumer on the audio thread so armed tracks hear live input.
+    input_monitor_producer: Arc<PlMutex<Option<rtrb::Producer<f32>>>>,
     /// Sample rate the input stream is actually running at (may differ from
     /// `sample_rate` when the input device rejects the output's rate).
     input_active_sample_rate: u32,
@@ -197,6 +204,7 @@ impl AudioDeviceManager {
             active_exclusive: false,
             input_stream: None,
             input_peaks: Arc::new(InputPeakTracker::new()),
+            input_monitor_producer: Arc::new(PlMutex::new(None)),
             input_active_sample_rate: 0,
             input_active_buffer_size: 0,
         }
@@ -578,6 +586,7 @@ impl AudioDeviceManager {
         );
 
         let peaks = Arc::clone(&self.input_peaks);
+        let monitor_producer = Arc::clone(&self.input_monitor_producer);
         let chans = channels;
         let stream = device
             .build_input_stream(
@@ -588,12 +597,25 @@ impl AudioDeviceManager {
                     }
                     let mut max_l = 0.0_f32;
                     let mut max_r = 0.0_f32;
+
+                    // Also stream samples into the monitor ring buffer when
+                    // it's attached. We push up to 2 frames of interleaved
+                    // stereo per source frame; excess samples are silently
+                    // dropped when the ring is full (consumer has gone away
+                    // or isn't draining fast enough).
+                    let mut producer_guard = monitor_producer.try_lock();
+                    let mut producer = producer_guard.as_mut().and_then(|g| g.as_mut());
+
                     match chans {
                         1 => {
                             for &s in data {
                                 let a = s.abs();
                                 if a > max_l {
                                     max_l = a;
+                                }
+                                if let Some(ref mut p) = producer {
+                                    let _ = p.push(s);
+                                    let _ = p.push(s);
                                 }
                             }
                             max_r = max_l;
@@ -604,13 +626,19 @@ impl AudioDeviceManager {
                             let step = chans as usize;
                             let mut i = 0;
                             while i + 1 < data.len() {
-                                let l = data[i].abs();
-                                let r = data[i + 1].abs();
-                                if l > max_l {
-                                    max_l = l;
+                                let l = data[i];
+                                let r = data[i + 1];
+                                let al = l.abs();
+                                let ar = r.abs();
+                                if al > max_l {
+                                    max_l = al;
                                 }
-                                if r > max_r {
-                                    max_r = r;
+                                if ar > max_r {
+                                    max_r = ar;
+                                }
+                                if let Some(ref mut p) = producer {
+                                    let _ = p.push(l);
+                                    let _ = p.push(r);
                                 }
                                 i += step;
                             }
@@ -648,6 +676,13 @@ impl AudioDeviceManager {
 
     pub fn is_input_running(&self) -> bool {
         self.input_stream.is_some()
+    }
+
+    /// Attach (or detach, when `None`) the ring-buffer producer the input
+    /// callback pushes interleaved stereo samples into. The engine owns the
+    /// matching consumer and drains it on the audio thread.
+    pub fn set_input_monitor_producer(&self, producer: Option<rtrb::Producer<f32>>) {
+        *self.input_monitor_producer.lock() = producer;
     }
 
     /// Snapshot and reset the current input peak. Returns linear L/R peaks.

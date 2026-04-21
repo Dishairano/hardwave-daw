@@ -11,7 +11,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 export function MixerPanel() {
   const {
     tracks, setVolume, setPan, toggleMute, toggleSolo, toggleSoloSafe, toggleArm, renameTrack, setTrackColor,
-    setTrackPhaseInvert, setTrackSwapLr, setTrackStereoSeparation, setTrackDelaySamples,
+    setTrackPhaseInvert, setTrackSwapLr, setTrackStereoSeparation, setTrackDelaySamples, setTrackMonitorInput,
   } = useTrackStore()
   const { master, tracks: trackMeters, startListening } = useMeterStore()
   useEffect(() => { startListening() }, [])
@@ -59,6 +59,7 @@ export function MixerPanel() {
               muted={track.muted} soloed={track.soloed}
               soloSafe={track.solo_safe}
               armed={track.armed}
+              monitorInput={track.monitorInput}
               phaseInvert={track.phaseInvert}
               swapLr={track.swapLr}
               stereoSeparation={track.stereoSeparation}
@@ -72,6 +73,7 @@ export function MixerPanel() {
               onMute={() => toggleMute(track.id)}
               onSolo={() => toggleSolo(track.id)}
               onArm={() => toggleArm(track.id)}
+              onToggleMonitorInput={() => setTrackMonitorInput(track.id, !track.monitorInput)}
               onToggleSoloSafe={() => toggleSoloSafe(track.id)}
               onTogglePhaseInvert={() => setTrackPhaseInvert(track.id, !track.phaseInvert)}
               onToggleSwapLr={() => setTrackSwapLr(track.id, !track.swapLr)}
@@ -158,6 +160,7 @@ interface StripProps {
   volumeDb: number; pan: number; muted: boolean; soloed: boolean
   soloSafe?: boolean
   armed?: boolean
+  monitorInput?: boolean
   phaseInvert?: boolean
   swapLr?: boolean
   stereoSeparation?: number
@@ -171,6 +174,7 @@ interface StripProps {
   onVolume?: (db: number) => void; onPan: (p: number) => void
   onMute?: () => void; onSolo: () => void
   onArm?: () => void
+  onToggleMonitorInput?: () => void
   onToggleSoloSafe?: () => void
   onTogglePhaseInvert?: () => void
   onToggleSwapLr?: () => void
@@ -178,7 +182,7 @@ interface StripProps {
   onDelaySamples?: (samples: number) => void
 }
 
-function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, soloed, soloSafe, armed, phaseInvert = false, swapLr = false, stereoSeparation = 1, delaySamples = 0, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo, onArm, onToggleSoloSafe, onTogglePhaseInvert, onToggleSwapLr, onStereoSeparation, onDelaySamples }: StripProps) {
+function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, soloed, soloSafe, armed, monitorInput = true, phaseInvert = false, swapLr = false, stereoSeparation = 1, delaySamples = 0, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo, onArm, onToggleMonitorInput, onToggleSoloSafe, onTogglePhaseInvert, onToggleSwapLr, onStereoSeparation, onDelaySamples }: StripProps) {
   const [clipped, setClipped] = useState(false)
   const resetClip = useCallback(() => setClipped(false), [])
   useEffect(() => { if (peakL >= 0 || peakR >= 0) setClipped(true) }, [peakL, peakR])
@@ -443,6 +447,16 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
               background: armed ? hw.redDim : 'rgba(255,255,255,0.03)',
             }}
           >R</button>
+        )}
+        {!isMaster && armed && onToggleMonitorInput && (
+          <button
+            onClick={onToggleMonitorInput}
+            title={monitorInput ? 'Disable input monitoring' : 'Enable input monitoring (hear input through FX chain)'}
+            style={{
+              ...sB, color: monitorInput ? hw.accent : hw.textMuted,
+              background: monitorInput ? 'rgba(124,58,237,0.18)' : 'rgba(255,255,255,0.03)',
+            }}
+          >I</button>
         )}
       </div>
       {ctxMenu && !isMaster && (

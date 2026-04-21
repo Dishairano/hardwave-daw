@@ -25,6 +25,8 @@ pub struct TrackInfo {
     soloed: bool,
     solo_safe: bool,
     armed: bool,
+    #[serde(rename = "monitorInput")]
+    monitor_input: bool,
     #[serde(rename = "phaseInvert")]
     phase_invert: bool,
     #[serde(rename = "swapLr")]
@@ -63,6 +65,7 @@ fn track_to_info(
         soloed: t.soloed,
         solo_safe: t.solo_safe,
         armed: t.armed,
+        monitor_input: t.monitor_input,
         phase_invert: t.phase_invert,
         swap_lr: t.swap_lr,
         stereo_separation: t.stereo_separation,
@@ -333,6 +336,19 @@ pub fn set_track_stereo_separation(state: State<AppState>, track_id: String, sep
         let mut project = engine.project.lock();
         if let Some(track) = project.track_mut(&track_id) {
             track.stereo_separation = separation;
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_monitor_input(state: State<AppState>, track_id: String, enabled: bool) {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.monitor_input = enabled;
         }
     }
     engine.rebuild_graph();

@@ -68,6 +68,7 @@ pub fn run() {
             commands::tracks::set_exclusive_solo,
             commands::tracks::toggle_solo_safe,
             commands::tracks::toggle_arm,
+            commands::tracks::set_track_monitor_input,
             commands::tracks::reorder_track,
             commands::tracks::set_track_name,
             commands::tracks::set_track_color,

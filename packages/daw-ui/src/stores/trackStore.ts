@@ -49,6 +49,7 @@ export interface TrackInfo {
   soloed: boolean
   armed: boolean
   solo_safe: boolean
+  monitorInput: boolean
   phaseInvert: boolean
   swapLr: boolean
   stereoSeparation: number
@@ -98,6 +99,7 @@ interface TrackState {
   toggleMute: (id: string) => Promise<void>
   toggleSolo: (id: string) => Promise<void>
   toggleArm: (id: string) => Promise<void>
+  setTrackMonitorInput: (id: string, enabled: boolean) => Promise<void>
   toggleSoloSafe: (id: string) => Promise<void>
   reorderTrack: (id: string, newIndex: number) => Promise<void>
   renameTrack: (id: string, name: string) => Promise<void>
@@ -242,6 +244,12 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   toggleArm: async (id) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('toggle_arm', { trackId: id }, `Toggle arm on "${name}"`)
+    await get().fetchTracks()
+  },
+
+  setTrackMonitorInput: async (id, enabled) => {
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_monitor_input', { trackId: id, enabled }, `${enabled ? 'Enable' : 'Disable'} input monitoring on "${name}"`)
     await get().fetchTracks()
   },
 
