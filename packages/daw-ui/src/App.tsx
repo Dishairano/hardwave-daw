@@ -80,6 +80,32 @@ export function App() {
     return () => clearTimeout(timer)
   }, [])
 
+  // Auto-save: every 3 minutes, if project has been saved once and is dirty, save silently.
+  useEffect(() => {
+    const ENABLED = localStorage.getItem('hardwave.daw.autoSaveEnabled') !== 'false'
+    if (!ENABLED) return
+    const INTERVAL_MS = 3 * 60 * 1000
+    const id = setInterval(() => {
+      const { dirty, filePath } = useProjectStore.getState()
+      if (dirty && filePath) {
+        useProjectStore.getState().saveProject(filePath).catch(() => {})
+      }
+    }, INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [])
+
+  // Warn before closing the window if there are unsaved changes.
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (useProjectStore.getState().dirty) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [])
+
   const checkForUpdates = async () => {
     try {
       const { check } = await import('@tauri-apps/plugin-updater')
@@ -133,7 +159,28 @@ export function App() {
     setUpdateInfo(prev => ({ ...prev, dismissed: true }))
   }, [])
 
+  const confirmDiscardIfDirty = useCallback(async (action: string): Promise<boolean> => {
+    const { dirty } = useProjectStore.getState()
+    if (!dirty) return true
+    try {
+      const { ask } = await import('@tauri-apps/plugin-dialog')
+      return await ask(`You have unsaved changes. ${action} anyway?`, {
+        title: 'Unsaved changes',
+        kind: 'warning',
+      })
+    } catch {
+      return window.confirm(`You have unsaved changes. ${action} anyway?`)
+    }
+  }, [])
+
+  const handleNewProject = useCallback(async () => {
+    if (!(await confirmDiscardIfDirty('Discard and create a new project'))) return
+    await newProject()
+    await fetchTracks()
+  }, [confirmDiscardIfDirty, newProject, fetchTracks])
+
   const handleOpenProject = useCallback(async () => {
+    if (!(await confirmDiscardIfDirty('Discard and open another project'))) return
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const selected = await open({
@@ -145,7 +192,7 @@ export function App() {
         await fetchTracks()
       }
     } catch {}
-  }, [loadProject, fetchTracks])
+  }, [loadProject, fetchTracks, confirmDiscardIfDirty])
 
   const handleSaveProjectAs = useCallback(async () => {
     try {
@@ -177,11 +224,12 @@ export function App() {
   }, [])
 
   const handleOpenRecent = useCallback(async (path: string) => {
+    if (!(await confirmDiscardIfDirty('Discard and open this recent project'))) return
     try {
       await loadProject(path)
       await fetchTracks()
     } catch {}
-  }, [loadProject, fetchTracks])
+  }, [loadProject, fetchTracks, confirmDiscardIfDirty])
 
   const handleExportAudio = useCallback(async () => {
     try {
@@ -218,7 +266,7 @@ export function App() {
         switch (e.key.toLowerCase()) {
           case 'n':
             e.preventDefault()
-            project.newProject().then(() => fetchTracks())
+            handleNewProject()
             return
           case 'o':
             e.preventDefault()
@@ -364,7 +412,7 @@ export function App() {
 
       <TitleBar
         hintText={hintText}
-        onNewProject={() => newProject().then(() => fetchTracks())}
+        onNewProject={handleNewProject}
         onSaveProject={() => saveProject()}
         onSaveProjectAs={handleSaveProjectAs}
         onOpenProject={handleOpenProject}

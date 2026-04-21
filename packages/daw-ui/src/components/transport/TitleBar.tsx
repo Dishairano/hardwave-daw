@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { hw } from '../../theme'
 import { usePatternStore } from '../../stores/patternStore'
+import { useProjectStore } from '../../stores/projectStore'
 
 interface MenuItem {
   label: string
@@ -292,17 +293,7 @@ export function TitleBar(props: TitleBarProps) {
 
       <div style={{ flex: 1 }} />
 
-      <div style={{
-        fontSize: 11,
-        color: hw.textFaint,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-        maxWidth: 400,
-        marginRight: 4,
-      }}>
-        {hintText || 'Hardwave DAW'}
-      </div>
+      <ProjectTitleDisplay hintText={hintText} />
 
       <div style={{ display: 'flex', gap: 0, marginLeft: 8,
         // @ts-ignore
@@ -312,6 +303,25 @@ export function TitleBar(props: TitleBarProps) {
         <WinBtn label={'□'} onClick={windowToggleMaximize} />
         <WinBtn label={'×'} isClose onClick={windowClose} />
       </div>
+    </div>
+  )
+}
+
+function ProjectTitleDisplay({ hintText }: { hintText: string }) {
+  const projectName = useProjectStore(s => s.projectName)
+  const dirty = useProjectStore(s => s.dirty)
+  const label = hintText || `${dirty ? '*' : ''}${projectName} — Hardwave DAW`
+  return (
+    <div style={{
+      fontSize: 11,
+      color: hw.textFaint,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      maxWidth: 400,
+      marginRight: 4,
+    }}>
+      {label}
     </div>
   )
 }
