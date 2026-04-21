@@ -13,11 +13,13 @@ const CHANNEL_COLORS = [
 ]
 
 export function ChannelRack() {
-  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack } = useTrackStore()
+  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks } = useTrackStore()
   const channels = tracks.filter(t => t.kind !== 'Master')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string } | null>(null)
+  const [dragSource, setDragSource] = useState<string | null>(null)
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -201,9 +203,36 @@ export function ChannelRack() {
           return (
             <div
               key={ch.id}
+              draggable
+              onDragStart={(e) => {
+                setDragSource(ch.id)
+                e.dataTransfer.effectAllowed = 'move'
+                e.dataTransfer.setData('text/plain', ch.id)
+              }}
+              onDragOver={(e) => {
+                if (!dragSource || dragSource === ch.id) return
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
+                const above = e.clientY < rect.top + rect.height / 2
+                setDragOverIndex(above ? ci : ci + 1)
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                if (!dragSource) return
+                const srcIdx = tracks.findIndex(t => t.id === dragSource)
+                let target = dragOverIndex ?? ci
+                if (srcIdx !== -1 && srcIdx < target) target -= 1
+                reorderTrack(dragSource, Math.max(0, target))
+                setDragSource(null)
+                setDragOverIndex(null)
+              }}
+              onDragEnd={() => { setDragSource(null); setDragOverIndex(null) }}
               style={{
                 height: 30, display: 'flex', alignItems: 'stretch',
                 borderBottom: `1px solid ${hw.border}`,
+                borderTop: dragOverIndex === ci ? `2px solid ${hw.accent}` : '2px solid transparent',
+                opacity: dragSource === ch.id ? 0.4 : 1,
                 background: selected ? hw.selectionDim : (ci % 2 === 1 ? 'transparent' : 'rgba(255,255,255,0.015)'),
               }}
             >
@@ -428,6 +457,30 @@ export function ChannelRack() {
               const t = channels.find(c => c.id === id)
               setCtxMenu(null)
               if (t) startRename(id, t.name)
+            }}
+          />
+          <MenuItem
+            label="Clone"
+            shortcut=""
+            onClick={async () => {
+              const id = ctxMenu.trackId
+              const src = channels.find(c => c.id === id)
+              setCtxMenu(null)
+              if (!src) return
+              const before = useTrackStore.getState().tracks.map(t => t.id)
+              await addMidiTrack(`${src.name} (copy)`)
+              await fetchTracks()
+              const after = useTrackStore.getState().tracks
+              const newTrack = after.find(t => !before.includes(t.id))
+              if (!newTrack) return
+              if (src.color) await setTrackColor(newTrack.id, src.color)
+              const store = usePatternStore.getState()
+              const updatedPatterns = store.patterns.map(p => {
+                const srcSteps = p.steps[src.id]
+                if (!srcSteps) return p
+                return { ...p, steps: { ...p.steps, [newTrack.id]: [...srcSteps] } }
+              })
+              usePatternStore.setState({ patterns: updatedPatterns })
             }}
           />
           <MenuSep />
