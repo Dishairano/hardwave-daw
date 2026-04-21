@@ -18,6 +18,7 @@ import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
 import { useUserTemplateStore } from './stores/userTemplateStore'
 import { WelcomeScreen, shouldSkipWelcome } from './components/WelcomeScreen'
 import { NotificationHost } from './components/NotificationHost'
+import { MetronomeScheduler } from './components/transport/MetronomeScheduler'
 import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecoveryDialog'
 import { ShortcutsPanel } from './components/ShortcutsPanel'
 import { invoke } from '@tauri-apps/api/core'
@@ -734,6 +735,7 @@ export function App() {
       )}
 
       <NotificationHost />
+      <MetronomeScheduler />
 
       {/* Update modal — same pattern as Hardwave Suite */}
       {updateInfo.available && !updateInfo.dismissed && (

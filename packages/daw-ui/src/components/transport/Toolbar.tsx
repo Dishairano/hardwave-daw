@@ -3,6 +3,7 @@ import { hw } from '../../theme'
 import { useTransportStore, SNAP_VALUES } from '../../stores/transportStore'
 import { useTrackStore } from '../../stores/trackStore'
 import { usePatternStore } from '../../stores/patternStore'
+import { useMetronomeStore } from '../../stores/metronomeStore'
 
 type Tool = 'draw' | 'paint' | 'delete' | 'mute' | 'slip' | 'slice' | 'select' | 'zoom'
 
@@ -161,6 +162,7 @@ export function Toolbar(props: ToolbarProps) {
             <path d="M8 1l2 1.5L8 4" fill="none" stroke={looping ? '#eab308' : hw.textMuted} strokeWidth="1"/>
           </svg>
         </button>
+        <MetronomeButton onEnter={hint} onLeave={clear} />
       </div>
 
       <Sep />
@@ -500,6 +502,90 @@ function CpuPolyMeters({ onEnter, onLeave }: { onEnter: (text: string) => () => 
           }} />
         </div>
       </div>
+    </div>
+  )
+}
+
+function MetronomeButton({ onEnter, onLeave }: {
+  onEnter: (text: string) => () => void; onLeave: () => void
+}) {
+  const enabled = useMetronomeStore(s => s.enabled)
+  const volume = useMetronomeStore(s => s.volume)
+  const accent = useMetronomeStore(s => s.accent)
+  const recordOnly = useMetronomeStore(s => s.recordOnly)
+  const toggleEnabled = useMetronomeStore(s => s.toggleEnabled)
+  const setVolume = useMetronomeStore(s => s.setVolume)
+  const setAccent = useMetronomeStore(s => s.setAccent)
+  const setRecordOnly = useMetronomeStore(s => s.setRecordOnly)
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [open])
+
+  return (
+    <div style={{ position: 'relative' }}
+      onMouseEnter={onEnter(enabled ? `Metronome ON — volume ${Math.round(volume * 100)}%` : 'Metronome (click to enable, right-click for options)')}
+      onMouseLeave={onLeave}
+    >
+      <button
+        onClick={toggleEnabled}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(v => !v) }}
+        style={{
+          ...transportBtn,
+          background: enabled ? hw.accentDim : transportBtn.background,
+          borderColor: enabled ? hw.accentGlow : 'rgba(255,255,255,0.06)',
+        }}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke={enabled ? hw.accent : hw.textMuted} strokeWidth="1.1" strokeLinejoin="round">
+          <path d="M3.5 10.5L5 1.5h2l1.5 9z" />
+          <line x1="2.5" y1="10.5" x2="9.5" y2="10.5" />
+          <line x1="6" y1="6" x2="9.5" y2="3" />
+        </svg>
+      </button>
+      {open && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute', top: 30, left: 0, zIndex: 500,
+            minWidth: 200, padding: 10,
+            background: 'rgba(12,12,18,0.96)',
+            border: `1px solid ${hw.borderLight}`,
+            borderRadius: hw.radius.md,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+            backdropFilter: hw.blur.md,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}
+        >
+          <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            Metronome
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: hw.textMuted }}>
+            <input type="checkbox" checked={enabled} onChange={(e) => useMetronomeStore.getState().setEnabled(e.target.checked)} />
+            Enable
+          </label>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
+              <span>Volume</span>
+              <span style={{ color: hw.textPrimary, fontWeight: 600 }}>{Math.round(volume * 100)}%</span>
+            </div>
+            <input type="range" min={0} max={100} step={1} value={Math.round(volume * 100)}
+              onChange={(e) => setVolume(Number(e.target.value) / 100)}
+              style={{ width: '100%', accentColor: hw.accent }} />
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: hw.textMuted }}>
+            <input type="checkbox" checked={accent} onChange={(e) => setAccent(e.target.checked)} />
+            Accent beat 1 (higher pitch)
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: hw.textMuted }}>
+            <input type="checkbox" checked={recordOnly} onChange={(e) => setRecordOnly(e.target.checked)} />
+            Only during recording
+          </label>
+        </div>
+      )}
     </div>
   )
 }
