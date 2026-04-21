@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
+import { useTransportStore } from '../stores/transportStore'
 
 export type BitDepth = 0 | 16 | 24
 export type SampleRate = 44100 | 48000 | 88200 | 96000 | 192000
+export type ExportRange = 'full' | 'loop'
+export type NormalizeMode = 'off' | 'peak'
+export type DitherMode = 'none' | 'tpdf' | 'tpdf_shaped'
 
 export interface ExportSettings {
   bitDepth: BitDepth
@@ -36,6 +40,11 @@ const TAIL_SECS_KEY = 'hw.export.tailSecs'
 const STEMS_KEY = 'hw.export.stems'
 const STEMS_INCLUDE_MASTER_KEY = 'hw.export.stemsIncludeMaster'
 const STEMS_RESPECT_MUTE_SOLO_KEY = 'hw.export.stemsRespectMuteSolo'
+const RANGE_KEY = 'hw.export.range'
+const PLAY_AFTER_KEY = 'hw.export.playAfter'
+const NORMALIZE_KEY = 'hw.export.normalize'
+const NORMALIZE_DB_KEY = 'hw.export.normalizeDb'
+const DITHER_KEY = 'hw.export.dither'
 
 function readNumber(key: string, fallback: number): number {
   try {
@@ -61,10 +70,42 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
   const [stems, setStems] = useState<boolean>(() => readBool(STEMS_KEY, false))
   const [includeMaster, setIncludeMaster] = useState<boolean>(() => readBool(STEMS_INCLUDE_MASTER_KEY, true))
   const [respectMuteSolo, setRespectMuteSolo] = useState<boolean>(() => readBool(STEMS_RESPECT_MUTE_SOLO_KEY, false))
+  const [range, setRange] = useState<ExportRange>(() => {
+    const raw = (typeof localStorage !== 'undefined' && localStorage.getItem(RANGE_KEY)) || 'full'
+    return raw === 'loop' ? 'loop' : 'full'
+  })
+  const [playAfter, setPlayAfter] = useState<boolean>(() => readBool(PLAY_AFTER_KEY, false))
+  const [normalizeMode, setNormalizeMode] = useState<NormalizeMode>(() => {
+    const raw = (typeof localStorage !== 'undefined' && localStorage.getItem(NORMALIZE_KEY)) || 'off'
+    return raw === 'peak' ? 'peak' : 'off'
+  })
+  const [normalizeTargetDb, setNormalizeTargetDb] = useState<number>(() => readNumber(NORMALIZE_DB_KEY, -1.0))
+  const [ditherMode, setDitherMode] = useState<DitherMode>(() => {
+    const raw = (typeof localStorage !== 'undefined' && localStorage.getItem(DITHER_KEY)) || 'none'
+    if (raw === 'tpdf') return 'tpdf'
+    if (raw === 'tpdf_shaped') return 'tpdf_shaped'
+    return 'none'
+  })
   const [exporting, setExporting] = useState(false)
   const [percent, setPercent] = useState(0)
   const [stageLabel, setStageLabel] = useState<string | null>(null)
+  const [etaSecs, setEtaSecs] = useState<number | null>(null)
+  const renderStartedAt = useRef<number>(0)
   const startBtn = useRef<HTMLButtonElement>(null)
+
+  const loopStart = useTransportStore(s => s.loopStart)
+  const loopEnd = useTransportStore(s => s.loopEnd)
+  const projectSampleRate = useTransportStore(s => s.sampleRate)
+  const loopRangeValid = loopEnd > loopStart
+
+  const loopDurationSecs = useMemo(() => {
+    if (!loopRangeValid || projectSampleRate <= 0) return 0
+    return (loopEnd - loopStart) / projectSampleRate
+  }, [loopStart, loopEnd, projectSampleRate, loopRangeValid])
+
+  useEffect(() => {
+    if (range === 'loop' && !loopRangeValid) setRange('full')
+  }, [range, loopRangeValid])
 
   useEffect(() => {
     startBtn.current?.focus()
@@ -80,8 +121,14 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     let cancelled = false
     const unlisten = listen<{ percent: number; label?: string | null }>('export-progress', e => {
       if (cancelled) return
-      setPercent(Math.max(0, Math.min(100, e.payload.percent)))
+      const pct = Math.max(0, Math.min(100, e.payload.percent))
+      setPercent(pct)
       if (e.payload.label !== undefined) setStageLabel(e.payload.label ?? null)
+      if (pct > 0.5 && renderStartedAt.current > 0) {
+        const elapsed = (performance.now() - renderStartedAt.current) / 1000
+        const total = elapsed * (100 / pct)
+        setEtaSecs(Math.max(0, total - elapsed))
+      }
     })
     return () => {
       cancelled = true
@@ -96,6 +143,25 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     try { localStorage.setItem(STEMS_KEY, stems ? '1' : '0') } catch {}
     try { localStorage.setItem(STEMS_INCLUDE_MASTER_KEY, includeMaster ? '1' : '0') } catch {}
     try { localStorage.setItem(STEMS_RESPECT_MUTE_SOLO_KEY, respectMuteSolo ? '1' : '0') } catch {}
+    try { localStorage.setItem(RANGE_KEY, range) } catch {}
+    try { localStorage.setItem(PLAY_AFTER_KEY, playAfter ? '1' : '0') } catch {}
+    try { localStorage.setItem(NORMALIZE_KEY, normalizeMode) } catch {}
+    try { localStorage.setItem(NORMALIZE_DB_KEY, String(normalizeTargetDb)) } catch {}
+    try { localStorage.setItem(DITHER_KEY, ditherMode) } catch {}
+  }
+
+  const computeRenderBounds = (): { startSamples: number | null; endSamples: number | null } => {
+    if (range !== 'loop' || !loopRangeValid || projectSampleRate <= 0 || projectSampleRate === sampleRate) {
+      if (range === 'loop' && loopRangeValid) {
+        return { startSamples: loopStart, endSamples: loopEnd }
+      }
+      return { startSamples: null, endSamples: null }
+    }
+    const ratio = sampleRate / projectSampleRate
+    return {
+      startSamples: Math.round(loopStart * ratio),
+      endSamples: Math.round(loopEnd * ratio),
+    }
   }
 
   const handleStart = async () => {
@@ -116,6 +182,9 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
       setExporting(true)
       setPercent(0)
       setStageLabel(null)
+      setEtaSecs(null)
+      renderStartedAt.current = performance.now()
+      const stemsBounds = computeRenderBounds()
       try {
         const result = await invoke<{
           folder: string
@@ -130,6 +199,11 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           tailSecs,
           includeMaster,
           respectMuteSolo,
+          startSamples: stemsBounds.startSamples,
+          endSamples: stemsBounds.endSamples,
+          normalizeMode,
+          normalizeTargetDb,
+          ditherMode,
         })
         if (result.cancelled) {
           onError('Export cancelled')
@@ -161,15 +235,34 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     setExporting(true)
     setPercent(0)
     setStageLabel(null)
+    setEtaSecs(null)
+    renderStartedAt.current = performance.now()
+    const { startSamples, endSamples } = computeRenderBounds()
     try {
       const result = await invoke<{
         path: string
         duration_secs: number
         cancelled: boolean
-      }>('export_project_wav', { path, sampleRate, bitDepth, tailSecs })
+      }>('export_project_wav', {
+        path,
+        sampleRate,
+        bitDepth,
+        tailSecs,
+        startSamples,
+        endSamples,
+        normalizeMode,
+        normalizeTargetDb,
+        ditherMode,
+      })
       if (result.cancelled) {
         onError('Export cancelled')
       } else {
+        if (playAfter) {
+          try {
+            const { openPath } = await import('@tauri-apps/plugin-opener')
+            await openPath(result.path)
+          } catch {}
+        }
         onComplete(result)
       }
     } catch (err) {
@@ -248,6 +341,73 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           />
         </Row>
 
+        <Row label="Range">
+          <select
+            value={range}
+            disabled={exporting}
+            onChange={e => setRange(e.target.value as ExportRange)}
+            style={selectStyle}
+          >
+            <option value="full">Full project</option>
+            <option value="loop" disabled={!loopRangeValid}>
+              {loopRangeValid
+                ? `Loop region (${loopDurationSecs.toFixed(2)}s)`
+                : 'Loop region (no range set)'}
+            </option>
+          </select>
+        </Row>
+
+        <Row label="Normalize">
+          <select
+            value={normalizeMode}
+            disabled={exporting}
+            onChange={e => setNormalizeMode(e.target.value as NormalizeMode)}
+            style={selectStyle}
+          >
+            <option value="off">Off</option>
+            <option value="peak">Peak</option>
+          </select>
+        </Row>
+        {normalizeMode === 'peak' && (
+          <Row label={`Target (${normalizeTargetDb.toFixed(1)} dB)`}>
+            <input
+              type="range"
+              min={-12}
+              max={0}
+              step={0.1}
+              value={normalizeTargetDb}
+              disabled={exporting}
+              onChange={e => setNormalizeTargetDb(Number(e.target.value))}
+              style={{ flex: 1 }}
+            />
+          </Row>
+        )}
+
+        <Row label="Dither">
+          <select
+            value={ditherMode}
+            disabled={exporting || bitDepth === 0}
+            onChange={e => setDitherMode(e.target.value as DitherMode)}
+            style={selectStyle}
+          >
+            <option value="none">None</option>
+            <option value="tpdf">TPDF</option>
+            <option value="tpdf_shaped">TPDF noise-shaped</option>
+          </select>
+        </Row>
+
+        <Row label="After">
+          <label style={checkLabel}>
+            <input
+              type="checkbox"
+              checked={playAfter}
+              disabled={exporting}
+              onChange={e => setPlayAfter(e.target.checked)}
+            />
+            <span>Play rendered file when done</span>
+          </label>
+        </Row>
+
         <Row label="Stems">
           <label style={checkLabel}>
             <input
@@ -309,6 +469,14 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
                 transition: 'width 0.12s linear',
               }} />
             </div>
+            <div style={{
+              fontSize: 10, color: hw.textMuted, marginTop: 6,
+              display: 'flex', justifyContent: 'flex-end',
+            }}>
+              {etaSecs !== null && percent < 100
+                ? `~${formatEta(etaSecs)} remaining`
+                : ' '}
+            </div>
           </div>
         )}
 
@@ -346,6 +514,15 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     </div>,
     document.body,
   )
+}
+
+function formatEta(secs: number): string {
+  if (!Number.isFinite(secs) || secs < 0) return '—'
+  if (secs < 1) return '<1s'
+  if (secs < 60) return `${Math.ceil(secs)}s`
+  const mins = Math.floor(secs / 60)
+  const rem = Math.round(secs - mins * 60)
+  return rem === 0 ? `${mins}m` : `${mins}m ${rem}s`
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {

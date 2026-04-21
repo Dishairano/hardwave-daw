@@ -524,7 +524,7 @@ impl DawEngine {
         total_samples: u64,
         on_block: impl FnMut(&[f32]) -> bool,
     ) -> Result<(), String> {
-        self.render_offline_with(sample_rate, total_samples, |_| {}, on_block)
+        self.render_offline_with(sample_rate, total_samples, 0, |_| {}, on_block)
     }
 
     /// Like [`Self::render_offline`] but allows the caller to mutate the
@@ -535,6 +535,7 @@ impl DawEngine {
         &self,
         sample_rate: u32,
         total_samples: u64,
+        start_samples: u64,
         prepare: impl FnOnce(&mut Project),
         mut on_block: impl FnMut(&[f32]) -> bool,
     ) -> Result<(), String> {
@@ -562,7 +563,7 @@ impl DawEngine {
             self.transport.master_volume_db.load(Ordering::Relaxed),
             Ordering::Relaxed,
         );
-        transport.set_position(0);
+        transport.set_position(start_samples);
         transport.playing.store(true, Ordering::Relaxed);
 
         let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);

@@ -32,15 +32,161 @@ pub struct StemsExportResult {
     pub cancelled: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum NormalizeMode {
+    Off,
+    Peak,
+}
+
+impl NormalizeMode {
+    fn parse(s: &str) -> Self {
+        match s {
+            "peak" => Self::Peak,
+            _ => Self::Off,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DitherMode {
+    None,
+    Tpdf,
+    TpdfShaped,
+}
+
+impl DitherMode {
+    fn parse(s: &str) -> Self {
+        match s {
+            "triangular" | "tpdf" => Self::Tpdf,
+            "tpdf_shaped" | "noise_shaped" | "shaped" => Self::TpdfShaped,
+            _ => Self::None,
+        }
+    }
+}
+
+/// Small xorshift32 PRNG for dither noise. Seeded deterministically per
+/// render so a given project produces byte-identical output each export —
+/// which matters for audio diffing and user verification.
+struct DitherRng {
+    state: u32,
+}
+
+impl DitherRng {
+    fn new(seed: u32) -> Self {
+        Self {
+            state: if seed == 0 { 0xdead_beef } else { seed },
+        }
+    }
+    fn next_u32(&mut self) -> u32 {
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.state = x;
+        x
+    }
+    fn next_uniform(&mut self) -> f32 {
+        let u = self.next_u32() as f32 / u32::MAX as f32;
+        u * 2.0 - 1.0
+    }
+    fn next_tpdf(&mut self) -> f32 {
+        (self.next_uniform() + self.next_uniform()) * 0.5
+    }
+}
+
+struct DitherState {
+    rng: DitherRng,
+    prev_err: [f32; 2],
+}
+
+impl DitherState {
+    fn new() -> Self {
+        Self {
+            rng: DitherRng::new(0x1234_5678),
+            prev_err: [0.0; 2],
+        }
+    }
+}
+
+fn write_sample_dithered(
+    wav: &mut WavWriter<BufWriter<File>>,
+    s: f32,
+    bit_depth: u32,
+    dither: DitherMode,
+    state: &mut DitherState,
+    channel: usize,
+) -> Result<(), hound::Error> {
+    match bit_depth {
+        16 => {
+            let max = i16::MAX as f32;
+            let lsb = 1.0 / max;
+            let mut x = s;
+            match dither {
+                DitherMode::None => {}
+                DitherMode::Tpdf => x += state.rng.next_tpdf() * lsb,
+                DitherMode::TpdfShaped => {
+                    let n = state.rng.next_tpdf() * lsb;
+                    let ch = channel & 1;
+                    x = x + n - state.prev_err[ch];
+                    state.prev_err[ch] = n;
+                }
+            }
+            let v = (x.clamp(-1.0, 1.0) * max).round() as i16;
+            wav.write_sample(v)
+        }
+        24 => {
+            let max = 8_388_607.0_f32;
+            let lsb = 1.0 / max;
+            let mut x = s;
+            match dither {
+                DitherMode::None => {}
+                DitherMode::Tpdf => x += state.rng.next_tpdf() * lsb,
+                DitherMode::TpdfShaped => {
+                    let n = state.rng.next_tpdf() * lsb;
+                    let ch = channel & 1;
+                    x = x + n - state.prev_err[ch];
+                    state.prev_err[ch] = n;
+                }
+            }
+            let v = (x.clamp(-1.0, 1.0) * max).round() as i32;
+            wav.write_sample(v)
+        }
+        _ => wav.write_sample(s.clamp(-1.0, 1.0)),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RenderFormat {
+    sample_rate: u32,
+    bit_depth: u32,
+    normalize: NormalizeMode,
+    normalize_target_db: f32,
+    dither: DitherMode,
+}
+
+fn spec_for(bit_depth: u32, sample_rate: u32) -> WavSpec {
+    let (bits, format) = if bit_depth == 0 {
+        (32u16, SampleFormat::Float)
+    } else {
+        (bit_depth as u16, SampleFormat::Int)
+    };
+    WavSpec {
+        channels: 2,
+        sample_rate,
+        bits_per_sample: bits,
+        sample_format: format,
+    }
+}
+
 /// Render and write one offline-rendered WAV file. Returns `Ok(true)` on
 /// completion, `Ok(false)` when the caller requested cancellation mid-render.
 #[allow(clippy::too_many_arguments)]
 fn write_render<F>(
     engine: &DawEngine,
     out_path: &Path,
-    sample_rate: u32,
-    bit_depth: u32,
+    fmt: RenderFormat,
     total_samples: u64,
+    start_samples: u64,
     cancel: &Arc<AtomicBool>,
     mut on_progress: F,
     prepare: impl FnOnce(&mut Project),
@@ -48,63 +194,123 @@ fn write_render<F>(
 where
     F: FnMut(u64, u64),
 {
-    let bits = if bit_depth == 0 { 32 } else { bit_depth as u16 };
-    let format = if bit_depth == 0 {
-        SampleFormat::Float
-    } else {
-        SampleFormat::Int
-    };
-    let spec = WavSpec {
-        channels: 2,
-        sample_rate,
-        bits_per_sample: bits,
-        sample_format: format,
-    };
+    let spec = spec_for(fmt.bit_depth, fmt.sample_rate);
 
-    let file = File::create(out_path).map_err(|e| format!("create: {e}"))?;
-    let writer = BufWriter::new(file);
-    let mut wav = WavWriter::new(writer, spec).map_err(|e| format!("wav: {e}"))?;
-    let mut wav_err: Option<String> = None;
-    let mut written_samples: u64 = 0;
+    match fmt.normalize {
+        NormalizeMode::Off => {
+            let file = File::create(out_path).map_err(|e| format!("create: {e}"))?;
+            let writer = BufWriter::new(file);
+            let mut wav = WavWriter::new(writer, spec).map_err(|e| format!("wav: {e}"))?;
+            let mut wav_err: Option<String> = None;
+            let mut dither = DitherState::new();
+            let mut written_frames: u64 = 0;
 
-    engine.render_offline_with(sample_rate, total_samples, prepare, |block| {
-        if wav_err.is_some() {
-            return false;
-        }
-        if cancel.load(Ordering::Relaxed) {
-            return false;
-        }
-        for &s in block {
-            let clamped = s.clamp(-1.0, 1.0);
-            let write_res: Result<(), hound::Error> = match (bit_depth, format) {
-                (16, _) => {
-                    let v = (clamped * i16::MAX as f32) as i16;
-                    wav.write_sample(v)
-                }
-                (24, _) => {
-                    let v = (clamped * 8_388_607.0) as i32;
-                    wav.write_sample(v)
-                }
-                _ => wav.write_sample(clamped),
-            };
-            if let Err(e) = write_res {
-                wav_err = Some(format!("wav write: {e}"));
-                return false;
+            engine.render_offline_with(
+                fmt.sample_rate,
+                total_samples,
+                start_samples,
+                prepare,
+                |block| {
+                    if wav_err.is_some() || cancel.load(Ordering::Relaxed) {
+                        return false;
+                    }
+                    for (i, &s) in block.iter().enumerate() {
+                        if let Err(e) = write_sample_dithered(
+                            &mut wav,
+                            s,
+                            fmt.bit_depth,
+                            fmt.dither,
+                            &mut dither,
+                            i & 1,
+                        ) {
+                            wav_err = Some(format!("wav write: {e}"));
+                            return false;
+                        }
+                    }
+                    written_frames += (block.len() / 2) as u64;
+                    on_progress(written_frames, total_samples);
+                    true
+                },
+            )?;
+
+            if let Some(e) = wav_err {
+                return Err(e);
             }
+            wav.finalize().map_err(|e| format!("finalize: {e}"))?;
         }
-        written_samples += (block.len() / 2) as u64;
-        on_progress(written_samples, total_samples);
-        true
-    })?;
+        NormalizeMode::Peak => {
+            // Peak normalize requires two passes: first buffer all samples
+            // to find the absolute peak, then scale and write. A 10-min
+            // stereo render at 48 kHz buffers ~230 MB — acceptable on desktop.
+            let capacity = (total_samples as usize).saturating_mul(2);
+            let mut buffer: Vec<f32> = Vec::with_capacity(capacity);
+            let mut peak: f32 = 0.0;
 
-    if let Some(e) = wav_err {
-        return Err(e);
+            engine.render_offline_with(
+                fmt.sample_rate,
+                total_samples,
+                start_samples,
+                prepare,
+                |block| {
+                    if cancel.load(Ordering::Relaxed) {
+                        return false;
+                    }
+                    for &s in block {
+                        let a = s.abs();
+                        if a > peak {
+                            peak = a;
+                        }
+                        buffer.push(s);
+                    }
+                    // Reserve half of progress for render, half for write.
+                    let frames = (buffer.len() / 2) as u64;
+                    on_progress(frames / 2, total_samples);
+                    true
+                },
+            )?;
+
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(false);
+            }
+
+            let target_lin = 10.0_f32.powf(fmt.normalize_target_db / 20.0);
+            let gain = if peak > 1e-9 { target_lin / peak } else { 1.0 };
+
+            let file = File::create(out_path).map_err(|e| format!("create: {e}"))?;
+            let writer = BufWriter::new(file);
+            let mut wav = WavWriter::new(writer, spec).map_err(|e| format!("wav: {e}"))?;
+            let mut dither = DitherState::new();
+            let half = total_samples / 2;
+
+            for (i, s) in buffer.iter().enumerate() {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(false);
+                }
+                let scaled = *s * gain;
+                write_sample_dithered(
+                    &mut wav,
+                    scaled,
+                    fmt.bit_depth,
+                    fmt.dither,
+                    &mut dither,
+                    i & 1,
+                )
+                .map_err(|e| format!("wav write: {e}"))?;
+                if i % 4096 == 0 {
+                    let frames = (i / 2) as u64;
+                    on_progress(half + frames / 2, total_samples);
+                }
+            }
+            wav.finalize().map_err(|e| format!("finalize: {e}"))?;
+            on_progress(total_samples, total_samples);
+        }
     }
-    wav.finalize().map_err(|e| format!("finalize: {e}"))?;
+
     let completed = !cancel.load(Ordering::Relaxed);
     Ok(completed)
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn export_project_wav(
     app: AppHandle,
@@ -112,12 +318,25 @@ pub async fn export_project_wav(
     sample_rate: u32,
     bit_depth: u32,
     tail_secs: f32,
+    start_samples: Option<u64>,
+    end_samples: Option<u64>,
+    normalize_mode: Option<String>,
+    normalize_target_db: Option<f32>,
+    dither_mode: Option<String>,
 ) -> Result<ExportResult, String> {
     let (engine, cancel) = {
         let state: State<AppState> = app.state();
         (state.engine.clone(), state.export_cancel.clone())
     };
     cancel.store(false, Ordering::Relaxed);
+
+    let fmt = RenderFormat {
+        sample_rate,
+        bit_depth,
+        normalize: NormalizeMode::parse(normalize_mode.as_deref().unwrap_or("off")),
+        normalize_target_db: normalize_target_db.unwrap_or(-1.0),
+        dither: DitherMode::parse(dither_mode.as_deref().unwrap_or("none")),
+    };
 
     let out_path = path.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<ExportResult, String> {
@@ -128,16 +347,20 @@ pub async fn export_project_wav(
             return Err("Project is empty — nothing to export.".into());
         }
         let tail_samples = ((tail_secs.max(0.0) as f64) * sample_rate as f64) as u64;
-        let total_samples = body_samples + tail_samples;
+        let (render_start, body_len) = match (start_samples, end_samples) {
+            (Some(s), Some(e)) if e > s => (s, e - s),
+            _ => (0, body_samples),
+        };
+        let total_samples = body_len + tail_samples;
 
         let mut last_pct: i32 = -1;
         let app_for_progress = app.clone();
         let completed = write_render(
             &engine_guard,
             Path::new(&out_path),
-            sample_rate,
-            bit_depth,
+            fmt,
             total_samples,
+            render_start,
             &cancel,
             |written, total| {
                 let pct_i = ((written as f64 / total as f64) * 100.0) as i32;
@@ -156,7 +379,6 @@ pub async fn export_project_wav(
         )?;
 
         if !completed {
-            // Best-effort cleanup of the partial file.
             let _ = fs::remove_file(&out_path);
         }
 
@@ -207,12 +429,25 @@ pub async fn export_project_stems(
     tail_secs: f32,
     include_master: bool,
     respect_mute_solo: bool,
+    start_samples: Option<u64>,
+    end_samples: Option<u64>,
+    normalize_mode: Option<String>,
+    normalize_target_db: Option<f32>,
+    dither_mode: Option<String>,
 ) -> Result<StemsExportResult, String> {
     let (engine, cancel) = {
         let state: State<AppState> = app.state();
         (state.engine.clone(), state.export_cancel.clone())
     };
     cancel.store(false, Ordering::Relaxed);
+
+    let fmt = RenderFormat {
+        sample_rate,
+        bit_depth,
+        normalize: NormalizeMode::parse(normalize_mode.as_deref().unwrap_or("off")),
+        normalize_target_db: normalize_target_db.unwrap_or(-1.0),
+        dither: DitherMode::parse(dither_mode.as_deref().unwrap_or("none")),
+    };
 
     let result =
         tauri::async_runtime::spawn_blocking(move || -> Result<StemsExportResult, String> {
@@ -223,7 +458,11 @@ pub async fn export_project_stems(
                 return Err("Project is empty — nothing to export.".into());
             }
             let tail_samples = ((tail_secs.max(0.0) as f64) * sample_rate as f64) as u64;
-            let total_samples = body_samples + tail_samples;
+            let (render_start, body_len) = match (start_samples, end_samples) {
+                (Some(s), Some(e)) if e > s => (s, e - s),
+                _ => (0, body_samples),
+            };
+            let total_samples = body_len + tail_samples;
 
             let folder = PathBuf::from(&folder_path);
             fs::create_dir_all(&folder).map_err(|e| format!("create folder: {e}"))?;
@@ -262,9 +501,9 @@ pub async fn export_project_stems(
                 let completed = write_render(
                     &engine_guard,
                     &stem_path,
-                    sample_rate,
-                    bit_depth,
+                    fmt,
                     total_samples,
+                    render_start,
                     &cancel,
                     |written, total| {
                         let pct_i = ((written as f64 / total as f64) * 100.0) as i32;
@@ -314,9 +553,9 @@ pub async fn export_project_stems(
                 let completed = write_render(
                     &engine_guard,
                     &master_path,
-                    sample_rate,
-                    bit_depth,
+                    fmt,
                     total_samples,
+                    render_start,
                     &cancel,
                     |written, total| {
                         let pct_i = ((written as f64 / total as f64) * 100.0) as i32;
