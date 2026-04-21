@@ -16,6 +16,7 @@ import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow } from './components/FloatingWindow'
 import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChangesDialog'
 import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
+import { ExportDialog } from './components/ExportDialog'
 import { useUserTemplateStore } from './stores/userTemplateStore'
 import { useTrackTemplateStore } from './stores/trackTemplateStore'
 import { TrackTemplateManager } from './components/TrackTemplateManager'
@@ -99,6 +100,9 @@ export function App() {
 
   // Crash recovery
   const [crashInfo, setCrashInfo] = useState<{ path: string; modified_unix: number } | null>(null)
+
+  // Export dialog
+  const [showExport, setShowExport] = useState(false)
 
   // Open Piano Roll on request from arrangement double-click.
   useEffect(() => {
@@ -466,47 +470,26 @@ export function App() {
     }
   }, [loadProject, fetchTracks, confirmDiscardIfDirty, showErrorDialog])
 
-  const handleExportAudio = useCallback(async () => {
+  const handleExportAudio = useCallback(() => {
+    setShowExport(true)
+  }, [])
+
+  const handleExportComplete = useCallback(async (result: { path: string; duration_secs: number }) => {
+    setShowExport(false)
+    const notif = useNotificationStore.getState()
+    const dur = result.duration_secs.toFixed(1)
+    notif.push('info', `Exported ${dur}s to WAV`, { detail: result.path })
     try {
-      const { save, message } = await import('@tauri-apps/plugin-dialog')
-      const projectName = useProjectStore.getState().projectName || 'Untitled'
-      const path = await save({
-        title: 'Export audio',
-        defaultPath: `${projectName}.wav`,
-        filters: [{ name: 'WAV audio', extensions: ['wav'] }],
-      })
-      if (!path) return
+      const { revealItemInDir } = await import('@tauri-apps/plugin-opener')
+      await revealItemInDir(result.path)
+    } catch {}
+  }, [])
 
-      const notif = useNotificationStore.getState()
-      const pendingId = notif.push('info', 'Exporting audio…', {
-        sticky: true,
-        detail: 'Rendering project offline at 48 kHz',
-      })
-
-      try {
-        const result = await invoke<{ path: string; duration_secs: number }>(
-          'export_project_wav',
-          {
-            path,
-            sampleRate: 48000,
-            bitDepth: 0,
-            tailSecs: 2.0,
-          },
-        )
-        notif.dismiss(pendingId)
-        const dur = result.duration_secs.toFixed(1)
-        notif.push('info', `Exported ${dur}s to WAV`, { detail: result.path })
-        try {
-          const { revealItemInDir } = await import('@tauri-apps/plugin-opener')
-          await revealItemInDir(result.path)
-        } catch {
-          // revealItemInDir is best-effort — silently ignore if the platform
-          // doesn't support it or the file manager is unavailable.
-        }
-      } catch (err) {
-        notif.dismiss(pendingId)
-        await message(`Export failed: ${err}`, { title: 'Export audio', kind: 'error' })
-      }
+  const handleExportError = useCallback(async (msg: string) => {
+    setShowExport(false)
+    try {
+      const { message } = await import('@tauri-apps/plugin-dialog')
+      await message(`Export failed: ${msg}`, { title: 'Export audio', kind: 'error' })
     } catch {}
   }, [])
 
@@ -746,6 +729,20 @@ export function App() {
         <TemplateDialog
           onPick={handlePickTemplate}
           onCancel={() => setShowTemplateDialog(false)}
+        />
+      )}
+
+      {showExport && (
+        <ExportDialog
+          initial={{
+            bitDepth: 0,
+            sampleRate: 48000,
+            tailSecs: 2.0,
+            defaultName: useProjectStore.getState().projectName || 'Untitled',
+          }}
+          onCancel={() => setShowExport(false)}
+          onComplete={handleExportComplete}
+          onError={handleExportError}
         />
       )}
 
