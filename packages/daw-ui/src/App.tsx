@@ -26,6 +26,7 @@ import { SampleEditor } from './components/sample-editor/SampleEditor'
 import { useSampleEditorStore } from './stores/sampleEditorStore'
 import { BeatSlicer } from './components/beat-slicer/BeatSlicer'
 import { useBeatSlicerStore } from './stores/beatSlicerStore'
+import { LoudnessMeter } from './components/LoudnessMeter'
 import { invoke } from '@tauri-apps/api/core'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
@@ -64,6 +65,7 @@ export function App() {
   const [showThemePicker, setShowThemePicker] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [showLoudness, setShowLoudness] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
   const closeSampleEditor = useSampleEditorStore(s => s.close)
   const beatSlicerPath = useBeatSlicerStore(s => s.openPath)
@@ -585,6 +587,7 @@ export function App() {
         onToggleRoadmap={() => setShowRoadmap(v => !v)}
         onOpenAudioSettings={() => setShowAudioSettings(true)}
         onOpenThemePicker={() => setShowThemePicker(true)}
+        onOpenLoudness={() => setShowLoudness(true)}
         onCheckForUpdates={checkForUpdates}
         onToggleAbout={() => setShowAbout(v => !v)}
         onToggleShortcuts={() => setShowShortcuts(v => !v)}
@@ -643,6 +646,7 @@ export function App() {
       <ShortcutsPanel open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       {sampleEditorPath && <SampleEditor path={sampleEditorPath} onClose={closeSampleEditor} />}
       {beatSlicerPath && <BeatSlicer path={beatSlicerPath} onClose={closeBeatSlicer} />}
+      {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}
       {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}
 
       {savePromptAction && (
