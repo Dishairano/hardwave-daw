@@ -121,7 +121,10 @@ export function PianoRoll() {
   const containerRef = useRef<HTMLDivElement>(null)
   const activeTrackId = useTrackStore(s => s.activeMidiTrackId)
   const activeClipId = useTrackStore(s => s.activeMidiClipId)
+  const tracks = useTrackStore(s => s.tracks)
   const [notes, setNotes] = useState<Note[]>([])
+  const [ghostMode, setGhostMode] = useState<'off' | 'track' | 'all'>('off')
+  const [ghostNotes, setGhostNotes] = useState<Array<Note & { color: string }>>([])
   const [scrollX, setScrollX] = useState(0)
   const [noteHeight, setNoteHeight] = useState(DEFAULT_NOTE_HEIGHT)
   const [scrollY, setScrollY] = useState(DEFAULT_NOTE_HEIGHT * 60)
@@ -185,6 +188,45 @@ export function PianoRoll() {
     refreshNotes()
     setSelectedNotes(new Set())
   }, [refreshNotes])
+
+  useEffect(() => {
+    let cancelled = false
+    async function fetchGhosts() {
+      if (ghostMode === 'off' || !activeTrackId || !activeClipId) {
+        if (!cancelled) setGhostNotes([])
+        return
+      }
+      const candidates: Array<{ trackId: string; clipId: string; color: string }> = []
+      for (const t of tracks) {
+        if (ghostMode === 'track' && t.id !== activeTrackId) continue
+        for (const c of t.clips) {
+          if (c.kind !== 'midi') continue
+          if (t.id === activeTrackId && c.id === activeClipId) continue
+          candidates.push({ trackId: t.id, clipId: c.id, color: t.color || '#64748b' })
+        }
+      }
+      const collected: Array<Note & { color: string }> = []
+      for (const { trackId, clipId, color } of candidates) {
+        try {
+          const data = await invoke<MidiNoteInfo[]>('get_midi_notes', { trackId, clipId })
+          for (const n of data) {
+            collected.push({
+              index: -1,
+              startTick: n.start_tick,
+              durationTicks: n.duration_ticks,
+              pitch: n.pitch,
+              velocity: n.velocity,
+              muted: n.muted,
+              color,
+            })
+          }
+        } catch {}
+      }
+      if (!cancelled) setGhostNotes(collected)
+    }
+    fetchGhosts()
+    return () => { cancelled = true }
+  }, [ghostMode, activeTrackId, activeClipId, tracks, notes])
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -267,6 +309,26 @@ export function PianoRoll() {
       ctx.stroke()
     }
 
+    if (ghostMode !== 'off' && ghostNotes.length > 0) {
+      ctx.save()
+      for (const note of ghostNotes) {
+        const x = xFromTick(note.startTick) - KEYBOARD_WIDTH
+        const y = yFromPitch(note.pitch)
+        const noteW = note.durationTicks * pixelsPerTick
+        if (x + noteW < 0 || x > w || y + noteHeight < 0 || y > h) continue
+        ctx.globalAlpha = 0.22
+        ctx.fillStyle = note.color
+        ctx.beginPath()
+        ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), noteHeight - 2, 4)
+        ctx.fill()
+        ctx.globalAlpha = 0.4
+        ctx.strokeStyle = note.color
+        ctx.lineWidth = 0.5
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+
     for (const note of notes) {
       const x = xFromTick(note.startTick) - KEYBOARD_WIDTH
       const y = yFromPitch(note.pitch)
@@ -332,7 +394,7 @@ export function PianoRoll() {
       ctx.strokeRect(mx + 0.5, my + 0.5, mw, mh)
       ctx.setLineDash([])
     }
-  }, [notes, scrollX, scrollY, pixelsPerTick, selectedNotes, marquee, scaleRoot, scaleType])
+  }, [notes, scrollX, scrollY, pixelsPerTick, selectedNotes, marquee, scaleRoot, scaleType, ghostMode, ghostNotes, noteHeight])
 
   useEffect(() => { draw() }, [draw])
 
@@ -1191,6 +1253,23 @@ export function PianoRoll() {
           }}
         >
           FOLLOW
+        </button>
+        <button
+          onClick={() => setGhostMode(m => m === 'off' ? 'track' : m === 'track' ? 'all' : 'off')}
+          title={
+            ghostMode === 'off' ? 'Ghost notes: OFF (click to show same-track)' :
+            ghostMode === 'track' ? 'Ghost notes: same track (click to show all)' :
+            'Ghost notes: all tracks (click to hide)'
+          }
+          style={{
+            padding: '1px 6px', fontSize: 9, fontWeight: 600,
+            color: ghostMode !== 'off' ? hw.accent : hw.textFaint,
+            background: ghostMode !== 'off' ? hw.accentDim : 'rgba(255,255,255,0.04)',
+            border: `1px solid ${ghostMode !== 'off' ? hw.accentGlow : hw.border}`,
+            borderRadius: hw.radius.sm,
+          }}
+        >
+          GHOST{ghostMode === 'track' ? ':T' : ghostMode === 'all' ? ':A' : ''}
         </button>
 
         <div style={{ position: 'relative' }}>
