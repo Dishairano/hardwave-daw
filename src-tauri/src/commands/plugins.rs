@@ -134,5 +134,82 @@ pub fn remove_plugin_from_track(
         .ok_or_else(|| format!("Track not found: {}", track_id))?;
 
     track.inserts.retain(|s| s.id != slot_id);
+    drop(project);
+    engine.rebuild_graph();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_insert_enabled(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+
+    let track = project
+        .track_mut(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+    let slot = track
+        .inserts
+        .iter_mut()
+        .find(|s| s.id == slot_id)
+        .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
+    slot.enabled = enabled;
+    drop(project);
+    engine.rebuild_graph();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reorder_insert(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    new_index: usize,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+
+    let track = project
+        .track_mut(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+    let from = track
+        .inserts
+        .iter()
+        .position(|s| s.id == slot_id)
+        .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
+    let to = new_index.min(track.inserts.len().saturating_sub(1));
+    if from != to {
+        let slot = track.inserts.remove(from);
+        track.inserts.insert(to, slot);
+    }
+    drop(project);
+    engine.rebuild_graph();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_fx_chain_bypassed(
+    state: State<AppState>,
+    track_id: String,
+    bypassed: bool,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+
+    let track = project
+        .track_mut(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+    for slot in &mut track.inserts {
+        slot.enabled = !bypassed;
+    }
+    drop(project);
+    engine.rebuild_graph();
     Ok(())
 }

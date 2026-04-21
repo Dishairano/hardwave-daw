@@ -1,5 +1,6 @@
 import { hw } from '../../theme'
-import { useTrackStore } from '../../stores/trackStore'
+import { useTrackStore, type InsertInfo } from '../../stores/trackStore'
+import { usePluginStore } from '../../stores/pluginStore'
 import { useMeterStore, DEFAULT_TRACK_METER } from '../../stores/meterStore'
 import { PATTERN_COLORS } from '../../stores/patternStore'
 import { DetachButton } from '../FloatingWindow'
@@ -47,6 +48,8 @@ export function MixerPanel() {
           const meter = trackMeters[track.id] ?? DEFAULT_TRACK_METER
           return (
             <Strip key={track.id}
+              trackId={track.id}
+              inserts={track.inserts ?? []}
               name={track.name} color={track.color} number={idx}
               volumeDb={track.volume_db} pan={track.pan}
               muted={track.muted} soloed={track.soloed}
@@ -137,6 +140,8 @@ function DbScale() {
 }
 
 interface StripProps {
+  trackId?: string
+  inserts?: InsertInfo[]
   name: string; color: string; number: number
   volumeDb: number; pan: number; muted: boolean; soloed: boolean
   soloSafe?: boolean
@@ -153,7 +158,7 @@ interface StripProps {
   onToggleSoloSafe?: () => void
 }
 
-function Strip({ name, color, number, volumeDb, muted, soloed, soloSafe, armed, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo, onArm, onToggleSoloSafe }: StripProps) {
+function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, soloed, soloSafe, armed, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo, onArm, onToggleSoloSafe }: StripProps) {
   const [clipped, setClipped] = useState(false)
   const resetClip = useCallback(() => setClipped(false), [])
   useEffect(() => { if (peakL >= 0 || peakR >= 0) setClipped(true) }, [peakL, peakR])
@@ -277,17 +282,10 @@ function Strip({ name, color, number, volumeDb, muted, soloed, soloSafe, armed, 
       </div>
 
       {/* FX slots */}
-      <div style={{ padding: '2px 3px', borderBottom: `1px solid ${hw.border}` }}>
-        {[0, 1, 2].map(i => (
-          <div key={i} style={{
-            height: 11, background: 'rgba(255,255,255,0.03)', border: `1px solid ${hw.borderDark}`,
-            borderRadius: hw.radius.sm, marginBottom: 1,
-            display: 'flex', alignItems: 'center', padding: '0 3px',
-          }}>
-            <span style={{ fontSize: 7, color: hw.textFaint }}>{i + 1}</span>
-          </div>
-        ))}
-      </div>
+      <FxSlots
+        trackId={isMaster ? undefined : trackId}
+        inserts={inserts}
+      />
 
       {/* Fader + meter */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 3, gap: 2, minHeight: 70 }}>
@@ -487,4 +485,165 @@ const sB: React.CSSProperties = {
   width: 17, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
   fontSize: 7, fontWeight: 700, borderRadius: 6, padding: 0,
   border: `1px solid rgba(255,255,255,0.06)`,
+}
+
+const MAX_VISIBLE_SLOTS = 10
+
+function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[] }) {
+  const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed } = usePluginStore()
+  const { fetchTracks } = useTrackStore()
+  const [menu, setMenu] = useState<{ x: number; y: number; slotId: string } | null>(null)
+
+  useEffect(() => {
+    if (!menu) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-fx-menu]')) return
+      setMenu(null)
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [menu])
+
+  if (!trackId) {
+    // Master strip keeps a purely decorative placeholder for layout parity.
+    return (
+      <div style={{ padding: '2px 3px', borderBottom: `1px solid ${hw.border}`, minHeight: 36 }} />
+    )
+  }
+
+  const allBypassed = inserts.length > 0 && inserts.every(i => !i.enabled)
+  const visibleCount = Math.max(inserts.length, 3)
+  const paddingCount = Math.max(0, Math.min(MAX_VISIBLE_SLOTS, visibleCount) - inserts.length)
+
+  return (
+    <div style={{ padding: '2px 3px', borderBottom: `1px solid ${hw.border}` }}>
+      {inserts.slice(0, MAX_VISIBLE_SLOTS).map((slot, idx) => (
+        <div
+          key={slot.id}
+          data-testid={`fx-slot-${trackId}-${slot.id}`}
+          onClick={async () => {
+            await setInsertEnabled(trackId, slot.id, !slot.enabled)
+            fetchTracks()
+          }}
+          onContextMenu={e => {
+            e.preventDefault()
+            setMenu({ x: e.clientX, y: e.clientY, slotId: slot.id })
+          }}
+          title={`${slot.pluginName} — click to ${slot.enabled ? 'disable' : 'enable'}`}
+          style={{
+            height: 11,
+            background: slot.enabled ? 'rgba(124, 58, 237, 0.18)' : 'rgba(255,255,255,0.03)',
+            border: `1px solid ${slot.enabled ? 'rgba(124, 58, 237, 0.4)' : hw.borderDark}`,
+            borderRadius: hw.radius.sm, marginBottom: 1,
+            display: 'flex', alignItems: 'center', padding: '0 3px', gap: 2,
+            cursor: 'pointer', overflow: 'hidden',
+            opacity: slot.enabled ? 1 : 0.55,
+          }}
+        >
+          <span style={{ fontSize: 7, color: hw.textFaint, flexShrink: 0 }}>{idx + 1}</span>
+          <span style={{
+            fontSize: 8, color: slot.enabled ? hw.textPrimary : hw.textMuted,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+            textDecoration: slot.enabled ? 'none' : 'line-through',
+          }}>{slot.pluginName}</span>
+        </div>
+      ))}
+      {Array.from({ length: paddingCount }).map((_, i) => (
+        <div
+          key={`empty-${i}`}
+          style={{
+            height: 11, background: 'rgba(255,255,255,0.02)', border: `1px dashed ${hw.borderDark}`,
+            borderRadius: hw.radius.sm, marginBottom: 1,
+            display: 'flex', alignItems: 'center', padding: '0 3px',
+          }}
+        >
+          <span style={{ fontSize: 7, color: hw.textFaint }}>{inserts.length + i + 1}</span>
+        </div>
+      ))}
+
+      {inserts.length > 0 && (
+        <button
+          onClick={async () => {
+            await setFxChainBypassed(trackId, !allBypassed)
+            fetchTracks()
+          }}
+          title={allBypassed ? 'Un-bypass FX chain' : 'Bypass entire FX chain'}
+          data-testid={`fx-bypass-${trackId}`}
+          style={{
+            width: '100%', height: 10, marginTop: 2,
+            fontSize: 7, fontWeight: 700, letterSpacing: 0.4,
+            background: allBypassed ? 'rgba(255, 120, 80, 0.14)' : 'rgba(255,255,255,0.04)',
+            color: allBypassed ? '#e08060' : hw.textMuted,
+            border: `1px solid ${allBypassed ? 'rgba(255, 120, 80, 0.4)' : hw.borderDark}`,
+            borderRadius: hw.radius.sm, cursor: 'pointer', padding: 0,
+          }}
+        >{allBypassed ? 'BYPASSED' : 'BYPASS'}</button>
+      )}
+
+      {menu && (
+        <div
+          data-fx-menu
+          style={{
+            position: 'fixed', left: menu.x, top: menu.y, zIndex: 100,
+            background: '#151517', border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
+            padding: 3, boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
+            display: 'flex', flexDirection: 'column', gap: 1, minWidth: 140,
+          }}
+        >
+          {(() => {
+            const slot = inserts.find(i => i.id === menu.slotId)
+            const idx = inserts.findIndex(i => i.id === menu.slotId)
+            if (!slot) return null
+            return (
+              <>
+                <button
+                  onClick={async () => {
+                    await setInsertEnabled(trackId, slot.id, !slot.enabled)
+                    fetchTracks()
+                    setMenu(null)
+                  }}
+                  style={menuBtnStyle}
+                >{slot.enabled ? 'Disable' : 'Enable'}</button>
+                <button
+                  disabled={idx <= 0}
+                  onClick={async () => {
+                    await reorderInsert(trackId, slot.id, idx - 1)
+                    fetchTracks()
+                    setMenu(null)
+                  }}
+                  style={{ ...menuBtnStyle, opacity: idx <= 0 ? 0.3 : 1 }}
+                >Move up</button>
+                <button
+                  disabled={idx >= inserts.length - 1}
+                  onClick={async () => {
+                    await reorderInsert(trackId, slot.id, idx + 1)
+                    fetchTracks()
+                    setMenu(null)
+                  }}
+                  style={{ ...menuBtnStyle, opacity: idx >= inserts.length - 1 ? 0.3 : 1 }}
+                >Move down</button>
+                <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
+                <button
+                  onClick={async () => {
+                    await removeFromTrack(trackId, slot.id)
+                    fetchTracks()
+                    setMenu(null)
+                  }}
+                  style={{ ...menuBtnStyle, color: '#e06060' }}
+                >Remove</button>
+              </>
+            )
+          })()}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const menuBtnStyle: React.CSSProperties = {
+  fontSize: 10, padding: '4px 8px', textAlign: 'left',
+  background: 'transparent', border: 'none',
+  color: hw.textPrimary, cursor: 'pointer', fontFamily: 'inherit',
+  borderRadius: 3,
 }

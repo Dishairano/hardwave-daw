@@ -46,6 +46,9 @@ interface PluginState {
   setScanProgress: (p: ScanProgress | null) => void
   addToTrack: (trackId: string, pluginId: string) => Promise<string>
   removeFromTrack: (trackId: string, slotId: string) => Promise<void>
+  setInsertEnabled: (trackId: string, slotId: string, enabled: boolean) => Promise<void>
+  reorderInsert: (trackId: string, slotId: string, newIndex: number) => Promise<void>
+  setFxChainBypassed: (trackId: string, bypassed: boolean) => Promise<void>
 }
 
 export const usePluginStore = create<PluginState>((set, get) => ({
@@ -118,5 +121,17 @@ export const usePluginStore = create<PluginState>((set, get) => ({
 
   removeFromTrack: async (trackId, slotId) => {
     await invoke('remove_plugin_from_track', { trackId, slotId })
+  },
+
+  setInsertEnabled: async (trackId, slotId, enabled) => {
+    await invoke('set_insert_enabled', { trackId, slotId, enabled })
+  },
+
+  reorderInsert: async (trackId, slotId, newIndex) => {
+    await invoke('reorder_insert', { trackId, slotId, newIndex })
+  },
+
+  setFxChainBypassed: async (trackId, bypassed) => {
+    await invoke('set_fx_chain_bypassed', { trackId, bypassed })
   },
 }))

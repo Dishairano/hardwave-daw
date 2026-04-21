@@ -30,6 +30,13 @@ export interface ClipInfo {
   fadeOutCurve: FadeCurveKind
 }
 
+export interface InsertInfo {
+  id: string
+  pluginId: string
+  pluginName: string
+  enabled: boolean
+}
+
 export interface TrackInfo {
   id: string
   name: string
@@ -42,6 +49,7 @@ export interface TrackInfo {
   armed: boolean
   solo_safe: boolean
   insert_count: number
+  inserts: InsertInfo[]
 }
 
 export interface TrackWithClips extends TrackInfo {

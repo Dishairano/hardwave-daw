@@ -3,6 +3,16 @@ use serde::Serialize;
 use tauri::State;
 
 #[derive(Serialize)]
+pub struct InsertInfo {
+    pub id: String,
+    #[serde(rename = "pluginId")]
+    pub plugin_id: String,
+    #[serde(rename = "pluginName")]
+    pub plugin_name: String,
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
 pub struct TrackInfo {
     id: String,
     name: String,
@@ -15,9 +25,23 @@ pub struct TrackInfo {
     solo_safe: bool,
     armed: bool,
     insert_count: usize,
+    inserts: Vec<InsertInfo>,
 }
 
-fn track_to_info(t: &hardwave_project::Track) -> TrackInfo {
+fn track_to_info(
+    t: &hardwave_project::Track,
+    plugin_name_lookup: &dyn Fn(&str) -> String,
+) -> TrackInfo {
+    let inserts = t
+        .inserts
+        .iter()
+        .map(|s| InsertInfo {
+            id: s.id.clone(),
+            plugin_id: s.plugin_id.clone(),
+            plugin_name: plugin_name_lookup(&s.plugin_id),
+            enabled: s.enabled,
+        })
+        .collect();
     TrackInfo {
         id: t.id.clone(),
         name: t.name.clone(),
@@ -30,6 +54,7 @@ fn track_to_info(t: &hardwave_project::Track) -> TrackInfo {
         solo_safe: t.solo_safe,
         armed: t.armed,
         insert_count: t.inserts.len(),
+        inserts,
     }
 }
 
@@ -37,7 +62,21 @@ fn track_to_info(t: &hardwave_project::Track) -> TrackInfo {
 pub fn get_tracks(state: State<AppState>) -> Vec<TrackInfo> {
     let engine = state.engine.lock();
     let project = engine.project.lock();
-    project.tracks.iter().map(track_to_info).collect()
+    let scanner = engine.plugin_scanner.lock();
+    // Build an id → name map once; fall back to the plugin id itself when the
+    // plugin is missing from the current scan (uninstalled, or scan not yet
+    // run) so the mixer never shows empty slot labels.
+    let name_of = |id: &str| -> String {
+        scanner
+            .find(id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+    project
+        .tracks
+        .iter()
+        .map(|t| track_to_info(t, &name_of))
+        .collect()
 }
 
 #[tauri::command]
