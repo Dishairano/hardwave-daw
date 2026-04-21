@@ -33,6 +33,10 @@ fn default_wet() -> f32 {
     1.0
 }
 
+fn default_stereo_separation() -> f64 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
@@ -48,6 +52,20 @@ pub struct Track {
     pub solo_safe: bool,
     pub armed: bool,
     pub output_bus: Option<TrackId>,
+
+    /// Flip sample polarity on this track. Applied before the fader.
+    #[serde(default)]
+    pub phase_invert: bool,
+    /// Swap left and right channels on this track. Applied before the fader.
+    #[serde(default)]
+    pub swap_lr: bool,
+    /// Stereo separation: 0.0 = mono (L=R), 1.0 = normal, >1.0 = widened.
+    #[serde(default = "default_stereo_separation")]
+    pub stereo_separation: f64,
+    /// Positive value delays the track by N samples, negative advances it.
+    /// Applied before the fader so metering reflects the shifted signal.
+    #[serde(default)]
+    pub delay_samples: i64,
 
     // Plugin chain
     pub inserts: Vec<PluginSlot>,
@@ -76,6 +94,10 @@ impl Track {
             solo_safe: false,
             armed: false,
             output_bus: None,
+            phase_invert: false,
+            swap_lr: false,
+            stereo_separation: 1.0,
+            delay_samples: 0,
             inserts: Vec::new(),
             sends: Vec::new(),
             clips: Vec::new(),

@@ -8,7 +8,10 @@ import { ParameterContextMenu } from '../ParameterContextMenu'
 import { useEffect, useState, useCallback, useRef } from 'react'
 
 export function MixerPanel() {
-  const { tracks, setVolume, setPan, toggleMute, toggleSolo, toggleSoloSafe, toggleArm, renameTrack, setTrackColor } = useTrackStore()
+  const {
+    tracks, setVolume, setPan, toggleMute, toggleSolo, toggleSoloSafe, toggleArm, renameTrack, setTrackColor,
+    setTrackPhaseInvert, setTrackSwapLr, setTrackStereoSeparation, setTrackDelaySamples,
+  } = useTrackStore()
   const { master, tracks: trackMeters, startListening } = useMeterStore()
   useEffect(() => { startListening() }, [])
   const [clipResetNonce, setClipResetNonce] = useState(0)
@@ -55,6 +58,10 @@ export function MixerPanel() {
               muted={track.muted} soloed={track.soloed}
               soloSafe={track.solo_safe}
               armed={track.armed}
+              phaseInvert={track.phaseInvert}
+              swapLr={track.swapLr}
+              stereoSeparation={track.stereoSeparation}
+              delaySamples={track.delaySamples}
               peakL={meter.peakL} peakR={meter.peakR} rmsDb={meter.rms}
               clipResetNonce={clipResetNonce}
               onRename={name => renameTrack(track.id, name)}
@@ -65,6 +72,10 @@ export function MixerPanel() {
               onSolo={() => toggleSolo(track.id)}
               onArm={() => toggleArm(track.id)}
               onToggleSoloSafe={() => toggleSoloSafe(track.id)}
+              onTogglePhaseInvert={() => setTrackPhaseInvert(track.id, !track.phaseInvert)}
+              onToggleSwapLr={() => setTrackSwapLr(track.id, !track.swapLr)}
+              onStereoSeparation={v => setTrackStereoSeparation(track.id, v)}
+              onDelaySamples={s => setTrackDelaySamples(track.id, s)}
             />
           )
         })}
@@ -146,6 +157,10 @@ interface StripProps {
   volumeDb: number; pan: number; muted: boolean; soloed: boolean
   soloSafe?: boolean
   armed?: boolean
+  phaseInvert?: boolean
+  swapLr?: boolean
+  stereoSeparation?: number
+  delaySamples?: number
   peakL: number; peakR: number; rmsDb: number
   peakHoldDb?: number
   clipResetNonce?: number
@@ -156,9 +171,13 @@ interface StripProps {
   onMute?: () => void; onSolo: () => void
   onArm?: () => void
   onToggleSoloSafe?: () => void
+  onTogglePhaseInvert?: () => void
+  onToggleSwapLr?: () => void
+  onStereoSeparation?: (v: number) => void
+  onDelaySamples?: (samples: number) => void
 }
 
-function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, soloed, soloSafe, armed, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo, onArm, onToggleSoloSafe }: StripProps) {
+function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, soloed, soloSafe, armed, phaseInvert = false, swapLr = false, stereoSeparation = 1, delaySamples = 0, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo, onArm, onToggleSoloSafe, onTogglePhaseInvert, onToggleSwapLr, onStereoSeparation, onDelaySamples }: StripProps) {
   const [clipped, setClipped] = useState(false)
   const resetClip = useCallback(() => setClipped(false), [])
   useEffect(() => { if (peakL >= 0 || peakR >= 0) setClipped(true) }, [peakL, peakR])
@@ -368,6 +387,33 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
         </span>
       </div>
 
+      {/* Utility buttons (phase invert, L/R swap) */}
+      {!isMaster && (onTogglePhaseInvert || onToggleSwapLr) && (
+        <div style={{ display: 'flex', gap: 1, padding: '2px 3px 0', justifyContent: 'center' }}>
+          {onTogglePhaseInvert && (
+            <button
+              onClick={onTogglePhaseInvert}
+              title={phaseInvert ? 'Phase inverted (click to restore)' : 'Invert phase'}
+              style={{
+                ...sB, color: phaseInvert ? hw.accent : hw.textMuted,
+                background: phaseInvert ? 'rgba(124,58,237,0.22)' : 'rgba(255,255,255,0.03)',
+              }}
+            >Ø</button>
+          )}
+          {onToggleSwapLr && (
+            <button
+              onClick={onToggleSwapLr}
+              title={swapLr ? 'L/R swapped (click to restore)' : 'Swap L/R'}
+              style={{
+                ...sB, color: swapLr ? hw.accent : hw.textMuted,
+                background: swapLr ? 'rgba(124,58,237,0.22)' : 'rgba(255,255,255,0.03)',
+                fontSize: 8,
+              }}
+            >L↔R</button>
+          )}
+        </div>
+      )}
+
       {/* M/S/R buttons */}
       <div style={{ display: 'flex', gap: 1, padding: '2px 3px 3px', justifyContent: 'center' }}>
         <button onClick={() => onMute?.()} style={{
@@ -422,6 +468,59 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
               label={soloSafe ? 'Disable solo-safe' : 'Solo-safe'}
               onClick={() => { setCtxMenu(null); onToggleSoloSafe() }}
             />
+          )}
+          {(onTogglePhaseInvert || onToggleSwapLr || onStereoSeparation || onDelaySamples) && (
+            <>
+              <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+              <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                Utilities
+              </div>
+              {onTogglePhaseInvert && (
+                <StripMenuItem label={phaseInvert ? 'Restore phase' : 'Invert phase (Ø)'} onClick={() => { setCtxMenu(null); onTogglePhaseInvert() }} />
+              )}
+              {onToggleSwapLr && (
+                <StripMenuItem label={swapLr ? 'Restore L/R' : 'Swap L↔R'} onClick={() => { setCtxMenu(null); onToggleSwapLr() }} />
+              )}
+              {onStereoSeparation && (
+                <div style={{ padding: '4px 8px 2px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textSecondary, marginBottom: 2 }}>
+                    <span>Separation</span>
+                    <span style={{ fontFamily: "'Consolas', monospace", color: hw.textMuted }}>
+                      {stereoSeparation < 0.01 ? 'mono' : `${stereoSeparation.toFixed(2)}×`}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={2}
+                    step={0.01}
+                    value={stereoSeparation}
+                    onChange={e => onStereoSeparation(parseFloat(e.target.value))}
+                    onDoubleClick={() => onStereoSeparation(1)}
+                    style={{ width: '100%', accentColor: hw.accent }}
+                  />
+                </div>
+              )}
+              {onDelaySamples && (
+                <div style={{ padding: '4px 8px 6px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 9, color: hw.textSecondary }}>Delay</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={4799}
+                    value={delaySamples}
+                    onChange={e => onDelaySamples(parseInt(e.target.value, 10) || 0)}
+                    style={{
+                      flex: 1, minWidth: 0, fontSize: 10,
+                      padding: '2px 4px', borderRadius: hw.radius.sm,
+                      border: `1px solid ${hw.border}`, background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
+                      fontFamily: "'Consolas', monospace",
+                    }}
+                  />
+                  <span style={{ fontSize: 8, color: hw.textFaint }}>smp</span>
+                </div>
+              )}
+            </>
           )}
           <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>

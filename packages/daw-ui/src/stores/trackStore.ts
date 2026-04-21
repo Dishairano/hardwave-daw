@@ -49,6 +49,10 @@ export interface TrackInfo {
   soloed: boolean
   armed: boolean
   solo_safe: boolean
+  phaseInvert: boolean
+  swapLr: boolean
+  stereoSeparation: number
+  delaySamples: number
   insert_count: number
   inserts: InsertInfo[]
 }
@@ -98,6 +102,10 @@ interface TrackState {
   reorderTrack: (id: string, newIndex: number) => Promise<void>
   renameTrack: (id: string, name: string) => Promise<void>
   setTrackColor: (id: string, color: string) => Promise<void>
+  setTrackPhaseInvert: (id: string, invert: boolean) => Promise<void>
+  setTrackSwapLr: (id: string, swap: boolean) => Promise<void>
+  setTrackStereoSeparation: (id: string, separation: number) => Promise<void>
+  setTrackDelaySamples: (id: string, samples: number) => Promise<void>
   trackHeights: Record<string, number>
   setTrackHeight: (id: string, height: number) => void
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
@@ -260,6 +268,32 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   setTrackColor: async (id, color) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_color', { trackId: id, color }, `Recolor "${name}"`)
+    await get().fetchTracks()
+  },
+
+  setTrackPhaseInvert: async (id, invert) => {
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_phase_invert', { trackId: id, invert }, `${invert ? 'Invert' : 'Un-invert'} phase on "${name}"`)
+    await get().fetchTracks()
+  },
+
+  setTrackSwapLr: async (id, swap) => {
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_swap_lr', { trackId: id, swap }, `${swap ? 'Swap' : 'Unswap'} L/R on "${name}"`)
+    await get().fetchTracks()
+  },
+
+  setTrackStereoSeparation: async (id, separation) => {
+    const clamped = Math.max(0, Math.min(2, separation))
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_stereo_separation', { trackId: id, separation: clamped }, `Set "${name}" separation to ${clamped.toFixed(2)}`)
+    await get().fetchTracks()
+  },
+
+  setTrackDelaySamples: async (id, samples) => {
+    const clamped = Math.max(0, Math.floor(samples))
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_delay_samples', { trackId: id, samples: clamped }, `Set "${name}" delay to ${clamped} samples`)
     await get().fetchTracks()
   },
 

@@ -25,6 +25,14 @@ pub struct TrackInfo {
     soloed: bool,
     solo_safe: bool,
     armed: bool,
+    #[serde(rename = "phaseInvert")]
+    phase_invert: bool,
+    #[serde(rename = "swapLr")]
+    swap_lr: bool,
+    #[serde(rename = "stereoSeparation")]
+    stereo_separation: f64,
+    #[serde(rename = "delaySamples")]
+    delay_samples: i64,
     insert_count: usize,
     inserts: Vec<InsertInfo>,
 }
@@ -55,6 +63,10 @@ fn track_to_info(
         soloed: t.soloed,
         solo_safe: t.solo_safe,
         armed: t.armed,
+        phase_invert: t.phase_invert,
+        swap_lr: t.swap_lr,
+        stereo_separation: t.stereo_separation,
+        delay_samples: t.delay_samples,
         insert_count: t.inserts.len(),
         inserts,
     }
@@ -278,6 +290,62 @@ pub fn toggle_solo_safe(state: State<AppState>, track_id: String) {
         let mut project = engine.project.lock();
         if let Some(track) = project.track_mut(&track_id) {
             track.solo_safe = !track.solo_safe;
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_phase_invert(state: State<AppState>, track_id: String, invert: bool) {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.phase_invert = invert;
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_swap_lr(state: State<AppState>, track_id: String, swap: bool) {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.swap_lr = swap;
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_stereo_separation(state: State<AppState>, track_id: String, separation: f64) {
+    if !separation.is_finite() {
+        return;
+    }
+    let separation = separation.clamp(0.0, 2.0);
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.stereo_separation = separation;
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_delay_samples(state: State<AppState>, track_id: String, samples: i64) {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.delay_samples = samples.max(0);
         }
     }
     engine.rebuild_graph();

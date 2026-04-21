@@ -615,6 +615,10 @@ impl EngineCallback {
             let effective_mute = track.muted || (any_soloed && !track.soloed && !track.solo_safe);
             node.set_muted(effective_mute);
             node.set_soloed(track.soloed);
+            node.set_phase_invert(track.phase_invert);
+            node.set_swap_lr(track.swap_lr);
+            node.set_stereo_separation(track.stereo_separation);
+            node.set_delay_samples(track.delay_samples);
 
             // Convert clip placements to sample-based ClipRegions.
             // Clips are visited in their project-defined order, then any overlap between

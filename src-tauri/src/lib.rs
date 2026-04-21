@@ -52,6 +52,10 @@ pub fn run() {
             commands::tracks::reorder_track,
             commands::tracks::set_track_name,
             commands::tracks::set_track_color,
+            commands::tracks::set_track_phase_invert,
+            commands::tracks::set_track_swap_lr,
+            commands::tracks::set_track_stereo_separation,
+            commands::tracks::set_track_delay_samples,
             // Plugins
             commands::plugins::scan_plugins,
             commands::plugins::get_plugins,

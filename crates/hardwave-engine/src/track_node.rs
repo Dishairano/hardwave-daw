@@ -87,6 +87,16 @@ pub struct TrackNode {
     pan: f32,    // -1.0 to 1.0
     muted: bool,
     soloed: bool,
+    phase_invert: bool,
+    swap_lr: bool,
+    /// 0.0 = mono, 1.0 = normal, >1.0 = widened.
+    stereo_separation: f32,
+    /// Positive = delay, negative = advance. Bounded against delay_capacity.
+    delay_samples: i32,
+    /// Delay line for the left/right channels (ring buffer, zero-initialized).
+    delay_buf_l: Vec<f32>,
+    delay_buf_r: Vec<f32>,
+    delay_write_pos: usize,
     /// Cached Arc references to audio buffers, refreshed when clips change.
     cached_buffers: Vec<Option<Arc<AudioBuffer>>>,
     /// Shared meter state so the UI can read post-fader peaks without locking.
@@ -94,6 +104,8 @@ pub struct TrackNode {
     /// Smoothed RMS (linear), updated each block.
     rms_smooth: f32,
 }
+
+const TRACK_DELAY_CAPACITY: usize = 4800; // 100 ms at 48 kHz, both directions
 
 impl TrackNode {
     pub fn new(name: String, pool: AudioPool, meter: Arc<TrackMeterState>) -> Self {
@@ -105,10 +117,37 @@ impl TrackNode {
             pan: 0.0,
             muted: false,
             soloed: false,
+            phase_invert: false,
+            swap_lr: false,
+            stereo_separation: 1.0,
+            delay_samples: 0,
+            delay_buf_l: vec![0.0; TRACK_DELAY_CAPACITY],
+            delay_buf_r: vec![0.0; TRACK_DELAY_CAPACITY],
+            delay_write_pos: 0,
             cached_buffers: Vec::new(),
             meter,
             rms_smooth: 0.0,
         }
+    }
+
+    pub fn set_phase_invert(&mut self, inv: bool) {
+        self.phase_invert = inv;
+    }
+
+    pub fn set_swap_lr(&mut self, swap: bool) {
+        self.swap_lr = swap;
+    }
+
+    pub fn set_stereo_separation(&mut self, sep: f64) {
+        self.stereo_separation = sep.clamp(0.0, 2.0) as f32;
+    }
+
+    pub fn set_delay_samples(&mut self, samples: i64) {
+        let max = TRACK_DELAY_CAPACITY as i64 - 1;
+        // Only positive delay is honored; negative delay (advance) isn't representable
+        // in a streaming graph without lookahead, and is normally achieved by delaying
+        // the other tracks instead.
+        self.delay_samples = samples.clamp(0, max) as i32;
     }
 
     /// Update the clip list. Called from the engine thread (not the audio thread)
@@ -253,6 +292,63 @@ impl AudioNode for TrackNode {
 
                 out_l[frame] += l;
                 out_r[frame] += r;
+            }
+        }
+
+        // --- Pre-fader utility chain: delay → swap → phase → stereo separation.
+        // Order is deliberate: delay first so the shifted signal feeds the rest of
+        // the chain, then L/R swap, then polarity flip, then M/S separation.
+
+        if self.delay_samples > 0 {
+            let cap = self.delay_buf_l.len();
+            let delay = self.delay_samples as usize;
+            let (out_left, out_rest) = outputs.split_at_mut(1);
+            let out_l = &mut out_left[0];
+            let out_r = &mut out_rest[0];
+            for frame in 0..buf_size {
+                let write = self.delay_write_pos;
+                let read = (write + cap - delay) % cap;
+                let in_l = out_l[frame];
+                let in_r = out_r[frame];
+                out_l[frame] = self.delay_buf_l[read];
+                out_r[frame] = self.delay_buf_r[read];
+                self.delay_buf_l[write] = in_l;
+                self.delay_buf_r[write] = in_r;
+                self.delay_write_pos = (write + 1) % cap;
+            }
+        }
+
+        if self.swap_lr {
+            let (out_left, out_rest) = outputs.split_at_mut(1);
+            let out_l = &mut out_left[0];
+            let out_r = &mut out_rest[0];
+            for frame in 0..buf_size {
+                std::mem::swap(&mut out_l[frame], &mut out_r[frame]);
+            }
+        }
+
+        if self.phase_invert {
+            let (out_left, out_rest) = outputs.split_at_mut(1);
+            for s in out_left[0].iter_mut().take(buf_size) {
+                *s = -*s;
+            }
+            for s in out_rest[0].iter_mut().take(buf_size) {
+                *s = -*s;
+            }
+        }
+
+        if (self.stereo_separation - 1.0).abs() > 1e-4 {
+            let sep = self.stereo_separation;
+            let (out_left, out_rest) = outputs.split_at_mut(1);
+            let out_l = &mut out_left[0];
+            let out_r = &mut out_rest[0];
+            for frame in 0..buf_size {
+                let l = out_l[frame];
+                let r = out_r[frame];
+                let mid = (l + r) * 0.5;
+                let side = (l - r) * 0.5;
+                out_l[frame] = mid + side * sep;
+                out_r[frame] = mid - side * sep;
             }
         }
 
