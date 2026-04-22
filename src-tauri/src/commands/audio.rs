@@ -305,6 +305,17 @@ pub fn set_clip_fade_curves(
     Ok(())
 }
 
+/// Clamp pitch to the roadmap-documented range of ±24 semitones.
+pub fn clamp_clip_pitch_semitones(pitch_semitones: f64) -> f64 {
+    pitch_semitones.clamp(-24.0, 24.0)
+}
+
+/// Clamp stretch ratio to a strict superset of the roadmap-documented
+/// 50%..200% range. 1.0 = realtime, 0.25 = 4× slower, 4.0 = 4× faster.
+pub fn clamp_clip_stretch_ratio(stretch_ratio: f64) -> f64 {
+    stretch_ratio.clamp(0.25, 4.0)
+}
+
 /// Set clip pitch shift in semitones (range -24..+24).
 #[tauri::command]
 pub fn set_clip_pitch(
@@ -316,7 +327,7 @@ pub fn set_clip_pitch(
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
-        ac.pitch_semitones = pitch_semitones.clamp(-24.0, 24.0);
+        ac.pitch_semitones = clamp_clip_pitch_semitones(pitch_semitones);
     })?;
     drop(engine);
     state.engine.lock().rebuild_graph();
@@ -334,11 +345,44 @@ pub fn set_clip_stretch(
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
-        ac.stretch_ratio = stretch_ratio.clamp(0.25, 4.0);
+        ac.stretch_ratio = clamp_clip_stretch_ratio(stretch_ratio);
     })?;
     drop(engine);
     state.engine.lock().rebuild_graph();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pitch_clamp_covers_two_octaves_each_way() {
+        assert_eq!(clamp_clip_pitch_semitones(0.0), 0.0);
+        assert_eq!(clamp_clip_pitch_semitones(24.0), 24.0);
+        assert_eq!(clamp_clip_pitch_semitones(-24.0), -24.0);
+        // Out-of-range values clamp to the ±24 st limit.
+        assert_eq!(clamp_clip_pitch_semitones(50.0), 24.0);
+        assert_eq!(clamp_clip_pitch_semitones(-120.0), -24.0);
+        // Non-integer / fine-grained values pass through untouched until the
+        // boundary — the dedicated fine-cents pathway lives separately.
+        assert_eq!(clamp_clip_pitch_semitones(7.5), 7.5);
+        assert_eq!(clamp_clip_pitch_semitones(-3.25), -3.25);
+    }
+
+    #[test]
+    fn stretch_clamp_is_superset_of_roadmap_range() {
+        // Roadmap claims 50%..200% must work. We ship 25%..400%, so both
+        // boundary values of the documented range pass through untouched.
+        assert_eq!(clamp_clip_stretch_ratio(0.5), 0.5);
+        assert_eq!(clamp_clip_stretch_ratio(2.0), 2.0);
+        assert_eq!(clamp_clip_stretch_ratio(1.0), 1.0);
+        // Our own limits (0.25 / 4.0) clamp values beyond them.
+        assert_eq!(clamp_clip_stretch_ratio(0.25), 0.25);
+        assert_eq!(clamp_clip_stretch_ratio(4.0), 4.0);
+        assert_eq!(clamp_clip_stretch_ratio(0.01), 0.25);
+        assert_eq!(clamp_clip_stretch_ratio(10.0), 4.0);
+    }
 }
 
 /// Toggle the reverse flag of an audio clip.
