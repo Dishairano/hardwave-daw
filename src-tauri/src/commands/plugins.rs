@@ -1,6 +1,8 @@
 use crate::AppState;
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::PluginDescriptor;
+use serde::Serialize;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
 
@@ -33,6 +35,48 @@ pub fn get_plugins(state: State<AppState>) -> Vec<PluginDescriptor> {
     let engine = state.engine.lock();
     let scanner = engine.plugin_scanner.lock();
     scanner.plugins().to_vec()
+}
+
+#[derive(Serialize)]
+pub struct MissingPluginInfo {
+    #[serde(rename = "pluginId")]
+    pub plugin_id: String,
+    #[serde(rename = "trackId")]
+    pub track_id: String,
+    #[serde(rename = "trackName")]
+    pub track_name: String,
+    #[serde(rename = "slotId")]
+    pub slot_id: String,
+    #[serde(rename = "slotIndex")]
+    pub slot_index: usize,
+}
+
+#[tauri::command]
+pub fn find_missing_plugins(state: State<AppState>) -> Vec<MissingPluginInfo> {
+    let engine = state.engine.lock();
+    let available: HashSet<String> = engine
+        .plugin_scanner
+        .lock()
+        .plugins()
+        .iter()
+        .map(|p| p.id.clone())
+        .collect();
+    let project = engine.project.lock();
+    let mut missing = Vec::new();
+    for track in &project.tracks {
+        for (slot_index, slot) in track.inserts.iter().enumerate() {
+            if !available.contains(&slot.plugin_id) {
+                missing.push(MissingPluginInfo {
+                    plugin_id: slot.plugin_id.clone(),
+                    track_id: track.id.clone(),
+                    track_name: track.name.clone(),
+                    slot_id: slot.id.clone(),
+                    slot_index,
+                });
+            }
+        }
+    }
+    missing
 }
 
 #[tauri::command]

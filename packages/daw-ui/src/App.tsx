@@ -384,6 +384,28 @@ export function App() {
     await fetchTracks()
   }, [newProject, fetchTracks, applyTemplate])
 
+  const warnIfMissingPlugins = useCallback(async () => {
+    try {
+      const missing = await invoke<Array<{ pluginId: string; trackName: string; slotIndex: number }>>('find_missing_plugins')
+      if (missing.length === 0) return
+      const byPlugin = new Map<string, Array<{ trackName: string; slotIndex: number }>>()
+      for (const m of missing) {
+        const arr = byPlugin.get(m.pluginId) ?? []
+        arr.push({ trackName: m.trackName, slotIndex: m.slotIndex })
+        byPlugin.set(m.pluginId, arr)
+      }
+      const lines: string[] = []
+      for (const [pid, uses] of byPlugin) {
+        const where = uses.map(u => `${u.trackName} · slot #${u.slotIndex + 1}`).join(', ')
+        lines.push(`• ${pid}\n   ${where}`)
+      }
+      await showErrorDialog(
+        'Missing plugins',
+        `This project references ${missing.length} plugin instance${missing.length === 1 ? '' : 's'} that aren't installed or scanned. Their state is preserved — rescan or install the plugins to re-enable them.\n\n${lines.join('\n')}`,
+      )
+    } catch {}
+  }, [showErrorDialog])
+
   const handleOpenProject = useCallback(async () => {
     if (!(await confirmDiscardIfDirty('Save changes before opening another project'))) return
     try {
@@ -397,12 +419,13 @@ export function App() {
       try {
         await loadProject(path)
         await fetchTracks()
+        await warnIfMissingPlugins()
       } catch (err) {
         useProjectStore.getState().removeRecent(path)
         await showErrorDialog('Could not open project', `${path}\n\n${err}`)
       }
     } catch {}
-  }, [loadProject, fetchTracks, confirmDiscardIfDirty, showErrorDialog])
+  }, [loadProject, fetchTracks, confirmDiscardIfDirty, showErrorDialog, warnIfMissingPlugins])
 
   const handleSaveProjectAs = useCallback(async () => {
     try {
@@ -435,6 +458,7 @@ export function App() {
         await loadProject(info.path)
         await fetchTracks()
         useProjectStore.getState().markDirty()
+        await warnIfMissingPlugins()
       } catch (err) {
         await showErrorDialog('Recovery failed', String(err))
       }
@@ -450,10 +474,11 @@ export function App() {
         if (selected) {
           await loadProject(selected as string)
           await fetchTracks()
+          await warnIfMissingPlugins()
         }
       } catch {}
     }
-  }, [crashInfo, loadProject, fetchTracks, showErrorDialog])
+  }, [crashInfo, loadProject, fetchTracks, showErrorDialog, warnIfMissingPlugins])
 
   const pasteAtPlayhead = useCallback(() => {
     const transport = useTransportStore.getState()
@@ -483,11 +508,12 @@ export function App() {
     try {
       await loadProject(path)
       await fetchTracks()
+      await warnIfMissingPlugins()
     } catch (err) {
       useProjectStore.getState().removeRecent(path)
       await showErrorDialog('Could not open project', `${path}\n\nRemoved from recent projects.\n\n${err}`)
     }
-  }, [loadProject, fetchTracks, confirmDiscardIfDirty, showErrorDialog])
+  }, [loadProject, fetchTracks, confirmDiscardIfDirty, showErrorDialog, warnIfMissingPlugins])
 
   const handleExportAudio = useCallback(() => {
     setShowExport(true)
