@@ -24,10 +24,11 @@ export interface ParameterContextMenuProps {
   decimals?: number
   onSet: (v: number) => void
   onClose: () => void
+  onMidiLearn?: () => void
 }
 
 export function ParameterContextMenu(props: ParameterContextMenuProps) {
-  const { x, y, label, value, defaultValue, unit = '', min, max, decimals = 2, onSet, onClose } = props
+  const { x, y, label, value, defaultValue, unit = '', min, max, decimals = 2, onSet, onClose, onMidiLearn } = props
   const [typing, setTyping] = useState(false)
   const [draft, setDraft] = useState(() => value.toFixed(decimals))
   const inputRef = useRef<HTMLInputElement>(null)
@@ -133,7 +134,17 @@ export function ParameterContextMenu(props: ParameterContextMenuProps) {
           }} />
           <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
           <Item label="Automation…" disabled shortcut="soon" onClick={() => {}} />
-          <Item label="MIDI Learn" disabled shortcut="soon" onClick={() => {}} />
+          <Item
+            label="MIDI Learn"
+            disabled={!onMidiLearn}
+            shortcut={onMidiLearn ? undefined : 'soon'}
+            onClick={() => {
+              if (onMidiLearn) {
+                onMidiLearn()
+                onClose()
+              }
+            }}
+          />
         </>
       )}
     </div>

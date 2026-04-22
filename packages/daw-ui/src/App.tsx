@@ -33,7 +33,7 @@ import { useBeatSlicerStore } from './stores/beatSlicerStore'
 import { LoudnessMeter } from './components/LoudnessMeter'
 import { Oscilloscope } from './components/Oscilloscope'
 import { SpectrumAnalyzer } from './components/SpectrumAnalyzer'
-import { MidiMappingsPanel } from './components/MidiMappingsPanel'
+import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappingsPanel'
 import { HistoryPanel } from './components/HistoryPanel'
 import { PrecountOverlay } from './components/transport/PrecountOverlay'
 import { invoke } from '@tauri-apps/api/core'
@@ -82,6 +82,7 @@ export function App() {
   const [showOscilloscope, setShowOscilloscope] = useState(false)
   const [showSpectrum, setShowSpectrum] = useState(false)
   const [showMidiMappings, setShowMidiMappings] = useState(false)
+  const [midiLearnPreset, setMidiLearnPreset] = useState<MidiMapTarget | undefined>(undefined)
   const [showHistory, setShowHistory] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
   const closeSampleEditor = useSampleEditorStore(s => s.close)
@@ -115,6 +116,16 @@ export function App() {
     const onOpen = () => setShowPianoRoll(true)
     window.addEventListener('daw:openPianoRoll', onOpen)
     return () => window.removeEventListener('daw:openPianoRoll', onOpen)
+  }, [])
+
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const target = (e as CustomEvent<MidiMapTarget>).detail
+      setMidiLearnPreset(target)
+      setShowMidiMappings(true)
+    }
+    window.addEventListener('daw:openMidiLearn', onOpen)
+    return () => window.removeEventListener('daw:openMidiLearn', onOpen)
   }, [])
 
   // When Piano Roll opens with no active clip but a MIDI track is selected,
@@ -724,7 +735,12 @@ export function App() {
       {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}
       {showOscilloscope && <Oscilloscope onClose={() => setShowOscilloscope(false)} />}
       {showSpectrum && <SpectrumAnalyzer onClose={() => setShowSpectrum(false)} />}
-      {showMidiMappings && <MidiMappingsPanel onClose={() => setShowMidiMappings(false)} />}
+      {showMidiMappings && (
+        <MidiMappingsPanel
+          onClose={() => { setShowMidiMappings(false); setMidiLearnPreset(undefined) }}
+          initialTarget={midiLearnPreset}
+        />
+      )}
 
       {showHistory && <HistoryPanel onClose={() => setShowHistory(false)} />}
       <PrecountOverlay />

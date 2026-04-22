@@ -886,6 +886,9 @@ export function ChannelRack() {
               decimals={2}
               onSet={v => setPan(ch.id, v)}
               onClose={() => setParamCtx(null)}
+              onMidiLearn={() => window.dispatchEvent(new CustomEvent('daw:openMidiLearn', {
+                detail: { kind: 'trackPan', trackId: ch.id },
+              }))}
             />
           )
         }
@@ -902,6 +905,9 @@ export function ChannelRack() {
             decimals={1}
             onSet={v => setVolume(ch.id, v)}
             onClose={() => setParamCtx(null)}
+            onMidiLearn={() => window.dispatchEvent(new CustomEvent('daw:openMidiLearn', {
+              detail: { kind: 'trackVolume', trackId: ch.id },
+            }))}
           />
         )
       })()}

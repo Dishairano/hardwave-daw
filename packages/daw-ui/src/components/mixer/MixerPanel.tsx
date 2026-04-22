@@ -571,6 +571,17 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
           decimals={1}
           onSet={v => onVolume(v)}
           onClose={() => setFaderCtx(null)}
+          onMidiLearn={
+            isMaster
+              ? () => window.dispatchEvent(new CustomEvent('daw:openMidiLearn', {
+                  detail: { kind: 'masterVolume' },
+                }))
+              : trackId
+                ? () => window.dispatchEvent(new CustomEvent('daw:openMidiLearn', {
+                    detail: { kind: 'trackVolume', trackId },
+                  }))
+                : undefined
+          }
         />
       )}
     </div>

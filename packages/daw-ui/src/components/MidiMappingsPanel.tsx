@@ -5,9 +5,10 @@ import { useTrackStore, type TrackInfo } from '../stores/trackStore'
 
 interface MidiMappingsPanelProps {
   onClose: () => void
+  initialTarget?: MidiMapTarget
 }
 
-type MidiMapTarget =
+export type MidiMapTarget =
   | { kind: 'masterVolume' }
   | { kind: 'trackVolume'; trackId: string }
   | { kind: 'trackPan'; trackId: string }
@@ -47,14 +48,20 @@ function buildTarget(kind: TargetKind, trackId: string): MidiMapTarget {
   return { kind, trackId }
 }
 
-export function MidiMappingsPanel({ onClose }: MidiMappingsPanelProps) {
+export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelProps) {
   const tracks = useTrackStore(s => s.tracks)
   const [mappings, setMappings] = useState<MidiMapping[]>([])
   const [learnStatus, setLearnStatus] = useState<LearnStatus>({
     learning: false, target: null, lastLearned: null,
   })
-  const [addKind, setAddKind] = useState<TargetKind>('masterVolume')
-  const [addTrackId, setAddTrackId] = useState<string>(tracks[0]?.id ?? '')
+  const [addKind, setAddKind] = useState<TargetKind>(
+    initialTarget?.kind ?? 'masterVolume'
+  )
+  const [addTrackId, setAddTrackId] = useState<string>(
+    initialTarget && initialTarget.kind !== 'masterVolume'
+      ? initialTarget.trackId
+      : (tracks[0]?.id ?? '')
+  )
 
   const refreshMappings = useCallback(async () => {
     try {
@@ -84,17 +91,22 @@ export function MidiMappingsPanel({ onClose }: MidiMappingsPanelProps) {
     if (!addTrackId && tracks.length > 0) setAddTrackId(tracks[0].id)
   }, [tracks, addTrackId])
 
-  const startLearn = async () => {
-    const needsTrack = addKind !== 'masterVolume'
-    if (needsTrack && !addTrackId) return
-    const target = buildTarget(addKind, addTrackId)
+  const startLearn = useCallback(async (preset?: MidiMapTarget) => {
+    const target = preset ?? buildTarget(addKind, addTrackId)
+    if (target.kind !== 'masterVolume' && !target.trackId) return
     try {
       await invoke('midi_learn_start', { target })
       await refreshStatus()
     } catch (e) {
       console.error('midi_learn_start failed', e)
     }
-  }
+  }, [addKind, addTrackId, refreshStatus])
+
+  useEffect(() => {
+    if (!initialTarget) return
+    startLearn(initialTarget)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const cancelLearn = async () => {
     await invoke('midi_learn_cancel')
@@ -174,7 +186,7 @@ export function MidiMappingsPanel({ onClose }: MidiMappingsPanelProps) {
           )}
           {learnStatus.learning
             ? <button onClick={cancelLearn} style={btn(true)}>Cancel learn</button>
-            : <button onClick={startLearn} style={btn(false)}>Start learn</button>
+            : <button onClick={() => startLearn()} style={btn(false)}>Start learn</button>
           }
         </div>
 
