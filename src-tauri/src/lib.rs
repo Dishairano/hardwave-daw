@@ -137,6 +137,7 @@ pub fn run() {
             commands::plugins::set_insert_wet,
             commands::plugins::set_plugin_sidechain_source,
             commands::plugins::find_missing_plugins,
+            commands::engine::get_graph_latency,
             // Project
             commands::project::new_project,
             commands::project::save_project,

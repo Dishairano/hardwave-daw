@@ -213,6 +213,26 @@ pub fn get_direct_monitoring(state: State<AppState>) -> bool {
         .load(Ordering::Relaxed)
 }
 
+#[derive(Serialize)]
+pub struct GraphLatency {
+    pub samples: u32,
+    pub ms: f64,
+}
+
+#[tauri::command]
+pub fn get_graph_latency(state: State<AppState>) -> GraphLatency {
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    let samples = engine.graph_latency_samples.load(Ordering::Relaxed);
+    let (_, sample_rate, _) = engine.audio_config();
+    let ms = if sample_rate > 0 {
+        samples as f64 / sample_rate as f64 * 1000.0
+    } else {
+        0.0
+    };
+    GraphLatency { samples, ms }
+}
+
 #[tauri::command]
 pub fn get_input_meter(state: State<AppState>) -> InputMeterSnapshot {
     let engine = state.engine.lock();

@@ -398,6 +398,11 @@ export function Toolbar(props: ToolbarProps) {
 
       <Sep />
 
+      {/* 14a. Graph latency */}
+      <LatencyReadout onEnter={hint} onLeave={clear} />
+
+      <Sep />
+
       {/* 14b. MIDI activity LED */}
       <MidiActivityLed onEnter={hint} onLeave={clear} />
 
@@ -519,6 +524,48 @@ function CpuPolyMeters({ onEnter, onLeave }: { onEnter: (text: string) => () => 
           }} />
         </div>
       </div>
+    </div>
+  )
+}
+
+// Polls the audio graph for its current critical-path latency. Until full PDC
+// (per-path accumulation + parallel alignment) lands this is the max of all
+// node `latency_samples()` reports; it's a coarse indicator but gets the user
+// a concrete number to watch as they add plugins.
+function LatencyReadout({ onEnter, onLeave }: {
+  onEnter: (text: string) => () => void; onLeave: () => void
+}) {
+  const [samples, setSamples] = useState(0)
+  const [ms, setMs] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const lat = await invoke<{ samples: number; ms: number }>('get_graph_latency')
+        if (!cancelled) { setSamples(lat.samples); setMs(lat.ms) }
+      } catch {}
+    }
+    tick()
+    const id = window.setInterval(tick, 1000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [])
+  const label = ms < 10 ? ms.toFixed(2) : ms.toFixed(1)
+  const color = samples === 0 ? hw.textFaint : ms > 20 ? hw.yellow : hw.textPrimary
+  return (
+    <div
+      data-testid="toolbar-latency"
+      onMouseEnter={onEnter(`Graph latency: ${samples} samples (~${ms.toFixed(2)} ms)`)}
+      onMouseLeave={onLeave}
+      title={`Critical-path latency ~${ms.toFixed(2)} ms (${samples} samples). Coarse estimate until full plugin delay compensation lands.`}
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
+        minWidth: 36,
+      }}
+    >
+      <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1, letterSpacing: 0.3 }}>LAT</span>
+      <span style={{ fontSize: 9, color, fontVariantNumeric: 'tabular-nums' }}>
+        {samples === 0 ? '—' : `${label} ms`}
+      </span>
     </div>
   )
 }

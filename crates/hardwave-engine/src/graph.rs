@@ -186,4 +186,15 @@ impl AudioGraph {
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
+
+    /// Maximum per-node `latency_samples` in the graph. Used as a coarse
+    /// indicator of total project latency until full plugin-delay
+    /// compensation (per-path accumulation + parallel-path alignment) lands.
+    pub fn max_latency_samples(&self) -> u32 {
+        self.nodes
+            .iter()
+            .map(|n| n.latency_samples())
+            .max()
+            .unwrap_or(0)
+    }
 }

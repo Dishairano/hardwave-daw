@@ -93,6 +93,10 @@ pub struct DawEngine {
     pub plugin_scanner: Arc<Mutex<PluginScanner>>,
     pub midi_input: Arc<Mutex<MidiInputManager>>,
     pub audio_pool: AudioPool,
+    /// Critical-path latency in samples, published by the audio thread after
+    /// each graph rebuild. Coarse proxy for "total project latency" until
+    /// full PDC lands.
+    pub graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
 
     audio_device: AudioDeviceManager,
     command_tx: Sender<EngineCommand>,
@@ -147,6 +151,7 @@ impl DawEngine {
             input_consumer: Arc::new(Mutex::new(None)),
             history: Arc::new(Mutex::new(History::new())),
             master_tap: master_tap::new_shared(),
+            graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
 
@@ -218,6 +223,7 @@ impl DawEngine {
             Arc::clone(&self.track_meters),
             Arc::clone(&self.input_consumer),
             Arc::clone(&self.master_tap),
+            Arc::clone(&self.graph_latency_samples),
             sample_rate,
             buffer_size,
         );
@@ -593,6 +599,7 @@ impl DawEngine {
         // Offline render — use a private, discardable tap so we don't mix
         // offline samples into the live UI visualization stream.
         let offline_tap = master_tap::new_shared();
+        let offline_latency = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let mut callback = EngineCallback::new(
             transport,
             project_arc,
@@ -602,6 +609,7 @@ impl DawEngine {
             track_meters,
             input_consumer,
             offline_tap,
+            offline_latency,
             sample_rate,
             buffer_size as u32,
         );
@@ -665,6 +673,7 @@ struct EngineCallback {
     /// When false AND the transport isn't playing, we can short-circuit the
     /// graph and emit silence to save CPU.
     has_monitored_input: bool,
+    graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl EngineCallback {
@@ -678,6 +687,7 @@ impl EngineCallback {
         track_meters: TrackMeterMap,
         input_consumer: SharedInputConsumer,
         master_tap: SharedMasterTap,
+        graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
         sample_rate: u32,
         buffer_size: u32,
     ) -> Self {
@@ -696,6 +706,7 @@ impl EngineCallback {
             needs_rebuild: true,
             master_id: None,
             has_monitored_input: false,
+            graph_latency_samples,
         };
         cb.rebuild_graph();
         cb
@@ -1068,6 +1079,10 @@ impl EngineCallback {
         }
 
         self.needs_rebuild = false;
+        self.graph_latency_samples.store(
+            self.graph.max_latency_samples(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 }
 
