@@ -9,7 +9,8 @@ import { usePatternStore } from '../stores/patternStore'
 export type BitDepth = 0 | 16 | 24
 export type SampleRate = 44100 | 48000 | 88200 | 96000 | 192000
 export type ExportRange = 'full' | 'loop' | 'pattern'
-export type ExportFormat = 'wav' | 'flac'
+export type ExportFormat = 'wav' | 'flac' | 'mp3'
+export type Mp3Bitrate = 128 | 192 | 256 | 320
 export type NormalizeMode = 'off' | 'peak' | 'lufs'
 export type DitherMode = 'none' | 'tpdf' | 'tpdf_shaped'
 
@@ -48,6 +49,10 @@ const NORMALIZE_KEY = 'hw.export.normalize'
 const NORMALIZE_DB_KEY = 'hw.export.normalizeDb'
 const DITHER_KEY = 'hw.export.dither'
 const FORMAT_KEY = 'hw.export.format'
+const MP3_BITRATE_KEY = 'hw.export.mp3Bitrate'
+
+const MP3_BITRATE_OPTIONS: Mp3Bitrate[] = [128, 192, 256, 320]
+const MP3_SAMPLE_RATES: SampleRate[] = [44100, 48000]
 
 function readNumber(key: string, fallback: number): number {
   try {
@@ -96,7 +101,13 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
   })
   const [format, setFormat] = useState<ExportFormat>(() => {
     const raw = (typeof localStorage !== 'undefined' && localStorage.getItem(FORMAT_KEY)) || 'wav'
-    return raw === 'flac' ? 'flac' : 'wav'
+    if (raw === 'flac') return 'flac'
+    if (raw === 'mp3') return 'mp3'
+    return 'wav'
+  })
+  const [mp3Bitrate, setMp3Bitrate] = useState<Mp3Bitrate>(() => {
+    const n = readNumber(MP3_BITRATE_KEY, 320)
+    return (MP3_BITRATE_OPTIONS.includes(n as Mp3Bitrate) ? n : 320) as Mp3Bitrate
   })
   const [exporting, setExporting] = useState(false)
   const [percent, setPercent] = useState(0)
@@ -129,6 +140,12 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
   useEffect(() => {
     if (range === 'loop' && !loopRangeValid) setRange('full')
   }, [range, loopRangeValid])
+
+  useEffect(() => {
+    if (format === 'mp3' && !MP3_SAMPLE_RATES.includes(sampleRate)) {
+      setSampleRate(48000)
+    }
+  }, [format, sampleRate])
 
   useEffect(() => {
     startBtn.current?.focus()
@@ -173,6 +190,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     try { localStorage.setItem('hw.export.normalizeLufs', String(normalizeTargetLufs)) } catch {}
     try { localStorage.setItem(DITHER_KEY, ditherMode) } catch {}
     try { localStorage.setItem(FORMAT_KEY, format) } catch {}
+    try { localStorage.setItem(MP3_BITRATE_KEY, String(mp3Bitrate)) } catch {}
   }
 
   const normalizeTargetForBackend = normalizeMode === 'lufs' ? normalizeTargetLufs : normalizeTargetDb
@@ -240,6 +258,8 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           normalizeMode,
           normalizeTargetDb: normalizeTargetForBackend,
           ditherMode,
+          stemFormat: format,
+          mp3BitrateKbps: mp3Bitrate,
         })
         if (result.cancelled) {
           onError('Export cancelled')
@@ -258,7 +278,11 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     const defaultPath = lastDir
       ? `${lastDir}/${initial.defaultName}.${ext}`
       : `${initial.defaultName}.${ext}`
-    const filterName = format === 'flac' ? 'FLAC audio' : 'WAV audio'
+    const filterName = format === 'flac'
+      ? 'FLAC audio'
+      : format === 'mp3'
+        ? 'MP3 audio'
+        : 'WAV audio'
     const path = await save({
       title: 'Export audio',
       defaultPath,
@@ -292,6 +316,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
         normalizeMode,
         normalizeTargetDb: normalizeTargetForBackend,
         ditherMode,
+        mp3BitrateKbps: mp3Bitrate,
       })
       if (result.cancelled) {
         onError('Export cancelled')
@@ -346,8 +371,23 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           >
             <option value="wav">WAV (PCM)</option>
             <option value="flac">FLAC (lossless)</option>
+            <option value="mp3">MP3 (CBR)</option>
           </select>
         </Row>
+        {format === 'mp3' && (
+          <Row label="MP3 bitrate">
+            <select
+              value={mp3Bitrate}
+              disabled={exporting}
+              onChange={e => setMp3Bitrate(Number(e.target.value) as Mp3Bitrate)}
+              style={selectStyle}
+            >
+              {MP3_BITRATE_OPTIONS.map(b => (
+                <option key={b} value={b}>{b} kbps</option>
+              ))}
+            </select>
+          </Row>
+        )}
 
         <Row label="Bit depth">
           <select
@@ -369,7 +409,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
             onChange={e => setSampleRate(Number(e.target.value) as SampleRate)}
             style={selectStyle}
           >
-            {SAMPLE_RATE_OPTIONS.map(sr => (
+            {(format === 'mp3' ? MP3_SAMPLE_RATES : SAMPLE_RATE_OPTIONS).map(sr => (
               <option key={sr} value={sr}>{sr.toLocaleString()} Hz</option>
             ))}
           </select>

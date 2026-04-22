@@ -51,6 +51,7 @@ rubato = "0.15"
 symphonia = { version = "0.5", features = ["all"] }
 hound = "3.5"
 flacenc = "0.5"
+shine-rs = "0.1"
 
 # Plugin hosting
 vst3 = "0.3"

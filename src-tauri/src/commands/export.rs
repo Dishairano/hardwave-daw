@@ -309,6 +309,8 @@ struct RenderFormat {
     normalize: NormalizeMode,
     normalize_target_db: f32,
     dither: DitherMode,
+    /// Only consulted when the output path is `.mp3`. Ignored otherwise.
+    mp3_bitrate_kbps: u32,
 }
 
 fn spec_for(bit_depth: u32, sample_rate: u32) -> WavSpec {
@@ -460,6 +462,149 @@ where
     Ok(true)
 }
 
+fn is_mp3_path(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("mp3"))
+        .unwrap_or(false)
+}
+
+/// Encode normalized interleaved stereo `f32` samples to a CBR MP3 file via
+/// shine-rs. Shine supports only MPEG-1/2/2.5 sample rates up to 48 kHz; the
+/// caller enforces that constraint upstream so we can error cleanly here.
+fn write_mp3_from_buffer(
+    out_path: &Path,
+    buffer: &[f32],
+    sample_rate: u32,
+    bitrate_kbps: u32,
+) -> Result<(), String> {
+    use shine_rs::{Mp3Encoder, Mp3EncoderConfig, StereoMode};
+
+    const SHINE_RATES: &[u32] = &[8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
+    if !SHINE_RATES.contains(&sample_rate) {
+        return Err(format!(
+            "MP3 export does not support {sample_rate} Hz — choose 32000/44100/48000"
+        ));
+    }
+
+    let mut pcm: Vec<i16> = Vec::with_capacity(buffer.len());
+    for &s in buffer {
+        let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i32;
+        pcm.push(v.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
+    }
+
+    let cfg = Mp3EncoderConfig::new()
+        .sample_rate(sample_rate)
+        .bitrate(bitrate_kbps)
+        .channels(2)
+        .stereo_mode(StereoMode::JointStereo);
+    let mut encoder = Mp3Encoder::new(cfg).map_err(|e| format!("mp3 init: {e:?}"))?;
+
+    let mut out = Vec::with_capacity(pcm.len() / 8);
+    let frame_len = encoder.samples_per_frame();
+    let mut cursor = 0usize;
+    while cursor < pcm.len() {
+        let end = (cursor + frame_len).min(pcm.len());
+        let frames = encoder
+            .encode_interleaved(&pcm[cursor..end])
+            .map_err(|e| format!("mp3 encode: {e:?}"))?;
+        for f in frames {
+            out.extend_from_slice(&f);
+        }
+        cursor = end;
+    }
+    let tail = encoder.finish().map_err(|e| format!("mp3 finish: {e:?}"))?;
+    out.extend_from_slice(&tail);
+
+    fs::write(out_path, &out).map_err(|e| format!("mp3 file: {e}"))?;
+    Ok(())
+}
+
+/// MP3 render path: buffer full render, normalize, then hand off to shine.
+#[allow(clippy::too_many_arguments)]
+fn write_render_mp3<F>(
+    engine: &DawEngine,
+    out_path: &Path,
+    fmt: RenderFormat,
+    total_samples: u64,
+    start_samples: u64,
+    cancel: &Arc<AtomicBool>,
+    mut on_progress: F,
+    prepare: impl FnOnce(&mut Project),
+) -> Result<bool, String>
+where
+    F: FnMut(u64, u64),
+{
+    let capacity = (total_samples as usize).saturating_mul(2);
+    let mut buffer: Vec<f32> = Vec::with_capacity(capacity);
+
+    engine.render_offline_with(
+        fmt.sample_rate,
+        total_samples,
+        start_samples,
+        prepare,
+        |block| {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            buffer.extend_from_slice(block);
+            let frames = (buffer.len() / 2) as u64;
+            on_progress((frames * 85) / 100, total_samples);
+            true
+        },
+    )?;
+
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(false);
+    }
+
+    let mut gain: f32 = 1.0;
+    match fmt.normalize {
+        NormalizeMode::Off => {}
+        NormalizeMode::Peak => {
+            let mut peak: f32 = 0.0;
+            for &s in buffer.iter() {
+                let a = s.abs();
+                if a > peak {
+                    peak = a;
+                }
+            }
+            if peak > 1e-9 {
+                gain = 10.0_f32.powf(fmt.normalize_target_db / 20.0) / peak;
+            }
+        }
+        NormalizeMode::Lufs => {
+            if let Some(lufs) = integrated_lufs(&buffer, fmt.sample_rate) {
+                if lufs.is_finite() {
+                    gain = 10.0_f32.powf((fmt.normalize_target_db - lufs) / 20.0);
+                }
+            }
+            let mut peak: f32 = 0.0;
+            for &s in buffer.iter() {
+                let a = s.abs();
+                if a > peak {
+                    peak = a;
+                }
+            }
+            let ceiling = 10.0_f32.powf(-1.0 / 20.0);
+            if peak * gain > ceiling && peak > 1e-9 {
+                gain = ceiling / peak;
+            }
+        }
+    }
+
+    if (gain - 1.0).abs() > f32::EPSILON {
+        for s in buffer.iter_mut() {
+            *s *= gain;
+        }
+    }
+
+    on_progress((total_samples * 90) / 100, total_samples);
+    write_mp3_from_buffer(out_path, &buffer, fmt.sample_rate, fmt.mp3_bitrate_kbps)?;
+    on_progress(total_samples, total_samples);
+    Ok(true)
+}
+
 /// Render and write one offline-rendered WAV file. Returns `Ok(true)` on
 /// completion, `Ok(false)` when the caller requested cancellation mid-render.
 #[allow(clippy::too_many_arguments)]
@@ -478,6 +623,19 @@ where
 {
     if is_flac_path(out_path) {
         return write_render_flac(
+            engine,
+            out_path,
+            fmt,
+            total_samples,
+            start_samples,
+            cancel,
+            on_progress,
+            prepare,
+        );
+    }
+
+    if is_mp3_path(out_path) {
+        return write_render_mp3(
             engine,
             out_path,
             fmt,
@@ -696,6 +854,7 @@ pub async fn export_project_wav(
     normalize_mode: Option<String>,
     normalize_target_db: Option<f32>,
     dither_mode: Option<String>,
+    mp3_bitrate_kbps: Option<u32>,
 ) -> Result<ExportResult, String> {
     let (engine, cancel) = {
         let state: State<AppState> = app.state();
@@ -709,6 +868,7 @@ pub async fn export_project_wav(
         normalize: NormalizeMode::parse(normalize_mode.as_deref().unwrap_or("off")),
         normalize_target_db: normalize_target_db.unwrap_or(-1.0),
         dither: DitherMode::parse(dither_mode.as_deref().unwrap_or("none")),
+        mp3_bitrate_kbps: mp3_bitrate_kbps.unwrap_or(320).clamp(8, 320),
     };
 
     let out_path = path.clone();
@@ -807,6 +967,8 @@ pub async fn export_project_stems(
     normalize_mode: Option<String>,
     normalize_target_db: Option<f32>,
     dither_mode: Option<String>,
+    stem_format: Option<String>,
+    mp3_bitrate_kbps: Option<u32>,
 ) -> Result<StemsExportResult, String> {
     let (engine, cancel) = {
         let state: State<AppState> = app.state();
@@ -820,6 +982,13 @@ pub async fn export_project_stems(
         normalize: NormalizeMode::parse(normalize_mode.as_deref().unwrap_or("off")),
         normalize_target_db: normalize_target_db.unwrap_or(-1.0),
         dither: DitherMode::parse(dither_mode.as_deref().unwrap_or("none")),
+        mp3_bitrate_kbps: mp3_bitrate_kbps.unwrap_or(320).clamp(8, 320),
+    };
+
+    let stem_ext: &str = match stem_format.as_deref().unwrap_or("wav") {
+        "flac" => "flac",
+        "mp3" => "mp3",
+        _ => "wav",
     };
 
     let result =
@@ -863,7 +1032,12 @@ pub async fn export_project_stems(
                     cancelled = true;
                     break;
                 }
-                let stem_name = format!("{}_{}.wav", project_slug, sanitize_filename(track_name));
+                let stem_name = format!(
+                    "{}_{}.{}",
+                    project_slug,
+                    sanitize_filename(track_name),
+                    stem_ext
+                );
                 let stem_path = folder.join(&stem_name);
                 let mut last_pct: i32 = -1;
                 let app_for_progress = app.clone();
@@ -917,7 +1091,7 @@ pub async fn export_project_stems(
             }
 
             if !cancelled && include_master {
-                let master_name = format!("{}_master.wav", project_slug);
+                let master_name = format!("{}_master.{}", project_slug, stem_ext);
                 let master_path = folder.join(&master_name);
                 let mut last_pct: i32 = -1;
                 let app_for_progress = app.clone();
