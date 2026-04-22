@@ -74,6 +74,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
   const [selectedSlice, setSelectedSlice] = useState<number | null>(null)
   const [threshold, setThreshold] = useState(0.25)
   const [banner, setBanner] = useState<string | null>(null)
+  const [sliceView, setSliceView] = useState<'list' | 'pads'>('list')
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const ctxRef = useRef<AudioContext | null>(null)
@@ -352,6 +353,18 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
               </label>
               <button onClick={runAutoDetect} style={btnStyle('primary')}>Auto-detect</button>
               <button onClick={clearAll} style={btnStyle('ghost')}>Clear</button>
+              <div style={{ display: 'flex', gap: 0, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, overflow: 'hidden' }}>
+                <button
+                  onClick={() => setSliceView('list')}
+                  style={viewToggleStyle(sliceView === 'list')}
+                  title="Show slices as a vertical list"
+                >List</button>
+                <button
+                  onClick={() => setSliceView('pads')}
+                  style={viewToggleStyle(sliceView === 'pads')}
+                  title="Show slices as a drum pad grid"
+                >Pads</button>
+              </div>
               <button onClick={exportSlices} style={btnStyle('accent')}>Export WAVs</button>
             </div>
 
@@ -365,7 +378,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
                     No slices yet. Click the waveform to add one.
                   </div>
                 )}
-                {slices.map((s, i) => {
+                {sliceView === 'list' && slices.map((s, i) => {
                   const dur = ((sliceEnd(slices, i, sample.channels[0].length) - s.start) / sample.sampleRate)
                   const active = i === selectedSlice
                   return (
@@ -392,6 +405,14 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
                     </button>
                   )
                 })}
+                {sliceView === 'pads' && (
+                  <PadGrid
+                    slices={slices}
+                    selected={selectedSlice}
+                    keymap={KEYMAP}
+                    onTrigger={(i) => { setSelectedSlice(i); playSlice(i) }}
+                  />
+                )}
               </div>
 
               <div style={{ flex: 1, padding: 12, overflowY: 'auto' }}>
@@ -482,6 +503,68 @@ function Knob({ label, value, min, max, step, unit, onChange }: {
         {value.toFixed(3)}{unit ?? ''}
       </span>
     </label>
+  )
+}
+
+function viewToggleStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: '4px 10px', fontSize: 10,
+    background: active ? hw.accentDim : 'transparent',
+    border: 'none',
+    color: active ? hw.accent : hw.textSecondary,
+    cursor: 'pointer', lineHeight: 1.4,
+    fontWeight: active ? 600 : 400,
+  }
+}
+
+function PadGrid({ slices, selected, keymap, onTrigger }: {
+  slices: Slice[]
+  selected: number | null
+  keymap: string[]
+  onTrigger: (i: number) => void
+}) {
+  if (slices.length === 0) return null
+  const cols = slices.length <= 16 ? 4 : Math.ceil(Math.sqrt(slices.length))
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${cols}, 1fr)`,
+        gap: 4,
+        padding: 2,
+      }}
+    >
+      {slices.map((_, i) => {
+        const active = i === selected
+        const key = keymap[i]
+        return (
+          <button
+            key={i}
+            onClick={() => onTrigger(i)}
+            title={`Slice ${i + 1}${key ? ` (${key})` : ''}`}
+            style={{
+              aspectRatio: '1 / 1',
+              display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center',
+              background: active ? hw.accentDim : 'rgba(255,255,255,0.04)',
+              border: `1px solid ${active ? hw.accent : hw.border}`,
+              borderRadius: hw.radius.sm,
+              boxShadow: active ? `0 0 10px ${hw.accentGlow}` : 'none',
+              color: active ? hw.textBright : hw.textSecondary,
+              cursor: 'pointer', padding: 0,
+              fontFamily: 'monospace', gap: 2,
+            }}
+          >
+            <span style={{ fontSize: 11, fontWeight: 700 }}>{i + 1}</span>
+            {key && (
+              <span style={{ fontSize: 8, color: hw.textFaint, textTransform: 'uppercase' }}>
+                {key}
+              </span>
+            )}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
