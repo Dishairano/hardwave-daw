@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { hw } from '../../theme'
 import { encodeWav } from '../../utils/wav'
+import { encodeSingleTrackMidi, type SmfNote } from '../../utils/midi'
+import { useTransportStore } from '../../stores/transportStore'
+
+const SLICE_MIDI_PPQ = 960
+const SLICE_MIDI_BASE_PITCH = 60 // C3, matches the chromatic KEYMAP convention
+
 
 interface BeatSlicerProps {
   path: string
@@ -246,6 +252,36 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
 
   const clearAll = () => { setSlices([defaultSlice(0)]); setSelectedSlice(0) }
 
+  const exportSlicesAsMidi = () => {
+    if (!sample || slices.length === 0) return
+    const bpm = Math.max(20, Math.min(999, useTransportStore.getState().bpm))
+    const ticksPerSecond = (bpm / 60) * SLICE_MIDI_PPQ
+    const total = sample.channels[0].length
+    const notes: SmfNote[] = slices.map((s, i) => {
+      const end = sliceEnd(slices, i, total)
+      const startSec = s.start / sample.sampleRate
+      const durSec = Math.max(1 / sample.sampleRate, (end - s.start) / sample.sampleRate)
+      const velocity = Math.max(1, Math.min(127, Math.round((s.vol > 0 ? s.vol : 1) * 100)))
+      return {
+        pitch: Math.max(0, Math.min(127, SLICE_MIDI_BASE_PITCH + i)),
+        velocity,
+        startTicks: Math.max(0, Math.round(startSec * ticksPerSecond)),
+        durationTicks: Math.max(1, Math.round(durSec * ticksPerSecond)),
+      }
+    })
+    const blob = encodeSingleTrackMidi(notes, SLICE_MIDI_PPQ, bpm)
+    const base = name.replace(/\.[^.]+$/, '')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${base}_slices.mid`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    setBanner(`Exported ${slices.length} slice${slices.length === 1 ? '' : 's'} as MIDI`)
+  }
+
   const exportSlices = () => {
     if (!sample || slices.length === 0) return
     const base = name.replace(/\.[^.]+$/, '')
@@ -365,6 +401,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
                   title="Show slices as a drum pad grid"
                 >Pads</button>
               </div>
+              <button onClick={exportSlicesAsMidi} style={btnStyle('primary')}>Export MIDI</button>
               <button onClick={exportSlices} style={btnStyle('accent')}>Export WAVs</button>
             </div>
 
