@@ -638,7 +638,14 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
       return raw ? JSON.parse(raw) : {}
     } catch { return {} }
   })
+  const [windowSizes, setWindowSizes] = useState<Record<string, { w: number; h: number }>>(() => {
+    try {
+      const raw = localStorage.getItem('hardwave.daw.pluginWindowSizes')
+      return raw ? JSON.parse(raw) : {}
+    } catch { return {} }
+  })
   const [dragging, setDragging] = useState<{ slotId: string; dx: number; dy: number } | null>(null)
+  const [resizing, setResizing] = useState<{ slotId: string; startX: number; startY: number; startW: number; startH: number } | null>(null)
 
   const openPluginWindow = (slotId: string) => {
     setOpenPluginWindows(prev => (prev.includes(slotId) ? prev : [...prev, slotId]))
@@ -653,6 +660,19 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
 
   const closePluginWindow = (slotId: string) => {
     setOpenPluginWindows(prev => prev.filter(id => id !== slotId))
+  }
+
+  const resetPluginWindow = (slotId: string) => {
+    setWindowPositions(prev => {
+      const { [slotId]: _, ...rest } = prev
+      try { localStorage.setItem('hardwave.daw.pluginWindowPositions', JSON.stringify(rest)) } catch {}
+      return rest
+    })
+    setWindowSizes(prev => {
+      const { [slotId]: _, ...rest } = prev
+      try { localStorage.setItem('hardwave.daw.pluginWindowSizes', JSON.stringify(rest)) } catch {}
+      return rest
+    })
   }
 
   useEffect(() => { loadSlotPresets() }, [loadSlotPresets])
@@ -679,6 +699,28 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
       window.removeEventListener('mouseup', onUp)
     }
   }, [dragging])
+
+  useEffect(() => {
+    if (!resizing) return
+    const onMove = (e: MouseEvent) => {
+      const w = Math.max(280, Math.min(640, resizing.startW + (e.clientX - resizing.startX)))
+      const h = Math.max(240, Math.min(720, resizing.startH + (e.clientY - resizing.startY)))
+      setWindowSizes(prev => ({ ...prev, [resizing.slotId]: { w, h } }))
+    }
+    const onUp = () => {
+      setResizing(null)
+      setWindowSizes(prev => {
+        try { localStorage.setItem('hardwave.daw.pluginWindowSizes', JSON.stringify(prev)) } catch {}
+        return prev
+      })
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [resizing])
 
   useEffect(() => {
     if (!menu) return
@@ -1031,19 +1073,30 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
         const descriptor = plugins.find(p => p.id === slot.pluginId)
         const close = () => closePluginWindow(winSlotId)
         const pos = windowPositions[winSlotId] ?? { x: 120 + winIdx * 36, y: 110 + winIdx * 36 }
+        const size = windowSizes[winSlotId]
         const title = `${slot.pluginName} — ${track?.name ?? 'track'}`
         const rowStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 10, color: hw.textMuted }
-        return (
-          <div
-            key={winSlotId}
-            data-testid={`plugin-window-${slot.id}`}
-            style={{
+        const frameStyle: React.CSSProperties = size
+          ? {
+              position: 'fixed', left: pos.x, top: pos.y, zIndex: 300 + winIdx,
+              width: size.w, height: size.h,
+              background: '#151517', border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
+              boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
+              display: 'flex', flexDirection: 'column',
+              overflow: 'hidden',
+            }
+          : {
               position: 'fixed', left: pos.x, top: pos.y, zIndex: 300 + winIdx,
               minWidth: 320, maxWidth: 420,
               background: '#151517', border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
               boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
               display: 'flex', flexDirection: 'column',
-            }}
+            }
+        return (
+          <div
+            key={winSlotId}
+            data-testid={`plugin-window-${slot.id}`}
+            style={frameStyle}
           >
             <div
               data-testid={`plugin-window-drag-${slot.id}`}
@@ -1064,6 +1117,17 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                 style={{ flex: 1, fontSize: 11, fontWeight: 600, color: hw.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               >{title}</span>
               <button
+                onClick={() => resetPluginWindow(winSlotId)}
+                onMouseDown={(e) => e.stopPropagation()}
+                data-testid={`plugin-window-reset-${slot.id}`}
+                title="Reset window position and size"
+                style={{
+                  height: 18, padding: '0 6px', borderRadius: 3,
+                  background: 'transparent', color: hw.textMuted,
+                  border: `1px solid ${hw.borderDark}`, cursor: 'pointer', fontSize: 9, letterSpacing: 0.4, lineHeight: '16px',
+                }}
+              >RESET</button>
+              <button
                 onClick={close}
                 onMouseDown={(e) => e.stopPropagation()}
                 data-testid={`plugin-window-close-${slot.id}`}
@@ -1076,6 +1140,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
               >×</button>
             </div>
 
+            <div style={{ flex: size ? 1 : undefined, minHeight: 0, overflowY: 'auto' }}>
               <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 5 }}>
                 <div style={rowStyle}>
                   <span style={{ color: hw.textFaint }}>Vendor</span>
@@ -1175,6 +1240,30 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                 </label>
               </div>
             </div>
+
+            <div
+              data-testid={`plugin-window-resize-${slot.id}`}
+              onMouseDown={(e) => {
+                const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect()
+                setResizing({
+                  slotId: winSlotId,
+                  startX: e.clientX,
+                  startY: e.clientY,
+                  startW: size?.w ?? rect.width,
+                  startH: size?.h ?? rect.height,
+                })
+                e.preventDefault()
+                e.stopPropagation()
+              }}
+              title="Drag to resize"
+              style={{
+                position: 'absolute', right: 0, bottom: 0,
+                width: 14, height: 14, cursor: 'nwse-resize',
+                background: 'linear-gradient(135deg, transparent 0 55%, rgba(255,255,255,0.35) 55% 65%, transparent 65% 75%, rgba(255,255,255,0.35) 75% 85%, transparent 85% 100%)',
+                borderBottomRightRadius: hw.radius.md,
+              }}
+            />
+          </div>
         )
       })}
     </div>
