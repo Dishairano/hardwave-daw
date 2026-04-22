@@ -596,4 +596,3 @@ mod tests {
         assert!(result.is_err(), "non-CLAP binary must be rejected");
     }
 }
-
