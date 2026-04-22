@@ -144,6 +144,19 @@ pub fn add_midi_track(state: State<AppState>, name: String) -> String {
 }
 
 #[tauri::command]
+pub fn add_automation_track(state: State<AppState>, name: String) -> String {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let id = {
+        let mut project = engine.project.lock();
+        project.add_automation_track(name)
+    };
+    engine.sync_track_meters();
+    engine.rebuild_graph();
+    id
+}
+
+#[tauri::command]
 pub fn remove_track(state: State<AppState>, track_id: String) {
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();

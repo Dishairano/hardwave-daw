@@ -12,6 +12,18 @@ pub enum TrackKind {
     Bus,
     Return,
     Master,
+    /// Container for automation lanes that drive parameter changes but
+    /// produce no audio output. Skipped during audio graph build.
+    Automation,
+}
+
+impl TrackKind {
+    /// Whether a track of this kind participates in audio processing —
+    /// i.e. needs a TrackNode in the audio graph and post-fader output.
+    /// Master and Automation are the two non-audio-bearing kinds.
+    pub fn is_audio_bearing(&self) -> bool {
+        !matches!(self, TrackKind::Master | TrackKind::Automation)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +190,13 @@ impl Track {
         let mut t = Self::new_audio(id, "Master".into());
         t.kind = TrackKind::Master;
         t.color = "#ef4444".into();
+        t
+    }
+
+    pub fn new_automation(id: String, name: String) -> Self {
+        let mut t = Self::new_audio(id, name);
+        t.kind = TrackKind::Automation;
+        t.color = "#f59e0b".into();
         t
     }
 }

@@ -88,6 +88,7 @@ pub fn run() {
             commands::tracks::get_tracks,
             commands::tracks::add_audio_track,
             commands::tracks::add_midi_track,
+            commands::tracks::add_automation_track,
             commands::tracks::remove_track,
             commands::tracks::set_track_volume,
             commands::tracks::set_track_pan,

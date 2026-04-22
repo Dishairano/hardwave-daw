@@ -548,13 +548,7 @@ export function App() {
   }, [])
 
   const handleAddAutomationTrack = useCallback(async () => {
-    try {
-      const { message } = await import('@tauri-apps/plugin-dialog')
-      await message('Automation tracks are coming in a future release.', {
-        title: 'Add automation track',
-        kind: 'info',
-      })
-    } catch {}
+    await useTrackStore.getState().addAutomationTrack()
   }, [])
 
   const applyTrackTemplate = useCallback(async (templateId: string) => {

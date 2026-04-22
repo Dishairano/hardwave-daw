@@ -276,7 +276,7 @@ impl DawEngine {
         let project = self.project.lock();
         let mut meters = self.track_meters.lock();
         for track in &project.tracks {
-            if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
+            if !track.kind.is_audio_bearing() {
                 continue;
             }
             meters
@@ -286,7 +286,7 @@ impl DawEngine {
         let live_ids: std::collections::HashSet<String> = project
             .tracks
             .iter()
-            .filter(|t| !matches!(t.kind, hardwave_project::track::TrackKind::Master))
+            .filter(|t| t.kind.is_audio_bearing())
             .map(|t| t.id.clone())
             .collect();
         meters.retain(|id, _| live_ids.contains(id));
@@ -823,7 +823,7 @@ impl EngineCallback {
         let any_soloed = project
             .tracks
             .iter()
-            .any(|t| t.soloed && !matches!(t.kind, hardwave_project::track::TrackKind::Master));
+            .any(|t| t.soloed && t.kind.is_audio_bearing());
 
         // Reconcile the per-track meter map with the current tracks: reuse existing
         // Arcs where possible, create new ones, drop meters for removed tracks.
@@ -831,13 +831,13 @@ impl EngineCallback {
         let live_ids: std::collections::HashSet<String> = project
             .tracks
             .iter()
-            .filter(|t| !matches!(t.kind, hardwave_project::track::TrackKind::Master))
+            .filter(|t| t.kind.is_audio_bearing())
             .map(|t| t.id.clone())
             .collect();
         meters.retain(|id, _| live_ids.contains(id));
 
         for track in &project.tracks {
-            if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
+            if !track.kind.is_audio_bearing() {
                 continue;
             }
 
@@ -967,7 +967,7 @@ impl EngineCallback {
         // rejects bad values, but the engine is defensive to keep audio
         // flowing even if a legacy project carries stale routing.
         for track in &project.tracks {
-            if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
+            if !track.kind.is_audio_bearing() {
                 continue;
             }
             let Some(&src_node) = track_id_to_node.get(&track.id) else {
@@ -1015,7 +1015,7 @@ impl EngineCallback {
         // every audio block and waste work.
         let mut monitor_routes: Vec<crate::graph::NodeId> = Vec::new();
         for track in &project.tracks {
-            if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
+            if !track.kind.is_audio_bearing() {
                 continue;
             }
             if track.armed && track.monitor_input {

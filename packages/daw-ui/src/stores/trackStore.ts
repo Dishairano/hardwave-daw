@@ -100,6 +100,7 @@ interface TrackState {
   ensureMidiClipOnTrack: (trackId: string) => Promise<string | null>
   addAudioTrack: (name?: string) => Promise<void>
   addMidiTrack: (name?: string) => Promise<void>
+  addAutomationTrack: (name?: string) => Promise<void>
   removeTrack: (id: string) => Promise<void>
   setVolume: (id: string, db: number) => Promise<void>
   setPan: (id: string, pan: number) => Promise<void>
@@ -221,6 +222,13 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const n = get().tracks.filter(t => t.kind === 'Midi').length + 1
     const finalName = name || `MIDI ${n}`
     await mut('add_midi_track', { name: finalName }, `Add MIDI track "${finalName}"`)
+    await get().fetchTracks()
+  },
+
+  addAutomationTrack: async (name) => {
+    const n = get().tracks.filter(t => t.kind === 'Automation').length + 1
+    const finalName = name || `Automation ${n}`
+    await mut('add_automation_track', { name: finalName }, `Add automation track "${finalName}"`)
     await get().fetchTracks()
   },
 

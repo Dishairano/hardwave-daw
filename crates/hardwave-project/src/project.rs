@@ -85,6 +85,12 @@ impl Project {
         id
     }
 
+    pub fn add_automation_track(&mut self, name: String) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.tracks.push(Track::new_automation(id.clone(), name));
+        id
+    }
+
     pub fn remove_track(&mut self, id: &str) {
         self.tracks.retain(|t| t.id != id);
     }
