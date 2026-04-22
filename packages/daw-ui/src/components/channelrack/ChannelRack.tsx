@@ -15,7 +15,7 @@ const CHANNEL_COLORS = [
 ]
 
 export function ChannelRack() {
-  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan } = useTrackStore()
+  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan, setTrackPitchSemitones, setTrackFineTuneCents } = useTrackStore()
   const folders = useTrackFolderStore(s => s.folders)
   const toggleFolderCollapsed = useTrackFolderStore(s => s.toggleCollapsed)
   const allChannels = tracks.filter(t => t.kind !== 'Master')
@@ -678,6 +678,48 @@ export function ChannelRack() {
             }}
           />
           <MenuSep />
+          {(() => {
+            const ch = channels.find(c => c.id === ctxMenu.trackId)
+            if (!ch) return null
+            return (
+              <>
+                <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                  Pitch
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 2px' }}>
+                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>Coarse</span>
+                  <input
+                    type="range"
+                    min={-24}
+                    max={24}
+                    step={1}
+                    value={ch.pitchSemitones}
+                    onChange={(e) => setTrackPitchSemitones(ch.id, Number(e.target.value))}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ fontSize: 10, color: hw.textPrimary, width: 34, textAlign: 'right', fontFamily: "'Consolas', monospace" }}>
+                    {ch.pitchSemitones > 0 ? `+${ch.pitchSemitones}` : ch.pitchSemitones} st
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 4px' }}>
+                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>Fine</span>
+                  <input
+                    type="range"
+                    min={-100}
+                    max={100}
+                    step={1}
+                    value={Math.round(ch.fineTuneCents)}
+                    onChange={(e) => setTrackFineTuneCents(ch.id, Number(e.target.value))}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ fontSize: 10, color: hw.textPrimary, width: 34, textAlign: 'right', fontFamily: "'Consolas', monospace" }}>
+                    {ch.fineTuneCents > 0 ? `+${Math.round(ch.fineTuneCents)}` : Math.round(ch.fineTuneCents)} c
+                  </span>
+                </div>
+                <MenuSep />
+              </>
+            )
+          })()}
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
             Color
           </div>

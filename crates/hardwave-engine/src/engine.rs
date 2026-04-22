@@ -822,6 +822,12 @@ impl EngineCallback {
             node.set_stereo_separation(track.stereo_separation);
             node.set_delay_samples(track.delay_samples);
 
+            // Per-track coarse + fine pitch offset. Combined as a single resample
+            // factor that's folded into each clip's source_step below.
+            let track_pitch_offset =
+                (track.pitch_semitones as f64) / 12.0 + (track.fine_tune_cents as f64) / 1200.0;
+            let track_pitch_factor = 2.0_f64.powf(track_pitch_offset);
+
             // Convert clip placements to sample-based ClipRegions.
             // Clips are visited in their project-defined order, then any overlap between
             // adjacent audio clips is promoted to an equal-length crossfade: the earlier
@@ -848,7 +854,10 @@ impl EngineCallback {
                             tempo_map.tick_to_samples(audio_clip.fade_out_ticks, sample_rate);
                         // source_step combines pitch and stretch via resampling.
                         // pitch +12 semitones = 2x source step; stretch_ratio 2.0 = half step.
-                        let pitch_factor = 2.0_f64.powf(audio_clip.pitch_semitones / 12.0);
+                        // The track-level pitch/fine-tune offset is folded in as an
+                        // additional resample factor.
+                        let clip_pitch_factor = 2.0_f64.powf(audio_clip.pitch_semitones / 12.0);
+                        let pitch_factor = clip_pitch_factor * track_pitch_factor;
                         let stretch = if audio_clip.stretch_ratio <= 0.01 {
                             1.0
                         } else {

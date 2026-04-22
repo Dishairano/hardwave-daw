@@ -41,6 +41,14 @@ fn default_monitor_input() -> bool {
     true
 }
 
+fn default_pitch_semitones() -> i32 {
+    0
+}
+
+fn default_fine_tune_cents() -> f32 {
+    0.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
@@ -76,6 +84,16 @@ pub struct Track {
     #[serde(default)]
     pub delay_samples: i64,
 
+    /// Coarse pitch offset in semitones, applied as a source resample factor
+    /// multiplied with each audio clip's own pitch setting. Range clamped to
+    /// -24..=24 by the Tauri command.
+    #[serde(default = "default_pitch_semitones")]
+    pub pitch_semitones: i32,
+    /// Fine tune in cents, combined with pitch_semitones on the same resample
+    /// factor. Range clamped to -100.0..=100.0 by the Tauri command.
+    #[serde(default = "default_fine_tune_cents")]
+    pub fine_tune_cents: f32,
+
     // Plugin chain
     pub inserts: Vec<PluginSlot>,
 
@@ -108,6 +126,8 @@ impl Track {
             swap_lr: false,
             stereo_separation: 1.0,
             delay_samples: 0,
+            pitch_semitones: 0,
+            fine_tune_cents: 0.0,
             inserts: Vec::new(),
             sends: Vec::new(),
             clips: Vec::new(),

@@ -54,6 +54,8 @@ export interface TrackInfo {
   swapLr: boolean
   stereoSeparation: number
   delaySamples: number
+  pitchSemitones: number
+  fineTuneCents: number
   insert_count: number
   inserts: InsertInfo[]
 }
@@ -108,6 +110,8 @@ interface TrackState {
   setTrackSwapLr: (id: string, swap: boolean) => Promise<void>
   setTrackStereoSeparation: (id: string, separation: number) => Promise<void>
   setTrackDelaySamples: (id: string, samples: number) => Promise<void>
+  setTrackPitchSemitones: (id: string, semitones: number) => Promise<void>
+  setTrackFineTuneCents: (id: string, cents: number) => Promise<void>
   trackHeights: Record<string, number>
   setTrackHeight: (id: string, height: number) => void
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
@@ -302,6 +306,21 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const clamped = Math.max(0, Math.floor(samples))
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_delay_samples', { trackId: id, samples: clamped }, `Set "${name}" delay to ${clamped} samples`)
+    await get().fetchTracks()
+  },
+
+  setTrackPitchSemitones: async (id, semitones) => {
+    const clamped = Math.max(-24, Math.min(24, Math.round(semitones)))
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_pitch_semitones', { trackId: id, semitones: clamped }, `Set "${name}" pitch to ${clamped > 0 ? '+' : ''}${clamped} st`)
+    await get().fetchTracks()
+  },
+
+  setTrackFineTuneCents: async (id, cents) => {
+    if (!Number.isFinite(cents)) return
+    const clamped = Math.max(-100, Math.min(100, cents))
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_fine_tune_cents', { trackId: id, cents: clamped }, `Set "${name}" fine tune to ${clamped > 0 ? '+' : ''}${clamped.toFixed(0)} cents`)
     await get().fetchTracks()
   },
 

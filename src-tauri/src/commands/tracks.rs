@@ -35,6 +35,10 @@ pub struct TrackInfo {
     stereo_separation: f64,
     #[serde(rename = "delaySamples")]
     delay_samples: i64,
+    #[serde(rename = "pitchSemitones")]
+    pitch_semitones: i32,
+    #[serde(rename = "fineTuneCents")]
+    fine_tune_cents: f32,
     insert_count: usize,
     inserts: Vec<InsertInfo>,
 }
@@ -70,6 +74,8 @@ fn track_to_info(
         swap_lr: t.swap_lr,
         stereo_separation: t.stereo_separation,
         delay_samples: t.delay_samples,
+        pitch_semitones: t.pitch_semitones,
+        fine_tune_cents: t.fine_tune_cents,
         insert_count: t.inserts.len(),
         inserts,
     }
@@ -362,6 +368,37 @@ pub fn set_track_delay_samples(state: State<AppState>, track_id: String, samples
         let mut project = engine.project.lock();
         if let Some(track) = project.track_mut(&track_id) {
             track.delay_samples = samples.max(0);
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_pitch_semitones(state: State<AppState>, track_id: String, semitones: i32) {
+    let semitones = semitones.clamp(-24, 24);
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.pitch_semitones = semitones;
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_fine_tune_cents(state: State<AppState>, track_id: String, cents: f32) {
+    if !cents.is_finite() {
+        return;
+    }
+    let cents = cents.clamp(-100.0, 100.0);
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.fine_tune_cents = cents;
         }
     }
     engine.rebuild_graph();

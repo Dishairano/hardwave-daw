@@ -82,6 +82,8 @@ pub fn run() {
             commands::tracks::set_track_swap_lr,
             commands::tracks::set_track_stereo_separation,
             commands::tracks::set_track_delay_samples,
+            commands::tracks::set_track_pitch_semitones,
+            commands::tracks::set_track_fine_tune_cents,
             // Sends
             commands::sends::get_sends,
             commands::sends::list_sends,
