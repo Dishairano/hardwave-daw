@@ -325,6 +325,141 @@ fn spec_for(bit_depth: u32, sample_rate: u32) -> WavSpec {
     }
 }
 
+fn is_flac_path(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("flac"))
+        .unwrap_or(false)
+}
+
+/// Encode normalized interleaved stereo `f32` samples to a FLAC file. FLAC
+/// is lossless integer PCM only, so `bit_depth==0` (32-bit float requested)
+/// falls back to 24-bit to preserve the maximum lossless precision flacenc
+/// can represent.
+fn write_flac_from_buffer(
+    out_path: &Path,
+    buffer: &[f32],
+    sample_rate: u32,
+    bit_depth: u32,
+) -> Result<(), String> {
+    use flacenc::component::BitRepr;
+    use flacenc::error::Verify;
+
+    let bits: u32 = match bit_depth {
+        16 => 16,
+        0 | 24 => 24,
+        n => n.clamp(8, 24),
+    };
+    let max = ((1i64 << (bits - 1)) - 1) as f32;
+    let mut samples: Vec<i32> = Vec::with_capacity(buffer.len());
+    for &s in buffer {
+        let v = (s.clamp(-1.0, 1.0) * max).round() as i32;
+        samples.push(v);
+    }
+
+    let config = flacenc::config::Encoder::default()
+        .into_verified()
+        .map_err(|(_, e)| format!("flac config: {e:?}"))?;
+    let source =
+        flacenc::source::MemSource::from_samples(&samples, 2, bits as usize, sample_rate as usize);
+    let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
+        .map_err(|e| format!("flac encode: {e:?}"))?;
+    let mut sink = flacenc::bitsink::ByteSink::new();
+    stream
+        .write(&mut sink)
+        .map_err(|e| format!("flac serialize: {e:?}"))?;
+    fs::write(out_path, sink.as_slice()).map_err(|e| format!("flac file: {e}"))?;
+    Ok(())
+}
+
+/// FLAC path: always buffer the full render, apply normalization, then encode.
+/// FLAC has no streaming writer in this codebase, but the file sizes involved
+/// (2.6 GB for a 4-hour session at 48k stereo f32) are acceptable for desktop.
+#[allow(clippy::too_many_arguments)]
+fn write_render_flac<F>(
+    engine: &DawEngine,
+    out_path: &Path,
+    fmt: RenderFormat,
+    total_samples: u64,
+    start_samples: u64,
+    cancel: &Arc<AtomicBool>,
+    mut on_progress: F,
+    prepare: impl FnOnce(&mut Project),
+) -> Result<bool, String>
+where
+    F: FnMut(u64, u64),
+{
+    let capacity = (total_samples as usize).saturating_mul(2);
+    let mut buffer: Vec<f32> = Vec::with_capacity(capacity);
+
+    engine.render_offline_with(
+        fmt.sample_rate,
+        total_samples,
+        start_samples,
+        prepare,
+        |block| {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            buffer.extend_from_slice(block);
+            // Reserve ~85% of progress for render; encode is the final 15%.
+            let frames = (buffer.len() / 2) as u64;
+            on_progress((frames * 85) / 100, total_samples);
+            true
+        },
+    )?;
+
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(false);
+    }
+
+    let mut gain: f32 = 1.0;
+    match fmt.normalize {
+        NormalizeMode::Off => {}
+        NormalizeMode::Peak => {
+            let mut peak: f32 = 0.0;
+            for &s in buffer.iter() {
+                let a = s.abs();
+                if a > peak {
+                    peak = a;
+                }
+            }
+            if peak > 1e-9 {
+                gain = 10.0_f32.powf(fmt.normalize_target_db / 20.0) / peak;
+            }
+        }
+        NormalizeMode::Lufs => {
+            if let Some(lufs) = integrated_lufs(&buffer, fmt.sample_rate) {
+                if lufs.is_finite() {
+                    gain = 10.0_f32.powf((fmt.normalize_target_db - lufs) / 20.0);
+                }
+            }
+            let mut peak: f32 = 0.0;
+            for &s in buffer.iter() {
+                let a = s.abs();
+                if a > peak {
+                    peak = a;
+                }
+            }
+            let ceiling = 10.0_f32.powf(-1.0 / 20.0);
+            if peak * gain > ceiling && peak > 1e-9 {
+                gain = ceiling / peak;
+            }
+        }
+    }
+
+    if (gain - 1.0).abs() > f32::EPSILON {
+        for s in buffer.iter_mut() {
+            *s *= gain;
+        }
+    }
+
+    on_progress((total_samples * 90) / 100, total_samples);
+    write_flac_from_buffer(out_path, &buffer, fmt.sample_rate, fmt.bit_depth)?;
+    on_progress(total_samples, total_samples);
+    Ok(true)
+}
+
 /// Render and write one offline-rendered WAV file. Returns `Ok(true)` on
 /// completion, `Ok(false)` when the caller requested cancellation mid-render.
 #[allow(clippy::too_many_arguments)]
@@ -341,6 +476,19 @@ fn write_render<F>(
 where
     F: FnMut(u64, u64),
 {
+    if is_flac_path(out_path) {
+        return write_render_flac(
+            engine,
+            out_path,
+            fmt,
+            total_samples,
+            start_samples,
+            cancel,
+            on_progress,
+            prepare,
+        );
+    }
+
     let spec = spec_for(fmt.bit_depth, fmt.sample_rate);
 
     match fmt.normalize {

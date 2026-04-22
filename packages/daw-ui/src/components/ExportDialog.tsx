@@ -9,6 +9,7 @@ import { usePatternStore } from '../stores/patternStore'
 export type BitDepth = 0 | 16 | 24
 export type SampleRate = 44100 | 48000 | 88200 | 96000 | 192000
 export type ExportRange = 'full' | 'loop' | 'pattern'
+export type ExportFormat = 'wav' | 'flac'
 export type NormalizeMode = 'off' | 'peak' | 'lufs'
 export type DitherMode = 'none' | 'tpdf' | 'tpdf_shaped'
 
@@ -46,6 +47,7 @@ const PLAY_AFTER_KEY = 'hw.export.playAfter'
 const NORMALIZE_KEY = 'hw.export.normalize'
 const NORMALIZE_DB_KEY = 'hw.export.normalizeDb'
 const DITHER_KEY = 'hw.export.dither'
+const FORMAT_KEY = 'hw.export.format'
 
 function readNumber(key: string, fallback: number): number {
   try {
@@ -91,6 +93,10 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     if (raw === 'tpdf') return 'tpdf'
     if (raw === 'tpdf_shaped') return 'tpdf_shaped'
     return 'none'
+  })
+  const [format, setFormat] = useState<ExportFormat>(() => {
+    const raw = (typeof localStorage !== 'undefined' && localStorage.getItem(FORMAT_KEY)) || 'wav'
+    return raw === 'flac' ? 'flac' : 'wav'
   })
   const [exporting, setExporting] = useState(false)
   const [percent, setPercent] = useState(0)
@@ -166,6 +172,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     try { localStorage.setItem(NORMALIZE_DB_KEY, String(normalizeTargetDb)) } catch {}
     try { localStorage.setItem('hw.export.normalizeLufs', String(normalizeTargetLufs)) } catch {}
     try { localStorage.setItem(DITHER_KEY, ditherMode) } catch {}
+    try { localStorage.setItem(FORMAT_KEY, format) } catch {}
   }
 
   const normalizeTargetForBackend = normalizeMode === 'lufs' ? normalizeTargetLufs : normalizeTargetDb
@@ -247,18 +254,21 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
       return
     }
 
+    const ext = format
     const defaultPath = lastDir
-      ? `${lastDir}/${initial.defaultName}.wav`
-      : `${initial.defaultName}.wav`
+      ? `${lastDir}/${initial.defaultName}.${ext}`
+      : `${initial.defaultName}.${ext}`
+    const filterName = format === 'flac' ? 'FLAC audio' : 'WAV audio'
     const path = await save({
       title: 'Export audio',
       defaultPath,
-      filters: [{ name: 'WAV audio', extensions: ['wav'] }],
+      filters: [{ name: filterName, extensions: [ext] }],
     })
     if (!path) return
-    const sep = path.includes('\\') ? '\\' : '/'
-    const idx = path.lastIndexOf(sep)
-    if (idx > 0) localStorage.setItem(LAST_EXPORT_DIR_KEY, path.slice(0, idx))
+    const finalPath = path.toLowerCase().endsWith(`.${ext}`) ? path : `${path}.${ext}`
+    const sep = finalPath.includes('\\') ? '\\' : '/'
+    const idx = finalPath.lastIndexOf(sep)
+    if (idx > 0) localStorage.setItem(LAST_EXPORT_DIR_KEY, finalPath.slice(0, idx))
     persistPrefs()
 
     setExporting(true)
@@ -273,7 +283,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
         duration_secs: number
         cancelled: boolean
       }>('export_project_wav', {
-        path,
+        path: finalPath,
         sampleRate,
         bitDepth,
         tailSecs,
@@ -328,7 +338,15 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
         </div>
 
         <Row label="Format">
-          <div style={{ fontSize: 12, color: hw.textSecondary }}>WAV</div>
+          <select
+            value={format}
+            disabled={exporting}
+            onChange={e => setFormat(e.target.value as ExportFormat)}
+            style={selectStyle}
+          >
+            <option value="wav">WAV (PCM)</option>
+            <option value="flac">FLAC (lossless)</option>
+          </select>
         </Row>
 
         <Row label="Bit depth">
