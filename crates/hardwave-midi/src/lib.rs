@@ -3,9 +3,11 @@
 pub mod input;
 pub mod output;
 pub mod recording;
+pub mod theory;
 pub use input::{ClockSyncSnapshot, MidiInputManager, ReconcileReport};
 pub use output::{MidiOutputManager, MIDI_CLOCK_TICK, MIDI_CONTINUE, MIDI_START, MIDI_STOP};
 pub use recording::{CcEvent, MidiCcRecorder, MidiRecordMode, MidiRecorder};
+pub use theory::{generate_melody, major_scale, suggest_next_chord, Chord, ChordQuality};
 
 use serde::{Deserialize, Serialize};
 
