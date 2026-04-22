@@ -197,6 +197,58 @@ mod tests {
     }
 
     #[test]
+    fn linear_curve_interpolates_between_points() {
+        let l = lane(&[(0, 0.0, CurveMode::Linear), (100, 1.0, CurveMode::Linear)]);
+        assert_eq!(l.value_at(0), 0.0);
+        assert_eq!(l.value_at(25), 0.25);
+        assert_eq!(l.value_at(50), 0.5);
+        assert_eq!(l.value_at(75), 0.75);
+        assert_eq!(l.value_at(100), 1.0);
+    }
+
+    #[test]
+    fn step_curve_holds_a_value_until_next_point() {
+        let l = lane(&[(0, 0.2, CurveMode::Step), (100, 0.8, CurveMode::Linear)]);
+        for t in 0..100 {
+            assert_eq!(l.value_at(t), 0.2, "step curve should hold at tick {t}");
+        }
+        assert_eq!(l.value_at(100), 0.8);
+    }
+
+    #[test]
+    fn bezier_curve_passes_through_endpoints() {
+        // The power-curve bezier implementation must still hit both endpoints
+        // exactly regardless of tension.
+        let mut lane_bez = lane(&[(0, 0.0, CurveMode::Bezier), (100, 1.0, CurveMode::Linear)]);
+        lane_bez.points[0].tension = 0.5;
+        assert_eq!(lane_bez.value_at(0), 0.0);
+        assert_eq!(lane_bez.value_at(100), 1.0);
+        // Positive tension bends the curve toward the start, so at the
+        // midpoint the value should be less than 0.5.
+        let mid = lane_bez.value_at(50);
+        assert!(
+            mid < 0.5,
+            "positive-tension bezier midpoint should be < 0.5, got {mid}"
+        );
+    }
+
+    #[test]
+    fn per_segment_curve_type_is_independent() {
+        // A lane with different curve modes on adjacent segments: Step
+        // from 0..100, Linear from 100..200. Each segment uses its own
+        // curve type via `a.curve`.
+        let l = lane(&[
+            (0, 0.0, CurveMode::Step),
+            (100, 0.6, CurveMode::Linear),
+            (200, 1.0, CurveMode::Linear),
+        ]);
+        // Step segment: holds at 0.0 until tick 100.
+        assert_eq!(l.value_at(50), 0.0);
+        // Linear segment: midpoint between 0.6 and 1.0 = 0.8.
+        assert_eq!(l.value_at(150), 0.8);
+    }
+
+    #[test]
     fn stairs_curve_produces_quantized_steps() {
         // 4-step stairs from 0.0 → 1.0 over 0..100 ticks. Expected values
         // at tick 0, 25, 50, 75 = 0.0, 0.25, 0.5, 0.75; at tick 100
