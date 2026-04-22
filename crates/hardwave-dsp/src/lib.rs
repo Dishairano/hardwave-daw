@@ -23,6 +23,7 @@ pub mod parametric_eq;
 pub mod phase_vocoder;
 pub mod recording;
 pub mod reverb;
+pub mod reverb_extras;
 pub mod sample_classify;
 pub mod spectrum;
 pub mod stereo;
