@@ -11,6 +11,7 @@ pub mod project;
 pub mod recording_session;
 pub mod tempo;
 pub mod track;
+pub mod track_freeze;
 
 pub use automation::{AutomationLane, AutomationPoint, AutomationTarget};
 pub use automation_recording::{AutomationRecorder, WriteMode};
