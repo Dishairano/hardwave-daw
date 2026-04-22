@@ -52,6 +52,14 @@ pub fn get_meters(state: State<AppState>) -> MeterSnapshot {
     state.engine.lock().master_meter()
 }
 
+/// Return the most recent `n_frames` stereo frames from the master bus,
+/// interleaved L,R,L,R… The UI uses this for oscilloscope / correlation /
+/// spectrum visualizations. `n_frames` is clamped to the tap capacity.
+#[tauri::command]
+pub fn get_master_samples(state: State<AppState>, n_frames: u32) -> Vec<f32> {
+    state.engine.lock().master_tap_snapshot(n_frames as usize)
+}
+
 #[tauri::command]
 pub fn get_audio_devices(state: State<AppState>) -> Vec<AudioDeviceInfo> {
     let engine = state.engine.lock();

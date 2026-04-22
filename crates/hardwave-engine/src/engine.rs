@@ -18,6 +18,7 @@ use crate::audio_pool::{AudioBuffer, AudioPool};
 use crate::graph::{AudioGraph, ProcessContext};
 use crate::input_node::{InputNode, SharedInputConsumer};
 use crate::master_node::MasterNode;
+use crate::master_tap::{self, SharedMasterTap};
 use crate::track_node::{ClipRegion, TrackMeterState, TrackNode};
 use crate::transport::{TransportCommand, TransportState};
 
@@ -113,6 +114,10 @@ pub struct DawEngine {
 
     /// Undo/redo history. Take a snapshot BEFORE mutating the project.
     pub history: Arc<Mutex<History>>,
+
+    /// Circular buffer of recent master-bus output samples. Used by the UI
+    /// for oscilloscope / spectrum / correlation visualizations.
+    pub master_tap: SharedMasterTap,
 }
 
 /// Commands sent from UI thread to audio thread.
@@ -141,6 +146,7 @@ impl DawEngine {
             track_meters: Arc::new(Mutex::new(HashMap::new())),
             input_consumer: Arc::new(Mutex::new(None)),
             history: Arc::new(Mutex::new(History::new())),
+            master_tap: master_tap::new_shared(),
         }
     }
 
@@ -211,6 +217,7 @@ impl DawEngine {
             audio_pool,
             Arc::clone(&self.track_meters),
             Arc::clone(&self.input_consumer),
+            Arc::clone(&self.master_tap),
             sample_rate,
             buffer_size,
         );
@@ -296,6 +303,17 @@ impl DawEngine {
                 )
             })
             .collect()
+    }
+
+    /// Snapshot the most recent `n_frames` stereo frames from the master
+    /// tap, interleaved. Returns fewer samples if the tap hasn't filled.
+    pub fn master_tap_snapshot(&self, n_frames: usize) -> Vec<f32> {
+        self.master_tap.lock().snapshot_interleaved(n_frames)
+    }
+
+    /// Clear the master-tap circular buffer (e.g. after transport reset).
+    pub fn master_tap_reset(&self) {
+        self.master_tap.lock().reset();
     }
 
     /// Get the latest master meter snapshot (drains the lock-free ring buffer).
@@ -572,6 +590,9 @@ impl DawEngine {
         let input_consumer: SharedInputConsumer = Arc::new(Mutex::new(None));
 
         let buffer_size: usize = 1024;
+        // Offline render — use a private, discardable tap so we don't mix
+        // offline samples into the live UI visualization stream.
+        let offline_tap = master_tap::new_shared();
         let mut callback = EngineCallback::new(
             transport,
             project_arc,
@@ -580,6 +601,7 @@ impl DawEngine {
             self.audio_pool.clone(),
             track_meters,
             input_consumer,
+            offline_tap,
             sample_rate,
             buffer_size as u32,
         );
@@ -630,6 +652,7 @@ struct EngineCallback {
     audio_pool: AudioPool,
     track_meters: TrackMeterMap,
     input_consumer: SharedInputConsumer,
+    master_tap: SharedMasterTap,
     graph: AudioGraph,
     meter: ChannelMeter,
     sample_rate: u32,
@@ -654,6 +677,7 @@ impl EngineCallback {
         audio_pool: AudioPool,
         track_meters: TrackMeterMap,
         input_consumer: SharedInputConsumer,
+        master_tap: SharedMasterTap,
         sample_rate: u32,
         buffer_size: u32,
     ) -> Self {
@@ -665,6 +689,7 @@ impl EngineCallback {
             audio_pool,
             track_meters,
             input_consumer,
+            master_tap,
             graph: AudioGraph::new(buffer_size as usize),
             meter: ChannelMeter::new(sample_rate as f64),
             sample_rate,
@@ -1070,6 +1095,13 @@ impl AudioCallback for EngineCallback {
                 };
                 // Lock-free push; if the consumer is behind, drop the sample.
                 let _ = self.meter_producer.push(snapshot);
+
+                // Best-effort push of master samples for UI visualizations.
+                // try_lock keeps the audio thread non-blocking — if the UI
+                // is mid-snapshot we just drop this block.
+                if let Some(mut tap) = self.master_tap.try_lock() {
+                    tap.push_block(&output[..num_frames * 2]);
+                }
             }
         }
 

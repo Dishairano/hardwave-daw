@@ -130,6 +130,7 @@ pub fn run() {
             commands::engine::start_engine,
             commands::engine::stop_engine,
             commands::engine::get_meters,
+            commands::engine::get_master_samples,
             commands::engine::get_audio_devices,
             commands::engine::get_audio_config,
             commands::engine::set_audio_config,

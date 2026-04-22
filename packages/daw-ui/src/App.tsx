@@ -31,6 +31,7 @@ import { useSampleEditorStore } from './stores/sampleEditorStore'
 import { BeatSlicer } from './components/beat-slicer/BeatSlicer'
 import { useBeatSlicerStore } from './stores/beatSlicerStore'
 import { LoudnessMeter } from './components/LoudnessMeter'
+import { Oscilloscope } from './components/Oscilloscope'
 import { HistoryPanel } from './components/HistoryPanel'
 import { PrecountOverlay } from './components/transport/PrecountOverlay'
 import { invoke } from '@tauri-apps/api/core'
@@ -76,6 +77,7 @@ export function App() {
   const [showHelp, setShowHelp] = useState(false)
   const [showTrackTemplateManager, setShowTrackTemplateManager] = useState(false)
   const [showLoudness, setShowLoudness] = useState(false)
+  const [showOscilloscope, setShowOscilloscope] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
   const closeSampleEditor = useSampleEditorStore(s => s.close)
@@ -644,6 +646,7 @@ export function App() {
         onOpenAudioSettings={() => setShowAudioSettings(true)}
         onOpenThemePicker={() => setShowThemePicker(true)}
         onOpenLoudness={() => setShowLoudness(true)}
+        onOpenOscilloscope={() => setShowOscilloscope(true)}
         onCheckForUpdates={checkForUpdates}
         onToggleAbout={() => setShowAbout(v => !v)}
         onToggleShortcuts={() => setShowShortcuts(v => !v)}
@@ -713,6 +716,7 @@ export function App() {
       {sampleEditorPath && <SampleEditor path={sampleEditorPath} onClose={closeSampleEditor} />}
       {beatSlicerPath && <BeatSlicer path={beatSlicerPath} onClose={closeBeatSlicer} />}
       {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}
+      {showOscilloscope && <Oscilloscope onClose={() => setShowOscilloscope(false)} />}
 
       {showHistory && <HistoryPanel onClose={() => setShowHistory(false)} />}
       <PrecountOverlay />

@@ -50,6 +50,7 @@ interface TitleBarProps {
   onOpenAudioSettings: () => void
   onOpenThemePicker: () => void
   onOpenLoudness: () => void
+  onOpenOscilloscope: () => void
   onCheckForUpdates: () => void
   onToggleAbout: () => void
   onToggleShortcuts: () => void
@@ -77,7 +78,7 @@ export function TitleBar(props: TitleBarProps) {
     onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
     onApplyTrackTemplate, onManageTrackTemplates,
     onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
-    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onToggleHelp, onOpenHistory, onExportAudio,
+    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onOpenOscilloscope, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onToggleHelp, onOpenHistory, onExportAudio,
     onSaveAsTemplate, onAutoCrossfade,
     recentProjects, onOpenRecentProject, onClearRecentProjects,
     showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
@@ -207,6 +208,7 @@ export function TitleBar(props: TitleBarProps) {
       label: 'TOOLS',
       items: [
         { label: 'Loudness meter...', action: onOpenLoudness },
+        { label: 'Oscilloscope...', action: onOpenOscilloscope },
         { separator: true, label: '' },
         { label: 'Macros...', disabled: true },
         { label: 'External editor...', disabled: true },

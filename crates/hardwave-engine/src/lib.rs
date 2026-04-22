@@ -5,6 +5,7 @@ pub mod engine;
 pub mod graph;
 pub mod input_node;
 pub mod master_node;
+pub mod master_tap;
 pub mod track_node;
 pub mod transport;
 
@@ -12,5 +13,6 @@ pub use audio_pool::{AudioBuffer, AudioPool};
 pub use engine::DawEngine;
 pub use graph::{AudioGraph, AudioNode, NodeId, ProcessContext};
 pub use master_node::MasterNode;
+pub use master_tap::{MasterTap, SharedMasterTap};
 pub use track_node::{ClipRegion, TrackNode};
 pub use transport::{TransportCommand, TransportState};
