@@ -51,6 +51,7 @@ interface TitleBarProps {
   onOpenThemePicker: () => void
   onOpenLoudness: () => void
   onOpenOscilloscope: () => void
+  onOpenSpectrum: () => void
   onCheckForUpdates: () => void
   onToggleAbout: () => void
   onToggleShortcuts: () => void
@@ -78,7 +79,7 @@ export function TitleBar(props: TitleBarProps) {
     onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
     onApplyTrackTemplate, onManageTrackTemplates,
     onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
-    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onOpenOscilloscope, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onToggleHelp, onOpenHistory, onExportAudio,
+    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onOpenOscilloscope, onOpenSpectrum, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onToggleHelp, onOpenHistory, onExportAudio,
     onSaveAsTemplate, onAutoCrossfade,
     recentProjects, onOpenRecentProject, onClearRecentProjects,
     showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
@@ -209,6 +210,7 @@ export function TitleBar(props: TitleBarProps) {
       items: [
         { label: 'Loudness meter...', action: onOpenLoudness },
         { label: 'Oscilloscope...', action: onOpenOscilloscope },
+        { label: 'Spectrum analyzer...', action: onOpenSpectrum },
         { separator: true, label: '' },
         { label: 'Macros...', disabled: true },
         { label: 'External editor...', disabled: true },

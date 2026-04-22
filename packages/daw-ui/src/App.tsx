@@ -32,6 +32,7 @@ import { BeatSlicer } from './components/beat-slicer/BeatSlicer'
 import { useBeatSlicerStore } from './stores/beatSlicerStore'
 import { LoudnessMeter } from './components/LoudnessMeter'
 import { Oscilloscope } from './components/Oscilloscope'
+import { SpectrumAnalyzer } from './components/SpectrumAnalyzer'
 import { HistoryPanel } from './components/HistoryPanel'
 import { PrecountOverlay } from './components/transport/PrecountOverlay'
 import { invoke } from '@tauri-apps/api/core'
@@ -78,6 +79,7 @@ export function App() {
   const [showTrackTemplateManager, setShowTrackTemplateManager] = useState(false)
   const [showLoudness, setShowLoudness] = useState(false)
   const [showOscilloscope, setShowOscilloscope] = useState(false)
+  const [showSpectrum, setShowSpectrum] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
   const closeSampleEditor = useSampleEditorStore(s => s.close)
@@ -647,6 +649,7 @@ export function App() {
         onOpenThemePicker={() => setShowThemePicker(true)}
         onOpenLoudness={() => setShowLoudness(true)}
         onOpenOscilloscope={() => setShowOscilloscope(true)}
+        onOpenSpectrum={() => setShowSpectrum(true)}
         onCheckForUpdates={checkForUpdates}
         onToggleAbout={() => setShowAbout(v => !v)}
         onToggleShortcuts={() => setShowShortcuts(v => !v)}
@@ -717,6 +720,7 @@ export function App() {
       {beatSlicerPath && <BeatSlicer path={beatSlicerPath} onClose={closeBeatSlicer} />}
       {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}
       {showOscilloscope && <Oscilloscope onClose={() => setShowOscilloscope(false)} />}
+      {showSpectrum && <SpectrumAnalyzer onClose={() => setShowSpectrum(false)} />}
 
       {showHistory && <HistoryPanel onClose={() => setShowHistory(false)} />}
       <PrecountOverlay />
