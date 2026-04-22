@@ -362,6 +362,64 @@ impl PunchWindow {
     }
 }
 
+/// A single slice chosen from a take during comp assembly.
+/// `(take_index, start_frame, length_frames)` — include this many
+/// frames from this take starting at this frame offset.
+#[derive(Debug, Clone, Copy)]
+pub struct CompSlice {
+    pub take_index: usize,
+    pub start_frame: usize,
+    pub length_frames: usize,
+}
+
+/// Assemble a final comp'd take from a list of `Take`s and a
+/// selection of slices from each. Slices are concatenated in order
+/// into one interleaved `Vec<f32>`. Frames that fall outside a
+/// take's bounds are silenced. Channels are taken from the first
+/// take; if later takes have different channel counts they're
+/// zero-padded to match.
+pub fn assemble_comp_take(takes: &[Take], slices: &[CompSlice]) -> Option<Take> {
+    let first = takes.first()?;
+    let channels = first.channels.max(1) as usize;
+    let mut out_samples: Vec<f32> = Vec::new();
+    let mut min_start: Option<u64> = None;
+    let mut max_end: u64 = 0;
+    for slice in slices {
+        let Some(take) = takes.get(slice.take_index) else {
+            // Skip invalid take index — silent.
+            out_samples.resize(
+                out_samples.len() + slice.length_frames * channels,
+                0.0,
+            );
+            continue;
+        };
+        let take_channels = take.channels.max(1) as usize;
+        let start_sample = slice.start_frame * take_channels;
+        let slice_start_u64 = take.start_sample + slice.start_frame as u64;
+        if min_start.is_none_or(|m| slice_start_u64 < m) {
+            min_start = Some(slice_start_u64);
+        }
+        let slice_end_u64 = slice_start_u64 + slice.length_frames as u64;
+        if slice_end_u64 > max_end {
+            max_end = slice_end_u64;
+        }
+        for f in 0..slice.length_frames {
+            let src_base = start_sample + f * take_channels;
+            for ch in 0..channels {
+                let src_idx = src_base + ch.min(take_channels - 1);
+                let val = take.samples.get(src_idx).copied().unwrap_or(0.0);
+                out_samples.push(val);
+            }
+        }
+    }
+    Some(Take {
+        samples: out_samples,
+        start_sample: min_start.unwrap_or(0),
+        end_sample: max_end,
+        channels: channels as u8,
+    })
+}
+
 /// Write the captured samples from a RecordingSession as a 32-bit
 /// float WAV file. Returns the number of samples written, or an error
 /// if the file can't be created / written.
@@ -561,6 +619,65 @@ mod tests {
         assert_eq!(tl.take_count(), 1);
         // First sample: 1.0 + 0.5 = 1.5.
         assert!((tl.takes()[0].samples[0] - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn assemble_comp_take_concatenates_slices_from_multiple_takes() {
+        // Two mono takes, easy to identify by value.
+        let take_a = Take {
+            samples: vec![1.0; 100],
+            start_sample: 0,
+            end_sample: 100,
+            channels: 1,
+        };
+        let take_b = Take {
+            samples: vec![2.0; 100],
+            start_sample: 0,
+            end_sample: 100,
+            channels: 1,
+        };
+        let takes = vec![take_a, take_b];
+        let slices = vec![
+            CompSlice {
+                take_index: 0,
+                start_frame: 0,
+                length_frames: 50,
+            },
+            CompSlice {
+                take_index: 1,
+                start_frame: 50,
+                length_frames: 50,
+            },
+        ];
+        let comp = assemble_comp_take(&takes, &slices).expect("comp built");
+        assert_eq!(comp.samples.len(), 100);
+        // First 50 should be 1.0 (from take A), last 50 should be 2.0.
+        for i in 0..50 {
+            assert_eq!(comp.samples[i], 1.0);
+        }
+        for i in 50..100 {
+            assert_eq!(comp.samples[i], 2.0);
+        }
+    }
+
+    #[test]
+    fn assemble_comp_take_with_invalid_index_produces_silence() {
+        let take = Take {
+            samples: vec![1.0; 50],
+            start_sample: 0,
+            end_sample: 50,
+            channels: 1,
+        };
+        let slices = vec![CompSlice {
+            take_index: 99,
+            start_frame: 0,
+            length_frames: 25,
+        }];
+        let comp = assemble_comp_take(&[take], &slices).expect("comp built");
+        for s in &comp.samples {
+            assert_eq!(*s, 0.0);
+        }
+        assert_eq!(comp.samples.len(), 25);
     }
 
     #[test]
