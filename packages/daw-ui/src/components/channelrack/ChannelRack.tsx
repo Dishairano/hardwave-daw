@@ -143,6 +143,24 @@ export function ChannelRack() {
     setStep(id, i, cur[i] > 0 ? 0 : DEFAULT_VEL)
   }
 
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null)
+  const previewChannelSample = async (channelId: string) => {
+    const ch = tracks.find(t => t.id === channelId)
+    const clip = ch?.clips.find(c => c.kind === 'audio' && c.source_id)
+    if (!clip) return
+    try {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause()
+        previewAudioRef.current = null
+      }
+      const { convertFileSrc } = await import('@tauri-apps/api/core')
+      const audio = new Audio(convertFileSrc(clip.source_id))
+      previewAudioRef.current = audio
+      audio.onended = () => { if (previewAudioRef.current === audio) previewAudioRef.current = null }
+      await audio.play().catch(() => {})
+    } catch { /* ignore — preview is best-effort */ }
+  }
+
   // Vertical drag on a step sets velocity 0..1.
   const startVelocityDrag = (id: string, i: number, e: React.MouseEvent) => {
     e.preventDefault()
@@ -461,14 +479,18 @@ export function ChannelRack() {
                   return (
                     <button
                       key={i}
-                      onClick={() => toggleStep(ch.id, i)}
+                      onClick={(e) => {
+                        if (e.altKey && active) { previewChannelSample(ch.id); return }
+                        toggleStep(ch.id, i)
+                      }}
                       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setStep(ch.id, i, 0) }}
                       onMouseDown={(e) => {
                         if (e.button !== 0) return
+                        if (e.altKey) return
                         if (!active) return
                         startVelocityDrag(ch.id, i, e)
                       }}
-                      title={active ? `Velocity ${Math.round(vel * 127)} (drag up/down)` : 'Click to add step'}
+                      title={active ? `Velocity ${Math.round(vel * 127)} (drag up/down · Alt+click to preview)` : 'Click to add step'}
                       style={{
                         flex: 1, maxWidth: 28, height: 22, position: 'relative',
                         background: active
