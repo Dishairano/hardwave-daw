@@ -10,6 +10,7 @@ pub mod fade;
 pub mod fm_synth;
 pub mod modulation;
 pub mod multiband;
+pub mod parametric_eq;
 pub mod reverb;
 pub mod stereo;
 pub mod synth;
