@@ -25,6 +25,7 @@ pub mod reverb;
 pub mod sample_classify;
 pub mod stereo;
 pub mod synth;
+pub mod synth_voicing;
 pub mod time_pitch;
 pub mod wavetable;
 
