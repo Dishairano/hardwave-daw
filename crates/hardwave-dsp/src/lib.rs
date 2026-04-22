@@ -23,6 +23,7 @@ pub mod reverb;
 pub mod sample_classify;
 pub mod stereo;
 pub mod synth;
+pub mod time_pitch;
 pub mod wavetable;
 
 pub use audio_file::{AudioFileInfo, AudioFileReader};
