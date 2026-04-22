@@ -1080,7 +1080,7 @@ impl EngineCallback {
 
         self.needs_rebuild = false;
         self.graph_latency_samples.store(
-            self.graph.max_latency_samples(),
+            self.graph.total_latency_samples(),
             std::sync::atomic::Ordering::Relaxed,
         );
     }

@@ -187,14 +187,38 @@ impl AudioGraph {
         self.nodes.len()
     }
 
-    /// Maximum per-node `latency_samples` in the graph. Used as a coarse
-    /// indicator of total project latency until full plugin-delay
-    /// compensation (per-path accumulation + parallel-path alignment) lands.
+    /// Maximum per-node `latency_samples` in the graph. Kept for callers that
+    /// only want a quick lower bound — see [`Self::total_latency_samples`]
+    /// for the real critical-path figure.
     pub fn max_latency_samples(&self) -> u32 {
         self.nodes
             .iter()
             .map(|n| n.latency_samples())
             .max()
             .unwrap_or(0)
+    }
+
+    /// Critical-path latency in samples: the maximum, over every signal path
+    /// in the graph, of the sum of `latency_samples()` along that path.
+    /// Computed by DP over the topologically-sorted node list — each node's
+    /// accumulated latency is `self_latency + max(incoming source latencies)`.
+    /// This is the number plugin delay compensation would use to align
+    /// parallel paths against the slowest branch.
+    pub fn total_latency_samples(&self) -> u32 {
+        let n = self.nodes.len();
+        if n == 0 {
+            return 0;
+        }
+        let mut acc = vec![0u32; n];
+        for &node_id in &self.processing_order {
+            let mut incoming_max = 0u32;
+            for edge in &self.edges {
+                if edge.dest == node_id {
+                    incoming_max = incoming_max.max(acc[edge.source]);
+                }
+            }
+            acc[node_id] = incoming_max.saturating_add(self.nodes[node_id].latency_samples());
+        }
+        acc.into_iter().max().unwrap_or(0)
     }
 }
