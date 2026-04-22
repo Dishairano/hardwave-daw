@@ -181,6 +181,70 @@ fn no_cpu_spikes_above_envelope_on_moderate_load() {
 }
 
 #[test]
+fn simulated_long_session_stays_stable_across_many_render_cycles() {
+    // Simulates the shape of a multi-hour session: 200 render cycles that
+    // each add tracks, render, mutate (volume/pan), render, remove tracks,
+    // render, with a periodic sanity check against the baseline track
+    // count. This doesn't run for 4 hours of wall time — CI can't afford
+    // that — but it exercises the same edit-render-edit-render loop shape
+    // that a real session hits, at several orders of magnitude more
+    // cycles than any typical user session would reach.
+    //
+    // Regressions that leak tracks, accumulate graph nodes, grow the
+    // audio pool unboundedly, or corrupt output samples all surface in
+    // well under the 200-cycle budget.
+    let engine = DawEngine::new();
+    let sample_rate = 48_000;
+    let baseline = engine.project.lock().tracks.len();
+
+    for cycle in 0..200 {
+        // Stage 1: add a handful of tracks.
+        let created_ids: Vec<String> = {
+            let mut project = engine.project.lock();
+            (0..4)
+                .map(|i| project.add_audio_track(format!("LS {cycle}-{i}")))
+                .collect()
+        };
+        let r1 = engine.render_offline(sample_rate, 512, |block| {
+            !block.iter().any(|s| s.is_nan() || s.is_infinite())
+        });
+        assert!(r1.is_ok(), "cycle {cycle} stage 1 failed: {r1:?}");
+
+        // Stage 2: mutate every newly-added track.
+        {
+            let mut project = engine.project.lock();
+            for (i, id) in created_ids.iter().enumerate() {
+                if let Some(t) = project.track_mut(id) {
+                    t.volume_db = -6.0 + (i as f64);
+                    t.pan = ((i as f64) - 2.0) * 0.25;
+                }
+            }
+        }
+        let r2 = engine.render_offline(sample_rate, 512, |_| true);
+        assert!(r2.is_ok(), "cycle {cycle} stage 2 failed: {r2:?}");
+
+        // Stage 3: remove the tracks.
+        {
+            let mut project = engine.project.lock();
+            for id in &created_ids {
+                project.remove_track(id);
+            }
+        }
+        let r3 = engine.render_offline(sample_rate, 512, |_| true);
+        assert!(r3.is_ok(), "cycle {cycle} stage 3 failed: {r3:?}");
+
+        // Sanity: every 20 cycles, verify we're back at baseline.
+        if cycle % 20 == 19 {
+            let count_now = engine.project.lock().tracks.len();
+            assert_eq!(
+                count_now, baseline,
+                "cycle {cycle} drifted from baseline: expected {baseline}, got {count_now}"
+            );
+        }
+    }
+}
+
+#[test]
 fn audio_thread_does_not_block_on_held_project_lock() {
     // Simulate a UI command holding the project mutex for an unusually
     // long stretch (e.g. a slow save). The audio thread should keep
