@@ -5,6 +5,7 @@ pub mod automation_clip;
 pub mod automation_recording;
 pub mod channel_rack;
 pub mod clip;
+pub mod fl_import;
 pub mod lfo;
 pub mod marketplace;
 pub mod mixer;
