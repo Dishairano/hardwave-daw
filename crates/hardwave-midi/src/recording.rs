@@ -2,8 +2,89 @@
 //! audio RecordingSession but for note-on / note-off events. Handles
 //! overdub (add notes on top of existing) and replace (clear then
 //! record) modes, plus optional input quantization.
+//!
+//! Also includes a MIDI CC recorder that captures `(tick, cc_value)`
+//! events and converts them to normalized automation samples ready
+//! to feed into `AutomationLane::push_sample`.
 
 use crate::MidiNote;
+
+/// One captured MIDI CC event.
+#[derive(Debug, Clone, Copy)]
+pub struct CcEvent {
+    pub tick: u64,
+    pub cc_number: u8,
+    /// Raw MIDI CC value in 0..=127.
+    pub value: u8,
+}
+
+/// MIDI CC recorder — accumulates per-CC event streams during
+/// playback. `cc_events(cc_number)` returns the captured events
+/// normalized to automation-lane-ready `(tick, normalized_value)`
+/// pairs where normalized = value / 127.0.
+#[derive(Default)]
+pub struct MidiCcRecorder {
+    events: Vec<CcEvent>,
+    recording: bool,
+}
+
+impl MidiCcRecorder {
+    pub fn start(&mut self) {
+        self.recording = true;
+        self.events.clear();
+    }
+
+    pub fn stop(&mut self) {
+        self.recording = false;
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.recording
+    }
+
+    pub fn push_cc(&mut self, tick: u64, cc_number: u8, value: u8) {
+        if !self.recording {
+            return;
+        }
+        self.events.push(CcEvent {
+            tick,
+            cc_number,
+            value: value.min(127),
+        });
+    }
+
+    pub fn events(&self) -> &[CcEvent] {
+        &self.events
+    }
+
+    pub fn event_count(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Extract just the events for a specific CC number, mapped to
+    /// `(tick, normalized_value_0_to_1)` ready to feed into an
+    /// `AutomationLane`.
+    pub fn cc_events_normalized(&self, cc_number: u8) -> Vec<(u64, f64)> {
+        self.events
+            .iter()
+            .filter(|e| e.cc_number == cc_number)
+            .map(|e| (e.tick, e.value as f64 / 127.0))
+            .collect()
+    }
+
+    /// List of unique CC numbers seen during recording.
+    pub fn unique_cc_numbers(&self) -> Vec<u8> {
+        let mut seen = std::collections::BTreeSet::new();
+        for e in &self.events {
+            seen.insert(e.cc_number);
+        }
+        seen.into_iter().collect()
+    }
+
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+}
 
 /// What to do with existing notes when recording starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,6 +413,68 @@ mod tests {
         rec.note_on(0, 60, 0.7, 0);
         rec.note_off(100, 60, 0);
         assert_eq!(rec.note_count(), 0);
+    }
+
+    #[test]
+    fn cc_recorder_captures_events_during_playback() {
+        let mut rec = MidiCcRecorder::default();
+        rec.push_cc(0, 1, 64);
+        assert_eq!(rec.event_count(), 0);
+        rec.start();
+        rec.push_cc(100, 1, 64);
+        rec.push_cc(200, 1, 80);
+        rec.push_cc(300, 7, 100);
+        rec.stop();
+        rec.push_cc(400, 1, 90);
+        assert_eq!(rec.event_count(), 3);
+    }
+
+    #[test]
+    fn cc_recorder_normalizes_to_0_to_1() {
+        let mut rec = MidiCcRecorder::default();
+        rec.start();
+        rec.push_cc(0, 1, 0);
+        rec.push_cc(100, 1, 64);
+        rec.push_cc(200, 1, 127);
+        let samples = rec.cc_events_normalized(1);
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[0].1, 0.0);
+        assert!((samples[1].1 - 64.0 / 127.0).abs() < 1e-6);
+        assert_eq!(samples[2].1, 1.0);
+    }
+
+    #[test]
+    fn cc_recorder_filters_by_cc_number() {
+        let mut rec = MidiCcRecorder::default();
+        rec.start();
+        rec.push_cc(0, 1, 50);
+        rec.push_cc(100, 7, 100);
+        rec.push_cc(200, 1, 80);
+        // Only CC 1 should come out.
+        let cc1 = rec.cc_events_normalized(1);
+        assert_eq!(cc1.len(), 2);
+        assert_eq!(cc1[0].0, 0);
+        assert_eq!(cc1[1].0, 200);
+    }
+
+    #[test]
+    fn cc_recorder_unique_numbers_sorted() {
+        let mut rec = MidiCcRecorder::default();
+        rec.start();
+        rec.push_cc(0, 7, 50);
+        rec.push_cc(100, 1, 60);
+        rec.push_cc(200, 7, 70);
+        rec.push_cc(300, 11, 80);
+        assert_eq!(rec.unique_cc_numbers(), vec![1, 7, 11]);
+    }
+
+    #[test]
+    fn cc_recorder_clamps_out_of_range_values() {
+        let mut rec = MidiCcRecorder::default();
+        rec.start();
+        rec.push_cc(0, 1, 255);
+        let samples = rec.cc_events_normalized(1);
+        assert_eq!(samples[0].1, 1.0);
     }
 
     #[test]

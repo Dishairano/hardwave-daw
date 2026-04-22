@@ -387,10 +387,7 @@ pub fn assemble_comp_take(takes: &[Take], slices: &[CompSlice]) -> Option<Take> 
     for slice in slices {
         let Some(take) = takes.get(slice.take_index) else {
             // Skip invalid take index — silent.
-            out_samples.resize(
-                out_samples.len() + slice.length_frames * channels,
-                0.0,
-            );
+            out_samples.resize(out_samples.len() + slice.length_frames * channels, 0.0);
             continue;
         };
         let take_channels = take.channels.max(1) as usize;
