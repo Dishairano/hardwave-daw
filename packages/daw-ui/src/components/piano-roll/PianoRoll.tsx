@@ -1329,6 +1329,20 @@ export function PianoRoll() {
     try { localStorage.setItem('hardwave.daw.pianoRollQwertyVelocity', String(qwertyVelocity)) } catch {}
   }, [qwertyVelocity])
 
+  const qwertyRest = useCallback(() => {
+    const ts = useTransportStore.getState()
+    let originTick: number
+    if (ts.editCursorTicks != null) {
+      originTick = ts.editCursorTicks
+    } else {
+      const sr = ts.sampleRate || 48000
+      const samplesPerTick = (sr * 60) / (ts.bpm * PPQ)
+      originTick = Math.round(ts.positionSamples / samplesPerTick)
+    }
+    const snappedTick = Math.max(0, Math.round(originTick / snap) * snap)
+    ts.setEditCursor(snappedTick + snap)
+  }, [snap])
+
   // QWERTY step-record: capture-phase handler so keys consumed here
   // don't trigger global shortcuts like 'S' (split clip).
   const handleQwertyKeyDown = useCallback(async (e: KeyboardEvent) => {
@@ -1350,6 +1364,12 @@ export function PianoRoll() {
       e.preventDefault()
       e.stopImmediatePropagation()
       setQwertyOctave(o => Math.min(9, o + 1))
+      return
+    }
+    if (e.code === 'Backquote') {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      qwertyRest()
       return
     }
 
@@ -1394,7 +1414,7 @@ export function PianoRoll() {
       setNotes(prev => [...prev, draftNote])
       ts.setEditCursor(snappedTick + snap)
     } catch (err) { console.warn('qwerty add_midi_note failed', err) }
-  }, [qwertyEnabled, qwertyOctave, qwertyVelocity, activeTrackId, activeClipId, snap])
+  }, [qwertyEnabled, qwertyOctave, qwertyVelocity, activeTrackId, activeClipId, snap, qwertyRest])
 
   useEffect(() => {
     window.addEventListener('keydown', handleQwertyKeyDown, true)
@@ -1765,10 +1785,25 @@ export function PianoRoll() {
                   onChange={(e) => setQwertyVelocity(Number(e.target.value))}
                   style={{ width: '100%', accentColor: hw.accent }} />
               </div>
+              <button
+                onClick={qwertyRest}
+                disabled={!qwertyEnabled}
+                title="Advance the edit cursor by one snap without inserting a note (Backquote key while typing)"
+                style={{
+                  padding: '5px 10px', fontSize: 10, fontWeight: 700,
+                  color: qwertyEnabled ? hw.textPrimary : hw.textFaint,
+                  background: qwertyEnabled ? 'rgba(255,255,255,0.06)' : 'transparent',
+                  border: `1px solid ${hw.border}`,
+                  borderRadius: hw.radius.sm,
+                  cursor: qwertyEnabled ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Rest (skip step)
+              </button>
               <div style={{ fontSize: 8, color: hw.textFaint, lineHeight: 1.4 }}>
                 Z row = octave {qwertyOctave} · Q row = octave {qwertyOctave + 1}
                 <br />
-                <kbd style={{ fontSize: 8 }}>[</kbd> / <kbd style={{ fontSize: 8 }}>]</kbd> shift octave · notes added at edit cursor
+                <kbd style={{ fontSize: 8 }}>[</kbd> / <kbd style={{ fontSize: 8 }}>]</kbd> shift octave · <kbd style={{ fontSize: 8 }}>`</kbd> rest · notes added at edit cursor
               </div>
             </div>
           )}
