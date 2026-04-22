@@ -9,6 +9,7 @@ pub mod delay_line;
 pub mod distortion;
 pub mod drum_machine;
 pub mod dynamics;
+pub mod dynamics_extras;
 pub mod fade;
 pub mod fm_synth;
 pub mod granular;
