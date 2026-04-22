@@ -14,6 +14,7 @@ pub mod dynamics_extras;
 pub mod eq_interaction;
 pub mod fade;
 pub mod fm_synth;
+pub mod gpu_buffers;
 pub mod granular;
 pub mod ir_library;
 pub mod latency;
