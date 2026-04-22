@@ -15,6 +15,7 @@ pub mod multiband;
 pub mod parametric_eq;
 pub mod recording;
 pub mod reverb;
+pub mod sample_classify;
 pub mod stereo;
 pub mod synth;
 pub mod wavetable;
