@@ -6,6 +6,7 @@ pub mod graph;
 pub mod input_node;
 pub mod master_node;
 pub mod master_tap;
+pub mod parallel_eval;
 pub mod track_node;
 pub mod transport;
 
