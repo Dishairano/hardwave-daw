@@ -7,6 +7,7 @@ pub mod clip;
 pub mod lfo;
 pub mod mixer;
 pub mod project;
+pub mod recording_session;
 pub mod tempo;
 pub mod track;
 
