@@ -222,3 +222,82 @@ impl AudioGraph {
         acc.into_iter().max().unwrap_or(0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FakeNode {
+        name: &'static str,
+        latency: u32,
+    }
+
+    impl AudioNode for FakeNode {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn process(
+            &mut self,
+            _inputs: &[&[f32]],
+            _outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            _ctx: &ProcessContext,
+        ) {
+        }
+        fn latency_samples(&self) -> u32 {
+            self.latency
+        }
+    }
+
+    fn node(n: &'static str, l: u32) -> Box<dyn AudioNode> {
+        Box::new(FakeNode {
+            name: n,
+            latency: l,
+        })
+    }
+
+    #[test]
+    fn total_latency_is_zero_for_empty_graph() {
+        let g = AudioGraph::new(64);
+        assert_eq!(g.total_latency_samples(), 0);
+    }
+
+    #[test]
+    fn total_latency_accumulates_along_chain() {
+        let mut g = AudioGraph::new(64);
+        let a = g.add_node(node("A", 64));
+        let b = g.add_node(node("B", 128));
+        let c = g.add_node(node("C", 256));
+        g.connect(a, 0, b, 0);
+        g.connect(b, 0, c, 0);
+        // critical path = 64 + 128 + 256 = 448
+        assert_eq!(g.total_latency_samples(), 448);
+    }
+
+    #[test]
+    fn total_latency_takes_max_of_parallel_branches() {
+        let mut g = AudioGraph::new(64);
+        let src = g.add_node(node("src", 0));
+        let slow = g.add_node(node("slow", 1024));
+        let fast = g.add_node(node("fast", 64));
+        let sink = g.add_node(node("sink", 0));
+        g.connect(src, 0, slow, 0);
+        g.connect(src, 0, fast, 0);
+        g.connect(slow, 0, sink, 0);
+        g.connect(fast, 0, sink, 0);
+        // Critical path runs through the slow branch: 0 + 1024 + 0 = 1024
+        assert_eq!(g.total_latency_samples(), 1024);
+    }
+
+    #[test]
+    fn max_latency_differs_from_total_on_chains() {
+        let mut g = AudioGraph::new(64);
+        let a = g.add_node(node("A", 100));
+        let b = g.add_node(node("B", 100));
+        g.connect(a, 0, b, 0);
+        // Per-node max is 100, but the correct critical-path figure is 200.
+        assert_eq!(g.max_latency_samples(), 100);
+        assert_eq!(g.total_latency_samples(), 200);
+    }
+}
