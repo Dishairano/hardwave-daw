@@ -10,6 +10,7 @@ pub mod drum_machine;
 pub mod dynamics;
 pub mod fade;
 pub mod fm_synth;
+pub mod ir_library;
 pub mod latency;
 pub mod mix_feedback;
 pub mod modulation;
