@@ -5,5 +5,9 @@ edition.workspace = true
 
 [dependencies]
 hardwave-engine = { path = "../hardwave-engine" }
+hardwave-dsp = { path = "../hardwave-dsp" }
+hardwave-plugin-host = { path = "../hardwave-plugin-host" }
+hardwave-midi = { path = "../hardwave-midi" }
+raw-window-handle.workspace = true
 serde.workspace = true
 log.workspace = true

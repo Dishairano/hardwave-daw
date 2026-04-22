@@ -1921,8 +1921,12 @@ dependencies = [
 name = "hardwave-native-plugins"
 version = "0.1.0"
 dependencies = [
+ "hardwave-dsp",
  "hardwave-engine",
+ "hardwave-midi",
+ "hardwave-plugin-host",
  "log",
+ "raw-window-handle",
  "serde",
 ]
 
