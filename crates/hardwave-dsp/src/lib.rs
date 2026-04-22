@@ -12,6 +12,7 @@ pub mod fm_synth;
 pub mod modulation;
 pub mod multiband;
 pub mod parametric_eq;
+pub mod recording;
 pub mod reverb;
 pub mod stereo;
 pub mod synth;
