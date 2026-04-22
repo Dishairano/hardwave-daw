@@ -619,7 +619,7 @@ const sB: React.CSSProperties = {
 const MAX_VISIBLE_SLOTS = 10
 
 function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[] }) {
-  const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed, addToTrack, setInsertWet } = usePluginStore()
+  const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed, addToTrack, setInsertWet, setPluginSidechainSource } = usePluginStore()
   const plugins = usePluginStore(s => s.plugins)
   const tracks = useTrackStore(s => s.tracks)
   const { fetchTracks } = useTrackStore()
@@ -773,6 +773,13 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
               textDecoration: slot.enabled ? 'none' : 'line-through',
             }}>{slot.pluginName}</span>
+            {slot.sidechainSource && (
+              <span
+                data-testid={`fx-slot-sc-${slot.id}`}
+                style={{ fontSize: 7, fontWeight: 700, color: '#f5a524', flexShrink: 0, letterSpacing: 0.3 }}
+                title={`Sidechain from ${tracks.find(t => t.id === slot.sidechainSource)?.name ?? 'track'}`}
+              >SC</span>
+            )}
             {slot.enabled && slot.wet < 0.999 && (
               <span style={{ fontSize: 7, color: hw.textFaint, flexShrink: 0 }} title={`Wet ${Math.round(slot.wet * 100)}%`}>
                 {Math.round(slot.wet * 100)}%
@@ -1085,6 +1092,35 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     style={{ width: '100%', cursor: 'pointer' }}
                     title="Drag to blend dry/wet · double-click to reset"
                   />
+                </label>
+
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: hw.textMuted }}>
+                    <span>Sidechain source</span>
+                    {slot.sidechainSource && <span style={{ color: '#f5a524', fontWeight: 700, letterSpacing: 0.5 }}>SC</span>}
+                  </div>
+                  <select
+                    data-testid="plugin-window-sidechain"
+                    value={slot.sidechainSource ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setPluginSidechainSource(trackId, slot.id, v === '' ? null : v).then(() => fetchTracks())
+                    }}
+                    style={{
+                      width: '100%', fontSize: 10,
+                      background: '#0e0e10', color: hw.textPrimary,
+                      border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
+                      padding: '4px 6px', cursor: 'pointer',
+                    }}
+                    title="Route another track's output into this plugin's sidechain input"
+                  >
+                    <option value="">None</option>
+                    {tracks
+                      .filter(t => t.id !== trackId && t.kind !== 'Master')
+                      .map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                  </select>
                 </label>
               </div>
             </div>

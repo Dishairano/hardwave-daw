@@ -36,6 +36,7 @@ export interface InsertInfo {
   pluginName: string
   enabled: boolean
   wet: number
+  sidechainSource: string | null
 }
 
 export interface TrackInfo {

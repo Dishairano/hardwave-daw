@@ -221,6 +221,40 @@ pub fn set_insert_wet(
 }
 
 #[tauri::command]
+pub fn set_plugin_sidechain_source(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    source_track_id: Option<String>,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+
+    if let Some(ref src) = source_track_id {
+        if src == &track_id {
+            return Err("Cannot route a track's sidechain to itself".into());
+        }
+        if project.track(src).is_none() {
+            return Err(format!("Source track not found: {}", src));
+        }
+    }
+
+    let track = project
+        .track_mut(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+    let slot = track
+        .inserts
+        .iter_mut()
+        .find(|s| s.id == slot_id)
+        .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
+    slot.sidechain_source = source_track_id;
+    drop(project);
+    engine.rebuild_graph();
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_fx_chain_bypassed(
     state: State<AppState>,
     track_id: String,

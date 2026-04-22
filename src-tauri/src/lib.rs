@@ -135,6 +135,7 @@ pub fn run() {
             commands::plugins::reorder_insert,
             commands::plugins::set_fx_chain_bypassed,
             commands::plugins::set_insert_wet,
+            commands::plugins::set_plugin_sidechain_source,
             // Project
             commands::project::new_project,
             commands::project::save_project,

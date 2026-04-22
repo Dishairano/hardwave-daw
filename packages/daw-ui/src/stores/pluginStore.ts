@@ -50,6 +50,7 @@ interface PluginState {
   reorderInsert: (trackId: string, slotId: string, newIndex: number) => Promise<void>
   setFxChainBypassed: (trackId: string, bypassed: boolean) => Promise<void>
   setInsertWet: (trackId: string, slotId: string, wet: number) => Promise<void>
+  setPluginSidechainSource: (trackId: string, slotId: string, sourceTrackId: string | null) => Promise<void>
 }
 
 export const usePluginStore = create<PluginState>((set, get) => ({
@@ -138,5 +139,9 @@ export const usePluginStore = create<PluginState>((set, get) => ({
 
   setInsertWet: async (trackId, slotId, wet) => {
     await invoke('set_insert_wet', { trackId, slotId, wet })
+  },
+
+  setPluginSidechainSource: async (trackId, slotId, sourceTrackId) => {
+    await invoke('set_plugin_sidechain_source', { trackId, slotId, sourceTrackId })
   },
 }))

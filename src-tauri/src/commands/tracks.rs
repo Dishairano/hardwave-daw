@@ -11,6 +11,8 @@ pub struct InsertInfo {
     pub plugin_name: String,
     pub enabled: bool,
     pub wet: f32,
+    #[serde(rename = "sidechainSource")]
+    pub sidechain_source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -64,6 +66,7 @@ fn track_to_info(
             plugin_name: plugin_name_lookup(&s.plugin_id),
             enabled: s.enabled,
             wet: s.wet,
+            sidechain_source: s.sidechain_source.clone(),
         })
         .collect();
     TrackInfo {
