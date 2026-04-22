@@ -8,6 +8,7 @@ pub mod distortion;
 pub mod dynamics;
 pub mod fade;
 pub mod modulation;
+pub mod multiband;
 pub mod reverb;
 pub mod stereo;
 pub mod synth;
