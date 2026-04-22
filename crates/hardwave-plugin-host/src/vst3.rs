@@ -27,12 +27,19 @@ use vst3::Steinberg::Vst::{
     BusDirections_, BusInfo, Event, Event_::EventTypes_, IAudioProcessor, IAudioProcessorTrait,
     IComponent, IComponentTrait, IEditController, IEditControllerTrait, IEventList, IEventListTrait,
     IoModes_, MediaTypes_, NoteOffEvent, NoteOnEvent, ProcessModes_, ProcessSetup,
-    SymbolicSampleSizes_,
+    SymbolicSampleSizes_, ViewType,
 };
 use vst3::Steinberg::{
-    kResultOk, tresult, FIDString, IBStream, IBStreamTrait, IBStream_::IStreamSeekMode_,
-    IPluginBaseTrait, IPluginFactory, IPluginFactoryTrait, PClassInfo, TUID,
+    kResultOk, tresult, FIDString, IBStream, IBStreamTrait, IBStream_::IStreamSeekMode_, IPlugView,
+    IPlugViewTrait, IPluginBaseTrait, IPluginFactory, IPluginFactoryTrait, PClassInfo, TUID,
 };
+
+#[cfg(target_os = "windows")]
+use vst3::Steinberg::kPlatformTypeHWND;
+#[cfg(target_os = "macos")]
+use vst3::Steinberg::kPlatformTypeNSView;
+#[cfg(target_os = "linux")]
+use vst3::Steinberg::kPlatformTypeX11EmbedWindowID;
 use vst3::{ComPtr, Interface};
 
 /// Load a VST3 plugin from a .vst3 bundle/dll path.
@@ -94,6 +101,7 @@ struct Vst3Inner {
     component: Option<ComPtr<IComponent>>,
     processor: Option<ComPtr<IAudioProcessor>>,
     controller: Option<ComPtr<IEditController>>,
+    plug_view: Option<ComPtr<IPlugView>>,
     class_cid: TUID,
     sample_rate: f64,
     max_block: i32,
@@ -267,6 +275,7 @@ impl Vst3PluginInstance {
             component: Some(component),
             processor,
             controller,
+            plug_view: None,
             class_cid,
             sample_rate: 48_000.0,
             max_block: 0,
@@ -306,6 +315,11 @@ impl Vst3PluginInstance {
 
 impl Drop for Vst3Inner {
     fn drop(&mut self) {
+        // Detach + release the plug view first so the plugin can
+        // clean up its editor state before its controller is dropped.
+        if let Some(view) = self.plug_view.take() {
+            unsafe { view.removed() };
+        }
         if self.processing {
             if let Some(p) = &self.processor {
                 unsafe { p.setProcessing(0) };
@@ -319,9 +333,6 @@ impl Drop for Vst3Inner {
         if let Some(c) = &self.component {
             unsafe { c.terminate() };
         }
-        // Drop order: processor & controller ComPtrs release before
-        // component; component releases before factory; library closes
-        // last. The Arc fields below drop in declaration order.
         self.processor.take();
         self.controller.take();
         self.component.take();
@@ -621,10 +632,57 @@ impl HostedPlugin for Vst3PluginInstance {
         unsafe { processor.getLatencySamples() }
     }
 
-    fn open_editor(&mut self, _parent: raw_window_handle::RawWindowHandle) -> bool {
-        false
+    fn open_editor(&mut self, parent: raw_window_handle::RawWindowHandle) -> bool {
+        let Ok(inner) = self.inner_mut() else {
+            return false;
+        };
+        let Some(controller) = &inner.controller else {
+            return false;
+        };
+        // Close any existing editor first.
+        if let Some(view) = inner.plug_view.take() {
+            unsafe { view.removed() };
+        }
+        let view_name = ViewType::kEditor;
+        let view_raw = unsafe { controller.createView(view_name) };
+        let Some(view) = (unsafe { ComPtr::<IPlugView>::from_raw(view_raw) }) else {
+            return false;
+        };
+        // Pick the platform type + native pointer from the handle.
+        use raw_window_handle::RawWindowHandle as Rwh;
+        let (handle_ptr, platform_type): (*mut c_void, FIDString) = match parent {
+            #[cfg(target_os = "windows")]
+            Rwh::Win32(h) => (h.hwnd.get() as *mut c_void, kPlatformTypeHWND),
+            #[cfg(target_os = "macos")]
+            Rwh::AppKit(h) => (h.ns_view.as_ptr(), kPlatformTypeNSView),
+            #[cfg(target_os = "linux")]
+            Rwh::Xlib(h) => (h.window as *mut c_void, kPlatformTypeX11EmbedWindowID),
+            #[cfg(target_os = "linux")]
+            Rwh::Xcb(h) => (h.window.get() as usize as *mut c_void, kPlatformTypeX11EmbedWindowID),
+            _ => return false,
+        };
+        // Some plugins need isPlatformTypeSupported first.
+        let supported = unsafe { view.isPlatformTypeSupported(platform_type) };
+        if supported != kResultOk {
+            return false;
+        }
+        let attach_res = unsafe { view.attached(handle_ptr, platform_type) };
+        if attach_res != kResultOk {
+            return false;
+        }
+        inner.plug_view = Some(view);
+        true
     }
-    fn close_editor(&mut self) {}
+
+    fn close_editor(&mut self) {
+        let Ok(inner) = self.inner_mut() else {
+            return;
+        };
+        if let Some(view) = inner.plug_view.take() {
+            unsafe { view.removed() };
+        }
+    }
+
     fn has_editor(&self) -> bool {
         self.inner.descriptor.has_editor
     }
