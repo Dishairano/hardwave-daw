@@ -8,6 +8,7 @@ pub mod clip;
 pub mod lfo;
 pub mod marketplace;
 pub mod mixer;
+pub mod multiplayer;
 pub mod project;
 pub mod recording_session;
 pub mod sidechain_routing;
