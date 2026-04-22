@@ -63,6 +63,117 @@ impl Wavetable {
         Self { frames }
     }
 
+    /// Built-in "analog" wavetable: soft saw → ramp → pulse-width
+    /// sweeping square → mellow triangle with subtle harmonic
+    /// drift. Emulates the warmer edge of classic VA oscillators.
+    pub fn analog() -> Self {
+        let mut frames: Vec<Vec<f32>> = Vec::with_capacity(4);
+        for stage in 0..4 {
+            let mut v = vec![0.0_f32; WAVE_LENGTH];
+            for (i, sample) in v.iter_mut().enumerate() {
+                let p = i as f32 / WAVE_LENGTH as f32;
+                let t = 2.0 * PI * p;
+                *sample = match stage {
+                    // Soft saw: band-limited additive out to 16 harmonics.
+                    0 => band_limited_saw(p, 16),
+                    // Asymmetric ramp with fundamental-stacked soft rolloff.
+                    1 => band_limited_saw(p, 8) * 0.7 + (t).sin() * 0.3,
+                    // PWM square at 40% duty.
+                    2 => {
+                        if p < 0.4 {
+                            0.9
+                        } else {
+                            -0.9
+                        }
+                    }
+                    // Mellow triangle with a touch of 3rd harmonic.
+                    _ => {
+                        let tri = if p < 0.5 {
+                            4.0 * p - 1.0
+                        } else {
+                            3.0 - 4.0 * p
+                        };
+                        tri * 0.85 + (3.0 * t).sin() * 0.1
+                    }
+                };
+            }
+            frames.push(normalize_frame(v));
+        }
+        Self { frames }
+    }
+
+    /// Built-in "digital" wavetable: harsh, high-harmonic-content
+    /// frames reminiscent of FM / PD / DX-style oscillators —
+    /// double-saw stack, bit-reduced staircase, sawtooth-sync, and
+    /// square-with-extra-odd-harmonics.
+    pub fn digital() -> Self {
+        let mut frames: Vec<Vec<f32>> = Vec::with_capacity(4);
+        for stage in 0..4 {
+            let mut v = vec![0.0_f32; WAVE_LENGTH];
+            for (i, sample) in v.iter_mut().enumerate() {
+                let p = i as f32 / WAVE_LENGTH as f32;
+                let t = 2.0 * PI * p;
+                *sample = match stage {
+                    // Double saw (super-saw-ish stack of two slightly
+                    // detuned saws).
+                    0 => band_limited_saw(p, 32) * 0.6 + band_limited_saw(p * 1.01, 16) * 0.4,
+                    // 4-bit staircase.
+                    1 => {
+                        let steps = 16.0;
+                        ((p * steps).floor() / steps) * 2.0 - 1.0 + 1.0 / steps
+                    }
+                    // Hard-sync saw at ratio 2 (second saw resets twice
+                    // per cycle — bright, buzzy).
+                    2 => band_limited_saw(((p * 2.0) % 1.0 + 1.0) % 1.0, 16),
+                    // Square + odd-harmonic flavor (7th harmonic kick).
+                    _ => {
+                        let sq = if p < 0.5 { 1.0 } else { -1.0 };
+                        sq * 0.8 + (7.0 * t).sin() * 0.2
+                    }
+                };
+            }
+            frames.push(normalize_frame(v));
+        }
+        Self { frames }
+    }
+
+    /// Built-in "vocal" wavetable: four frames approximating the
+    /// vowels /a/, /e/, /i/, /o/ via sums of formant-tuned sine
+    /// partials. Morphing across position sweeps the vowel.
+    pub fn vocal() -> Self {
+        // F1 / F2 formant pairs (Hz) for a male voice, referenced to
+        // a fundamental of 110 Hz. We bake the partials nearest each
+        // formant into the single-cycle table.
+        let vowels: [(f32, f32); 4] = [
+            (730.0, 1090.0), // /a/
+            (530.0, 1840.0), // /e/
+            (270.0, 2290.0), // /i/
+            (570.0, 840.0),  // /o/
+        ];
+        let f0 = 110.0_f32;
+        let mut frames: Vec<Vec<f32>> = Vec::with_capacity(vowels.len());
+        for (f1, f2) in vowels.iter().copied() {
+            let mut v = vec![0.0_f32; WAVE_LENGTH];
+            for (i, sample) in v.iter_mut().enumerate() {
+                let p = i as f32 / WAVE_LENGTH as f32;
+                let t = 2.0 * PI * p;
+                let mut s = 0.0_f32;
+                // Sum the first 24 harmonics with gain peaked at the
+                // two formant frequencies.
+                for k in 1..=24 {
+                    let freq = (k as f32) * f0;
+                    let gain = formant_gain(freq, f1, 80.0) + formant_gain(freq, f2, 120.0);
+                    if gain > 0.001 {
+                        s += (k as f32 * t).sin() * gain;
+                    }
+                }
+                *sample = s;
+            }
+            frames.push(normalize_frame(v));
+        }
+        Self { frames }
+    }
+
     /// Built-in "noise" wavetable: one frame of deterministic pseudo-
     /// random noise. Useful as a fourth oscillator source.
     pub fn noise() -> Self {
@@ -105,6 +216,34 @@ impl Wavetable {
         let b = frame[(idx + 1) & (WAVE_LENGTH - 1)];
         a + (b - a) * frac
     }
+}
+
+fn band_limited_saw(phase: f32, harmonics: usize) -> f32 {
+    let t = 2.0 * PI * phase;
+    let mut s = 0.0_f32;
+    for k in 1..=harmonics {
+        s += (k as f32 * t).sin() / k as f32;
+    }
+    // Scale down so harmonic sums stay in range.
+    -2.0 / PI * s
+}
+
+fn normalize_frame(mut frame: Vec<f32>) -> Vec<f32> {
+    let peak = frame.iter().fold(0.0_f32, |acc, v| acc.max(v.abs()));
+    if peak > 1e-6 {
+        let inv = 0.98 / peak;
+        for v in frame.iter_mut() {
+            *v *= inv;
+        }
+    }
+    frame
+}
+
+fn formant_gain(freq: f32, center: f32, bandwidth: f32) -> f32 {
+    // Gaussian-shaped formant peak — unit gain at `center`, falls off
+    // with distance scaled by `bandwidth`.
+    let x = (freq - center) / bandwidth;
+    (-0.5 * x * x).exp()
 }
 
 /// Wavetable oscillator — holds a reference to a `Wavetable` via
@@ -259,5 +398,41 @@ mod tests {
         assert_eq!(wt.frame_count(), 2);
         assert!((wt.sample(0.0, 0.0) - 0.5).abs() < 0.01);
         assert!((wt.sample(0.0, 1.0) - (-0.5)).abs() < 0.01);
+    }
+
+    #[test]
+    fn analog_wavetable_has_four_frames_and_is_bounded() {
+        let wt = Wavetable::analog();
+        assert_eq!(wt.frame_count(), 4);
+        for frame_pos in [0.0, 0.33, 0.66, 1.0] {
+            for i in 0..256 {
+                let s = wt.sample(i as f32 / 256.0, frame_pos);
+                assert!(s.abs() <= 1.01, "|sample| {} at pos {}", s, frame_pos);
+            }
+        }
+    }
+
+    #[test]
+    fn digital_wavetable_has_four_frames_and_is_not_silent() {
+        let wt = Wavetable::digital();
+        assert_eq!(wt.frame_count(), 4);
+        for frame_pos in [0.0, 0.33, 0.66, 1.0] {
+            let energy: f32 = (0..256)
+                .map(|i| wt.sample(i as f32 / 256.0, frame_pos).powi(2))
+                .sum();
+            assert!(energy > 1.0, "frame {} silent", frame_pos);
+        }
+    }
+
+    #[test]
+    fn vocal_wavetable_has_four_frames_and_is_distinct_per_vowel() {
+        let wt = Wavetable::vocal();
+        assert_eq!(wt.frame_count(), 4);
+        let sample_at =
+            |pos: f32| -> Vec<f32> { (0..256).map(|i| wt.sample(i as f32 / 256.0, pos)).collect() };
+        let a = sample_at(0.0);
+        let e = sample_at(1.0 / 3.0);
+        let diff: f32 = a.iter().zip(e.iter()).map(|(x, y)| (x - y).abs()).sum();
+        assert!(diff > 10.0, "vowels not distinct enough, diff {}", diff);
     }
 }
