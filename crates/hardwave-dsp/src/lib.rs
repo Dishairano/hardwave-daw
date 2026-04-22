@@ -2,6 +2,7 @@
 
 pub mod audio_file;
 pub mod biquad;
+pub mod chord_detect;
 pub mod convolution;
 pub mod delay_line;
 pub mod distortion;
