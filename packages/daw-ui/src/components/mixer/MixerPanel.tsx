@@ -3,6 +3,7 @@ import { useTrackStore, type InsertInfo } from '../../stores/trackStore'
 import { usePluginStore } from '../../stores/pluginStore'
 import { useMeterStore, DEFAULT_TRACK_METER } from '../../stores/meterStore'
 import { PATTERN_COLORS } from '../../stores/patternStore'
+import { useSlotPresetStore } from '../../stores/slotPresetStore'
 import { DetachButton } from '../FloatingWindow'
 import { ParameterContextMenu } from '../ParameterContextMenu'
 import { SendsEditor } from './SendsEditor'
@@ -620,9 +621,16 @@ const MAX_VISIBLE_SLOTS = 10
 function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[] }) {
   const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed, addToTrack, setInsertWet } = usePluginStore()
   const { fetchTracks } = useTrackStore()
+  const slotPresets = useSlotPresetStore(s => s.presets)
+  const loadSlotPresets = useSlotPresetStore(s => s.load)
+  const addSlotPreset = useSlotPresetStore(s => s.add)
+  const removeSlotPreset = useSlotPresetStore(s => s.remove)
   const [menu, setMenu] = useState<{ x: number; y: number; slotId: string } | null>(null)
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false)
   const [dragOverSlotId, setDragOverSlotId] = useState<string | null>(null)
   const [dragOverEmptyIdx, setDragOverEmptyIdx] = useState<number | null>(null)
+
+  useEffect(() => { loadSlotPresets() }, [loadSlotPresets])
 
   useEffect(() => {
     if (!menu) return
@@ -630,6 +638,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
       const t = e.target as HTMLElement
       if (t.closest('[data-fx-menu]')) return
       setMenu(null)
+      setPresetMenuOpen(false)
     }
     window.addEventListener('mousedown', close)
     return () => window.removeEventListener('mousedown', close)
@@ -677,6 +686,33 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
       fetchTracks()
     }
     setDragOverEmptyIdx(null)
+  }
+
+  const handleSavePreset = async (slot: InsertInfo) => {
+    const name = window.prompt(`Save slot preset — "${slot.pluginName}" as:`, slot.pluginName)
+    if (name === null) return
+    addSlotPreset(name, {
+      pluginId: slot.pluginId,
+      pluginName: slot.pluginName,
+      wet: slot.wet,
+      enabled: slot.enabled,
+    })
+  }
+
+  const handleLoadPreset = async (slot: InsertInfo, presetId: string) => {
+    const preset = useSlotPresetStore.getState().get(presetId)
+    if (!preset) return
+    const idx = inserts.findIndex(i => i.id === slot.id)
+    await removeFromTrack(trackId, slot.id)
+    const newSlotId = await addToTrack(trackId, preset.pluginId)
+    if (idx >= 0) await reorderInsert(trackId, newSlotId, idx)
+    if (preset.wet < 0.999 || preset.wet > 1.001) {
+      await setInsertWet(trackId, newSlotId, preset.wet)
+    }
+    if (!preset.enabled) {
+      await setInsertEnabled(trackId, newSlotId, false)
+    }
+    fetchTracks()
   }
 
   const allBypassed = inserts.length > 0 && inserts.every(i => !i.enabled)
@@ -851,6 +887,62 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     title="Drag to blend dry/wet · double-click to reset"
                   />
                 </div>
+                <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
+                <button
+                  onClick={async () => {
+                    await handleSavePreset(slot)
+                    setMenu(null)
+                    setPresetMenuOpen(false)
+                  }}
+                  style={menuBtnStyle}
+                >Save preset…</button>
+                <button
+                  onClick={() => setPresetMenuOpen(v => !v)}
+                  disabled={slotPresets.length === 0}
+                  style={{ ...menuBtnStyle, opacity: slotPresets.length === 0 ? 0.4 : 1, display: 'flex', justifyContent: 'space-between' }}
+                  title={slotPresets.length === 0 ? 'No saved presets yet' : 'Load a saved preset'}
+                >
+                  <span>Load preset</span>
+                  <span style={{ color: hw.textFaint, fontSize: 9 }}>
+                    {slotPresets.length > 0 ? (presetMenuOpen ? '▾' : '▸') : ''}
+                  </span>
+                </button>
+                {presetMenuOpen && slotPresets.length > 0 && (
+                  <div style={{
+                    display: 'flex', flexDirection: 'column', gap: 1,
+                    maxHeight: 180, overflowY: 'auto',
+                    borderTop: `1px solid ${hw.borderDark}`,
+                    borderBottom: `1px solid ${hw.borderDark}`,
+                    padding: '2px 0',
+                  }}>
+                    {slotPresets.map(p => (
+                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <button
+                          onClick={async () => {
+                            await handleLoadPreset(slot, p.id)
+                            setMenu(null)
+                            setPresetMenuOpen(false)
+                          }}
+                          style={{ ...menuBtnStyle, flex: 1, paddingLeft: 16 }}
+                          title={`Load "${p.name}" (${p.pluginName})`}
+                        >
+                          <span style={{ fontSize: 10 }}>{p.name}</span>
+                          <span style={{ fontSize: 8, color: hw.textFaint, marginLeft: 6 }}>{p.pluginName}</span>
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (window.confirm(`Delete preset "${p.name}"?`)) {
+                              removeSlotPreset(p.id)
+                            }
+                          }}
+                          title="Delete preset"
+                          style={{ ...menuBtnStyle, color: '#e06060', padding: '4px 6px' }}
+                        >×</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
                 <button
                   onClick={async () => {
