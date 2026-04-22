@@ -58,7 +58,11 @@ pub fn hit_test_band(
 /// linear-phase mode).
 pub fn design_linear_phase_fir(bands: &[EqBand], sample_rate: f32, taps: usize) -> Vec<f32> {
     let taps = taps.max(17);
-    let taps = if taps.is_multiple_of(2) { taps + 1 } else { taps };
+    let taps = if taps.is_multiple_of(2) {
+        taps + 1
+    } else {
+        taps
+    };
     // Desired magnitude response at each bin of the FIR's DFT.
     let half = taps / 2 + 1;
     let mut desired_db = vec![0.0_f32; half];

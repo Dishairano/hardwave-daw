@@ -19,6 +19,7 @@ pub mod latency;
 pub mod loudness;
 pub mod mix_feedback;
 pub mod modulation;
+pub mod modulation_matrix;
 pub mod multiband;
 pub mod parametric_eq;
 pub mod phase_vocoder;
@@ -35,6 +36,7 @@ pub mod synth_presets;
 pub mod synth_voicing;
 pub mod time_pitch;
 pub mod wavetable;
+pub mod wavetable_display;
 
 pub use audio_file::{AudioFileInfo, AudioFileReader};
 pub use biquad::{Biquad, BiquadKind};
