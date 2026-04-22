@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Shared config directory for all prefs files (`~/.config/hardwave/` on
+/// Linux, the OS-specific equivalent elsewhere). Returns `None` if the
+/// platform has no config dir.
+pub fn prefs_dir() -> Option<PathBuf> {
+    let mut p = dirs::config_dir()?;
+    p.push("hardwave");
+    Some(p)
+}
+
 /// Audio device preferences persisted between sessions. Matches the fields the
 /// Audio Settings dialog lets users configure. Every field is optional on
 /// deserialize (via #[serde(default)]) so older prefs files load cleanly after

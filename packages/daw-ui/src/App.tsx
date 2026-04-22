@@ -33,6 +33,7 @@ import { useBeatSlicerStore } from './stores/beatSlicerStore'
 import { LoudnessMeter } from './components/LoudnessMeter'
 import { Oscilloscope } from './components/Oscilloscope'
 import { SpectrumAnalyzer } from './components/SpectrumAnalyzer'
+import { MidiMappingsPanel } from './components/MidiMappingsPanel'
 import { HistoryPanel } from './components/HistoryPanel'
 import { PrecountOverlay } from './components/transport/PrecountOverlay'
 import { invoke } from '@tauri-apps/api/core'
@@ -80,6 +81,7 @@ export function App() {
   const [showLoudness, setShowLoudness] = useState(false)
   const [showOscilloscope, setShowOscilloscope] = useState(false)
   const [showSpectrum, setShowSpectrum] = useState(false)
+  const [showMidiMappings, setShowMidiMappings] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
   const closeSampleEditor = useSampleEditorStore(s => s.close)
@@ -650,6 +652,7 @@ export function App() {
         onOpenLoudness={() => setShowLoudness(true)}
         onOpenOscilloscope={() => setShowOscilloscope(true)}
         onOpenSpectrum={() => setShowSpectrum(true)}
+        onOpenMidiMappings={() => setShowMidiMappings(true)}
         onCheckForUpdates={checkForUpdates}
         onToggleAbout={() => setShowAbout(v => !v)}
         onToggleShortcuts={() => setShowShortcuts(v => !v)}
@@ -721,6 +724,7 @@ export function App() {
       {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}
       {showOscilloscope && <Oscilloscope onClose={() => setShowOscilloscope(false)} />}
       {showSpectrum && <SpectrumAnalyzer onClose={() => setShowSpectrum(false)} />}
+      {showMidiMappings && <MidiMappingsPanel onClose={() => setShowMidiMappings(false)} />}
 
       {showHistory && <HistoryPanel onClose={() => setShowHistory(false)} />}
       <PrecountOverlay />

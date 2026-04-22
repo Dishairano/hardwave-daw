@@ -4,9 +4,11 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 mod commands;
+mod midi_map;
 mod prefs;
 
 use hardwave_engine::DawEngine;
+pub use midi_map::MidiMappings;
 pub use prefs::AudioPrefs;
 
 /// Shared engine state accessible from Tauri commands.
@@ -15,6 +17,7 @@ pub struct AppState {
     /// Flipped by `cancel_export` to halt an in-progress offline render.
     /// The export command clears it on entry and checks it each block.
     pub export_cancel: Arc<AtomicBool>,
+    pub midi_mappings: Arc<Mutex<MidiMappings>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -39,9 +42,11 @@ pub fn run() {
             log::warn!("Failed to apply saved WASAPI exclusive pref: {e}");
         }
     }
+    let midi_mappings = Arc::new(Mutex::new(MidiMappings::load()));
     let state = AppState {
         engine: Arc::new(Mutex::new(engine)),
         export_cancel: Arc::new(AtomicBool::new(false)),
+        midi_mappings: Arc::clone(&midi_mappings),
     };
 
     tauri::Builder::default()
@@ -172,6 +177,13 @@ pub fn run() {
             commands::midi_input::close_midi_input,
             commands::midi_input::close_all_midi_inputs,
             commands::midi_input::get_midi_activity,
+            // MIDI Learn
+            commands::midi_learn::midi_learn_start,
+            commands::midi_learn::midi_learn_cancel,
+            commands::midi_learn::midi_learn_status,
+            commands::midi_learn::list_midi_mappings,
+            commands::midi_learn::remove_midi_mapping,
+            commands::midi_learn::clear_midi_mappings,
             // Undo/redo
             commands::history::undo,
             commands::history::redo,
@@ -193,6 +205,12 @@ pub fn run() {
             let state = app.state::<AppState>();
             let engine = Arc::clone(&state.engine);
             let app_handle = app.handle().clone();
+
+            // MIDI Learn dispatcher: drains incoming CC events and applies
+            // mapped values to the live engine state. Also handles learn-mode
+            // capture in the same loop so there's no race with the main
+            // meter/transport broadcast thread.
+            midi_map::spawn_dispatcher(Arc::clone(&state.engine), Arc::clone(&state.midi_mappings));
 
             // Load the plugin cache from disk, then kick off a background
             // rescan so added/removed plugins are detected on startup without
