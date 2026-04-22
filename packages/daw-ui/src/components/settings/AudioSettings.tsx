@@ -62,6 +62,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [midiOutOpen, setMidiOutOpen] = useState<string[]>([])
   const [midiClockEnabled, setMidiClockEnabled] = useState(false)
   const [midiOutBusy, setMidiOutBusy] = useState(false)
+  const [midiSyncEnabled, setMidiSyncEnabled] = useState(false)
+  const [midiSyncTicksSeen, setMidiSyncTicksSeen] = useState(false)
+  const [midiSyncBpm, setMidiSyncBpm] = useState<number | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -74,7 +77,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       invoke<{ open_ports: string[] }>('get_midi_activity'),
       invoke<string[]>('list_midi_outputs'),
       invoke<{ enabled: boolean; open_ports: string[] }>('get_midi_clock_status'),
-    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity, outPorts, clockStatus]) => {
+      invoke<{ enabled: boolean; ticks_seen: boolean; last_bpm: number | null }>('get_midi_clock_sync_status'),
+    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity, outPorts, clockStatus, syncStatus]) => {
       setDevices(devs)
       setInputDevices(inputs)
       setConfig(cfg)
@@ -90,8 +94,33 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setMidiOutPorts(outPorts)
       setMidiOutOpen(clockStatus.open_ports)
       setMidiClockEnabled(clockStatus.enabled)
+      setMidiSyncEnabled(syncStatus.enabled)
+      setMidiSyncTicksSeen(syncStatus.ticks_seen)
+      setMidiSyncBpm(syncStatus.last_bpm)
     })
   }, [])
+
+  // Poll clock-sync status so the BPM readout and ticks-seen indicator
+  // update while the panel is open.
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const s = await invoke<{ enabled: boolean; ticks_seen: boolean; last_bpm: number | null }>(
+          'get_midi_clock_sync_status'
+        )
+        setMidiSyncEnabled(s.enabled)
+        setMidiSyncTicksSeen(s.ticks_seen)
+        setMidiSyncBpm(s.last_bpm)
+      } catch { /* ignore */ }
+    }, 500)
+    return () => clearInterval(id)
+  }, [])
+
+  const toggleMidiSync = async () => {
+    const next = !midiSyncEnabled
+    await invoke('set_midi_clock_sync_enabled', { enabled: next })
+    setMidiSyncEnabled(next)
+  }
 
   const toggleMidiOutPort = async (port: string) => {
     setError(null)
@@ -479,6 +508,40 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 })}
               </div>
             )}
+            <div style={{
+              marginTop: midiPorts.length > 0 ? 8 : 6,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '6px 8px',
+              background: 'rgba(0,0,0,0.25)',
+              borderRadius: hw.radius.sm,
+              border: `1px solid ${midiSyncEnabled ? hw.accent : hw.borderDark}`,
+              opacity: midiOpen.length === 0 ? 0.6 : 1,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>Sync to external clock</span>
+                <span style={{ fontSize: 9, color: hw.textFaint, fontFamily: "'Consolas', monospace" }}>
+                  {midiSyncTicksSeen
+                    ? (midiSyncBpm != null
+                      ? `Master: ${midiSyncBpm.toFixed(2)} BPM`
+                      : 'Master detected · waiting for stable tempo')
+                    : 'No clock ticks received yet'}
+                </span>
+              </div>
+              <button
+                onClick={toggleMidiSync}
+                disabled={midiOpen.length === 0}
+                style={{
+                  padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                  borderRadius: hw.radius.sm, border: 'none',
+                  cursor: midiOpen.length === 0 ? 'default' : 'pointer',
+                  background: midiSyncEnabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                  color: midiSyncEnabled ? '#fff' : hw.textSecondary,
+                  fontFamily: 'inherit',
+                }}
+              >
+                {midiSyncEnabled ? 'On' : 'Off'}
+              </button>
+            </div>
           </div>
 
           {/* MIDI Outputs — clock send to external hardware */}

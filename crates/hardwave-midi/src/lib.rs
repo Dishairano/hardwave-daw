@@ -2,7 +2,7 @@
 
 pub mod input;
 pub mod output;
-pub use input::MidiInputManager;
+pub use input::{ClockSyncSnapshot, MidiInputManager};
 pub use output::{MidiOutputManager, MIDI_CLOCK_TICK, MIDI_CONTINUE, MIDI_START, MIDI_STOP};
 
 use serde::{Deserialize, Serialize};

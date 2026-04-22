@@ -10,7 +10,7 @@ use midir::{MidiInput, MidiInputConnection};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::MidiEvent;
 
@@ -19,11 +19,35 @@ use crate::MidiEvent;
 /// anything the audio thread could miss in a normal drain cadence.
 const QUEUE_CAPACITY: usize = 4096;
 
+/// Number of recent clock-tick intervals averaged to produce the BPM
+/// estimate. 48 ticks = two quarter notes at 24 PPQN, enough to smooth
+/// jitter without reacting sluggishly to real tempo changes.
+const TICK_HISTORY: usize = 48;
+
+/// Snapshot of clock-sync observations drained from the shared state. The
+/// `pending_*` flags are consumed by `take_clock_sync_snapshot` so each
+/// start/stop/continue message drives exactly one transport action.
+#[derive(Debug, Clone, Default)]
+pub struct ClockSyncSnapshot {
+    pub bpm_estimate: Option<f64>,
+    pub ticks_received: bool,
+    pub pending_start: bool,
+    pub pending_continue: bool,
+    pub pending_stop: bool,
+}
+
 #[derive(Default)]
 struct SharedState {
     events: VecDeque<MidiEvent>,
     last_event_at: Option<Instant>,
     dropped: u64,
+    // Clock sync — updated in the midir callback on system realtime bytes.
+    last_tick_at: Option<Instant>,
+    tick_intervals: VecDeque<Duration>,
+    bpm_estimate: Option<f64>,
+    pending_start: bool,
+    pending_continue: bool,
+    pending_stop: bool,
 }
 
 pub struct MidiInputManager {
@@ -74,15 +98,7 @@ impl MidiInputManager {
                 port,
                 "hardwave-midi-in",
                 move |_stamp, bytes, shared| {
-                    if let Some(event) = parse_midi_bytes(0, bytes) {
-                        let mut state = shared.lock();
-                        if state.events.len() >= QUEUE_CAPACITY {
-                            state.events.pop_front();
-                            state.dropped = state.dropped.saturating_add(1);
-                        }
-                        state.events.push_back(event);
-                        state.last_event_at = Some(Instant::now());
-                    }
+                    handle_input_bytes(bytes, shared);
                 },
                 shared,
             )
@@ -119,6 +135,24 @@ impl MidiInputManager {
         state.events.drain(..).collect()
     }
 
+    /// Return the current clock-sync observation and clear the pending
+    /// transport flags so each Start/Continue/Stop message drives exactly
+    /// one transport action in the caller.
+    pub fn take_clock_sync_snapshot(&self) -> ClockSyncSnapshot {
+        let mut state = self.shared.lock();
+        let snap = ClockSyncSnapshot {
+            bpm_estimate: state.bpm_estimate,
+            ticks_received: state.last_tick_at.is_some(),
+            pending_start: state.pending_start,
+            pending_continue: state.pending_continue,
+            pending_stop: state.pending_stop,
+        };
+        state.pending_start = false;
+        state.pending_continue = false;
+        state.pending_stop = false;
+        snap
+    }
+
     /// Milliseconds since the last event was seen, or None if no event has
     /// ever arrived since the manager was created.
     pub fn ms_since_last_event(&self) -> Option<u64> {
@@ -132,6 +166,65 @@ impl MidiInputManager {
 impl Default for MidiInputManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Route one wire-format input message: clock and transport system-realtime
+/// bytes update the shared sync state; every other message goes through the
+/// normal `parse_midi_bytes` + event queue path.
+fn handle_input_bytes(bytes: &[u8], shared: &Arc<Mutex<SharedState>>) {
+    let now = Instant::now();
+    match bytes.first().copied() {
+        Some(0xF8) => {
+            let mut state = shared.lock();
+            if let Some(last) = state.last_tick_at {
+                let delta = now.saturating_duration_since(last);
+                if state.tick_intervals.len() >= TICK_HISTORY {
+                    state.tick_intervals.pop_front();
+                }
+                state.tick_intervals.push_back(delta);
+                if state.tick_intervals.len() >= 12 {
+                    let sum: Duration = state.tick_intervals.iter().sum();
+                    let avg_secs = sum.as_secs_f64() / state.tick_intervals.len() as f64;
+                    if avg_secs > 0.0 {
+                        let bpm = 60.0 / avg_secs / 24.0;
+                        if bpm.is_finite() && (1.0..=999.0).contains(&bpm) {
+                            state.bpm_estimate = Some(bpm);
+                        }
+                    }
+                }
+            }
+            state.last_tick_at = Some(now);
+            state.last_event_at = Some(now);
+        }
+        Some(0xFA) => {
+            let mut state = shared.lock();
+            state.pending_start = true;
+            state.tick_intervals.clear();
+            state.last_tick_at = None;
+            state.last_event_at = Some(now);
+        }
+        Some(0xFB) => {
+            let mut state = shared.lock();
+            state.pending_continue = true;
+            state.last_event_at = Some(now);
+        }
+        Some(0xFC) => {
+            let mut state = shared.lock();
+            state.pending_stop = true;
+            state.last_event_at = Some(now);
+        }
+        _ => {
+            if let Some(event) = parse_midi_bytes(0, bytes) {
+                let mut state = shared.lock();
+                if state.events.len() >= QUEUE_CAPACITY {
+                    state.events.pop_front();
+                    state.dropped = state.dropped.saturating_add(1);
+                }
+                state.events.push_back(event);
+                state.last_event_at = Some(now);
+            }
+        }
     }
 }
 

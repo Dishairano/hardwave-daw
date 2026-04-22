@@ -6,11 +6,13 @@ use tauri::{Emitter, Manager};
 mod commands;
 mod midi_clock;
 mod midi_map;
+mod midi_sync;
 mod prefs;
 
 use hardwave_engine::DawEngine;
 pub use midi_clock::MidiClockState;
 pub use midi_map::MidiMappings;
+pub use midi_sync::MidiClockSyncState;
 pub use prefs::AudioPrefs;
 
 /// Shared engine state accessible from Tauri commands.
@@ -21,6 +23,7 @@ pub struct AppState {
     pub export_cancel: Arc<AtomicBool>,
     pub midi_mappings: Arc<Mutex<MidiMappings>>,
     pub midi_clock: Arc<MidiClockState>,
+    pub midi_sync: Arc<MidiClockSyncState>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -47,11 +50,13 @@ pub fn run() {
     }
     let midi_mappings = Arc::new(Mutex::new(MidiMappings::load()));
     let midi_clock = Arc::new(MidiClockState::new());
+    let midi_sync = Arc::new(MidiClockSyncState::new());
     let state = AppState {
         engine: Arc::new(Mutex::new(engine)),
         export_cancel: Arc::new(AtomicBool::new(false)),
         midi_mappings: Arc::clone(&midi_mappings),
         midi_clock: Arc::clone(&midi_clock),
+        midi_sync: Arc::clone(&midi_sync),
     };
 
     tauri::Builder::default()
@@ -182,6 +187,8 @@ pub fn run() {
             commands::midi_input::close_midi_input,
             commands::midi_input::close_all_midi_inputs,
             commands::midi_input::get_midi_activity,
+            commands::midi_input::set_midi_clock_sync_enabled,
+            commands::midi_input::get_midi_clock_sync_status,
             // MIDI Learn
             commands::midi_learn::midi_learn_start,
             commands::midi_learn::midi_learn_cancel,
@@ -227,6 +234,11 @@ pub fn run() {
             // Start/Stop system realtime messages to every open MIDI output
             // whenever the user has enabled clock send in Audio settings.
             midi_clock::spawn_dispatcher(Arc::clone(&state.engine), Arc::clone(&state.midi_clock));
+
+            // MIDI Clock sync dispatcher: observes clock ticks from the
+            // MIDI input manager and, when sync is enabled, slaves the
+            // transport BPM and play/stop state to the external master.
+            midi_sync::spawn_dispatcher(Arc::clone(&state.engine), Arc::clone(&state.midi_sync));
 
             // Load the plugin cache from disk, then kick off a background
             // rescan so added/removed plugins are detected on startup without

@@ -1,11 +1,19 @@
 use crate::AppState;
 use serde::Serialize;
+use std::sync::atomic::Ordering;
 use tauri::State;
 
 #[derive(Serialize)]
 pub struct MidiActivitySnapshot {
     pub open_ports: Vec<String>,
     pub ms_since_last_event: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct MidiClockSyncStatus {
+    pub enabled: bool,
+    pub ticks_seen: bool,
+    pub last_bpm: Option<f64>,
 }
 
 #[tauri::command]
@@ -43,5 +51,19 @@ pub fn get_midi_activity(state: State<AppState>) -> MidiActivitySnapshot {
     MidiActivitySnapshot {
         open_ports: manager.open_port_names(),
         ms_since_last_event: manager.ms_since_last_event(),
+    }
+}
+
+#[tauri::command]
+pub fn set_midi_clock_sync_enabled(state: State<AppState>, enabled: bool) {
+    state.midi_sync.enabled.store(enabled, Ordering::Relaxed);
+}
+
+#[tauri::command]
+pub fn get_midi_clock_sync_status(state: State<AppState>) -> MidiClockSyncStatus {
+    MidiClockSyncStatus {
+        enabled: state.midi_sync.enabled.load(Ordering::Relaxed),
+        ticks_seen: state.midi_sync.ticks_seen.load(Ordering::Relaxed),
+        last_bpm: *state.midi_sync.last_bpm.lock(),
     }
 }
