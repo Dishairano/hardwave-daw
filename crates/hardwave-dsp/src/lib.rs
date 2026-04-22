@@ -1,6 +1,7 @@
 //! Hardwave DSP — audio file I/O, sample rate conversion, fades, time stretching, distortion, filters.
 
 pub mod audio_file;
+pub mod audio_stream;
 pub mod auto_eq;
 pub mod biquad;
 pub mod chord_detect;
