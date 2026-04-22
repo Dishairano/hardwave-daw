@@ -295,6 +295,73 @@ impl TakeList {
     }
 }
 
+/// Punch-in / punch-out window — the tick range during which the
+/// recorder should actually capture audio. Outside the window, the
+/// engine skips `push_stereo` calls even if the RecordingSession is
+/// in the Recording state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PunchWindow {
+    pub punch_in_tick: u64,
+    pub punch_out_tick: u64,
+    pub enabled: bool,
+}
+
+impl Default for PunchWindow {
+    fn default() -> Self {
+        Self {
+            punch_in_tick: 0,
+            punch_out_tick: u64::MAX,
+            enabled: false,
+        }
+    }
+}
+
+impl PunchWindow {
+    pub fn new(punch_in_tick: u64, punch_out_tick: u64) -> Self {
+        Self {
+            punch_in_tick,
+            punch_out_tick: punch_out_tick.max(punch_in_tick),
+            enabled: true,
+        }
+    }
+
+    pub fn set_in(&mut self, tick: u64) {
+        self.punch_in_tick = tick;
+        if self.punch_out_tick < tick {
+            self.punch_out_tick = tick;
+        }
+    }
+
+    pub fn set_out(&mut self, tick: u64) {
+        self.punch_out_tick = tick.max(self.punch_in_tick);
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// True if recording should be active at this tick.
+    pub fn should_record(&self, tick: u64) -> bool {
+        if !self.enabled {
+            return true;
+        }
+        tick >= self.punch_in_tick && tick < self.punch_out_tick
+    }
+
+    /// True if `current_tick` just crossed the punch-out boundary
+    /// since `prev_tick` — the engine uses this to auto-stop the
+    /// recording session when playback passes the punch-out mark.
+    pub fn crossed_out(&self, prev_tick: u64, current_tick: u64) -> bool {
+        self.enabled && prev_tick < self.punch_out_tick && current_tick >= self.punch_out_tick
+    }
+
+    /// True if `current_tick` just crossed the punch-in boundary —
+    /// the engine uses this to auto-start recording.
+    pub fn crossed_in(&self, prev_tick: u64, current_tick: u64) -> bool {
+        self.enabled && prev_tick < self.punch_in_tick && current_tick >= self.punch_in_tick
+    }
+}
+
 /// Write the captured samples from a RecordingSession as a 32-bit
 /// float WAV file. Returns the number of samples written, or an error
 /// if the file can't be created / written.
@@ -494,6 +561,42 @@ mod tests {
         assert_eq!(tl.take_count(), 1);
         // First sample: 1.0 + 0.5 = 1.5.
         assert!((tl.takes()[0].samples[0] - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn punch_window_only_records_in_range() {
+        let w = PunchWindow::new(100, 500);
+        assert!(!w.should_record(50));
+        assert!(w.should_record(100));
+        assert!(w.should_record(499));
+        assert!(!w.should_record(500));
+        assert!(!w.should_record(1000));
+    }
+
+    #[test]
+    fn punch_window_disabled_always_records() {
+        let w = PunchWindow::default();
+        assert!(w.should_record(0));
+        assert!(w.should_record(u64::MAX / 2));
+    }
+
+    #[test]
+    fn punch_window_detects_boundary_crossings() {
+        let w = PunchWindow::new(100, 500);
+        assert!(w.crossed_in(99, 100));
+        assert!(!w.crossed_in(98, 99));
+        assert!(w.crossed_out(499, 500));
+        assert!(!w.crossed_out(498, 499));
+    }
+
+    #[test]
+    fn punch_window_sanitizes_reversed_range() {
+        // If someone sets out < in, out clamps up to in.
+        let mut w = PunchWindow::new(500, 200);
+        assert_eq!(w.punch_out_tick, 500);
+        // Setting a new in point above out also fixes out.
+        w.set_in(700);
+        assert_eq!(w.punch_out_tick, 700);
     }
 
     #[test]
