@@ -48,12 +48,62 @@ struct Edge {
     /// Linear gain multiplier applied when mixing this edge into the dest buffer.
     /// 1.0 is unity; used to implement send amounts without a per-send node.
     gain: f32,
+    /// Plugin-delay compensation: samples to delay source before mixing into
+    /// dest. Computed from per-node accumulated latency so parallel branches
+    /// line up against the slowest branch.
+    compensation_samples: u32,
+}
+
+/// Delay line for one edge's PDC compensation. `ring` holds `capacity`
+/// samples; `write_pos` is the next index to write to.
+#[derive(Debug, Clone)]
+struct EdgeDelayLine {
+    samples: u32,
+    ring: Vec<f32>,
+    write_pos: usize,
+}
+
+impl EdgeDelayLine {
+    fn new(samples: u32, buffer_size: usize) -> Self {
+        // ring must hold (samples + buffer_size) so a full block's worth of
+        // reads can pull fully-delayed samples without stepping on writes.
+        let capacity = samples as usize + buffer_size;
+        Self {
+            samples,
+            ring: vec![0.0; capacity.max(1)],
+            write_pos: 0,
+        }
+    }
+
+    /// Advance the line by one block: write `src` into the ring and read the
+    /// same number of samples, delayed by `self.samples`, into `dst`.
+    fn process(&mut self, src: &[f32], dst: &mut [f32]) {
+        let n = src.len().min(dst.len());
+        if self.samples == 0 {
+            // Zero-delay edges bypass the ring entirely and act as an
+            // identity copy. finalize_pdc wouldn't normally build a line
+            // with samples == 0, but keep this defensive path explicit.
+            dst[..n].copy_from_slice(&src[..n]);
+            return;
+        }
+        let cap = self.ring.len();
+        for i in 0..n {
+            // Read delayed sample first, then overwrite it. With non-zero
+            // `samples`, read_pos != write_pos so this is safe.
+            let read_pos = (self.write_pos + cap - self.samples as usize) % cap;
+            dst[i] = self.ring[read_pos];
+            self.ring[self.write_pos] = src[i];
+            self.write_pos = (self.write_pos + 1) % cap;
+        }
+    }
 }
 
 /// The audio graph. Nodes are stored in topological order for lock-free processing.
 pub struct AudioGraph {
     nodes: Vec<Box<dyn AudioNode>>,
     edges: Vec<Edge>,
+    /// Per-edge PDC delay lines, indexed 1:1 with `edges`.
+    edge_delays: Vec<Option<EdgeDelayLine>>,
     processing_order: Vec<NodeId>,
     /// Pre-allocated buffers for intermediate data.
     buffers: Vec<Vec<Vec<f32>>>, // [node][channel][samples]
@@ -65,6 +115,7 @@ impl AudioGraph {
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
+            edge_delays: Vec::new(),
             processing_order: Vec::new(),
             buffers: Vec::new(),
             buffer_size,
@@ -101,7 +152,9 @@ impl AudioGraph {
             dest,
             dest_port,
             gain,
+            compensation_samples: 0,
         });
+        self.edge_delays.push(None);
         self.rebuild_order();
     }
 
@@ -109,8 +162,63 @@ impl AudioGraph {
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.edges.clear();
+        self.edge_delays.clear();
         self.processing_order.clear();
         self.buffers.clear();
+    }
+
+    /// Compute per-edge PDC compensation delays from each node's accumulated
+    /// latency. Must be called after all nodes/edges are added — typically at
+    /// the end of `EngineCallback::rebuild_graph`. For each edge, the delay
+    /// is `acc[dest] - acc[source] - dest.latency_samples()`, which pads the
+    /// source's arrival so parallel branches reach the dest sample-aligned
+    /// against the slowest incoming path.
+    pub fn finalize_pdc(&mut self) {
+        let n = self.nodes.len();
+        if n == 0 {
+            self.edge_delays.clear();
+            return;
+        }
+        // Accumulated latency per node (critical path into the node +
+        // node's own latency) — same DP as `total_latency_samples`.
+        let mut acc = vec![0u32; n];
+        for &node_id in &self.processing_order {
+            let mut incoming_max = 0u32;
+            for edge in &self.edges {
+                if edge.dest == node_id {
+                    incoming_max = incoming_max.max(acc[edge.source]);
+                }
+            }
+            acc[node_id] = incoming_max.saturating_add(self.nodes[node_id].latency_samples());
+        }
+        // For each edge, compute the pad samples needed so the source arrives
+        // aligned with the slowest incoming branch of the same dest.
+        // Two passes: write compensation_samples on edges, then build delay
+        // lines — separate borrows keep the borrow checker happy.
+        let pads: Vec<u32> = self
+            .edges
+            .iter()
+            .map(|edge| {
+                let dest_incoming_max = self
+                    .edges
+                    .iter()
+                    .filter(|e| e.dest == edge.dest)
+                    .map(|e| acc[e.source])
+                    .max()
+                    .unwrap_or(0);
+                dest_incoming_max.saturating_sub(acc[edge.source])
+            })
+            .collect();
+        self.edge_delays.clear();
+        self.edge_delays.reserve(self.edges.len());
+        for (edge, &pad) in self.edges.iter_mut().zip(pads.iter()) {
+            edge.compensation_samples = pad;
+            self.edge_delays.push(if pad > 0 {
+                Some(EdgeDelayLine::new(pad, self.buffer_size))
+            } else {
+                None
+            });
+        }
     }
 
     /// Rebuild topological order using Kahn's algorithm.
@@ -149,18 +257,38 @@ impl AudioGraph {
             // Gather inputs from connected source nodes
             let inputs: Vec<Vec<f32>> = {
                 let mut ch_bufs: Vec<Vec<f32>> = vec![vec![0.0; self.buffer_size]; NODE_CHANNELS];
-                for edge in &self.edges {
-                    if edge.dest == node_id {
-                        if let Some(src_buf) = self.buffers.get(edge.source) {
-                            if let Some(ch) = src_buf.get(edge.source_port) {
-                                if edge.dest_port < ch_bufs.len() {
-                                    let g = edge.gain;
-                                    for (i, s) in ch.iter().enumerate() {
-                                        if i < ch_bufs[edge.dest_port].len() {
-                                            ch_bufs[edge.dest_port][i] += s * g;
-                                        }
-                                    }
-                                }
+                let mut delay_scratch = vec![0.0_f32; self.buffer_size];
+                for edge_idx in 0..self.edges.len() {
+                    let (edge_source, edge_source_port, edge_dest, edge_dest_port, edge_gain) = {
+                        let e = &self.edges[edge_idx];
+                        (e.source, e.source_port, e.dest, e.dest_port, e.gain)
+                    };
+                    if edge_dest != node_id {
+                        continue;
+                    }
+                    // Pull the source channel into a Vec so we can release the
+                    // immutable borrow on `self.buffers` before touching
+                    // `self.edge_delays` mutably below.
+                    let src_vec: Vec<f32> = match self
+                        .buffers
+                        .get(edge_source)
+                        .and_then(|b| b.get(edge_source_port))
+                    {
+                        Some(ch) => ch.clone(),
+                        None => continue,
+                    };
+                    let n = src_vec.len().min(self.buffer_size);
+                    let src_slice: &[f32] =
+                        if let Some(Some(dl)) = self.edge_delays.get_mut(edge_idx) {
+                            dl.process(&src_vec[..n], &mut delay_scratch[..n]);
+                            &delay_scratch[..n]
+                        } else {
+                            &src_vec[..n]
+                        };
+                    if edge_dest_port < ch_bufs.len() {
+                        for (i, s) in src_slice.iter().enumerate() {
+                            if i < ch_bufs[edge_dest_port].len() {
+                                ch_bufs[edge_dest_port][i] += s * edge_gain;
                             }
                         }
                     }
@@ -299,5 +427,67 @@ mod tests {
         // Per-node max is 100, but the correct critical-path figure is 200.
         assert_eq!(g.max_latency_samples(), 100);
         assert_eq!(g.total_latency_samples(), 200);
+    }
+
+    #[test]
+    fn finalize_pdc_leaves_single_chain_uncompensated() {
+        let mut g = AudioGraph::new(64);
+        let a = g.add_node(node("A", 0));
+        let b = g.add_node(node("B", 100));
+        let c = g.add_node(node("C", 50));
+        g.connect(a, 0, b, 0);
+        g.connect(b, 0, c, 0);
+        g.finalize_pdc();
+        for e in &g.edges {
+            assert_eq!(e.compensation_samples, 0, "single chain needs no PDC");
+        }
+    }
+
+    #[test]
+    fn finalize_pdc_pads_fast_branch_to_match_slow() {
+        // src feeds both `slow` (latency 1000) and `fast` (latency 100);
+        // both feed `sink`. `fast → sink` needs 900 samples of delay so it
+        // lines up with `slow → sink` at the sink's input.
+        let mut g = AudioGraph::new(64);
+        let src = g.add_node(node("src", 0));
+        let slow = g.add_node(node("slow", 1000));
+        let fast = g.add_node(node("fast", 100));
+        let sink = g.add_node(node("sink", 0));
+        g.connect(src, 0, slow, 0);
+        g.connect(src, 0, fast, 0);
+        g.connect(slow, 0, sink, 0);
+        g.connect(fast, 0, sink, 0);
+        g.finalize_pdc();
+        let mut slow_to_sink = None;
+        let mut fast_to_sink = None;
+        for e in &g.edges {
+            if e.source == slow && e.dest == sink {
+                slow_to_sink = Some(e.compensation_samples);
+            }
+            if e.source == fast && e.dest == sink {
+                fast_to_sink = Some(e.compensation_samples);
+            }
+        }
+        assert_eq!(slow_to_sink, Some(0), "slowest branch already aligns");
+        assert_eq!(fast_to_sink, Some(900), "fast branch padded to 1000");
+    }
+
+    #[test]
+    fn edge_delay_line_delays_samples_by_configured_amount() {
+        let mut dl = EdgeDelayLine::new(3, 8);
+        let mut out = [0.0_f32; 8];
+        let input: [f32; 8] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        dl.process(&input, &mut out);
+        // First 3 samples were pre-filled zeros; then 1, 2, 3, 4, 5.
+        assert_eq!(out, [0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn edge_delay_line_with_zero_samples_is_identity() {
+        let mut dl = EdgeDelayLine::new(0, 4);
+        let mut out = [0.0_f32; 4];
+        let input: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
+        dl.process(&input, &mut out);
+        assert_eq!(out, input);
     }
 }

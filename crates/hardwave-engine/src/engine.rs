@@ -1079,6 +1079,10 @@ impl EngineCallback {
         }
 
         self.needs_rebuild = false;
+        // Finalize PDC: compute per-edge compensation delays so parallel
+        // paths arrive sample-aligned against the slowest branch before the
+        // total-latency number is published.
+        self.graph.finalize_pdc();
         self.graph_latency_samples.store(
             self.graph.total_latency_samples(),
             std::sync::atomic::Ordering::Relaxed,
