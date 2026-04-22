@@ -18,6 +18,7 @@ pub mod mix_feedback;
 pub mod modulation;
 pub mod multiband;
 pub mod parametric_eq;
+pub mod phase_vocoder;
 pub mod recording;
 pub mod reverb;
 pub mod sample_classify;
