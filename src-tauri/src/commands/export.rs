@@ -311,6 +311,9 @@ struct RenderFormat {
     dither: DitherMode,
     /// Only consulted when the output path is `.mp3`. Ignored otherwise.
     mp3_bitrate_kbps: u32,
+    /// Vorbis QualityVbr target in the range `-0.2..=1.0`. Only consulted
+    /// when the output path is `.ogg`. Ignored otherwise.
+    ogg_quality: f32,
 }
 
 fn spec_for(bit_depth: u32, sample_rate: u32) -> WavSpec {
@@ -605,6 +608,154 @@ where
     Ok(true)
 }
 
+fn is_ogg_path(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("ogg") || s.eq_ignore_ascii_case("oga"))
+        .unwrap_or(false)
+}
+
+/// Encode normalized interleaved stereo `f32` samples to an Ogg Vorbis file
+/// via vorbis_rs (aoTuV/Lancer-patched libvorbis). Uses QualityVbr mode so
+/// the caller-provided quality in `-0.2..=1.0` maps directly to Vorbis's
+/// perceptual quality scale (0.0 ≈ 64 kb/s, 0.5 ≈ 160 kb/s, 1.0 ≈ 500 kb/s).
+fn write_ogg_from_buffer(
+    out_path: &Path,
+    buffer: &[f32],
+    sample_rate: u32,
+    quality: f32,
+) -> Result<(), String> {
+    use std::num::{NonZeroU32, NonZeroU8};
+    use vorbis_rs::{VorbisBitrateManagementStrategy, VorbisEncoderBuilder};
+
+    let sr = NonZeroU32::new(sample_rate)
+        .ok_or_else(|| "ogg encode: sample rate must be non-zero".to_string())?;
+    let channels = NonZeroU8::new(2).unwrap();
+    let q = quality.clamp(-0.2, 1.0);
+
+    let file = File::create(out_path).map_err(|e| format!("ogg create: {e}"))?;
+    let writer = BufWriter::new(file);
+
+    let mut encoder = VorbisEncoderBuilder::new(sr, channels, writer)
+        .map_err(|e| format!("ogg init: {e}"))?
+        .bitrate_management_strategy(VorbisBitrateManagementStrategy::QualityVbr {
+            target_quality: q,
+        })
+        .build()
+        .map_err(|e| format!("ogg build: {e}"))?;
+
+    // Deinterleave in chunks to keep peak memory bounded; 8192 frames
+    // (~170 ms at 48 kHz) is well above the vorbis internal block size
+    // (max 2048 samples) so the analysis pipeline always has headroom.
+    const CHUNK_FRAMES: usize = 8192;
+    let total_frames = buffer.len() / 2;
+    let mut left: Vec<f32> = Vec::with_capacity(CHUNK_FRAMES);
+    let mut right: Vec<f32> = Vec::with_capacity(CHUNK_FRAMES);
+    let mut i = 0;
+    while i < total_frames {
+        let end = (i + CHUNK_FRAMES).min(total_frames);
+        left.clear();
+        right.clear();
+        for f in i..end {
+            left.push(buffer[f * 2]);
+            right.push(buffer[f * 2 + 1]);
+        }
+        let block: [&[f32]; 2] = [&left, &right];
+        encoder
+            .encode_audio_block(block)
+            .map_err(|e| format!("ogg encode: {e}"))?;
+        i = end;
+    }
+    let sink = encoder.finish().map_err(|e| format!("ogg finish: {e}"))?;
+    drop(sink);
+    Ok(())
+}
+
+/// OGG Vorbis render path: buffer full render, normalize, hand off to vorbis_rs.
+#[allow(clippy::too_many_arguments)]
+fn write_render_ogg<F>(
+    engine: &DawEngine,
+    out_path: &Path,
+    fmt: RenderFormat,
+    total_samples: u64,
+    start_samples: u64,
+    cancel: &Arc<AtomicBool>,
+    mut on_progress: F,
+    prepare: impl FnOnce(&mut Project),
+) -> Result<bool, String>
+where
+    F: FnMut(u64, u64),
+{
+    let capacity = (total_samples as usize).saturating_mul(2);
+    let mut buffer: Vec<f32> = Vec::with_capacity(capacity);
+
+    engine.render_offline_with(
+        fmt.sample_rate,
+        total_samples,
+        start_samples,
+        prepare,
+        |block| {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            buffer.extend_from_slice(block);
+            let frames = (buffer.len() / 2) as u64;
+            on_progress((frames * 85) / 100, total_samples);
+            true
+        },
+    )?;
+
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(false);
+    }
+
+    let mut gain: f32 = 1.0;
+    match fmt.normalize {
+        NormalizeMode::Off => {}
+        NormalizeMode::Peak => {
+            let mut peak: f32 = 0.0;
+            for &s in buffer.iter() {
+                let a = s.abs();
+                if a > peak {
+                    peak = a;
+                }
+            }
+            if peak > 1e-9 {
+                gain = 10.0_f32.powf(fmt.normalize_target_db / 20.0) / peak;
+            }
+        }
+        NormalizeMode::Lufs => {
+            if let Some(lufs) = integrated_lufs(&buffer, fmt.sample_rate) {
+                if lufs.is_finite() {
+                    gain = 10.0_f32.powf((fmt.normalize_target_db - lufs) / 20.0);
+                }
+            }
+            let mut peak: f32 = 0.0;
+            for &s in buffer.iter() {
+                let a = s.abs();
+                if a > peak {
+                    peak = a;
+                }
+            }
+            let ceiling = 10.0_f32.powf(-1.0 / 20.0);
+            if peak * gain > ceiling && peak > 1e-9 {
+                gain = ceiling / peak;
+            }
+        }
+    }
+
+    if (gain - 1.0).abs() > f32::EPSILON {
+        for s in buffer.iter_mut() {
+            *s *= gain;
+        }
+    }
+
+    on_progress((total_samples * 90) / 100, total_samples);
+    write_ogg_from_buffer(out_path, &buffer, fmt.sample_rate, fmt.ogg_quality)?;
+    on_progress(total_samples, total_samples);
+    Ok(true)
+}
+
 /// Render and write one offline-rendered WAV file. Returns `Ok(true)` on
 /// completion, `Ok(false)` when the caller requested cancellation mid-render.
 #[allow(clippy::too_many_arguments)]
@@ -636,6 +787,19 @@ where
 
     if is_mp3_path(out_path) {
         return write_render_mp3(
+            engine,
+            out_path,
+            fmt,
+            total_samples,
+            start_samples,
+            cancel,
+            on_progress,
+            prepare,
+        );
+    }
+
+    if is_ogg_path(out_path) {
+        return write_render_ogg(
             engine,
             out_path,
             fmt,
@@ -855,6 +1019,7 @@ pub async fn export_project_wav(
     normalize_target_db: Option<f32>,
     dither_mode: Option<String>,
     mp3_bitrate_kbps: Option<u32>,
+    ogg_quality: Option<f32>,
 ) -> Result<ExportResult, String> {
     let (engine, cancel) = {
         let state: State<AppState> = app.state();
@@ -869,6 +1034,7 @@ pub async fn export_project_wav(
         normalize_target_db: normalize_target_db.unwrap_or(-1.0),
         dither: DitherMode::parse(dither_mode.as_deref().unwrap_or("none")),
         mp3_bitrate_kbps: mp3_bitrate_kbps.unwrap_or(320).clamp(8, 320),
+        ogg_quality: ogg_quality.unwrap_or(0.5).clamp(-0.2, 1.0),
     };
 
     let out_path = path.clone();
@@ -969,6 +1135,7 @@ pub async fn export_project_stems(
     dither_mode: Option<String>,
     stem_format: Option<String>,
     mp3_bitrate_kbps: Option<u32>,
+    ogg_quality: Option<f32>,
 ) -> Result<StemsExportResult, String> {
     let (engine, cancel) = {
         let state: State<AppState> = app.state();
@@ -983,11 +1150,13 @@ pub async fn export_project_stems(
         normalize_target_db: normalize_target_db.unwrap_or(-1.0),
         dither: DitherMode::parse(dither_mode.as_deref().unwrap_or("none")),
         mp3_bitrate_kbps: mp3_bitrate_kbps.unwrap_or(320).clamp(8, 320),
+        ogg_quality: ogg_quality.unwrap_or(0.5).clamp(-0.2, 1.0),
     };
 
     let stem_ext: &str = match stem_format.as_deref().unwrap_or("wav") {
         "flac" => "flac",
         "mp3" => "mp3",
+        "ogg" => "ogg",
         _ => "wav",
     };
 

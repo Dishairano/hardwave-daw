@@ -9,7 +9,7 @@ import { usePatternStore } from '../stores/patternStore'
 export type BitDepth = 0 | 16 | 24
 export type SampleRate = 44100 | 48000 | 88200 | 96000 | 192000
 export type ExportRange = 'full' | 'loop' | 'pattern'
-export type ExportFormat = 'wav' | 'flac' | 'mp3'
+export type ExportFormat = 'wav' | 'flac' | 'mp3' | 'ogg'
 export type Mp3Bitrate = 128 | 192 | 256 | 320
 export type NormalizeMode = 'off' | 'peak' | 'lufs'
 export type DitherMode = 'none' | 'tpdf' | 'tpdf_shaped'
@@ -50,6 +50,7 @@ const NORMALIZE_DB_KEY = 'hw.export.normalizeDb'
 const DITHER_KEY = 'hw.export.dither'
 const FORMAT_KEY = 'hw.export.format'
 const MP3_BITRATE_KEY = 'hw.export.mp3Bitrate'
+const OGG_QUALITY_KEY = 'hw.export.oggQuality'
 
 const MP3_BITRATE_OPTIONS: Mp3Bitrate[] = [128, 192, 256, 320]
 const MP3_SAMPLE_RATES: SampleRate[] = [44100, 48000]
@@ -103,11 +104,16 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     const raw = (typeof localStorage !== 'undefined' && localStorage.getItem(FORMAT_KEY)) || 'wav'
     if (raw === 'flac') return 'flac'
     if (raw === 'mp3') return 'mp3'
+    if (raw === 'ogg') return 'ogg'
     return 'wav'
   })
   const [mp3Bitrate, setMp3Bitrate] = useState<Mp3Bitrate>(() => {
     const n = readNumber(MP3_BITRATE_KEY, 320)
     return (MP3_BITRATE_OPTIONS.includes(n as Mp3Bitrate) ? n : 320) as Mp3Bitrate
+  })
+  const [oggQuality, setOggQuality] = useState<number>(() => {
+    const q = readNumber(OGG_QUALITY_KEY, 0.5)
+    return Math.max(0, Math.min(1, q))
   })
   const [exporting, setExporting] = useState(false)
   const [percent, setPercent] = useState(0)
@@ -191,6 +197,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     try { localStorage.setItem(DITHER_KEY, ditherMode) } catch {}
     try { localStorage.setItem(FORMAT_KEY, format) } catch {}
     try { localStorage.setItem(MP3_BITRATE_KEY, String(mp3Bitrate)) } catch {}
+    try { localStorage.setItem(OGG_QUALITY_KEY, String(oggQuality)) } catch {}
   }
 
   const normalizeTargetForBackend = normalizeMode === 'lufs' ? normalizeTargetLufs : normalizeTargetDb
@@ -260,6 +267,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           ditherMode,
           stemFormat: format,
           mp3BitrateKbps: mp3Bitrate,
+          oggQuality,
         })
         if (result.cancelled) {
           onError('Export cancelled')
@@ -282,7 +290,9 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
       ? 'FLAC audio'
       : format === 'mp3'
         ? 'MP3 audio'
-        : 'WAV audio'
+        : format === 'ogg'
+          ? 'OGG Vorbis audio'
+          : 'WAV audio'
     const path = await save({
       title: 'Export audio',
       defaultPath,
@@ -317,6 +327,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
         normalizeTargetDb: normalizeTargetForBackend,
         ditherMode,
         mp3BitrateKbps: mp3Bitrate,
+        oggQuality,
       })
       if (result.cancelled) {
         onError('Export cancelled')
@@ -372,6 +383,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
             <option value="wav">WAV (PCM)</option>
             <option value="flac">FLAC (lossless)</option>
             <option value="mp3">MP3 (CBR)</option>
+            <option value="ogg">OGG Vorbis (VBR)</option>
           </select>
         </Row>
         {format === 'mp3' && (
@@ -386,6 +398,20 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
                 <option key={b} value={b}>{b} kbps</option>
               ))}
             </select>
+          </Row>
+        )}
+        {format === 'ogg' && (
+          <Row label={`OGG quality (${oggQuality.toFixed(2)})`}>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={oggQuality}
+              disabled={exporting}
+              onChange={e => setOggQuality(Number(e.target.value))}
+              style={{ flex: 1 }}
+            />
           </Row>
         )}
 

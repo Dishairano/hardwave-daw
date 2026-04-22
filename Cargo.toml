@@ -52,6 +52,7 @@ symphonia = { version = "0.5", features = ["all"] }
 hound = "3.5"
 flacenc = "0.5"
 shine-rs = "0.1"
+vorbis_rs = "0.5"
 
 # Plugin hosting
 vst3 = "0.3"
