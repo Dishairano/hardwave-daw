@@ -81,6 +81,8 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
   const [threshold, setThreshold] = useState(0.25)
   const [banner, setBanner] = useState<string | null>(null)
   const [sliceView, setSliceView] = useState<'list' | 'pads'>('list')
+  const [loopBpm, setLoopBpm] = useState<number>(0)
+  const [tempoSync, setTempoSync] = useState<boolean>(false)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const ctxRef = useRef<AudioContext | null>(null)
@@ -171,6 +173,12 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
     const src = ctx.createBufferSource()
     src.buffer = buf
 
+    const projectBpm = useTransportStore.getState().bpm
+    const rate = tempoSync && loopBpm > 0 && projectBpm > 0
+      ? Math.max(0.0625, Math.min(16, loopBpm / projectBpm))
+      : 1
+    src.playbackRate.value = rate
+
     const gain = ctx.createGain()
     const panner = ctx.createStereoPanner()
     panner.pan.value = Math.max(-1, Math.min(1, s.pan))
@@ -181,7 +189,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
     const d = Math.max(0, s.adsr.d)
     const sus = Math.max(0, Math.min(1, s.adsr.s)) * peak
     const r = Math.max(0.001, s.adsr.r)
-    const dur = length / sample.sampleRate
+    const dur = (length / sample.sampleRate) / rate
 
     gain.gain.setValueAtTime(0, now)
     gain.gain.linearRampToValueAtTime(peak, now + a)
@@ -193,7 +201,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
     src.connect(gain).connect(panner).connect(ctx.destination)
     src.start(now)
     src.stop(now + dur + r + 0.01)
-  }, [sample, slices])
+  }, [sample, slices, tempoSync, loopBpm])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -401,6 +409,35 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
                   title="Show slices as a drum pad grid"
                 >Pads</button>
               </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}
+                title="When on, slices are stretched via playbackRate so a loop tagged with its original BPM plays at the current session tempo.">
+                <input
+                  type="checkbox"
+                  checked={tempoSync}
+                  onChange={(e) => setTempoSync(e.target.checked)}
+                />
+                <span style={{ color: tempoSync ? hw.accent : hw.textFaint }}>Sync</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, opacity: tempoSync ? 1 : 0.5 }}>
+                <span style={{ color: hw.textFaint }}>Loop BPM</span>
+                <input
+                  type="number"
+                  min={20}
+                  max={999}
+                  step={0.1}
+                  value={loopBpm || ''}
+                  placeholder="—"
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value)
+                    setLoopBpm(Number.isFinite(v) ? Math.max(0, Math.min(999, v)) : 0)
+                  }}
+                  style={{
+                    width: 60, padding: '2px 4px', fontSize: 10,
+                    background: hw.bgElevated, color: hw.textPrimary,
+                    border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+                  }}
+                />
+              </label>
               <button onClick={exportSlicesAsMidi} style={btnStyle('primary')}>Export MIDI</button>
               <button onClick={exportSlices} style={btnStyle('accent')}>Export WAVs</button>
             </div>
