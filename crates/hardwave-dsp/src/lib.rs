@@ -13,6 +13,7 @@ pub mod multiband;
 pub mod reverb;
 pub mod stereo;
 pub mod synth;
+pub mod wavetable;
 
 pub use audio_file::{AudioFileInfo, AudioFileReader};
 pub use biquad::{Biquad, BiquadKind};
