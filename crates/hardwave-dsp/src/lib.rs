@@ -6,6 +6,7 @@ pub mod delay_line;
 pub mod distortion;
 pub mod dynamics;
 pub mod fade;
+pub mod modulation;
 pub mod stereo;
 pub mod synth;
 
@@ -14,5 +15,6 @@ pub use biquad::{Biquad, BiquadKind};
 pub use delay_line::StereoDelayLine;
 pub use dynamics::{DetectMode, EnvelopeFollower};
 pub use fade::{apply_fade, FadeCurve};
+pub use modulation::{AllpassStage, ModulatedDelay, PhaserChain};
 pub use stereo::{BassMono, CorrelationMeter, HaasDelay};
 pub use synth::{AdsrEnvelope, AdsrStage, Oscillator, Waveform};
