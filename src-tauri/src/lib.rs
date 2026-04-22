@@ -161,6 +161,8 @@ pub fn run() {
             commands::engine::set_audio_input_config,
             commands::engine::start_input_monitoring,
             commands::engine::stop_input_monitoring,
+            commands::engine::set_direct_monitoring,
+            commands::engine::get_direct_monitoring,
             commands::engine::get_input_meter,
             commands::engine::list_audio_hosts,
             commands::engine::get_audio_host,

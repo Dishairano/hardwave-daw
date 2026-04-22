@@ -34,6 +34,12 @@ pub struct TransportState {
 
     /// Playback mode: 0 = Song, 1 = Pattern.
     pub pattern_mode: Arc<AtomicBool>,
+
+    /// When true, live input on armed+monitored tracks is routed directly to
+    /// the master bus, bypassing the track's FX chain and fader. Gives the
+    /// lowest possible monitoring latency at the cost of hearing the input
+    /// without processing.
+    pub direct_monitoring: Arc<AtomicBool>,
 }
 
 /// Pack a (numerator, denominator) time signature into a u64.
@@ -60,6 +66,7 @@ impl Default for TransportState {
             master_volume_db: Arc::new(AtomicF64::new(0.0)),
             time_sig: Arc::new(AtomicU64::new(pack_time_sig(4, 4))),
             pattern_mode: Arc::new(AtomicBool::new(false)),
+            direct_monitoring: Arc::new(AtomicBool::new(false)),
         }
     }
 }

@@ -975,11 +975,22 @@ impl EngineCallback {
         }
         self.has_monitored_input = !monitor_routes.is_empty();
         if self.has_monitored_input {
+            let direct = self
+                .transport
+                .direct_monitoring
+                .load(std::sync::atomic::Ordering::Relaxed);
             let input_node = InputNode::new(Arc::clone(&self.input_consumer));
             let input_id = self.graph.add_node(Box::new(input_node));
-            for track_node_id in monitor_routes {
-                self.graph.connect(input_id, 0, track_node_id, 0);
-                self.graph.connect(input_id, 1, track_node_id, 1);
+            if direct {
+                // Direct monitoring: bypass the track FX chain and route live
+                // input straight to master for minimum latency.
+                self.graph.connect(input_id, 0, master_id, 0);
+                self.graph.connect(input_id, 1, master_id, 1);
+            } else {
+                for track_node_id in monitor_routes {
+                    self.graph.connect(input_id, 0, track_node_id, 0);
+                    self.graph.connect(input_id, 1, track_node_id, 1);
+                }
             }
         }
 

@@ -67,6 +67,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [midiSyncBpm, setMidiSyncBpm] = useState<number | null>(null)
   const [midiMtcEnabled, setMidiMtcEnabled] = useState(false)
   const [midiMtcFps, setMidiMtcFps] = useState(30)
+  const [directMonitoring, setDirectMonitoring] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -81,7 +82,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       invoke<{ enabled: boolean; open_ports: string[] }>('get_midi_clock_status'),
       invoke<{ enabled: boolean; ticks_seen: boolean; last_bpm: number | null }>('get_midi_clock_sync_status'),
       invoke<{ enabled: boolean; fps: number }>('get_midi_mtc_status'),
-    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity, outPorts, clockStatus, syncStatus, mtcStatus]) => {
+      invoke<boolean>('get_direct_monitoring'),
+    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity, outPorts, clockStatus, syncStatus, mtcStatus, directMon]) => {
       setDevices(devs)
       setInputDevices(inputs)
       setConfig(cfg)
@@ -102,6 +104,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setMidiSyncBpm(syncStatus.last_bpm)
       setMidiMtcEnabled(mtcStatus.enabled)
       setMidiMtcFps(mtcStatus.fps)
+      setDirectMonitoring(directMon)
     })
   }, [])
 
@@ -169,6 +172,16 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
     try {
       await invoke('set_midi_mtc_fps', { fps })
       setMidiMtcFps(fps)
+    } catch (e: any) {
+      setError(String(e))
+    }
+  }
+
+  const toggleDirectMonitoring = async () => {
+    const next = !directMonitoring
+    try {
+      await invoke('set_direct_monitoring', { enabled: next })
+      setDirectMonitoring(next)
     } catch (e: any) {
       setError(String(e))
     }
@@ -463,6 +476,36 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 )}
               </div>
             )}
+            <div style={{
+              marginTop: 8,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '6px 8px',
+              background: 'rgba(0,0,0,0.25)',
+              borderRadius: hw.radius.sm,
+              border: `1px solid ${directMonitoring ? hw.accent : hw.borderDark}`,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>Direct monitoring</span>
+                <span style={{ fontSize: 9, color: hw.textFaint }}>
+                  {directMonitoring
+                    ? 'Live input routes straight to master — track FX bypassed.'
+                    : 'Software monitor: live input passes through the track FX chain.'}
+                </span>
+              </div>
+              <button
+                onClick={toggleDirectMonitoring}
+                style={{
+                  padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                  borderRadius: hw.radius.sm, border: 'none',
+                  cursor: 'pointer',
+                  background: directMonitoring ? hw.accent : 'rgba(255,255,255,0.08)',
+                  color: directMonitoring ? '#fff' : hw.textSecondary,
+                  fontFamily: 'inherit',
+                }}
+              >
+                {directMonitoring ? 'On' : 'Off'}
+              </button>
+            </div>
           </div>
 
           {/* MIDI Inputs */}

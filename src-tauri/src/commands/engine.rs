@@ -192,6 +192,28 @@ pub fn stop_input_monitoring(state: State<AppState>) {
 }
 
 #[tauri::command]
+pub fn set_direct_monitoring(state: State<AppState>, enabled: bool) {
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    engine
+        .transport
+        .direct_monitoring
+        .store(enabled, Ordering::Relaxed);
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn get_direct_monitoring(state: State<AppState>) -> bool {
+    use std::sync::atomic::Ordering;
+    state
+        .engine
+        .lock()
+        .transport
+        .direct_monitoring
+        .load(Ordering::Relaxed)
+}
+
+#[tauri::command]
 pub fn get_input_meter(state: State<AppState>) -> InputMeterSnapshot {
     let engine = state.engine.lock();
     let running = engine.is_input_monitoring();
