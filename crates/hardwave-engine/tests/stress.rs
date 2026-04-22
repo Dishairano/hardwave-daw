@@ -137,6 +137,40 @@ fn engine_renders_pattern_with_1500_midi_notes() {
 }
 
 #[test]
+fn track_churn_leaves_baseline_track_count() {
+    // Add + remove tracks in a long loop, verifying the project's track
+    // count returns to its original baseline after each pair. Catches
+    // cases where `remove_track` leaves dangling entries behind and where
+    // `rebuild_graph` fails to clean up per-track resources — either of
+    // which would show up as a growing track count or a failed render.
+    let engine = DawEngine::new();
+    let sample_rate = 48_000;
+    let baseline = engine.project.lock().tracks.len();
+
+    for cycle in 0..40 {
+        let created_ids: Vec<String> = {
+            let mut project = engine.project.lock();
+            (0..10)
+                .map(|i| project.add_audio_track(format!("Churn {cycle}-{i}")))
+                .collect()
+        };
+        assert!(engine.render_offline(sample_rate, 512, |_| true).is_ok());
+        {
+            let mut project = engine.project.lock();
+            for id in &created_ids {
+                project.remove_track(id);
+            }
+        }
+        assert!(engine.render_offline(sample_rate, 512, |_| true).is_ok());
+        let count_now = engine.project.lock().tracks.len();
+        assert_eq!(
+            count_now, baseline,
+            "cycle {cycle} leaked tracks: expected {baseline}, got {count_now}"
+        );
+    }
+}
+
+#[test]
 fn engine_survives_rapid_rebuild_with_many_tracks() {
     // Add tracks one at a time, re-rendering briefly between each addition.
     // Verifies that `rebuild_graph` stays stable as the graph grows and
