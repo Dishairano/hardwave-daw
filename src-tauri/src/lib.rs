@@ -7,12 +7,14 @@ mod commands;
 mod midi_clock;
 mod midi_map;
 mod midi_sync;
+mod midi_timecode;
 mod prefs;
 
 use hardwave_engine::DawEngine;
 pub use midi_clock::MidiClockState;
 pub use midi_map::MidiMappings;
 pub use midi_sync::MidiClockSyncState;
+pub use midi_timecode::MidiTimecodeState;
 pub use prefs::AudioPrefs;
 
 /// Shared engine state accessible from Tauri commands.
@@ -24,6 +26,7 @@ pub struct AppState {
     pub midi_mappings: Arc<Mutex<MidiMappings>>,
     pub midi_clock: Arc<MidiClockState>,
     pub midi_sync: Arc<MidiClockSyncState>,
+    pub midi_timecode: Arc<MidiTimecodeState>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -51,12 +54,16 @@ pub fn run() {
     let midi_mappings = Arc::new(Mutex::new(MidiMappings::load()));
     let midi_clock = Arc::new(MidiClockState::new());
     let midi_sync = Arc::new(MidiClockSyncState::new());
+    let midi_timecode = Arc::new(MidiTimecodeState::with_output(Arc::clone(
+        &midi_clock.output,
+    )));
     let state = AppState {
         engine: Arc::new(Mutex::new(engine)),
         export_cancel: Arc::new(AtomicBool::new(false)),
         midi_mappings: Arc::clone(&midi_mappings),
         midi_clock: Arc::clone(&midi_clock),
         midi_sync: Arc::clone(&midi_sync),
+        midi_timecode: Arc::clone(&midi_timecode),
     };
 
     tauri::Builder::default()
@@ -203,6 +210,9 @@ pub fn run() {
             commands::midi_output::close_midi_output,
             commands::midi_output::set_midi_clock_enabled,
             commands::midi_output::get_midi_clock_status,
+            commands::midi_output::set_midi_mtc_enabled,
+            commands::midi_output::set_midi_mtc_fps,
+            commands::midi_output::get_midi_mtc_status,
             // Undo/redo
             commands::history::undo,
             commands::history::redo,
@@ -240,6 +250,14 @@ pub fn run() {
             // MIDI input manager and, when sync is enabled, slaves the
             // transport BPM and play/stop state to the external master.
             midi_sync::spawn_dispatcher(Arc::clone(&state.engine), Arc::clone(&state.midi_sync));
+
+            // MIDI Time Code dispatcher: emits Quarter Frame messages at 4×fps
+            // while playing and MTC send is enabled. Uses the same output
+            // manager as MidiClockState so both stream to the same ports.
+            midi_timecode::spawn_dispatcher(
+                Arc::clone(&state.engine),
+                Arc::clone(&state.midi_timecode),
+            );
 
             // MIDI hot-plug reconciler: every ~2s, reopens desired ports that
             // have come back online and drops connections whose device has

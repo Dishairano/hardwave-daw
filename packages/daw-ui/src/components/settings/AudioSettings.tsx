@@ -65,6 +65,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [midiSyncEnabled, setMidiSyncEnabled] = useState(false)
   const [midiSyncTicksSeen, setMidiSyncTicksSeen] = useState(false)
   const [midiSyncBpm, setMidiSyncBpm] = useState<number | null>(null)
+  const [midiMtcEnabled, setMidiMtcEnabled] = useState(false)
+  const [midiMtcFps, setMidiMtcFps] = useState(30)
 
   useEffect(() => {
     Promise.all([
@@ -78,7 +80,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       invoke<string[]>('list_midi_outputs'),
       invoke<{ enabled: boolean; open_ports: string[] }>('get_midi_clock_status'),
       invoke<{ enabled: boolean; ticks_seen: boolean; last_bpm: number | null }>('get_midi_clock_sync_status'),
-    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity, outPorts, clockStatus, syncStatus]) => {
+      invoke<{ enabled: boolean; fps: number }>('get_midi_mtc_status'),
+    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity, outPorts, clockStatus, syncStatus, mtcStatus]) => {
       setDevices(devs)
       setInputDevices(inputs)
       setConfig(cfg)
@@ -97,6 +100,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setMidiSyncEnabled(syncStatus.enabled)
       setMidiSyncTicksSeen(syncStatus.ticks_seen)
       setMidiSyncBpm(syncStatus.last_bpm)
+      setMidiMtcEnabled(mtcStatus.enabled)
+      setMidiMtcFps(mtcStatus.fps)
     })
   }, [])
 
@@ -152,6 +157,21 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
     const next = !midiClockEnabled
     await invoke('set_midi_clock_enabled', { enabled: next })
     setMidiClockEnabled(next)
+  }
+
+  const toggleMidiMtc = async () => {
+    const next = !midiMtcEnabled
+    await invoke('set_midi_mtc_enabled', { enabled: next })
+    setMidiMtcEnabled(next)
+  }
+
+  const changeMidiMtcFps = async (fps: number) => {
+    try {
+      await invoke('set_midi_mtc_fps', { fps })
+      setMidiMtcFps(fps)
+    } catch (e: any) {
+      setError(String(e))
+    }
   }
 
   const toggleMidiPort = async (port: string) => {
@@ -639,6 +659,56 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               >
                 {midiClockEnabled ? 'On' : 'Off'}
               </button>
+            </div>
+            <div style={{
+              marginTop: 6,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '6px 8px',
+              background: 'rgba(0,0,0,0.25)',
+              borderRadius: hw.radius.sm,
+              border: `1px solid ${midiMtcEnabled ? hw.accent : hw.borderDark}`,
+              opacity: midiOutOpen.length === 0 ? 0.6 : 1,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>Send MIDI timecode</span>
+                <span style={{ fontSize: 9, color: hw.textFaint }}>
+                  Broadcasts SMPTE timecode as MTC Quarter Frames while playing.
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <select
+                  value={midiMtcFps}
+                  onChange={(e) => changeMidiMtcFps(Number(e.target.value))}
+                  disabled={midiOutOpen.length === 0}
+                  style={{
+                    fontSize: 10,
+                    background: 'rgba(255,255,255,0.05)',
+                    color: hw.textSecondary,
+                    border: `1px solid ${hw.borderDark}`,
+                    borderRadius: hw.radius.sm,
+                    padding: '2px 4px',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  <option value={24}>24 fps</option>
+                  <option value={25}>25 fps</option>
+                  <option value={30}>30 fps</option>
+                </select>
+                <button
+                  onClick={toggleMidiMtc}
+                  disabled={midiOutOpen.length === 0}
+                  style={{
+                    padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none',
+                    cursor: midiOutOpen.length === 0 ? 'default' : 'pointer',
+                    background: midiMtcEnabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                    color: midiMtcEnabled ? '#fff' : hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  {midiMtcEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
             </div>
           </div>
 
