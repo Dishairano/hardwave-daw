@@ -23,6 +23,7 @@ pub mod phase_vocoder;
 pub mod recording;
 pub mod reverb;
 pub mod sample_classify;
+pub mod spectrum;
 pub mod stereo;
 pub mod synth;
 pub mod synth_voicing;
