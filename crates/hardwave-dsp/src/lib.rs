@@ -7,6 +7,7 @@ pub mod delay_line;
 pub mod distortion;
 pub mod dynamics;
 pub mod fade;
+pub mod fm_synth;
 pub mod modulation;
 pub mod multiband;
 pub mod reverb;
