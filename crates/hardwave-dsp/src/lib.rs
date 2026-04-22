@@ -9,6 +9,7 @@ pub mod drum_machine;
 pub mod dynamics;
 pub mod fade;
 pub mod fm_synth;
+pub mod latency;
 pub mod modulation;
 pub mod multiband;
 pub mod parametric_eq;
