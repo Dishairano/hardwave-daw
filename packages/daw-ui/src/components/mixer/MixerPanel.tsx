@@ -644,8 +644,23 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
       return raw ? JSON.parse(raw) : {}
     } catch { return {} }
   })
+  const [windowPinned, setWindowPinned] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem('hardwave.daw.pluginWindowPinned')
+      return raw ? JSON.parse(raw) : {}
+    } catch { return {} }
+  })
   const [dragging, setDragging] = useState<{ slotId: string; dx: number; dy: number } | null>(null)
   const [resizing, setResizing] = useState<{ slotId: string; startX: number; startY: number; startW: number; startH: number } | null>(null)
+
+  const togglePluginWindowPinned = (slotId: string) => {
+    setWindowPinned(prev => {
+      const next = { ...prev, [slotId]: !prev[slotId] }
+      if (!next[slotId]) delete next[slotId]
+      try { localStorage.setItem('hardwave.daw.pluginWindowPinned', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
 
   const openPluginWindow = (slotId: string) => {
     setOpenPluginWindows(prev => (prev.includes(slotId) ? prev : [...prev, slotId]))
@@ -671,6 +686,12 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
     setWindowSizes(prev => {
       const { [slotId]: _, ...rest } = prev
       try { localStorage.setItem('hardwave.daw.pluginWindowSizes', JSON.stringify(rest)) } catch {}
+      return rest
+    })
+    setWindowPinned(prev => {
+      if (!prev[slotId]) return prev
+      const { [slotId]: _, ...rest } = prev
+      try { localStorage.setItem('hardwave.daw.pluginWindowPinned', JSON.stringify(rest)) } catch {}
       return rest
     })
   }
@@ -1074,22 +1095,28 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
         const close = () => closePluginWindow(winSlotId)
         const pos = windowPositions[winSlotId] ?? { x: 120 + winIdx * 36, y: 110 + winIdx * 36 }
         const size = windowSizes[winSlotId]
+        const pinned = !!windowPinned[winSlotId]
+        const frameZ = pinned ? 10000 + winIdx : 300 + winIdx
         const title = `${slot.pluginName} — ${track?.name ?? 'track'}`
         const rowStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 10, color: hw.textMuted }
         const frameStyle: React.CSSProperties = size
           ? {
-              position: 'fixed', left: pos.x, top: pos.y, zIndex: 300 + winIdx,
+              position: 'fixed', left: pos.x, top: pos.y, zIndex: frameZ,
               width: size.w, height: size.h,
-              background: '#151517', border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
-              boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
+              background: '#151517',
+              border: `1px solid ${pinned ? '#f5a524' : hw.border}`,
+              borderRadius: hw.radius.md,
+              boxShadow: pinned ? '0 20px 50px rgba(245,165,36,0.22), 0 20px 50px rgba(0,0,0,0.7)' : '0 20px 50px rgba(0,0,0,0.7)',
               display: 'flex', flexDirection: 'column',
               overflow: 'hidden',
             }
           : {
-              position: 'fixed', left: pos.x, top: pos.y, zIndex: 300 + winIdx,
+              position: 'fixed', left: pos.x, top: pos.y, zIndex: frameZ,
               minWidth: 320, maxWidth: 420,
-              background: '#151517', border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
-              boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
+              background: '#151517',
+              border: `1px solid ${pinned ? '#f5a524' : hw.border}`,
+              borderRadius: hw.radius.md,
+              boxShadow: pinned ? '0 20px 50px rgba(245,165,36,0.22), 0 20px 50px rgba(0,0,0,0.7)' : '0 20px 50px rgba(0,0,0,0.7)',
               display: 'flex', flexDirection: 'column',
             }
         return (
@@ -1117,10 +1144,23 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                 style={{ flex: 1, fontSize: 11, fontWeight: 600, color: hw.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               >{title}</span>
               <button
+                onClick={() => togglePluginWindowPinned(winSlotId)}
+                onMouseDown={(e) => e.stopPropagation()}
+                data-testid={`plugin-window-pin-${slot.id}`}
+                title={pinned ? 'Unpin (currently stays on top)' : 'Pin window on top'}
+                style={{
+                  height: 18, padding: '0 6px', borderRadius: 3,
+                  background: pinned ? 'rgba(245,165,36,0.2)' : 'transparent',
+                  color: pinned ? '#f5a524' : hw.textMuted,
+                  border: `1px solid ${pinned ? '#f5a524' : hw.borderDark}`,
+                  cursor: 'pointer', fontSize: 9, letterSpacing: 0.4, lineHeight: '16px', fontWeight: 600,
+                }}
+              >{pinned ? 'PINNED' : 'PIN'}</button>
+              <button
                 onClick={() => resetPluginWindow(winSlotId)}
                 onMouseDown={(e) => e.stopPropagation()}
                 data-testid={`plugin-window-reset-${slot.id}`}
-                title="Reset window position and size"
+                title="Reset window position, size, and pin state"
                 style={{
                   height: 18, padding: '0 6px', borderRadius: 3,
                   background: 'transparent', color: hw.textMuted,
