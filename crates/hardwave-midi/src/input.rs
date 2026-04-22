@@ -50,9 +50,20 @@ struct SharedState {
     pending_stop: bool,
 }
 
+/// Result of a single reconcile pass — useful for logging/telemetry.
+#[derive(Debug, Default, Clone)]
+pub struct ReconcileReport {
+    pub reopened: Vec<String>,
+    pub disconnected: Vec<String>,
+    pub failed: Vec<(String, String)>,
+}
+
 pub struct MidiInputManager {
     active: Vec<(String, MidiInputConnection<Arc<Mutex<SharedState>>>)>,
     shared: Arc<Mutex<SharedState>>,
+    /// Ports the user has asked to keep open. Survives disconnection so the
+    /// reconciler can reopen them when the device reappears.
+    desired: Vec<String>,
 }
 
 impl MidiInputManager {
@@ -60,6 +71,7 @@ impl MidiInputManager {
         Self {
             active: Vec::new(),
             shared: Arc::new(Mutex::new(SharedState::default())),
+            desired: Vec::new(),
         }
     }
 
@@ -81,7 +93,19 @@ impl MidiInputManager {
     }
 
     /// Open a port by its display name. No-op if the port is already open.
+    /// Adds the port to the desired set so the reconciler will reopen it
+    /// automatically if the device is later unplugged and replugged.
     pub fn open(&mut self, port_name: &str) -> Result<(), String> {
+        if !self.desired.iter().any(|n| n == port_name) {
+            self.desired.push(port_name.to_string());
+        }
+        self.connect_one(port_name)
+    }
+
+    /// Establish the midir connection without touching the desired set — used
+    /// both by `open` (after it updates desired) and by `reconcile` when a
+    /// port reappears.
+    fn connect_one(&mut self, port_name: &str) -> Result<(), String> {
         if self.is_open(port_name) {
             return Ok(());
         }
@@ -109,14 +133,64 @@ impl MidiInputManager {
         Ok(())
     }
 
-    /// Close a port by display name.
+    /// Close a port by display name. Removes it from the desired set so the
+    /// reconciler doesn't reopen it.
     pub fn close(&mut self, port_name: &str) {
         self.active.retain(|(n, _)| n != port_name);
+        self.desired.retain(|n| n != port_name);
     }
 
-    /// Close every open port.
+    /// Close every open port and clear desired.
     pub fn close_all(&mut self) {
         self.active.clear();
+        self.desired.clear();
+    }
+
+    /// Ports the user has asked to keep open, regardless of whether the
+    /// underlying device is currently plugged in.
+    pub fn desired_port_names(&self) -> Vec<String> {
+        self.desired.clone()
+    }
+
+    /// Single reconcile pass — reopens any desired port that is now available
+    /// but not active, and drops active connections whose port has vanished
+    /// from the system list. Called periodically by the hot-plug scanner.
+    pub fn reconcile(&mut self) -> ReconcileReport {
+        let mut report = ReconcileReport::default();
+        let available = self.list_ports();
+
+        // Drop active connections for ports that no longer exist.
+        let active_names: Vec<String> = self.active.iter().map(|(n, _)| n.clone()).collect();
+        for name in active_names {
+            if !available.iter().any(|a| a == &name) {
+                self.active.retain(|(n, _)| n != &name);
+                log::info!("MIDI port vanished, dropped connection: {name}");
+                report.disconnected.push(name);
+            }
+        }
+
+        // Reopen desired ports that are available but not active.
+        let desired_snapshot: Vec<String> = self.desired.clone();
+        for name in desired_snapshot {
+            if self.is_open(&name) {
+                continue;
+            }
+            if !available.iter().any(|a| a == &name) {
+                continue;
+            }
+            match self.connect_one(&name) {
+                Ok(()) => {
+                    log::info!("MIDI port reconnected: {name}");
+                    report.reopened.push(name);
+                }
+                Err(e) => {
+                    log::warn!("MIDI reconnect failed for {name}: {e}");
+                    report.failed.push((name, e));
+                }
+            }
+        }
+
+        report
     }
 
     pub fn is_open(&self, port_name: &str) -> bool {

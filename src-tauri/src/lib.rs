@@ -187,6 +187,7 @@ pub fn run() {
             commands::midi_input::close_midi_input,
             commands::midi_input::close_all_midi_inputs,
             commands::midi_input::get_midi_activity,
+            commands::midi_input::get_midi_desired_ports,
             commands::midi_input::set_midi_clock_sync_enabled,
             commands::midi_input::get_midi_clock_sync_status,
             // MIDI Learn
@@ -239,6 +240,22 @@ pub fn run() {
             // MIDI input manager and, when sync is enabled, slaves the
             // transport BPM and play/stop state to the external master.
             midi_sync::spawn_dispatcher(Arc::clone(&state.engine), Arc::clone(&state.midi_sync));
+
+            // MIDI hot-plug reconciler: every ~2s, reopens desired ports that
+            // have come back online and drops connections whose device has
+            // vanished. Desired set is maintained by open/close commands so
+            // the user's choice survives unplug/replug.
+            {
+                let engine_for_reconcile = Arc::clone(&state.engine);
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_millis(2000));
+                    let mgr = {
+                        let eng = engine_for_reconcile.lock();
+                        Arc::clone(&eng.midi_input)
+                    };
+                    let _report = mgr.lock().reconcile();
+                });
+            }
 
             // Load the plugin cache from disk, then kick off a background
             // rescan so added/removed plugins are detected on startup without

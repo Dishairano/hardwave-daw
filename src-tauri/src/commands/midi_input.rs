@@ -55,6 +55,13 @@ pub fn get_midi_activity(state: State<AppState>) -> MidiActivitySnapshot {
 }
 
 #[tauri::command]
+pub fn get_midi_desired_ports(state: State<AppState>) -> Vec<String> {
+    let engine = state.engine.lock();
+    let manager = engine.midi_input.lock();
+    manager.desired_port_names()
+}
+
+#[tauri::command]
 pub fn set_midi_clock_sync_enabled(state: State<AppState>, enabled: bool) {
     state.midi_sync.enabled.store(enabled, Ordering::Relaxed);
 }
