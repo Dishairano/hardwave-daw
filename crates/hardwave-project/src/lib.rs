@@ -11,6 +11,7 @@ pub mod mixer;
 pub mod multiplayer;
 pub mod project;
 pub mod recording_session;
+pub mod scripting_api;
 pub mod sidechain_routing;
 pub mod tempo;
 pub mod track;
