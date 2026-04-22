@@ -56,6 +56,9 @@ export interface TrackInfo {
   delaySamples: number
   pitchSemitones: number
   fineTuneCents: number
+  filterType: string
+  filterCutoffHz: number
+  filterResonance: number
   insert_count: number
   inserts: InsertInfo[]
 }
@@ -112,6 +115,9 @@ interface TrackState {
   setTrackDelaySamples: (id: string, samples: number) => Promise<void>
   setTrackPitchSemitones: (id: string, semitones: number) => Promise<void>
   setTrackFineTuneCents: (id: string, cents: number) => Promise<void>
+  setTrackFilterType: (id: string, filterType: string) => Promise<void>
+  setTrackFilterCutoffHz: (id: string, cutoffHz: number) => Promise<void>
+  setTrackFilterResonance: (id: string, resonance: number) => Promise<void>
   trackHeights: Record<string, number>
   setTrackHeight: (id: string, height: number) => void
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
@@ -321,6 +327,29 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const clamped = Math.max(-100, Math.min(100, cents))
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_fine_tune_cents', { trackId: id, cents: clamped }, `Set "${name}" fine tune to ${clamped > 0 ? '+' : ''}${clamped.toFixed(0)} cents`)
+    await get().fetchTracks()
+  },
+
+  setTrackFilterType: async (id, filterType) => {
+    const normalized = ['off', 'lp', 'hp', 'bp'].includes(filterType) ? filterType : 'off'
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_filter_type', { trackId: id, filterType: normalized }, `Set "${name}" filter to ${normalized}`)
+    await get().fetchTracks()
+  },
+
+  setTrackFilterCutoffHz: async (id, cutoffHz) => {
+    if (!Number.isFinite(cutoffHz)) return
+    const clamped = Math.max(20, Math.min(20000, cutoffHz))
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_filter_cutoff', { trackId: id, cutoffHz: clamped }, `Set "${name}" filter cutoff to ${Math.round(clamped)} Hz`)
+    await get().fetchTracks()
+  },
+
+  setTrackFilterResonance: async (id, resonance) => {
+    if (!Number.isFinite(resonance)) return
+    const clamped = Math.max(0, Math.min(1, resonance))
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_filter_resonance', { trackId: id, resonance: clamped }, `Set "${name}" filter Q to ${clamped.toFixed(2)}`)
     await get().fetchTracks()
   },
 

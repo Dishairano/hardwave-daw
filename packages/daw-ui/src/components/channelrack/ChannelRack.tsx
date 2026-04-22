@@ -14,8 +14,27 @@ const CHANNEL_COLORS = [
   '#3B82F6', '#8B5CF6', '#A855F7', '#EC4899', '#F43F5E', '#64748B',
 ]
 
+const CUTOFF_MIN_HZ = 20
+const CUTOFF_MAX_HZ = 20000
+const CUTOFF_LOG_RANGE = Math.log2(CUTOFF_MAX_HZ / CUTOFF_MIN_HZ)
+
+function cutoffToNorm(hz: number): number {
+  const clamped = Math.max(CUTOFF_MIN_HZ, Math.min(CUTOFF_MAX_HZ, hz))
+  return Math.log2(clamped / CUTOFF_MIN_HZ) / CUTOFF_LOG_RANGE
+}
+
+function normToCutoff(norm: number): number {
+  const clamped = Math.max(0, Math.min(1, norm))
+  return CUTOFF_MIN_HZ * Math.pow(2, clamped * CUTOFF_LOG_RANGE)
+}
+
+function formatCutoff(hz: number): string {
+  if (hz >= 1000) return `${(hz / 1000).toFixed(hz >= 10000 ? 1 : 2)} kHz`
+  return `${Math.round(hz)} Hz`
+}
+
 export function ChannelRack() {
-  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan, setTrackPitchSemitones, setTrackFineTuneCents } = useTrackStore()
+  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan, setTrackPitchSemitones, setTrackFineTuneCents, setTrackFilterType, setTrackFilterCutoffHz, setTrackFilterResonance } = useTrackStore()
   const folders = useTrackFolderStore(s => s.folders)
   const toggleFolderCollapsed = useTrackFolderStore(s => s.toggleCollapsed)
   const allChannels = tracks.filter(t => t.kind !== 'Master')
@@ -714,6 +733,60 @@ export function ChannelRack() {
                   />
                   <span style={{ fontSize: 10, color: hw.textPrimary, width: 34, textAlign: 'right', fontFamily: "'Consolas', monospace" }}>
                     {ch.fineTuneCents > 0 ? `+${Math.round(ch.fineTuneCents)}` : Math.round(ch.fineTuneCents)} c
+                  </span>
+                </div>
+                <MenuSep />
+                <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                  Filter
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 2px' }}>
+                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>Type</span>
+                  <select
+                    value={ch.filterType || 'off'}
+                    onChange={(e) => setTrackFilterType(ch.id, e.target.value)}
+                    style={{
+                      flex: 1, fontSize: 10,
+                      background: hw.bgInput, color: hw.textPrimary,
+                      border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+                      padding: '2px 4px', outline: 'none',
+                    }}
+                  >
+                    <option value="off">Off</option>
+                    <option value="lp">Low-pass</option>
+                    <option value="hp">High-pass</option>
+                    <option value="bp">Band-pass</option>
+                  </select>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 2px', opacity: ch.filterType === 'off' ? 0.4 : 1 }}>
+                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>Cutoff</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.001}
+                    value={cutoffToNorm(ch.filterCutoffHz)}
+                    disabled={ch.filterType === 'off'}
+                    onChange={(e) => setTrackFilterCutoffHz(ch.id, normToCutoff(Number(e.target.value)))}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ fontSize: 10, color: hw.textPrimary, width: 46, textAlign: 'right', fontFamily: "'Consolas', monospace" }}>
+                    {formatCutoff(ch.filterCutoffHz)}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 4px', opacity: ch.filterType === 'off' ? 0.4 : 1 }}>
+                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>Res</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={ch.filterResonance}
+                    disabled={ch.filterType === 'off'}
+                    onChange={(e) => setTrackFilterResonance(ch.id, Number(e.target.value))}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ fontSize: 10, color: hw.textPrimary, width: 46, textAlign: 'right', fontFamily: "'Consolas', monospace" }}>
+                    {(ch.filterResonance * 100).toFixed(0)}%
                   </span>
                 </div>
                 <MenuSep />

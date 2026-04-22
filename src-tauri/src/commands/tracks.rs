@@ -39,6 +39,12 @@ pub struct TrackInfo {
     pitch_semitones: i32,
     #[serde(rename = "fineTuneCents")]
     fine_tune_cents: f32,
+    #[serde(rename = "filterType")]
+    filter_type: String,
+    #[serde(rename = "filterCutoffHz")]
+    filter_cutoff_hz: f32,
+    #[serde(rename = "filterResonance")]
+    filter_resonance: f32,
     insert_count: usize,
     inserts: Vec<InsertInfo>,
 }
@@ -76,6 +82,9 @@ fn track_to_info(
         delay_samples: t.delay_samples,
         pitch_semitones: t.pitch_semitones,
         fine_tune_cents: t.fine_tune_cents,
+        filter_type: t.filter_type.clone(),
+        filter_cutoff_hz: t.filter_cutoff_hz,
+        filter_resonance: t.filter_resonance,
         insert_count: t.inserts.len(),
         inserts,
     }
@@ -399,6 +408,57 @@ pub fn set_track_fine_tune_cents(state: State<AppState>, track_id: String, cents
         let mut project = engine.project.lock();
         if let Some(track) = project.track_mut(&track_id) {
             track.fine_tune_cents = cents;
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_filter_type(state: State<AppState>, track_id: String, filter_type: String) {
+    let normalized = match filter_type.as_str() {
+        "lp" | "hp" | "bp" | "off" => filter_type,
+        _ => "off".to_string(),
+    };
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.filter_type = normalized;
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_filter_cutoff(state: State<AppState>, track_id: String, cutoff_hz: f32) {
+    if !cutoff_hz.is_finite() {
+        return;
+    }
+    let cutoff = cutoff_hz.clamp(20.0, 20_000.0);
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.filter_cutoff_hz = cutoff;
+        }
+    }
+    engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_filter_resonance(state: State<AppState>, track_id: String, resonance: f32) {
+    if !resonance.is_finite() {
+        return;
+    }
+    let r = resonance.clamp(0.0, 1.0);
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.filter_resonance = r;
         }
     }
     engine.rebuild_graph();

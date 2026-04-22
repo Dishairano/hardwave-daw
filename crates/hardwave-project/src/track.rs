@@ -49,6 +49,18 @@ fn default_fine_tune_cents() -> f32 {
     0.0
 }
 
+fn default_filter_type() -> String {
+    "off".to_string()
+}
+
+fn default_filter_cutoff_hz() -> f32 {
+    20_000.0
+}
+
+fn default_filter_resonance() -> f32 {
+    0.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
@@ -94,6 +106,16 @@ pub struct Track {
     #[serde(default = "default_fine_tune_cents")]
     pub fine_tune_cents: f32,
 
+    /// Per-channel filter type: "off", "lp", "hp", or "bp".
+    #[serde(default = "default_filter_type")]
+    pub filter_type: String,
+    /// Filter cutoff frequency in Hz, clamped 20..=20000.
+    #[serde(default = "default_filter_cutoff_hz")]
+    pub filter_cutoff_hz: f32,
+    /// Filter resonance 0.0..=1.0, maps to Q = 0.707 + r * 9.3.
+    #[serde(default = "default_filter_resonance")]
+    pub filter_resonance: f32,
+
     // Plugin chain
     pub inserts: Vec<PluginSlot>,
 
@@ -128,6 +150,9 @@ impl Track {
             delay_samples: 0,
             pitch_semitones: 0,
             fine_tune_cents: 0.0,
+            filter_type: "off".into(),
+            filter_cutoff_hz: 20_000.0,
+            filter_resonance: 0.0,
             inserts: Vec::new(),
             sends: Vec::new(),
             clips: Vec::new(),

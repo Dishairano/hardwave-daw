@@ -821,6 +821,13 @@ impl EngineCallback {
             node.set_swap_lr(track.swap_lr);
             node.set_stereo_separation(track.stereo_separation);
             node.set_delay_samples(track.delay_samples);
+            let filter_kind = crate::track_node::TrackFilterType::parse(&track.filter_type);
+            node.set_filter(
+                filter_kind,
+                track.filter_cutoff_hz,
+                track.filter_resonance,
+                sample_rate as f32,
+            );
 
             // Per-track coarse + fine pitch offset. Combined as a single resample
             // factor that's folded into each clip's source_step below.

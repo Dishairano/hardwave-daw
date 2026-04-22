@@ -78,6 +78,120 @@ fn fade_shape(t: f32, curve: hardwave_project::clip::FadeCurve) -> f32 {
     }
 }
 
+/// Per-channel filter mode. `Off` bypasses the filter stage entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackFilterType {
+    Off,
+    LowPass,
+    HighPass,
+    BandPass,
+}
+
+impl TrackFilterType {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "lp" | "low" | "lowpass" => TrackFilterType::LowPass,
+            "hp" | "high" | "highpass" => TrackFilterType::HighPass,
+            "bp" | "band" | "bandpass" => TrackFilterType::BandPass,
+            _ => TrackFilterType::Off,
+        }
+    }
+}
+
+/// Single biquad stage with independent L/R state. Coefficients are recomputed
+/// whenever the filter parameters change.
+#[derive(Default, Clone, Copy)]
+struct BiquadStereo {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    x1_l: f32,
+    x2_l: f32,
+    y1_l: f32,
+    y2_l: f32,
+    x1_r: f32,
+    x2_r: f32,
+    y1_r: f32,
+    y2_r: f32,
+}
+
+impl BiquadStereo {
+    fn set_coeffs(&mut self, kind: TrackFilterType, cutoff_hz: f32, resonance: f32, sr: f32) {
+        if !matches!(
+            kind,
+            TrackFilterType::LowPass | TrackFilterType::HighPass | TrackFilterType::BandPass
+        ) {
+            self.b0 = 1.0;
+            self.b1 = 0.0;
+            self.b2 = 0.0;
+            self.a1 = 0.0;
+            self.a2 = 0.0;
+            return;
+        }
+        let sr = sr.max(1.0);
+        let cutoff = cutoff_hz.clamp(20.0, (sr * 0.49).min(20_000.0));
+        let w0 = 2.0 * std::f32::consts::PI * cutoff / sr;
+        let q = 0.707 + resonance.clamp(0.0, 1.0) * 9.3;
+        let alpha = w0.sin() / (2.0 * q);
+        let cos_w0 = w0.cos();
+        let a0 = 1.0 + alpha;
+        match kind {
+            TrackFilterType::LowPass => {
+                self.b0 = (1.0 - cos_w0) * 0.5 / a0;
+                self.b1 = (1.0 - cos_w0) / a0;
+                self.b2 = (1.0 - cos_w0) * 0.5 / a0;
+            }
+            TrackFilterType::HighPass => {
+                self.b0 = (1.0 + cos_w0) * 0.5 / a0;
+                self.b1 = -(1.0 + cos_w0) / a0;
+                self.b2 = (1.0 + cos_w0) * 0.5 / a0;
+            }
+            TrackFilterType::BandPass => {
+                self.b0 = alpha / a0;
+                self.b1 = 0.0;
+                self.b2 = -alpha / a0;
+            }
+            TrackFilterType::Off => unreachable!(),
+        }
+        self.a1 = -2.0 * cos_w0 / a0;
+        self.a2 = (1.0 - alpha) / a0;
+    }
+
+    #[inline]
+    fn process_stereo(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let yl = self.b0 * l + self.b1 * self.x1_l + self.b2 * self.x2_l
+            - self.a1 * self.y1_l
+            - self.a2 * self.y2_l;
+        self.x2_l = self.x1_l;
+        self.x1_l = l;
+        self.y2_l = self.y1_l;
+        self.y1_l = yl;
+
+        let yr = self.b0 * r + self.b1 * self.x1_r + self.b2 * self.x2_r
+            - self.a1 * self.y1_r
+            - self.a2 * self.y2_r;
+        self.x2_r = self.x1_r;
+        self.x1_r = r;
+        self.y2_r = self.y1_r;
+        self.y1_r = yr;
+
+        (yl, yr)
+    }
+
+    fn reset_state(&mut self) {
+        self.x1_l = 0.0;
+        self.x2_l = 0.0;
+        self.y1_l = 0.0;
+        self.y2_l = 0.0;
+        self.x1_r = 0.0;
+        self.x2_r = 0.0;
+        self.y1_r = 0.0;
+        self.y2_r = 0.0;
+    }
+}
+
 /// Audio node for a single track. Holds references to its clips and the shared audio pool.
 pub struct TrackNode {
     name: String,
@@ -103,6 +217,9 @@ pub struct TrackNode {
     meter: Arc<TrackMeterState>,
     /// Smoothed RMS (linear), updated each block.
     rms_smooth: f32,
+    /// Per-channel filter stage (biquad), applied before the fader.
+    filter_kind: TrackFilterType,
+    filter: BiquadStereo,
 }
 
 const TRACK_DELAY_CAPACITY: usize = 4800; // 100 ms at 48 kHz, both directions
@@ -127,6 +244,26 @@ impl TrackNode {
             cached_buffers: Vec::new(),
             meter,
             rms_smooth: 0.0,
+            filter_kind: TrackFilterType::Off,
+            filter: BiquadStereo::default(),
+        }
+    }
+
+    /// Configure the per-channel filter. Called from the engine thread when the
+    /// project state changes, so computing coefficients here is fine.
+    pub fn set_filter(
+        &mut self,
+        kind: TrackFilterType,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: f32,
+    ) {
+        let changing_kind = self.filter_kind != kind;
+        self.filter_kind = kind;
+        self.filter
+            .set_coeffs(kind, cutoff_hz, resonance, sample_rate);
+        if changing_kind {
+            self.filter.reset_state();
         }
     }
 
@@ -371,6 +508,19 @@ impl AudioNode for TrackNode {
                 let side = (l - r) * 0.5;
                 out_l[frame] = mid + side * sep;
                 out_r[frame] = mid - side * sep;
+            }
+        }
+
+        // Per-channel biquad filter stage. Applied pre-fader so metering and
+        // sends see the filtered signal. `Off` skips the inner loop.
+        if self.filter_kind != TrackFilterType::Off {
+            let (out_left, out_rest) = outputs.split_at_mut(1);
+            let out_l = &mut out_left[0];
+            let out_r = &mut out_rest[0];
+            for frame in 0..buf_size {
+                let (yl, yr) = self.filter.process_stereo(out_l[frame], out_r[frame]);
+                out_l[frame] = yl;
+                out_r[frame] = yr;
             }
         }
 
