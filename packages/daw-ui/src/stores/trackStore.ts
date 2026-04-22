@@ -59,6 +59,7 @@ export interface TrackInfo {
   filterType: string
   filterCutoffHz: number
   filterResonance: number
+  outputBus: string | null
   insert_count: number
   inserts: InsertInfo[]
 }
@@ -118,6 +119,7 @@ interface TrackState {
   setTrackFilterType: (id: string, filterType: string) => Promise<void>
   setTrackFilterCutoffHz: (id: string, cutoffHz: number) => Promise<void>
   setTrackFilterResonance: (id: string, resonance: number) => Promise<void>
+  setTrackOutputBus: (id: string, outputBus: string | null) => Promise<void>
   trackHeights: Record<string, number>
   setTrackHeight: (id: string, height: number) => void
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
@@ -350,6 +352,14 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const clamped = Math.max(0, Math.min(1, resonance))
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_filter_resonance', { trackId: id, resonance: clamped }, `Set "${name}" filter Q to ${clamped.toFixed(2)}`)
+    await get().fetchTracks()
+  },
+
+  setTrackOutputBus: async (id, outputBus) => {
+    const tracks = get().tracks
+    const name = tracks.find(t => t.id === id)?.name ?? 'track'
+    const targetName = outputBus ? (tracks.find(t => t.id === outputBus)?.name ?? 'Master') : 'Master'
+    await mut('set_track_output_bus', { trackId: id, outputBus }, `Route "${name}" to ${targetName}`)
     await get().fetchTracks()
   },
 

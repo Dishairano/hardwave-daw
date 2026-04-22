@@ -804,7 +804,6 @@ impl EngineCallback {
         let sample_rate = self.sample_rate as f64;
         let tempo_map = &project.tempo_map;
 
-        let mut track_node_ids = Vec::new();
         // Parallel map from project track id to graph node id, needed to
         // connect send edges once every track node has been inserted.
         let mut track_id_to_node: HashMap<String, crate::graph::NodeId> = HashMap::new();
@@ -943,7 +942,6 @@ impl EngineCallback {
             node.set_clips(regions);
 
             let node_id = self.graph.add_node(Box::new(node));
-            track_node_ids.push(node_id);
             track_id_to_node.insert(track.id.clone(), node_id);
         }
 
@@ -952,10 +950,52 @@ impl EngineCallback {
         let master_id = self.graph.add_node(Box::new(master_node));
         self.master_id = Some(master_id);
 
-        // Connect all track nodes → master (L→L, R→R)
-        for &track_id in &track_node_ids {
-            self.graph.connect(track_id, 0, master_id, 0); // Left
-            self.graph.connect(track_id, 1, master_id, 1); // Right
+        // Connect each track either to its configured output_bus (another
+        // track) or to master. Invalid targets (self-routing, unknown id,
+        // cycles) silently fall back to master — the command layer already
+        // rejects bad values, but the engine is defensive to keep audio
+        // flowing even if a legacy project carries stale routing.
+        for track in &project.tracks {
+            if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
+                continue;
+            }
+            let Some(&src_node) = track_id_to_node.get(&track.id) else {
+                continue;
+            };
+            let dst_node = match track.output_bus.as_ref() {
+                Some(bus_id) if bus_id != &track.id => {
+                    // Walk the chain from the bus target; if the chain comes
+                    // back to the current track it's a cycle, fall through to
+                    // master. Otherwise use the configured bus when it maps to
+                    // a real graph node.
+                    let mut visited: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    let mut cursor: Option<&str> = Some(bus_id.as_str());
+                    let mut cycle = false;
+                    while let Some(next) = cursor {
+                        if next == track.id {
+                            cycle = true;
+                            break;
+                        }
+                        if !visited.insert(next.to_string()) {
+                            break;
+                        }
+                        cursor = project
+                            .tracks
+                            .iter()
+                            .find(|t| t.id == next)
+                            .and_then(|t| t.output_bus.as_deref());
+                    }
+                    if cycle {
+                        master_id
+                    } else {
+                        track_id_to_node.get(bus_id).copied().unwrap_or(master_id)
+                    }
+                }
+                _ => master_id,
+            };
+            self.graph.connect(src_node, 0, dst_node, 0);
+            self.graph.connect(src_node, 1, dst_node, 1);
         }
 
         // Wire armed-and-monitoring tracks to a single InputNode that drains

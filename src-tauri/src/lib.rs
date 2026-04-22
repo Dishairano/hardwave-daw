@@ -109,6 +109,7 @@ pub fn run() {
             commands::tracks::set_track_filter_type,
             commands::tracks::set_track_filter_cutoff,
             commands::tracks::set_track_filter_resonance,
+            commands::tracks::set_track_output_bus,
             // Sends
             commands::sends::get_sends,
             commands::sends::list_sends,

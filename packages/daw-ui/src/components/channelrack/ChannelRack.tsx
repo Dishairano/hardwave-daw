@@ -34,7 +34,7 @@ function formatCutoff(hz: number): string {
 }
 
 export function ChannelRack() {
-  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan, setTrackPitchSemitones, setTrackFineTuneCents, setTrackFilterType, setTrackFilterCutoffHz, setTrackFilterResonance } = useTrackStore()
+  const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan, setTrackPitchSemitones, setTrackFineTuneCents, setTrackFilterType, setTrackFilterCutoffHz, setTrackFilterResonance, setTrackOutputBus } = useTrackStore()
   const folders = useTrackFolderStore(s => s.folders)
   const toggleFolderCollapsed = useTrackFolderStore(s => s.toggleCollapsed)
   const allChannels = tracks.filter(t => t.kind !== 'Master')
@@ -810,6 +810,32 @@ export function ChannelRack() {
                   <span style={{ fontSize: 10, color: hw.textPrimary, width: 46, textAlign: 'right', fontFamily: "'Consolas', monospace" }}>
                     {(ch.filterResonance * 100).toFixed(0)}%
                   </span>
+                </div>
+                <MenuSep />
+                <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                  Route to
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 4px' }}>
+                  <select
+                    value={ch.outputBus ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setTrackOutputBus(ch.id, v === '' ? null : v)
+                    }}
+                    style={{
+                      flex: 1, fontSize: 10,
+                      background: hw.bgInput, color: hw.textPrimary,
+                      border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+                      padding: '2px 4px', outline: 'none',
+                    }}
+                  >
+                    <option value="">Master</option>
+                    {tracks
+                      .filter(t => t.id !== ch.id && t.kind !== 'Master')
+                      .map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                  </select>
                 </div>
                 <MenuSep />
               </>

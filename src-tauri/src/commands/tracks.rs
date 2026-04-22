@@ -45,6 +45,8 @@ pub struct TrackInfo {
     filter_cutoff_hz: f32,
     #[serde(rename = "filterResonance")]
     filter_resonance: f32,
+    #[serde(rename = "outputBus")]
+    output_bus: Option<String>,
     insert_count: usize,
     inserts: Vec<InsertInfo>,
 }
@@ -85,6 +87,7 @@ fn track_to_info(
         filter_type: t.filter_type.clone(),
         filter_cutoff_hz: t.filter_cutoff_hz,
         filter_resonance: t.filter_resonance,
+        output_bus: t.output_bus.clone(),
         insert_count: t.inserts.len(),
         inserts,
     }
@@ -462,4 +465,50 @@ pub fn set_track_filter_resonance(state: State<AppState>, track_id: String, reso
         }
     }
     engine.rebuild_graph();
+}
+
+#[tauri::command]
+pub fn set_track_output_bus(
+    state: State<AppState>,
+    track_id: String,
+    output_bus: Option<String>,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        // Reject self-routing. Reject routing to tracks that don't exist.
+        if let Some(ref bus_id) = output_bus {
+            if bus_id == &track_id {
+                return Err("cannot route a track to itself".into());
+            }
+            if !project.tracks.iter().any(|t| &t.id == bus_id) {
+                return Err("target track not found".into());
+            }
+            // Reject obvious cycles: if the target already routes (directly or
+            // transitively) back to this track, the routing would form a loop.
+            let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut cursor = Some(bus_id.clone());
+            while let Some(next) = cursor {
+                if next == track_id {
+                    return Err("routing would form a cycle".into());
+                }
+                if !visited.insert(next.clone()) {
+                    break;
+                }
+                cursor = project
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == next)
+                    .and_then(|t| t.output_bus.clone());
+            }
+        }
+        if let Some(track) = project.track_mut(&track_id) {
+            track.output_bus = output_bus;
+        } else {
+            return Err("track not found".into());
+        }
+    }
+    engine.rebuild_graph();
+    Ok(())
 }
