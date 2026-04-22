@@ -4,10 +4,11 @@ import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTransportStore } from '../stores/transportStore'
+import { usePatternStore } from '../stores/patternStore'
 
 export type BitDepth = 0 | 16 | 24
 export type SampleRate = 44100 | 48000 | 88200 | 96000 | 192000
-export type ExportRange = 'full' | 'loop'
+export type ExportRange = 'full' | 'loop' | 'pattern'
 export type NormalizeMode = 'off' | 'peak'
 export type DitherMode = 'none' | 'tpdf' | 'tpdf_shaped'
 
@@ -72,7 +73,9 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
   const [respectMuteSolo, setRespectMuteSolo] = useState<boolean>(() => readBool(STEMS_RESPECT_MUTE_SOLO_KEY, false))
   const [range, setRange] = useState<ExportRange>(() => {
     const raw = (typeof localStorage !== 'undefined' && localStorage.getItem(RANGE_KEY)) || 'full'
-    return raw === 'loop' ? 'loop' : 'full'
+    if (raw === 'loop') return 'loop'
+    if (raw === 'pattern') return 'pattern'
+    return 'full'
   })
   const [playAfter, setPlayAfter] = useState<boolean>(() => readBool(PLAY_AFTER_KEY, false))
   const [normalizeMode, setNormalizeMode] = useState<NormalizeMode>(() => {
@@ -96,12 +99,23 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
   const loopStart = useTransportStore(s => s.loopStart)
   const loopEnd = useTransportStore(s => s.loopEnd)
   const projectSampleRate = useTransportStore(s => s.sampleRate)
+  const bpm = useTransportStore(s => s.bpm)
+  const patternActiveId = usePatternStore(s => s.activeId)
+  const patternGetLength = usePatternStore(s => s.getEffectiveLength)
   const loopRangeValid = loopEnd > loopStart
 
   const loopDurationSecs = useMemo(() => {
     if (!loopRangeValid || projectSampleRate <= 0) return 0
     return (loopEnd - loopStart) / projectSampleRate
   }, [loopStart, loopEnd, projectSampleRate, loopRangeValid])
+
+  const patternDurationSecs = useMemo(() => {
+    if (bpm <= 0) return 0
+    const steps = patternGetLength(patternActiveId)
+    const stepsPerBeat = 4
+    const beats = steps / stepsPerBeat
+    return beats * (60 / bpm)
+  }, [bpm, patternActiveId, patternGetLength])
 
   useEffect(() => {
     if (range === 'loop' && !loopRangeValid) setRange('full')
@@ -151,6 +165,15 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
   }
 
   const computeRenderBounds = (): { startSamples: number | null; endSamples: number | null } => {
+    if (range === 'pattern') {
+      if (bpm <= 0) return { startSamples: null, endSamples: null }
+      const steps = patternGetLength(patternActiveId)
+      const stepsPerBeat = 4
+      const beats = steps / stepsPerBeat
+      const patternSamples = Math.round((beats * 60) / bpm * sampleRate)
+      if (patternSamples <= 0) return { startSamples: null, endSamples: null }
+      return { startSamples: 0, endSamples: patternSamples }
+    }
     if (range !== 'loop' || !loopRangeValid || projectSampleRate <= 0 || projectSampleRate === sampleRate) {
       if (range === 'loop' && loopRangeValid) {
         return { startSamples: loopStart, endSamples: loopEnd }
@@ -353,6 +376,11 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
               {loopRangeValid
                 ? `Loop region (${loopDurationSecs.toFixed(2)}s)`
                 : 'Loop region (no range set)'}
+            </option>
+            <option value="pattern" disabled={patternDurationSecs <= 0}>
+              {patternDurationSecs > 0
+                ? `Current pattern (${patternDurationSecs.toFixed(2)}s)`
+                : 'Current pattern (unknown)'}
             </option>
           </select>
         </Row>
