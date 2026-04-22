@@ -631,9 +631,54 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
   const [presetMenuOpen, setPresetMenuOpen] = useState(false)
   const [dragOverSlotId, setDragOverSlotId] = useState<string | null>(null)
   const [dragOverEmptyIdx, setDragOverEmptyIdx] = useState<number | null>(null)
-  const [pluginWindowSlotId, setPluginWindowSlotId] = useState<string | null>(null)
+  const [openPluginWindows, setOpenPluginWindows] = useState<string[]>([])
+  const [windowPositions, setWindowPositions] = useState<Record<string, { x: number; y: number }>>(() => {
+    try {
+      const raw = localStorage.getItem('hardwave.daw.pluginWindowPositions')
+      return raw ? JSON.parse(raw) : {}
+    } catch { return {} }
+  })
+  const [dragging, setDragging] = useState<{ slotId: string; dx: number; dy: number } | null>(null)
+
+  const openPluginWindow = (slotId: string) => {
+    setOpenPluginWindows(prev => (prev.includes(slotId) ? prev : [...prev, slotId]))
+    setWindowPositions(prev => {
+      if (prev[slotId]) return prev
+      const cascadeIdx = openPluginWindows.length
+      const next = { ...prev, [slotId]: { x: 120 + cascadeIdx * 36, y: 110 + cascadeIdx * 36 } }
+      try { localStorage.setItem('hardwave.daw.pluginWindowPositions', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+
+  const closePluginWindow = (slotId: string) => {
+    setOpenPluginWindows(prev => prev.filter(id => id !== slotId))
+  }
 
   useEffect(() => { loadSlotPresets() }, [loadSlotPresets])
+
+  useEffect(() => {
+    if (!dragging) return
+    const onMove = (e: MouseEvent) => {
+      setWindowPositions(prev => ({
+        ...prev,
+        [dragging.slotId]: { x: e.clientX - dragging.dx, y: e.clientY - dragging.dy },
+      }))
+    }
+    const onUp = () => {
+      setDragging(null)
+      setWindowPositions(prev => {
+        try { localStorage.setItem('hardwave.daw.pluginWindowPositions', JSON.stringify(prev)) } catch {}
+        return prev
+      })
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [dragging])
 
   useEffect(() => {
     if (!menu) return
@@ -851,13 +896,13 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
               <>
                 <button
                   onClick={() => {
-                    setPluginWindowSlotId(slot.id)
+                    openPluginWindow(slot.id)
                     setMenu(null)
                     setPresetMenuOpen(false)
                   }}
                   style={menuBtnStyle}
-                  title="Open the plugin in a panel (generic parameter fallback for plugins without a GUI)"
-                >Open plugin…</button>
+                  title="Open the plugin in a floating panel (generic parameter fallback for plugins without a GUI)"
+                >{openPluginWindows.includes(slot.id) ? 'Plugin window open ✓' : 'Open plugin…'}</button>
                 <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
                 <button
                   onClick={async () => {
@@ -978,52 +1023,58 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
         </div>
       )}
 
-      {pluginWindowSlotId && (() => {
-        const slot = inserts.find(s => s.id === pluginWindowSlotId)
+      {openPluginWindows.map((winSlotId, winIdx) => {
+        const slot = inserts.find(s => s.id === winSlotId)
         if (!slot) return null
-        const idx = inserts.findIndex(s => s.id === pluginWindowSlotId)
+        const idx = inserts.findIndex(s => s.id === winSlotId)
         const track = tracks.find(t => t.id === trackId)
         const descriptor = plugins.find(p => p.id === slot.pluginId)
-        const close = () => setPluginWindowSlotId(null)
+        const close = () => closePluginWindow(winSlotId)
+        const pos = windowPositions[winSlotId] ?? { x: 120 + winIdx * 36, y: 110 + winIdx * 36 }
+        const title = `${slot.pluginName} — ${track?.name ?? 'track'}`
         const rowStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 10, color: hw.textMuted }
         return (
           <div
-            data-testid="plugin-window-overlay"
-            onMouseDown={close}
+            key={winSlotId}
+            data-testid={`plugin-window-${slot.id}`}
             style={{
-              position: 'fixed', inset: 0, zIndex: 300,
-              background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              position: 'fixed', left: pos.x, top: pos.y, zIndex: 300 + winIdx,
+              minWidth: 320, maxWidth: 420,
+              background: '#151517', border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
+              boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
+              display: 'flex', flexDirection: 'column',
             }}
           >
             <div
-              data-testid={`plugin-window-${slot.id}`}
-              onMouseDown={(e) => e.stopPropagation()}
-              style={{
-                minWidth: 320, maxWidth: 420,
-                background: '#151517', border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
-                boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
-                display: 'flex', flexDirection: 'column',
+              data-testid={`plugin-window-drag-${slot.id}`}
+              onMouseDown={(e) => {
+                const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect()
+                setDragging({ slotId: winSlotId, dx: e.clientX - rect.left, dy: e.clientY - rect.top })
+                e.preventDefault()
               }}
-            >
-              <div style={{
+              style={{
                 display: 'flex', alignItems: 'center', gap: 6,
                 padding: '6px 10px', borderBottom: `1px solid ${hw.border}`,
-              }}>
-                <span style={{ flex: 1, fontSize: 11, fontWeight: 600, color: hw.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {slot.pluginName}
-                </span>
-                <button
-                  onClick={close}
-                  data-testid="plugin-window-close"
-                  title="Close"
-                  style={{
-                    width: 18, height: 18, borderRadius: 3, padding: 0,
-                    background: 'transparent', color: hw.textMuted,
-                    border: `1px solid ${hw.borderDark}`, cursor: 'pointer', fontSize: 11, lineHeight: '14px',
-                  }}
-                >×</button>
-              </div>
+                cursor: dragging?.slotId === winSlotId ? 'grabbing' : 'grab',
+                userSelect: 'none',
+              }}
+            >
+              <span
+                title={title}
+                style={{ flex: 1, fontSize: 11, fontWeight: 600, color: hw.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              >{title}</span>
+              <button
+                onClick={close}
+                onMouseDown={(e) => e.stopPropagation()}
+                data-testid={`plugin-window-close-${slot.id}`}
+                title="Close"
+                style={{
+                  width: 18, height: 18, borderRadius: 3, padding: 0,
+                  background: 'transparent', color: hw.textMuted,
+                  border: `1px solid ${hw.borderDark}`, cursor: 'pointer', fontSize: 11, lineHeight: '14px',
+                }}
+              >×</button>
+            </div>
 
               <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 5 }}>
                 <div style={rowStyle}>
@@ -1124,9 +1175,8 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                 </label>
               </div>
             </div>
-          </div>
         )
-      })()}
+      })}
     </div>
   )
 }
