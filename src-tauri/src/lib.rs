@@ -140,6 +140,8 @@ pub fn run() {
             commands::engine::get_graph_latency,
             commands::engine::get_pdc_enabled,
             commands::engine::set_pdc_enabled,
+            commands::engine::get_audio_cache_stats,
+            commands::engine::set_audio_cache_max_bytes,
             // Project
             commands::project::new_project,
             commands::project::save_project,

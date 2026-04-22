@@ -68,6 +68,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [midiMtcEnabled, setMidiMtcEnabled] = useState(false)
   const [midiMtcFps, setMidiMtcFps] = useState(30)
   const [directMonitoring, setDirectMonitoring] = useState(false)
+  const [cacheStats, setCacheStats] = useState<{ bytesUsed: number; maxBytes: number; entryCount: number } | null>(null)
+  const [cacheMaxMb, setCacheMaxMb] = useState<string>('2048')
 
   useEffect(() => {
     Promise.all([
@@ -106,6 +108,22 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setMidiMtcFps(mtcStatus.fps)
       setDirectMonitoring(directMon)
     })
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        const s = await invoke<{ bytesUsed: number; maxBytes: number; entryCount: number }>('get_audio_cache_stats')
+        if (!cancelled) {
+          setCacheStats(s)
+          setCacheMaxMb(String(Math.round(s.maxBytes / (1024 * 1024))))
+        }
+      } catch {}
+    }
+    refresh()
+    const id = window.setInterval(refresh, 2000)
+    return () => { cancelled = true; window.clearInterval(id) }
   }, [])
 
   // Poll clock-sync status so the BPM readout and ticks-seen indicator
@@ -412,6 +430,38 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 label: `${b} samples`,
               }))}
             />
+          </SettingRow>
+
+          {/* Audio cache */}
+          <SettingRow label="Audio cache">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+              <input
+                type="number"
+                min={64}
+                max={65536}
+                step={64}
+                value={cacheMaxMb}
+                onChange={e => setCacheMaxMb(e.target.value)}
+                onBlur={async () => {
+                  const mb = Math.max(64, Math.min(65536, parseInt(cacheMaxMb, 10) || 2048))
+                  setCacheMaxMb(String(mb))
+                  try { await invoke('set_audio_cache_max_bytes', { maxBytes: mb * 1024 * 1024 }) } catch {}
+                }}
+                style={{
+                  width: 80, fontSize: 12, padding: '4px 6px',
+                  background: '#0e0e10', color: hw.textPrimary,
+                  border: `1px solid ${hw.borderDark}`, borderRadius: 3,
+                }}
+                data-testid="audio-cache-max-mb"
+                title="Maximum decoded audio memory before oldest entries are evicted (FIFO)"
+              />
+              <span style={{ fontSize: 11, color: hw.textMuted }}>MB cap</span>
+              <span style={{ fontSize: 11, color: hw.textFaint, marginLeft: 'auto' }} data-testid="audio-cache-stats">
+                {cacheStats
+                  ? `${(cacheStats.bytesUsed / (1024 * 1024)).toFixed(1)} MB used · ${cacheStats.entryCount} file${cacheStats.entryCount === 1 ? '' : 's'}`
+                  : '—'}
+              </span>
+            </div>
           </SettingRow>
 
           {/* Input Device */}

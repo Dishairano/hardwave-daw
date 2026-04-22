@@ -264,6 +264,18 @@ pub fn set_pdc_enabled(state: State<AppState>, enabled: bool) {
 }
 
 #[tauri::command]
+pub fn get_audio_cache_stats(
+    state: State<AppState>,
+) -> hardwave_engine::audio_pool::AudioCacheStats {
+    state.engine.lock().audio_pool.stats()
+}
+
+#[tauri::command]
+pub fn set_audio_cache_max_bytes(state: State<AppState>, max_bytes: u64) {
+    state.engine.lock().audio_pool.set_max_bytes(max_bytes);
+}
+
+#[tauri::command]
 pub fn get_input_meter(state: State<AppState>) -> InputMeterSnapshot {
     let engine = state.engine.lock();
     let running = engine.is_input_monitoring();
