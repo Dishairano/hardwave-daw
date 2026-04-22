@@ -9,6 +9,7 @@ pub mod lfo;
 pub mod mixer;
 pub mod project;
 pub mod recording_session;
+pub mod sidechain_routing;
 pub mod tempo;
 pub mod track;
 pub mod track_freeze;
