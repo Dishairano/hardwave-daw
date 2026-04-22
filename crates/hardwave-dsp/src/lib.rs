@@ -21,7 +21,7 @@ pub use audio_file::{AudioFileInfo, AudioFileReader};
 pub use biquad::{Biquad, BiquadKind};
 pub use convolution::ConvolutionReverb;
 pub use delay_line::StereoDelayLine;
-pub use dynamics::{DetectMode, EnvelopeFollower};
+pub use dynamics::{DetectMode, EnvelopeFollower, GainReductionMeter};
 pub use fade::{apply_fade, FadeCurve};
 pub use modulation::{AllpassStage, ModulatedDelay, PhaserChain};
 pub use reverb::AlgorithmicReverb;

@@ -176,6 +176,68 @@ pub fn auto_makeup_gain_db(threshold_db: f32, ratio: f32) -> f32 {
     (-threshold_db) * (1.0 - 1.0 / ratio) * 0.5
 }
 
+/// Gain reduction meter — tracks the current amount of gain
+/// reduction (in dB, always ≤ 0) a dynamics processor is applying.
+/// Uses the same exponential smoother as `EnvelopeFollower` but on
+/// the reduction value, so the meter shows a stable reading even
+/// with fast attack/release times on the compressor itself.
+pub struct GainReductionMeter {
+    value_db: f32,
+    attack_coeff: f32,
+    release_coeff: f32,
+}
+
+impl Default for GainReductionMeter {
+    fn default() -> Self {
+        Self {
+            value_db: 0.0,
+            attack_coeff: 0.0,
+            release_coeff: 0.0,
+        }
+    }
+}
+
+impl GainReductionMeter {
+    /// Configure meter ballistics in ms at the given sample rate.
+    /// Typical meter times: attack 10 ms, release 200 ms.
+    pub fn set_times(&mut self, attack_ms: f32, release_ms: f32, sample_rate: f32) {
+        let sr = sample_rate.max(1.0);
+        let compute = |ms: f32| -> f32 {
+            let ms = ms.max(0.0);
+            if ms <= 0.0 {
+                return 0.0;
+            }
+            let samples = ms * 0.001 * sr;
+            (-1.0 / samples.max(1.0)).exp()
+        };
+        self.attack_coeff = compute(attack_ms);
+        self.release_coeff = compute(release_ms);
+    }
+
+    /// Feed one sample of gain reduction in dB (≤ 0). Returns the
+    /// smoothed meter value. "Attack" in meter terms means
+    /// reduction is growing (more negative); "release" means
+    /// reduction is shrinking (toward zero).
+    pub fn process(&mut self, reduction_db: f32) -> f32 {
+        let target = reduction_db.min(0.0);
+        let coeff = if target < self.value_db {
+            self.attack_coeff
+        } else {
+            self.release_coeff
+        };
+        self.value_db = coeff * self.value_db + (1.0 - coeff) * target;
+        self.value_db
+    }
+
+    pub fn current_db(&self) -> f32 {
+        self.value_db
+    }
+
+    pub fn reset(&mut self) {
+        self.value_db = 0.0;
+    }
+}
+
 /// True-peak estimate using 2× oversampling with a simple linear
 /// interpolator. Not a full ITU-R BS.1770 true-peak implementation,
 /// but a cheap upper bound suitable for catching inter-sample peaks
@@ -319,6 +381,54 @@ mod tests {
             let rt = linear_to_db(db_to_linear(db));
             assert!((rt - db).abs() < 0.01, "round trip {db} -> {rt}");
         }
+    }
+
+    #[test]
+    fn gr_meter_holds_peak_reduction_during_attack() {
+        let mut m = GainReductionMeter::default();
+        m.set_times(5.0, 100.0, 48_000.0);
+        // Drive meter toward -6 dB. Needs several samples to reach
+        // target given the 5 ms attack smoothing.
+        for _ in 0..2000 {
+            m.process(-6.0);
+        }
+        assert!(
+            (m.current_db() - (-6.0)).abs() < 0.1,
+            "gr meter settled at {}, expected ≈ -6",
+            m.current_db()
+        );
+    }
+
+    #[test]
+    fn gr_meter_releases_smoothly_when_reduction_ends() {
+        let mut m = GainReductionMeter::default();
+        m.set_times(5.0, 100.0, 48_000.0);
+        // Drive to -12 dB.
+        for _ in 0..2000 {
+            m.process(-12.0);
+        }
+        // Release — feed 0 dB. 100 ms release at 48 kHz is 4800
+        // samples for the one-pole to reach ~63% of target. Give
+        // it ~5 full release time constants.
+        for _ in 0..30_000 {
+            m.process(0.0);
+        }
+        assert!(
+            m.current_db() > -0.1,
+            "gr meter should release to near 0 but is at {}",
+            m.current_db()
+        );
+    }
+
+    #[test]
+    fn gr_meter_rejects_positive_input() {
+        // Reductions are always ≤ 0. Positive input gets clamped.
+        let mut m = GainReductionMeter::default();
+        m.set_times(1.0, 10.0, 48_000.0);
+        for _ in 0..1000 {
+            m.process(3.0);
+        }
+        assert_eq!(m.current_db(), 0.0);
     }
 
     #[test]
