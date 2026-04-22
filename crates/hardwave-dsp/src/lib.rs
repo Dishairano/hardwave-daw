@@ -13,6 +13,7 @@ pub mod fade;
 pub mod fm_synth;
 pub mod ir_library;
 pub mod latency;
+pub mod loudness;
 pub mod mix_feedback;
 pub mod modulation;
 pub mod multiband;
