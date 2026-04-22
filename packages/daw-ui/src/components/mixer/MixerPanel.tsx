@@ -620,6 +620,8 @@ const MAX_VISIBLE_SLOTS = 10
 
 function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[] }) {
   const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed, addToTrack, setInsertWet } = usePluginStore()
+  const plugins = usePluginStore(s => s.plugins)
+  const tracks = useTrackStore(s => s.tracks)
   const { fetchTracks } = useTrackStore()
   const slotPresets = useSlotPresetStore(s => s.presets)
   const loadSlotPresets = useSlotPresetStore(s => s.load)
@@ -629,6 +631,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
   const [presetMenuOpen, setPresetMenuOpen] = useState(false)
   const [dragOverSlotId, setDragOverSlotId] = useState<string | null>(null)
   const [dragOverEmptyIdx, setDragOverEmptyIdx] = useState<number | null>(null)
+  const [pluginWindowSlotId, setPluginWindowSlotId] = useState<string | null>(null)
 
   useEffect(() => { loadSlotPresets() }, [loadSlotPresets])
 
@@ -840,6 +843,16 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
             return (
               <>
                 <button
+                  onClick={() => {
+                    setPluginWindowSlotId(slot.id)
+                    setMenu(null)
+                    setPresetMenuOpen(false)
+                  }}
+                  style={menuBtnStyle}
+                  title="Open the plugin in a panel (generic parameter fallback for plugins without a GUI)"
+                >Open plugin…</button>
+                <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
+                <button
                   onClick={async () => {
                     await setInsertEnabled(trackId, slot.id, !slot.enabled)
                     fetchTracks()
@@ -957,6 +970,127 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
           })()}
         </div>
       )}
+
+      {pluginWindowSlotId && (() => {
+        const slot = inserts.find(s => s.id === pluginWindowSlotId)
+        if (!slot) return null
+        const idx = inserts.findIndex(s => s.id === pluginWindowSlotId)
+        const track = tracks.find(t => t.id === trackId)
+        const descriptor = plugins.find(p => p.id === slot.pluginId)
+        const close = () => setPluginWindowSlotId(null)
+        const rowStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 10, color: hw.textMuted }
+        return (
+          <div
+            data-testid="plugin-window-overlay"
+            onMouseDown={close}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 300,
+              background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <div
+              data-testid={`plugin-window-${slot.id}`}
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                minWidth: 320, maxWidth: 420,
+                background: '#151517', border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
+                boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
+                display: 'flex', flexDirection: 'column',
+              }}
+            >
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '6px 10px', borderBottom: `1px solid ${hw.border}`,
+              }}>
+                <span style={{ flex: 1, fontSize: 11, fontWeight: 600, color: hw.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {slot.pluginName}
+                </span>
+                <button
+                  onClick={close}
+                  data-testid="plugin-window-close"
+                  title="Close"
+                  style={{
+                    width: 18, height: 18, borderRadius: 3, padding: 0,
+                    background: 'transparent', color: hw.textMuted,
+                    border: `1px solid ${hw.borderDark}`, cursor: 'pointer', fontSize: 11, lineHeight: '14px',
+                  }}
+                >×</button>
+              </div>
+
+              <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <div style={rowStyle}>
+                  <span style={{ color: hw.textFaint }}>Vendor</span>
+                  <span>{descriptor?.vendor || '—'}</span>
+                </div>
+                <div style={rowStyle}>
+                  <span style={{ color: hw.textFaint }}>Version</span>
+                  <span>{descriptor?.version || '—'}</span>
+                </div>
+                <div style={rowStyle}>
+                  <span style={{ color: hw.textFaint }}>Format</span>
+                  <span>{descriptor?.format || '—'}</span>
+                </div>
+                <div style={rowStyle}>
+                  <span style={{ color: hw.textFaint }}>Category</span>
+                  <span>{descriptor?.category || '—'}</span>
+                </div>
+                <div style={rowStyle}>
+                  <span style={{ color: hw.textFaint }}>I/O</span>
+                  <span>{descriptor ? `${descriptor.num_inputs} in / ${descriptor.num_outputs} out` : '—'}</span>
+                </div>
+                <div style={rowStyle}>
+                  <span style={{ color: hw.textFaint }}>Slot</span>
+                  <span>{track?.name ?? 'track'} · #{idx + 1}</span>
+                </div>
+              </div>
+
+              <div style={{ height: 1, background: hw.border }} />
+
+              <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', color: hw.textFaint }}>
+                  {descriptor?.has_editor ? 'Parameters' : 'Generic parameters (no GUI)'}
+                </div>
+                <button
+                  onClick={async () => {
+                    await setInsertEnabled(trackId, slot.id, !slot.enabled)
+                    fetchTracks()
+                  }}
+                  data-testid="plugin-window-enable"
+                  style={{
+                    padding: '6px 10px', fontSize: 10, fontWeight: 600, letterSpacing: 0.4,
+                    background: slot.enabled ? 'rgba(124, 58, 237, 0.22)' : 'rgba(255,255,255,0.04)',
+                    color: slot.enabled ? hw.textPrimary : hw.textMuted,
+                    border: `1px solid ${slot.enabled ? 'rgba(124, 58, 237, 0.5)' : hw.borderDark}`,
+                    borderRadius: hw.radius.sm, cursor: 'pointer',
+                  }}
+                >{slot.enabled ? 'Enabled' : 'Disabled (click to enable)'}</button>
+
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: hw.textMuted }}>
+                    <span>Wet</span>
+                    <span>{Math.round(slot.wet * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round(slot.wet * 100)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value) / 100
+                      setInsertWet(trackId, slot.id, v).then(() => fetchTracks())
+                    }}
+                    onDoubleClick={() => { setInsertWet(trackId, slot.id, 1.0).then(() => fetchTracks()) }}
+                    data-testid="plugin-window-wet"
+                    style={{ width: '100%', cursor: 'pointer' }}
+                    title="Drag to blend dry/wet · double-click to reset"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
