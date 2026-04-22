@@ -18,6 +18,7 @@ pub mod granular;
 pub mod ir_library;
 pub mod latency;
 pub mod loudness;
+pub mod mastering;
 pub mod mix_feedback;
 pub mod modulation;
 pub mod modulation_matrix;
