@@ -23,6 +23,11 @@ pub struct Project {
     /// Stored as a string so schema changes in the UI don't require project-crate updates.
     #[serde(default)]
     pub channel_rack_state: Option<String>,
+    /// Opaque JSON array of MIDI Learn CC→parameter mappings. Same pattern as
+    /// channel_rack_state — the src-tauri side owns the real type; the project
+    /// crate just ferries the blob across save/load.
+    #[serde(default)]
+    pub midi_mappings: Option<String>,
 }
 
 impl Default for Project {
@@ -39,6 +44,7 @@ impl Default for Project {
             tempo_map: TempoMap::default(),
             tracks: vec![Track::new_master("master".into())],
             channel_rack_state: None,
+            midi_mappings: None,
         }
     }
 }

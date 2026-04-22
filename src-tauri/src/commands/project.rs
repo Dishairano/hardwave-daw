@@ -1,3 +1,4 @@
+use crate::midi_map::MidiMapping;
 use crate::AppState;
 use hardwave_project::Project;
 use serde::Serialize;
@@ -31,12 +32,26 @@ pub fn new_project(state: State<AppState>) {
     engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
     engine.reset_history();
     engine.rebuild_graph();
+    {
+        let mut m = state.midi_mappings.lock();
+        m.clear();
+        m.save();
+    }
 }
 
 #[tauri::command]
 pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> {
     let engine = state.engine.lock();
-    let project = engine.project.lock();
+    let mapping_blob = {
+        let m = state.midi_mappings.lock();
+        if m.mappings.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&m.mappings).ok()
+        }
+    };
+    let mut project = engine.project.lock();
+    project.midi_mappings = mapping_blob;
     project
         .save(&PathBuf::from(path))
         .map_err(|e| e.to_string())
@@ -53,6 +68,7 @@ pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> 
         .first()
         .map(|e| e.bpm)
         .unwrap_or(140.0);
+    let mapping_blob = loaded.midi_mappings.clone();
     {
         let mut project = engine.project.lock();
         *project = loaded;
@@ -61,6 +77,22 @@ pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> 
     engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
     engine.reset_history();
     engine.rebuild_graph();
+    {
+        let mut m = state.midi_mappings.lock();
+        match mapping_blob.as_deref() {
+            Some(blob) => match serde_json::from_str::<Vec<MidiMapping>>(blob) {
+                Ok(parsed) => {
+                    m.mappings = parsed;
+                }
+                Err(e) => {
+                    log::warn!("load_project: midi_mappings parse failed: {e}");
+                    m.clear();
+                }
+            },
+            None => m.clear(),
+        }
+        m.save();
+    }
     Ok(())
 }
 
