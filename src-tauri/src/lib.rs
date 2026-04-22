@@ -308,7 +308,18 @@ pub fn run() {
                     {
                         let eng = engine_for_scan.lock();
                         let mut scanner = eng.plugin_scanner.lock();
+                        // Register native plugins before scanning external
+                        // paths so `find(id)` resolves them as well.
+                        scanner.register_natives(
+                            hardwave_native_plugins::native_plugin_descriptors(),
+                        );
                         scanner.scan();
+                        // Re-register after scan — `scan()` clears the cache
+                        // before rebuilding from disk, so natives must be
+                        // reapplied to remain discoverable.
+                        scanner.register_natives(
+                            hardwave_native_plugins::native_plugin_descriptors(),
+                        );
                         if let Some(ref path) = cache_path {
                             if let Err(e) = scanner.save_cache_to_disk(path) {
                                 log::warn!("Failed to save plugin cache: {e}");

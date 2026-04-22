@@ -18,6 +18,7 @@ hardwave-plugin-host = { path = "../crates/hardwave-plugin-host" }
 hardwave-metering = { path = "../crates/hardwave-metering" }
 hardwave-midi = { path = "../crates/hardwave-midi" }
 hardwave-dsp = { path = "../crates/hardwave-dsp" }
+hardwave-native-plugins = { path = "../crates/hardwave-native-plugins" }
 
 tauri.workspace = true
 serde.workspace = true

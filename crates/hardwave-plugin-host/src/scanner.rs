@@ -191,6 +191,30 @@ impl PluginScanner {
         self.cache.iter().find(|p| p.id == id)
     }
 
+    /// Inject a native (in-process) plugin descriptor into the cache.
+    /// Used for bundled plugins that don't live in a VST3 / CLAP
+    /// directory — the `add_plugin_to_track` command looks them up
+    /// through `find(id)` just like external plugins.
+    pub fn register_native(&mut self, descriptor: PluginDescriptor) {
+        if let Some(existing) = self.cache.iter_mut().find(|p| p.id == descriptor.id) {
+            *existing = descriptor;
+        } else {
+            self.cache.push(descriptor);
+        }
+    }
+
+    /// Bulk-register a list of native descriptors. Called at engine
+    /// init so the native plugin catalog is available before any
+    /// directory scan has run.
+    pub fn register_natives<I>(&mut self, descriptors: I)
+    where
+        I: IntoIterator<Item = PluginDescriptor>,
+    {
+        for d in descriptors {
+            self.register_native(d);
+        }
+    }
+
     fn scan_vst3_dir(&mut self, dir: &Path, mut progress: Option<&mut ScanProgress>) {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,

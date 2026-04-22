@@ -42,6 +42,7 @@ import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
+import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
 import { useShortcutsStore } from './stores/shortcutsStore'
 import { useNotificationStore } from './stores/notificationStore'
@@ -326,9 +327,23 @@ export function App() {
       await ts.addAudioTrack('Backing Vocals')
       await ts.addAudioTrack('FX Return')
     } else if (id === 'mixing') {
+      const ps = usePluginStore.getState()
+      const existingBefore = useTrackStore.getState().tracks.filter(t => t.kind !== 'Master')
       for (let i = 1; i <= 8; i++) await ts.addAudioTrack(`Track ${i}`)
       await ts.addAudioTrack('Bus A')
       await ts.addAudioTrack('Bus B')
+      // Add EQ + Compressor to each of the 8 new audio tracks (Bus A/B stay clean).
+      await ts.fetchTracks()
+      const afterTracks = useTrackStore.getState().tracks.filter(t => t.kind !== 'Master')
+      const newTracks = afterTracks.slice(existingBefore.length, existingBefore.length + 8)
+      for (const tr of newTracks) {
+        try {
+          await ps.addToTrack(tr.id, 'hardwave.native.eq')
+          await ps.addToTrack(tr.id, 'hardwave.native.compressor')
+        } catch (err) {
+          console.warn('Failed to insert native EQ+Comp on template track', tr.id, err)
+        }
+      }
     } else if (id.startsWith('user:')) {
       const tpl = useUserTemplateStore.getState().get(id.slice(5))
       if (!tpl) return

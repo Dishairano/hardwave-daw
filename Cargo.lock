@@ -1845,6 +1845,7 @@ dependencies = [
  "hardwave-engine",
  "hardwave-metering",
  "hardwave-midi",
+ "hardwave-native-plugins",
  "hardwave-plugin-host",
  "hardwave-project",
  "hound",
