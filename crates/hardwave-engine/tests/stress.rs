@@ -181,6 +181,58 @@ fn no_cpu_spikes_above_envelope_on_moderate_load() {
 }
 
 #[test]
+fn audio_thread_does_not_block_on_held_project_lock() {
+    // Simulate a UI command holding the project mutex for an unusually
+    // long stretch (e.g. a slow save). The audio thread should keep
+    // producing sample blocks — our tempo-map following path uses
+    // `try_lock` specifically so it never blocks on a held mutex, and
+    // other read paths on the audio thread stay off the project mutex
+    // entirely. This test drives that contract.
+    // `DawEngine` isn't `Send` (the `PluginScanner` inside isn't
+    // thread-safe), so we share only the `Arc<Mutex<Project>>` handle
+    // with the holder thread instead of the whole engine.
+    use std::thread;
+    use std::time::Duration;
+
+    let engine = DawEngine::new();
+    {
+        let mut project = engine.project.lock();
+        for i in 0..30 {
+            project.add_audio_track(format!("Track {i}"));
+        }
+    }
+
+    // Spawn a background thread that holds the project lock for 200 ms.
+    let project_handle = std::sync::Arc::clone(&engine.project);
+    let holder = thread::spawn(move || {
+        let _guard = project_handle.lock();
+        thread::sleep(Duration::from_millis(200));
+        // _guard drops here, releasing the lock.
+    });
+
+    // Let the holder grab the lock first.
+    thread::sleep(Duration::from_millis(20));
+
+    let sample_rate = 48_000;
+    let total_samples = sample_rate as u64 / 4; // 250 ms
+    let mut block_count = 0_usize;
+    let result = engine.render_offline(sample_rate, total_samples, |_block| {
+        block_count += 1;
+        true
+    });
+    assert!(
+        result.is_ok(),
+        "render_offline failed under lock: {result:?}"
+    );
+    assert!(
+        block_count > 0,
+        "audio thread produced no blocks under held lock"
+    );
+
+    holder.join().expect("holder thread must join");
+}
+
+#[test]
 fn track_churn_leaves_baseline_track_count() {
     // Add + remove tracks in a long loop, verifying the project's track
     // count returns to its original baseline after each pair. Catches
