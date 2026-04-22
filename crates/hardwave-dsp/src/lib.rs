@@ -27,6 +27,7 @@ pub mod reverb_extras;
 pub mod sample_classify;
 pub mod spectrum;
 pub mod stereo;
+pub mod stretch_apply;
 pub mod synth;
 pub mod synth_extras;
 pub mod synth_presets;

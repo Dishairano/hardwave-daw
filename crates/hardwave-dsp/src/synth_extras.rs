@@ -490,7 +490,11 @@ mod tests {
         for _ in 0..3_000 {
             total_energy += r.process(0.0).powi(2);
         }
-        assert!(total_energy > 1e-3, "reverb tail has no energy: {}", total_energy);
+        assert!(
+            total_energy > 1e-3,
+            "reverb tail has no energy: {}",
+            total_energy
+        );
     }
 
     #[test]
