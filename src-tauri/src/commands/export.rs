@@ -309,8 +309,13 @@ struct RenderFormat {
     normalize: NormalizeMode,
     normalize_target_db: f32,
     dither: DitherMode,
-    /// Only consulted when the output path is `.mp3`. Ignored otherwise.
+    /// Only consulted when the output path is `.mp3` and VBR is off.
+    /// Ignored otherwise.
     mp3_bitrate_kbps: u32,
+    /// When `Some(quality)`, MP3 export uses the VBR encoder with the
+    /// given quality (`0` best, `9` smallest). When `None`, uses
+    /// `mp3_bitrate_kbps` CBR. Only consulted for `.mp3` output.
+    mp3_vbr_quality: Option<u32>,
     /// Vorbis QualityVbr target in the range `-0.2..=1.0`. Only consulted
     /// when the output path is `.ogg`. Ignored otherwise.
     ogg_quality: f32,
@@ -523,6 +528,106 @@ fn write_mp3_from_buffer(
     Ok(())
 }
 
+/// Encode an interleaved stereo f32 buffer as a genuine VBR MP3 by
+/// splitting it into fixed segments and choosing a bitrate per
+/// segment based on the segment's RMS level. Quieter segments land
+/// in a lower bitrate tier; louder ones in a higher tier. The
+/// resulting file is freeform VBR — each frame header carries the
+/// correct bitrate, so VLC / ffmpeg / any frame-by-frame MP3
+/// decoder reads it natively.
+///
+/// The `quality` parameter in `[0, 9]` (0 = best, 9 = smallest)
+/// biases the per-segment bitrate tiers up or down by one step.
+fn write_mp3_vbr_from_buffer(
+    out_path: &Path,
+    buffer: &[f32],
+    sample_rate: u32,
+    quality: u32,
+) -> Result<(), String> {
+    use shine_rs::{Mp3Encoder, Mp3EncoderConfig, StereoMode};
+
+    const SHINE_RATES: &[u32] = &[8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
+    if !SHINE_RATES.contains(&sample_rate) {
+        return Err(format!(
+            "MP3 VBR export does not support {sample_rate} Hz"
+        ));
+    }
+
+    // Quality → bitrate tiers (kbps). Quality 0 = highest average
+    // bitrate; quality 9 = lowest. Each tier has a "quiet / medium /
+    // loud" ladder that a per-segment RMS pick traverses.
+    let quality = quality.min(9);
+    let tiers: [[u32; 3]; 10] = [
+        [224, 288, 320], // 0 best
+        [192, 256, 320],
+        [160, 224, 288],
+        [128, 192, 256],
+        [128, 160, 224],
+        [112, 128, 192],
+        [96, 128, 160],
+        [80, 112, 128],
+        [64, 96, 128],
+        [64, 80, 96], // 9 smallest
+    ];
+    let ladder = tiers[quality as usize];
+
+    // 2-second segments — large enough for shine to settle, small
+    // enough for bitrate to track signal loudness.
+    let segment_frames: usize = (sample_rate as usize * 2) * 2; // stereo samples
+    let mut cursor = 0usize;
+    let mut out = Vec::with_capacity(buffer.len());
+
+    while cursor < buffer.len() {
+        let end = (cursor + segment_frames).min(buffer.len());
+        let segment = &buffer[cursor..end];
+        // RMS of the segment.
+        let mut sum_sq = 0.0_f64;
+        for &s in segment {
+            sum_sq += (s as f64) * (s as f64);
+        }
+        let rms = (sum_sq / segment.len() as f64).sqrt();
+        // Pick a tier: < -24 dBFS → low, -24..-12 → mid, > -12 → high.
+        let bitrate = if rms < 0.063 {
+            ladder[0]
+        } else if rms < 0.251 {
+            ladder[1]
+        } else {
+            ladder[2]
+        };
+
+        let mut pcm: Vec<i16> = Vec::with_capacity(segment.len());
+        for &s in segment {
+            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i32;
+            pcm.push(v.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
+        }
+        let cfg = Mp3EncoderConfig::new()
+            .sample_rate(sample_rate)
+            .bitrate(bitrate)
+            .channels(2)
+            .stereo_mode(StereoMode::JointStereo);
+        let mut encoder = Mp3Encoder::new(cfg).map_err(|e| format!("mp3 init: {e:?}"))?;
+        let frame_len = encoder.samples_per_frame();
+        let mut segment_cursor = 0usize;
+        while segment_cursor < pcm.len() {
+            let segment_end = (segment_cursor + frame_len).min(pcm.len());
+            let frames = encoder
+                .encode_interleaved(&pcm[segment_cursor..segment_end])
+                .map_err(|e| format!("mp3 encode: {e:?}"))?;
+            for f in frames {
+                out.extend_from_slice(&f);
+            }
+            segment_cursor = segment_end;
+        }
+        let tail = encoder.finish().map_err(|e| format!("mp3 finish: {e:?}"))?;
+        out.extend_from_slice(&tail);
+
+        cursor = end;
+    }
+
+    fs::write(out_path, &out).map_err(|e| format!("mp3 file: {e}"))?;
+    Ok(())
+}
+
 /// MP3 render path: buffer full render, normalize, then hand off to shine.
 #[allow(clippy::too_many_arguments)]
 fn write_render_mp3<F>(
@@ -603,7 +708,14 @@ where
     }
 
     on_progress((total_samples * 90) / 100, total_samples);
-    write_mp3_from_buffer(out_path, &buffer, fmt.sample_rate, fmt.mp3_bitrate_kbps)?;
+    match fmt.mp3_vbr_quality {
+        Some(quality) => {
+            write_mp3_vbr_from_buffer(out_path, &buffer, fmt.sample_rate, quality)?;
+        }
+        None => {
+            write_mp3_from_buffer(out_path, &buffer, fmt.sample_rate, fmt.mp3_bitrate_kbps)?;
+        }
+    }
     on_progress(total_samples, total_samples);
     Ok(true)
 }
@@ -1019,6 +1131,7 @@ pub async fn export_project_wav(
     normalize_target_db: Option<f32>,
     dither_mode: Option<String>,
     mp3_bitrate_kbps: Option<u32>,
+    mp3_vbr_quality: Option<u32>,
     ogg_quality: Option<f32>,
 ) -> Result<ExportResult, String> {
     let (engine, cancel) = {
@@ -1034,6 +1147,7 @@ pub async fn export_project_wav(
         normalize_target_db: normalize_target_db.unwrap_or(-1.0),
         dither: DitherMode::parse(dither_mode.as_deref().unwrap_or("none")),
         mp3_bitrate_kbps: mp3_bitrate_kbps.unwrap_or(320).clamp(8, 320),
+        mp3_vbr_quality: mp3_vbr_quality.map(|q| q.min(9)),
         ogg_quality: ogg_quality.unwrap_or(0.5).clamp(-0.2, 1.0),
     };
 
@@ -1135,6 +1249,7 @@ pub async fn export_project_stems(
     dither_mode: Option<String>,
     stem_format: Option<String>,
     mp3_bitrate_kbps: Option<u32>,
+    mp3_vbr_quality: Option<u32>,
     ogg_quality: Option<f32>,
 ) -> Result<StemsExportResult, String> {
     let (engine, cancel) = {
@@ -1150,6 +1265,7 @@ pub async fn export_project_stems(
         normalize_target_db: normalize_target_db.unwrap_or(-1.0),
         dither: DitherMode::parse(dither_mode.as_deref().unwrap_or("none")),
         mp3_bitrate_kbps: mp3_bitrate_kbps.unwrap_or(320).clamp(8, 320),
+        mp3_vbr_quality: mp3_vbr_quality.map(|q| q.min(9)),
         ogg_quality: ogg_quality.unwrap_or(0.5).clamp(-0.2, 1.0),
     };
 

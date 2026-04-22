@@ -1,10 +1,12 @@
 use crate::AppState;
 use hardwave_plugin_host::scanner::ScanDiff;
-use hardwave_plugin_host::PluginDescriptor;
+use hardwave_plugin_host::types::HostedPlugin;
+use hardwave_plugin_host::{clap_instance::ClapPluginInstance, vst3::Vst3PluginInstance, PluginDescriptor, PluginFormat};
+use raw_window_handle::HasWindowHandle;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[tauri::command]
 pub fn scan_plugins(app: AppHandle, state: State<AppState>) -> Vec<PluginDescriptor> {
@@ -130,6 +132,87 @@ pub fn set_custom_scan_paths(state: State<AppState>, vst3: Vec<String>, clap: Ve
 #[tauri::command]
 pub fn plugin_cache_path() -> Option<String> {
     hardwave_plugin_host::PluginScanner::default_cache_path().map(|p| p.display().to_string())
+}
+
+/// Open a plugin editor in a floating native window parented to the
+/// main webview. Creates a fresh `HostedPlugin` instance from the
+/// scanner descriptor, spawns a child Tauri window, gets its native
+/// raw-window handle, and calls `open_editor(handle)` to attach the
+/// plugin's `IPlugView` / CLAP GUI view there.
+///
+/// The instance is stored in `state.plugin_editors` keyed by the
+/// Tauri window label so `close_plugin_editor` can tear it down
+/// cleanly. If `open_editor` returns `false` (plugin declined or
+/// platform type unsupported), the Tauri window is closed and an
+/// error is returned.
+#[tauri::command]
+pub fn open_plugin_editor(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    plugin_id: String,
+    window_label: String,
+) -> Result<String, String> {
+    let engine = state.engine.lock();
+    let scanner = engine.plugin_scanner.lock();
+    let descriptor = scanner
+        .find(&plugin_id)
+        .ok_or_else(|| format!("Plugin not found: {}", plugin_id))?
+        .clone();
+    drop(scanner);
+    drop(engine);
+
+    let mut hosted: Box<dyn HostedPlugin> = match descriptor.format {
+        PluginFormat::Vst3 => {
+            Box::new(Vst3PluginInstance::load(descriptor.clone()).map_err(|e| e.to_string())?)
+        }
+        PluginFormat::Clap => {
+            Box::new(ClapPluginInstance::load(descriptor.clone()).map_err(|e| e.to_string())?)
+        }
+    };
+
+    let url = tauri::WebviewUrl::App("about:blank".into());
+    let editor_window = tauri::WebviewWindowBuilder::new(&app, &window_label, url)
+        .title(format!("{} — Plugin Editor", descriptor.name))
+        .inner_size(600.0, 400.0)
+        .resizable(true)
+        .always_on_top(true)
+        .build()
+        .map_err(|e| format!("Failed to open editor window: {e}"))?;
+
+    let handle = editor_window
+        .window_handle()
+        .map_err(|e| format!("window handle unavailable: {e}"))?;
+    let raw = handle.as_raw();
+
+    if !hosted.open_editor(raw) {
+        let _ = editor_window.close();
+        return Err(format!(
+            "{} rejected the floating-window handle (platform type unsupported or plugin has no editor)",
+            descriptor.name
+        ));
+    }
+
+    state
+        .plugin_editors
+        .lock()
+        .insert(window_label.clone(), hosted);
+    Ok(window_label)
+}
+
+#[tauri::command]
+pub fn close_plugin_editor(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    window_label: String,
+) -> Result<(), String> {
+    let mut editors = state.plugin_editors.lock();
+    if let Some(mut hosted) = editors.remove(&window_label) {
+        hosted.close_editor();
+    }
+    if let Some(window) = app.get_webview_window(&window_label) {
+        let _ = window.close();
+    }
+    Ok(())
 }
 
 #[tauri::command]

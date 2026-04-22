@@ -1851,6 +1851,7 @@ dependencies = [
  "hound",
  "log",
  "parking_lot",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "shine-rs",

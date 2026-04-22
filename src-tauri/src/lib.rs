@@ -27,6 +27,9 @@ pub struct AppState {
     pub midi_clock: Arc<MidiClockState>,
     pub midi_sync: Arc<MidiClockSyncState>,
     pub midi_timecode: Arc<MidiTimecodeState>,
+    /// Live plugin editor instances, keyed by the Tauri window label
+    /// they're parented to. Dropping an entry closes the editor view.
+    pub plugin_editors: Arc<Mutex<std::collections::HashMap<String, Box<dyn hardwave_plugin_host::types::HostedPlugin>>>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -60,6 +63,7 @@ pub fn run() {
     let state = AppState {
         engine: Arc::new(Mutex::new(engine)),
         export_cancel: Arc::new(AtomicBool::new(false)),
+        plugin_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         midi_mappings: Arc::clone(&midi_mappings),
         midi_clock: Arc::clone(&midi_clock),
         midi_sync: Arc::clone(&midi_sync),
@@ -132,6 +136,8 @@ pub fn run() {
             commands::plugins::plugin_cache_path,
             commands::plugins::add_plugin_to_track,
             commands::plugins::remove_plugin_from_track,
+            commands::plugins::open_plugin_editor,
+            commands::plugins::close_plugin_editor,
             commands::plugins::set_insert_enabled,
             commands::plugins::reorder_insert,
             commands::plugins::set_fx_chain_bypassed,
