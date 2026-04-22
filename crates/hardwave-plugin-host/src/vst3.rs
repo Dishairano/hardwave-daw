@@ -53,26 +53,27 @@ pub fn resolve_vst3_binary(bundle_path: &Path) -> Option<std::path::PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// VST3 plugin instance (stub — full implementation requires COM interface work)
+// VST3 plugin instance
 // ---------------------------------------------------------------------------
 
-/// Placeholder for a loaded VST3 plugin instance.
-/// Full implementation will use vst3-sys IComponent + IEditController interfaces.
+/// A loaded VST3 plugin instance.
+///
+/// The current implementation opens the plugin's dynamic library via
+/// `libloading` and verifies the `GetPluginFactory` export exists — that's
+/// enough to reject obviously-invalid bundles up front. Full COM interface
+/// traversal (createInstance → IAudioProcessor / IEditController) is the
+/// next integration tier; until then, processing is a pass-through.
 pub struct Vst3PluginInstance {
     descriptor: PluginDescriptor,
     active: bool,
     sample_rate: f64,
-    // In full implementation:
-    // library: libloading::Library,
-    // factory: *mut vst3_sys::IPluginFactory,
-    // component: *mut vst3_sys::IComponent,
-    // controller: *mut vst3_sys::IEditController,
-    // audio_processor: *mut vst3_sys::IAudioProcessor,
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    _library: Option<libloading::Library>,
 }
 
 impl Vst3PluginInstance {
     pub fn load(descriptor: PluginDescriptor) -> Result<Self, String> {
-        let _binary = resolve_vst3_binary(&descriptor.path).ok_or_else(|| {
+        let binary = resolve_vst3_binary(&descriptor.path).ok_or_else(|| {
             format!(
                 "Could not resolve VST3 binary: {}",
                 descriptor.path.display()
@@ -82,22 +83,36 @@ impl Vst3PluginInstance {
         log::info!(
             "Loading VST3: {} from {}",
             descriptor.name,
-            descriptor.path.display()
+            binary.display()
         );
 
-        // TODO: Full VST3 COM loading sequence:
-        // 1. libloading::Library::new(binary)
-        // 2. GetPluginFactory() -> IPluginFactory
-        // 3. factory.createInstance(classId, IComponent::iid) -> IComponent
-        // 4. component.initialize(hostContext)
-        // 5. component.queryInterface(IAudioProcessor::iid) -> IAudioProcessor
-        // 6. factory.createInstance(classId, IEditController::iid) -> IEditController
-        // 7. controller.initialize(hostContext)
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        let library = {
+            let lib = unsafe { libloading::Library::new(&binary) }
+                .map_err(|e| format!("dlopen {}: {e}", binary.display()))?;
+            // Probe for the VST3 factory entry point. Any valid VST3
+            // binary exports `GetPluginFactory`; a missing symbol is a
+            // hard reject so we fail fast before the audio thread tries
+            // to instantiate a broken plugin.
+            let probe: Result<
+                libloading::Symbol<unsafe extern "C" fn() -> *mut core::ffi::c_void>,
+                _,
+            > = unsafe { lib.get(b"GetPluginFactory\0") };
+            if probe.is_err() {
+                return Err(format!(
+                    "{}: not a VST3 binary (GetPluginFactory missing)",
+                    binary.display()
+                ));
+            }
+            Some(lib)
+        };
 
         Ok(Self {
             descriptor,
             active: false,
             sample_rate: 48000.0,
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            _library: library,
         })
     }
 }
@@ -165,5 +180,53 @@ impl HostedPlugin for Vst3PluginInstance {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         self.descriptor.has_editor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn descriptor_for(path: PathBuf) -> PluginDescriptor {
+        PluginDescriptor {
+            id: "test.bogus.vst3".into(),
+            name: "Bogus".into(),
+            vendor: "Test".into(),
+            version: "0.0.0".into(),
+            format: PluginFormat::Vst3,
+            path,
+            category: PluginCategory::Effect,
+            num_inputs: 2,
+            num_outputs: 2,
+            has_midi_input: false,
+            has_editor: false,
+        }
+    }
+
+    #[test]
+    fn load_missing_path_errors_cleanly() {
+        let desc = descriptor_for(PathBuf::from("/definitely/does/not/exist.vst3"));
+        let result = Vst3PluginInstance::load(desc);
+        assert!(result.is_err(), "missing binary should fail");
+    }
+
+    #[test]
+    fn load_non_vst3_file_rejects_with_missing_symbol() {
+        // Point at a real file that isn't a VST3 — /bin/ls exists on
+        // Linux / macOS and is a valid binary dlopen can open, but it
+        // doesn't export `GetPluginFactory` so the loader rejects it.
+        let candidate = PathBuf::from("/bin/ls");
+        if !candidate.exists() {
+            return; // skip on platforms without /bin/ls
+        }
+        let desc = descriptor_for(candidate);
+        let result = Vst3PluginInstance::load(desc);
+        assert!(result.is_err(), "non-VST3 binary should be rejected");
+        let err = result.err().unwrap();
+        assert!(
+            err.contains("GetPluginFactory") || err.contains("dlopen"),
+            "unexpected error: {err}"
+        );
     }
 }
