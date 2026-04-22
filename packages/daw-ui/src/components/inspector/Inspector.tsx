@@ -94,17 +94,42 @@ export function Inspector() {
                 />
               </label>
 
-              <label style={labelStyle}>
-                Pitch (semitones)
-                <input
-                  type="range" min={-24} max={24} step={1}
-                  value={selectedClip.pitchSemitones ?? 0}
-                  onChange={(e) => setClipPitch(clipOwner.id, selectedClip.id, parseFloat(e.target.value))}
-                  style={{ width: '100%' }}
-                  data-testid="clip-pitch-input"
-                />
-                <span style={{ fontSize: 9, color: hw.textFaint }}>{(selectedClip.pitchSemitones ?? 0).toFixed(0)} st</span>
-              </label>
+              {(() => {
+                const pitchTotal = selectedClip.pitchSemitones ?? 0
+                const pitchSemi = Math.trunc(pitchTotal)
+                const pitchCents = Math.round((pitchTotal - pitchSemi) * 100)
+                const writePitch = (semi: number, cents: number) => {
+                  const combined = Math.max(-24, Math.min(24, semi + cents / 100))
+                  setClipPitch(clipOwner.id, selectedClip.id, combined)
+                }
+                return (
+                  <>
+                    <label style={labelStyle}>
+                      Pitch (semitones)
+                      <input
+                        type="range" min={-24} max={24} step={1}
+                        value={pitchSemi}
+                        onChange={(e) => writePitch(parseInt(e.target.value), pitchCents)}
+                        style={{ width: '100%' }}
+                        data-testid="clip-pitch-input"
+                      />
+                      <span style={{ fontSize: 9, color: hw.textFaint }}>{pitchSemi >= 0 ? '+' : ''}{pitchSemi} st</span>
+                    </label>
+
+                    <label style={labelStyle}>
+                      Pitch fine (cents)
+                      <input
+                        type="range" min={-100} max={100} step={1}
+                        value={pitchCents}
+                        onChange={(e) => writePitch(pitchSemi, parseInt(e.target.value))}
+                        style={{ width: '100%' }}
+                        data-testid="clip-pitch-cents-input"
+                      />
+                      <span style={{ fontSize: 9, color: hw.textFaint }}>{pitchCents >= 0 ? '+' : ''}{pitchCents} ¢</span>
+                    </label>
+                  </>
+                )
+              })()}
 
               <label style={labelStyle}>
                 Stretch
