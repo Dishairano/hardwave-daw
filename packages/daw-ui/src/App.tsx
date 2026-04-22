@@ -34,6 +34,7 @@ import { LoudnessMeter } from './components/LoudnessMeter'
 import { Oscilloscope } from './components/Oscilloscope'
 import { SpectrumAnalyzer } from './components/SpectrumAnalyzer'
 import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappingsPanel'
+import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
 import { PrecountOverlay } from './components/transport/PrecountOverlay'
 import { invoke } from '@tauri-apps/api/core'
@@ -82,6 +83,7 @@ export function App() {
   const [showOscilloscope, setShowOscilloscope] = useState(false)
   const [showSpectrum, setShowSpectrum] = useState(false)
   const [showMidiMappings, setShowMidiMappings] = useState(false)
+  const [showTempoMap, setShowTempoMap] = useState(false)
   const [midiLearnPreset, setMidiLearnPreset] = useState<MidiMapTarget | undefined>(undefined)
   const [showHistory, setShowHistory] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
@@ -664,6 +666,7 @@ export function App() {
         onOpenOscilloscope={() => setShowOscilloscope(true)}
         onOpenSpectrum={() => setShowSpectrum(true)}
         onOpenMidiMappings={() => setShowMidiMappings(true)}
+        onOpenTempoMap={() => setShowTempoMap(true)}
         onCheckForUpdates={checkForUpdates}
         onToggleAbout={() => setShowAbout(v => !v)}
         onToggleShortcuts={() => setShowShortcuts(v => !v)}
@@ -742,6 +745,7 @@ export function App() {
         />
       )}
 
+      {showTempoMap && <TempoMapDialog onClose={() => setShowTempoMap(false)} />}
       {showHistory && <HistoryPanel onClose={() => setShowHistory(false)} />}
       <PrecountOverlay />
       {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}

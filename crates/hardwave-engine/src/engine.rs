@@ -1087,6 +1087,25 @@ impl AudioCallback for EngineCallback {
             return;
         }
 
+        // Tempo-map following: when the project has multi-entry tempo automation,
+        // look up the current BPM for the playhead and push it into the transport
+        // atomic so plugins see the right tempo in ProcessContext. try_lock so the
+        // audio thread never blocks on a mutating UI command — stale BPM for one
+        // block is fine.
+        if playing {
+            if let Some(project) = self.project.try_lock() {
+                if project.tempo_map.entries.len() > 1 {
+                    let sr = self.sample_rate as f64;
+                    let pos_samples = self.transport.position();
+                    let cur_tick = project.tempo_map.samples_to_tick(pos_samples, sr);
+                    let cur_bpm = project.tempo_map.bpm_at(cur_tick);
+                    self.transport
+                        .bpm
+                        .store(cur_bpm, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+
         let ctx = ProcessContext {
             sample_rate: self.sample_rate as f64,
             buffer_size: num_frames as u32,

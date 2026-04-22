@@ -143,6 +143,10 @@ pub fn run() {
             commands::project::get_project_info,
             commands::project::get_channel_rack_state,
             commands::project::set_channel_rack_state,
+            commands::project::get_tempo_entries,
+            commands::project::add_tempo_entry,
+            commands::project::remove_tempo_entry,
+            commands::project::set_tempo_entry,
             // Autosave / crash recovery
             commands::autosave::autosave_save,
             commands::autosave::autosave_latest,

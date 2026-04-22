@@ -53,6 +53,7 @@ interface TitleBarProps {
   onOpenOscilloscope: () => void
   onOpenSpectrum: () => void
   onOpenMidiMappings: () => void
+  onOpenTempoMap: () => void
   onCheckForUpdates: () => void
   onToggleAbout: () => void
   onToggleShortcuts: () => void
@@ -80,7 +81,7 @@ export function TitleBar(props: TitleBarProps) {
     onAddAudioTrack, onAddInstrumentTrack, onAddAutomationTrack,
     onApplyTrackTemplate, onManageTrackTemplates,
     onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
-    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onOpenOscilloscope, onOpenSpectrum, onOpenMidiMappings, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onToggleHelp, onOpenHistory, onExportAudio,
+    onToggleRoadmap, onOpenAudioSettings, onOpenThemePicker, onOpenLoudness, onOpenOscilloscope, onOpenSpectrum, onOpenMidiMappings, onOpenTempoMap, onCheckForUpdates, onToggleAbout, onToggleShortcuts, onToggleHelp, onOpenHistory, onExportAudio,
     onSaveAsTemplate, onAutoCrossfade,
     recentProjects, onOpenRecentProject, onClearRecentProjects,
     showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
@@ -201,6 +202,7 @@ export function TitleBar(props: TitleBarProps) {
       items: [
         { label: 'Audio settings...', action: onOpenAudioSettings },
         { label: 'MIDI settings...', disabled: true },
+        { label: 'Tempo map...', action: onOpenTempoMap },
         { separator: true, label: '' },
         { label: 'Theme...', action: onOpenThemePicker },
         { label: 'UI scale', submenu: uiScaleItems },
