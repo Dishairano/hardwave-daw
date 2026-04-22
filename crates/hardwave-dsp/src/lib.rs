@@ -5,6 +5,7 @@ pub mod biquad;
 pub mod convolution;
 pub mod delay_line;
 pub mod distortion;
+pub mod drum_machine;
 pub mod dynamics;
 pub mod fade;
 pub mod fm_synth;
