@@ -36,15 +36,162 @@ pub struct StemsExportResult {
 enum NormalizeMode {
     Off,
     Peak,
+    Lufs,
 }
 
 impl NormalizeMode {
     fn parse(s: &str) -> Self {
         match s {
             "peak" => Self::Peak,
+            "lufs" => Self::Lufs,
             _ => Self::Off,
         }
     }
+}
+
+/// BS.1770 K-weighting biquad in Direct Form I (64-bit to preserve headroom
+/// across the pre-filter + RLB cascade).
+struct KBiquad {
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
+    x1: f64,
+    x2: f64,
+    y1: f64,
+    y2: f64,
+}
+
+impl KBiquad {
+    fn new(b0: f64, b1: f64, b2: f64, a0: f64, a1: f64, a2: f64) -> Self {
+        Self {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
+        }
+    }
+
+    fn process(&mut self, x: f64) -> f64 {
+        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
+            - self.a1 * self.y1
+            - self.a2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = x;
+        self.y2 = self.y1;
+        self.y1 = y;
+        y
+    }
+}
+
+fn k_shelf(fs: f64) -> KBiquad {
+    let a = f64::powf(10.0, 3.999_843_853_973_347 / 40.0);
+    let w = 2.0 * std::f64::consts::PI * 1_681.974_450_955_533 / fs;
+    let alpha = w.sin() / (2.0 * 0.707_175_236_955_419_6);
+    let c = w.cos();
+    let sq = a.sqrt();
+    KBiquad::new(
+        a * ((a + 1.0) + (a - 1.0) * c + 2.0 * sq * alpha),
+        -2.0 * a * ((a - 1.0) + (a + 1.0) * c),
+        a * ((a + 1.0) + (a - 1.0) * c - 2.0 * sq * alpha),
+        (a + 1.0) - (a - 1.0) * c + 2.0 * sq * alpha,
+        2.0 * ((a - 1.0) - (a + 1.0) * c),
+        (a + 1.0) - (a - 1.0) * c - 2.0 * sq * alpha,
+    )
+}
+
+fn k_hpf(fs: f64) -> KBiquad {
+    let w = 2.0 * std::f64::consts::PI * 38.135_470_876_024_44 / fs;
+    let alpha = w.sin() / (2.0 * 0.500_327_037_323_877_3);
+    let c = w.cos();
+    KBiquad::new(
+        (1.0 + c) / 2.0,
+        -(1.0 + c),
+        (1.0 + c) / 2.0,
+        1.0 + alpha,
+        -2.0 * c,
+        1.0 - alpha,
+    )
+}
+
+/// Integrated loudness per ITU-R BS.1770-4: K-weight both channels, compute
+/// mean-square over 400 ms blocks with 75 % overlap (100 ms hop), gate
+/// absolute at -70 LUFS, then gate relative at integrated - 10 LU. Input
+/// buffer is interleaved stereo `[l0, r0, l1, r1, ...]`. Returns `None` when
+/// the buffer is too short for a single gated block.
+fn integrated_lufs(buffer: &[f32], sample_rate: u32) -> Option<f32> {
+    let fs = sample_rate as f64;
+    let block = (0.4 * fs).round() as usize;
+    let hop = (0.1 * fs).round() as usize;
+    if block == 0 || hop == 0 {
+        return None;
+    }
+
+    let frames = buffer.len() / 2;
+    if frames < block {
+        return None;
+    }
+
+    let mut kl_shelf = k_shelf(fs);
+    let mut kl_hpf = k_hpf(fs);
+    let mut kr_shelf = k_shelf(fs);
+    let mut kr_hpf = k_hpf(fs);
+
+    let mut kl = vec![0.0_f64; frames];
+    let mut kr = vec![0.0_f64; frames];
+    for i in 0..frames {
+        let l = buffer[i * 2] as f64;
+        let r = buffer[i * 2 + 1] as f64;
+        kl[i] = kl_hpf.process(kl_shelf.process(l));
+        kr[i] = kr_hpf.process(kr_shelf.process(r));
+    }
+
+    let mut blocks_z: Vec<f64> = Vec::with_capacity((frames.saturating_sub(block)) / hop + 1);
+    let mut start = 0usize;
+    while start + block <= frames {
+        let mut sl = 0.0_f64;
+        let mut sr = 0.0_f64;
+        for i in 0..block {
+            let a = kl[start + i];
+            let b = kr[start + i];
+            sl += a * a;
+            sr += b * b;
+        }
+        let z = (sl + sr) / block as f64;
+        blocks_z.push(z);
+        start += hop;
+    }
+    if blocks_z.is_empty() {
+        return None;
+    }
+
+    // Absolute gate: L >= -70 LUFS <=> z >= 10^(-6.9309) after the -0.691 offset.
+    let abs_z = 10f64.powf((-70.0 - (-0.691)) / 10.0);
+    let pass_abs: Vec<f64> = blocks_z.iter().copied().filter(|&z| z >= abs_z).collect();
+    if pass_abs.is_empty() {
+        return None;
+    }
+
+    // Relative gate: -10 LU below integrated loudness of the abs-gated set.
+    let mean_abs = pass_abs.iter().sum::<f64>() / pass_abs.len() as f64;
+    let rel_lufs = -0.691 + 10.0 * mean_abs.log10() - 10.0;
+    let rel_z = 10f64.powf((rel_lufs - (-0.691)) / 10.0);
+
+    let pass_rel: Vec<f64> = pass_abs.into_iter().filter(|&z| z >= rel_z).collect();
+    if pass_rel.is_empty() {
+        return None;
+    }
+    let mean = pass_rel.iter().sum::<f64>() / pass_rel.len() as f64;
+    if mean <= 0.0 {
+        return None;
+    }
+    Some((-0.691 + 10.0 * mean.log10()) as f32)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -275,6 +422,84 @@ where
 
             let target_lin = 10.0_f32.powf(fmt.normalize_target_db / 20.0);
             let gain = if peak > 1e-9 { target_lin / peak } else { 1.0 };
+
+            let file = File::create(out_path).map_err(|e| format!("create: {e}"))?;
+            let writer = BufWriter::new(file);
+            let mut wav = WavWriter::new(writer, spec).map_err(|e| format!("wav: {e}"))?;
+            let mut dither = DitherState::new();
+            let half = total_samples / 2;
+
+            for (i, s) in buffer.iter().enumerate() {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(false);
+                }
+                let scaled = *s * gain;
+                write_sample_dithered(
+                    &mut wav,
+                    scaled,
+                    fmt.bit_depth,
+                    fmt.dither,
+                    &mut dither,
+                    i & 1,
+                )
+                .map_err(|e| format!("wav write: {e}"))?;
+                if i % 4096 == 0 {
+                    let frames = (i / 2) as u64;
+                    on_progress(half + frames / 2, total_samples);
+                }
+            }
+            wav.finalize().map_err(|e| format!("finalize: {e}"))?;
+            on_progress(total_samples, total_samples);
+        }
+        NormalizeMode::Lufs => {
+            // LUFS normalize mirrors the peak two-pass approach: render first,
+            // then measure BS.1770 integrated loudness and scale to target. A
+            // hard peak ceiling of -1 dBFS after scaling prevents overshoot on
+            // tracks with high peak-to-loudness ratios (drum stems, sfx).
+            let capacity = (total_samples as usize).saturating_mul(2);
+            let mut buffer: Vec<f32> = Vec::with_capacity(capacity);
+
+            engine.render_offline_with(
+                fmt.sample_rate,
+                total_samples,
+                start_samples,
+                prepare,
+                |block| {
+                    if cancel.load(Ordering::Relaxed) {
+                        return false;
+                    }
+                    buffer.extend_from_slice(block);
+                    let frames = (buffer.len() / 2) as u64;
+                    on_progress(frames / 2, total_samples);
+                    true
+                },
+            )?;
+
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(false);
+            }
+
+            let measured = integrated_lufs(&buffer, fmt.sample_rate);
+            let mut gain = match measured {
+                Some(lufs) if lufs.is_finite() => {
+                    let delta_db = fmt.normalize_target_db - lufs;
+                    10.0_f32.powf(delta_db / 20.0)
+                }
+                _ => 1.0,
+            };
+
+            // Clamp so post-gain peaks stay below -1 dBFS true-peak budget.
+            let mut peak: f32 = 0.0;
+            for &s in buffer.iter() {
+                let a = s.abs();
+                if a > peak {
+                    peak = a;
+                }
+            }
+            let peak_ceiling = 10.0_f32.powf(-1.0 / 20.0);
+            if peak * gain > peak_ceiling && peak > 1e-9 {
+                gain = peak_ceiling / peak;
+            }
 
             let file = File::create(out_path).map_err(|e| format!("create: {e}"))?;
             let writer = BufWriter::new(file);

@@ -9,7 +9,7 @@ import { usePatternStore } from '../stores/patternStore'
 export type BitDepth = 0 | 16 | 24
 export type SampleRate = 44100 | 48000 | 88200 | 96000 | 192000
 export type ExportRange = 'full' | 'loop' | 'pattern'
-export type NormalizeMode = 'off' | 'peak'
+export type NormalizeMode = 'off' | 'peak' | 'lufs'
 export type DitherMode = 'none' | 'tpdf' | 'tpdf_shaped'
 
 export interface ExportSettings {
@@ -80,9 +80,12 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
   const [playAfter, setPlayAfter] = useState<boolean>(() => readBool(PLAY_AFTER_KEY, false))
   const [normalizeMode, setNormalizeMode] = useState<NormalizeMode>(() => {
     const raw = (typeof localStorage !== 'undefined' && localStorage.getItem(NORMALIZE_KEY)) || 'off'
-    return raw === 'peak' ? 'peak' : 'off'
+    if (raw === 'peak') return 'peak'
+    if (raw === 'lufs') return 'lufs'
+    return 'off'
   })
   const [normalizeTargetDb, setNormalizeTargetDb] = useState<number>(() => readNumber(NORMALIZE_DB_KEY, -1.0))
+  const [normalizeTargetLufs, setNormalizeTargetLufs] = useState<number>(() => readNumber('hw.export.normalizeLufs', -14.0))
   const [ditherMode, setDitherMode] = useState<DitherMode>(() => {
     const raw = (typeof localStorage !== 'undefined' && localStorage.getItem(DITHER_KEY)) || 'none'
     if (raw === 'tpdf') return 'tpdf'
@@ -161,8 +164,11 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     try { localStorage.setItem(PLAY_AFTER_KEY, playAfter ? '1' : '0') } catch {}
     try { localStorage.setItem(NORMALIZE_KEY, normalizeMode) } catch {}
     try { localStorage.setItem(NORMALIZE_DB_KEY, String(normalizeTargetDb)) } catch {}
+    try { localStorage.setItem('hw.export.normalizeLufs', String(normalizeTargetLufs)) } catch {}
     try { localStorage.setItem(DITHER_KEY, ditherMode) } catch {}
   }
+
+  const normalizeTargetForBackend = normalizeMode === 'lufs' ? normalizeTargetLufs : normalizeTargetDb
 
   const computeRenderBounds = (): { startSamples: number | null; endSamples: number | null } => {
     if (range === 'pattern') {
@@ -225,7 +231,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           startSamples: stemsBounds.startSamples,
           endSamples: stemsBounds.endSamples,
           normalizeMode,
-          normalizeTargetDb,
+          normalizeTargetDb: normalizeTargetForBackend,
           ditherMode,
         })
         if (result.cancelled) {
@@ -274,7 +280,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
         startSamples,
         endSamples,
         normalizeMode,
-        normalizeTargetDb,
+        normalizeTargetDb: normalizeTargetForBackend,
         ditherMode,
       })
       if (result.cancelled) {
@@ -394,6 +400,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           >
             <option value="off">Off</option>
             <option value="peak">Peak</option>
+            <option value="lufs">LUFS (BS.1770)</option>
           </select>
         </Row>
         {normalizeMode === 'peak' && (
@@ -406,6 +413,20 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
               value={normalizeTargetDb}
               disabled={exporting}
               onChange={e => setNormalizeTargetDb(Number(e.target.value))}
+              style={{ flex: 1 }}
+            />
+          </Row>
+        )}
+        {normalizeMode === 'lufs' && (
+          <Row label={`Target (${normalizeTargetLufs.toFixed(1)} LUFS)`}>
+            <input
+              type="range"
+              min={-30}
+              max={-6}
+              step={0.1}
+              value={normalizeTargetLufs}
+              disabled={exporting}
+              onChange={e => setNormalizeTargetLufs(Number(e.target.value))}
               style={{ flex: 1 }}
             />
           </Row>
