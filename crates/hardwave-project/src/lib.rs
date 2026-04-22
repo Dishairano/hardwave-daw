@@ -1,6 +1,7 @@
 //! Hardwave Project — project model, track system, serialization.
 
 pub mod automation;
+pub mod automation_clip;
 pub mod automation_recording;
 pub mod clip;
 pub mod lfo;
