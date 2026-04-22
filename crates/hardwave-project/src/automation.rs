@@ -13,8 +13,17 @@ pub enum AutomationTarget {
 pub enum CurveMode {
     Linear,
     Bezier,
+    /// Hold `a.value` until the next point — classic step automation.
     Step,
+    /// 4-step staircase that climbs/descends from `a.value` to `b.value`
+    /// across the segment, holding at each step.
+    Stairs,
+    /// Same 4-step layout as `Stairs`, but the transition within each
+    /// step smooths rather than jumping abruptly.
+    SmoothStairs,
 }
+
+const STAIR_STEPS: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutomationPoint {
@@ -88,6 +97,28 @@ impl AutomationLane {
                     1.0 - (1.0 - t).powf(1.0 + (-a.tension) * 3.0)
                 };
                 a.value + (b.value - a.value) * curved_t
+            }
+            CurveMode::Stairs => {
+                // 4 horizontal steps, each 1/STAIR_STEPS of the segment
+                // wide, with an instant jump at each boundary.
+                let t = (tick - a.tick) as f64 / (b.tick - a.tick) as f64;
+                let step_index = (t * STAIR_STEPS as f64).floor() as u32;
+                let step_index = step_index.min(STAIR_STEPS - 1);
+                let step_t = step_index as f64 / STAIR_STEPS as f64;
+                a.value + (b.value - a.value) * step_t
+            }
+            CurveMode::SmoothStairs => {
+                // Same 4-step discrete layout as Stairs, but each step
+                // transitions smoothly to the next via a cosine ramp
+                // instead of an instant jump.
+                let t = (tick - a.tick) as f64 / (b.tick - a.tick) as f64;
+                let scaled = t * STAIR_STEPS as f64;
+                let step_index = scaled.floor() as u32;
+                let step_index = step_index.min(STAIR_STEPS - 1);
+                let local = scaled - step_index as f64;
+                let smoothed = 0.5 - 0.5 * (std::f64::consts::PI * local).cos();
+                let step_t = (step_index as f64 + smoothed) / STAIR_STEPS as f64;
+                a.value + (b.value - a.value) * step_t
             }
         }
     }
@@ -163,5 +194,57 @@ mod tests {
         assert_eq!(l.denormalized_value_at(0, -24.0, 24.0), -24.0);
         assert_eq!(l.denormalized_value_at(100, -24.0, 24.0), 24.0);
         assert_eq!(l.denormalized_value_at(50, -24.0, 24.0), 0.0);
+    }
+
+    #[test]
+    fn stairs_curve_produces_quantized_steps() {
+        // 4-step stairs from 0.0 → 1.0 over 0..100 ticks. Expected values
+        // at tick 0, 25, 50, 75 = 0.0, 0.25, 0.5, 0.75; at tick 100
+        // we're clamped to b.value == 1.0.
+        let l = lane(&[(0, 0.0, CurveMode::Stairs), (100, 1.0, CurveMode::Linear)]);
+        assert_eq!(l.value_at(0), 0.0);
+        assert_eq!(l.value_at(24), 0.0, "first step holds until boundary");
+        assert_eq!(l.value_at(25), 0.25);
+        assert_eq!(l.value_at(49), 0.25, "second step holds until boundary");
+        assert_eq!(l.value_at(50), 0.5);
+        assert_eq!(l.value_at(75), 0.75);
+        assert_eq!(l.value_at(100), 1.0);
+    }
+
+    #[test]
+    fn smooth_stairs_is_monotonic_within_segment() {
+        // SmoothStairs still climbs monotonically from 0.0 to 1.0 — no
+        // dips, no overshoots. It just replaces the instant jumps of
+        // plain stairs with cosine ramps.
+        let l = lane(&[
+            (0, 0.0, CurveMode::SmoothStairs),
+            (400, 1.0, CurveMode::Linear),
+        ]);
+        let mut prev = -1.0;
+        for t in 0..=400 {
+            let v = l.value_at(t);
+            assert!(
+                v >= prev - 1e-9,
+                "smooth stairs not monotonic at tick {t}: {v} < prev {prev}"
+            );
+            assert!((0.0..=1.0).contains(&v));
+            prev = v;
+        }
+    }
+
+    #[test]
+    fn smooth_stairs_matches_stairs_at_step_boundaries() {
+        // At the start of each of the 4 steps (t = 0, 0.25, 0.5, 0.75
+        // of the segment), SmoothStairs and Stairs produce the same
+        // value — the smoothing happens *inside* each step, not at the
+        // boundaries.
+        let stair = lane(&[(0, 0.0, CurveMode::Stairs), (400, 1.0, CurveMode::Linear)]);
+        let smooth = lane(&[
+            (0, 0.0, CurveMode::SmoothStairs),
+            (400, 1.0, CurveMode::Linear),
+        ]);
+        for t in [0, 100, 200, 300] {
+            assert!((stair.value_at(t) - smooth.value_at(t)).abs() < 1e-9);
+        }
     }
 }
