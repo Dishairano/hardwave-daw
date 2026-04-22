@@ -4,10 +4,12 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 mod commands;
+mod midi_clock;
 mod midi_map;
 mod prefs;
 
 use hardwave_engine::DawEngine;
+pub use midi_clock::MidiClockState;
 pub use midi_map::MidiMappings;
 pub use prefs::AudioPrefs;
 
@@ -18,6 +20,7 @@ pub struct AppState {
     /// The export command clears it on entry and checks it each block.
     pub export_cancel: Arc<AtomicBool>,
     pub midi_mappings: Arc<Mutex<MidiMappings>>,
+    pub midi_clock: Arc<MidiClockState>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -43,10 +46,12 @@ pub fn run() {
         }
     }
     let midi_mappings = Arc::new(Mutex::new(MidiMappings::load()));
+    let midi_clock = Arc::new(MidiClockState::new());
     let state = AppState {
         engine: Arc::new(Mutex::new(engine)),
         export_cancel: Arc::new(AtomicBool::new(false)),
         midi_mappings: Arc::clone(&midi_mappings),
+        midi_clock: Arc::clone(&midi_clock),
     };
 
     tauri::Builder::default()
@@ -184,6 +189,12 @@ pub fn run() {
             commands::midi_learn::list_midi_mappings,
             commands::midi_learn::remove_midi_mapping,
             commands::midi_learn::clear_midi_mappings,
+            // MIDI Clock output
+            commands::midi_output::list_midi_outputs,
+            commands::midi_output::open_midi_output,
+            commands::midi_output::close_midi_output,
+            commands::midi_output::set_midi_clock_enabled,
+            commands::midi_output::get_midi_clock_status,
             // Undo/redo
             commands::history::undo,
             commands::history::redo,
@@ -211,6 +222,11 @@ pub fn run() {
             // capture in the same loop so there's no race with the main
             // meter/transport broadcast thread.
             midi_map::spawn_dispatcher(Arc::clone(&state.engine), Arc::clone(&state.midi_mappings));
+
+            // MIDI Clock dispatcher: sends 24 PPQN clock ticks and
+            // Start/Stop system realtime messages to every open MIDI output
+            // whenever the user has enabled clock send in Audio settings.
+            midi_clock::spawn_dispatcher(Arc::clone(&state.engine), Arc::clone(&state.midi_clock));
 
             // Load the plugin cache from disk, then kick off a background
             // rescan so added/removed plugins are detected on startup without

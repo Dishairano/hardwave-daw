@@ -58,6 +58,10 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [midiPorts, setMidiPorts] = useState<string[]>([])
   const [midiOpen, setMidiOpen] = useState<string[]>([])
   const [midiBusy, setMidiBusy] = useState(false)
+  const [midiOutPorts, setMidiOutPorts] = useState<string[]>([])
+  const [midiOutOpen, setMidiOutOpen] = useState<string[]>([])
+  const [midiClockEnabled, setMidiClockEnabled] = useState(false)
+  const [midiOutBusy, setMidiOutBusy] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -68,7 +72,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       invoke<WasapiExclusiveStatus>('get_wasapi_exclusive'),
       invoke<string[]>('list_midi_inputs'),
       invoke<{ open_ports: string[] }>('get_midi_activity'),
-    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity]) => {
+      invoke<string[]>('list_midi_outputs'),
+      invoke<{ enabled: boolean; open_ports: string[] }>('get_midi_clock_status'),
+    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity, outPorts, clockStatus]) => {
       setDevices(devs)
       setInputDevices(inputs)
       setConfig(cfg)
@@ -81,8 +87,43 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setExclusive(excl)
       setMidiPorts(ports)
       setMidiOpen(activity.open_ports)
+      setMidiOutPorts(outPorts)
+      setMidiOutOpen(clockStatus.open_ports)
+      setMidiClockEnabled(clockStatus.enabled)
     })
   }, [])
+
+  const toggleMidiOutPort = async (port: string) => {
+    setError(null)
+    setMidiOutBusy(true)
+    try {
+      if (midiOutOpen.includes(port)) {
+        await invoke('close_midi_output', { portName: port })
+        setMidiOutOpen(list => list.filter(p => p !== port))
+      } else {
+        await invoke('open_midi_output', { portName: port })
+        setMidiOutOpen(list => [...list, port])
+      }
+    } catch (e: any) {
+      setError(String(e))
+    }
+    setMidiOutBusy(false)
+  }
+
+  const rescanMidiOut = async () => {
+    try {
+      const ports = await invoke<string[]>('list_midi_outputs')
+      setMidiOutPorts(ports)
+    } catch (e: any) {
+      setError(String(e))
+    }
+  }
+
+  const toggleMidiClock = async () => {
+    const next = !midiClockEnabled
+    await invoke('set_midi_clock_enabled', { enabled: next })
+    setMidiClockEnabled(next)
+  }
 
   const toggleMidiPort = async (port: string) => {
     setError(null)
@@ -438,6 +479,104 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 })}
               </div>
             )}
+          </div>
+
+          {/* MIDI Outputs — clock send to external hardware */}
+          <div style={{
+            marginBottom: 10, padding: '8px 12px',
+            background: hw.bgPanel, borderRadius: hw.radius.sm,
+            border: `1px solid ${hw.borderDark}`,
+          }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              marginBottom: midiOutPorts.length > 0 ? 6 : 0,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textMuted }}>MIDI Outputs</span>
+                <span style={{ fontSize: 10, color: hw.textFaint }}>
+                  {midiOutPorts.length === 0
+                    ? 'No MIDI output ports detected'
+                    : `${midiOutOpen.length} of ${midiOutPorts.length} open`}
+                </span>
+              </div>
+              <button
+                onClick={rescanMidiOut}
+                style={{
+                  padding: '4px 10px', fontSize: 11, fontWeight: 600,
+                  borderRadius: hw.radius.sm, border: 'none',
+                  cursor: 'pointer',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: hw.textSecondary,
+                  fontFamily: 'inherit',
+                }}
+              >
+                Rescan
+              </button>
+            </div>
+            {midiOutPorts.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {midiOutPorts.map(port => {
+                  const open = midiOutOpen.includes(port)
+                  return (
+                    <div key={port} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '4px 8px',
+                      background: 'rgba(0,0,0,0.25)',
+                      borderRadius: hw.radius.sm,
+                      border: `1px solid ${open ? hw.accent : hw.borderDark}`,
+                    }}>
+                      <span style={{ fontSize: 11, color: hw.textSecondary, fontFamily: 'inherit' }}>
+                        {port}
+                      </span>
+                      <button
+                        disabled={midiOutBusy}
+                        onClick={() => toggleMidiOutPort(port)}
+                        style={{
+                          padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                          borderRadius: hw.radius.sm, border: 'none',
+                          cursor: midiOutBusy ? 'default' : 'pointer',
+                          background: open ? hw.accent : 'rgba(255,255,255,0.08)',
+                          color: open ? '#fff' : hw.textSecondary,
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        {open ? 'Connected' : 'Connect'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            <div style={{
+              marginTop: midiOutPorts.length > 0 ? 8 : 6,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '6px 8px',
+              background: 'rgba(0,0,0,0.25)',
+              borderRadius: hw.radius.sm,
+              border: `1px solid ${midiClockEnabled ? hw.accent : hw.borderDark}`,
+              opacity: midiOutOpen.length === 0 ? 0.6 : 1,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>Send MIDI clock</span>
+                <span style={{ fontSize: 9, color: hw.textFaint }}>
+                  Broadcasts 24 PPQN clock + Start/Stop to every open output.
+                </span>
+              </div>
+              <button
+                onClick={toggleMidiClock}
+                disabled={midiOutOpen.length === 0}
+                style={{
+                  padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                  borderRadius: hw.radius.sm, border: 'none',
+                  cursor: midiOutOpen.length === 0 ? 'default' : 'pointer',
+                  background: midiClockEnabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                  color: midiClockEnabled ? '#fff' : hw.textSecondary,
+                  fontFamily: 'inherit',
+                }}
+              >
+                {midiClockEnabled ? 'On' : 'Off'}
+              </button>
+            </div>
           </div>
 
           {/* Latency readout */}

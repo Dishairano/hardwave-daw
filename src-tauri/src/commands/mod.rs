@@ -7,6 +7,7 @@ pub mod history;
 pub mod midi;
 pub mod midi_input;
 pub mod midi_learn;
+pub mod midi_output;
 pub mod plugins;
 pub mod project;
 pub mod sends;

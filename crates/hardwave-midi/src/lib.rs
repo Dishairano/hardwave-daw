@@ -1,7 +1,9 @@
 //! Hardwave MIDI — MIDI I/O, event types, and quantization.
 
 pub mod input;
+pub mod output;
 pub use input::MidiInputManager;
+pub use output::{MidiOutputManager, MIDI_CLOCK_TICK, MIDI_CONTINUE, MIDI_START, MIDI_STOP};
 
 use serde::{Deserialize, Serialize};
 
