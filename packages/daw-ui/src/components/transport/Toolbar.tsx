@@ -537,12 +537,13 @@ function LatencyReadout({ onEnter, onLeave }: {
 }) {
   const [samples, setSamples] = useState(0)
   const [ms, setMs] = useState(0)
+  const [pdcEnabled, setPdcEnabled] = useState(true)
   useEffect(() => {
     let cancelled = false
     const tick = async () => {
       try {
-        const lat = await invoke<{ samples: number; ms: number }>('get_graph_latency')
-        if (!cancelled) { setSamples(lat.samples); setMs(lat.ms) }
+        const lat = await invoke<{ samples: number; ms: number; pdcEnabled: boolean }>('get_graph_latency')
+        if (!cancelled) { setSamples(lat.samples); setMs(lat.ms); setPdcEnabled(lat.pdcEnabled) }
       } catch {}
     }
     tick()
@@ -550,21 +551,37 @@ function LatencyReadout({ onEnter, onLeave }: {
     return () => { cancelled = true; window.clearInterval(id) }
   }, [])
   const label = ms < 10 ? ms.toFixed(2) : ms.toFixed(1)
-  const color = samples === 0 ? hw.textFaint : ms > 20 ? hw.yellow : hw.textPrimary
+  const color = !pdcEnabled
+    ? '#f5a524'
+    : samples === 0 ? hw.textFaint : ms > 20 ? hw.yellow : hw.textPrimary
+  const tooltip = pdcEnabled
+    ? `Critical-path latency ~${ms.toFixed(2)} ms (${samples} samples). Click to disable PDC for low-latency monitoring.`
+    : 'Plugin delay compensation is OFF — parallel paths will not be aligned. Click to re-enable.'
+  const handleToggle = async () => {
+    const next = !pdcEnabled
+    try {
+      await invoke('set_pdc_enabled', { enabled: next })
+      setPdcEnabled(next)
+    } catch {}
+  }
   return (
     <div
       data-testid="toolbar-latency"
-      onMouseEnter={onEnter(`Graph latency: ${samples} samples (~${ms.toFixed(2)} ms)`)}
+      onMouseEnter={onEnter(pdcEnabled ? `Graph latency: ${samples} samples (~${ms.toFixed(2)} ms)` : 'PDC disabled — low-latency monitoring')}
       onMouseLeave={onLeave}
-      title={`Critical-path latency ~${ms.toFixed(2)} ms (${samples} samples). Coarse estimate until full plugin delay compensation lands.`}
+      onClick={handleToggle}
+      role="button"
+      title={tooltip}
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
-        minWidth: 36,
+        minWidth: 36, cursor: 'pointer', userSelect: 'none',
       }}
     >
-      <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1, letterSpacing: 0.3 }}>LAT</span>
+      <span style={{ fontSize: 7, color: hw.textFaint, lineHeight: 1, letterSpacing: 0.3 }}>
+        {pdcEnabled ? 'LAT' : 'PDC OFF'}
+      </span>
       <span style={{ fontSize: 9, color, fontVariantNumeric: 'tabular-nums' }}>
-        {samples === 0 ? '—' : `${label} ms`}
+        {!pdcEnabled ? '—' : samples === 0 ? '—' : `${label} ms`}
       </span>
     </div>
   )

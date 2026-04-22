@@ -217,20 +217,50 @@ pub fn get_direct_monitoring(state: State<AppState>) -> bool {
 pub struct GraphLatency {
     pub samples: u32,
     pub ms: f64,
+    #[serde(rename = "pdcEnabled")]
+    pub pdc_enabled: bool,
 }
 
 #[tauri::command]
 pub fn get_graph_latency(state: State<AppState>) -> GraphLatency {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
-    let samples = engine.graph_latency_samples.load(Ordering::Relaxed);
+    let pdc_enabled = engine.transport.pdc_enabled.load(Ordering::Relaxed);
+    let raw = engine.graph_latency_samples.load(Ordering::Relaxed);
+    let samples = if pdc_enabled { raw } else { 0 };
     let (_, sample_rate, _) = engine.audio_config();
     let ms = if sample_rate > 0 {
         samples as f64 / sample_rate as f64 * 1000.0
     } else {
         0.0
     };
-    GraphLatency { samples, ms }
+    GraphLatency {
+        samples,
+        ms,
+        pdc_enabled,
+    }
+}
+
+#[tauri::command]
+pub fn get_pdc_enabled(state: State<AppState>) -> bool {
+    use std::sync::atomic::Ordering;
+    state
+        .engine
+        .lock()
+        .transport
+        .pdc_enabled
+        .load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+pub fn set_pdc_enabled(state: State<AppState>, enabled: bool) {
+    use std::sync::atomic::Ordering;
+    state
+        .engine
+        .lock()
+        .transport
+        .pdc_enabled
+        .store(enabled, Ordering::Relaxed);
 }
 
 #[tauri::command]

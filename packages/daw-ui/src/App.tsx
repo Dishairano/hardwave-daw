@@ -84,6 +84,7 @@ export function App() {
   const [showSpectrum, setShowSpectrum] = useState(false)
   const [showMidiMappings, setShowMidiMappings] = useState(false)
   const [showTempoMap, setShowTempoMap] = useState(false)
+  const [pdcEnabled, setPdcEnabled] = useState(true)
   const [midiLearnPreset, setMidiLearnPreset] = useState<MidiMapTarget | undefined>(undefined)
   const [showHistory, setShowHistory] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
@@ -202,6 +203,14 @@ export function App() {
       }
     }, INTERVAL_MS)
     return () => clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    invoke<boolean>('get_pdc_enabled')
+      .then(v => { if (!cancelled) setPdcEnabled(v) })
+      .catch(() => {})
+    return () => { cancelled = true }
   }, [])
 
   // Warn before closing the window if there are unsaved changes.
@@ -693,6 +702,12 @@ export function App() {
         onOpenSpectrum={() => setShowSpectrum(true)}
         onOpenMidiMappings={() => setShowMidiMappings(true)}
         onOpenTempoMap={() => setShowTempoMap(true)}
+        pdcEnabled={pdcEnabled}
+        onTogglePdc={async () => {
+          const next = !pdcEnabled
+          setPdcEnabled(next)
+          try { await invoke('set_pdc_enabled', { enabled: next }) } catch {}
+        }}
         onCheckForUpdates={checkForUpdates}
         onToggleAbout={() => setShowAbout(v => !v)}
         onToggleShortcuts={() => setShowShortcuts(v => !v)}

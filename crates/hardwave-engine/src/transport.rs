@@ -40,6 +40,11 @@ pub struct TransportState {
     /// lowest possible monitoring latency at the cost of hearing the input
     /// without processing.
     pub direct_monitoring: Arc<AtomicBool>,
+
+    /// Plugin delay compensation toggle. When false, parallel-path alignment
+    /// is skipped and the UI reports 0 latency — use for low-latency
+    /// monitoring when absolute timing across tracks doesn't matter.
+    pub pdc_enabled: Arc<AtomicBool>,
 }
 
 /// Pack a (numerator, denominator) time signature into a u64.
@@ -67,6 +72,7 @@ impl Default for TransportState {
             time_sig: Arc::new(AtomicU64::new(pack_time_sig(4, 4))),
             pattern_mode: Arc::new(AtomicBool::new(false)),
             direct_monitoring: Arc::new(AtomicBool::new(false)),
+            pdc_enabled: Arc::new(AtomicBool::new(true)),
         }
     }
 }

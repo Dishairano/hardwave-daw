@@ -138,6 +138,8 @@ pub fn run() {
             commands::plugins::set_plugin_sidechain_source,
             commands::plugins::find_missing_plugins,
             commands::engine::get_graph_latency,
+            commands::engine::get_pdc_enabled,
+            commands::engine::set_pdc_enabled,
             // Project
             commands::project::new_project,
             commands::project::save_project,
