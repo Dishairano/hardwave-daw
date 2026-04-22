@@ -2,8 +2,10 @@
 
 pub mod input;
 pub mod output;
+pub mod recording;
 pub use input::{ClockSyncSnapshot, MidiInputManager, ReconcileReport};
 pub use output::{MidiOutputManager, MIDI_CLOCK_TICK, MIDI_CONTINUE, MIDI_START, MIDI_STOP};
+pub use recording::{MidiRecordMode, MidiRecorder};
 
 use serde::{Deserialize, Serialize};
 
