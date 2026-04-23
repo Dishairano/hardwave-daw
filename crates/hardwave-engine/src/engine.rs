@@ -403,18 +403,26 @@ impl DawEngine {
     }
 
     /// Enable/disable WASAPI exclusive mode. Restarts the stream if running
-    /// so the change takes effect immediately.
+    /// so the change takes effect immediately. If the restart fails (e.g. the
+    /// device does not support exclusive at the current sample rate/format),
+    /// the flag is rolled back and the stream is restarted in the previous
+    /// mode so the engine is never left in a stopped+committed state.
     pub fn set_wasapi_exclusive(&mut self, enabled: bool) -> Result<(), String> {
         if self.audio_device.wasapi_exclusive == enabled {
             return Ok(());
         }
+        let previous = self.audio_device.wasapi_exclusive;
         let was_running = self.audio_device.is_running();
         if was_running {
             self.audio_device.stop();
         }
         self.audio_device.wasapi_exclusive = enabled;
         if was_running {
-            self.start()?;
+            if let Err(e) = self.start() {
+                self.audio_device.wasapi_exclusive = previous;
+                let _ = self.start();
+                return Err(e);
+            }
         }
         Ok(())
     }
