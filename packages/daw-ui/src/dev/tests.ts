@@ -13,6 +13,7 @@ import { devDumpState, devForceDeviceError, devResolveTestAsset, queryTestId, ge
 import { useTransportStore, snapToTicks } from '../stores/transportStore'
 import { PHASE3_TESTS } from './testsPhase3'
 import { PHASE4_TESTS } from './testsPhase4'
+import { PHASE5_TESTS } from './testsPhase5'
 
 export type TestKind = 'AUTO' | 'MANUAL'
 export type TestStatus = 'idle' | 'running' | 'pass' | 'fail'
@@ -3388,3 +3389,6 @@ TESTS.push(...PHASE3_TESTS)
 
 // Phase 4 — exhaustive parametric sweeps + integration scenarios.
 TESTS.push(...PHASE4_TESTS)
+
+// Phase 5 — destructive commands (export, scan, plugin editor).
+TESTS.push(...PHASE5_TESTS)
