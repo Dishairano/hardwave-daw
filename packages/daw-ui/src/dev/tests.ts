@@ -19,6 +19,7 @@ import { PHASE8_TESTS } from './testsPhase8'
 import { PHASE9_TESTS } from './testsPhase9'
 import { PHASE10_TESTS } from './testsPhase10'
 import { PHASE11_TESTS } from './testsPhase11'
+import { PHASE12_TESTS } from './testsPhase12'
 
 export type TestKind = 'AUTO' | 'MANUAL'
 export type TestStatus = 'idle' | 'running' | 'pass' | 'fail'
@@ -3412,3 +3413,6 @@ TESTS.push(...PHASE10_TESTS)
 
 // Phase 11 — entity-lifecycle races (delete during reference, parallel ops).
 TESTS.push(...PHASE11_TESTS)
+
+// Phase 12 — MIDI mapping e2e + MANUAL decoder coverage.
+TESTS.push(...PHASE12_TESTS)
