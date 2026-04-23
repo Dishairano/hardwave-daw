@@ -12,6 +12,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { devDumpState, devForceDeviceError, devResolveTestAsset, queryTestId, getMeterDb, clickCanvas, simulateKey, type DevState } from './devApi'
 import { useTransportStore, snapToTicks } from '../stores/transportStore'
 import { PHASE3_TESTS } from './testsPhase3'
+import { PHASE4_TESTS } from './testsPhase4'
 
 export type TestKind = 'AUTO' | 'MANUAL'
 export type TestStatus = 'idle' | 'running' | 'pass' | 'fail'
@@ -3384,3 +3385,6 @@ TESTS.push(
 
 // Phase 3 — extensive per-feature coverage plus edge cases.
 TESTS.push(...PHASE3_TESTS)
+
+// Phase 4 — exhaustive parametric sweeps + integration scenarios.
+TESTS.push(...PHASE4_TESTS)
