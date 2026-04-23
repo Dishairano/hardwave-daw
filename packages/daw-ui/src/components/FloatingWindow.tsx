@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { hw } from '../theme'
 import { usePanelLayoutStore, type PanelId } from '../stores/panelLayoutStore'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
   panelId: PanelId
@@ -20,6 +21,7 @@ export function FloatingWindow({ panelId, title, onClose, children }: Props) {
   const setFloating = usePanelLayoutStore(s => s.setFloating)
   const bringToFront = usePanelLayoutStore(s => s.bringToFront)
 
+  const isMobile = useIsMobile()
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
   const resizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null)
 
@@ -63,54 +65,57 @@ export function FloatingWindow({ panelId, title, onClose, children }: Props) {
     e.stopPropagation()
   }
 
+  const framePos = isMobile
+    ? { left: 0, top: 0, width: '100vw', height: '100vh', borderRadius: 0, border: 'none' }
+    : { left: layout.x, top: layout.y, width: layout.w, height: layout.h, borderRadius: hw.radius.lg, border: `1px solid ${hw.borderDark}` }
+
   return createPortal(
     <div
       style={{
         position: 'fixed',
-        left: layout.x, top: layout.y,
-        width: layout.w, height: layout.h,
+        ...framePos,
         zIndex: layout.zIndex,
         background: hw.bg,
-        border: `1px solid ${hw.borderDark}`,
-        borderRadius: hw.radius.lg,
-        boxShadow: '0 12px 32px rgba(0,0,0,0.55)',
+        boxShadow: isMobile ? 'none' : '0 12px 32px rgba(0,0,0,0.55)',
         display: 'flex', flexDirection: 'column',
         overflow: 'hidden',
       }}
       onMouseDown={() => bringToFront(panelId)}
     >
       <div
-        onMouseDown={startDrag}
+        onMouseDown={isMobile ? undefined : startDrag}
         style={{
-          height: 24, flexShrink: 0,
+          height: isMobile ? 40 : 24, flexShrink: 0,
           display: 'flex', alignItems: 'center', gap: 6,
-          padding: '0 6px 0 10px',
+          padding: isMobile ? '0 8px 0 14px' : '0 6px 0 10px',
           background: 'rgba(255,255,255,0.04)',
           borderBottom: `1px solid ${hw.border}`,
-          cursor: 'move', userSelect: 'none',
-          fontSize: 10, color: hw.textSecondary, fontWeight: 600,
+          cursor: isMobile ? 'default' : 'move', userSelect: 'none',
+          fontSize: isMobile ? 13 : 10, color: hw.textSecondary, fontWeight: 600,
         }}
       >
         <span style={{ flex: 1 }}>{title}</span>
-        <button
-          data-nodrag
-          onClick={() => setFloating(panelId, false)}
-          title="Dock"
-          style={{
-            width: 18, height: 18, padding: 0,
-            background: 'transparent', border: 'none',
-            color: hw.textFaint, fontSize: 11, cursor: 'pointer',
-          }}
-        >⧉</button>
+        {!isMobile && (
+          <button
+            data-nodrag
+            onClick={() => setFloating(panelId, false)}
+            title="Dock"
+            style={{
+              width: 18, height: 18, padding: 0,
+              background: 'transparent', border: 'none',
+              color: hw.textFaint, fontSize: 11, cursor: 'pointer',
+            }}
+          >⧉</button>
+        )}
         {onClose && (
           <button
             data-nodrag
             onClick={onClose}
             title="Close"
             style={{
-              width: 18, height: 18, padding: 0,
+              width: isMobile ? 32 : 18, height: isMobile ? 32 : 18, padding: 0,
               background: 'transparent', border: 'none',
-              color: hw.textFaint, fontSize: 12, cursor: 'pointer',
+              color: hw.textFaint, fontSize: isMobile ? 20 : 12, cursor: 'pointer',
             }}
           >×</button>
         )}
@@ -118,17 +123,19 @@ export function FloatingWindow({ panelId, title, onClose, children }: Props) {
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
         {children}
       </div>
-      <div
-        onMouseDown={startResize}
-        title="Resize"
-        style={{
-          position: 'absolute',
-          right: 0, bottom: 0,
-          width: 14, height: 14,
-          cursor: 'nwse-resize',
-          background: `linear-gradient(135deg, transparent 50%, ${hw.border} 50%, ${hw.border} 60%, transparent 60%, transparent 75%, ${hw.border} 75%)`,
-        }}
-      />
+      {!isMobile && (
+        <div
+          onMouseDown={startResize}
+          title="Resize"
+          style={{
+            position: 'absolute',
+            right: 0, bottom: 0,
+            width: 14, height: 14,
+            cursor: 'nwse-resize',
+            background: `linear-gradient(135deg, transparent 50%, ${hw.border} 50%, ${hw.border} 60%, transparent 60%, transparent 75%, ${hw.border} 75%)`,
+          }}
+        />
+      )}
     </div>,
     document.body,
   )

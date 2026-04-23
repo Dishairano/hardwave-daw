@@ -5,6 +5,7 @@ import { useTransportStore, SNAP_VALUES } from '../../stores/transportStore'
 import { useTrackStore } from '../../stores/trackStore'
 import { usePatternStore } from '../../stores/patternStore'
 import { useMetronomeStore } from '../../stores/metronomeStore'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 type Tool = 'draw' | 'paint' | 'delete' | 'mute' | 'slip' | 'slice' | 'select' | 'zoom'
 
@@ -41,6 +42,7 @@ export function Toolbar(props: ToolbarProps) {
   const nextPattern = usePatternStore(s => s.nextPattern)
   const activePattern = patterns.find(p => p.id === activePatternId) || patterns[0]
   const [activeTool, setActiveTool] = useState<Tool>('draw')
+  const isMobile = useIsMobile()
 
   const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
   const hrs = Math.floor(seconds / 3600)
@@ -61,11 +63,16 @@ export function Toolbar(props: ToolbarProps) {
       display: 'flex',
       alignItems: 'center',
       height: 40,
+      flexShrink: 0,
       background: hw.bgToolbarGrad,
       backdropFilter: hw.blur.md,
       borderBottom: `1px solid ${hw.border}`,
       padding: '0 6px',
       gap: 2,
+      overflowX: isMobile ? 'auto' : 'visible',
+      overflowY: 'hidden',
+      WebkitOverflowScrolling: 'touch',
+      scrollbarWidth: 'thin',
     }}>
       {/* 1. Panel toggle buttons */}
       <div style={{ display: 'flex', gap: 2 }}>

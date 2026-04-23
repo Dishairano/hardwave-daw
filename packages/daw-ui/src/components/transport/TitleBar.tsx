@@ -4,6 +4,7 @@ import { usePatternStore } from '../../stores/patternStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { useUiPreferencesStore, UI_SCALE_OPTIONS, type UiScale } from '../../stores/uiPreferencesStore'
 import { useTrackTemplateStore } from '../../stores/trackTemplateStore'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 function openExternal(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer')
@@ -91,6 +92,7 @@ export function TitleBar(props: TitleBarProps) {
   const [openMenu, setOpenMenu] = useState<number | null>(null)
   const [openSubmenu, setOpenSubmenu] = useState<number | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
+  const isMobile = useIsMobile()
   const addPattern = usePatternStore(s => s.addPattern)
   const clonePattern = usePatternStore(s => s.clonePattern)
   const deletePattern = usePatternStore(s => s.deletePattern)
@@ -279,7 +281,8 @@ export function TitleBar(props: TitleBarProps) {
       style={{
         display: 'flex',
         alignItems: 'center',
-        height: 28,
+        height: isMobile ? 36 : 28,
+        flexShrink: 0,
         background: 'rgba(255,255,255,0.02)',
         backdropFilter: hw.blur.md,
         borderBottom: `1px solid ${hw.border}`,
@@ -288,6 +291,9 @@ export function TitleBar(props: TitleBarProps) {
         padding: '0 8px',
         position: 'relative',
         zIndex: 100,
+        overflowX: isMobile ? 'auto' : 'visible',
+        overflowY: 'hidden',
+        WebkitOverflowScrolling: 'touch',
       }}
     >
       <div style={{
@@ -376,14 +382,16 @@ export function TitleBar(props: TitleBarProps) {
 
       <ProjectTitleDisplay hintText={hintText} />
 
-      <div style={{ display: 'flex', gap: 0, marginLeft: 8,
-        // @ts-ignore
-        WebkitAppRegion: 'no-drag',
-      }}>
-        <WinBtn label={'‒'} onClick={windowMinimize} />
-        <WinBtn label={'□'} onClick={windowToggleMaximize} />
-        <WinBtn label={'×'} isClose onClick={windowClose} />
-      </div>
+      {!isMobile && (
+        <div style={{ display: 'flex', gap: 0, marginLeft: 8,
+          // @ts-ignore
+          WebkitAppRegion: 'no-drag',
+        }}>
+          <WinBtn label={'‒'} onClick={windowMinimize} />
+          <WinBtn label={'□'} onClick={windowToggleMaximize} />
+          <WinBtn label={'×'} isClose onClick={windowClose} />
+        </div>
+      )}
     </div>
   )
 }

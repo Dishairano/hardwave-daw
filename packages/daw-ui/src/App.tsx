@@ -39,6 +39,8 @@ import { HistoryPanel } from './components/HistoryPanel'
 import { PrecountOverlay } from './components/transport/PrecountOverlay'
 import { invoke } from '@tauri-apps/api/core'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
+import { useIsMobile } from './hooks/useIsMobile'
+import { MobileTabBar, type MobilePanel } from './components/MobileTabBar'
 import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
@@ -114,6 +116,19 @@ export function App() {
 
   // Export dialog
   const [showExport, setShowExport] = useState(false)
+
+  // Mobile: which panel is currently visible (only one at a time).
+  const isMobile = useIsMobile()
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>('playlist')
+  const selectMobilePanel = useCallback((panel: MobilePanel) => {
+    setMobilePanel(panel)
+    // Keep the toggle flags in sync so panel logic and piano-roll/etc. initializers still work.
+    setShowBrowser(panel === 'browser')
+    setShowPlaylist(panel === 'playlist')
+    setShowChannelRack(panel === 'channelRack')
+    setShowPianoRoll(panel === 'pianoRoll')
+    setShowMixer(panel === 'mixer')
+  }, [])
 
   // Open Piano Roll on request from arrangement double-click.
   useEffect(() => {
@@ -760,7 +775,16 @@ export function App() {
         showChannelRack={showChannelRack}
         showPianoRoll={showPianoRoll}
         showMixer={showMixer}
+        isMobile={isMobile}
+        mobilePanel={mobilePanel}
       />
+
+      {isMobile && (
+        <MobileTabBar
+          active={mobilePanel}
+          onSelect={selectMobilePanel}
+        />
+      )}
 
       <FloatingPanels
         showBrowser={showBrowser}
@@ -874,11 +898,48 @@ export function App() {
 
 function MainLayout({
   showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
+  isMobile, mobilePanel,
 }: {
   showBrowser: boolean; showPlaylist: boolean;
   showChannelRack: boolean; showPianoRoll: boolean; showMixer: boolean;
+  isMobile: boolean; mobilePanel: MobilePanel;
 }) {
   const layout = usePanelLayoutStore(s => s.layout)
+
+  // Phone mode: show exactly one panel, full-width, no side dock.
+  if (isMobile) {
+    return (
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+        {mobilePanel === 'browser' && (
+          <div data-testid="panel-browser" style={{ flex: 1, display: 'flex', overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
+            <Browser />
+          </div>
+        )}
+        {mobilePanel === 'channelRack' && (
+          <div data-testid="panel-channel-rack" style={{ flex: 1, minHeight: 0, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
+            <ChannelRack />
+          </div>
+        )}
+        {mobilePanel === 'pianoRoll' && (
+          <div data-testid="panel-piano-roll" style={{ flex: 1, minHeight: 0, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
+            <PianoRoll />
+          </div>
+        )}
+        {mobilePanel === 'playlist' && (
+          <div data-testid="panel-playlist" style={{ flex: 1, display: 'flex', overflow: 'auto', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
+            <TrackList />
+            <Arrangement />
+          </div>
+        )}
+        {mobilePanel === 'mixer' && (
+          <div data-testid="panel-mixer" style={{ flex: 1, minHeight: 0, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
+            <MixerPanel />
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const browserDocked = showBrowser && !layout.browser.floating
   const channelRackDocked = showChannelRack && !layout.channelRack.floating
   const pianoRollDocked = showPianoRoll && !layout.pianoRoll.floating
