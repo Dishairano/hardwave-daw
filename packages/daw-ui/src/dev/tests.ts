@@ -14,6 +14,7 @@ import { useTransportStore, snapToTicks } from '../stores/transportStore'
 import { PHASE3_TESTS } from './testsPhase3'
 import { PHASE4_TESTS } from './testsPhase4'
 import { PHASE5_TESTS } from './testsPhase5'
+import { PHASE6_TESTS } from './testsPhase6'
 
 export type TestKind = 'AUTO' | 'MANUAL'
 export type TestStatus = 'idle' | 'running' | 'pass' | 'fail'
@@ -3392,3 +3393,6 @@ TESTS.push(...PHASE4_TESTS)
 
 // Phase 5 — destructive commands (export, scan, plugin editor).
 TESTS.push(...PHASE5_TESTS)
+
+// Phase 6 — MANUAL tests for UI/audio/visual roadmap items.
+TESTS.push(...PHASE6_TESTS)
