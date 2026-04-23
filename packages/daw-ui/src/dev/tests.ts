@@ -15,6 +15,7 @@ import { PHASE3_TESTS } from './testsPhase3'
 import { PHASE4_TESTS } from './testsPhase4'
 import { PHASE5_TESTS } from './testsPhase5'
 import { PHASE6_TESTS } from './testsPhase6'
+import { PHASE8_TESTS } from './testsPhase8'
 
 export type TestKind = 'AUTO' | 'MANUAL'
 export type TestStatus = 'idle' | 'running' | 'pass' | 'fail'
@@ -3396,3 +3397,6 @@ TESTS.push(...PHASE5_TESTS)
 
 // Phase 6 — MANUAL tests for UI/audio/visual roadmap items.
 TESTS.push(...PHASE6_TESTS)
+
+// Phase 8 — numeric fuzz matrix (NaN, Infinity, MAX_SAFE_INTEGER).
+TESTS.push(...PHASE8_TESTS)
