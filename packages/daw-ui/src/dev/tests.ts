@@ -16,6 +16,7 @@ import { PHASE4_TESTS } from './testsPhase4'
 import { PHASE5_TESTS } from './testsPhase5'
 import { PHASE6_TESTS } from './testsPhase6'
 import { PHASE8_TESTS } from './testsPhase8'
+import { PHASE9_TESTS } from './testsPhase9'
 
 export type TestKind = 'AUTO' | 'MANUAL'
 export type TestStatus = 'idle' | 'running' | 'pass' | 'fail'
@@ -3400,3 +3401,6 @@ TESTS.push(...PHASE6_TESTS)
 
 // Phase 8 — numeric fuzz matrix (NaN, Infinity, MAX_SAFE_INTEGER).
 TESTS.push(...PHASE8_TESTS)
+
+// Phase 9 — string-input fuzz (empty, whitespace, Unicode, long, injection).
+TESTS.push(...PHASE9_TESTS)
