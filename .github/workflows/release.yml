@@ -91,6 +91,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ${{ matrix.target }}
+          cache-on-failure: true
+
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.7
         continue-on-error: true
