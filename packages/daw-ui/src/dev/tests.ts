@@ -18,6 +18,7 @@ import { PHASE6_TESTS } from './testsPhase6'
 import { PHASE8_TESTS } from './testsPhase8'
 import { PHASE9_TESTS } from './testsPhase9'
 import { PHASE10_TESTS } from './testsPhase10'
+import { PHASE11_TESTS } from './testsPhase11'
 
 export type TestKind = 'AUTO' | 'MANUAL'
 export type TestStatus = 'idle' | 'running' | 'pass' | 'fail'
@@ -3408,3 +3409,6 @@ TESTS.push(...PHASE9_TESTS)
 
 // Phase 10 — resource stress extremes (1000 tempo entries, 500 tracks, etc.).
 TESTS.push(...PHASE10_TESTS)
+
+// Phase 11 — entity-lifecycle races (delete during reference, parallel ops).
+TESTS.push(...PHASE11_TESTS)
