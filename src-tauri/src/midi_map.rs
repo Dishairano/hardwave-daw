@@ -21,9 +21,18 @@ static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MidiMapTarget {
     MasterVolume,
-    TrackVolume { track_id: String },
-    TrackPan { track_id: String },
-    TrackMute { track_id: String },
+    TrackVolume {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        track_id: Option<String>,
+    },
+    TrackPan {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        track_id: Option<String>,
+    },
+    TrackMute {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        track_id: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -175,6 +184,7 @@ fn apply_cc(engine: &Arc<Mutex<DawEngine>>, target: &MidiMapTarget, value: f32) 
             eng.transport.master_volume_db.store(db, Ordering::Relaxed);
         }
         MidiMapTarget::TrackVolume { track_id } => {
+            let Some(track_id) = track_id else { return };
             let db = -60.0 + value as f64 * 60.0;
             let eng = engine.lock();
             {
@@ -186,6 +196,7 @@ fn apply_cc(engine: &Arc<Mutex<DawEngine>>, target: &MidiMapTarget, value: f32) 
             eng.rebuild_graph();
         }
         MidiMapTarget::TrackPan { track_id } => {
+            let Some(track_id) = track_id else { return };
             let pan = (value as f64 * 2.0 - 1.0).clamp(-1.0, 1.0);
             let eng = engine.lock();
             {
@@ -197,6 +208,7 @@ fn apply_cc(engine: &Arc<Mutex<DawEngine>>, target: &MidiMapTarget, value: f32) 
             eng.rebuild_graph();
         }
         MidiMapTarget::TrackMute { track_id } => {
+            let Some(track_id) = track_id else { return };
             let muted = value > 0.5;
             let eng = engine.lock();
             {

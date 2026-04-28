@@ -548,9 +548,7 @@ fn write_mp3_vbr_from_buffer(
 
     const SHINE_RATES: &[u32] = &[8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
     if !SHINE_RATES.contains(&sample_rate) {
-        return Err(format!(
-            "MP3 VBR export does not support {sample_rate} Hz"
-        ));
+        return Err(format!("MP3 VBR export does not support {sample_rate} Hz"));
     }
 
     // Quality → bitrate tiers (kbps). Quality 0 = highest average

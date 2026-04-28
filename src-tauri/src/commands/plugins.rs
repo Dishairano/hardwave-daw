@@ -1,7 +1,9 @@
 use crate::AppState;
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
-use hardwave_plugin_host::{clap_instance::ClapPluginInstance, vst3::Vst3PluginInstance, PluginDescriptor, PluginFormat};
+use hardwave_plugin_host::{
+    clap_instance::ClapPluginInstance, vst3::Vst3PluginInstance, PluginDescriptor, PluginFormat,
+};
 use raw_window_handle::HasWindowHandle;
 use serde::Serialize;
 use std::collections::HashSet;

@@ -186,7 +186,13 @@ pub fn set_send_target(
 }
 
 #[tauri::command]
-pub fn set_send_gain(state: State<AppState>, track_id: String, send_index: usize, gain_db: f64) {
+pub fn set_send_gain(
+    state: State<AppState>,
+    track_id: String,
+    send_index: usize,
+    gain_db: Option<f64>,
+) {
+    let Some(gain_db) = gain_db else { return };
     if !gain_db.is_finite() {
         return;
     }

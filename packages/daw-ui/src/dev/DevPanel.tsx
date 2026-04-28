@@ -443,8 +443,8 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
   )
 
   const runTest = useCallback(
-    async (test: TestDef) => {
-      if (!test.run) return
+    async (test: TestDef): Promise<boolean | null> => {
+      if (!test.run) return null
       setStatuses((s) => ({ ...s, [test.id]: 'running' }))
       append({ level: 'info', test: test.id, message: `Starting: ${test.title}` })
       try {
@@ -452,9 +452,11 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
         const { pass, note } = await test.run(ctx)
         setStatuses((s) => ({ ...s, [test.id]: pass ? 'pass' : 'fail' }))
         append({ level: pass ? 'pass' : 'fail', test: test.id, message: `Result: ${note}` })
+        return pass
       } catch (e: any) {
         setStatuses((s) => ({ ...s, [test.id]: 'fail' }))
         append({ level: 'fail', test: test.id, message: `Exception: ${e?.message ?? e}` })
+        return false
       }
     },
     [makeContext],
@@ -484,6 +486,77 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
       }
     }
   }, [runTest, activePhase])
+
+  // Run every AUTO test from Phase 1 → last phase, in phase + insertion order.
+  // Logs a clear divider per phase so the resulting paste is easy to scan.
+  const runEveryPhase = useCallback(async () => {
+    const sorted = [...TESTS].sort((a, b) => {
+      const pa = a.phase ?? 1
+      const pb = b.phase ?? 1
+      if (pa !== pb) return pa - pb
+      return TESTS.indexOf(a) - TESTS.indexOf(b)
+    })
+    let currentPhase: number | null = null
+    let phaseStart = 0
+    let phasePassed = 0
+    let phaseFailed = 0
+    let phaseSkipped = 0
+    const overallStart = Date.now()
+    let overallPassed = 0
+    let overallFailed = 0
+    let overallSkipped = 0
+
+    append({
+      level: 'info',
+      message: `╔═ Running ALL phases: ${sorted.length} tests across ${phases.length} phase(s) ═╗`,
+    })
+
+    for (const test of sorted) {
+      const p = test.phase ?? 1
+      if (p !== currentPhase) {
+        if (currentPhase !== null) {
+          const elapsed = ((Date.now() - phaseStart) / 1000).toFixed(1)
+          append({
+            level: phaseFailed === 0 ? 'pass' : 'fail',
+            message: `─── Phase ${currentPhase} done: ${phasePassed} pass · ${phaseFailed} fail · ${phaseSkipped} skipped · ${elapsed}s ───`,
+          })
+          overallPassed += phasePassed
+          overallFailed += phaseFailed
+          overallSkipped += phaseSkipped
+        }
+        currentPhase = p
+        phaseStart = Date.now()
+        phasePassed = 0
+        phaseFailed = 0
+        phaseSkipped = 0
+        setTab(`phase${p}` as Tab)
+        append({ level: 'info', message: `═══ Phase ${p} starting ═══` })
+      }
+      if (test.kind === 'AUTO' && test.run) {
+        const result = await runTest(test)
+        if (result === true) phasePassed++
+        else if (result === false) phaseFailed++
+        else phaseSkipped++
+      } else {
+        phaseSkipped++
+      }
+    }
+    if (currentPhase !== null) {
+      const elapsed = ((Date.now() - phaseStart) / 1000).toFixed(1)
+      append({
+        level: phaseFailed === 0 ? 'pass' : 'fail',
+        message: `─── Phase ${currentPhase} done: ${phasePassed} pass · ${phaseFailed} fail · ${phaseSkipped} skipped · ${elapsed}s ───`,
+      })
+      overallPassed += phasePassed
+      overallFailed += phaseFailed
+      overallSkipped += phaseSkipped
+    }
+    const totalElapsed = ((Date.now() - overallStart) / 1000).toFixed(1)
+    append({
+      level: overallFailed === 0 ? 'pass' : 'fail',
+      message: `╚═ ALL PHASES DONE: ${overallPassed} pass · ${overallFailed} fail · ${overallSkipped} skipped · ${totalElapsed}s ═╝`,
+    })
+  }, [runTest, phases, append])
 
   const copyLog = useCallback(() => {
     const text = exportText()
@@ -556,6 +629,23 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
           }}
         >
           Run All AUTO
+        </button>
+        <button
+          onClick={runEveryPhase}
+          title="Run every AUTO test from Phase 1 to the last phase, with per-phase dividers in the log."
+          style={{
+            padding: '3px 12px',
+            background: hw.green,
+            border: 'none',
+            borderRadius: 4,
+            color: '#0a0a0a',
+            fontSize: 10,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            fontWeight: 600,
+          }}
+        >
+          Run ALL Phases
         </button>
         <button
           onClick={copyLog}

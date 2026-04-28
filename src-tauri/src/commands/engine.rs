@@ -52,12 +52,21 @@ pub fn get_meters(state: State<AppState>) -> MeterSnapshot {
     state.engine.lock().master_meter()
 }
 
-/// Return the most recent `n_frames` stereo frames from the master bus,
-/// interleaved L,R,L,R… The UI uses this for oscilloscope / correlation /
-/// spectrum visualizations. `n_frames` is clamped to the tap capacity.
+/// Return up to `n_frames` interleaved samples (L,R,L,R…) from the master bus.
+/// The result length is exactly `n_frames` (or fewer if the tap hasn't filled).
+/// Used for oscilloscope, correlation, and spectrum visualizations.
 #[tauri::command]
 pub fn get_master_samples(state: State<AppState>, n_frames: u32) -> Vec<f32> {
-    state.engine.lock().master_tap_snapshot(n_frames as usize)
+    let n = n_frames as usize;
+    if n == 0 {
+        return Vec::new();
+    }
+    // The tap returns 2 samples per stereo frame, so request ceil(n / 2)
+    // frames and truncate to exactly `n` returned samples.
+    let frames_needed = n.div_ceil(2);
+    let mut out = state.engine.lock().master_tap_snapshot(frames_needed);
+    out.truncate(n);
+    out
 }
 
 #[tauri::command]

@@ -70,10 +70,15 @@ pub fn set_bpm(state: State<AppState>, bpm: f64) {
 
 #[tauri::command]
 pub fn toggle_loop(state: State<AppState>) {
-    state
-        .engine
-        .lock()
-        .send_command(TransportCommand::ToggleLoop);
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    // The audio thread reads `transport.looping` directly each block, so
+    // toggling the atomic here is enough — no command needs to be queued.
+    // Sending TransportCommand::ToggleLoop in addition would re-toggle on
+    // the next dispatch tick and cancel the change, leaving the test
+    // observing `false → false → true` instead of `false → true → false`.
+    let current = engine.transport.looping.load(Ordering::Relaxed);
+    engine.transport.looping.store(!current, Ordering::Relaxed);
 }
 
 #[tauri::command]

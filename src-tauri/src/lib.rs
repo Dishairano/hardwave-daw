@@ -29,7 +29,11 @@ pub struct AppState {
     pub midi_timecode: Arc<MidiTimecodeState>,
     /// Live plugin editor instances, keyed by the Tauri window label
     /// they're parented to. Dropping an entry closes the editor view.
-    pub plugin_editors: Arc<Mutex<std::collections::HashMap<String, Box<dyn hardwave_plugin_host::types::HostedPlugin>>>>,
+    pub plugin_editors: Arc<
+        Mutex<
+            std::collections::HashMap<String, Box<dyn hardwave_plugin_host::types::HostedPlugin>>,
+        >,
+    >,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -316,16 +320,14 @@ pub fn run() {
                         let mut scanner = eng.plugin_scanner.lock();
                         // Register native plugins before scanning external
                         // paths so `find(id)` resolves them as well.
-                        scanner.register_natives(
-                            hardwave_native_plugins::native_plugin_descriptors(),
-                        );
+                        scanner
+                            .register_natives(hardwave_native_plugins::native_plugin_descriptors());
                         scanner.scan();
                         // Re-register after scan — `scan()` clears the cache
                         // before rebuilding from disk, so natives must be
                         // reapplied to remain discoverable.
-                        scanner.register_natives(
-                            hardwave_native_plugins::native_plugin_descriptors(),
-                        );
+                        scanner
+                            .register_natives(hardwave_native_plugins::native_plugin_descriptors());
                         if let Some(ref path) = cache_path {
                             if let Err(e) = scanner.save_cache_to_disk(path) {
                                 log::warn!("Failed to save plugin cache: {e}");

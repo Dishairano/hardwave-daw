@@ -359,7 +359,12 @@ pub fn set_track_swap_lr(state: State<AppState>, track_id: String, swap: bool) {
 }
 
 #[tauri::command]
-pub fn set_track_stereo_separation(state: State<AppState>, track_id: String, separation: f64) {
+pub fn set_track_stereo_separation(
+    state: State<AppState>,
+    track_id: String,
+    separation: Option<f64>,
+) {
+    let Some(separation) = separation else { return };
     if !separation.is_finite() {
         return;
     }
@@ -390,12 +395,15 @@ pub fn set_track_monitor_input(state: State<AppState>, track_id: String, enabled
 
 #[tauri::command]
 pub fn set_track_delay_samples(state: State<AppState>, track_id: String, samples: i64) {
+    // Allow positive (latency compensation) and negative (look-ahead) values.
+    // Clamp to ±10 minutes at 96 kHz to prevent runaway storage values.
+    let samples = samples.clamp(-57_600_000, 57_600_000);
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();
         if let Some(track) = project.track_mut(&track_id) {
-            track.delay_samples = samples.max(0);
+            track.delay_samples = samples;
         }
     }
     engine.rebuild_graph();
@@ -416,7 +424,8 @@ pub fn set_track_pitch_semitones(state: State<AppState>, track_id: String, semit
 }
 
 #[tauri::command]
-pub fn set_track_fine_tune_cents(state: State<AppState>, track_id: String, cents: f32) {
+pub fn set_track_fine_tune_cents(state: State<AppState>, track_id: String, cents: Option<f32>) {
+    let Some(cents) = cents else { return };
     if !cents.is_finite() {
         return;
     }
@@ -471,7 +480,8 @@ pub fn set_track_filter_resonance(state: State<AppState>, track_id: String, reso
     if !resonance.is_finite() {
         return;
     }
-    let r = resonance.clamp(0.0, 1.0);
+    // Allow self-oscillation territory (Q up to 10) used by acid-style filters.
+    let r = resonance.clamp(0.0, 10.0);
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
