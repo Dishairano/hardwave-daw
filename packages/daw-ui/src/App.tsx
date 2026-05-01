@@ -971,9 +971,39 @@ function MainLayout({
         )}
 
         {playlistDocked && (
-          <div data-testid="panel-playlist" style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
-            <TrackList />
-            <Arrangement />
+          <div data-testid="panel-playlist" style={{
+            flex: 1, display: 'flex', flexDirection: 'column',
+            overflow: 'hidden', minHeight: 80,
+            background: '#000',
+            borderTop: `1px solid ${hw.borderLight}`,
+            position: 'relative',
+          }}>
+            {/* Hardwave panel signature: 2 px red-gradient top stripe */}
+            <div style={{
+              position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+              background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accentLight}, ${hw.secondary})`,
+              zIndex: 2, pointerEvents: 'none',
+            }} />
+            <div style={{
+              height: 24, flexShrink: 0,
+              background: 'linear-gradient(180deg, #0a0a0d, #050507)',
+              borderBottom: `1px solid ${hw.border}`,
+              display: 'flex', alignItems: 'center', padding: '0 12px', gap: 12,
+            }}>
+              <span style={{
+                fontFamily: hw.font.mono, fontSize: 10, fontWeight: 600,
+                color: hw.red, letterSpacing: hw.tracking.eyebrow, textTransform: 'uppercase',
+              }}>Playlist</span>
+              <span style={{ flex: 1 }} />
+              <span style={{
+                fontFamily: hw.font.mono, fontSize: 9, fontWeight: 500,
+                color: hw.textFaint, letterSpacing: hw.tracking.wide, textTransform: 'uppercase',
+              }}>ctrl-wheel zoom · alt-drag bypass snap</span>
+            </div>
+            <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+              <TrackList />
+              <Arrangement />
+            </div>
           </div>
         )}
 

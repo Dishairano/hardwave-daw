@@ -374,7 +374,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   trackHeights: {},
   setTrackHeight: (id, height) =>
-    set(s => ({ trackHeights: { ...s.trackHeights, [id]: Math.max(24, Math.min(240, height)) } })),
+    set(s => ({ trackHeights: { ...s.trackHeights, [id]: Math.max(14, Math.min(240, height)) } })),
 
   importAudioFile: async (trackId, filePath, positionTicks) => {
     try {

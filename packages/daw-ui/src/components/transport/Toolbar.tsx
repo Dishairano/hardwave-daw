@@ -118,7 +118,7 @@ export function Toolbar(props: ToolbarProps) {
             style={{
               background: 'transparent', border: 'none', color: hw.textSecondary,
               fontSize: 10, outline: 'none', appearance: 'none', cursor: 'pointer',
-              width: '100%', fontFamily: "'Consolas', monospace",
+              width: '100%', fontFamily: hw.font.mono,
             }}
           >
             {patterns.map(p => (
@@ -195,7 +195,7 @@ export function Toolbar(props: ToolbarProps) {
             style={{
               width: 50, background: 'transparent', border: 'none',
               color: hw.textPrimary, fontSize: 14, fontWeight: 700,
-              fontFamily: "'Consolas', 'Courier New', monospace",
+              fontFamily: hw.font.mono,
               textAlign: 'right', outline: 'none',
             }}
           />
@@ -213,7 +213,7 @@ export function Toolbar(props: ToolbarProps) {
             style={{
               width: 20, background: 'transparent', border: 'none',
               color: hw.textPrimary, fontSize: 11, fontWeight: 700,
-              fontFamily: "'Consolas', 'Courier New', monospace",
+              fontFamily: hw.font.mono,
               textAlign: 'center', outline: 'none',
             }}
           />
@@ -224,7 +224,7 @@ export function Toolbar(props: ToolbarProps) {
             style={{
               background: 'transparent', border: 'none',
               color: hw.textPrimary, fontSize: 11, fontWeight: 700,
-              fontFamily: "'Consolas', 'Courier New', monospace",
+              fontFamily: hw.font.mono,
               outline: 'none', appearance: 'none', width: 20, textAlign: 'center',
             }}
           >
@@ -296,7 +296,7 @@ export function Toolbar(props: ToolbarProps) {
           data-testid="snap-select"
           style={{
             background: 'transparent', border: 'none', color: hw.textSecondary,
-            fontSize: 10, fontFamily: "'Consolas', 'Courier New', monospace", outline: 'none',
+            fontSize: 10, fontFamily: hw.font.mono, outline: 'none',
             padding: '0 2px', appearance: 'none', cursor: 'pointer', minWidth: 38,
           }}
         >
@@ -1047,12 +1047,12 @@ const lcd: React.CSSProperties = {
 const zoomBtn: React.CSSProperties = {
   width: 18, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
   background: 'transparent', border: 'none', color: '#a1a1aa',
-  fontSize: 11, fontWeight: 700, fontFamily: "'Consolas', 'Courier New', monospace",
+  fontSize: 11, fontWeight: 700, fontFamily: hw.font.mono,
   cursor: 'pointer', padding: 0,
 }
 
 const lcdDigit: React.CSSProperties = {
-  fontFamily: "'Consolas', 'Courier New', monospace",
+  fontFamily: hw.font.mono,
   fontSize: 13, fontWeight: 700,
   whiteSpace: 'pre',
   letterSpacing: 0,

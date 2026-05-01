@@ -9,8 +9,9 @@ import { hw } from '../../theme'
 
 const PPQ = 960
 const PIXELS_PER_SECOND_BASE = 100
+// (mockup-aligned)
 const RESIZE_HANDLE_PX = 6
-const RULER_HEIGHT = 22
+const RULER_HEIGHT = 28
 
 type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left' | 'fade-in' | 'fade-out' | 'rubber' | 'scrub'
 
@@ -133,30 +134,31 @@ export function Arrangement() {
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const scrollOffset = Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
 
-    // Background — near-black
-    ctx.fillStyle = '#0a0a0f'
+    // Background — pure black to match mockup
+    ctx.fillStyle = '#000'
     ctx.fillRect(0, 0, w, h)
 
-    // Ruler bar
-    ctx.fillStyle = '#08080d'
+    // Ruler bar — darker to match mockup
+    ctx.fillStyle = '#040406'
     ctx.fillRect(0, 0, w, RULER_HEIGHT)
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)'
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
     ctx.lineWidth = 1
     ctx.beginPath()
-    ctx.moveTo(0, RULER_HEIGHT)
-    ctx.lineTo(w, RULER_HEIGHT)
+    ctx.moveTo(0, RULER_HEIGHT + 0.5)
+    ctx.lineTo(w, RULER_HEIGHT + 0.5)
     ctx.stroke()
 
-    // Beat grid + snap subdivisions
+    // Beat grid — HQ pixel-snapped, brighter opacity to match mockup readability
     const startBeat = Math.floor(scrollOffset / pixelsPerBeat)
     for (let i = startBeat; i < startBeat + Math.ceil(w / pixelsPerBeat) + 2; i++) {
-      const x = i * pixelsPerBeat - scrollOffset
+      const xRaw = i * pixelsPerBeat - scrollOffset
+      const x = Math.floor(xRaw) + 0.5
       if (x < -1 || x > w + 1) continue
 
       const isBar = i % 4 === 0
 
-      ctx.strokeStyle = isBar ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.02)'
-      ctx.lineWidth = isBar ? 1 : 0.5
+      ctx.strokeStyle = isBar ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.04)'
+      ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(x, RULER_HEIGHT)
       ctx.lineTo(x, h)
@@ -164,17 +166,17 @@ export function Arrangement() {
 
       // Ruler markings
       if (isBar) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.06)'
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)'
         ctx.beginPath()
         ctx.moveTo(x, 0)
         ctx.lineTo(x, RULER_HEIGHT)
         ctx.stroke()
 
-        ctx.fillStyle = '#71717a'
-        ctx.font = '9px Inter, ui-sans-serif, sans-serif'
-        ctx.fillText(`${Math.floor(i / 4) + 1}`, x + 3, 13)
+        ctx.fillStyle = '#a1a1aa'
+        ctx.font = "8px 'JetBrains Mono', ui-monospace, Menlo, monospace"
+        ctx.fillText(`${Math.floor(i / 4) + 1}`, Math.floor(xRaw) + 3, 16)
       } else {
-        ctx.strokeStyle = 'rgba(255,255,255,0.03)'
+        ctx.strokeStyle = 'rgba(255,255,255,0.05)'
         ctx.beginPath()
         ctx.moveTo(x, RULER_HEIGHT - 4)
         ctx.lineTo(x, RULER_HEIGHT)
@@ -334,29 +336,29 @@ export function Arrangement() {
       ctx.stroke()
     }
 
-    // Playhead — red
-    const playheadX = playheadSecs * PIXELS_PER_SECOND - scrollOffset
+    // Playhead — bright red, sharper 1px stroke with glow underlay (mockup style)
+    const playheadX = Math.floor(playheadSecs * PIXELS_PER_SECOND - scrollOffset) + 0.5
     if (playing || positionSamples > 0) {
-      ctx.strokeStyle = '#DC2626'
-      ctx.lineWidth = 1.5
+      // Glow underneath the sharp line
+      ctx.strokeStyle = 'rgba(239,68,68,0.20)'
+      ctx.lineWidth = 5
       ctx.beginPath()
       ctx.moveTo(playheadX, 0)
       ctx.lineTo(playheadX, h)
       ctx.stroke()
 
-      // Glow
-      ctx.strokeStyle = 'rgba(220,38,38,0.15)'
-      ctx.lineWidth = 6
+      ctx.strokeStyle = '#EF4444'
+      ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(playheadX, 0)
       ctx.lineTo(playheadX, h)
       ctx.stroke()
 
-      ctx.fillStyle = '#DC2626'
+      ctx.fillStyle = '#EF4444'
       ctx.beginPath()
       ctx.moveTo(playheadX - 5, 0)
       ctx.lineTo(playheadX + 5, 0)
-      ctx.lineTo(playheadX, 7)
+      ctx.lineTo(playheadX, 8)
       ctx.closePath()
       ctx.fill()
     }
@@ -466,40 +468,44 @@ export function Arrangement() {
     const clipW = clip.length_ticks * pxPerTick
     if (clipX + clipW < 0 || clipX > viewWidth) return
 
-    const pad = 2
+    const pad = 1
     const x = clipX
     const y = trackY + pad
     const w = clipW
     const h = trackHeight - pad * 2
     const isSelected = clip.id === selectedClipId || selectedClipIds.has(clip.id)
     const color = clip.muted ? '#1a1a24' : baseColor
+    // Mockup-style: sharp 1px corners, thin proportional header, full-saturation header stripe.
+    const radius = 1
+    const headerH = Math.min(9, Math.max(7, Math.round(h * 0.4)))
 
-    // Clip body
+    // Clip body — fuller saturation than before
     ctx.fillStyle = color
-    ctx.globalAlpha = clip.muted ? 0.3 : 0.25
+    ctx.globalAlpha = clip.muted ? 0.25 : 0.35
     ctx.beginPath()
-    ctx.roundRect(x, y, w, h, 6)
+    ctx.roundRect(x, y, w, h, radius)
     ctx.fill()
     ctx.globalAlpha = 1.0
 
-    // Clip header bar
-    const headerH = 14
-    ctx.fillStyle = clip.muted ? '#161620' : darkenColor(color, 0.4)
-    ctx.globalAlpha = clip.muted ? 0.5 : 0.8
+    // Clip header bar — full-color stripe
+    ctx.fillStyle = clip.muted ? '#161620' : color
+    ctx.globalAlpha = clip.muted ? 0.5 : 1.0
     ctx.beginPath()
-    ctx.roundRect(x, y, w, headerH, [6, 6, 0, 0])
+    ctx.roundRect(x, y, w, headerH, [radius, radius, 0, 0])
     ctx.fill()
     ctx.globalAlpha = 1
 
-    // Clip name
-    ctx.fillStyle = clip.muted ? '#52525b' : '#EEE'
-    ctx.font = '9px Inter, ui-sans-serif, sans-serif'
-    ctx.save()
-    ctx.beginPath()
-    ctx.rect(x + 2, y, w - 4, headerH)
-    ctx.clip()
-    ctx.fillText(clip.name, x + 4, y + 10)
-    ctx.restore()
+    // Clip name — only render if header is tall enough and clip is wide enough
+    if (headerH >= 8 && w >= 16) {
+      ctx.fillStyle = clip.muted ? '#52525b' : 'rgba(0,0,0,0.85)'
+      ctx.font = "700 7px 'JetBrains Mono', ui-monospace, Menlo, monospace"
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(x + 2, y, w - 4, headerH)
+      ctx.clip()
+      ctx.fillText(clip.name, x + 3, y + headerH - 2)
+      ctx.restore()
+    }
 
     // Waveform — pick the best available tier: prefer the current one, else fallback
     // to any other tier we've already fetched so we render something during refetch.
