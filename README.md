@@ -1,5 +1,7 @@
 # Hardwave DAW
 
+### Hard hours, harder hits.
+
 **A free, open-source digital audio workstation with real-time multiplayer.** Built in Rust + Tauri. Hosts your existing VST3 and CLAP plugins. One Hardwave account links every plugin you own.
 
 > Status: pre-release. Currently shipping `0.x` builds. Plugin hosting, multiplayer, and the public Plugin SDK are landing across the next few months.
