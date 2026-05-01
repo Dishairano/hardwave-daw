@@ -271,18 +271,22 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
         </div>
 
         <h1 ref={titleRef} style={{
-          fontSize: 30, fontWeight: 700, color: '#FFF',
+          fontSize: 32, fontWeight: 700, color: '#FFF',
           marginTop: 24, opacity: 0,
-          fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+          fontFamily: "'Space Grotesk', Inter, ui-sans-serif, system-ui, sans-serif",
+          letterSpacing: '-0.02em',
         }}>
           Hardwave DAW
         </h1>
         <p ref={subtitleRef} style={{
-          fontSize: 14, color: '#52525b',
-          marginTop: 8, opacity: 0,
-          fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+          fontSize: 12, color: '#a1a1a6',
+          marginTop: 10, opacity: 0,
+          fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          fontWeight: 500,
         }}>
-          Digital Audio Workstation
+          Hard hours, harder hits.
         </p>
 
         <div ref={barRef} style={{

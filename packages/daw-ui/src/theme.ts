@@ -82,4 +82,22 @@ export const hw = {
 
   // ─── Glow — follows accent ──────────────────────────────────────────────────
   glowRed: palette.glowRed,
+
+  // ─── Typography ──────────────────────────────────────────────────────────────
+  // 3-tier scale: display (Space Grotesk) for big section headings,
+  // ui (Inter) for everything chrome and body, mono (JetBrains Mono) for numerics.
+  // Loaded in index.html.
+  font: {
+    display: "'Space Grotesk', Inter, system-ui, -apple-system, sans-serif",
+    ui:      "Inter, system-ui, -apple-system, sans-serif",
+    mono:    "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+  },
+  tracking: {
+    tight:   '-0.02em',
+    normal:  '0',
+    wide:    '0.04em',
+    eyebrow: '0.16em',
+  },
+
+  shadow: '0 1px 2px rgba(0,0,0,0.5), 0 8px 32px rgba(0,0,0,0.4)',
 }
