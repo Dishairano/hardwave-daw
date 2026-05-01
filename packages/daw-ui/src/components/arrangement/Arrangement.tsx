@@ -205,17 +205,22 @@ export function Arrangement() {
       }
     }
 
-    // Track lane backgrounds
-    for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * trackHeight
-      ctx.fillStyle = i % 2 === 0 ? '#0a0a0f' : '#0c0c11'
-      ctx.fillRect(0, y, w, trackHeight)
+    // Track lane backgrounds — always render 500 slots, mockup-style.
+    // Real tracks fill the first N slots; the remainder is empty placeholder rows.
+    const TOTAL_SLOTS = 500
+    for (let i = 0; i < TOTAL_SLOTS; i++) {
+      const y = Math.floor(RULER_HEIGHT + i * trackHeight) + 0.5
+      if (y > h + trackHeight) break
+      if (y + trackHeight < RULER_HEIGHT) continue
+      // Mockup palette: subtle alternation, darker than before
+      ctx.fillStyle = i % 2 === 0 ? '#08080c' : '#0b0b10'
+      ctx.fillRect(0, y - 0.5, w, trackHeight)
 
-      ctx.strokeStyle = 'rgba(255,255,255,0.03)'
+      ctx.strokeStyle = '#0a0a0e'
       ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.moveTo(0, y + trackHeight)
-      ctx.lineTo(w, y + trackHeight)
+      ctx.moveTo(0, y + trackHeight - 0.5)
+      ctx.lineTo(w, y + trackHeight - 0.5)
       ctx.stroke()
     }
 

@@ -303,11 +303,39 @@ export function TrackList() {
           </div>
         )})}
 
-        {audioTracks.length === 0 && (
-          <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 10 }}>
-            Add tracks from toolbar
-          </div>
-        )}
+        {/* Empty placeholder slots — fill out the playlist to 500 rows like the mockup */}
+        {(() => {
+          const TOTAL_SLOTS = 500
+          const realCount = audioTracks.length
+          const placeholderCount = Math.max(0, TOTAL_SLOTS - realCount)
+          const slotHeight = defaultHeight
+          const placeholders = []
+          for (let i = 0; i < placeholderCount; i++) {
+            const slotNum = realCount + i + 1
+            placeholders.push(
+              <div
+                key={`slot_${slotNum}`}
+                style={{
+                  height: slotHeight,
+                  display: 'flex',
+                  alignItems: 'center',
+                  borderBottom: `1px solid #0a0a0e`,
+                  background: (realCount + i) % 2 === 0 ? '#08080c' : '#0b0b10',
+                  paddingLeft: 2,
+                }}
+              >
+                <div style={{ width: 2, height: '100%', background: 'transparent', flexShrink: 0 }} />
+                <span style={{
+                  width: 22, textAlign: 'right',
+                  fontFamily: hw.font.mono, fontSize: 8, fontWeight: 500,
+                  color: '#3f3f46', letterSpacing: hw.tracking.wide,
+                  paddingRight: 5, paddingLeft: 5,
+                }}>{slotNum}</span>
+              </div>,
+            )
+          }
+          return placeholders
+        })()}
       </div>
       {ctxMenu && (() => {
         const t = audioTracks.find(x => x.id === ctxMenu.trackId)
