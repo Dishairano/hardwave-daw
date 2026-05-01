@@ -47,8 +47,9 @@ export function App() {
   const [showSplash, setShowSplash] = useState(true)
   const [dataReady, setDataReady] = useState(false)
 
-  // Hint bar text
+  // Hint bar text — top-bar (global) + playlist (panel-local)
   const [hintText, setHintText] = useState('')
+  const [playlistHint, setPlaylistHint] = useState('')
 
   // Update state — matches Suite pattern
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
@@ -326,33 +327,14 @@ export function App() {
                 zIndex: 2,
                 pointerEvents: 'none',
               }} />
-              {/* Panel header — JetBrains Mono uppercase title with red accent */}
-              <div style={{
-                height: 24, flexShrink: 0,
-                background: 'linear-gradient(180deg, #0a0a0d, #050507)',
-                borderBottom: `1px solid ${hw.border}`,
-                display: 'flex', alignItems: 'center', padding: '0 12px', gap: 8,
-              }}>
-                <span style={{
-                  fontFamily: hw.font.mono, fontSize: 10, fontWeight: 600,
-                  color: hw.textPrimary, letterSpacing: hw.tracking.eyebrow,
-                  textTransform: 'uppercase',
-                }}>
-                  <span style={{ color: hw.red }}>Playlist</span>
-                </span>
-                <span style={{ flex: 1 }} />
-                <span style={{
-                  fontFamily: hw.font.mono, fontSize: 9, fontWeight: 500,
-                  color: hw.textFaint, letterSpacing: hw.tracking.wide,
-                  textTransform: 'uppercase',
-                }}>
-                  ctrl+wheel zoom · alt+wheel rows · alt+drag bypass snap
-                </span>
-              </div>
+              {/* Panel header — JetBrains Mono uppercase title with red accent + transport metadata on the right */}
+              <PlaylistHeader />
               <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
                 <TrackList />
-                <Arrangement onSetHint={setHintText} />
+                <Arrangement onSetHint={setPlaylistHint} />
               </div>
+              {/* Hint bar — fixed strip at the bottom of the playlist (mockup pattern) */}
+              <PlaylistHintBar text={playlistHint} />
             </div>
           )}
 
@@ -387,6 +369,86 @@ export function App() {
           onDismiss={handleDismissUpdate}
         />
       )}
+    </div>
+  )
+}
+
+function PlaylistHeader() {
+  const { bpm, sampleRate, positionSamples } = useTransportStore()
+  const { tracks } = useTrackStore()
+  const audioCount = tracks.filter(t => t.kind !== 'Master').length
+
+  const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
+  const beats = bpm > 0 ? (seconds * bpm / 60) : 0
+  const bar = Math.floor(beats / 4) + 1
+  const beat = Math.floor(beats % 4) + 1
+  const tick = Math.floor((beats % 1) * 960)
+  const pos = `${String(bar).padStart(3,' ')}.${beat}.${String(tick).padStart(3,'0')}`
+
+  return (
+    <div style={{
+      height: 24, flexShrink: 0,
+      background: 'linear-gradient(180deg, #0a0a0d, #050507)',
+      borderBottom: `1px solid ${hw.border}`,
+      display: 'flex', alignItems: 'center', padding: '0 12px', gap: 12,
+    }}>
+      <span style={{
+        fontFamily: hw.font.mono, fontSize: 10, fontWeight: 600,
+        color: hw.red, letterSpacing: hw.tracking.eyebrow, textTransform: 'uppercase',
+      }}>Playlist</span>
+      <span style={{
+        fontFamily: hw.font.mono, fontSize: 9, color: hw.textFaint,
+        letterSpacing: hw.tracking.wide, textTransform: 'uppercase',
+      }}>{audioCount} tracks</span>
+
+      <span style={{ flex: 1 }} />
+
+      {/* Cursor position + transport meta — right-aligned, JetBrains Mono tabular */}
+      <span style={metaCell}>
+        <span style={metaLabel}>POS</span>
+        <span style={metaValue}>{pos}</span>
+      </span>
+      <span style={metaCell}>
+        <span style={metaLabel}>BPM</span>
+        <span style={metaValue}>{bpm.toFixed(0)}</span>
+      </span>
+      <span style={metaCell}>
+        <span style={metaLabel}>SIG</span>
+        <span style={metaValue}>4/4</span>
+      </span>
+    </div>
+  )
+}
+
+const metaCell: React.CSSProperties = {
+  display: 'flex', alignItems: 'baseline', gap: 5,
+  fontFamily: hw.font.mono, fontSize: 10,
+  fontVariantNumeric: 'tabular-nums',
+}
+const metaLabel: React.CSSProperties = {
+  fontSize: 8, fontWeight: 600, color: hw.textFaint,
+  letterSpacing: hw.tracking.eyebrow, textTransform: 'uppercase',
+}
+const metaValue: React.CSSProperties = {
+  color: hw.textPrimary, letterSpacing: hw.tracking.wide,
+}
+
+function PlaylistHintBar({ text }: { text: string }) {
+  return (
+    <div style={{
+      height: 22, flexShrink: 0,
+      background: '#040406',
+      borderTop: `1px solid ${hw.border}`,
+      display: 'flex', alignItems: 'center', padding: '0 12px', gap: 8,
+      fontFamily: hw.font.mono, fontSize: 10, fontWeight: 500,
+      color: hw.textMuted, letterSpacing: '0.02em',
+      overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+    }}>
+      <span style={{
+        width: 4, height: 4, borderRadius: 2,
+        background: text ? hw.red : hw.textFaint, flexShrink: 0,
+      }} />
+      {text || 'Playlist · drop audio to import · ctrl+wheel zoom · alt+wheel rows · alt+drag bypass snap'}
     </div>
   )
 }

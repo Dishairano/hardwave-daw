@@ -9,6 +9,8 @@ export interface ClipInfo {
   position_ticks: number
   length_ticks: number
   muted: boolean
+  /** Optional user-set color (hex). Falls back to the track-index palette when absent. */
+  color?: string
 }
 
 export interface TrackInfo {

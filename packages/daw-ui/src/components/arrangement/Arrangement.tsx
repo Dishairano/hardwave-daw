@@ -188,9 +188,11 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const y = RULER_HEIGHT + i * TRACK_HEIGHT - scrollY
       if (y > h || y + TRACK_HEIGHT < RULER_HEIGHT) continue
       const track = audioTracks[i]
-      const clipColor = CLIP_COLORS[i % CLIP_COLORS.length]
+      const fallbackColor = CLIP_COLORS[i % CLIP_COLORS.length]
 
       for (const clip of track.clips) {
+        // Mockup: each clip can carry its own --col override; otherwise inherit from track index.
+        const clipColor = clip.color || track.color || fallbackColor
         drawClip(ctx, clip, clipColor, y, scrollOffset, w, pixelsPerTick)
       }
     }

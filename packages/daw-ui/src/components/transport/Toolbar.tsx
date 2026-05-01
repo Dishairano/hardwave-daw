@@ -180,14 +180,35 @@ export function Toolbar(props: ToolbarProps) {
 
       <Sep />
 
-      {/* 8. Snap */}
-      <div style={{ ...lcd, padding: '0 6px', cursor: 'default' }} onMouseEnter={hint('Global snap')} onMouseLeave={clear}>
-        <svg width="8" height="8" viewBox="0 0 8 8" style={{ marginRight: 3 }}>
-          <path d="M1 7V1h6" stroke={hw.textMuted} strokeWidth="0.8" fill="none"/>
-          <circle cx="4" cy="4" r="1.5" fill={hw.textMuted}/>
-        </svg>
-        <span style={{ fontSize: 10, color: hw.textSecondary }}>Line</span>
-        <svg width="7" height="5" viewBox="0 0 7 5" style={{ marginLeft: 3 }}>
+      {/* 8. Snap pill — Hardwave brand style */}
+      <div
+        onMouseEnter={hint('Global snap · alt-drag bypasses while moving clips')}
+        onMouseLeave={clear}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          height: 22, padding: '0 9px',
+          background: hw.accentDim,
+          border: `1px solid ${hw.accentGlow}`,
+          borderRadius: 11,
+          cursor: 'default',
+        }}
+      >
+        <span style={{
+          width: 5, height: 5, borderRadius: 3,
+          background: hw.red,
+          boxShadow: `0 0 6px ${hw.red}`,
+        }} />
+        <span style={{
+          fontFamily: hw.font.mono, fontSize: 9, fontWeight: 600,
+          color: hw.textFaint, letterSpacing: hw.tracking.eyebrow,
+          textTransform: 'uppercase',
+        }}>Snap</span>
+        <span style={{
+          fontFamily: hw.font.mono, fontSize: 10, fontWeight: 600,
+          color: hw.accentLight, letterSpacing: hw.tracking.wide,
+          textTransform: 'uppercase',
+        }}>Bar</span>
+        <svg width="7" height="5" viewBox="0 0 7 5" style={{ opacity: 0.6 }}>
           <path d="M0.5 0.5L3.5 4L6.5 0.5" stroke={hw.textMuted} strokeWidth="1" fill="none" />
         </svg>
       </div>
