@@ -29,6 +29,7 @@ interface TitleBarProps {
   onToggleMixer: () => void
   onToggleRoadmap: () => void
   onOpenAudioSettings: () => void
+  onOpenAbout: () => void
   showBrowser: boolean
   showPlaylist: boolean
   showChannelRack: boolean
@@ -40,7 +41,7 @@ export function TitleBar({
   hintText,
   onNewProject, onSaveProject, onSaveProjectAs, onOpenProject,
   onUndo, onRedo,
-  onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer, onToggleRoadmap, onOpenAudioSettings,
+  onToggleBrowser, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer, onToggleRoadmap, onOpenAudioSettings, onOpenAbout,
   showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
 }: TitleBarProps) {
   const [openMenu, setOpenMenu] = useState<number | null>(null)
@@ -112,7 +113,7 @@ export function TitleBar({
       items: [
         { label: 'Roadmap', action: onToggleRoadmap },
         { separator: true, label: '' },
-        { label: 'About Hardwave DAW', disabled: true },
+        { label: 'About Hardwave DAW', action: onOpenAbout },
       ],
     },
   ]

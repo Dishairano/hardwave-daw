@@ -41,6 +41,7 @@ export function App() {
   const [showPianoRoll, setShowPianoRoll] = useState(false)
   const [showRoadmap, setShowRoadmap] = useState(false)
   const [showAudioSettings, setShowAudioSettings] = useState(false)
+  const [showAbout, setShowAbout] = useState(false)
 
   // Splash screen
   const [showSplash, setShowSplash] = useState(true)
@@ -264,6 +265,7 @@ export function App() {
         onToggleMixer={() => setShowMixer(v => !v)}
         onToggleRoadmap={() => setShowRoadmap(v => !v)}
         onOpenAudioSettings={() => setShowAudioSettings(true)}
+        onOpenAbout={() => setShowAbout(true)}
         showBrowser={showBrowser}
         showPlaylist={showPlaylist}
         showChannelRack={showChannelRack}
@@ -331,6 +333,7 @@ export function App() {
       {/* Floating detached panels */}
       {showRoadmap && <Roadmap onClose={() => setShowRoadmap(false)} />}
       {showAudioSettings && <AudioSettings onClose={() => setShowAudioSettings(false)} />}
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
 
       {/* Update modal — same pattern as Hardwave Suite */}
       {updateInfo.available && !updateInfo.dismissed && (
@@ -346,6 +349,118 @@ export function App() {
           onDismiss={handleDismissUpdate}
         />
       )}
+    </div>
+  )
+}
+
+function AboutModal({ onClose }: { onClose: () => void }) {
+  // Read version from the package — Vite makes it available via import.meta.env at build time,
+  // but the canonical version lives in tauri.conf.json. Hardcoded fallback keeps it simple.
+  const version = '0.157.16+'
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 200,
+        background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 420, maxWidth: '92vw',
+          background: 'linear-gradient(155deg, #0d0d12 0%, #13131a 100%)',
+          border: `1px solid ${hw.borderLight}`, borderRadius: 14,
+          padding: '32px 28px 24px', position: 'relative',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.8), 0 0 1px rgba(255,255,255,0.06)',
+        }}
+      >
+        {/* Top red stripe */}
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+          background: `linear-gradient(90deg, transparent, ${hw.red}, transparent)`,
+          borderRadius: '14px 14px 0 0',
+        }} />
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
+          <div style={{
+            width: 44, height: 44, borderRadius: 10,
+            background: 'linear-gradient(145deg, #1c1c24 0%, #0a0a0e 100%)',
+            border: `1px solid ${hw.borderLight}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden',
+          }}>
+            <div style={{
+              position: 'absolute', inset: 1, borderRadius: 9,
+              background: 'radial-gradient(circle at 30% 20%, rgba(239,68,68,0.25), transparent 60%)',
+              pointerEvents: 'none',
+            }} />
+            <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={hw.accentLight} strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" style={{ position: 'relative', zIndex: 1 }}>
+              <path d="M12 2 L4 6 v6 c0 4.5 3.5 8.5 8 10 c4.5-1.5 8-5.5 8-10 V6 z" />
+              <path d="M9 12 l2 2 l4-4" />
+            </svg>
+          </div>
+          <div>
+            <div style={{ fontFamily: hw.font.display, fontWeight: 700, fontSize: 20, color: hw.textPrimary, letterSpacing: '-0.01em' }}>
+              Hardwave DAW
+            </div>
+            <div style={{ fontFamily: hw.font.mono, fontSize: 11, color: hw.textFaint, letterSpacing: hw.tracking.wide }}>
+              v{version}
+            </div>
+          </div>
+        </div>
+
+        <div style={{
+          fontFamily: hw.font.mono, fontSize: 11, color: hw.accentLight,
+          textTransform: 'uppercase', letterSpacing: hw.tracking.eyebrow,
+          marginBottom: 20,
+        }}>
+          Hard hours, harder hits.
+        </div>
+
+        <div style={{ fontSize: 13, color: hw.textSecondary, lineHeight: 1.6, marginBottom: 18 }}>
+          The free, open-source digital audio workstation with real-time multiplayer.
+          Built in Rust + Tauri. Hosts your existing VST3 and CLAP plugins.
+          One Hardwave account links every plugin you own.
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11.5, color: hw.textMuted, marginBottom: 18 }}>
+          <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer"
+             style={{ color: hw.textMuted, textDecoration: 'none', borderBottom: `1px solid ${hw.borderLight}`, paddingBottom: 1, width: 'fit-content' }}>
+            hardwavestudios.com
+          </a>
+          <a href="https://github.com/Dishairano/hardwave-daw" target="_blank" rel="noreferrer"
+             style={{ color: hw.textMuted, textDecoration: 'none', borderBottom: `1px solid ${hw.borderLight}`, paddingBottom: 1, width: 'fit-content' }}>
+            github.com/Dishairano/hardwave-daw
+          </a>
+          <a href="https://status.hardwavestudios.com" target="_blank" rel="noreferrer"
+             style={{ color: hw.textMuted, textDecoration: 'none', borderBottom: `1px solid ${hw.borderLight}`, paddingBottom: 1, width: 'fit-content' }}>
+            status.hardwavestudios.com
+          </a>
+        </div>
+
+        <button
+          onClick={onClose}
+          style={{
+            width: '100%', padding: '8px 0',
+            background: 'rgba(255,255,255,0.04)',
+            border: `1px solid ${hw.borderLight}`, borderRadius: 8,
+            fontFamily: hw.font.ui, fontSize: 11, fontWeight: 600,
+            color: hw.textSecondary, letterSpacing: hw.tracking.wide,
+            textTransform: 'uppercase', cursor: 'default',
+            transition: 'background 0.15s, color 0.15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = hw.textPrimary }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.color = hw.textSecondary }}
+        >
+          Close
+        </button>
+      </div>
     </div>
   )
 }

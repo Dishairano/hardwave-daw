@@ -1,75 +1,102 @@
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 
+const ROW_HEIGHT = 18
+
 export function TrackList() {
   const { tracks, selectedTrackId, selectTrack, toggleMute, toggleSolo } = useTrackStore()
   const audioTracks = tracks.filter(t => t.kind !== 'Master')
 
   return (
     <div style={{
-      width: 155, minWidth: 155,
-      background: 'rgba(255,255,255,0.02)',
-      backdropFilter: hw.blur.sm,
+      width: 168, minWidth: 168,
+      background: '#08080c',
       borderRight: `1px solid ${hw.border}`,
       display: 'flex', flexDirection: 'column',
     }}>
       <div style={{
-        height: 22, background: 'rgba(255,255,255,0.01)', borderBottom: `1px solid ${hw.border}`,
-        display: 'flex', alignItems: 'center', padding: '0 8px',
+        height: 28, background: '#040406', borderBottom: `1px solid ${hw.border}`,
+        display: 'flex', alignItems: 'center', padding: '0 10px',
       }}>
-        <span style={{ fontSize: 10, color: hw.textMuted }}>Playlist</span>
+        <span style={{
+          fontFamily: hw.font.ui, fontSize: 10, fontWeight: 600,
+          color: hw.textMuted, letterSpacing: hw.tracking.eyebrow,
+          textTransform: 'uppercase',
+        }}>Playlist</span>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {audioTracks.map((track, idx) => (
-          <div
-            key={track.id}
-            onClick={() => selectTrack(track.id)}
-            style={{
-              height: 56, display: 'flex', alignItems: 'stretch',
-              borderBottom: `1px solid ${hw.border}`,
-              background: selectedTrackId === track.id
-                ? hw.accentDim
-                : idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)',
-              cursor: 'default',
-              transition: 'background 0.1s',
-            }}
-          >
-            <div style={{ width: 3, background: track.color, flexShrink: 0 }} />
-            <div style={{ flex: 1, padding: '5px 7px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ fontSize: 9, color: hw.textFaint }}>{idx + 1}</span>
-                <span style={{
-                  fontSize: 10, color: hw.textPrimary, fontWeight: 500,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>
-                  {track.name}
-                </span>
-              </div>
-              <div style={{ display: 'flex', gap: 3, marginTop: 5 }}>
-                <button
-                  onClick={e => { e.stopPropagation(); toggleMute(track.id) }}
-                  style={{
-                    ...tb,
-                    color: track.muted ? hw.red : hw.textMuted,
-                    background: track.muted ? hw.redDim : 'rgba(255,255,255,0.04)',
-                  }}
-                >M</button>
-                <button
-                  onClick={e => { e.stopPropagation(); toggleSolo(track.id) }}
-                  style={{
-                    ...tb,
-                    color: track.soloed ? hw.yellow : hw.textMuted,
-                    background: track.soloed ? hw.yellowDim : 'rgba(255,255,255,0.04)',
-                  }}
-                >S</button>
-                <span style={{ fontSize: 8, color: hw.textFaint, marginLeft: 'auto', alignSelf: 'center' }}>
-                  {track.volume_db > -60 ? `${track.volume_db.toFixed(0)}dB` : '-\u221E'}
-                </span>
-              </div>
+        {audioTracks.map((track, idx) => {
+          const selected = selectedTrackId === track.id
+          return (
+            <div
+              key={track.id}
+              onClick={() => selectTrack(track.id)}
+              style={{
+                height: ROW_HEIGHT, display: 'flex', alignItems: 'center',
+                borderBottom: `1px solid #0a0a0e`,
+                background: selected
+                  ? 'rgba(220,38,38,0.10)'
+                  : idx % 2 === 0 ? '#08080c' : '#0b0b10',
+                cursor: 'default',
+                position: 'relative',
+                paddingRight: 6,
+              }}
+            >
+              {/* Color stripe */}
+              <div style={{ width: 2, height: '100%', background: track.color, flexShrink: 0 }} />
+
+              {/* Track number */}
+              <span style={{
+                width: 22, textAlign: 'right', flexShrink: 0,
+                fontFamily: hw.font.mono, fontSize: 8, fontWeight: 500,
+                color: hw.textFaint, letterSpacing: hw.tracking.wide,
+                paddingRight: 5,
+              }}>{idx + 1}</span>
+
+              {/* Track name */}
+              <span style={{
+                flex: 1, minWidth: 0,
+                fontFamily: hw.font.mono, fontSize: 9, fontWeight: 500,
+                color: track.muted ? hw.textFaint : hw.textPrimary,
+                letterSpacing: '0.01em',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {track.name}
+              </span>
+
+              {/* Compact M/S LEDs \u2014 circular indicators only when active */}
+              <button
+                onClick={e => { e.stopPropagation(); toggleMute(track.id) }}
+                title={track.muted ? 'Unmute' : 'Mute'}
+                style={{
+                  width: 11, height: 11, marginLeft: 4, padding: 0, flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  border: `1px solid ${track.muted ? hw.red : 'rgba(255,255,255,0.08)'}`,
+                  borderRadius: 2,
+                  background: track.muted ? hw.red : 'transparent',
+                  color: track.muted ? '#000' : hw.textFaint,
+                  fontFamily: hw.font.mono, fontSize: 7, fontWeight: 700,
+                  cursor: 'default',
+                }}
+              >M</button>
+              <button
+                onClick={e => { e.stopPropagation(); toggleSolo(track.id) }}
+                title={track.soloed ? 'Unsolo' : 'Solo'}
+                style={{
+                  width: 11, height: 11, marginLeft: 2, padding: 0, flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  border: `1px solid ${track.soloed ? hw.yellow : 'rgba(255,255,255,0.08)'}`,
+                  borderRadius: 2,
+                  background: track.soloed ? hw.yellow : 'transparent',
+                  color: track.soloed ? '#000' : hw.textFaint,
+                  fontFamily: hw.font.mono, fontSize: 7, fontWeight: 700,
+                  cursor: 'default',
+                }}
+              >S</button>
             </div>
-          </div>
-        ))}
+          )
+        })}
 
         {audioTracks.length === 0 && (
           <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 10 }}>
@@ -79,12 +106,4 @@ export function TrackList() {
       </div>
     </div>
   )
-}
-
-const tb: React.CSSProperties = {
-  width: 18, height: 14,
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-  fontSize: 8, fontWeight: 700,
-  border: `1px solid rgba(255,255,255,0.06)`,
-  borderRadius: 6, padding: 0,
 }

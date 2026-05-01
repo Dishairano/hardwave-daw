@@ -5,16 +5,17 @@ import { useTransportStore } from '../../stores/transportStore'
 import { hw } from '../../theme'
 
 const PPQ = 960
-const TRACK_HEIGHT_DEFAULT = 56
+// Mockup-aligned defaults: compact 18px rows like the FL-style playlist density.
+const TRACK_HEIGHT_DEFAULT = 18
 const PIXELS_PER_SECOND_DEFAULT = 100
-const RESIZE_HANDLE_PX = 6
-const RULER_HEIGHT = 22
+const RESIZE_HANDLE_PX = 4
+const RULER_HEIGHT = 28
 
 // Zoom limits — per user spec, vertical can't shrink below 0.6×
 const PPS_MIN = 30
 const PPS_MAX = 600
-const TRACK_H_MIN = Math.round(TRACK_HEIGHT_DEFAULT * 0.6)
-const TRACK_H_MAX = Math.round(TRACK_HEIGHT_DEFAULT * 2)
+const TRACK_H_MIN = Math.max(12, Math.round(TRACK_HEIGHT_DEFAULT * 0.6))
+const TRACK_H_MAX = TRACK_HEIGHT_DEFAULT * 4 // allow zooming to thicker rows
 
 type DragMode = 'none' | 'move' | 'resize-right'
 
@@ -110,14 +111,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ? Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
       : 0
 
-    // Background — near-black
-    ctx.fillStyle = '#0a0a0f'
+    // Background — pure black to match mockup
+    ctx.fillStyle = '#000'
     ctx.fillRect(0, 0, w, h)
 
     // Ruler bar (always pinned at top, never scrolls vertically)
-    ctx.fillStyle = '#08080d'
+    ctx.fillStyle = '#040406'
     ctx.fillRect(0, 0, w, RULER_HEIGHT)
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)'
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(0, RULER_HEIGHT + 0.5)
@@ -133,7 +134,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
       const isBar = i % 4 === 0
 
-      ctx.strokeStyle = isBar ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.025)'
+      ctx.strokeStyle = isBar ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.04)'
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(x, RULER_HEIGHT)
@@ -142,17 +143,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
       // Ruler markings
       if (isBar) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.07)'
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)'
         ctx.beginPath()
         ctx.moveTo(x, 0)
         ctx.lineTo(x, RULER_HEIGHT)
         ctx.stroke()
 
-        ctx.fillStyle = '#71717a'
-        ctx.font = '9px Inter, ui-sans-serif, sans-serif'
-        ctx.fillText(`${Math.floor(i / 4) + 1}`, Math.floor(xRaw) + 3, 13)
+        ctx.fillStyle = '#a1a1aa'
+        ctx.font = "8px 'JetBrains Mono', ui-monospace, Menlo, monospace"
+        ctx.fillText(`${Math.floor(i / 4) + 1}`, Math.floor(xRaw) + 3, 16)
       } else {
-        ctx.strokeStyle = 'rgba(255,255,255,0.04)'
+        ctx.strokeStyle = 'rgba(255,255,255,0.05)'
         ctx.beginPath()
         ctx.moveTo(x, RULER_HEIGHT - 4)
         ctx.lineTo(x, RULER_HEIGHT)
@@ -169,10 +170,12 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     for (let i = 0; i < audioTracks.length; i++) {
       const y = Math.floor(RULER_HEIGHT + i * TRACK_HEIGHT - scrollY) + 0.5
       if (y > h || y + TRACK_HEIGHT < RULER_HEIGHT) continue
-      ctx.fillStyle = i % 2 === 0 ? '#0a0a0f' : '#0c0c11'
+      // Subtle alternating row stripe — slightly darker in mockup palette
+      ctx.fillStyle = i % 2 === 0 ? '#08080c' : '#0b0b10'
       ctx.fillRect(0, y - 0.5, w, TRACK_HEIGHT)
 
-      ctx.strokeStyle = 'rgba(255,255,255,0.04)'
+      // Bottom border — darker to match mockup
+      ctx.strokeStyle = '#0a0a0e'
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(0, y + TRACK_HEIGHT - 0.5)
@@ -193,29 +196,29 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
     ctx.restore()
 
-    // Playhead — red
-    const playheadX = playheadSecs * PIXELS_PER_SECOND - scrollOffset
+    // Playhead — bright red, sharper 1px stroke with stronger glow
+    const playheadX = Math.floor(playheadSecs * PIXELS_PER_SECOND - scrollOffset) + 0.5
     if (playing || positionSamples > 0) {
-      ctx.strokeStyle = '#DC2626'
-      ctx.lineWidth = 1.5
+      // Glow first (so the sharp 1px line draws on top)
+      ctx.strokeStyle = 'rgba(239,68,68,0.20)'
+      ctx.lineWidth = 5
       ctx.beginPath()
       ctx.moveTo(playheadX, 0)
       ctx.lineTo(playheadX, h)
       ctx.stroke()
 
-      // Glow
-      ctx.strokeStyle = 'rgba(220,38,38,0.15)'
-      ctx.lineWidth = 6
+      ctx.strokeStyle = '#EF4444'
+      ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(playheadX, 0)
       ctx.lineTo(playheadX, h)
       ctx.stroke()
 
-      ctx.fillStyle = '#DC2626'
+      ctx.fillStyle = '#EF4444'
       ctx.beginPath()
       ctx.moveTo(playheadX - 5, 0)
       ctx.lineTo(playheadX + 5, 0)
-      ctx.lineTo(playheadX, 7)
+      ctx.lineTo(playheadX, 8)
       ctx.closePath()
       ctx.fill()
     }
@@ -235,40 +238,44 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const clipW = clip.length_ticks * pxPerTick
     if (clipX + clipW < 0 || clipX > viewWidth) return
 
-    const pad = 2
+    const pad = 1
     const x = clipX
     const y = trackY + pad
     const w = clipW
     const h = TRACK_HEIGHT - pad * 2
     const isSelected = clip.id === selectedClipId
     const color = clip.muted ? '#1a1a24' : baseColor
+    // Mockup uses sharp clip corners (1px). Header is 9px tall but scales down for tiny rows.
+    const radius = 1
+    const headerH = Math.min(9, Math.max(7, Math.round(h * 0.4)))
 
-    // Clip body
+    // Clip body — fuller saturation, less alpha bleed
     ctx.fillStyle = color
-    ctx.globalAlpha = clip.muted ? 0.3 : 0.25
+    ctx.globalAlpha = clip.muted ? 0.25 : 0.35
     ctx.beginPath()
-    ctx.roundRect(x, y, w, h, 6)
+    ctx.roundRect(x, y, w, h, radius)
     ctx.fill()
     ctx.globalAlpha = 1.0
 
-    // Clip header bar
-    const headerH = 14
-    ctx.fillStyle = clip.muted ? '#161620' : darkenColor(color, 0.4)
-    ctx.globalAlpha = clip.muted ? 0.5 : 0.8
+    // Clip header bar — full-saturation color stripe
+    ctx.fillStyle = clip.muted ? '#161620' : color
+    ctx.globalAlpha = clip.muted ? 0.5 : 1.0
     ctx.beginPath()
-    ctx.roundRect(x, y, w, headerH, [6, 6, 0, 0])
+    ctx.roundRect(x, y, w, headerH, [radius, radius, 0, 0])
     ctx.fill()
     ctx.globalAlpha = 1
 
-    // Clip name
-    ctx.fillStyle = clip.muted ? '#52525b' : '#EEE'
-    ctx.font = '9px Inter, ui-sans-serif, sans-serif'
-    ctx.save()
-    ctx.beginPath()
-    ctx.rect(x + 2, y, w - 4, headerH)
-    ctx.clip()
-    ctx.fillText(clip.name, x + 4, y + 10)
-    ctx.restore()
+    // Clip name — only render if there's enough room (header ≥ 8px)
+    if (headerH >= 8 && w >= 16) {
+      ctx.fillStyle = clip.muted ? '#52525b' : 'rgba(0,0,0,0.85)'
+      ctx.font = "700 7px 'JetBrains Mono', ui-monospace, Menlo, monospace"
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(x + 2, y, w - 4, headerH)
+      ctx.clip()
+      ctx.fillText(clip.name, x + 3, y + headerH - 2)
+      ctx.restore()
+    }
 
     // Waveform
     const peaks = waveformData.get(clip.source_id)
@@ -299,19 +306,19 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.restore()
     }
 
-    // Border
+    // Border (sharp 1px corner, with red glow when selected)
     if (isSelected) {
-      ctx.strokeStyle = '#EF4444'
-      ctx.lineWidth = 2
-      ctx.shadowColor = 'rgba(220,38,38,0.4)'
+      ctx.strokeStyle = 'rgba(239,68,68,0.85)'
+      ctx.lineWidth = 1
+      ctx.shadowColor = 'rgba(239,68,68,0.55)'
       ctx.shadowBlur = 8
     } else {
-      ctx.strokeStyle = clip.muted ? '#2a2a38' : `${color}88`
+      ctx.strokeStyle = clip.muted ? '#2a2a38' : 'rgba(0,0,0,0.5)'
       ctx.lineWidth = 1
       ctx.shadowBlur = 0
     }
     ctx.beginPath()
-    ctx.roundRect(x, y, w, h, 6)
+    ctx.roundRect(x, y, w, h, radius)
     ctx.stroke()
     ctx.shadowBlur = 0
   }
