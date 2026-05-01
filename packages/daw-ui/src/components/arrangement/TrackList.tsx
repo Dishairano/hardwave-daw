@@ -14,18 +14,17 @@ export function TrackList() {
       borderRight: `1px solid ${hw.border}`,
       display: 'flex', flexDirection: 'column',
     }}>
+      {/* Empty corner — aligns with the ruler height in the canvas (28px) */}
       <div style={{
         height: 28, background: '#040406', borderBottom: `1px solid ${hw.border}`,
-        display: 'flex', alignItems: 'center', padding: '0 10px',
-      }}>
-        <span style={{
-          fontFamily: hw.font.ui, fontSize: 10, fontWeight: 600,
-          color: hw.textMuted, letterSpacing: hw.tracking.eyebrow,
-          textTransform: 'uppercase',
-        }}>Playlist</span>
-      </div>
+      }} />
 
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div className="tracklist-scroll" style={{ flex: 1, overflowY: 'auto' }}>
+        <style>{`
+          .tracklist-scroll::-webkit-scrollbar{width:6px;background:#040406}
+          .tracklist-scroll::-webkit-scrollbar-thumb{background:#1a1a22;border-radius:3px}
+          .tracklist-scroll::-webkit-scrollbar-thumb:hover{background:${hw.red}}
+        `}</style>
         {audioTracks.map((track, idx) => {
           const selected = selectedTrackId === track.id
           return (
