@@ -124,9 +124,11 @@ export function Toolbar(props: ToolbarProps) {
             onChange={e => setBpm(parseFloat(e.target.value) || 140)}
             style={{
               width: 50, background: 'transparent', border: 'none',
-              color: hw.textPrimary, fontSize: 14, fontWeight: 700,
-              fontFamily: "'Consolas', 'Courier New', monospace",
+              color: hw.textPrimary, fontSize: 14, fontWeight: 600,
+              fontFamily: hw.font.mono,
+              fontVariantNumeric: 'tabular-nums',
               textAlign: 'right', outline: 'none',
+              letterSpacing: hw.tracking.wide,
             }}
           />
         </div>
@@ -450,8 +452,9 @@ const lcd: React.CSSProperties = {
 }
 
 const lcdDigit: React.CSSProperties = {
-  fontFamily: "'Consolas', 'Courier New', monospace",
-  fontSize: 13, fontWeight: 700,
+  fontFamily: hw.font.mono,
+  fontSize: 13, fontWeight: 600,
   whiteSpace: 'pre',
-  letterSpacing: 0,
+  letterSpacing: hw.tracking.wide,
+  fontVariantNumeric: 'tabular-nums',
 }

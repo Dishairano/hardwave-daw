@@ -157,17 +157,29 @@ export function TitleBar({
         zIndex: 100,
       }}
     >
-      {/* Hardwave Logo */}
+      {/* Hardwave Logo — shield with checkmark, matches mockup */}
       <div style={{
-        width: 20, height: 20, marginRight: 8,
-        background: `linear-gradient(135deg, ${hw.secondary}, ${hw.accent})`,
+        width: 22, height: 22, marginRight: 10,
+        background: 'linear-gradient(145deg, #1c1c24 0%, #0a0a0e 100%)',
+        border: `1px solid ${hw.borderLight}`,
         borderRadius: 6,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        boxShadow: '0 0 12px rgba(220,38,38,0.2)',
+        position: 'relative',
+        overflow: 'hidden',
         // @ts-ignore
         WebkitAppRegion: 'no-drag',
       }}>
-        <span style={{ fontSize: 10, fontWeight: 900, color: '#FFF' }}>H</span>
+        <div style={{
+          position: 'absolute', inset: 1, borderRadius: 5,
+          background: 'radial-gradient(circle at 30% 20%, rgba(239,68,68,0.25), transparent 60%)',
+          pointerEvents: 'none',
+        }} />
+        <svg width={12} height={12} viewBox="0 0 24 24" fill="none"
+          stroke={hw.accentLight} strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"
+          style={{ position: 'relative', zIndex: 1 }}>
+          <path d="M12 2 L4 6 v6 c0 4.5 3.5 8.5 8 10 c4.5-1.5 8-5.5 8-10 V6 z" />
+          <path d="M9 12 l2 2 l4-4" />
+        </svg>
       </div>
 
       {/* Menu items */}
@@ -178,8 +190,11 @@ export function TitleBar({
         >
           <div
             style={{
-              padding: '4px 8px',
-              fontSize: 11,
+              padding: '4px 9px',
+              fontFamily: hw.font.ui,
+              fontSize: 10.5,
+              fontWeight: 600,
+              letterSpacing: hw.tracking.eyebrow,
               color: openMenu === idx ? hw.textPrimary : hw.textMuted,
               cursor: 'default',
               borderRadius: hw.radius.sm,
@@ -241,8 +256,10 @@ export function TitleBar({
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
-                      padding: '5px 12px',
+                      padding: '6px 12px',
+                      fontFamily: hw.font.ui,
                       fontSize: 12,
+                      fontWeight: 500,
                       color: item.disabled ? hw.textFaint : hw.textSecondary,
                       cursor: item.disabled ? 'default' : 'pointer',
                       transition: 'background 0.1s, color 0.1s',
@@ -266,10 +283,12 @@ export function TitleBar({
                     <span>{item.label}</span>
                     {item.shortcut && (
                       <span style={{
+                        fontFamily: hw.font.mono,
                         fontSize: 10,
+                        fontWeight: 400,
                         color: hw.textFaint,
                         marginLeft: 24,
-                        fontFamily: "'Consolas', monospace",
+                        letterSpacing: hw.tracking.wide,
                       }}>
                         {item.shortcut}
                       </span>
@@ -286,13 +305,16 @@ export function TitleBar({
 
       {/* Hint text */}
       <div style={{
+        fontFamily: hw.font.ui,
         fontSize: 11,
+        fontWeight: 500,
         color: hw.textFaint,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
         maxWidth: 400,
         marginRight: 4,
+        letterSpacing: '0.01em',
       }}>
         {hintText || 'Hardwave DAW'}
       </div>

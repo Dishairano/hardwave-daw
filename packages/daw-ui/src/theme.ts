@@ -78,4 +78,25 @@ export const hw = {
 
   // ─── Glow ────────────────────────────────────────────────────────────────────
   glowRed: '0 0 40px rgba(220,38,38,0.08), 0 0 80px rgba(220,38,38,0.04)',
+
+  // ─── Typography ──────────────────────────────────────────────────────────────
+  // 3-tier scale: display (Space Grotesk) for big section headings,
+  // ui (Inter) for everything chrome and body, mono (JetBrains Mono) for numerics
+  // (timecode, BPM, dB, frequency, position, metadata). Loaded in index.html.
+  font: {
+    display: "'Space Grotesk', Inter, system-ui, -apple-system, sans-serif",
+    ui:      "Inter, system-ui, -apple-system, sans-serif",
+    mono:    "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+  },
+
+  // Letter-spacing tokens (matches mockup conventions)
+  tracking: {
+    tight:   '-0.02em',  // display headings
+    normal:  '0',
+    wide:    '0.04em',   // small numerics
+    eyebrow: '0.16em',   // uppercase eyebrow labels (TIMELINE, MIXER, etc.)
+  },
+
+  // ─── Shadow ──────────────────────────────────────────────────────────────────
+  shadow: '0 1px 2px rgba(0,0,0,0.5), 0 8px 32px rgba(0,0,0,0.4)',
 } as const
