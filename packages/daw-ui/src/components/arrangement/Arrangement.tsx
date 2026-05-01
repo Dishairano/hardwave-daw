@@ -55,7 +55,11 @@ const CLIP_COLORS = [
   '#3B82F6', '#EC4899', '#06B6D4', '#84CC16',
 ]
 
-export function Arrangement() {
+interface ArrangementProps {
+  onSetHint?: (text: string) => void
+}
+
+export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
@@ -773,6 +777,23 @@ export function Arrangement() {
           canvas.style.cursor = 'default'
         }
       }
+      // Hint bar at bottom of playlist — describe whatever is under the cursor.
+      if (onSetHint) {
+        if (mouseY < RULER_HEIGHT) {
+          onSetHint('Timeline ruler — click to place playhead')
+        } else if (hit) {
+          const tip = hit.edge === 'right' || hit.edge === 'left'
+            ? 'drag to resize · alt to bypass snap'
+            : hit.edge === 'fade-in'
+              ? 'drag to set fade-in length'
+              : hit.edge === 'fade-out'
+                ? 'drag to set fade-out length'
+                : 'drag to move · alt to bypass snap'
+          onSetHint(`${hit.clip.name} · ${tip}`)
+        } else {
+          onSetHint('')
+        }
+      }
       return
     }
 
@@ -832,7 +853,7 @@ export function Arrangement() {
       moveClip(drag.trackId, drag.clipId, newPos)
       resizeClip(drag.trackId, drag.clipId, newLen)
     }
-  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, resizeClip, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition])
+  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, resizeClip, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint])
 
   const handleMouseUp = useCallback(() => {
     const drag = dragRef.current

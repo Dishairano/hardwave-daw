@@ -273,31 +273,46 @@ export function Toolbar(props: ToolbarProps) {
 
       <Sep />
 
-      {/* 8. Snap */}
-      <div style={{ ...lcd, padding: '0 4px', gap: 3 }} onMouseEnter={hint(`Snap: ${snapEnabled ? snapValue : 'Off'}`)} onMouseLeave={clear}>
+      {/* 8. Snap pill — Hardwave brand style */}
+      <div
+        onMouseEnter={hint(`Snap: ${snapEnabled ? snapValue : 'Off'} · alt-drag bypasses while moving clips`)}
+        onMouseLeave={clear}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          height: 22, padding: '0 9px',
+          background: snapEnabled ? hw.accentDim : 'rgba(255,255,255,0.03)',
+          border: `1px solid ${snapEnabled ? hw.accentGlow : hw.borderDark}`,
+          borderRadius: 11,
+          cursor: 'default',
+        }}
+      >
         <button
           onClick={toggleSnap}
           title="Toggle snap"
           style={{
-            width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: snapEnabled ? hw.accentDim : 'transparent',
-            border: `1px solid ${snapEnabled ? hw.accentGlow : 'transparent'}`,
-            borderRadius: hw.radius.sm, color: snapEnabled ? hw.accent : hw.textMuted, padding: 0,
+            width: 6, height: 6, padding: 0, border: 0,
+            borderRadius: 3,
+            background: snapEnabled ? hw.red : hw.textFaint,
+            boxShadow: snapEnabled ? `0 0 6px ${hw.red}` : 'none',
+            cursor: 'pointer',
           }}
-        >
-          <svg width="8" height="8" viewBox="0 0 8 8">
-            <path d="M1 7V1h6" stroke="currentColor" strokeWidth="0.9" fill="none"/>
-            <circle cx="4" cy="4" r="1.3" fill="currentColor"/>
-          </svg>
-        </button>
+        />
+        <span style={{
+          fontFamily: hw.font.mono, fontSize: 9, fontWeight: 600,
+          color: hw.textFaint, letterSpacing: hw.tracking.eyebrow,
+          textTransform: 'uppercase',
+        }}>Snap</span>
         <select
           value={snapValue}
           onChange={e => setSnapValue(e.target.value as any)}
           data-testid="snap-select"
           style={{
-            background: 'transparent', border: 'none', color: hw.textSecondary,
-            fontSize: 10, fontFamily: hw.font.mono, outline: 'none',
-            padding: '0 2px', appearance: 'none', cursor: 'pointer', minWidth: 38,
+            background: 'transparent', border: 'none',
+            color: snapEnabled ? hw.accentLight : hw.textMuted,
+            fontFamily: hw.font.mono, fontSize: 10, fontWeight: 600,
+            letterSpacing: hw.tracking.wide, textTransform: 'uppercase',
+            outline: 'none', padding: 0, appearance: 'none', cursor: 'pointer',
+            minWidth: 32, textAlignLast: 'center' as any,
           }}
         >
           {SNAP_VALUES.map(v => <option key={v} value={v}>{v}</option>)}
