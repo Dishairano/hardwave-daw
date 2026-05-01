@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { SplashScreen } from './components/SplashScreen'
 import { TitleBar } from './components/transport/TitleBar'
 import { Toolbar } from './components/transport/Toolbar'
+import { HwApp } from './components/HwApp'
 import { TrackList } from './components/arrangement/TrackList'
 import { Arrangement } from './components/arrangement/Arrangement'
 import { MixerPanel } from './components/mixer/MixerPanel'
@@ -695,81 +696,7 @@ export function App() {
         />
       )}
 
-      <TitleBar
-        hintText={hintText}
-        onNewProject={handleNewProject}
-        onSaveProject={handleSaveProject}
-        onSaveProjectAs={handleSaveProjectAs}
-        onOpenProject={handleOpenProject}
-        onUndo={() => useTrackStore.getState().undo()}
-        onRedo={() => useTrackStore.getState().redo()}
-        onCut={cutSelection}
-        onCopy={() => useTrackStore.getState().copySelectedClips()}
-        onPaste={pasteAtPlayhead}
-        onDuplicate={duplicateSelection}
-        onSelectAll={() => useTrackStore.getState().selectAllClips()}
-        onAddAudioTrack={() => useTrackStore.getState().addAudioTrack()}
-        onAddInstrumentTrack={() => useTrackStore.getState().addMidiTrack()}
-        onAddAutomationTrack={handleAddAutomationTrack}
-        onApplyTrackTemplate={applyTrackTemplate}
-        onManageTrackTemplates={() => setShowTrackTemplateManager(true)}
-        onToggleBrowser={() => setShowBrowser(v => !v)}
-        onTogglePlaylist={() => setShowPlaylist(v => !v)}
-        onToggleChannelRack={() => setShowChannelRack(v => !v)}
-        onTogglePianoRoll={() => setShowPianoRoll(v => !v)}
-        onToggleMixer={() => setShowMixer(v => !v)}
-        onToggleRoadmap={() => setShowRoadmap(v => !v)}
-        onOpenAudioSettings={() => setShowAudioSettings(true)}
-        onOpenThemePicker={() => setShowThemePicker(true)}
-        onOpenLoudness={() => setShowLoudness(true)}
-        onOpenOscilloscope={() => setShowOscilloscope(true)}
-        onOpenSpectrum={() => setShowSpectrum(true)}
-        onOpenMidiMappings={() => setShowMidiMappings(true)}
-        onOpenTempoMap={() => setShowTempoMap(true)}
-        pdcEnabled={pdcEnabled}
-        onTogglePdc={async () => {
-          const next = !pdcEnabled
-          setPdcEnabled(next)
-          try { await invoke('set_pdc_enabled', { enabled: next }) } catch {}
-        }}
-        onCheckForUpdates={checkForUpdates}
-        onToggleAbout={() => setShowAbout(v => !v)}
-        onToggleShortcuts={() => setShowShortcuts(v => !v)}
-        onToggleHelp={() => setShowHelp(v => !v)}
-        onOpenHistory={() => setShowHistory(true)}
-        onExportAudio={handleExportAudio}
-        onSaveAsTemplate={handleSaveAsTemplate}
-        onAutoCrossfade={async () => {
-          const pairs = await useTrackStore.getState().autoCrossfadeOverlaps()
-          const notify = useNotificationStore.getState().push
-          if (pairs === 0) notify('info', 'No overlapping clips found')
-          else notify('info', `Auto-crossfaded ${pairs} overlap${pairs === 1 ? '' : 's'}`)
-        }}
-        recentProjects={recentProjects}
-        onOpenRecentProject={handleOpenRecent}
-        onClearRecentProjects={() => useProjectStore.getState().clearRecent()}
-        showBrowser={showBrowser}
-        showPlaylist={showPlaylist}
-        showChannelRack={showChannelRack}
-        showPianoRoll={showPianoRoll}
-        showMixer={showMixer}
-      />
-
-      <Toolbar
-        showBrowser={showBrowser}
-        showPlaylist={showPlaylist}
-        showChannelRack={showChannelRack}
-        showPianoRoll={showPianoRoll}
-        showMixer={showMixer}
-        onToggleBrowser={() => setShowBrowser(v => !v)}
-        onTogglePlaylist={() => setShowPlaylist(v => !v)}
-        onToggleChannelRack={() => setShowChannelRack(v => !v)}
-        onTogglePianoRoll={() => setShowPianoRoll(v => !v)}
-        onToggleMixer={() => setShowMixer(v => !v)}
-        onSetHint={setHintText}
-      />
-
-      <MainLayout
+      <HwApp
         showBrowser={showBrowser}
         showPlaylist={showPlaylist}
         showChannelRack={showChannelRack}
@@ -777,6 +704,10 @@ export function App() {
         showMixer={showMixer}
         isMobile={isMobile}
         mobilePanel={mobilePanel}
+        onToggleBrowser={() => setShowBrowser(v => !v)}
+        onToggleChannelRack={() => setShowChannelRack(v => !v)}
+        onTogglePianoRoll={() => setShowPianoRoll(v => !v)}
+        onToggleMixer={() => setShowMixer(v => !v)}
       />
 
       {isMobile && (

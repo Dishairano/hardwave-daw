@@ -1,0 +1,531 @@
+/*
+ * mockup.css — Hardwave DAW redesign visual port.
+ *
+ * Source: /var/www/hardwave-app/daw-mockup/index.html (proposal page).
+ * This file extracts ONLY the .fl-* DAW-shell rules + the :root design tokens
+ * that those rules reference. The proposal-page chrome (`.shell`, `.head`,
+ * `.eyebrow`, `.tokens-grid`, `.mockup`, `.token-card`, `.diff-grid`, `.phil-*`,
+ * `.zoom-*`, `.ws-*`, `.splash-*`, `.frame`, `.section-sub`, `h2::before`,
+ * `footer`, etc.) was deliberately dropped — we don't ship the rate-card.
+ *
+ * The classnames here are referenced by `components/HwApp.tsx` to give the
+ * docked DAW panels their FL-Studio-flavored skin without rewriting the
+ * existing React components (Browser, ChannelRack, PianoRoll, MixerPanel,
+ * Arrangement). HwApp wraps those components in `.fl-app` chrome so the
+ * surrounding shell matches the mockup pixel-for-pixel.
+ *
+ * Imported once from `main.tsx`.
+ */
+
+/* === Design tokens (subset of mockup :root, scoped to FL shell) === */
+.fl-app, .fl-floating {
+  --bg: #000;
+  --panel: #0a0a0c;
+  --panel-2: #111114;
+  --panel-3: #16161b;
+  --panel-4: #1c1c22;
+  --text: #dddde3;
+  --text-muted: #8b8b99;
+  --text-dim: #4a4a58;
+  --red: #DC2626;
+  --red-bright: #EF4444;
+  --red-dark: #991b1b;
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --blue: #3b82f6;
+  --purple: #a855f7;
+  --cyan: #06b6d4;
+  --border: rgba(255,255,255,0.06);
+  --border-hover: rgba(255,255,255,0.16);
+  --border-strong: rgba(255,255,255,0.12);
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --display: 'Space Grotesk', Inter, sans-serif;
+}
+
+/* Generic icon helper used across .fl-* SVGs */
+.fl-app .ic, .fl-floating .ic {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+  color: currentColor;
+}
+
+/* === FL APP SHELL (top-bar / second-row / body) === */
+.fl-app {
+  background: #000;
+  color: var(--text);
+  font-family: Inter, system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+.fl-topbar {
+  height: 30px;
+  background: linear-gradient(180deg, #0a0a0d, #050507);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+.fl-logo {
+  font-family: var(--display);
+  font-weight: 700;
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: 2px;
+  padding: 0 10px;
+}
+.fl-logo span { color: var(--red); }
+.fl-menu {
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 0 6px;
+  border-left: 1px solid var(--border);
+  height: 100%;
+  align-items: center;
+}
+.fl-menu span { cursor: pointer; -webkit-app-region: no-drag; }
+.fl-menu span:hover { color: var(--red); }
+
+.fl-trans {
+  display: flex;
+  gap: 1px;
+  align-items: center;
+  padding: 0 4px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  height: 100%;
+  margin-left: 6px;
+  -webkit-app-region: no-drag;
+}
+.fl-trans-btn {
+  width: 26px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #16161c, #0a0a0e);
+  border: 1px solid var(--border);
+}
+.fl-trans-btn:hover {
+  color: #fff;
+  background: linear-gradient(180deg, #1c1c24, #0e0e14);
+  border-color: var(--border-hover);
+}
+.fl-trans-btn.play { color: var(--green); background: linear-gradient(180deg, #0e2a18, #06180c); border-color: rgba(34,197,94,0.35); }
+.fl-trans-btn.play:hover { background: linear-gradient(180deg, #143a20, #08200e); }
+.fl-trans-btn.rec { color: var(--red-bright); background: linear-gradient(180deg, #2a0e10, #180608); border-color: rgba(220,38,38,0.4); }
+.fl-trans-btn.rec:hover { background: linear-gradient(180deg, #3a1418, #200a0c); }
+.fl-trans-btn.on { color: #fff; background: linear-gradient(180deg, #2a1a0e, #180e08); border-color: rgba(245,158,11,0.5); }
+
+.fl-clock {
+  display: flex; align-items: center; gap: 8px;
+  background: #000;
+  border: 1px solid var(--border);
+  padding: 2px 10px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  height: 26px;
+  margin-left: 6px;
+  -webkit-app-region: no-drag;
+}
+.fl-clock-stack { display: flex; flex-direction: column; line-height: 1; gap: 1px; }
+.fl-clock-stack small { font-size: 6px; color: var(--text-dim); letter-spacing: 1.5px; font-weight: 600; text-transform: uppercase; }
+.fl-clock-stack b { font-size: 11px; color: #fff; font-weight: 600; }
+.fl-clock-stack.red b { color: var(--red-bright); }
+
+.fl-bpm {
+  display: flex; flex-direction: column;
+  background: #000;
+  border: 1px solid var(--border);
+  padding: 2px 10px;
+  border-radius: 3px;
+  height: 24px;
+  justify-content: center;
+  margin-left: 4px;
+  cursor: ns-resize;
+  -webkit-app-region: no-drag;
+}
+.fl-bpm small { font-size: 7px; color: var(--text-dim); letter-spacing: 1.5px; line-height: 1; font-weight: 500; }
+.fl-bpm b { font-family: var(--mono); font-size: 11px; color: var(--red-bright); font-weight: 600; line-height: 1.1; }
+.fl-bpm input {
+  font-family: var(--mono); font-size: 11px; color: var(--red-bright); font-weight: 600;
+  background: transparent; border: 0; width: 60px; padding: 0; outline: none;
+  text-align: left;
+}
+
+.fl-pat-pill {
+  display: flex; align-items: center; gap: 6px;
+  background: #160a14;
+  border: 1px solid rgba(168,85,247,0.4);
+  padding: 0 10px;
+  border-radius: 3px;
+  height: 26px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--purple);
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  margin-left: 6px;
+  font-weight: 600;
+  -webkit-app-region: no-drag;
+}
+.fl-pat-pill .ic { color: var(--purple); }
+.fl-pat-pill:hover { border-color: rgba(168,85,247,0.5); }
+
+.fl-perf {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+  padding: 0 10px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  height: 100%;
+  margin-left: 8px;
+}
+.fl-perf b { color: var(--text); font-weight: 500; }
+
+.fl-master-vol {
+  display: flex; align-items: center; gap: 6px;
+  flex: 1;
+  justify-content: flex-end;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+.fl-meter-mini {
+  width: 80px; height: 8px;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 1px;
+  overflow: hidden;
+  display: flex; flex-direction: column; gap: 1px; padding: 1px;
+}
+.fl-meter-mini i { height: 2px; background: linear-gradient(90deg, var(--green) 0, var(--green) 50%, var(--amber) 75%, var(--red-bright) 100%); display: block; }
+
+.fl-win-ctl { display: flex; gap: 0; margin-left: 6px; align-items: center; -webkit-app-region: no-drag; }
+.fl-win-ctl i {
+  width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-style: normal;
+}
+.fl-win-ctl i:hover { background: #1a1a22; color: #fff; }
+.fl-win-ctl i.x:hover { background: var(--red); color: #fff; }
+
+/* === Second row: hint bar + status pills === */
+.fl-second-row {
+  height: 30px;
+  background: linear-gradient(180deg, #0a0a0d, #070709);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.fl-hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 3px 10px;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  min-width: 220px;
+  max-width: 520px;
+  transition: color .12s, border-color .12s, background .12s;
+}
+.fl-hint.active {
+  color: #fff;
+  border-color: rgba(220,38,38,0.45);
+  background: rgba(220,38,38,0.08);
+}
+.fl-hint b { color: var(--red-bright); font-weight: 600; margin-right: 4px; }
+.fl-tag-pill {
+  padding: 3px 8px;
+  background: #08080c;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-size: 9px;
+  font-weight: 500;
+}
+.fl-step-pill {
+  padding: 3px 10px;
+  background: rgba(168,85,247,0.08);
+  border: 1px solid rgba(168,85,247,0.3);
+  border-radius: 3px;
+  color: var(--purple);
+  letter-spacing: 0.5px;
+  font-size: 10px;
+}
+
+/* === Body: browser | picker | playlist (or stacked panels) === */
+.fl-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  background: #000;
+  min-height: 0;
+}
+
+/* Browser column (wraps the existing <Browser /> component). */
+.fl-browser {
+  width: 220px;
+  background: linear-gradient(180deg, #06060a, #000);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* Picker (pattern picker — uses real patterns from store). */
+.fl-picker {
+  width: 140px;
+  background: #040406;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.fl-picker-head {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--red); font-weight: 700;
+  display: flex; align-items: center; gap: 4px;
+  background: #08080c;
+}
+.fl-picker-head .ct { margin-left: auto; color: var(--text-dim); font-size: 8px; font-weight: 500; }
+.fl-picker-tabs {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: 8px;
+  letter-spacing: 1.5px; text-transform: uppercase;
+}
+.fl-picker-tab {
+  padding: 4px 0; text-align: center;
+  color: var(--text-dim);
+  border-right: 1px solid var(--border);
+  cursor: pointer; font-weight: 600;
+  background: transparent; border-top: 0; border-left: 0; border-bottom: 0;
+}
+.fl-picker-tab:last-child { border-right: 0; }
+.fl-picker-tab.on { color: var(--red); background: rgba(220,38,38,0.06); border-bottom: 1px solid var(--red); }
+.fl-picker-list { flex: 1; overflow: auto; padding: 3px 0; }
+.fl-pi {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 5px;
+  align-items: center;
+  padding: 3px 6px;
+  font-family: var(--mono); font-size: 9px;
+  color: var(--text);
+  cursor: grab;
+  line-height: 1.2;
+  letter-spacing: 0.5px;
+  border-left: 2px solid transparent;
+}
+.fl-pi:hover { background: rgba(255,255,255,0.04); }
+.fl-pi.on { background: rgba(220,38,38,0.06); color: #fff; border-left-color: var(--red); }
+.fl-pi .ic { width: 14px; height: 12px; border-radius: 2px; background: var(--col, #888); }
+.fl-pi .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* === Playlist === */
+.fl-playlist {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #000;
+  min-width: 0;
+}
+.fl-pl-head {
+  height: 24px;
+  background: linear-gradient(180deg, #0a0a0d, #050507);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 8px;
+  font-family: var(--mono); font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.fl-pl-head .title {
+  font-family: var(--mono); font-size: 10px;
+  color: var(--text); letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.fl-pl-head .title b { color: var(--red); font-weight: 700; }
+.fl-pl-tools {
+  height: 26px;
+  background: linear-gradient(180deg, #08080c, #040406);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 6px; gap: 1px;
+  flex-shrink: 0;
+}
+.fl-tool {
+  width: 24px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+  background: transparent; border: 0;
+}
+.fl-tool:hover { color: #fff; background: #0e0e14; }
+.fl-tool.on { color: #fff; background: rgba(220,38,38,0.18); box-shadow: inset 0 0 0 1px rgba(220,38,38,0.4); }
+.fl-tool.on .ic { color: var(--red-bright); }
+.fl-tool-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+.fl-tool-pill {
+  padding: 0 7px;
+  background: #0a0a0e;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  display: flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 9px;
+  color: var(--text);
+  letter-spacing: 0.5px;
+  height: 20px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.fl-tool-pill small { color: var(--text-dim); font-size: 8px; letter-spacing: 1px; font-weight: 500; }
+.fl-tool-pill.on { background: rgba(220,38,38,0.12); border-color: rgba(220,38,38,0.45); color: #fff; }
+.fl-tool-pill.on small { color: var(--red-bright); }
+
+.fl-pl-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* The `Arrangement` React component owns the playlist canvas. We just wrap it. */
+.fl-pl-canvas-host {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: linear-gradient(180deg, #1a0e1f 0%, #0e0716 100%);
+  position: relative;
+}
+
+/* === Channel rack panel chrome === */
+.fl-cr {
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.fl-cr-head {
+  height: 22px;
+  background: linear-gradient(180deg, #0a0a0d, #040406);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 8px; gap: 8px;
+  font-family: var(--mono); font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+.fl-cr-head .title { color: var(--text); text-transform: uppercase; font-weight: 600; letter-spacing: 1.5px; }
+
+/* === Piano roll panel chrome === */
+.fl-pr {
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.fl-pr-head {
+  height: 22px;
+  background: linear-gradient(180deg, #0a0a0d, #040406);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 8px; gap: 6px;
+  font-family: var(--mono); font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+.fl-pr-head .title { color: var(--text); text-transform: uppercase; font-weight: 600; letter-spacing: 1.5px; }
+
+/* === Mixer panel chrome === */
+.fl-mx {
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.fl-mx-head {
+  height: 22px;
+  background: linear-gradient(180deg, #0a0a0d, #040406);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 8px; gap: 6px;
+  font-family: var(--mono); font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+.fl-mx-head .title { color: var(--text); text-transform: uppercase; font-weight: 600; letter-spacing: 1.5px; }
+
+/* Generic "panel host" wrapper — keeps the React component flush with chrome */
+.fl-panel-host {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* When mockup .fl-* components host live React components, ensure they fill */
+.fl-browser > * { flex: 1; min-height: 0; }
+.fl-pl-canvas-host > * { flex: 1; min-width: 0; min-height: 0; }
+.fl-panel-host > * { flex: 1; min-height: 0; }
+
+/* === Responsive (subset of mockup media queries) === */
+@media (max-width: 1100px) {
+  .fl-browser { width: 200px; }
+}
+@media (max-width: 780px) {
+  .fl-browser, .fl-picker { display: none; }
+}
