@@ -17,15 +17,38 @@ export function Browser() {
       flex: 1,
       width: '100%',
       minWidth: 240,
-      background: 'rgba(255,255,255,0.02)',
-      backdropFilter: hw.blur.sm,
+      background: '#000',
       borderRight: `1px solid ${hw.border}`,
       display: 'flex',
       flexDirection: 'column',
+      position: 'relative',
     }}>
+      {/* Hardwave panel signature: 2 px red-gradient top stripe */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+        background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accentLight}, ${hw.secondary})`,
+        zIndex: 2, pointerEvents: 'none',
+      }} />
+
+      {/* Branded panel header */}
+      <div style={{
+        height: 24, flexShrink: 0,
+        background: 'linear-gradient(180deg, #0a0a0d, #050507)',
+        borderBottom: `1px solid ${hw.border}`,
+        display: 'flex', alignItems: 'center', padding: '0 10px', gap: 8,
+      }}>
+        <span style={{
+          fontFamily: hw.font.mono, fontSize: 10, fontWeight: 600,
+          color: hw.red, letterSpacing: hw.tracking.eyebrow, textTransform: 'uppercase',
+        }}>Browser</span>
+        <span style={{ flex: 1 }} />
+        <DetachButton panelId="browser" />
+      </div>
+
+      {/* Tab row — JetBrains Mono uppercase, red underline on active */}
       <div style={{
         display: 'flex',
-        background: 'rgba(255,255,255,0.01)',
+        background: '#040406',
         borderBottom: `1px solid ${hw.border}`,
       }}>
         {(['plugins', 'files', 'project'] as Tab[]).map(tab => (
@@ -33,27 +56,34 @@ export function Browser() {
             key={tab}
             onClick={() => setActiveTab(tab)}
             style={{
-              flex: 1, padding: '5px 0',
-              fontSize: 10, fontWeight: activeTab === tab ? 600 : 400,
+              flex: 1, padding: '6px 0',
+              fontFamily: hw.font.mono,
+              fontSize: 9, fontWeight: 600,
+              letterSpacing: hw.tracking.eyebrow,
+              textTransform: 'uppercase',
               color: activeTab === tab ? hw.textPrimary : hw.textFaint,
-              background: activeTab === tab ? 'rgba(255,255,255,0.04)' : 'transparent',
-              borderBottom: activeTab === tab ? `2px solid ${hw.accent}` : '2px solid transparent',
-              transition: 'all 0.15s',
+              background: 'transparent',
+              border: 'none',
+              borderBottom: activeTab === tab ? `2px solid ${hw.red}` : '2px solid transparent',
+              cursor: 'default',
+              transition: 'color 0.15s, border-color 0.15s',
             }}
           >
-            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {tab}
           </button>
         ))}
-        <div style={{ display: 'flex', alignItems: 'center', padding: '0 4px' }}>
-          <DetachButton panelId="browser" />
-        </div>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '2px 0' }}>
         {activeTab === 'plugins' && <PluginsTab />}
         {activeTab === 'files' && <FilesTab />}
         {activeTab === 'project' && (
-          <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 10 }}>
+          <div style={{
+            padding: 18, textAlign: 'center',
+            fontFamily: hw.font.mono, fontSize: 10,
+            color: hw.textFaint, letterSpacing: hw.tracking.wide,
+            textTransform: 'uppercase',
+          }}>
             Project files will<br />appear here
           </div>
         )}
