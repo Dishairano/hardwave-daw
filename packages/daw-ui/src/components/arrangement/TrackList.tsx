@@ -215,10 +215,14 @@ export function TrackList() {
               paddingLeft: inFolder ? 8 : 0,
             }}
           >
-            <div style={{ width: 3, background: track.color, flexShrink: 0 }} />
-            <div style={{ flex: 1, padding: '5px 7px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ fontSize: 9, color: hw.textFaint }}>{idx + 1}</span>
+            {/* 2 px color stripe (mockup pattern, was 3 px) */}
+            <div style={{ width: 2, background: track.color, flexShrink: 0 }} />
+            <div style={{ flex: 1, padding: '4px 7px', display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{
+                  fontFamily: hw.font.mono, fontSize: 8, fontWeight: 500,
+                  color: hw.textFaint, letterSpacing: hw.tracking.wide,
+                }}>{idx + 1}</span>
                 {renaming?.id === track.id ? (
                   <input
                     ref={renameInputRef}
@@ -231,7 +235,8 @@ export function TrackList() {
                       else if (e.key === 'Escape') setRenaming(null)
                     }}
                     style={{
-                      flex: 1, minWidth: 0, fontSize: 10, fontWeight: 500,
+                      flex: 1, minWidth: 0,
+                      fontFamily: hw.font.mono, fontSize: 9, fontWeight: 500,
                       color: hw.textPrimary, background: 'rgba(255,255,255,0.08)',
                       border: `1px solid ${hw.accent}`, borderRadius: 2, padding: '1px 3px',
                       outline: 'none',
@@ -241,8 +246,11 @@ export function TrackList() {
                   <span
                     onDoubleClick={e => { e.stopPropagation(); setRenaming({ id: track.id, draft: track.name }) }}
                     style={{
-                      fontSize: 10, color: hw.textPrimary, fontWeight: 500,
+                      fontFamily: hw.font.mono, fontSize: 9,
+                      color: track.muted ? hw.textFaint : hw.textPrimary,
+                      fontWeight: 500, letterSpacing: '0.01em',
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      flex: 1, minWidth: 0,
                     }}
                   >
                     {track.name}
@@ -441,9 +449,11 @@ function TrackMenuItem({ label, shortcut, danger, onClick }: {
 }
 
 const tb: React.CSSProperties = {
-  width: 18, height: 14,
+  width: 13, height: 11,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  fontSize: 8, fontWeight: 700,
-  border: `1px solid rgba(255,255,255,0.06)`,
-  borderRadius: 6, padding: 0,
+  fontFamily: "'JetBrains Mono', ui-monospace, Menlo, monospace",
+  fontSize: 7, fontWeight: 700,
+  border: `1px solid rgba(255,255,255,0.08)`,
+  borderRadius: 2, padding: 0,
+  cursor: 'default',
 }
