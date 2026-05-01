@@ -5,10 +5,16 @@ import { useTransportStore } from '../../stores/transportStore'
 import { hw } from '../../theme'
 
 const PPQ = 960
-const TRACK_HEIGHT = 56
-const PIXELS_PER_SECOND = 100
+const TRACK_HEIGHT_DEFAULT = 56
+const PIXELS_PER_SECOND_DEFAULT = 100
 const RESIZE_HANDLE_PX = 6
 const RULER_HEIGHT = 22
+
+// Zoom limits — per user spec, vertical can't shrink below 0.6×
+const PPS_MIN = 30
+const PPS_MAX = 600
+const TRACK_H_MIN = Math.round(TRACK_HEIGHT_DEFAULT * 0.6)
+const TRACK_H_MAX = Math.round(TRACK_HEIGHT_DEFAULT * 2)
 
 type DragMode = 'none' | 'move' | 'resize-right'
 
@@ -19,6 +25,7 @@ interface DragState {
   startMouseX: number
   originalPositionTicks: number
   originalLengthTicks: number
+  altBypassedSnap: boolean
 }
 
 const waveformData = new Map<string, [number, number][]>()
@@ -29,7 +36,13 @@ const CLIP_COLORS = [
   '#3B82F6', '#EC4899', '#06B6D4', '#84CC16',
 ]
 
-export function Arrangement() {
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
+
+interface ArrangementProps {
+  onSetHint?: (text: string) => void
+}
+
+export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
@@ -38,10 +51,24 @@ export function Arrangement() {
   const { tracks, selectedClipId, selectClip, moveClip, resizeClip, getWaveformPeaks } = useTrackStore()
   const { positionSamples, playing, bpm, sampleRate } = useTransportStore()
 
+  // Two-axis zoom + scroll state. autoFollow follows the playhead until the user pans manually.
+  const [pps, setPps] = useState(PIXELS_PER_SECOND_DEFAULT)
+  const [trackH, setTrackH] = useState(TRACK_HEIGHT_DEFAULT)
+  const [scrollY, setScrollY] = useState(0)
+  const [autoFollow, setAutoFollow] = useState(true)
+
+  const ppsRef = useRef(pps); ppsRef.current = pps
+  const trackHRef = useRef(trackH); trackHRef.current = trackH
+  const scrollYRef = useRef(scrollY); scrollYRef.current = scrollY
+  const autoFollowRef = useRef(autoFollow); autoFollowRef.current = autoFollow
+
   const audioTracks = tracks.filter(t => t.kind !== 'Master')
   const beatsPerSecond = bpm / 60
-  const pixelsPerBeat = PIXELS_PER_SECOND / beatsPerSecond
+  const pixelsPerBeat = pps / beatsPerSecond
   const pixelsPerTick = pixelsPerBeat / PPQ
+  // Aliases so the rest of the draw/hit-test code reads cleanly with the new state-driven values.
+  const TRACK_HEIGHT = trackH
+  const PIXELS_PER_SECOND = pps
 
   // Load waveforms
   useEffect(() => {
@@ -79,32 +106,35 @@ export function Arrangement() {
     const h = rect.height
 
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
-    const scrollOffset = Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
+    const scrollOffset = autoFollow
+      ? Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
+      : 0
 
     // Background — near-black
     ctx.fillStyle = '#0a0a0f'
     ctx.fillRect(0, 0, w, h)
 
-    // Ruler bar
+    // Ruler bar (always pinned at top, never scrolls vertically)
     ctx.fillStyle = '#08080d'
     ctx.fillRect(0, 0, w, RULER_HEIGHT)
     ctx.strokeStyle = 'rgba(255,255,255,0.04)'
     ctx.lineWidth = 1
     ctx.beginPath()
-    ctx.moveTo(0, RULER_HEIGHT)
-    ctx.lineTo(w, RULER_HEIGHT)
+    ctx.moveTo(0, RULER_HEIGHT + 0.5)
+    ctx.lineTo(w, RULER_HEIGHT + 0.5)
     ctx.stroke()
 
-    // Beat grid
+    // Beat grid — HQ pixel-snapped 1px hairlines (use Math.floor + 0.5 for crisp lines)
     const startBeat = Math.floor(scrollOffset / pixelsPerBeat)
     for (let i = startBeat; i < startBeat + Math.ceil(w / pixelsPerBeat) + 2; i++) {
-      const x = i * pixelsPerBeat - scrollOffset
+      const xRaw = i * pixelsPerBeat - scrollOffset
+      const x = Math.floor(xRaw) + 0.5
       if (x < -1 || x > w + 1) continue
 
       const isBar = i % 4 === 0
 
-      ctx.strokeStyle = isBar ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.02)'
-      ctx.lineWidth = isBar ? 1 : 0.5
+      ctx.strokeStyle = isBar ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.025)'
+      ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(x, RULER_HEIGHT)
       ctx.lineTo(x, h)
@@ -112,7 +142,7 @@ export function Arrangement() {
 
       // Ruler markings
       if (isBar) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.06)'
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)'
         ctx.beginPath()
         ctx.moveTo(x, 0)
         ctx.lineTo(x, RULER_HEIGHT)
@@ -120,9 +150,9 @@ export function Arrangement() {
 
         ctx.fillStyle = '#71717a'
         ctx.font = '9px Inter, ui-sans-serif, sans-serif'
-        ctx.fillText(`${Math.floor(i / 4) + 1}`, x + 3, 13)
+        ctx.fillText(`${Math.floor(i / 4) + 1}`, Math.floor(xRaw) + 3, 13)
       } else {
-        ctx.strokeStyle = 'rgba(255,255,255,0.03)'
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)'
         ctx.beginPath()
         ctx.moveTo(x, RULER_HEIGHT - 4)
         ctx.lineTo(x, RULER_HEIGHT)
@@ -130,23 +160,30 @@ export function Arrangement() {
       }
     }
 
-    // Track lane backgrounds
-    for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * TRACK_HEIGHT
-      ctx.fillStyle = i % 2 === 0 ? '#0a0a0f' : '#0c0c11'
-      ctx.fillRect(0, y, w, TRACK_HEIGHT)
+    // Track lane backgrounds (apply vertical scroll, clip below ruler)
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(0, RULER_HEIGHT, w, h - RULER_HEIGHT)
+    ctx.clip()
 
-      ctx.strokeStyle = 'rgba(255,255,255,0.03)'
+    for (let i = 0; i < audioTracks.length; i++) {
+      const y = Math.floor(RULER_HEIGHT + i * TRACK_HEIGHT - scrollY) + 0.5
+      if (y > h || y + TRACK_HEIGHT < RULER_HEIGHT) continue
+      ctx.fillStyle = i % 2 === 0 ? '#0a0a0f' : '#0c0c11'
+      ctx.fillRect(0, y - 0.5, w, TRACK_HEIGHT)
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)'
       ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.moveTo(0, y + TRACK_HEIGHT)
-      ctx.lineTo(w, y + TRACK_HEIGHT)
+      ctx.moveTo(0, y + TRACK_HEIGHT - 0.5)
+      ctx.lineTo(w, y + TRACK_HEIGHT - 0.5)
       ctx.stroke()
     }
 
-    // Clips
+    // Clips (within the same vertical-scroll clip region)
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * TRACK_HEIGHT
+      const y = RULER_HEIGHT + i * TRACK_HEIGHT - scrollY
+      if (y > h || y + TRACK_HEIGHT < RULER_HEIGHT) continue
       const track = audioTracks[i]
       const clipColor = CLIP_COLORS[i % CLIP_COLORS.length]
 
@@ -154,6 +191,7 @@ export function Arrangement() {
         drawClip(ctx, clip, clipColor, y, scrollOffset, w, pixelsPerTick)
       }
     }
+    ctx.restore()
 
     // Playhead — red
     const playheadX = playheadSecs * PIXELS_PER_SECOND - scrollOffset
@@ -182,7 +220,7 @@ export function Arrangement() {
       ctx.fill()
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, pps, trackH, scrollY, autoFollow])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -278,12 +316,13 @@ export function Arrangement() {
     ctx.shadowBlur = 0
   }
 
-  // Hit test
+  // Hit test — accounts for current vertical scroll
   const hitTest = useCallback((mouseX: number, mouseY: number, scrollOffset: number): {
     clip: ClipInfo, trackId: string, edge: 'body' | 'right'
   } | null => {
+    if (mouseY < RULER_HEIGHT) return null
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * TRACK_HEIGHT
+      const y = RULER_HEIGHT + i * TRACK_HEIGHT - scrollYRef.current
       if (mouseY < y + 2 || mouseY > y + TRACK_HEIGHT - 2) continue
       const track = audioTracks[i]
       for (const clip of track.clips) {
@@ -299,10 +338,11 @@ export function Arrangement() {
   }, [audioTracks, pixelsPerTick])
 
   const getScrollOffset = useCallback(() => {
+    if (!autoFollowRef.current) return 0
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const container = containerRef.current
     const w = container ? container.getBoundingClientRect().width : 800
-    return Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
+    return Math.max(0, playheadSecs * ppsRef.current - w * 0.25)
   }, [positionSamples, sampleRate])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -321,6 +361,7 @@ export function Arrangement() {
         startMouseX: mouseX,
         originalPositionTicks: hit.clip.position_ticks,
         originalLengthTicks: hit.clip.length_ticks,
+        altBypassedSnap: e.altKey,
       }
     } else {
       selectClip(null)
@@ -338,6 +379,18 @@ export function Arrangement() {
       if (canvas) {
         canvas.style.cursor = hit ? (hit.edge === 'right' ? 'ew-resize' : 'grab') : 'default'
       }
+      // Hint bar
+      if (onSetHint) {
+        if (hit) {
+          onSetHint(hit.edge === 'right'
+            ? `${hit.clip.name} · drag right edge to resize · hold Alt to bypass snap`
+            : `${hit.clip.name} · drag to move · hold Alt to bypass snap`)
+        } else if (mouseY < RULER_HEIGHT) {
+          onSetHint('Timeline ruler · click to place playhead (TODO)')
+        } else {
+          onSetHint('Playlist · Ctrl+wheel = horizontal zoom · Alt+wheel = vertical zoom · wheel = scroll')
+        }
+      }
       return
     }
 
@@ -345,21 +398,55 @@ export function Arrangement() {
     const mouseX = e.clientX - rect.left
     const dx = mouseX - drag.startMouseX
     const dTicks = Math.round(dx / pixelsPerTick)
+    // Snap-by-default. Hold Alt at any point during drag to bypass.
+    const bypassSnap = e.altKey || drag.altBypassedSnap
 
     if (drag.mode === 'move') {
       const newPos = Math.max(0, drag.originalPositionTicks + dTicks)
-      const snapped = Math.round(newPos / PPQ) * PPQ
-      moveClip(drag.trackId, drag.clipId, snapped)
+      const finalPos = bypassSnap ? newPos : Math.round(newPos / PPQ) * PPQ
+      moveClip(drag.trackId, drag.clipId, finalPos)
     } else if (drag.mode === 'resize-right') {
       const newLen = Math.max(PPQ, drag.originalLengthTicks + dTicks)
-      const snapped = Math.round(newLen / PPQ) * PPQ
-      resizeClip(drag.trackId, drag.clipId, snapped)
+      const finalLen = bypassSnap ? newLen : Math.round(newLen / PPQ) * PPQ
+      resizeClip(drag.trackId, drag.clipId, finalLen)
     }
-  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, resizeClip])
+  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, resizeClip, onSetHint])
 
   const handleMouseUp = useCallback(() => {
     dragRef.current = null
   }, [])
+
+  const handleMouseLeave = useCallback(() => {
+    dragRef.current = null
+    if (onSetHint) onSetHint('')
+  }, [onSetHint])
+
+  // Two-axis zoom + scroll. Native event handler so we can preventDefault.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const handler = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
+        setPps(p => clamp(p * factor, PPS_MIN, PPS_MAX))
+      } else if (e.altKey) {
+        e.preventDefault()
+        const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
+        setTrackH(h => clamp(Math.round(h * factor), TRACK_H_MIN, TRACK_H_MAX))
+      } else {
+        // Vertical pan — disengage auto-follow so the user keeps their position
+        e.preventDefault()
+        const totalH = audioTracks.length * trackHRef.current
+        const visibleH = Math.max(1, container.clientHeight - RULER_HEIGHT)
+        const maxScroll = Math.max(0, totalH - visibleH)
+        setScrollY(y => clamp(y + e.deltaY, 0, maxScroll))
+        if (autoFollowRef.current) setAutoFollow(false)
+      }
+    }
+    container.addEventListener('wheel', handler, { passive: false })
+    return () => container.removeEventListener('wheel', handler)
+  }, [audioTracks.length])
 
   // Drag-and-drop
   const [dropHighlight, setDropHighlight] = useState(false)

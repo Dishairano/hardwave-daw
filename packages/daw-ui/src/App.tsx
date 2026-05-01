@@ -312,7 +312,7 @@ export function App() {
           {showPlaylist && (
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 80 }}>
               <TrackList />
-              <Arrangement />
+              <Arrangement onSetHint={setHintText} />
             </div>
           )}
 
