@@ -80,5 +80,25 @@ tauri = { version = "2", features = [] }
 tauri-build = "2"
 
 [profile.release]
-lto = "thin"
+# Tuned for fast CI iteration during the UI-redesign-heavy workstream.
+# When we settle and start shipping audio-perf-sensitive releases, switch the
+# CI workflow to `--profile release-final` (defined below) and revert this back
+# to `lto = "thin"` + `opt-level = 3`.
+opt-level = 2
+lto = false
+codegen-units = 16
+# incremental=false — sccache (set by CI) handles cross-run caching; incremental
+# would fight it. Locally users can override with CARGO_INCREMENTAL=1 if they want.
+incremental = false
+debug = 0
+strip = "symbols"
+
+# `release-final` keeps the original audio-perf-tuned profile — single codegen
+# unit, thin LTO, opt-level 3. Use for real ships when the redesign is done:
+#   cargo build --profile release-final
+[profile.release-final]
+inherits = "release"
 opt-level = 3
+lto = "thin"
+codegen-units = 1
+incremental = false
