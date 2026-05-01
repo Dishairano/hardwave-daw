@@ -164,7 +164,6 @@ export function App() {
 
   // Hint bar text
   const [hintText, setHintText] = useState('')
-  const [playlistHint, setPlaylistHint] = useState('')
 
   // Update state — matches Suite pattern
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
@@ -906,6 +905,7 @@ function MainLayout({
   isMobile: boolean; mobilePanel: MobilePanel;
 }) {
   const layout = usePanelLayoutStore(s => s.layout)
+  const [playlistHint, setPlaylistHint] = useState('')
 
   // Phone mode: show exactly one panel, full-width, no side dock.
   if (isMobile) {
