@@ -11,7 +11,11 @@ const PPQ = 960
 const PIXELS_PER_SECOND_BASE = 100
 // (mockup-aligned)
 const RESIZE_HANDLE_PX = 6
-const RULER_HEIGHT = 28
+// HTML ruler now lives in HwApp.tsx (.fl-pl-ruler). Canvas reserves no top
+// space for ruler — track lanes start at y=0. Kept as a named constant so
+// scroll math stays readable; flip back to a positive value if the canvas
+// needs to render its own ruler again.
+const RULER_HEIGHT = 0
 
 type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left' | 'fade-in' | 'fade-out' | 'rubber' | 'scrub'
 
@@ -138,21 +142,12 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const scrollOffset = Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
 
-    // Background — pure black to match mockup
-    ctx.fillStyle = '#000'
-    ctx.fillRect(0, 0, w, h)
+    // Background — transparent so the .fl-pl-grid gradient (mockup) shows
+    // through. Previously a solid #000 fill that hid the parent gradient.
+    ctx.clearRect(0, 0, w, h)
 
-    // Ruler bar — darker to match mockup
-    ctx.fillStyle = '#040406'
-    ctx.fillRect(0, 0, w, RULER_HEIGHT)
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.moveTo(0, RULER_HEIGHT + 0.5)
-    ctx.lineTo(w, RULER_HEIGHT + 0.5)
-    ctx.stroke()
-
-    // Beat grid — HQ pixel-snapped, brighter opacity to match mockup readability
+    // Beat grid — HQ pixel-snapped, brighter opacity to match mockup readability.
+    // (The ruler bar itself is now an HTML element in HwApp .fl-pl-ruler.)
     const startBeat = Math.floor(scrollOffset / pixelsPerBeat)
     for (let i = startBeat; i < startBeat + Math.ceil(w / pixelsPerBeat) + 2; i++) {
       const xRaw = i * pixelsPerBeat - scrollOffset
@@ -164,28 +159,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.strokeStyle = isBar ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.04)'
       ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.moveTo(x, RULER_HEIGHT)
+      ctx.moveTo(x, 0)
       ctx.lineTo(x, h)
       ctx.stroke()
-
-      // Ruler markings
-      if (isBar) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.12)'
-        ctx.beginPath()
-        ctx.moveTo(x, 0)
-        ctx.lineTo(x, RULER_HEIGHT)
-        ctx.stroke()
-
-        ctx.fillStyle = '#a1a1aa'
-        ctx.font = "8px 'JetBrains Mono', ui-monospace, Menlo, monospace"
-        ctx.fillText(`${Math.floor(i / 4) + 1}`, Math.floor(xRaw) + 3, 16)
-      } else {
-        ctx.strokeStyle = 'rgba(255,255,255,0.05)'
-        ctx.beginPath()
-        ctx.moveTo(x, RULER_HEIGHT - 4)
-        ctx.lineTo(x, RULER_HEIGHT)
-        ctx.stroke()
-      }
     }
 
     // Sub-beat snap grid — only when snap is finer than 1/4 and lines won't be too dense
@@ -1110,7 +1086,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         flex: 1,
         position: 'relative',
         overflow: 'hidden',
-        background: '#0a0a0f',
+        // Background intentionally absent — the parent .fl-pl-grid renders
+        // the mockup's purple gradient (#1a0e1f → #0e0716) and the canvas
+        // is now transparent so it shows through.
         ...(dropHighlight ? { outline: `2px solid ${hw.accent}`, outlineOffset: -2 } : {}),
       }}
     >

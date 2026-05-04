@@ -404,6 +404,52 @@ function HwPlaylistTools() {
   )
 }
 
+// ─── Playlist track-name column (mockup: .fl-pl-tracks) ─────────────────────
+
+function HwPlaylistTracks() {
+  const tracks = useTrackStore(s => s.tracks)
+  return (
+    <div className="fl-pl-tracks">
+      <div className="fl-pl-tracks-head">TRACKS</div>
+      <div className="fl-pl-tracks-list">
+        {tracks.map((t, i) => (
+          <div
+            key={t.id}
+            className="fl-tr"
+            style={{ ['--track-color' as any]: t.color || '#06b6d4' }}
+            title={t.name}
+          >
+            <span className="num">{i + 1}</span>
+            <span className="led off"></span>
+            <span className="nm">{t.name}</span>
+          </div>
+        ))}
+        {tracks.length === 0 && (
+          <div style={{ padding: '6px 8px', color: 'var(--text-dim)', fontSize: 9, fontFamily: 'var(--mono)' }}>
+            no tracks
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Playlist HTML ruler (mockup: .fl-pl-ruler) ─────────────────────────────
+
+function HwPlaylistRuler({ totalBars = 64, step = 4 }: { totalBars?: number; step?: number }) {
+  // Render a bar-marker every `step` bars, evenly spaced via flex.
+  // Width scales with --h-zoom on the parent (.fl-pl-body) per mockup.
+  const markers: number[] = []
+  for (let bar = 1; bar <= totalBars; bar += step) markers.push(bar)
+  return (
+    <div className="fl-pl-ruler">
+      {markers.map(b => (
+        <i key={b}>{b}</i>
+      ))}
+    </div>
+  )
+}
+
 // ─── Playlist panel header ───────────────────────────────────────────────────
 
 function HwPlaylistHead() {
@@ -494,6 +540,9 @@ export function HwApp({
 }: HwAppProps) {
   const [hint, setHint] = useState('')
   const projectName = '[ddeboer] · Untitled.flp'
+  // Track lane height — drives both the canvas (Arrangement reads from store)
+  // and the HTML track-name column (.fl-tr) via the --row-h CSS variable.
+  const trackHeight = useTransportStore(s => s.trackHeight)
 
   // Mobile: single panel, no chrome.
   if (isMobile) {
@@ -573,12 +622,17 @@ export function HwApp({
             <div className="fl-playlist" data-testid="panel-playlist">
               <HwPlaylistHead />
               <HwPlaylistTools />
-              <div className="fl-pl-body">
-                <div
-                  className="fl-pl-canvas-host"
-                  onMouseLeave={() => setHint('')}
-                >
-                  <Arrangement onSetHint={setHint} />
+              <div
+                className="fl-pl-body"
+                onMouseLeave={() => setHint('')}
+                style={{ ['--row-h' as any]: `${trackHeight}px` }}
+              >
+                <HwPlaylistTracks />
+                <div className="fl-pl-grid">
+                  <HwPlaylistRuler />
+                  <div className="fl-pl-canvas">
+                    <Arrangement onSetHint={setHint} />
+                  </div>
                 </div>
               </div>
             </div>

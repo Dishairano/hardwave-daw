@@ -429,9 +429,142 @@
   display: flex;
   overflow: hidden;
   min-height: 0;
+  --h-zoom: 1;
 }
 
-/* The `Arrangement` React component owns the playlist canvas. We just wrap it. */
+/* === Playlist track-name column (sticky left) === */
+.fl-pl-tracks {
+  width: 140px;
+  background: #06060a;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+.fl-pl-tracks-head {
+  height: 28px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--text-dim);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  background: #040406;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+.fl-pl-tracks-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Single track row — height matches --row-h on .fl-pl-grid */
+.fl-tr {
+  height: var(--row-h, 56px);
+  border-bottom: 1px solid #0a0a0e;
+  display: grid;
+  grid-template-columns: 22px 6px 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+.fl-tr:hover { background: rgba(255,255,255,0.02); }
+.fl-tr .num {
+  font-size: 9px;
+  color: var(--text-dim);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.fl-tr .led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--track-color, #06b6d4);
+  box-shadow: 0 0 6px var(--track-color, #06b6d4);
+  flex-shrink: 0;
+  transition: opacity 120ms;
+}
+.fl-tr .led.off { opacity: 0.35; box-shadow: none; }
+.fl-tr .nm {
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* === Playlist grid (right column — purple gradient backdrop) === */
+.fl-pl-grid {
+  flex-grow: 1;
+  flex-shrink: 0;
+  flex-basis: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #1a0e1f 0%, #0e0716 100%);
+  position: relative;
+  --row-h: 56px;
+}
+
+/* HTML ruler (sticky top, scales with --h-zoom) */
+.fl-pl-ruler {
+  height: 28px;
+  background: #040406;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  width: calc(100% * var(--h-zoom, 1));
+  min-width: 100%;
+}
+.fl-pl-ruler i {
+  flex: 1;
+  border-right: 1px solid #0a0a0e;
+  padding: 8px 0 0 4px;
+  font-style: normal;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* Inner area where Arrangement renders its canvas */
+.fl-pl-canvas {
+  flex: 1;
+  position: relative;
+  width: calc(100% * var(--h-zoom, 1));
+  min-width: 100%;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.fl-pl-canvas > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Legacy custom wrapper — kept for any older callers, harmless if unused. */
 .fl-pl-canvas-host {
   flex: 1;
   display: flex;
