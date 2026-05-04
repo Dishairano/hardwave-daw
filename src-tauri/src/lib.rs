@@ -80,6 +80,13 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
+        // Custom protocol that serves the frontend bundle from the local
+        // cache when the updater has staged a newer version, falling back
+        // to the bundled assets when there's no cache yet. Default
+        // tauri://localhost still works so this is purely additive.
+        .register_uri_scheme_protocol(frontend_updater::PROTOCOL_SCHEME, |ctx, request| {
+            frontend_updater::handle_request(ctx.app_handle(), &request)
+        })
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             // Transport
@@ -258,6 +265,13 @@ pub fn run() {
         ])
         .setup(|app| {
             log::info!("Hardwave DAW starting");
+
+            // Frontend hot-swap: if the updater has previously staged a
+            // newer bundle (active.txt + <version>/index.html present),
+            // navigate the main window to the custom protocol so the
+            // user sees the cached UI on this launch. No-op when the
+            // cache is empty — the bundled UI keeps loading.
+            frontend_updater::maybe_activate_cache(&app.handle().clone());
 
             // Start meter broadcast thread
             let state = app.state::<AppState>();

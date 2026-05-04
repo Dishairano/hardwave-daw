@@ -330,6 +330,161 @@ pub struct FrontendVersionInfo {
     pub active_frontend_version: Option<String>,
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Custom URI scheme + activation (commit 2)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// URI scheme name registered by `lib.rs`. Reserved purely for serving the
+/// frontend bundle from cache; everything else continues to flow through
+/// Tauri's default `tauri://localhost` handler.
+pub const PROTOCOL_SCHEME: &str = "hardwave-app";
+
+/// Build the URL we'd navigate to when the cache is active. Hostname is a
+/// fixed placeholder (`localhost`) that we never resolve — the protocol
+/// handler intercepts the request before any DNS happens.
+pub fn cache_navigation_url() -> String {
+    format!("{PROTOCOL_SCHEME}://localhost/")
+}
+
+/// Map a relative path to a Content-Type guess. The bundled asset
+/// resolver gives us a real MIME for fallback hits; this only fires for
+/// files we read out of the cache directory ourselves.
+fn mime_for(path: &str) -> &'static str {
+    let lower = path.to_ascii_lowercase();
+    let ext = lower.rsplit('.').next().unwrap_or("");
+    match ext {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "wasm" => "application/wasm",
+        "txt" => "text/plain; charset=utf-8",
+        "map" => "application/json; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Read a single asset from the active cache, if any. Returns the file
+/// bytes when the cache exists *and* contains the requested path.
+fn read_from_cache(app: &AppHandle, path: &str) -> Option<Vec<u8>> {
+    let cache = cache_root(app).ok()?;
+    let version = read_active_version(&cache)?;
+    let resolved = cache.join(version).join(path);
+    // Sanity: refuse paths that escape the cache root (e.g. via `..`).
+    let canonical = resolved.canonicalize().ok()?;
+    let cache_canon = cache.canonicalize().ok()?;
+    if !canonical.starts_with(&cache_canon) {
+        log::warn!("frontend updater: refusing path outside cache: {path}");
+        return None;
+    }
+    std::fs::read(&canonical).ok()
+}
+
+/// Protocol handler — first-line cache hit, then falls back to the bundled
+/// asset resolver. Used by `tauri::Builder::register_uri_scheme_protocol`
+/// in `lib.rs`. Synchronous because reading from disk for sub-megabyte
+/// files is cheap; the alternative async API costs Tauri an extra thread
+/// hop per request.
+pub fn handle_request(
+    app: &AppHandle,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let raw_path = request.uri().path();
+    // Strip the leading slash and decode percent-encoded segments. The
+    // path "" is a navigation root → serve index.html.
+    let trimmed = raw_path.trim_start_matches('/');
+    let path = if trimmed.is_empty() { "index.html" } else { trimmed };
+
+    if let Some(bytes) = read_from_cache(app, path) {
+        return tauri::http::Response::builder()
+            .status(200)
+            .header("Content-Type", mime_for(path))
+            .header("Cache-Control", "no-cache")
+            .body(bytes)
+            .unwrap_or_else(|_| {
+                tauri::http::Response::builder()
+                    .status(500)
+                    .body(b"response build failed".to_vec())
+                    .unwrap()
+            });
+    }
+
+    if let Some(asset) = app.asset_resolver().get(path.to_string()) {
+        return tauri::http::Response::builder()
+            .status(200)
+            .header("Content-Type", asset.mime_type)
+            .body(asset.bytes)
+            .unwrap_or_else(|_| {
+                tauri::http::Response::builder()
+                    .status(500)
+                    .body(b"response build failed".to_vec())
+                    .unwrap()
+            });
+    }
+
+    tauri::http::Response::builder()
+        .status(404)
+        .header("Content-Type", "text/plain; charset=utf-8")
+        .body(format!("not found: {path}").into_bytes())
+        .unwrap()
+}
+
+/// Decide at startup whether the main window should load from cache or
+/// stay on the bundled default. Called from the `setup` closure in
+/// `lib.rs`. Returns `true` when navigation happened.
+pub fn maybe_activate_cache(app: &AppHandle) -> bool {
+    let cache = match cache_root(app) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("frontend updater: cannot read cache root: {e}");
+            return false;
+        }
+    };
+    let Some(version) = read_active_version(&cache) else {
+        return false;
+    };
+    let entry = cache.join(&version).join("index.html");
+    if !entry.exists() {
+        log::warn!(
+            "frontend updater: active.txt points to {version} but {entry:?} is missing — falling back to bundled"
+        );
+        return false;
+    }
+    let url_str = cache_navigation_url();
+    let parsed: url::Url = match url_str.parse() {
+        Ok(u) => u,
+        Err(e) => {
+            log::warn!("frontend updater: bad nav url {url_str}: {e}");
+            return false;
+        }
+    };
+    if let Some(window) = app.get_webview_window("main") {
+        match window.navigate(parsed) {
+            Ok(()) => {
+                log::info!("frontend updater: activated cached version {version}");
+                true
+            }
+            Err(e) => {
+                log::warn!("frontend updater: navigate failed: {e}");
+                false
+            }
+        }
+    } else {
+        log::warn!("frontend updater: main webview window not found at activation time");
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
