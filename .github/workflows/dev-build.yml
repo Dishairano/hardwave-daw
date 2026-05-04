@@ -1,0 +1,209 @@
+name: Dev Build
+
+# Builds Tauri installers for Win/Mac/Linux WITHOUT creating a public
+# GitHub Release, WITHOUT bumping the version, and WITHOUT posting to
+# Discord. Installers are uploaded as workflow artifacts so they can be
+# downloaded from the Actions run page for ad-hoc testing.
+#
+# Triggers:
+#   - push to redesign-port-from-master (or master) — auto-build on every push
+#   - workflow_dispatch — manual "Run workflow" button on any branch
+#
+# To download an installer:
+#   1. Go to https://github.com/Dishairano/hardwave-daw/actions
+#   2. Click the latest "Dev Build" run on your branch
+#   3. Scroll to the "Artifacts" section
+#   4. Download "windows-installer" / "macos-installer" / "linux-installer"
+
+on:
+  push:
+    branches:
+      - master
+      - redesign-port-from-master
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.github/workflows/functional-smoke.yml'
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Which platforms to build (comma-separated: windows,macos,linux,all)'
+        required: false
+        default: 'all'
+
+concurrency:
+  group: dev-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend (shared)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/daw-ui/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd packages/daw-ui
+          npm ci
+          npm run build
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: packages/daw-ui/dist
+          retention-days: 1
+
+  build:
+    name: ${{ matrix.label }}
+    needs: [frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows installer
+            platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: windows-installer
+            bundle_glob: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*
+          - label: macOS installer
+            platform: macos-latest
+            target: aarch64-apple-darwin
+            artifact: macos-installer
+            bundle_glob: src-tauri/target/aarch64-apple-darwin/release/bundle/**/*
+          - label: Linux installer
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: linux-installer
+            bundle_glob: src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/**/*
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: packages/daw-ui/dist
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: dev-${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+        continue-on-error: true
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          if sccache --start-server 2>/dev/null; then
+            echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          fi
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            mold clang
+          echo "RUSTFLAGS=-C linker=clang -C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+
+      - name: Fetch ASIO SDK (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $url = 'https://www.steinberg.net/asiosdk'
+          $dest = "$env:RUNNER_TEMP\asiosdk.zip"
+          $out  = "$env:RUNNER_TEMP\asiosdk"
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          Expand-Archive -Path $dest -DestinationPath $out -Force
+          $sdkRoot = Get-ChildItem -Path $out -Directory | Select-Object -First 1
+          echo "CPAL_ASIO_DIR=$($sdkRoot.FullName)" >> $env:GITHUB_ENV
+
+      - name: Resolve LLVM (Windows — required by cpal/asio bindgen)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvmBin\libclang.dll")) {
+            choco install llvm -y --no-progress --force
+          }
+          echo "LIBCLANG_PATH=$llvmBin" >> $env:GITHUB_ENV
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@latest
+
+      # Build via tauri-action with empty tagName — produces installers WITHOUT
+      # creating a GitHub Release. We then upload the bundle output as a
+      # workflow artifact below.
+      - name: Build Linux (with JACK)
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ''
+          tauriScript: tauri
+          args: --target ${{ matrix.target }} --features jack
+
+      - name: Build Windows (with ASIO)
+        if: matrix.platform == 'windows-latest'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CPAL_ASIO_DIR: ${{ env.CPAL_ASIO_DIR }}
+          LIBCLANG_PATH: ${{ env.LIBCLANG_PATH }}
+        with:
+          tagName: ''
+          tauriScript: tauri
+          args: --target ${{ matrix.target }} --features asio
+
+      - name: Build macOS
+        if: matrix.platform == 'macos-latest'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ''
+          tauriScript: tauri
+          args: --target ${{ matrix.target }}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.bundle_glob }}
+          retention-days: 14
+          if-no-files-found: error
