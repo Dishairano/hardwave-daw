@@ -76,17 +76,17 @@ jobs:
             platform: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: windows-installer
-            bundle_glob: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*
+            bundle_glob: target/x86_64-pc-windows-msvc/release/bundle/**/*
           - label: macOS installer
             platform: macos-latest
             target: aarch64-apple-darwin
             artifact: macos-installer
-            bundle_glob: src-tauri/target/aarch64-apple-darwin/release/bundle/**/*
+            bundle_glob: target/aarch64-apple-darwin/release/bundle/**/*
           - label: Linux installer
             platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             artifact: linux-installer
-            bundle_glob: src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/**/*
+            bundle_glob: target/x86_64-unknown-linux-gnu/release/bundle/**/*
 
     runs-on: ${{ matrix.platform }}
 
