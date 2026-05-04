@@ -142,11 +142,30 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const scrollOffset = Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
 
-    // Background — transparent so the .fl-pl-grid gradient (mockup) shows
-    // through. Previously a solid #000 fill that hid the parent gradient.
-    ctx.clearRect(0, 0, w, h)
+    // Background — solid mockup-canvas color (#15091a). Replaces the earlier
+    // pure-black fill so the playlist matches the mockup look. The .fl-pl-grid
+    // parent has a gradient too, but the mockup expects this color to cover it.
+    ctx.fillStyle = '#15091a'
+    ctx.fillRect(0, 0, w, h)
 
-    // Beat grid — HQ pixel-snapped, brighter opacity to match mockup readability.
+    // Horizontal track-row separators — match mockup's .fl-pl-canvas
+    // background-image: rgba(0,0,0,.55) line every --row-h px. Drawn before
+    // beat lines so vertical bar lines appear on top.
+    if (trackHeight > 0) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)'
+      ctx.lineWidth = 1
+      const visibleRows = Math.ceil(h / trackHeight) + 1
+      for (let r = 0; r <= visibleRows; r++) {
+        const y = Math.floor(r * trackHeight) + 0.5
+        if (y > h) break
+        ctx.beginPath()
+        ctx.moveTo(0, y)
+        ctx.lineTo(w, y)
+        ctx.stroke()
+      }
+    }
+
+    // Beat grid — HQ pixel-snapped, mockup palette.
     // (The ruler bar itself is now an HTML element in HwApp .fl-pl-ruler.)
     const startBeat = Math.floor(scrollOffset / pixelsPerBeat)
     for (let i = startBeat; i < startBeat + Math.ceil(w / pixelsPerBeat) + 2; i++) {

@@ -307,6 +307,65 @@
   flex-shrink: 0;
 }
 
+/* Browser internals — mockup classes that replace inline styles in Browser.tsx */
+.fl-browser-head {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--red);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.fl-browser-tabs {
+  display: flex;
+  gap: 0;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  background: #040406;
+  flex-shrink: 0;
+}
+.fl-browser-tab {
+  flex: 1;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  background: transparent;
+  border: none;
+  padding: 0;
+  transition: color 120ms, background 120ms;
+}
+.fl-browser-tab:hover { color: #fff; background: #0e0e14; }
+.fl-browser-tab.on { color: var(--red); }
+.fl-browser-tab.on::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--red);
+}
+.fl-browser-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 3px 0;
+}
+
 /* Picker (pattern picker — uses real patterns from store). */
 .fl-picker {
   width: 140px;
