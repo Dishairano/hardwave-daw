@@ -114,8 +114,9 @@ export function App() {
   const [frontendUpdateReady, setFrontendUpdateReady] = useState(false)
   const dataReady = tracksReady && frontendUpdateReady
   // One-line message rendered under the splash loading bar — kept here so
-  // it survives the splash component's lifecycle.
-  const [splashStatus, setSplashStatus] = useState('')
+  // it survives the splash component's lifecycle. Starts as a friendly
+  // default the user sees before the updater has anything to report.
+  const [splashStatus, setSplashStatus] = useState('Starting up...')
 
   // Welcome screen — shown on startup unless user has ticked "Don't show again"
   // (persistent) or already dismissed in this session.
@@ -242,11 +243,9 @@ export function App() {
               setSplashStatus(`Update ${p.version ?? ''} ready — restart to apply`)
               break
             case 'up_to_date':
-              setSplashStatus('Loading workspace...'); break
             case 'incompatible':
-              setSplashStatus('Loading workspace...'); break
             case 'skipped':
-              setSplashStatus('Loading workspace...'); break
+              setSplashStatus('Starting up...'); break
           }
         })
 
