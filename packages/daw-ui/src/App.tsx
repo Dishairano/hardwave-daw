@@ -64,6 +64,13 @@ interface UpdateInfo {
   error: string | null
 }
 
+/** Compact byte size for the splash status text. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 export function App() {
   const { startListening } = useTransportStore()
   const { fetchTracks } = useTrackStore()
@@ -99,7 +106,16 @@ export function App() {
 
   // Splash screen
   const [showSplash, setShowSplash] = useState(true)
-  const [dataReady, setDataReady] = useState(false)
+  // Splash gate is split into two parallel readiness flags. Both must flip
+  // true before the splash dismisses. `tracksReady` is set after the
+  // existing fetchTracks() call; `frontendUpdateReady` is set after the
+  // Rust frontend updater finishes (success, no-op, timeout, or error).
+  const [tracksReady, setTracksReady] = useState(false)
+  const [frontendUpdateReady, setFrontendUpdateReady] = useState(false)
+  const dataReady = tracksReady && frontendUpdateReady
+  // One-line message rendered under the splash loading bar — kept here so
+  // it survives the splash component's lifecycle.
+  const [splashStatus, setSplashStatus] = useState('')
 
   // Welcome screen — shown on startup unless user has ticked "Don't show again"
   // (persistent) or already dismissed in this session.
@@ -187,7 +203,64 @@ export function App() {
     if (initRan.current) return
     initRan.current = true
     startListening()
-    fetchTracks().finally(() => setDataReady(true))
+
+    // Splash gate part 1 — load track state for the project.
+    fetchTracks().finally(() => setTracksReady(true))
+
+    // Splash gate part 2 — run the frontend updater. The Rust side is
+    // budgeted (5s total) so this always resolves; on error we still set
+    // ready so the splash can advance. Status events from the Rust side
+    // pipe into setSplashStatus via the listen() below.
+    ;(async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        const unlisten = await listen<{
+          kind: string
+          downloaded?: number
+          total?: number
+          version?: string
+          reason?: string
+          manifest_requires?: string
+          running?: string
+        }>('frontend-update-status', (e) => {
+          const p = e.payload
+          switch (p.kind) {
+            case 'checking':
+              setSplashStatus('Checking for updates...'); break
+            case 'downloading':
+              if (typeof p.total === 'number' && p.total > 0) {
+                setSplashStatus(`Downloading update — ${formatBytes(p.total)}`)
+              } else {
+                setSplashStatus('Downloading update...')
+              }
+              break
+            case 'verifying':
+              setSplashStatus('Verifying signature...'); break
+            case 'applying':
+              setSplashStatus('Applying update...'); break
+            case 'ready':
+              setSplashStatus(`Update ${p.version ?? ''} ready — restart to apply`)
+              break
+            case 'up_to_date':
+              setSplashStatus('Loading workspace...'); break
+            case 'incompatible':
+              setSplashStatus('Loading workspace...'); break
+            case 'skipped':
+              setSplashStatus('Loading workspace...'); break
+          }
+        })
+
+        // Kick off the updater. The Rust command always resolves Ok(()).
+        await invoke('frontend_update_check_and_apply')
+        unlisten()
+      } catch (e) {
+        // If the import or invoke itself blows up (older binary missing
+        // the command, etc.), don't block the splash.
+        console.warn('[frontend updater] init failed:', e)
+      } finally {
+        setFrontendUpdateReady(true)
+      }
+    })()
 
     // Crash detection: if the previous session didn't clear the alive marker,
     // surface the newest auto-save as a recovery option.
@@ -692,6 +765,7 @@ export function App() {
       {showSplash && (
         <SplashScreen
           dataReady={dataReady}
+          statusText={splashStatus}
           onFinished={() => setShowSplash(false)}
         />
       )}

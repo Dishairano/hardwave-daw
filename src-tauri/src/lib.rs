@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 mod commands;
+mod frontend_updater;
 mod midi_clock;
 mod midi_map;
 mod midi_sync;
@@ -251,6 +252,9 @@ pub fn run() {
             commands::dev::dev_force_device_error,
             commands::dev::dev_resolve_test_asset,
             commands::dev::dev_list_test_assets,
+            // Frontend updater — splash-driven hot-swap of the UI bundle
+            frontend_updater::frontend_update_check_and_apply,
+            frontend_updater::frontend_update_status,
         ])
         .setup(|app| {
             log::info!("Hardwave DAW starting");

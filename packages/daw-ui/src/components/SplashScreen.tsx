@@ -4,10 +4,17 @@ import { HwLogo } from './HwLogo'
 
 interface SplashScreenProps {
   dataReady: boolean
+  /**
+   * One-line status hint rendered under the loading bar. Drives the
+   * "Checking for updates..." / "Downloading 5.2 MB" / "Applying update..."
+   * text that the frontend updater pipes in via the
+   * `frontend-update-status` event. Empty string hides the line.
+   */
+  statusText?: string
   onFinished: () => void
 }
 
-export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
+export function SplashScreen({ dataReady, statusText = '', onFinished }: SplashScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const logoRef = useRef<HTMLDivElement>(null)
   const shineRef = useRef<HTMLDivElement>(null)
@@ -300,6 +307,32 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
             borderRadius: 2,
           }} />
         </div>
+
+        {/*
+          Frontend updater status line. Stays empty until the updater
+          emits its first event, then fades in. Content swaps in place
+          on subsequent events — no re-fade so phase-changes don't
+          flicker. Sized smaller than the slogan so it reads as
+          telemetry rather than copy.
+        */}
+        <p
+          aria-live="polite"
+          style={{
+            marginTop: 14,
+            minHeight: 14,
+            fontSize: 10,
+            color: '#6b6b78',
+            fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+            fontWeight: 500,
+            opacity: statusText ? 1 : 0,
+            transition: 'opacity 220ms ease-out',
+            textAlign: 'center',
+          }}
+        >
+          {statusText || ' ' /* preserve baseline when empty */}
+        </p>
       </div>
     </div>
   )

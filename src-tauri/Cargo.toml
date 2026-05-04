@@ -33,6 +33,17 @@ tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
+
+# Frontend updater — see `src/frontend_updater.rs`. Lets us hot-swap the
+# React bundle on app launch without forcing customers to reinstall.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+sha2 = "0.10"
+hex = "0.4"
+semver = "1"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util"] }
+futures-util = "0.3"
+
 hound.workspace = true
 flacenc.workspace = true
 shine-rs.workspace = true
