@@ -22,17 +22,45 @@ export function Browser() {
         <DetachButton panelId="browser" />
       </div>
 
+      {/*
+        Icon-only tab strip per mockup. We keep our 3 content semantics
+        (plugins / files / project) but use SVG icons matching the
+        mockup's category icons instead of text labels. Hover tooltips
+        give the human-readable name.
+      */}
       <div className="fl-browser-tabs">
-        {(['plugins', 'files', 'project'] as Tab[]).map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`fl-browser-tab${activeTab === tab ? ' on' : ''}`}
-            style={{ position: 'relative' }}
-          >
-            {tab}
-          </button>
-        ))}
+        <button
+          type="button"
+          onClick={() => setActiveTab('plugins')}
+          title="Plugins"
+          className={`fl-browser-tab${activeTab === 'plugins' ? ' on' : ''}`}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <circle cx="5" cy="12" r="2" fill="currentColor"/>
+            <circle cx="11" cy="10" r="2" fill="currentColor"/>
+            <path d="M7 12V3.5l6-1.5v8" fill="none" stroke="currentColor" strokeWidth="1.4"/>
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('files')}
+          title="Files"
+          className={`fl-browser-tab${activeTab === 'files' ? ' on' : ''}`}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4.5h4l1 1h7v8H2z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('project')}
+          title="Project"
+          className={`fl-browser-tab${activeTab === 'project' ? ' on' : ''}`}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          </svg>
+        </button>
       </div>
 
       <div className="fl-browser-tree">
@@ -507,38 +535,32 @@ function TreeGroup({ label, count, expanded, onToggle, children, actionLabel, on
     <div>
       <div
         onClick={onToggle}
-        style={{
-          padding: '4px 8px',
-          display: 'flex', alignItems: 'center', gap: 4,
-          cursor: 'default', fontSize: 11,
-          transition: 'background 0.15s',
-        }}
-        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
-        onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+        className={`fl-bt-folder${expanded ? ' on' : ''}`}
       >
-        <span style={{
-          fontSize: 8, color: hw.textMuted,
-          transform: expanded ? 'rotate(90deg)' : 'none',
-          display: 'inline-block', transition: 'transform 150ms',
-        }}>
-          {'▶'}
-        </span>
-        <span style={{ color: hw.textPrimary, fontWeight: 600 }}>{label}</span>
-        <span style={{ color: hw.textFaint, marginLeft: 6 }}>{count}</span>
+        <span className="arrow">{expanded ? '▾' : '▸'}</span>
+        <span>{label}</span>
+        <span className="ct">· {count}</span>
         {actionLabel && onAction && (
           <span
             onClick={(e) => { e.stopPropagation(); onAction() }}
             style={{
-              marginLeft: 'auto', fontSize: 9, color: hw.textFaint,
-              padding: '1px 6px', borderRadius: 4,
+              marginLeft: 8,
+              fontSize: 9,
+              color: hw.textFaint,
+              padding: '1px 6px',
+              borderRadius: 4,
               background: 'rgba(255,255,255,0.03)',
+              fontFamily: hw.font.mono,
+              letterSpacing: hw.tracking.eyebrow,
+              textTransform: 'uppercase',
+              cursor: 'pointer',
             }}
           >
             {actionLabel}
           </span>
         )}
       </div>
-      {expanded && <div style={{ paddingLeft: 8 }}>{children}</div>}
+      {expanded && <div>{children}</div>}
     </div>
   )
 }
@@ -636,13 +658,12 @@ function PluginItem({ plugin, canAdd, isFavorite, onToggleFavorite }: {
 }) {
   return (
     <div
+      className="fl-bt-leaf"
       style={{
-        padding: '3px 8px 3px 16px',
-        cursor: canAdd ? 'pointer' : 'default',
+        cursor: canAdd ? 'pointer' : 'not-allowed',
         opacity: canAdd ? 1 : 0.5,
-        display: 'flex', alignItems: 'center', gap: 6,
-        transition: 'background 0.15s',
       }}
+      title={`${plugin.name} — ${plugin.vendor} · ${plugin.format}`}
       onClick={async () => {
         if (!canAdd) return
         const { selectedTrackId } = useTrackStore.getState()
@@ -650,26 +671,21 @@ function PluginItem({ plugin, canAdd, isFavorite, onToggleFavorite }: {
         await usePluginStore.getState().addToTrack(selectedTrackId, plugin.id)
         useTrackStore.getState().fetchTracks()
       }}
-      onMouseEnter={e => { if (canAdd) e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
     >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 10, color: hw.textPrimary,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {plugin.name}
-        </div>
-        <div style={{ fontSize: 8, color: hw.textFaint }}>{plugin.vendor} · {plugin.format}</div>
-      </div>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {plugin.name}
+      </span>
+      <span className="meta">{plugin.format}</span>
       <button
+        type="button"
         onClick={(e) => { e.stopPropagation(); onToggleFavorite() }}
         title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
         style={{
-          width: 18, height: 18,
+          width: 14, height: 14, padding: 0,
           background: 'transparent', border: 'none',
-          color: isFavorite ? hw.yellow : hw.textFaint,
-          fontSize: 12, cursor: 'pointer', padding: 0,
+          color: isFavorite ? '#fbbf24' : hw.textFaint,
+          fontSize: 11, cursor: 'pointer', lineHeight: 1,
+          flexShrink: 0,
         }}
       >
         {isFavorite ? '★' : '☆'}
