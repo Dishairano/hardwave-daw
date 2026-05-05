@@ -55,6 +55,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      # CI invariant #3 — workspace Cargo.toml version MUST match
+      # src-tauri/tauri.conf.json's version. The Rust binary reports
+      # `env!("CARGO_PKG_VERSION")` as `API_VERSION` to the resolver
+      # (frontend_updater.rs:43); if the workspace version drifts below
+      # the manifest's `min_installer`, every fresh manifest publish
+      # silently DOSes hot-swap by routing all clients to the installer
+      # modal. This step blocks the publish before that can happen.
+      - name: Assert workspace version matches tauri.conf.json
+        run: |
+          set -euo pipefail
+          CONF_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
+          # Pull the [workspace.package] version block. cargo metadata is
+          # too heavy here (would pull every dep); awk on the workspace
+          # manifest is sufficient and avoids a Rust toolchain install.
+          WS_VERSION=$(awk '
+            /^\[workspace\.package\]/ { in_section = 1; next }
+            /^\[/ && in_section { in_section = 0 }
+            in_section && /^version[[:space:]]*=[[:space:]]*"[^"]+"/ {
+              match($0, /"[^"]+"/)
+              v = substr($0, RSTART + 1, RLENGTH - 2)
+              print v
+              exit
+            }
+          ' Cargo.toml)
+          if [ -z "$WS_VERSION" ] || [ -z "$CONF_VERSION" ]; then
+            echo "::error::could not parse workspace ($WS_VERSION) or tauri.conf.json ($CONF_VERSION) version"
+            exit 1
+          fi
+          if [ "$WS_VERSION" != "$CONF_VERSION" ]; then
+            echo "::error::workspace Cargo.toml version ($WS_VERSION) != tauri.conf.json version ($CONF_VERSION) — release script must bump both. The Rust binary reports the workspace version as API_VERSION; drift disables hot-swap for every running binary."
+            exit 1
+          fi
+          echo "Workspace version $WS_VERSION matches tauri.conf.json — OK"
+
       - name: Resolve version + requires_api
         id: meta
         run: |
@@ -189,7 +223,14 @@ jobs:
           extract_lower_bound() {
             # Mirrors the Rust resolver's `range_lower_bound` logic.
             # Always returns a strict 3-component semver so downstream
-            # comparisons are unambiguous.
+            # comparisons are unambiguous. Accepted forms:
+            #   ^x.y.z / ^x.y / ^x       — caret (most common)
+            #   ~x.y.z / ~x.y            — tilde, treated as caret-equivalent
+            #                              for the lower-bound extraction
+            #   x.y.z / x.y              — bare version, treated as floor
+            #   >=x.y.z[, <a.b.c]        — explicit lower bound
+            #   >x.y.z[, <a.b.c]         — same lower bound (resolver rejects
+            #                              the equal case via api_compatible)
             local r="$1"
             r="${r## }"
             r="${r%% }"
@@ -199,6 +240,12 @@ jobs:
             case "$r" in
               ^*)
                 local v="${r#^}"
+                v="${v## }"
+                pad_semver "$v"
+                return 0
+                ;;
+              \~*)
+                local v="${r#\~}"
                 v="${v## }"
                 pad_semver "$v"
                 return 0
@@ -224,6 +271,15 @@ jobs:
                   ;;
               esac
             done
+            # Bare `x.y[.z]` — treat the whole string as the floor. This
+            # matches how a manifest-author would write a "minimum API"
+            # without thinking about caret syntax.
+            case "$r" in
+              [0-9]*)
+                pad_semver "$r"
+                return 0
+                ;;
+            esac
             return 1
           }
 
@@ -236,7 +292,7 @@ jobs:
               fi
               echo "requires_api lower bound $LOWER >= min_installer $MIN_INSTALLER OK"
             else
-              echo "::error::cannot extract lower bound from requires_api='$REQ' (need ^x.y.z or '>=x.y.z, <a.b.c')"
+              echo "::error::cannot extract lower bound from requires_api='$REQ'. Accepted forms: '^x.y.z', '^x.y', '^x', '~x.y.z', '~x.y', 'x.y.z', 'x.y', '>=x.y.z, <a.b.c', '>x.y.z, <a.b.c'."
               exit 1
             fi
           fi

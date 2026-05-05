@@ -114,8 +114,43 @@ CHANGELOG_FILE="RELEASE_CHANGELOG.md"
   fi
 } > "$CHANGELOG_FILE"
 
-# Bump version
+# Bump version in BOTH tauri.conf.json AND the workspace Cargo.toml so the
+# Rust binary's `env!("CARGO_PKG_VERSION")` (read by frontend_updater.rs as
+# API_VERSION) stays in lockstep with the bundle version. Drift here would
+# disable hot-swap for every running binary the moment a fresh manifest is
+# published — see frontend-publish.yml's `assert workspace version` step.
 sed -i "s/\"version\": \"$CURRENT\"/\"version\": \"$NEW_VERSION\"/" "$CONF"
+
+CARGO_TOML="Cargo.toml"
+# Match the `version = "..."` line that lives directly under the
+# `[workspace.package]` section header. awk is more robust than a single
+# sed against a comment-laden, multi-section Cargo.toml.
+awk -v new="$NEW_VERSION" '
+  BEGIN { in_section = 0; bumped = 0 }
+  /^\[workspace\.package\]/ { in_section = 1; print; next }
+  /^\[/ && in_section { in_section = 0 }
+  in_section && !bumped && /^version[[:space:]]*=[[:space:]]*"[^"]+"/ {
+    sub(/"[^"]+"/, "\"" new "\"")
+    bumped = 1
+  }
+  { print }
+  END {
+    if (!bumped) {
+      print "release.sh: failed to bump [workspace.package] version in Cargo.toml" > "/dev/stderr"
+      exit 1
+    }
+  }
+' "$CARGO_TOML" > "$CARGO_TOML.tmp"
+mv "$CARGO_TOML.tmp" "$CARGO_TOML"
+
+# Cargo.lock mirrors workspace versions; refresh it without rebuilding.
+# `--offline` keeps the bump fast on flaky networks. Failure here is not
+# fatal — CI's normal build step will refresh the lockfile if needed.
+if command -v cargo >/dev/null 2>&1; then
+  cargo update --workspace --offline >/dev/null 2>&1 \
+    || cargo update --workspace >/dev/null 2>&1 \
+    || echo "release.sh: warning — cargo update failed, Cargo.lock may need a rebuild in CI"
+fi
 
 # Commit message from arg or default
 MSG="${1:-Release v$NEW_VERSION}"

@@ -233,6 +233,12 @@ export function App() {
     initRan.current = true
     startListening()
 
+    // Cancellation flag matches the pattern used at :397-402 below — if
+    // the splash is dismissed (or the effect tears down) before the
+    // async resolver query resolves, we must not call setSplashStatus /
+    // setUpdateInfo on an unmounted component. Mirrored on cleanup.
+    let cancelled = false
+
     // Splash gate part 1 — load track state for the project.
     fetchTracks().finally(() => setTracksReady(true))
 
@@ -310,11 +316,16 @@ export function App() {
 
       // Resolver decision — drives whether we surface the Tauri-updater
       // modal at all this session. Tolerates older binaries that don't
-      // expose the command yet (treated as 'fallback').
+      // expose the command yet (treated as 'fallback'). The Rust side
+      // caches the LaunchPlan it built for the splash, so this call
+      // returns the EXACT decision the splash already rendered — no
+      // chance of a CDN replica flipping the manifest between the two
+      // fetches and showing both UIs.
       let decision: VersionContractDecision = 'fallback'
       let releaseUrl: string | null = null
       try {
         const state = await invoke<VersionContractState>('version_contract_state')
+        if (cancelled) return
         decision = state.decision
         releaseUrl = state.release_url ?? null
         if (releaseUrl) {
@@ -333,6 +344,7 @@ export function App() {
         console.warn('[version contract] state query failed, defaulting to fallback:', e)
       }
 
+      if (cancelled) return
       if (decision === 'installer_required') {
         // Skip the legacy 3 s wait — the resolver has already told us a
         // binary upgrade is required.
@@ -357,14 +369,16 @@ export function App() {
     })()
 
     // Long-interval recheck — covers users who keep the DAW running for
-    // days. Re-queries the resolver and only opens the modal if the
-    // manifest has pivoted to `installer_required` since launch. This
-    // replaces the legacy 3 s `setTimeout(checkForUpdates, 3000)` which
-    // could race the splash-gated decision and produce two prompts.
+    // days. Calls the dedicated `version_contract_recheck` command,
+    // which forces a fresh manifest fetch and updates the Rust-side
+    // cached plan. The launch-time `version_contract_state` call above
+    // is cache-first and stays locked to the splash decision; this is
+    // the explicit pivot path. Replaces the legacy 3 s
+    // `setTimeout(checkForUpdates, 3000)` which raced the splash gate.
     const RECHECK_MS = 24 * 60 * 60 * 1000
     const dailyRecheck = setInterval(async () => {
       try {
-        const state = await invoke<VersionContractState>('version_contract_state')
+        const state = await invoke<VersionContractState>('version_contract_recheck')
         if (state.decision === 'installer_required') {
           if (state.release_url) {
             setUpdateInfo(prev => ({ ...prev, releaseUrl: state.release_url ?? null }))
@@ -372,10 +386,15 @@ export function App() {
           await checkForUpdates()
         }
       } catch {
-        // Manifest unreachable mid-session — silently ignore.
+        // Manifest unreachable mid-session — silently ignore. An older
+        // binary that doesn't expose `_recheck` will throw here; that's
+        // the correct degraded behaviour (no spurious modal).
       }
     }, RECHECK_MS)
-    return () => clearInterval(dailyRecheck)
+    return () => {
+      cancelled = true
+      clearInterval(dailyRecheck)
+    }
   }, [])
 
   // Auto-save: every 2 minutes, if project is dirty, write to the cache dir.

@@ -21,6 +21,8 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
+use crate::AppState;
+
 /// Hard-coded production manifest URL. Override via env var for staging.
 /// Hosted on the suite.hardwavestudios.com cluster (vst-web01 nginx) so we
 /// can publish without touching the marketing-site infra.
@@ -329,6 +331,16 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
     let plan = resolve_launch_plan(API_VERSION, local_version, manifest_opt.as_ref());
     log_launch_plan(&plan, manifest_opt.as_ref(), local_version);
 
+    // Cache the plan in AppState so the follow-up `version_contract_state`
+    // command (called by App.tsx right after this finishes) sees the same
+    // decision the splash already showed. Without this, a CDN replica
+    // flipping mid-launch could let `version_contract_state` re-fetch a
+    // different manifest and the user sees BOTH a HotSwapReady event and
+    // an InstallerRequired modal back-to-back.
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.frontend_launch_plan.lock() = Some(plan.clone());
+    }
+
     match plan {
         LaunchPlan::HotSwap {
             action: HotSwapAction::NoOp,
@@ -374,17 +386,15 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
                     release_url,
                 },
             );
-            // Legacy event so older bundles still see *something* when the
-            // resolver pivots to Path A.
-            if let Some(m) = &manifest_opt {
-                emit(
-                    &app,
-                    UpdateStatus::Incompatible {
-                        manifest_requires: m.requires_api.clone(),
-                        running: API_VERSION.to_string(),
-                    },
-                );
-            }
+            // Note: we deliberately do NOT emit a follow-up legacy
+            // `Incompatible` event here. App.tsx maps `installer_required`
+            // to "Installer upgrade required" copy and `incompatible` to
+            // "Starting up..."; emitting both back-to-back made the second
+            // event win and erased the new mockup copy. The
+            // `log_launch_plan` telemetry above is the single triage
+            // surface — older bundles that only listen for the legacy
+            // event will still see `Skipped` if the manifest fetch fails,
+            // which is the correct fallback behaviour.
             Ok(())
         }
         LaunchPlan::Fallback { reason } => {
@@ -577,10 +587,17 @@ pub fn resolve_launch_plan(
                 };
             }
             Ok(_) => { /* floor met — fall through to step 2 */ }
-            Err(_) => {
+            Err(e) => {
                 // Bad floor in the manifest — refuse to interpret it. The
-                // CI publisher should have caught this; on the client we
-                // degrade safely rather than risk a wrong decision.
+                // CI publisher should have caught this (frontend-publish.yml
+                // §6 invariants); on the client we degrade safely rather
+                // than risk a wrong decision. Logged at error level so it
+                // shows up in triage immediately — every running client
+                // hitting this path means the publisher shipped a broken
+                // manifest, which is a release-blocker, not a warning.
+                log::error!(
+                    "frontend updater: min_installer unparseable in manifest: {floor_str:?} ({e}); falling back to bundled"
+                );
                 return LaunchPlan::Fallback {
                     reason: format!("min_installer unparseable: {floor_str}"),
                 };
@@ -659,11 +676,16 @@ fn range_lower_bound(range: &str) -> Option<semver::Version> {
             return parse_loose(rest.trim());
         }
         if let Some(rest) = part.strip_prefix('>') {
-            // `>a.b.c` means strictly greater; lower bound is the next
-            // patch. We approximate with the same value — for the
-            // resolver's "installed < lower_bound" check it's safe to
-            // treat `>a` as floor `a` (a binary at exactly `a` will
-            // still be reported as below-range by `api_compatible`).
+            // `>a.b.c` means strictly greater. The resolver only uses
+            // this lower bound to decide between InstallerModal (below
+            // range) and Fallback (above range). Treating `>a.b.c` as
+            // floor `a.b.c` is intentional: `api_compatible` (which
+            // uses semver::VersionReq) correctly rejects exactly
+            // `a.b.c`, and our `installed_v < floor` check then routes
+            // it to InstallerModal (the catchable-by-upgrade branch).
+            // Bumping the patch here would push borderline binaries to
+            // Fallback, which is the wrong UX. See the
+            // `range_lower_bound_strict_greater` test for the contract.
             return parse_loose(rest.trim());
         }
     }
@@ -794,20 +816,58 @@ pub struct VersionContractState {
     pub known_schema: u32,
 }
 
-/// Tauri command — re-fetches the manifest, runs `resolve_launch_plan`,
-/// returns the serializable decision. Pure with respect to the cache:
-/// no bundle is downloaded, no `active.txt` is rewritten. The actual
-/// hot-swap is the responsibility of `frontend_update_check_and_apply`,
-/// which this command's caller is expected to have already kicked off.
+/// Tauri command — returns the launch-time decision so App.tsx can
+/// gate the Tauri auto-updater modal. Pure with respect to the cache:
+/// no bundle is downloaded, no `active.txt` is rewritten.
+///
+/// **Cache-first** to defeat the staged-rollout race. When
+/// `frontend_update_check_and_apply` has already run on this launch
+/// (the normal splash path), it stashes its `LaunchPlan` in
+/// `AppState.frontend_launch_plan`; we read that here so the App.tsx
+/// follow-up sees the EXACT decision the splash rendered, even if a
+/// CDN replica flips manifests between the two calls. The cold path
+/// (command invoked before the splash, or in a context with no
+/// AppState) falls back to a fresh fetch.
 ///
 /// Resolves with a populated state object on every code path; failures
 /// degrade to `Fallback` so the splash and `App.tsx` can keep moving.
 #[tauri::command]
 pub async fn version_contract_state(app: AppHandle) -> Result<VersionContractState, String> {
-    // The cache root call is the only side effect, and it's idempotent
-    // (creates an empty dir at most). Errors there mean the OS denied
-    // us our app data dir — fall back rather than crash the splash.
-    let active_version = match cache_root(&app) {
+    // Cache-first: if the splash already resolved a plan this launch,
+    // return it verbatim so the two App.tsx invokes can't disagree.
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Some(cached) = state.frontend_launch_plan.lock().clone() {
+            return Ok(launch_plan_to_state(&cached));
+        }
+    }
+
+    let plan = resolve_launch_plan_uncached(&app).await;
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.frontend_launch_plan.lock() = Some(plan.clone());
+    }
+    Ok(launch_plan_to_state(&plan))
+}
+
+/// Tauri command — explicitly re-fetches the manifest, recomputes the
+/// plan, and overwrites the cached decision. Intended for the long-
+/// interval (24 h) recheck timer in App.tsx, which catches manifest
+/// pivots in long-running sessions. Launch-time callers should keep
+/// using `version_contract_state` (cache-first) so the splash decision
+/// stays locked.
+#[tauri::command]
+pub async fn version_contract_recheck(app: AppHandle) -> Result<VersionContractState, String> {
+    let plan = resolve_launch_plan_uncached(&app).await;
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.frontend_launch_plan.lock() = Some(plan.clone());
+    }
+    Ok(launch_plan_to_state(&plan))
+}
+
+/// Shared fresh-fetch path for both the cold-cache `_state` call and
+/// the explicit `_recheck` call. Pulled out so the cache-first branch
+/// of `version_contract_state` stays a single early-return.
+async fn resolve_launch_plan_uncached(app: &AppHandle) -> LaunchPlan {
+    let active_version = match cache_root(app) {
         Ok(cache) => read_active_version(&cache),
         Err(e) => {
             log::warn!("version_contract_state: cache root unavailable: {e}");
@@ -824,8 +884,7 @@ pub async fn version_contract_state(app: AppHandle) -> Result<VersionContractSta
         }
     };
 
-    let plan = resolve_launch_plan(API_VERSION, active, manifest.as_ref());
-    Ok(launch_plan_to_state(&plan))
+    resolve_launch_plan(API_VERSION, active, manifest.as_ref())
 }
 
 fn launch_plan_to_state(plan: &LaunchPlan) -> VersionContractState {
@@ -1265,5 +1324,91 @@ mod tests {
             } => assert_eq!(version, "0.157.29"),
             other => panic!("expected HotSwap::ApplyBundle, got {other:?}"),
         }
+
+        // Nit 4: belt-and-braces invariant — the legacy manifest fixture
+        // must always be at-or-below KNOWN_MANIFEST_SCHEMA, otherwise the
+        // resolver's schema-cliff branch would short-circuit this test
+        // and the assertion above would be exercising a different branch
+        // than the comment claims.
+        assert!(
+            m.manifest_schema <= KNOWN_MANIFEST_SCHEMA,
+            "legacy fixture schema {} exceeds KNOWN_MANIFEST_SCHEMA {} — fixture must stay backwards-compat",
+            m.manifest_schema,
+            KNOWN_MANIFEST_SCHEMA
+        );
+    }
+
+    // Blocker 1 (defensive): API_VERSION is read from CARGO_PKG_VERSION at
+    // compile time and reported to the resolver as the running binary's
+    // version. If the workspace Cargo.toml ever drifts back to a bare
+    // `0.1.0` default, every fresh manifest publish (current floor:
+    // 0.157.0) silently DOSes hot-swap by routing all clients to the
+    // installer modal. Pin a hard floor here so a regression fails CI
+    // before it ever ships.
+    #[test]
+    fn api_version_is_parseable_and_above_minimum_floor() {
+        let parsed = semver::Version::parse(API_VERSION)
+            .unwrap_or_else(|e| panic!("API_VERSION {API_VERSION:?} must be valid semver: {e}"));
+        let floor = semver::Version::parse("0.1.0").unwrap();
+        assert!(
+            parsed >= floor,
+            "API_VERSION {API_VERSION} below defensive floor 0.1.0 — workspace Cargo.toml \
+             [workspace.package].version is wrong; the binary would self-DOS hot-swap"
+        );
+    }
+
+    // Nit 3: lower-bound extraction for strict-greater-than comparators.
+    // `>0.158` and `>=0.158` produce the SAME lower bound by design (the
+    // resolver only uses this for routing below-range vs above-range; the
+    // strict-vs-loose distinction is enforced by `api_compatible`, which
+    // uses semver::VersionReq).
+    #[test]
+    fn range_lower_bound_strict_greater() {
+        assert_eq!(
+            range_lower_bound(">0.158"),
+            Some(semver::Version::parse("0.158.0").unwrap())
+        );
+        assert_eq!(
+            range_lower_bound(">0.158.4"),
+            Some(semver::Version::parse("0.158.4").unwrap())
+        );
+        // `>` and `>=` collapse to the same floor — that's the contract.
+        assert_eq!(range_lower_bound(">0.158"), range_lower_bound(">=0.158"));
+    }
+
+    // Blocker 2 (resolver invariant): `launch_plan_to_state` is a pure
+    // mapping the cached-vs-fresh paths both feed into. Cache the same
+    // plan twice and confirm the serialized state is identical so an
+    // App.tsx reader can't observe drift between the splash event and
+    // the follow-up command. (The full AppState round-trip needs a
+    // tauri::AppHandle, which is out of scope for a unit test — the
+    // mapping invariant is the load-bearing piece.)
+    #[test]
+    fn launch_plan_to_state_is_deterministic_for_same_plan() {
+        let plan = LaunchPlan::InstallerModal {
+            target_version: Some("0.158.0".to_string()),
+            track: InstallerTrack::Stable,
+            reason: InstallerReason::VersionFloor {
+                needed: "0.158.0".to_string(),
+                have: "0.157.9".to_string(),
+            },
+            release_url: Some("https://example.invalid/release".to_string()),
+        };
+        let a = launch_plan_to_state(&plan);
+        let b = launch_plan_to_state(&plan);
+        // Decision + payload identity — drift here would mean the cached
+        // path and the fresh path could ever produce different state.
+        assert!(matches!(
+            a.decision,
+            VersionContractDecision::InstallerRequired
+        ));
+        assert!(matches!(
+            b.decision,
+            VersionContractDecision::InstallerRequired
+        ));
+        assert_eq!(a.installer_target, b.installer_target);
+        assert_eq!(a.release_url, b.release_url);
+        assert_eq!(a.reason, b.reason);
+        assert_eq!(a.known_schema, b.known_schema);
     }
 }

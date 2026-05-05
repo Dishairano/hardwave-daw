@@ -179,7 +179,15 @@ export function UpdateModal({
               </svg>
               <span style={{ fontSize: 11, color: hw.red }}>{error}</span>
             </div>
-            {releaseUrl && (
+            {/*
+              Defensive: only render the link when the URL is plain
+              `https://`. The manifest is fetched over HTTPS and signed
+              by CI, but a compromised or misconfigured publish step
+              could in theory ship a `javascript:` URI; gating here
+              keeps that out of the DOM regardless. `http://` is also
+              rejected so a downgrade attack can't sneak past either.
+            */}
+            {releaseUrl && releaseUrl.startsWith('https://') && (
               <a
                 href={releaseUrl}
                 target="_blank"

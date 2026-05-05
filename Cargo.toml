@@ -13,7 +13,14 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+# Kept in lockstep with `src-tauri/tauri.conf.json`'s `version`. The
+# release script (`scripts/release.sh`) bumps both files in the same
+# commit; CI (`frontend-publish.yml`) asserts they match before any
+# manifest is published. The frontend updater reads this value via
+# `env!("CARGO_PKG_VERSION")` and reports it as `API_VERSION` to the
+# resolver — drift here disables hot-swap for every running binary on
+# the next manifest publish.
+version = "0.157.28"
 edition = "2021"
 license = "MIT"
 authors = ["Hardwave Studios"]
