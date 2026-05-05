@@ -35,14 +35,16 @@ pub struct AppState {
             std::collections::HashMap<String, Box<dyn hardwave_plugin_host::types::HostedPlugin>>,
         >,
     >,
-    /// Launch-time decision from `resolve_launch_plan`. Populated by the
-    /// splash-driven `frontend_update_check_and_apply` and READ by the
-    /// follow-up `version_contract_state` command so both fronts of
+    /// Cached launch-time decision from `resolve_launch_plan`. Populated
+    /// by the splash-driven `frontend_update_check_and_apply` and READ by
+    /// the follow-up `version_contract_state` command so both fronts of
     /// App.tsx see the same plan even if the manifest CDN flips between
-    /// the two calls (staged-rollout race). The 24h recheck explicitly
-    /// re-fetches via a forced path; the launch-time decision is locked
-    /// once the splash has rendered it.
-    pub frontend_launch_plan: Arc<Mutex<Option<frontend_updater::LaunchPlan>>>,
+    /// the two calls (staged-rollout race). The cache also records the
+    /// resolved-at timestamp and source manifest version for the 24h
+    /// staleness check, plus an `applied` flag set when the splash
+    /// finishes a HotSwapReady so a subsequent state query won't keep
+    /// telling App.tsx the same bundle still needs applying.
+    pub frontend_launch_plan: Arc<Mutex<Option<frontend_updater::LaunchPlanCacheEntry>>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -272,14 +274,12 @@ pub fn run() {
             frontend_updater::frontend_update_check_and_apply,
             frontend_updater::frontend_update_status,
             // Version contract resolver — single-source-of-truth decision
-            // between Path A (installer modal) and Path B (hot-swap).
-            // `_state` reads the cached LaunchPlan first (set by the
-            // splash-driven check_and_apply) so the launch-time decision
-            // can't drift if a CDN replica flips manifests mid-launch.
-            // `_recheck` explicitly re-fetches and updates the cache —
-            // used by the 24h recheck timer in long-running sessions.
+            // between Path A (installer modal) and Path B (hot-swap). The
+            // command is cache-first: launch-time callers get the same
+            // LaunchPlan the splash already rendered. App.tsx's 24h
+            // recheck timer passes `force_refresh: true` to bypass the
+            // cache and recompute against a fresh manifest fetch.
             frontend_updater::version_contract_state,
-            frontend_updater::version_contract_recheck,
         ])
         .setup(|app| {
             log::info!("Hardwave DAW starting");

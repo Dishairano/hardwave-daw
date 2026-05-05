@@ -152,6 +152,32 @@ if command -v cargo >/dev/null 2>&1; then
     || echo "release.sh: warning — cargo update failed, Cargo.lock may need a rebuild in CI"
 fi
 
+# Verification step — confirm `cargo metadata` reports the new version for
+# the `hardwave-daw` package. This is the same interrogation Cargo itself
+# does at compile time to populate `env!("CARGO_PKG_VERSION")`, so a green
+# light here means the binary will report `API_VERSION` matching the new
+# tauri.conf.json. A mismatch would silently DOS hot-swap the moment a
+# manifest with a min_installer floor publishes — better to fail the
+# release script before the commit lands than discover it post-tag.
+# Skipped if cargo or jq is unavailable (release.sh must still work in
+# minimal containers); CI's matching `assert workspace version` step in
+# frontend-publish.yml is the load-bearing check.
+if command -v cargo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  META_VERSION=$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
+    | jq -r '.packages[] | select(.name=="hardwave-daw") | .version' \
+    || echo "")
+  if [ -z "$META_VERSION" ]; then
+    echo "release.sh: warning — cargo metadata could not resolve hardwave-daw version; CI's frontend-publish guard will catch any drift"
+  elif [ "$META_VERSION" != "$NEW_VERSION" ]; then
+    echo "release.sh: ERROR — cargo metadata reports $META_VERSION but expected $NEW_VERSION." >&2
+    echo "  workspace Cargo.toml or src-tauri/Cargo.toml is out of sync with the bumped version." >&2
+    echo "  Aborting release before the bad commit lands." >&2
+    exit 1
+  else
+    echo "release.sh: cargo metadata version $META_VERSION matches tauri.conf.json — OK"
+  fi
+fi
+
 # Commit message from arg or default
 MSG="${1:-Release v$NEW_VERSION}"
 

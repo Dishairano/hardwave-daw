@@ -320,11 +320,15 @@ export function App() {
       // caches the LaunchPlan it built for the splash, so this call
       // returns the EXACT decision the splash already rendered — no
       // chance of a CDN replica flipping the manifest between the two
-      // fetches and showing both UIs.
+      // fetches and showing both UIs. We pass `force_refresh: false`
+      // explicitly so the cache-first contract is named at the call
+      // site rather than leaning on the Rust-side default.
       let decision: VersionContractDecision = 'fallback'
       let releaseUrl: string | null = null
       try {
-        const state = await invoke<VersionContractState>('version_contract_state')
+        const state = await invoke<VersionContractState>('version_contract_state', {
+          forceRefresh: false,
+        })
         if (cancelled) return
         decision = state.decision
         releaseUrl = state.release_url ?? null
@@ -369,16 +373,18 @@ export function App() {
     })()
 
     // Long-interval recheck — covers users who keep the DAW running for
-    // days. Calls the dedicated `version_contract_recheck` command,
-    // which forces a fresh manifest fetch and updates the Rust-side
-    // cached plan. The launch-time `version_contract_state` call above
-    // is cache-first and stays locked to the splash decision; this is
-    // the explicit pivot path. Replaces the legacy 3 s
-    // `setTimeout(checkForUpdates, 3000)` which raced the splash gate.
+    // days. Re-invokes `version_contract_state` with `force_refresh: true`
+    // so the Rust side bypasses its cache, re-fetches the manifest, and
+    // updates the cached plan. The launch-time call above stays cache-
+    // first and locked to the splash decision; this is the explicit
+    // pivot path. Replaces the legacy 3 s `setTimeout(checkForUpdates,
+    // 3000)` which raced the splash gate.
     const RECHECK_MS = 24 * 60 * 60 * 1000
     const dailyRecheck = setInterval(async () => {
       try {
-        const state = await invoke<VersionContractState>('version_contract_recheck')
+        const state = await invoke<VersionContractState>('version_contract_state', {
+          forceRefresh: true,
+        })
         if (state.decision === 'installer_required') {
           if (state.release_url) {
             setUpdateInfo(prev => ({ ...prev, releaseUrl: state.release_url ?? null }))
@@ -387,8 +393,10 @@ export function App() {
         }
       } catch {
         // Manifest unreachable mid-session — silently ignore. An older
-        // binary that doesn't expose `_recheck` will throw here; that's
-        // the correct degraded behaviour (no spurious modal).
+        // binary that doesn't accept the force_refresh arg will treat it
+        // as an unknown field and still return the cached plan (Tauri's
+        // arg deserialiser is lenient); the worst case is the recheck
+        // does nothing, which is the correct degraded behaviour.
       }
     }, RECHECK_MS)
     return () => {

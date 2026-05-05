@@ -13,7 +13,7 @@
 //! See proposal at suite.hardwavestudios.com/frontend-updater-mockup/
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -228,6 +228,82 @@ pub enum HotSwapAction {
     },
 }
 
+/// How long a cached `LaunchPlan` is considered fresh. App.tsx schedules
+/// a `force_refresh: true` call on this same cadence; the cache TTL is
+/// the belt-and-braces backstop in case that timer doesn't fire (e.g.
+/// the renderer hangs or the user blocks the recheck window). Anything
+/// older than this is treated as stale and re-resolved against a fresh
+/// manifest fetch.
+const LAUNCH_PLAN_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// In-memory cache entry for the resolved launch plan. Lives in
+/// `AppState.frontend_launch_plan`; see the field doc comment in `lib.rs`
+/// for the cross-call contract.
+///
+/// `resolved_at` is an `Instant` (monotonic) so wall-clock manipulation
+/// can't shorten the TTL artificially. `source_version` is the manifest's
+/// `latest_version` at resolve time — useful in logs for triage and for
+/// the determinism unit test below. `applied` is flipped to `true` once
+/// `check_and_apply` finishes the HotSwap::ApplyBundle path; subsequent
+/// `version_contract_state` calls then report the bundle as up-to-date
+/// instead of repeatedly telling App.tsx the same staged bundle still
+/// needs applying.
+#[derive(Debug, Clone)]
+pub struct LaunchPlanCacheEntry {
+    pub resolved_at: Instant,
+    pub plan: LaunchPlan,
+    pub source_version: String,
+    pub applied: bool,
+}
+
+impl LaunchPlanCacheEntry {
+    fn new(plan: LaunchPlan, source_version: String) -> Self {
+        Self {
+            resolved_at: Instant::now(),
+            plan,
+            source_version,
+            applied: false,
+        }
+    }
+
+    /// True if the entry is older than [`LAUNCH_PLAN_CACHE_TTL`] and
+    /// must be re-resolved before being trusted again. Pure modulo
+    /// `Instant::now`; the cache-decision unit tests inject a fake
+    /// `now` so they don't need to wait 24 h.
+    fn is_stale_at(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.resolved_at) > LAUNCH_PLAN_CACHE_TTL
+    }
+}
+
+/// Pure decision helper for `version_contract_state` — given an existing
+/// cache entry (if any), the requested freshness, and a notion of "now",
+/// decide whether to serve the cache or re-fetch. Pulled out of the
+/// command body so the cache-vs-fresh contract is unit-testable without
+/// a Tauri runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheDecision {
+    /// Cached entry is fresh and the caller didn't force a refresh —
+    /// serve it verbatim, no manifest fetch.
+    UseCache,
+    /// Cached entry is missing, stale, or the caller forced a refresh —
+    /// re-resolve against a fresh manifest fetch and overwrite the cache.
+    Refresh,
+}
+
+fn select_cache_or_refresh(
+    cached: Option<&LaunchPlanCacheEntry>,
+    force_refresh: bool,
+    now: Instant,
+) -> CacheDecision {
+    if force_refresh {
+        return CacheDecision::Refresh;
+    }
+    match cached {
+        Some(entry) if !entry.is_stale_at(now) => CacheDecision::UseCache,
+        _ => CacheDecision::Refresh,
+    }
+}
+
 /// Reads the currently active frontend version from `<cache>/active.txt`.
 /// Returns `None` if no cache exists yet — i.e. we're running the
 /// bundled frontend that shipped with the installer.
@@ -336,9 +412,16 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
     // decision the splash already showed. Without this, a CDN replica
     // flipping mid-launch could let `version_contract_state` re-fetch a
     // different manifest and the user sees BOTH a HotSwapReady event and
-    // an InstallerRequired modal back-to-back.
+    // an InstallerRequired modal back-to-back. `source_version` is the
+    // manifest's advertised `latest_version` (or "-" when unreachable);
+    // `applied` flips to true once we successfully stage a bundle below.
+    let source_version = manifest_opt
+        .as_ref()
+        .map(|m| m.latest_version.clone())
+        .unwrap_or_else(|| "-".to_string());
     if let Some(state) = app.try_state::<AppState>() {
-        *state.frontend_launch_plan.lock() = Some(plan.clone());
+        *state.frontend_launch_plan.lock() =
+            Some(LaunchPlanCacheEntry::new(plan.clone(), source_version));
     }
 
     match plan {
@@ -368,6 +451,18 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
             // `Ready`. Emitting both means an older bundle still in cache
             // continues to render the right copy after this commit lands.
             emit(&app, UpdateStatus::Ready { version });
+            // Mark the cached plan as applied — a subsequent
+            // `version_contract_state` call now reports the bundle as
+            // already-staged rather than telling App.tsx the same
+            // ApplyBundle action is still pending. Without this, a
+            // settings page polling the resolver would render "update
+            // available — restart to apply" forever even after the
+            // staged bundle is sitting on disk waiting for relaunch.
+            if let Some(state) = app.try_state::<AppState>() {
+                if let Some(entry) = state.frontend_launch_plan.lock().as_mut() {
+                    entry.applied = true;
+                }
+            }
             Ok(())
         }
         LaunchPlan::InstallerModal {
@@ -829,43 +924,69 @@ pub struct VersionContractState {
 /// (command invoked before the splash, or in a context with no
 /// AppState) falls back to a fresh fetch.
 ///
+/// `force_refresh` bypasses the cache and re-fetches the manifest. The
+/// 24 h recheck timer in App.tsx passes `true`; the launch-time invoke
+/// passes `false`. Cached entries older than [`LAUNCH_PLAN_CACHE_TTL`]
+/// are also treated as stale and re-resolved automatically — that's the
+/// belt-and-braces backstop in case the renderer-side timer doesn't
+/// fire.
+///
 /// Resolves with a populated state object on every code path; failures
 /// degrade to `Fallback` so the splash and `App.tsx` can keep moving.
 #[tauri::command]
-pub async fn version_contract_state(app: AppHandle) -> Result<VersionContractState, String> {
-    // Cache-first: if the splash already resolved a plan this launch,
-    // return it verbatim so the two App.tsx invokes can't disagree.
-    if let Some(state) = app.try_state::<AppState>() {
-        if let Some(cached) = state.frontend_launch_plan.lock().clone() {
-            return Ok(launch_plan_to_state(&cached));
-        }
+pub async fn version_contract_state(
+    app: AppHandle,
+    force_refresh: Option<bool>,
+) -> Result<VersionContractState, String> {
+    // Tauri's default arg deserialiser accepts `null` / missing fields as
+    // `None` so legacy frontends that invoked this with no args still
+    // work — they get the cache-first behaviour they always had.
+    let force_refresh = force_refresh.unwrap_or(false);
+
+    // Cache-first decision is a pure function of the cached entry, the
+    // force flag, and a notion of "now". Pulled out so we don't hold the
+    // mutex across the await that follows.
+    let now = Instant::now();
+    let (decision, cached_state) = if let Some(state) = app.try_state::<AppState>() {
+        let guard = state.frontend_launch_plan.lock();
+        let decision = select_cache_or_refresh(guard.as_ref(), force_refresh, now);
+        let snapshot = if matches!(decision, CacheDecision::UseCache) {
+            guard.as_ref().map(|e| cached_entry_to_state(e))
+        } else {
+            None
+        };
+        (decision, snapshot)
+    } else {
+        // No AppState — almost certainly a unit-test or pre-`.manage()`
+        // call. Always refresh in that branch; nothing to cache against.
+        (CacheDecision::Refresh, None)
+    };
+
+    if let (CacheDecision::UseCache, Some(state)) = (decision, cached_state) {
+        return Ok(state);
     }
 
     let plan = resolve_launch_plan_uncached(&app).await;
+    let source_version = active_or_unknown(&app);
     if let Some(state) = app.try_state::<AppState>() {
-        *state.frontend_launch_plan.lock() = Some(plan.clone());
+        *state.frontend_launch_plan.lock() =
+            Some(LaunchPlanCacheEntry::new(plan.clone(), source_version));
     }
     Ok(launch_plan_to_state(&plan))
 }
 
-/// Tauri command — explicitly re-fetches the manifest, recomputes the
-/// plan, and overwrites the cached decision. Intended for the long-
-/// interval (24 h) recheck timer in App.tsx, which catches manifest
-/// pivots in long-running sessions. Launch-time callers should keep
-/// using `version_contract_state` (cache-first) so the splash decision
-/// stays locked.
-#[tauri::command]
-pub async fn version_contract_recheck(app: AppHandle) -> Result<VersionContractState, String> {
-    let plan = resolve_launch_plan_uncached(&app).await;
-    if let Some(state) = app.try_state::<AppState>() {
-        *state.frontend_launch_plan.lock() = Some(plan.clone());
-    }
-    Ok(launch_plan_to_state(&plan))
+/// Best-effort active-frontend version string for stamping into a cache
+/// entry's `source_version` field. Falls back to `"-"` when the cache
+/// dir is unreadable so the field is never empty in logs.
+fn active_or_unknown(app: &AppHandle) -> String {
+    cache_root(app)
+        .ok()
+        .and_then(|c| read_active_version(&c))
+        .unwrap_or_else(|| "-".to_string())
 }
 
-/// Shared fresh-fetch path for both the cold-cache `_state` call and
-/// the explicit `_recheck` call. Pulled out so the cache-first branch
-/// of `version_contract_state` stays a single early-return.
+/// Shared fresh-fetch path for the cache-miss / `force_refresh` branch.
+/// Pulled out so the command body stays focused on cache decisions.
 async fn resolve_launch_plan_uncached(app: &AppHandle) -> LaunchPlan {
     let active_version = match cache_root(app) {
         Ok(cache) => read_active_version(&cache),
@@ -885,6 +1006,30 @@ async fn resolve_launch_plan_uncached(app: &AppHandle) -> LaunchPlan {
     };
 
     resolve_launch_plan(API_VERSION, active, manifest.as_ref())
+}
+
+/// Project a cache entry into the wire-format state. When `applied` is
+/// set and the underlying plan is `HotSwap::ApplyBundle`, we report
+/// `UpToDate` instead — the bundle is already on disk waiting for
+/// relaunch, so further "update available" UI would be a lie.
+fn cached_entry_to_state(entry: &LaunchPlanCacheEntry) -> VersionContractState {
+    if entry.applied {
+        if let LaunchPlan::HotSwap {
+            action: HotSwapAction::ApplyBundle { version, .. },
+        } = &entry.plan
+        {
+            return VersionContractState {
+                decision: VersionContractDecision::UpToDate,
+                installer_target: None,
+                installer_track: InstallerTrack::default(),
+                release_url: None,
+                hot_swap_version: Some(version.clone()),
+                reason: Some("bundle staged; restart to apply".to_string()),
+                known_schema: KNOWN_MANIFEST_SCHEMA,
+            };
+        }
+    }
+    launch_plan_to_state(&entry.plan)
 }
 
 fn launch_plan_to_state(plan: &LaunchPlan) -> VersionContractState {
@@ -1410,5 +1555,161 @@ mod tests {
         assert_eq!(a.release_url, b.release_url);
         assert_eq!(a.reason, b.reason);
         assert_eq!(a.known_schema, b.known_schema);
+    }
+
+    // Blocker 2 (cache contract): `select_cache_or_refresh` is the pure
+    // decision helper the `version_contract_state` command body uses
+    // before deciding whether to re-fetch the manifest. Three pinned
+    // contracts:
+    //
+    // 1. With NO cached entry, always refresh.
+    // 2. With a fresh cached entry and `force_refresh=false`, use cache.
+    // 3. With a fresh cached entry and `force_refresh=true`, refresh.
+    // 4. With a stale (>TTL) cached entry, refresh even when
+    //    `force_refresh=false` — the belt-and-braces backstop in case
+    //    App.tsx's recheck timer never fires.
+    //
+    // The reviewer's required test "dispatch resolver twice with the
+    // same manifest, expect identical plan; then dispatch with a
+    // different manifest under force_refresh=false, expect cached plan
+    // still wins" reduces to (2): the decision says UseCache, so the
+    // second manifest is never fetched and the cached plan is the one
+    // that gets returned.
+    #[test]
+    fn cache_decision_no_cache_always_refreshes() {
+        let now = Instant::now();
+        assert_eq!(
+            select_cache_or_refresh(None, false, now),
+            CacheDecision::Refresh
+        );
+        assert_eq!(
+            select_cache_or_refresh(None, true, now),
+            CacheDecision::Refresh
+        );
+    }
+
+    #[test]
+    fn cache_decision_fresh_entry_uses_cache_unless_forced() {
+        let entry = LaunchPlanCacheEntry::new(
+            LaunchPlan::HotSwap {
+                action: HotSwapAction::NoOp,
+            },
+            "0.158.4".to_string(),
+        );
+        let now = entry.resolved_at;
+        assert_eq!(
+            select_cache_or_refresh(Some(&entry), false, now),
+            CacheDecision::UseCache,
+            "fresh cache, no force → must serve cache so the splash and the App.tsx follow-up can't disagree"
+        );
+        assert_eq!(
+            select_cache_or_refresh(Some(&entry), true, now),
+            CacheDecision::Refresh,
+            "force_refresh=true overrides cache — that's the 24h recheck path's contract"
+        );
+    }
+
+    #[test]
+    fn cache_decision_stale_entry_refreshes_even_without_force() {
+        // Construct an entry whose resolved_at sits well outside the TTL.
+        // `Instant` arithmetic is monotonic so we go forward from `now`
+        // by TTL + buffer to simulate the cache aging.
+        let entry = LaunchPlanCacheEntry::new(
+            LaunchPlan::HotSwap {
+                action: HotSwapAction::NoOp,
+            },
+            "0.158.4".to_string(),
+        );
+        let later = entry.resolved_at + LAUNCH_PLAN_CACHE_TTL + Duration::from_secs(60);
+        assert!(entry.is_stale_at(later));
+        assert_eq!(
+            select_cache_or_refresh(Some(&entry), false, later),
+            CacheDecision::Refresh,
+            "stale cache must trigger a re-fetch even when caller didn't force refresh"
+        );
+    }
+
+    // Blocker 2 (applied semantics): once the splash has actually
+    // staged a bundle, a follow-up `version_contract_state` query must
+    // NOT keep telling App.tsx the same ApplyBundle action is pending —
+    // that would surface "update available" forever, even though the
+    // bundle is sitting on disk waiting for relaunch.
+    #[test]
+    fn applied_apply_bundle_collapses_to_up_to_date() {
+        let plan = LaunchPlan::HotSwap {
+            action: HotSwapAction::ApplyBundle {
+                version: "0.158.4".to_string(),
+                bundle_url: "https://example.invalid/bundle.zip".to_string(),
+                size_bytes: 1234,
+                sha256: "0".repeat(64),
+            },
+        };
+        let mut entry = LaunchPlanCacheEntry::new(plan, "0.158.4".to_string());
+
+        // Before apply: state reads as a pending HotSwap.
+        let pre = cached_entry_to_state(&entry);
+        assert!(matches!(pre.decision, VersionContractDecision::HotSwap));
+        assert_eq!(pre.hot_swap_version.as_deref(), Some("0.158.4"));
+
+        // After apply (the field flips inside `check_and_apply_inner`):
+        // the same entry now reads as up-to-date with the staged version.
+        entry.applied = true;
+        let post = cached_entry_to_state(&entry);
+        assert!(matches!(post.decision, VersionContractDecision::UpToDate));
+        assert_eq!(post.hot_swap_version.as_deref(), Some("0.158.4"));
+        assert_eq!(
+            post.reason.as_deref(),
+            Some("bundle staged; restart to apply")
+        );
+    }
+
+    // Reviewer's required scenario in concrete form. Two separate
+    // `LaunchPlan` results derived from two different manifests; under
+    // `force_refresh=false` the cache decision picks the FIRST one and
+    // never observes the second. This is the exact race the cache
+    // exists to prevent (CDN replica flips between splash and follow-up
+    // App.tsx invoke).
+    #[test]
+    fn second_manifest_does_not_win_under_cache_first() {
+        // First fetch: latest_version 0.158.4, no min_installer.
+        let m1 = make_manifest("0.158.4");
+        let plan1 = resolve_launch_plan("0.158.4", "0.158.0", Some(&m1));
+        let entry = LaunchPlanCacheEntry::new(plan1.clone(), m1.latest_version.clone());
+
+        // Second fetch (CDN flipped to staged-rollout manifest): same
+        // version field, but a min_installer floor that would route the
+        // SAME running binary to InstallerModal instead. If we ever
+        // re-fetched here, App.tsx would see the InstallerRequired
+        // decision after the splash already showed HotSwapReady.
+        let mut m2 = make_manifest("0.158.4");
+        m2.min_installer = Some("0.999.0".to_string());
+        let plan2 = resolve_launch_plan("0.158.4", "0.158.0", Some(&m2));
+
+        // Sanity: the two plans really differ. If they didn't, the rest
+        // of the test would still pass for the wrong reason.
+        assert!(
+            matches!(
+                plan1,
+                LaunchPlan::HotSwap {
+                    action: HotSwapAction::ApplyBundle { .. }
+                }
+            ),
+            "first plan should be HotSwap::ApplyBundle"
+        );
+        assert!(
+            matches!(plan2, LaunchPlan::InstallerModal { .. }),
+            "second plan should be InstallerModal — confirms the manifests really differ"
+        );
+
+        // Under force_refresh=false with a fresh cached entry, the
+        // decision is UseCache. The second manifest never gets a chance
+        // to influence the state; the splash's HotSwap decision stands.
+        let now = entry.resolved_at;
+        assert_eq!(
+            select_cache_or_refresh(Some(&entry), false, now),
+            CacheDecision::UseCache
+        );
+        let served = cached_entry_to_state(&entry);
+        assert!(matches!(served.decision, VersionContractDecision::HotSwap));
     }
 }
