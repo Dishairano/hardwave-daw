@@ -21,6 +21,7 @@ import { MixerPanel } from './mixer/MixerPanel'
 import { useTransportStore } from '../stores/transportStore'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
+import { usePanelLayoutStore } from '../stores/panelLayoutStore'
 import type { MobilePanel } from './MobileTabBar'
 
 interface HwAppProps {
@@ -544,6 +545,12 @@ export function HwApp({
   // and the HTML track-name column (.fl-tr) via the --row-h CSS variable.
   const trackHeight = useTransportStore(s => s.trackHeight)
 
+  // Floating-panel state — when a panel is detached, App.tsx renders it in
+  // a FloatingWindow. We must NOT also render the inline version here, or
+  // the user sees the same panel twice (one detached, one inline). Persisted
+  // in localStorage by panelLayoutStore so this flag survives restarts.
+  const layout = usePanelLayoutStore(s => s.layout)
+
   // Mobile: single panel, no chrome.
   if (isMobile) {
     return (
@@ -563,7 +570,7 @@ export function HwApp({
       <HwSecondRow hint={hint} projectName={projectName} />
 
       <div className="fl-body">
-        {showBrowser && (
+        {showBrowser && !layout.browser.floating && (
           <div className="fl-browser" data-testid="panel-browser">
             <Browser />
           </div>
@@ -574,7 +581,7 @@ export function HwApp({
         {/* Center column: stacked docked panels */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
 
-          {showChannelRack && (
+          {showChannelRack && !layout.channelRack.floating && (
             <div
               className="fl-cr"
               data-testid="panel-channel-rack"
@@ -596,7 +603,7 @@ export function HwApp({
             </div>
           )}
 
-          {showPianoRoll && (
+          {showPianoRoll && !layout.pianoRoll.floating && (
             <div
               className="fl-pr"
               data-testid="panel-piano-roll"
@@ -618,7 +625,7 @@ export function HwApp({
             </div>
           )}
 
-          {showPlaylist && (
+          {showPlaylist && !layout.playlist.floating && (
             <div className="fl-playlist" data-testid="panel-playlist">
               <HwPlaylistHead />
               <HwPlaylistTools />
@@ -638,7 +645,7 @@ export function HwApp({
             </div>
           )}
 
-          {showMixer && (
+          {showMixer && !layout.mixer.floating && (
             <div
               className="fl-mx"
               data-testid="panel-mixer"
