@@ -1,0 +1,11 @@
+{
+  "$comment": "Source of truth for the OUTGOING manifest's version-contract fields. CI (.github/workflows/frontend-publish.yml) reads this file and stamps these values into the published manifest.json. See /tmp/min-installer-architecture.md §6 for the publish-time invariants. Bump min_installer in the same commit that breaks compatibility with an older binary; CI enforces requires_api lower bound >= min_installer and that min_installer never decreases.",
+  "manifest_schema": 2,
+  "min_installer": "0.157.0",
+  "requires_api": "^0.157",
+  "installer_track": "stable",
+  "installer_hint": {
+    "version": "0.157.28",
+    "release_url": "https://github.com/Dishairano/hardwave-daw/releases/latest"
+  }
+}

@@ -262,6 +262,9 @@ pub fn run() {
             // Frontend updater — splash-driven hot-swap of the UI bundle
             frontend_updater::frontend_update_check_and_apply,
             frontend_updater::frontend_update_status,
+            // Version contract resolver — single-source-of-truth decision
+            // between Path A (installer modal) and Path B (hot-swap).
+            frontend_updater::version_contract_state,
         ])
         .setup(|app| {
             log::info!("Hardwave DAW starting");

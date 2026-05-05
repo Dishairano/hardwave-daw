@@ -62,6 +62,33 @@ interface UpdateInfo {
   progress: number
   downloaded: boolean
   error: string | null
+  /**
+   * Optional GitHub release URL surfaced as a "Open release notes" fallback
+   * link inside the update-error branch of UpdateModal. Sourced from the
+   * manifest's `installer_hint.release_url` via `version_contract_state`.
+   */
+  releaseUrl?: string | null
+}
+
+/**
+ * Mirrors `VersionContractState` in `src-tauri/src/frontend_updater.rs`.
+ * Single source of truth for the launch-time decision between the
+ * Tauri auto-updater (Path A) and the splash-driven hot-swap (Path B).
+ */
+type VersionContractDecision =
+  | 'hot_swap'
+  | 'installer_required'
+  | 'up_to_date'
+  | 'fallback'
+
+interface VersionContractState {
+  decision: VersionContractDecision
+  installer_target?: string | null
+  installer_track?: 'stable' | 'beta'
+  release_url?: string | null
+  hot_swap_version?: string | null
+  reason?: string | null
+  known_schema?: number
 }
 
 /** Compact byte size for the splash status text. */
@@ -194,6 +221,7 @@ export function App() {
     progress: 0,
     downloaded: false,
     error: null,
+    releaseUrl: null,
   })
   const initRan = useRef(false)
 
@@ -212,10 +240,20 @@ export function App() {
     // budgeted (5s total) so this always resolves; on error we still set
     // ready so the splash can advance. Status events from the Rust side
     // pipe into setSplashStatus via the listen() below.
+    //
+    // After the updater resolves, we query `version_contract_state` to
+    // discover the resolver's decision and gate the Tauri auto-updater
+    // modal on it. Per the spec, at most one update affordance per launch:
+    //   - decision == 'installer_required' → run checkForUpdates() to open
+    //     the existing Tauri-updater modal (no 3 s wait — we already know).
+    //   - decision in {hot_swap, up_to_date, fallback} → never call
+    //     checkForUpdates() at launch. A long-interval (24 h) recheck
+    //     covers users who keep the DAW open for days; that's set up below.
     ;(async () => {
+      let unlisten: (() => void) | null = null
       try {
         const { listen } = await import('@tauri-apps/api/event')
-        const unlisten = await listen<{
+        unlisten = await listen<{
           kind: string
           downloaded?: number
           total?: number
@@ -223,6 +261,9 @@ export function App() {
           reason?: string
           manifest_requires?: string
           running?: string
+          target_version?: string | null
+          track?: 'stable' | 'beta'
+          release_url?: string | null
         }>('frontend-update-status', (e) => {
           const p = e.payload
           switch (p.kind) {
@@ -240,7 +281,12 @@ export function App() {
             case 'applying':
               setSplashStatus('Applying update...'); break
             case 'ready':
+            case 'hot_swap_ready':
               setSplashStatus(`Update ${p.version ?? ''} ready — restart to apply`)
+              break
+            case 'installer_required':
+              // Splash status copy aligned with surface A in the mockup.
+              setSplashStatus('Installer upgrade required')
               break
             case 'up_to_date':
             case 'incompatible':
@@ -251,14 +297,50 @@ export function App() {
 
         // Kick off the updater. The Rust command always resolves Ok(()).
         await invoke('frontend_update_check_and_apply')
-        unlisten()
       } catch (e) {
         // If the import or invoke itself blows up (older binary missing
         // the command, etc.), don't block the splash.
         console.warn('[frontend updater] init failed:', e)
       } finally {
+        if (unlisten) {
+          try { unlisten() } catch { /* event listener already detached */ }
+        }
         setFrontendUpdateReady(true)
       }
+
+      // Resolver decision — drives whether we surface the Tauri-updater
+      // modal at all this session. Tolerates older binaries that don't
+      // expose the command yet (treated as 'fallback').
+      let decision: VersionContractDecision = 'fallback'
+      let releaseUrl: string | null = null
+      try {
+        const state = await invoke<VersionContractState>('version_contract_state')
+        decision = state.decision
+        releaseUrl = state.release_url ?? null
+        if (releaseUrl) {
+          setUpdateInfo(prev => ({ ...prev, releaseUrl }))
+        }
+        if (state.installer_target && decision === 'installer_required') {
+          // Pre-fill the modal version label with the manifest's hint so
+          // the dialog reads correctly the moment Tauri's check() opens
+          // it — the real version still comes from the auto-updater feed.
+          setUpdateInfo(prev => ({
+            ...prev,
+            version: state.installer_target ?? prev.version,
+          }))
+        }
+      } catch (e) {
+        console.warn('[version contract] state query failed, defaulting to fallback:', e)
+      }
+
+      if (decision === 'installer_required') {
+        // Skip the legacy 3 s wait — the resolver has already told us a
+        // binary upgrade is required.
+        await checkForUpdates()
+      }
+      // No else-branch: hot_swap / up_to_date / fallback all stay silent
+      // at launch. A 24 h recheck timer below catches manifest pivots in
+      // long-running sessions.
     })()
 
     // Crash detection: if the previous session didn't clear the alive marker,
@@ -274,9 +356,26 @@ export function App() {
       } catch {}
     })()
 
-    // Check for updates after a short delay
-    const timer = setTimeout(checkForUpdates, 3000)
-    return () => clearTimeout(timer)
+    // Long-interval recheck — covers users who keep the DAW running for
+    // days. Re-queries the resolver and only opens the modal if the
+    // manifest has pivoted to `installer_required` since launch. This
+    // replaces the legacy 3 s `setTimeout(checkForUpdates, 3000)` which
+    // could race the splash-gated decision and produce two prompts.
+    const RECHECK_MS = 24 * 60 * 60 * 1000
+    const dailyRecheck = setInterval(async () => {
+      try {
+        const state = await invoke<VersionContractState>('version_contract_state')
+        if (state.decision === 'installer_required') {
+          if (state.release_url) {
+            setUpdateInfo(prev => ({ ...prev, releaseUrl: state.release_url ?? null }))
+          }
+          await checkForUpdates()
+        }
+      } catch {
+        // Manifest unreachable mid-session — silently ignore.
+      }
+    }, RECHECK_MS)
+    return () => clearInterval(dailyRecheck)
   }, [])
 
   // Auto-save: every 2 minutes, if project is dirty, write to the cache dir.
@@ -892,6 +991,7 @@ export function App() {
           progress={updateInfo.progress}
           downloaded={updateInfo.downloaded}
           error={updateInfo.error}
+          releaseUrl={updateInfo.releaseUrl ?? null}
           onUpdate={handleUpdate}
           onDismiss={handleDismissUpdate}
         />

@@ -8,6 +8,12 @@ interface UpdateModalProps {
   progress: number
   downloaded: boolean
   error: string | null
+  /**
+   * Manifest-supplied GitHub release URL. Rendered as an "Open release
+   * notes" fallback link inside the error block — when the Tauri auto-
+   * updater feed is unreachable, the user can still get to the installer.
+   */
+  releaseUrl?: string | null
   onUpdate: () => void
   onDismiss: () => void
 }
@@ -20,6 +26,7 @@ export function UpdateModal({
   progress,
   downloaded,
   error,
+  releaseUrl,
   onUpdate,
   onDismiss,
 }: UpdateModalProps) {
@@ -164,12 +171,31 @@ export function UpdateModal({
             background: hw.redDim,
             border: `1px solid rgba(239,68,68,0.2)`,
             borderRadius: 8,
-            display: 'flex', alignItems: 'center', gap: 6,
+            display: 'flex', flexDirection: 'column', gap: 4,
           }}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={hw.red} strokeWidth="2" strokeLinecap="round">
-              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-            <span style={{ fontSize: 11, color: hw.red }}>{error}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={hw.red} strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <span style={{ fontSize: 11, color: hw.red }}>{error}</span>
+            </div>
+            {releaseUrl && (
+              <a
+                href={releaseUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  fontSize: 10,
+                  color: hw.red,
+                  textDecoration: 'underline',
+                  paddingLeft: 18,
+                  fontFamily: "'Consolas', monospace",
+                  letterSpacing: 0.4,
+                }}
+              >
+                Open release notes →
+              </a>
+            )}
           </div>
         )}
 

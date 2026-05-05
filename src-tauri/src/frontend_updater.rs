@@ -24,8 +24,7 @@ use tokio::io::AsyncWriteExt;
 /// Hard-coded production manifest URL. Override via env var for staging.
 /// Hosted on the suite.hardwavestudios.com cluster (vst-web01 nginx) so we
 /// can publish without touching the marketing-site infra.
-const DEFAULT_MANIFEST_URL: &str =
-    "https://suite.hardwavestudios.com/daw/frontend/manifest.json";
+const DEFAULT_MANIFEST_URL: &str = "https://suite.hardwavestudios.com/daw/frontend/manifest.json";
 
 /// Total budget the splash will wait. Past this we abort and use the bundled
 /// frontend; the next launch tries again. Keep tight so cold-start UX
@@ -43,9 +42,19 @@ const DOWNLOAD_TIMEOUT_SECS: u64 = 4;
 /// range syntax (e.g. `^1.5`).
 pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Highest manifest schema this client knows how to interpret. Bump in
+/// lockstep with breaking field changes; older binaries see anything
+/// strictly greater than this and degrade to silent fallback (Path C).
+pub const KNOWN_MANIFEST_SCHEMA: u32 = 2;
+
 /// Status events emitted to the splash on the `frontend-update-status`
 /// channel. The frontend listens and renders the matching string under
 /// the loading bar.
+///
+/// Variants present before the version-contract layer (`Checking` … `Skipped`)
+/// remain unchanged because the splash text mapping in App.tsx keys off the
+/// `kind` tag — renaming would silently break older frontends served from a
+/// stale bundle. New variants append.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UpdateStatus {
@@ -70,31 +79,151 @@ pub enum UpdateStatus {
     /// the user. The frontend may show this briefly or swallow it; the
     /// app continues with the bundled fallback either way.
     Skipped { reason: String },
+    /// Resolver decided the running binary is too old to host the
+    /// advertised bundle safely. The splash should swap copy to "installer
+    /// upgrade required"; the Tauri auto-updater (Path A) takes over.
+    InstallerRequired {
+        target_version: Option<String>,
+        track: InstallerTrack,
+        reason: String,
+        release_url: Option<String>,
+    },
+    /// Bundle is staged in cache (or will be on next apply). Equivalent to
+    /// `Ready` for backwards-compat, but emitted from the version-contract
+    /// resolver path so the frontend can recognise the explicit hot-swap
+    /// outcome and suppress its own auto-updater check for this session.
+    HotSwapReady { version: String },
 }
 
-#[derive(Debug, Deserialize)]
-struct Manifest {
-    latest_version: String,
+/// Outgoing-feed identifier for the Tauri auto-updater. Pivoting a user
+/// to `Beta` lets us roll a hotfix to opt-in testers without cutting a
+/// fresh stable installer; `Stable` is the default for everyone else.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum InstallerTrack {
+    Stable,
+    Beta,
+}
+
+impl Default for InstallerTrack {
+    fn default() -> Self {
+        InstallerTrack::Stable
+    }
+}
+
+/// Optional hint payload the modal uses for human-facing copy. Never
+/// authoritative — the actual installer download is resolved by
+/// `tauri-plugin-updater` against its own feed.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct InstallerHint {
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub notes_url: Option<String>,
+    #[serde(default)]
+    pub release_url: Option<String>,
+}
+
+/// Manifest as parsed from `manifest.json`. All version-contract fields
+/// are `#[serde(default)]` so a manifest published before the schema
+/// existed (or one served by a partial mirror) still parses — old fields
+/// take their old meaning, new fields default to "no opinion".
+#[derive(Debug, Clone, Deserialize)]
+pub struct Manifest {
+    pub latest_version: String,
     #[serde(default)]
     #[allow(dead_code)]
-    published_at: Option<String>,
+    pub published_at: Option<String>,
     #[serde(default = "default_requires_api")]
-    requires_api: String,
-    bundle: BundleSpec,
+    pub requires_api: String,
+    pub bundle: BundleSpec,
     #[serde(default)]
     #[allow(dead_code)]
-    changelog: Vec<String>,
+    pub changelog: Vec<String>,
+    /// Strict semver floor — the running binary must be `>= min_installer`
+    /// to host this bundle. Absent in pre-schema-2 manifests; treated as
+    /// "no floor" so legacy manifests continue to apply.
+    #[serde(default)]
+    pub min_installer: Option<String>,
+    /// Which `tauri-plugin-updater` feed Path A should use. Defaults to
+    /// `Stable` so legacy manifests pick the existing release channel.
+    #[serde(default)]
+    pub installer_track: InstallerTrack,
+    /// Monotonic schema marker. Old clients ignore it; newer clients
+    /// refuse to interpret a manifest whose schema is ahead of them.
+    #[serde(default = "default_manifest_schema")]
+    pub manifest_schema: u32,
+    /// Copy material for the installer modal. The actual download URL
+    /// still comes from `tauri-plugin-updater`.
+    #[serde(default)]
+    pub installer_hint: Option<InstallerHint>,
 }
 
-#[derive(Debug, Deserialize)]
-struct BundleSpec {
-    url: String,
-    size_bytes: u64,
-    sha256: String,
+#[derive(Debug, Clone, Deserialize)]
+pub struct BundleSpec {
+    pub url: String,
+    pub size_bytes: u64,
+    pub sha256: String,
 }
 
 fn default_requires_api() -> String {
     "*".to_string()
+}
+
+fn default_manifest_schema() -> u32 {
+    // Pre-schema-2 manifests didn't ship this field. Treat them as
+    // schema 1 so the resolver's "schema ahead of client" check (which
+    // compares strictly greater than KNOWN_MANIFEST_SCHEMA = 2) cannot
+    // fail spuriously.
+    1
+}
+
+/// Reason an installer modal was selected. Flows into the modal copy and
+/// the per-launch telemetry log line.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InstallerReason {
+    /// `installed < manifest.min_installer` — the strict semver floor
+    /// failed before any other check.
+    VersionFloor { needed: String, have: String },
+    /// `requires_api` range didn't accept the running binary, and the
+    /// running binary is *below* the range — upgrade resolves it.
+    ApiRangeBelow { range: String, have: String },
+}
+
+/// Pure resolver decision. The caller wires each variant to the
+/// appropriate UX surface; no UI lives in the resolver itself.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LaunchPlan {
+    /// Apply the advertised bundle (download/verify/extract). Sub-action
+    /// distinguishes "actually newer" from "manifest matched but bundle
+    /// is the same version we already cache".
+    HotSwap { action: HotSwapAction },
+    /// Path A — pop the Tauri auto-updater modal and run `check()`.
+    InstallerModal {
+        target_version: Option<String>,
+        track: InstallerTrack,
+        reason: InstallerReason,
+        release_url: Option<String>,
+    },
+    /// Path C — silent fallback to bundled assets. Logged for triage.
+    Fallback { reason: String },
+}
+
+/// Sub-action of `LaunchPlan::HotSwap`. `NoOp` skips the download but
+/// still counts as "manifest decided we're fine"; `ApplyBundle` is the
+/// happy path.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HotSwapAction {
+    NoOp,
+    ApplyBundle {
+        version: String,
+        bundle_url: String,
+        size_bytes: u64,
+        sha256: String,
+    },
 }
 
 /// Reads the currently active frontend version from `<cache>/active.txt`.
@@ -130,7 +259,10 @@ fn emit(app: &AppHandle, status: UpdateStatus) {
 }
 
 fn version_is_newer(remote: &str, local: &str) -> bool {
-    match (semver::Version::parse(remote), semver::Version::parse(local)) {
+    match (
+        semver::Version::parse(remote),
+        semver::Version::parse(local),
+    ) {
         (Ok(r), Ok(l)) => r > l,
         _ => remote != local, // fall back to string-inequality if parsing fails
     }
@@ -184,6 +316,87 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
     let active = read_active_version(&cache);
     let local_version = active.as_deref().unwrap_or(API_VERSION);
 
+    // Pure fetch — no side effects on the cache. The resolver decides
+    // whether the manifest's bundle is allowed to land before we touch disk.
+    let manifest_opt = match fetch_manifest_inner().await {
+        Ok(m) => Some(m),
+        Err(e) => {
+            log::warn!("frontend updater: manifest fetch failed: {e}");
+            None
+        }
+    };
+
+    let plan = resolve_launch_plan(API_VERSION, local_version, manifest_opt.as_ref());
+    log_launch_plan(&plan, manifest_opt.as_ref(), local_version);
+
+    match plan {
+        LaunchPlan::HotSwap {
+            action: HotSwapAction::NoOp,
+        } => {
+            emit(&app, UpdateStatus::UpToDate);
+            Ok(())
+        }
+        LaunchPlan::HotSwap {
+            action:
+                HotSwapAction::ApplyBundle {
+                    version,
+                    bundle_url,
+                    size_bytes,
+                    sha256,
+                },
+        } => {
+            apply_bundle(&app, &cache, &version, &bundle_url, size_bytes, &sha256).await?;
+            emit(
+                &app,
+                UpdateStatus::HotSwapReady {
+                    version: version.clone(),
+                },
+            );
+            // Backwards-compat: legacy splash text mapping listens for
+            // `Ready`. Emitting both means an older bundle still in cache
+            // continues to render the right copy after this commit lands.
+            emit(&app, UpdateStatus::Ready { version });
+            Ok(())
+        }
+        LaunchPlan::InstallerModal {
+            target_version,
+            track,
+            reason,
+            release_url,
+        } => {
+            let reason_str = installer_reason_summary(&reason);
+            emit(
+                &app,
+                UpdateStatus::InstallerRequired {
+                    target_version,
+                    track,
+                    reason: reason_str,
+                    release_url,
+                },
+            );
+            // Legacy event so older bundles still see *something* when the
+            // resolver pivots to Path A.
+            if let Some(m) = &manifest_opt {
+                emit(
+                    &app,
+                    UpdateStatus::Incompatible {
+                        manifest_requires: m.requires_api.clone(),
+                        running: API_VERSION.to_string(),
+                    },
+                );
+            }
+            Ok(())
+        }
+        LaunchPlan::Fallback { reason } => {
+            emit(&app, UpdateStatus::Skipped { reason });
+            Ok(())
+        }
+    }
+}
+
+/// Pure manifest fetcher. No cache writes, no event emissions. The
+/// caller is expected to pass the result into `resolve_launch_plan`.
+pub async fn fetch_manifest_inner() -> Result<Manifest, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(MANIFEST_TIMEOUT_SECS))
         .build()
@@ -199,38 +412,35 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
         .json()
         .await
         .map_err(|e| format!("manifest parse: {e}"))?;
+    Ok(manifest)
+}
 
-    if !version_is_newer(&manifest.latest_version, local_version) {
-        emit(&app, UpdateStatus::UpToDate);
-        return Ok(());
-    }
-
-    if !api_compatible(&manifest.requires_api, API_VERSION) {
-        emit(
-            &app,
-            UpdateStatus::Incompatible {
-                manifest_requires: manifest.requires_api.clone(),
-                running: API_VERSION.to_string(),
-            },
-        );
-        return Ok(());
-    }
-
-    // Download bundle, streaming so we can emit progress.
+/// Apply a verified bundle to the cache. Side-effecting — only call when
+/// `resolve_launch_plan` returned `HotSwap::ApplyBundle`. Splits the
+/// download/verify/extract/promote stages out of the launch decision so
+/// the resolver itself stays pure and testable.
+async fn apply_bundle(
+    app: &AppHandle,
+    cache: &Path,
+    version: &str,
+    bundle_url: &str,
+    size_bytes: u64,
+    expected_sha: &str,
+) -> Result<(), String> {
     let download_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("build download client: {e}"))?;
 
     let response = download_client
-        .get(&manifest.bundle.url)
+        .get(bundle_url)
         .send()
         .await
         .map_err(|e| format!("bundle download: {e}"))?
         .error_for_status()
         .map_err(|e| format!("bundle status: {e}"))?;
 
-    let total = manifest.bundle.size_bytes;
+    let total = size_bytes;
     let mut downloaded: u64 = 0;
     let mut hasher = Sha256::new();
     let mut bytes = Vec::with_capacity(total as usize);
@@ -241,22 +451,18 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
         downloaded += chunk.len() as u64;
         hasher.update(&chunk);
         bytes.extend_from_slice(&chunk);
-        emit(
-            &app,
-            UpdateStatus::Downloading { downloaded, total },
-        );
+        emit(app, UpdateStatus::Downloading { downloaded, total });
     }
 
-    emit(&app, UpdateStatus::Verifying);
+    emit(app, UpdateStatus::Verifying);
     let actual = hex::encode(hasher.finalize());
-    if !actual.eq_ignore_ascii_case(&manifest.bundle.sha256) {
+    if !actual.eq_ignore_ascii_case(expected_sha) {
         return Err(format!(
-            "sha256 mismatch (expected {}, got {actual})",
-            manifest.bundle.sha256
+            "sha256 mismatch (expected {expected_sha}, got {actual})"
         ));
     }
 
-    emit(&app, UpdateStatus::Applying);
+    emit(app, UpdateStatus::Applying);
     let staging = cache.join("staging");
     if staging.exists() {
         std::fs::remove_dir_all(&staging).map_err(|e| format!("clean staging: {e}"))?;
@@ -272,21 +478,21 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
     }
 
     // Atomically promote staging -> versioned dir.
-    let versioned = cache.join(&manifest.latest_version);
+    let versioned = cache.join(version);
     if versioned.exists() {
         std::fs::remove_dir_all(&versioned).map_err(|e| format!("clean old version dir: {e}"))?;
     }
     std::fs::rename(&staging, &versioned).map_err(|e| format!("promote staging: {e}"))?;
 
-    // Mark this version active. Custom protocol handler (Commit 2) reads
-    // active.txt on next launch and serves files from <cache>/<version>/.
+    // Mark this version active. Custom protocol handler reads active.txt
+    // on next launch and serves files from <cache>/<version>/.
     let active_marker = cache.join("active.txt");
     let tmp = cache.join("active.txt.tmp");
     {
         let mut f = tokio::fs::File::create(&tmp)
             .await
             .map_err(|e| format!("create active.txt.tmp: {e}"))?;
-        f.write_all(manifest.latest_version.as_bytes())
+        f.write_all(version.as_bytes())
             .await
             .map_err(|e| format!("write active.txt.tmp: {e}"))?;
         f.sync_all()
@@ -295,17 +501,232 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
     }
     std::fs::rename(&tmp, &active_marker).map_err(|e| format!("promote active.txt: {e}"))?;
 
-    emit(
-        &app,
-        UpdateStatus::Ready {
-            version: manifest.latest_version.clone(),
-        },
-    );
-    log::info!(
-        "frontend updater: staged version {} (active on next launch)",
-        manifest.latest_version
-    );
+    log::info!("frontend updater: staged version {version} (active on next launch)");
     Ok(())
+}
+
+/// Pure decision function. Given the installed binary version, the
+/// currently-active frontend version (cache or bundled), and the
+/// manifest if reachable, return the launch plan.
+///
+/// Order of checks mirrors §2 of `min-installer-architecture.md`:
+///   0. No manifest / corrupt / schema-too-new → Fallback.
+///   1. Strict installer floor (`min_installer`) → InstallerModal.
+///   2. `requires_api` range:
+///        - below range → InstallerModal (catchable by upgrade)
+///        - above range → Fallback (binary newer than manifest)
+///   3. Bundle version vs. active frontend → HotSwap::NoOp or
+///      HotSwap::ApplyBundle.
+///
+/// `installed` and `active` are passed in so the function can be unit-
+/// tested without a real `AppHandle`.
+pub fn resolve_launch_plan(
+    installed: &str,
+    active: &str,
+    manifest: Option<&Manifest>,
+) -> LaunchPlan {
+    // Step 0 — manifest reachability + schema cliff.
+    let m = match manifest {
+        None => {
+            return LaunchPlan::Fallback {
+                reason: "manifest unavailable".to_string(),
+            };
+        }
+        Some(m) if m.manifest_schema > KNOWN_MANIFEST_SCHEMA => {
+            return LaunchPlan::Fallback {
+                reason: format!(
+                    "manifest schema {} ahead of client {}",
+                    m.manifest_schema, KNOWN_MANIFEST_SCHEMA
+                ),
+            };
+        }
+        Some(m) => m,
+    };
+
+    let installed_v = match semver::Version::parse(installed) {
+        Ok(v) => v,
+        Err(_) => {
+            // We can't reason about a malformed installer version; the
+            // safest move is to stay on the bundled frontend.
+            return LaunchPlan::Fallback {
+                reason: format!("installed version unparseable: {installed}"),
+            };
+        }
+    };
+
+    // Step 1 — strict installer floor. Checked before anything else so an
+    // ancient binary with a fresh manifest never hot-swaps.
+    if let Some(floor_str) = &m.min_installer {
+        match semver::Version::parse(floor_str) {
+            Ok(floor) if installed_v < floor => {
+                return LaunchPlan::InstallerModal {
+                    target_version: m
+                        .installer_hint
+                        .as_ref()
+                        .and_then(|h| h.version.clone())
+                        .or_else(|| Some(floor_str.clone())),
+                    track: m.installer_track,
+                    reason: InstallerReason::VersionFloor {
+                        needed: floor_str.clone(),
+                        have: installed.to_string(),
+                    },
+                    release_url: m
+                        .installer_hint
+                        .as_ref()
+                        .and_then(|h| h.release_url.clone()),
+                };
+            }
+            Ok(_) => { /* floor met — fall through to step 2 */ }
+            Err(_) => {
+                // Bad floor in the manifest — refuse to interpret it. The
+                // CI publisher should have caught this; on the client we
+                // degrade safely rather than risk a wrong decision.
+                return LaunchPlan::Fallback {
+                    reason: format!("min_installer unparseable: {floor_str}"),
+                };
+            }
+        }
+    }
+
+    // Step 2 — API range. Reuse the existing parser; if the range is the
+    // wildcard default (`"*"`), `req.matches` always succeeds and we drop
+    // through to step 3.
+    let range_ok = api_compatible(&m.requires_api, installed);
+    if !range_ok {
+        // Distinguish below-range (catchable by upgrade → modal) from
+        // above-range (binary newer than manifest → silent fallback).
+        // We rely on the lower bound parsed out of the range string;
+        // if the range is opaque, fall back silently.
+        match range_lower_bound(&m.requires_api) {
+            Some(lower) if installed_v < lower => LaunchPlan::InstallerModal {
+                target_version: m.installer_hint.as_ref().and_then(|h| h.version.clone()),
+                track: m.installer_track,
+                reason: InstallerReason::ApiRangeBelow {
+                    range: m.requires_api.clone(),
+                    have: installed.to_string(),
+                },
+                release_url: m
+                    .installer_hint
+                    .as_ref()
+                    .and_then(|h| h.release_url.clone()),
+            },
+            _ => LaunchPlan::Fallback {
+                reason: format!(
+                    "binary {installed} outside manifest range {} (treating as ahead)",
+                    m.requires_api
+                ),
+            },
+        }
+    } else if !version_is_newer(&m.latest_version, active) {
+        LaunchPlan::HotSwap {
+            action: HotSwapAction::NoOp,
+        }
+    } else {
+        LaunchPlan::HotSwap {
+            action: HotSwapAction::ApplyBundle {
+                version: m.latest_version.clone(),
+                bundle_url: m.bundle.url.clone(),
+                size_bytes: m.bundle.size_bytes,
+                sha256: m.bundle.sha256.clone(),
+            },
+        }
+    }
+}
+
+/// Best-effort lower-bound extractor for a semver range string.
+/// Returns `None` for opaque ranges (notably the wildcard `*`); the
+/// resolver treats `None` as "we can't tell which side of the range
+/// we're on, prefer silent fallback over a misleading installer modal".
+fn range_lower_bound(range: &str) -> Option<semver::Version> {
+    // The `semver` crate doesn't expose comparators publicly, so parse
+    // by hand. Supports the two forms our manifests actually publish:
+    //   "^a.b.c" / "^a.b" / "^a"     -> floor is a.b.c (zeros for missing)
+    //   ">=a.b.c, <x.y.z" / ">=a.b"  -> floor is the >= operand
+    // Anything else returns None.
+    let trimmed = range.trim();
+    if trimmed.is_empty() || trimmed == "*" {
+        return None;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix('^') {
+        return parse_loose(rest);
+    }
+
+    // Comma-separated comparator list — find the >= or > segment.
+    for raw in trimmed.split(',') {
+        let part = raw.trim();
+        if let Some(rest) = part.strip_prefix(">=") {
+            return parse_loose(rest.trim());
+        }
+        if let Some(rest) = part.strip_prefix('>') {
+            // `>a.b.c` means strictly greater; lower bound is the next
+            // patch. We approximate with the same value — for the
+            // resolver's "installed < lower_bound" check it's safe to
+            // treat `>a` as floor `a` (a binary at exactly `a` will
+            // still be reported as below-range by `api_compatible`).
+            return parse_loose(rest.trim());
+        }
+    }
+    None
+}
+
+fn parse_loose(s: &str) -> Option<semver::Version> {
+    let s = s.trim();
+    if let Ok(v) = semver::Version::parse(s) {
+        return Some(v);
+    }
+    // "1.2" / "1" — pad with zeros so semver parses.
+    let parts: Vec<&str> = s.split('.').collect();
+    let padded = match parts.len() {
+        1 => format!("{}.0.0", parts[0]),
+        2 => format!("{}.{}.0", parts[0], parts[1]),
+        _ => return None,
+    };
+    semver::Version::parse(&padded).ok()
+}
+
+fn installer_reason_summary(r: &InstallerReason) -> String {
+    match r {
+        InstallerReason::VersionFloor { needed, have } => {
+            format!("installer floor {needed} not met (running {have})")
+        }
+        InstallerReason::ApiRangeBelow { range, have } => {
+            format!("running {have} below manifest API range {range}")
+        }
+    }
+}
+
+/// One-shot structured log line per launch — single observability surface
+/// for "why did this client take this path?". No PII; safe to forward to
+/// a log aggregator later.
+fn log_launch_plan(plan: &LaunchPlan, manifest: Option<&Manifest>, active: &str) {
+    let manifest_latest = manifest.map(|m| m.latest_version.as_str()).unwrap_or("-");
+    let manifest_floor = manifest
+        .and_then(|m| m.min_installer.as_deref())
+        .unwrap_or("-");
+    let manifest_range = manifest.map(|m| m.requires_api.as_str()).unwrap_or("-");
+    log::info!(
+        "version-contract decision installed={} active={} manifest_latest={} manifest_min_installer={} manifest_requires_api={} plan={}",
+        API_VERSION,
+        active,
+        manifest_latest,
+        manifest_floor,
+        manifest_range,
+        plan_label(plan),
+    );
+}
+
+fn plan_label(plan: &LaunchPlan) -> &'static str {
+    match plan {
+        LaunchPlan::HotSwap {
+            action: HotSwapAction::NoOp,
+        } => "hot_swap_noop",
+        LaunchPlan::HotSwap {
+            action: HotSwapAction::ApplyBundle { .. },
+        } => "hot_swap_apply",
+        LaunchPlan::InstallerModal { .. } => "installer_required",
+        LaunchPlan::Fallback { .. } => "fallback",
+    }
 }
 
 /// Tauri command bridge — called by the splash screen JS at app launch.
@@ -330,6 +751,131 @@ pub fn frontend_update_status(app: AppHandle) -> Result<FrontendVersionInfo, Str
 pub struct FrontendVersionInfo {
     pub api_version: String,
     pub active_frontend_version: Option<String>,
+}
+
+/// Serializable shape of the resolved launch plan, for the frontend.
+/// `App.tsx` invokes `version_contract_state` once after the splash's
+/// `frontend_update_check_and_apply` has resolved, and gates the Tauri
+/// auto-updater modal on `decision === "installer_required"`. Every other
+/// decision means no installer modal this session.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VersionContractDecision {
+    HotSwap,
+    InstallerRequired,
+    UpToDate,
+    Fallback,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VersionContractState {
+    pub decision: VersionContractDecision,
+    /// Best-known target version for the installer modal. Always
+    /// populated when `decision == "installer_required"`; otherwise
+    /// `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installer_target: Option<String>,
+    /// Which `tauri-plugin-updater` feed to use. Defaults to `Stable`
+    /// when the manifest doesn't pin it.
+    pub installer_track: InstallerTrack,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_url: Option<String>,
+    /// Hot-swap target version (only set when the resolver returned
+    /// `HotSwap`, even for the no-op sub-action). Lets the frontend
+    /// surface "up-to-date at v0.158.4" without a separate query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_swap_version: Option<String>,
+    /// Free-text reason for telemetry / settings-page badge copy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Highest manifest schema this client knows. Surfaced so a future
+    /// Settings → Updates panel can render a "client behind manifest"
+    /// hint without another round-trip.
+    pub known_schema: u32,
+}
+
+/// Tauri command — re-fetches the manifest, runs `resolve_launch_plan`,
+/// returns the serializable decision. Pure with respect to the cache:
+/// no bundle is downloaded, no `active.txt` is rewritten. The actual
+/// hot-swap is the responsibility of `frontend_update_check_and_apply`,
+/// which this command's caller is expected to have already kicked off.
+///
+/// Resolves with a populated state object on every code path; failures
+/// degrade to `Fallback` so the splash and `App.tsx` can keep moving.
+#[tauri::command]
+pub async fn version_contract_state(app: AppHandle) -> Result<VersionContractState, String> {
+    // The cache root call is the only side effect, and it's idempotent
+    // (creates an empty dir at most). Errors there mean the OS denied
+    // us our app data dir — fall back rather than crash the splash.
+    let active_version = match cache_root(&app) {
+        Ok(cache) => read_active_version(&cache),
+        Err(e) => {
+            log::warn!("version_contract_state: cache root unavailable: {e}");
+            None
+        }
+    };
+    let active = active_version.as_deref().unwrap_or(API_VERSION);
+
+    let manifest = match fetch_manifest_inner().await {
+        Ok(m) => Some(m),
+        Err(e) => {
+            log::warn!("version_contract_state: manifest fetch failed: {e}");
+            None
+        }
+    };
+
+    let plan = resolve_launch_plan(API_VERSION, active, manifest.as_ref());
+    Ok(launch_plan_to_state(&plan))
+}
+
+fn launch_plan_to_state(plan: &LaunchPlan) -> VersionContractState {
+    match plan {
+        LaunchPlan::HotSwap {
+            action: HotSwapAction::NoOp,
+        } => VersionContractState {
+            decision: VersionContractDecision::UpToDate,
+            installer_target: None,
+            installer_track: InstallerTrack::default(),
+            release_url: None,
+            hot_swap_version: None,
+            reason: None,
+            known_schema: KNOWN_MANIFEST_SCHEMA,
+        },
+        LaunchPlan::HotSwap {
+            action: HotSwapAction::ApplyBundle { version, .. },
+        } => VersionContractState {
+            decision: VersionContractDecision::HotSwap,
+            installer_target: None,
+            installer_track: InstallerTrack::default(),
+            release_url: None,
+            hot_swap_version: Some(version.clone()),
+            reason: None,
+            known_schema: KNOWN_MANIFEST_SCHEMA,
+        },
+        LaunchPlan::InstallerModal {
+            target_version,
+            track,
+            reason,
+            release_url,
+        } => VersionContractState {
+            decision: VersionContractDecision::InstallerRequired,
+            installer_target: target_version.clone(),
+            installer_track: *track,
+            release_url: release_url.clone(),
+            hot_swap_version: None,
+            reason: Some(installer_reason_summary(reason)),
+            known_schema: KNOWN_MANIFEST_SCHEMA,
+        },
+        LaunchPlan::Fallback { reason } => VersionContractState {
+            decision: VersionContractDecision::Fallback,
+            installer_target: None,
+            installer_track: InstallerTrack::default(),
+            release_url: None,
+            hot_swap_version: None,
+            reason: Some(reason.clone()),
+            known_schema: KNOWN_MANIFEST_SCHEMA,
+        },
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -405,7 +951,11 @@ pub fn handle_request(
     // Strip the leading slash and decode percent-encoded segments. The
     // path "" is a navigation root → serve index.html.
     let trimmed = raw_path.trim_start_matches('/');
-    let path = if trimmed.is_empty() { "index.html" } else { trimmed };
+    let path = if trimmed.is_empty() {
+        "index.html"
+    } else {
+        trimmed
+    };
 
     if let Some(bytes) = read_from_cache(app, path) {
         return tauri::http::Response::builder()
@@ -491,6 +1041,24 @@ pub fn maybe_activate_cache(app: &AppHandle) -> bool {
 mod tests {
     use super::*;
 
+    fn make_manifest(latest: &str) -> Manifest {
+        Manifest {
+            latest_version: latest.to_string(),
+            published_at: None,
+            requires_api: "*".to_string(),
+            bundle: BundleSpec {
+                url: "https://example.invalid/bundle.zip".to_string(),
+                size_bytes: 1,
+                sha256: "0".repeat(64),
+            },
+            changelog: vec![],
+            min_installer: None,
+            installer_track: InstallerTrack::default(),
+            manifest_schema: 1,
+            installer_hint: None,
+        }
+    }
+
     #[test]
     fn newer_remote_wins() {
         assert!(version_is_newer("1.5.4", "1.5.3"));
@@ -513,5 +1081,189 @@ mod tests {
         assert!(!api_compatible("^1.5", "2.0.0"));
         // Default wildcard accepts anything.
         assert!(api_compatible("*", "0.157.28"));
+    }
+
+    #[test]
+    fn range_lower_bound_caret_forms() {
+        assert_eq!(
+            range_lower_bound("^0.157"),
+            Some(semver::Version::parse("0.157.0").unwrap())
+        );
+        assert_eq!(
+            range_lower_bound("^1.2.3"),
+            Some(semver::Version::parse("1.2.3").unwrap())
+        );
+    }
+
+    #[test]
+    fn range_lower_bound_comma_form() {
+        assert_eq!(
+            range_lower_bound(">=0.158, <0.160"),
+            Some(semver::Version::parse("0.158.0").unwrap())
+        );
+        assert_eq!(
+            range_lower_bound(">=0.158.4, <0.160.0"),
+            Some(semver::Version::parse("0.158.4").unwrap())
+        );
+    }
+
+    #[test]
+    fn range_lower_bound_wildcard_yields_none() {
+        assert!(range_lower_bound("*").is_none());
+        assert!(range_lower_bound("").is_none());
+    }
+
+    // §2 of the spec — Resolver branches.
+
+    #[test]
+    fn resolver_no_manifest_falls_back() {
+        let plan = resolve_launch_plan("0.157.29", "0.157.29", None);
+        match plan {
+            LaunchPlan::Fallback { reason } => {
+                assert!(reason.contains("manifest unavailable"))
+            }
+            _ => panic!("expected Fallback when manifest is None"),
+        }
+    }
+
+    #[test]
+    fn resolver_schema_too_new_falls_back() {
+        let mut m = make_manifest("0.158.4");
+        m.manifest_schema = KNOWN_MANIFEST_SCHEMA + 7;
+        let plan = resolve_launch_plan("0.158.4", "0.158.4", Some(&m));
+        match plan {
+            LaunchPlan::Fallback { reason } => assert!(reason.contains("schema")),
+            _ => panic!("expected Fallback when schema is ahead of client"),
+        }
+    }
+
+    #[test]
+    fn resolver_min_installer_floor_triggers_modal() {
+        let mut m = make_manifest("0.158.4");
+        m.min_installer = Some("0.158.0".to_string());
+        m.installer_hint = Some(InstallerHint {
+            version: Some("0.158.0".to_string()),
+            notes_url: None,
+            release_url: Some(
+                "https://github.com/Dishairano/hardwave-daw/releases/tag/v0.158.0".to_string(),
+            ),
+        });
+        // Worked example from the spec: running 0.157.9 with floor 0.158.0
+        // → InstallerModal { reason: VersionFloor }
+        let plan = resolve_launch_plan("0.157.9", "0.157.9", Some(&m));
+        match plan {
+            LaunchPlan::InstallerModal {
+                target_version,
+                reason,
+                release_url,
+                ..
+            } => {
+                assert_eq!(target_version.as_deref(), Some("0.158.0"));
+                assert_eq!(
+                    reason,
+                    InstallerReason::VersionFloor {
+                        needed: "0.158.0".to_string(),
+                        have: "0.157.9".to_string(),
+                    }
+                );
+                assert!(release_url.is_some());
+            }
+            other => panic!("expected InstallerModal for floor mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolver_min_installer_satisfied_then_api_below_range_modal() {
+        // Edge case from §2: min_installer met but requires_api rejects
+        // a binary that's *below* the declared range. Spec says modal,
+        // not fallback (catchable by upgrade).
+        let mut m = make_manifest("0.158.4");
+        m.min_installer = Some("0.150.0".to_string());
+        m.requires_api = ">=0.158, <0.160".to_string();
+        let plan = resolve_launch_plan("0.157.9", "0.157.9", Some(&m));
+        match plan {
+            LaunchPlan::InstallerModal { reason, .. } => match reason {
+                InstallerReason::ApiRangeBelow { range, have } => {
+                    assert_eq!(range, ">=0.158, <0.160");
+                    assert_eq!(have, "0.157.9");
+                }
+                other => panic!("expected ApiRangeBelow reason, got {other:?}"),
+            },
+            other => panic!("expected InstallerModal for below-range, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolver_api_above_range_falls_back_silently() {
+        // Staged-rollout case: running 0.161.0 against a manifest that
+        // declares ">=0.158, <0.160". Don't hassle the user with a
+        // downgrade modal — stay on bundled.
+        let mut m = make_manifest("0.158.4");
+        m.requires_api = ">=0.158, <0.160".to_string();
+        let plan = resolve_launch_plan("0.161.0", "0.158.4", Some(&m));
+        match plan {
+            LaunchPlan::Fallback { reason } => {
+                assert!(reason.contains("outside manifest range"))
+            }
+            other => panic!("expected Fallback for above-range, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolver_hot_swap_happy_path() {
+        let m = make_manifest("0.158.4");
+        let plan = resolve_launch_plan("0.158.4", "0.158.0", Some(&m));
+        match plan {
+            LaunchPlan::HotSwap {
+                action: HotSwapAction::ApplyBundle { version, .. },
+            } => assert_eq!(version, "0.158.4"),
+            other => panic!("expected HotSwap::ApplyBundle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolver_hot_swap_noop_when_active_already_latest() {
+        let m = make_manifest("0.158.4");
+        let plan = resolve_launch_plan("0.158.4", "0.158.4", Some(&m));
+        assert!(matches!(
+            plan,
+            LaunchPlan::HotSwap {
+                action: HotSwapAction::NoOp
+            }
+        ));
+    }
+
+    // §4 backwards-compat invariant — the deployed test manifest at
+    // suite.hardwavestudios.com/daw/frontend/manifest.json (v0.157.29)
+    // doesn't carry the new fields. Parsing must not regress.
+    #[test]
+    fn legacy_manifest_parses_without_new_fields() {
+        let json = r#"{
+            "latest_version": "0.157.29",
+            "published_at": "2026-04-15T10:00:00Z",
+            "requires_api": "^0.157",
+            "bundle": {
+                "url": "https://example.invalid/bundle.zip",
+                "size_bytes": 1024,
+                "sha256": "abc"
+            },
+            "changelog": ["legacy"]
+        }"#;
+        let m: Manifest = serde_json::from_str(json).expect("legacy manifest must parse");
+        assert!(m.min_installer.is_none());
+        assert_eq!(m.installer_track, InstallerTrack::Stable);
+        assert_eq!(m.manifest_schema, 1);
+        assert!(m.installer_hint.is_none());
+
+        // Resolver with this manifest takes the hot-swap-or-noop branch
+        // (no floor, wildcard-style range matches, version comparison
+        // decides).
+        let plan = resolve_launch_plan("0.157.29", "0.157.0", Some(&m));
+        match plan {
+            LaunchPlan::HotSwap {
+                action: HotSwapAction::ApplyBundle { version, .. },
+            } => assert_eq!(version, "0.157.29"),
+            other => panic!("expected HotSwap::ApplyBundle, got {other:?}"),
+        }
     }
 }
