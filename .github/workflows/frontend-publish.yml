@@ -1,0 +1,229 @@
+name: Frontend Publish
+
+# Builds the React frontend, packages it as a versioned zip, computes the
+# manifest, and rsyncs both to /var/www/hardwave-app/daw/frontend/ on the
+# vst-web cluster (vst-web01 → web02/web03 via the existing nginx-config
+# distribution path). The DAW's FrontendUpdater then picks up the new
+# manifest on the next launch.
+#
+# This is the deploy half of the splash-driven hot-swap. See:
+#   - src-tauri/src/frontend_updater.rs    (client side)
+#   - https://suite.hardwavestudios.com/frontend-updater-mockup/   (proposal)
+#
+# Triggers:
+#   - Push of a tag matching `fe-v*` (e.g. fe-v0.157.29) — production publish
+#   - workflow_dispatch — manual publish from any branch (e.g. for staging)
+#
+# Required GitHub secrets:
+#   - VST_WEB01_HOST              host (e.g. 178.104.2.34) of the bundle target
+#   - VST_WEB01_SSH_KEY           private OpenSSH key authorised to write
+#                                 /var/www/hardwave-app/daw/frontend/ on the
+#                                 cluster's golden node
+#   - VST_WEB01_KNOWN_HOSTS       output of `ssh-keyscan -H <host>` for the
+#                                 same host, to avoid TOFU prompts
+#
+# What gets published:
+#   /daw/frontend/bundles/<version>.zip   — gzipped dist/ tree, immutable
+#   /daw/frontend/manifest.json           — mutable; updated atomically last
+
+on:
+  push:
+    tags:
+      - 'fe-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Frontend version (e.g. 0.157.29). Required when run manually.'
+        required: true
+      requires_api:
+        description: 'Semver range the running Rust core must satisfy (e.g. ^0.157)'
+        required: false
+        default: '*'
+
+concurrency:
+  group: frontend-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version + requires_api
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Tag form: fe-vX.Y.Z
+            VERSION="${GITHUB_REF_NAME#fe-v}"
+            REQ="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | grep -oE '^requires_api: ?.*$' | head -1 | sed 's/^requires_api:\s*//' || true)"
+            REQ="${REQ:-*}"
+          else
+            VERSION="${{ inputs.version }}"
+            REQ="${{ inputs.requires_api }}"
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not resolve version"
+            exit 1
+          fi
+          echo "version=$VERSION"          >> "$GITHUB_OUTPUT"
+          echo "requires_api=$REQ"         >> "$GITHUB_OUTPUT"
+          echo "Resolved version=$VERSION requires_api=$REQ"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/daw-ui/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd packages/daw-ui
+          npm ci
+          npm run build
+
+      - name: Package bundle
+        id: pack
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          OUT="bundle.zip"
+          # The custom URI scheme handler (frontend_updater.rs) reads files
+          # directly from <cache>/<version>/, so the zip must be flat — no
+          # leading dist/ directory.
+          ( cd packages/daw-ui/dist && zip -qr "$GITHUB_WORKSPACE/$OUT" . )
+
+          SHA=$(sha256sum "$OUT" | awk '{print $1}')
+          SIZE=$(stat -c %s "$OUT")
+          echo "sha256=$SHA"   >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE"    >> "$GITHUB_OUTPUT"
+          echo "name=$VERSION.zip" >> "$GITHUB_OUTPUT"
+
+          # Stable name for the upload step
+          mv "$OUT" "$VERSION.zip"
+          ls -l "$VERSION.zip"
+
+      - name: Build manifest.json
+        id: manifest
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          REQ="${{ steps.meta.outputs.requires_api }}"
+          SHA="${{ steps.pack.outputs.sha256 }}"
+          SIZE="${{ steps.pack.outputs.size }}"
+          PUBLISHED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          BUNDLE_URL="https://suite.hardwavestudios.com/daw/frontend/bundles/${VERSION}.zip"
+
+          # Pull bullets from the tag annotation if there is one, otherwise
+          # use the latest commit subject as a single-entry changelog.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            CHANGELOG=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" \
+              | grep -E '^\s*[-*]' \
+              | sed 's/^\s*[-*]\s*//' \
+              | jq -R . | jq -s .)
+          fi
+          if [ -z "${CHANGELOG:-}" ] || [ "$CHANGELOG" = "[]" ]; then
+            CHANGELOG=$(git log -1 --pretty=format:%s | jq -R . | jq -s .)
+          fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg published "$PUBLISHED" \
+            --arg requires_api "$REQ" \
+            --arg url "$BUNDLE_URL" \
+            --argjson size "$SIZE" \
+            --arg sha "$SHA" \
+            --argjson changelog "$CHANGELOG" \
+            '{
+              latest_version: $version,
+              published_at: $published,
+              requires_api: $requires_api,
+              bundle: {
+                url: $url,
+                size_bytes: $size,
+                sha256: $sha
+              },
+              changelog: $changelog
+            }' > manifest.json
+
+          echo "Manifest:"
+          cat manifest.json
+
+      - name: Upload artifacts (visible on the run page)
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-publish-${{ steps.meta.outputs.version }}
+          path: |
+            ${{ steps.meta.outputs.version }}.zip
+            manifest.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Configure SSH for cluster deploy
+        if: env.DEPLOY_SECRETS_PRESENT == 'true'
+        env:
+          DEPLOY_SECRETS_PRESENT: ${{ secrets.VST_WEB01_SSH_KEY != '' && secrets.VST_WEB01_HOST != '' }}
+          SSH_PRIVATE_KEY: ${{ secrets.VST_WEB01_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VST_WEB01_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_publish
+          chmod 600 ~/.ssh/id_publish
+          if [ -n "$KNOWN_HOSTS" ]; then
+            echo "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 644 ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H "${{ secrets.VST_WEB01_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+      - name: Push bundle + manifest atomically
+        if: env.DEPLOY_SECRETS_PRESENT == 'true'
+        env:
+          DEPLOY_SECRETS_PRESENT: ${{ secrets.VST_WEB01_SSH_KEY != '' && secrets.VST_WEB01_HOST != '' }}
+          HOST: ${{ secrets.VST_WEB01_HOST }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          REMOTE_DIR=/var/www/hardwave-app/daw/frontend
+          # Bundle first (immutable; safe to upload before the manifest points at it).
+          scp -i ~/.ssh/id_publish -o BatchMode=yes \
+            "${VERSION}.zip" \
+            "root@${HOST}:${REMOTE_DIR}/bundles/${VERSION}.zip"
+
+          # Manifest as a separate temp upload, then atomic rename so a
+          # client never sees a partially-written manifest.
+          scp -i ~/.ssh/id_publish -o BatchMode=yes \
+            manifest.json \
+            "root@${HOST}:${REMOTE_DIR}/manifest.json.tmp"
+          ssh -i ~/.ssh/id_publish -o BatchMode=yes "root@${HOST}" \
+            "mv ${REMOTE_DIR}/manifest.json.tmp ${REMOTE_DIR}/manifest.json"
+
+          echo "Published frontend ${VERSION}"
+          echo "Manifest URL: https://suite.hardwavestudios.com/daw/frontend/manifest.json"
+          echo "Bundle URL:   https://suite.hardwavestudios.com/daw/frontend/bundles/${VERSION}.zip"
+
+      - name: Sync to web02 + web03 from web01
+        if: env.DEPLOY_SECRETS_PRESENT == 'true'
+        env:
+          DEPLOY_SECRETS_PRESENT: ${{ secrets.VST_WEB01_SSH_KEY != '' && secrets.VST_WEB01_HOST != '' }}
+          HOST: ${{ secrets.VST_WEB01_HOST }}
+        run: |
+          set -euo pipefail
+          # vst-web01 already has SSH credentials for web02/web03 (per
+          # /opt/vst-webviews/scripts/deploy.sh) — let it fan out.
+          ssh -i ~/.ssh/id_publish -o BatchMode=yes "root@${HOST}" \
+            "/opt/vst-webviews/scripts/deploy-frontend-bundle.sh ${VERSION}"
+
+      - name: Note when secrets are absent
+        if: env.DEPLOY_SECRETS_PRESENT != 'true'
+        env:
+          DEPLOY_SECRETS_PRESENT: ${{ secrets.VST_WEB01_SSH_KEY != '' && secrets.VST_WEB01_HOST != '' }}
+        run: |
+          echo "::warning::VST_WEB01_SSH_KEY / VST_WEB01_HOST not configured — bundle and manifest are uploaded as run artifacts only. Configure the secrets to enable cluster deploy."

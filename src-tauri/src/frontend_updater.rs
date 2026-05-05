@@ -22,8 +22,10 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
 /// Hard-coded production manifest URL. Override via env var for staging.
+/// Hosted on the suite.hardwavestudios.com cluster (vst-web01 nginx) so we
+/// can publish without touching the marketing-site infra.
 const DEFAULT_MANIFEST_URL: &str =
-    "https://hardwavestudios.com/daw/frontend/manifest.json";
+    "https://suite.hardwavestudios.com/daw/frontend/manifest.json";
 
 /// Total budget the splash will wait. Past this we abort and use the bundled
 /// frontend; the next launch tries again. Keep tight so cold-start UX
