@@ -1834,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-audio-io"
-version = "0.157.29"
+version = "0.157.30"
 dependencies = [
  "cpal",
  "log",
@@ -1847,7 +1847,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-daw"
-version = "0.157.29"
+version = "0.157.30"
 dependencies = [
  "dirs 5.0.1",
  "env_logger",
@@ -1865,6 +1865,7 @@ dependencies = [
  "log",
  "parking_lot",
  "raw-window-handle",
+ "regex",
  "reqwest 0.12.28",
  "semver",
  "serde",
@@ -1877,6 +1878,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "tempfile",
  "tokio",
  "url",
  "uuid",
@@ -1886,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-dsp"
-version = "0.157.29"
+version = "0.157.30"
 dependencies = [
  "hound",
  "log",
@@ -1899,7 +1901,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-engine"
-version = "0.157.29"
+version = "0.157.30"
 dependencies = [
  "atomic_float",
  "crossbeam-channel",
@@ -1921,14 +1923,14 @@ dependencies = [
 
 [[package]]
 name = "hardwave-metering"
-version = "0.157.29"
+version = "0.157.30"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "hardwave-midi"
-version = "0.157.29"
+version = "0.157.30"
 dependencies = [
  "log",
  "midir",
@@ -1940,7 +1942,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-native-plugins"
-version = "0.157.29"
+version = "0.157.30"
 dependencies = [
  "hardwave-dsp",
  "hardwave-engine",
@@ -1953,7 +1955,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-plugin-host"
-version = "0.157.29"
+version = "0.157.30"
 dependencies = [
  "dirs 5.0.1",
  "hardwave-midi",
@@ -1971,7 +1973,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-project"
-version = "0.157.29"
+version = "0.157.30"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
