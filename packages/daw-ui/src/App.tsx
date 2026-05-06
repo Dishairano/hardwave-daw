@@ -5,6 +5,7 @@ import { Toolbar } from './components/transport/Toolbar'
 import { HwApp } from './components/HwApp'
 import type { MenuDef, MenuItem } from './components/HwTopMenu'
 import { usePatternStore } from './stores/patternStore'
+import { useUiPreferencesStore, UI_SCALE_OPTIONS, type UiScale } from './stores/uiPreferencesStore'
 import { TrackList } from './components/arrangement/TrackList'
 import { Arrangement } from './components/arrangement/Arrangement'
 import { MixerPanel } from './components/mixer/MixerPanel'
@@ -111,6 +112,9 @@ export function App() {
   const { fetchTracks } = useTrackStore()
   const { newProject, saveProject, loadProject } = useProjectStore()
   const recentProjects = useProjectStore(s => s.recentProjects)
+  const uiScaleMode = useUiPreferencesStore(s => s.mode)
+  const uiScaleEffective = useUiPreferencesStore(s => s.effectiveScale)
+  const setUiScaleMode = useUiPreferencesStore(s => s.setUiScaleMode)
 
   // Panel visibility
   const [showBrowser, setShowBrowser] = useState(true)
@@ -1034,6 +1038,20 @@ export function App() {
           { label: `${pdcEnabled ? '✓ ' : '   '}Plugin delay compensation`, action: () => setPdcEnabled(v => !v) },
           { separator: true, label: '' },
           { label: 'Theme…', action: () => setShowThemePicker(true) },
+          {
+            label: 'UI scale',
+            submenu: [
+              {
+                label: `${uiScaleMode === 'auto' ? '✓ ' : '   '}Auto (detected: ${uiScaleEffective}%)`,
+                action: () => setUiScaleMode('auto'),
+              },
+              { separator: true, label: '' },
+              ...UI_SCALE_OPTIONS.map((scale): MenuItem => ({
+                label: `${uiScaleMode === scale ? '✓ ' : '   '}${scale}%`,
+                action: () => setUiScaleMode(scale as UiScale),
+              })),
+            ],
+          },
         ],
       },
       {
@@ -1062,6 +1080,7 @@ export function App() {
     ]
   }, [
     recentProjects, showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer, pdcEnabled,
+    uiScaleMode, uiScaleEffective, setUiScaleMode,
     handleNewProject, handleOpenProject, handleSaveProject, handleSaveProjectAs, handleSaveAsTemplate,
     handleExportAudio, handleOpenRecent, handleAddAutomationTrack, cutSelection, pasteAtPlayhead, duplicateSelection,
   ])
