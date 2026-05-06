@@ -25,9 +25,9 @@ use std::sync::Arc;
 
 use vst3::Steinberg::Vst::{
     BusDirections_, BusInfo, Event, Event_::EventTypes_, IAudioProcessor, IAudioProcessorTrait,
-    IComponent, IComponentTrait, IEditController, IEditControllerTrait, IEventList, IEventListTrait,
-    IoModes_, MediaTypes_, NoteOffEvent, NoteOnEvent, ProcessModes_, ProcessSetup,
-    SymbolicSampleSizes_, ViewType,
+    IComponent, IComponentTrait, IComponentHandler, IComponentHandlerTrait, IEditController,
+    IEditControllerTrait, IEventList, IEventListTrait, IoModes_, MediaTypes_, NoteOffEvent,
+    NoteOnEvent, ParamID, ParamValue, ProcessModes_, ProcessSetup, SymbolicSampleSizes_, ViewType,
 };
 use vst3::Steinberg::{
     kResultOk, tresult, FIDString, IBStream, IBStreamTrait, IBStream_::IStreamSeekMode_, IPlugView,
@@ -113,6 +113,64 @@ struct Vst3Inner {
     num_inputs: u32,
     num_outputs: u32,
     has_midi_input: bool,
+    /// Cross-thread queue for parameter changes pushed by the plugin's
+    /// own GUI (knobs, sliders) via the IComponentHandler we register
+    /// on the controller. The audio thread drains this at the start of
+    /// each [`process`] block and applies the changes via
+    /// `setParamNormalized` so the plugin's audio side stays in sync
+    /// with the GUI's display state. Without this, knob movements in
+    /// the floating editor window were silent — the host never heard
+    /// about them and the live audio kept rendering from stale values.
+    pending_params: Arc<Mutex<Vec<(ParamID, ParamValue)>>>,
+    /// Holds the IComponentHandler ComWrapper alive for the lifetime
+    /// of the plugin instance. Dropping the wrapper would invalidate
+    /// the pointer the controller still holds.
+    #[allow(dead_code)]
+    component_handler: Option<vst3::ComWrapper<HardwaveComponentHandler>>,
+}
+
+/// Bridges the plugin's editor → host parameter notifications back to
+/// our audio thread. The plugin's GUI invokes `performEdit(id, value)`
+/// when the user moves a knob; we capture (id, value) into the
+/// shared `pending_params` queue. The matching `Vst3PluginInstance`
+/// drains that queue from `process()` and forwards each entry to
+/// `controller.setParamNormalized` so the audio side hears the change
+/// on the next block.
+struct HardwaveComponentHandler {
+    pending: Arc<Mutex<Vec<(ParamID, ParamValue)>>>,
+}
+
+impl vst3::Class for HardwaveComponentHandler {
+    type Interfaces = (IComponentHandler,);
+}
+
+impl IComponentHandlerTrait for HardwaveComponentHandler {
+    unsafe fn beginEdit(&self, _id: ParamID) -> tresult {
+        // Touch-events delimit a gesture but don't carry value data;
+        // we simply acknowledge so the plugin's automation path keeps
+        // marching. A future commit will bookend automation regions
+        // here.
+        kResultOk
+    }
+    unsafe fn performEdit(&self, id: ParamID, value: ParamValue) -> tresult {
+        // Capture the change for the audio thread. We try_lock to keep
+        // GUI events non-blocking; if the audio thread is mid-drain we
+        // skip this notification — the next move re-fires it.
+        if let Some(mut q) = self.pending.try_lock() {
+            // De-dupe consecutive edits on the same param so a fast
+            // knob spin doesn't queue a thousand intermediate values.
+            if let Some(last) = q.last_mut() {
+                if last.0 == id {
+                    last.1 = value;
+                    return kResultOk;
+                }
+            }
+            q.push((id, value));
+        }
+        kResultOk
+    }
+    unsafe fn endEdit(&self, _id: ParamID) -> tresult { kResultOk }
+    unsafe fn restartComponent(&self, _flags: i32) -> tresult { kResultOk }
 }
 
 impl Vst3PluginInstance {
@@ -268,6 +326,22 @@ impl Vst3PluginInstance {
             }
         }
 
+        // Build the cross-thread parameter queue + a HardwaveComponentHandler
+        // that pushes plugin-GUI knob movements into it. We then hand
+        // the handler's COM pointer to the controller so the plugin
+        // notifies us on every performEdit. The wrapper is held in
+        // Vst3Inner so its lifetime tracks the plugin instance.
+        let pending_params: Arc<Mutex<Vec<(ParamID, ParamValue)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let handler_wrapper = vst3::ComWrapper::new(HardwaveComponentHandler {
+            pending: Arc::clone(&pending_params),
+        });
+        if let Some(ctrl) = &controller {
+            if let Some(handler_ptr) = handler_wrapper.to_com_ptr::<IComponentHandler>() {
+                unsafe { ctrl.setComponentHandler(handler_ptr.as_ptr()) };
+            }
+        }
+
         let inner = Arc::new(Vst3Inner {
             descriptor,
             library: Some(library),
@@ -287,6 +361,8 @@ impl Vst3PluginInstance {
             num_inputs,
             num_outputs,
             has_midi_input,
+            pending_params,
+            component_handler: Some(handler_wrapper),
         });
 
         Ok(Self { inner })
@@ -485,6 +561,25 @@ impl HostedPlugin for Vst3PluginInstance {
             pass_through(inputs, outputs, num_samples);
             return;
         }
+
+        // Drain knob/slider changes that the plugin's GUI emitted via
+        // its IComponentHandler since the last block. Forwarding via
+        // setParamNormalized keeps the controller and the audio
+        // pipeline aligned without breaking through to the IParameterChanges
+        // wire format (which would require building a per-block
+        // parameter-changes stream and is the next milestone).
+        let pending: Vec<(ParamID, ParamValue)> = {
+            let mut q = inner.pending_params.lock();
+            std::mem::take(&mut *q)
+        };
+        if !pending.is_empty() {
+            if let Some(ctrl) = &inner.controller {
+                for (id, value) in pending {
+                    unsafe { ctrl.setParamNormalized(id, value) };
+                }
+            }
+        }
+
         // Prepare output buffers.
         for out in outputs.iter_mut() {
             out.clear();
