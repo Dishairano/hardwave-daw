@@ -38,7 +38,16 @@
     "resources": [
       "test_assets/*"
     ],
-    "createUpdaterArtifacts": "v1Compatible"
+    "createUpdaterArtifacts": "v1Compatible",
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "template": "nsis/installer.nsi",
+        "headerImage": "nsis/header.bmp",
+        "sidebarImage": "nsis/sidebar.bmp",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
   },
   "plugins": {
     "updater": {
