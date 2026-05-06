@@ -264,6 +264,29 @@ pub struct InsertCommandReceiver {
     rx: Consumer<InsertCommand>,
 }
 
+impl InsertCommandReceiver {
+    /// Pop the next pending command, or `None` if the queue is empty.
+    /// Audio-thread-safe: never blocks, never allocates.
+    pub fn try_recv(&mut self) -> Option<InsertCommand> {
+        self.rx.pop().ok()
+    }
+}
+
+impl InsertCommand {
+    /// The track id this command targets. Lets the audio-thread
+    /// dispatcher route in O(1) via a track_id → NodeId map.
+    pub fn target_track_id(&self) -> &str {
+        match self {
+            InsertCommand::Add { track_id, .. }
+            | InsertCommand::Remove { track_id, .. }
+            | InsertCommand::Reorder { track_id, .. }
+            | InsertCommand::SetEnabled { track_id, .. }
+            | InsertCommand::SetWet { track_id, .. }
+            | InsertCommand::SetParameter { track_id, .. } => track_id,
+        }
+    }
+}
+
 /// Allocation-side of dropped plug-ins. Audio thread pushes vacated
 /// `LiveSlot`s here; a non-RT drop thread (or the UI thread on idle)
 /// drains and drops them.

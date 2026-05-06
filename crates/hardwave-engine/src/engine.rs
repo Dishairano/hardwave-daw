@@ -15,7 +15,7 @@ use rtrb::RingBuffer;
 use std::collections::HashMap;
 
 use crate::audio_pool::{AudioBuffer, AudioPool};
-use crate::graph::{AudioGraph, ProcessContext};
+use crate::graph::{AudioGraph, AudioNode, ProcessContext};
 use crate::input_node::{InputNode, SharedInputConsumer};
 use crate::master_node::MasterNode;
 use crate::master_tap::{self, SharedMasterTap};
@@ -122,6 +122,20 @@ pub struct DawEngine {
     /// Circular buffer of recent master-bus output samples. Used by the UI
     /// for oscilloscope / spectrum / correlation visualizations.
     pub master_tap: SharedMasterTap,
+
+    /// UI-side handle for queueing per-track plug-in commands toward
+    /// the audio thread. Populated when `start()` builds the audio
+    /// callback; `None` before start or after stop. Wrapped in a Mutex
+    /// because Tauri command handlers fire concurrently — the
+    /// underlying rtrb Producer is single-producer.
+    pub insert_command_sender:
+        Arc<Mutex<Option<crate::insert_chain::InsertCommandSender>>>,
+
+    /// Receiver side of the audio→drop graveyard. The UI thread (or
+    /// engine shutdown) drains and drops vacated plug-in instances so
+    /// the audio thread never frees memory directly.
+    pub insert_graveyard:
+        Arc<Mutex<Option<crate::insert_chain::PluginGraveyardReceiver>>>,
 }
 
 /// Commands sent from UI thread to audio thread.
@@ -152,6 +166,34 @@ impl DawEngine {
             history: Arc::new(Mutex::new(History::new())),
             master_tap: master_tap::new_shared(),
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            insert_command_sender: Arc::new(Mutex::new(None)),
+            insert_graveyard: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Try to push a per-track plug-in command onto the audio-thread
+    /// queue. Returns `Err(cmd)` if the engine is not started yet or
+    /// the queue is full so the caller can retry on the next UI tick.
+    pub fn try_send_insert_command(
+        &self,
+        cmd: crate::insert_chain::InsertCommand,
+    ) -> Result<(), crate::insert_chain::InsertCommand> {
+        let mut sender = self.insert_command_sender.lock();
+        match sender.as_mut() {
+            Some(s) => s.try_send(cmd),
+            None => Err(cmd),
+        }
+    }
+
+    /// Drop everything pending in the plug-in graveyard. Call on a
+    /// non-RT cadence (UI tick, on quit, etc) so vacated plug-in
+    /// instances actually run their destructors. Returns the number
+    /// dropped.
+    pub fn drain_insert_graveyard(&self) -> usize {
+        let mut graveyard = self.insert_graveyard.lock();
+        match graveyard.as_mut() {
+            Some(g) => g.drain_and_drop(),
+            None => 0,
         }
     }
 
@@ -214,6 +256,18 @@ impl DawEngine {
         let (meter_producer, meter_consumer) = RingBuffer::new(16);
         self.meter_consumer = Some(meter_consumer);
 
+        // Fresh insert-chain channels per audio session. UI-side handles
+        // are exposed through `insert_command_sender` and `insert_graveyard`
+        // so Tauri command handlers can route plug-in mutations to the
+        // audio thread, and drain freed instances on a non-RT cadence.
+        // Each TrackNode owns its own chain; the engine routes commands
+        // by track_id_to_node lookup, so we build the channels directly
+        // and don't use the bundled InsertRouter helper.
+        let (cmd_tx, cmd_rx) = crate::insert_chain::command_channel(256);
+        let (grave_tx, grave_rx) = crate::insert_chain::graveyard_channel(64);
+        *self.insert_command_sender.lock() = Some(cmd_tx);
+        *self.insert_graveyard.lock() = Some(grave_rx);
+
         let callback = EngineCallback::new(
             transport,
             project,
@@ -224,6 +278,8 @@ impl DawEngine {
             Arc::clone(&self.input_consumer),
             Arc::clone(&self.master_tap),
             Arc::clone(&self.graph_latency_samples),
+            cmd_rx,
+            grave_tx,
             sample_rate,
             buffer_size,
         );
@@ -608,6 +664,16 @@ impl DawEngine {
         // offline samples into the live UI visualization stream.
         let offline_tap = master_tap::new_shared();
         let offline_latency = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        // Offline render gets its own throwaway insert-chain channels.
+        // Plug-in commands aren't fired during offline render anyway —
+        // the snapshot project is frozen — but EngineCallback's
+        // signature requires them. Capacities are tiny because nothing
+        // ever pushes here during offline.
+        let (_offline_cmd_tx, offline_cmd_rx) =
+            crate::insert_chain::command_channel(8);
+        let (offline_grave_tx, _offline_grave_rx) =
+            crate::insert_chain::graveyard_channel(8);
+
         let mut callback = EngineCallback::new(
             transport,
             project_arc,
@@ -618,6 +684,8 @@ impl DawEngine {
             input_consumer,
             offline_tap,
             offline_latency,
+            offline_cmd_rx,
+            offline_grave_tx,
             sample_rate,
             buffer_size as u32,
         );
@@ -682,6 +750,16 @@ struct EngineCallback {
     /// graph and emit silence to save CPU.
     has_monitored_input: bool,
     graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
+    /// Per-track plug-in command receiver. Drained at the start of every
+    /// audio block; commands route to TrackNodes by track_id.
+    insert_command_rx: crate::insert_chain::InsertCommandReceiver,
+    /// Audio→drop-thread channel for vacated plug-in instances. The
+    /// audio thread never frees plug-ins directly; it pushes them here
+    /// and the UI thread (or the engine on shutdown) drops them.
+    insert_graveyard_tx: crate::insert_chain::PluginGraveyardSender,
+    /// Stable track-id → graph-NodeId map maintained across rebuilds so
+    /// per-track commands resolve to the right TrackNode in O(1).
+    track_id_to_node: HashMap<String, crate::graph::NodeId>,
 }
 
 impl EngineCallback {
@@ -696,6 +774,8 @@ impl EngineCallback {
         input_consumer: SharedInputConsumer,
         master_tap: SharedMasterTap,
         graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
+        insert_command_rx: crate::insert_chain::InsertCommandReceiver,
+        insert_graveyard_tx: crate::insert_chain::PluginGraveyardSender,
         sample_rate: u32,
         buffer_size: u32,
     ) -> Self {
@@ -715,9 +795,42 @@ impl EngineCallback {
             master_id: None,
             has_monitored_input: false,
             graph_latency_samples,
+            insert_command_rx,
+            insert_graveyard_tx,
+            track_id_to_node: HashMap::new(),
         };
         cb.rebuild_graph();
         cb
+    }
+
+    /// Drain pending insert-chain commands and dispatch each to the
+    /// TrackNode whose `track_id` matches. Called on the audio thread
+    /// at the start of every block, BEFORE the graph runs, so the
+    /// chain reflects the latest UI state for this block.
+    fn dispatch_insert_commands(&mut self) {
+        let sample_rate = self.sample_rate as f64;
+        let buffer_size = self.graph.buffer_size_hint();
+        while let Some(cmd) = self.insert_command_rx.try_recv() {
+            // Borrow the target id just long enough to look it up; after
+            // `.copied()` the NodeId is owned and the borrow on `cmd`
+            // ends, freeing it to move into apply_insert_command below.
+            let node_id = self.track_id_to_node.get(cmd.target_track_id()).copied();
+            let Some(node_id) = node_id else {
+                log::warn!(
+                    "insert chain: no TrackNode for track_id {}; dropping command",
+                    cmd.target_track_id()
+                );
+                continue;
+            };
+            if let Some(node) = self.graph.node_mut(node_id) {
+                node.apply_insert_command(
+                    cmd,
+                    &mut self.insert_graveyard_tx,
+                    sample_rate,
+                    buffer_size,
+                );
+            }
+        }
     }
 
     fn process_commands(&mut self) {
@@ -817,6 +930,24 @@ impl EngineCallback {
     /// Rebuild the audio graph from the project state.
     /// Creates one TrackNode per non-master track, a MasterNode, and wires them together.
     fn rebuild_graph(&mut self) {
+        // Step 1: extract plug-in chains from the *outgoing* TrackNodes
+        // before the graph is cleared. Without this, every rebuild would
+        // drop every Box<dyn HostedPlugin> on the audio thread (calls
+        // free()) and silently destroy the user's plug-in instances on
+        // every property tweak. Stashing them by track_id lets us
+        // re-attach to the freshly-built TrackNode below — or, if a
+        // track was deleted, ship its chain to the graveyard for an
+        // off-RT thread to drop.
+        let mut stashed_chains: HashMap<String, crate::insert_chain::InsertChain> =
+            HashMap::new();
+        for node in self.graph.iter_nodes_mut() {
+            if let Some(track_id) = node.track_id().map(|s| s.to_string()) {
+                if let Some(chain) = node.take_chain() {
+                    stashed_chains.insert(track_id, chain);
+                }
+            }
+        }
+
         self.graph.clear();
 
         let project = self.project.lock();
@@ -854,7 +985,18 @@ impl EngineCallback {
                 .or_insert_with(|| Arc::new(TrackMeterState::default()))
                 .clone();
 
-            let mut node = TrackNode::new(track.name.clone(), self.audio_pool.clone(), meter);
+            let mut node = TrackNode::new(
+                track.id.clone(),
+                track.name.clone(),
+                self.audio_pool.clone(),
+                meter,
+            );
+            // Reattach the plug-in chain stashed at the top of this
+            // rebuild. Tracks that didn't exist before fall through to
+            // the default-empty chain that TrackNode::new gave them.
+            if let Some(chain) = stashed_chains.remove(&track.id) {
+                node.restore_chain(chain);
+            }
             node.set_volume_db(track.volume_db);
             node.set_pan(track.pan);
             let effective_mute = track.muted || (any_soloed && !track.soloed && !track.solo_safe);
@@ -1086,6 +1228,24 @@ impl EngineCallback {
             }
         }
 
+        // Persist the track_id → NodeId map so per-track plug-in
+        // commands can resolve in O(1) on the audio thread.
+        self.track_id_to_node = track_id_to_node;
+
+        // Any chains left in `stashed_chains` belong to tracks that
+        // disappeared during this rebuild. Ship them to the graveyard
+        // so an off-RT thread drops them — never on the audio thread.
+        for (track_id, mut chain) in stashed_chains.drain() {
+            for slot in chain.slots.drain(..) {
+                if self.insert_graveyard_tx.try_bury(slot).is_err() {
+                    log::warn!(
+                        "rebuild graveyard saturated dropping track {track_id} chain; remaining slots will free on engine shutdown"
+                    );
+                    break;
+                }
+            }
+        }
+
         self.needs_rebuild = false;
         // Finalize PDC: compute per-edge compensation delays so parallel
         // paths arrive sample-aligned against the slowest branch before the
@@ -1105,6 +1265,13 @@ impl AudioCallback for EngineCallback {
         if self.needs_rebuild {
             self.rebuild_graph();
         }
+
+        // Drain pending plug-in chain commands (Add/Remove/SetParameter
+        // /etc) and dispatch each to its owning TrackNode. Done AFTER
+        // any pending rebuild so newly-created TrackNodes are reachable
+        // and BEFORE graph.process so the chain reflects the latest
+        // requested state for this block.
+        self.dispatch_insert_commands();
 
         let playing = self.transport.is_playing();
         // When transport is stopped AND nothing is monitoring live input,

@@ -194,6 +194,9 @@ impl BiquadStereo {
 
 /// Audio node for a single track. Holds references to its clips and the shared audio pool.
 pub struct TrackNode {
+    /// Stable project-side track id. Lets the engine route plug-in
+    /// insert commands here and survive the chain across graph rebuilds.
+    track_id: String,
     name: String,
     pool: AudioPool,
     clips: Vec<ClipRegion>,
@@ -220,13 +223,29 @@ pub struct TrackNode {
     /// Per-channel filter stage (biquad), applied before the fader.
     filter_kind: TrackFilterType,
     filter: BiquadStereo,
+    /// Per-track plug-in insert chain. Audio flows through here after
+    /// the filter+delay step but before the fader+pan, matching the
+    /// pre-fader insert slot every major DAW exposes.
+    chain: crate::insert_chain::InsertChain,
+    /// Reusable scratch buffers for `chain.process` so the audio thread
+    /// stays allocation-free in steady state.
+    chain_scratch: crate::insert_chain::Scratch,
 }
 
 const TRACK_DELAY_CAPACITY: usize = 4800; // 100 ms at 48 kHz, both directions
 
 impl TrackNode {
-    pub fn new(name: String, pool: AudioPool, meter: Arc<TrackMeterState>) -> Self {
+    /// Construct a track node bound to a specific project track id. The
+    /// id propagates through the audio thread so per-track plug-in
+    /// commands can be routed directly without scanning every node.
+    pub fn new(
+        track_id: String,
+        name: String,
+        pool: AudioPool,
+        meter: Arc<TrackMeterState>,
+    ) -> Self {
         Self {
+            track_id,
             name,
             pool,
             clips: Vec::new(),
@@ -246,6 +265,8 @@ impl TrackNode {
             rms_smooth: 0.0,
             filter_kind: TrackFilterType::Off,
             filter: BiquadStereo::default(),
+            chain: crate::insert_chain::InsertChain::new(),
+            chain_scratch: crate::insert_chain::Scratch::default(),
         }
     }
 
@@ -314,6 +335,68 @@ impl TrackNode {
 impl AudioNode for TrackNode {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn track_id(&self) -> Option<&str> {
+        Some(&self.track_id)
+    }
+
+    fn apply_insert_command(
+        &mut self,
+        cmd: crate::insert_chain::InsertCommand,
+        graveyard: &mut crate::insert_chain::PluginGraveyardSender,
+        sample_rate: f64,
+        max_block_size: u32,
+    ) {
+        use crate::insert_chain::InsertCommand;
+        match cmd {
+            InsertCommand::Add { slot, .. } => {
+                if let Err(e) = self.chain.push_slot(slot, sample_rate, max_block_size) {
+                    log::warn!("track {} insert add failed: {e}", self.track_id);
+                }
+            }
+            InsertCommand::Remove { slot_id, .. } => {
+                if let Some(slot) = self.chain.take_slot(&slot_id) {
+                    if graveyard.try_bury(slot).is_err() {
+                        log::warn!(
+                            "track {} graveyard full while removing {slot_id}; slot will leak until engine teardown",
+                            self.track_id
+                        );
+                    }
+                }
+            }
+            InsertCommand::Reorder { from, to, .. } => self.chain.reorder(from, to),
+            InsertCommand::SetEnabled { slot_id, enabled, .. } => {
+                self.chain.set_enabled(&slot_id, enabled);
+            }
+            InsertCommand::SetWet { slot_id, wet, .. } => {
+                self.chain.set_wet(&slot_id, wet);
+            }
+            InsertCommand::SetParameter {
+                slot_id,
+                param_id,
+                value,
+                ..
+            } => {
+                self.chain.set_parameter(&slot_id, param_id, value);
+            }
+        }
+    }
+
+    fn take_chain(&mut self) -> Option<crate::insert_chain::InsertChain> {
+        // Swap in an empty chain so this TrackNode keeps its other state
+        // intact while the rebuild path moves the live plug-in instances
+        // onto the freshly-constructed replacement TrackNode.
+        let taken = std::mem::take(&mut self.chain);
+        if taken.slots.is_empty() {
+            None
+        } else {
+            Some(taken)
+        }
+    }
+
+    fn restore_chain(&mut self, chain: crate::insert_chain::InsertChain) {
+        self.chain = chain;
     }
 
     fn process(
@@ -524,6 +607,20 @@ impl AudioNode for TrackNode {
             }
         }
 
+        // Plug-in insert chain. Slots run in series, post-utility +
+        // post-filter, pre-fader. Pre-fader sends below see the
+        // already-processed signal so an EQ/Comp on the source track
+        // affects what hits the bus return — matching the standard
+        // DAW signal flow. No-op when the chain has zero enabled slots,
+        // and no allocations once `chain_scratch` is sized to buf_size.
+        {
+            let (out_left, out_rest) = outputs.split_at_mut(1);
+            let out_l = &mut out_left[0];
+            let out_r = &mut out_rest[0];
+            self.chain
+                .process(out_l, out_r, buf_size, &mut self.chain_scratch);
+        }
+
         // Measure pre-fader peak and publish the pre-fader tap so pre-fader
         // sends can read the signal before volume/pan.
         {
@@ -623,7 +720,7 @@ mod tests {
     fn make_test_node() -> (TrackNode, Arc<TrackMeterState>) {
         let pool = AudioPool::new();
         let meter = Arc::new(TrackMeterState::default());
-        let node = TrackNode::new("Test".into(), pool, Arc::clone(&meter));
+        let node = TrackNode::new("test-track-id".into(), "Test".into(), pool, Arc::clone(&meter));
         (node, meter)
     }
 

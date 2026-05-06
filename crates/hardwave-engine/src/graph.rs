@@ -31,6 +31,43 @@ pub trait AudioNode: Send {
         0
     }
     fn reset(&mut self) {}
+
+    /// Stable project-side identifier for the track this node represents,
+    /// if any. Returns `None` for non-track nodes (master, input bus,
+    /// etc.). Used by the engine to route per-track plug-in commands.
+    fn track_id(&self) -> Option<&str> {
+        None
+    }
+
+    /// Apply a per-track plug-in insert command to this node. Default
+    /// no-op so non-track nodes silently ignore. Track nodes override
+    /// to forward the command into their own [`crate::insert_chain::InsertChain`].
+    /// Removed slots are buried via the supplied graveyard so the audio
+    /// thread never frees plug-ins directly.
+    fn apply_insert_command(
+        &mut self,
+        cmd: crate::insert_chain::InsertCommand,
+        graveyard: &mut crate::insert_chain::PluginGraveyardSender,
+        sample_rate: f64,
+        max_block_size: u32,
+    ) {
+        let _ = (cmd, graveyard, sample_rate, max_block_size);
+    }
+
+    /// Hand off this node's plug-in chain so it can be reattached to a
+    /// freshly-built TrackNode after a graph rebuild. Default `None`.
+    /// TrackNode overrides to swap in an empty chain and return the
+    /// previous one.
+    fn take_chain(&mut self) -> Option<crate::insert_chain::InsertChain> {
+        None
+    }
+
+    /// Reattach a previously-stashed plug-in chain after a graph rebuild.
+    /// No-op for non-track nodes; TrackNode replaces its empty chain
+    /// with the supplied one.
+    fn restore_chain(&mut self, chain: crate::insert_chain::InsertChain) {
+        let _ = chain;
+    }
 }
 
 /// Number of output channels every node gets. Tracks use 0/1 for post-fader
@@ -309,6 +346,27 @@ impl AudioGraph {
     /// Get the output buffer of a specific node (e.g., the master node).
     pub fn node_output(&self, node_id: NodeId) -> Option<&[Vec<f32>]> {
         self.buffers.get(node_id).map(|v| v.as_slice())
+    }
+
+    /// Mutable access to a node by id — needed so the engine can route
+    /// per-track plug-in commands directly to the right TrackNode
+    /// without iterating every node in the graph.
+    pub fn node_mut(&mut self, node_id: NodeId) -> Option<&mut Box<dyn AudioNode>> {
+        self.nodes.get_mut(node_id)
+    }
+
+    /// Iterate every node in the graph mutably. Used during graph
+    /// rebuild to extract plug-in chains from the *outgoing* TrackNodes
+    /// before they're dropped, so plug-in instances survive the
+    /// rebuild instead of being freed on the audio thread.
+    pub fn iter_nodes_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn AudioNode>> {
+        self.nodes.iter_mut()
+    }
+
+    /// Maximum block size the graph was built for. Plug-ins activate
+    /// against this so they pre-size internal buffers correctly.
+    pub fn buffer_size_hint(&self) -> u32 {
+        self.buffer_size as u32
     }
 
     pub fn node_count(&self) -> usize {
