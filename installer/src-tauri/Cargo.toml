@@ -5,6 +5,15 @@ edition = "2021"
 description = "Hardwave DAW custom installer"
 publish = false
 
+# Stand-alone — NOT a member of the parent DAW Cargo workspace at
+# /Cargo.toml. Cargo otherwise sees the top-level workspace and
+# refuses to build because this package isn't in `workspace.members`.
+# An empty `[workspace]` declares this package as its own workspace
+# root, decoupling it from the DAW build graph entirely. The
+# installer ships its own Cargo.lock; deps don't need to align with
+# the main DAW.
+[workspace]
+
 [lib]
 name = "hardwave_daw_installer_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
