@@ -118,6 +118,7 @@ function HwTopbar({ menus }: { menus?: MenuDef[] }) {
   }
 
   return (
+    <>
     <div className="fl-topbar">
       <div className="fl-logo">HARD<span>WAVE</span></div>
       {menus && menus.length > 0 ? (
@@ -134,7 +135,29 @@ function HwTopbar({ menus }: { menus?: MenuDef[] }) {
           <span>Help</span>
         </div>
       )}
+      <div className="fl-topbar-spacer" />
+      <div className="fl-win-ctl">
+        <i onClick={onWindowMin} title="Minimize">
+          <svg className="ic" width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <path d="M3 12.5h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          </svg>
+        </i>
+        <i onClick={onWindowMax} title="Maximize">
+          <svg className="ic" width="11" height="11" viewBox="0 0 16 16" fill="none">
+            <rect x="3.5" y="3.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.3"/>
+          </svg>
+        </i>
+        <i className="x" onClick={onWindowClose} title="Close">
+          <svg className="ic" width="11" height="11" viewBox="0 0 16 16" fill="none">
+            <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          </svg>
+        </i>
+      </div>
+    </div>
 
+    {/* Row 2: transport + clock + bpm + pattern + perf + master meter,
+        left-aligned under HARDWAVE. Window controls stay in row 1. */}
+    <div className="fl-toolrow">
       <div className="fl-trans">
         <div className="fl-trans-btn" title="Skip back" onClick={() => setPosition(0)}>
           <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
@@ -221,25 +244,8 @@ function HwTopbar({ menus }: { menus?: MenuDef[] }) {
           {masterDb >= 0 ? '+' : ''}{masterDb.toFixed(1)}dB
         </span>
       </div>
-
-      <div className="fl-win-ctl">
-        <i onClick={onWindowMin} title="Minimize">
-          <svg className="ic" width="12" height="12" viewBox="0 0 16 16" fill="none">
-            <path d="M3 12.5h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-          </svg>
-        </i>
-        <i onClick={onWindowMax} title="Maximize">
-          <svg className="ic" width="11" height="11" viewBox="0 0 16 16" fill="none">
-            <rect x="3.5" y="3.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.3"/>
-          </svg>
-        </i>
-        <i className="x" onClick={onWindowClose} title="Close">
-          <svg className="ic" width="11" height="11" viewBox="0 0 16 16" fill="none">
-            <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-          </svg>
-        </i>
-      </div>
     </div>
+    </>
   )
 }
 

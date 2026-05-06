@@ -152,6 +152,29 @@
   margin: 4px 8px;
 }
 
+/* ─── Topbar row 1 spacer (pushes win-ctl to the far right) ─── */
+.fl-topbar-spacer {
+  flex: 1;
+  height: 100%;
+  -webkit-app-region: drag;
+}
+
+/* ─── Topbar row 2 — transport + clock + meters ───────────── */
+.fl-toolrow {
+  height: 30px;
+  background: linear-gradient(180deg, #08080c, #040406);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+.fl-toolrow .fl-trans { margin-left: 4px; }
+
 .fl-trans {
   display: flex;
   gap: 1px;
