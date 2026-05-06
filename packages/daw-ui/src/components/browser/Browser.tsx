@@ -7,19 +7,22 @@ import { useSampleEditorStore } from '../../stores/sampleEditorStore'
 import { useBeatSlicerStore } from '../../stores/beatSlicerStore'
 import { DetachButton } from '../FloatingWindow'
 
-type Tab = 'plugins' | 'files' | 'project'
+type Tab = 'favorites' | 'folders' | 'audio' | 'lists' | 'search'
 
 export function Browser() {
-  const [activeTab, setActiveTab] = useState<Tab>('plugins')
+  const [activeTab, setActiveTab] = useState<Tab>('folders')
   // Item count shown in the header — switches with the active tab so the
   // user always sees how many items are available in the current scope.
   const pluginCount = usePluginStore(s => s.plugins.length)
   const fileFavCount = useBrowserStore(s => s.fileFavorites.size)
   const fileRecentCount = useBrowserStore(s => s.fileRecents.length)
+  const pluginFavCount = useBrowserStore(s => s.pluginFavorites.size)
   const folderCount = useBrowserStore(s => s.folders.length)
   const headerCount =
-    activeTab === 'plugins' ? pluginCount :
-    activeTab === 'files'   ? (fileFavCount + fileRecentCount + folderCount) :
+    activeTab === 'favorites' ? (fileFavCount + pluginFavCount) :
+    activeTab === 'folders'   ? (fileFavCount + fileRecentCount + folderCount) :
+    activeTab === 'audio'     ? (fileFavCount + fileRecentCount) :
+    activeTab === 'lists'     ? pluginCount :
     0
 
   return (
@@ -35,17 +38,36 @@ export function Browser() {
       </div>
 
       {/*
-        Icon-only tab strip per mockup. We keep our 3 content semantics
-        (plugins / files / project) but use SVG icons matching the
-        mockup's category icons instead of text labels. Hover tooltips
-        give the human-readable name.
+        Five-tab strip — mockup parity (Favorites · Folders · Audio · Lists ·
+        Search). Icons match the mockup SVGs exactly. Each tab routes to its
+        existing or new content component below.
       */}
       <div className="fl-browser-tabs">
         <button
           type="button"
-          onClick={() => setActiveTab('plugins')}
-          title="Plugins"
-          className={`fl-browser-tab${activeTab === 'plugins' ? ' on' : ''}`}
+          onClick={() => setActiveTab('favorites')}
+          title="Favorites"
+          className={`fl-browser-tab${activeTab === 'favorites' ? ' on' : ''}`}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <path d="M8 1.5l1.9 4 4.4.5-3.3 3 .9 4.3L8 11.4l-3.9 1.9.9-4.3-3.3-3 4.4-.5z" fill="currentColor"/>
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('folders')}
+          title="Folders"
+          className={`fl-browser-tab${activeTab === 'folders' ? ' on' : ''}`}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4.5h4l1 1h7v8H2z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('audio')}
+          title="Audio"
+          className={`fl-browser-tab${activeTab === 'audio' ? ' on' : ''}`}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <circle cx="5" cy="12" r="2" fill="currentColor"/>
@@ -55,41 +77,185 @@ export function Browser() {
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab('files')}
-          title="Files"
-          className={`fl-browser-tab${activeTab === 'files' ? ' on' : ''}`}
-        >
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-            <path d="M2 4.5h4l1 1h7v8H2z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
-          </svg>
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('project')}
-          title="Project"
-          className={`fl-browser-tab${activeTab === 'project' ? ' on' : ''}`}
+          onClick={() => setActiveTab('lists')}
+          title="Lists"
+          className={`fl-browser-tab${activeTab === 'lists' ? ' on' : ''}`}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
         </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('search')}
+          title="Search"
+          className={`fl-browser-tab${activeTab === 'search' ? ' on' : ''}`}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <circle cx="6.8" cy="6.8" r="4.3" fill="none" stroke="currentColor" strokeWidth="1.3"/>
+            <path d="M10 10l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </button>
       </div>
 
       <div className="fl-browser-tree">
-        {activeTab === 'plugins' && <PluginsTab />}
-        {activeTab === 'files' && <FilesTab />}
-        {activeTab === 'project' && (
-          <div style={{
-            padding: 18, textAlign: 'center',
-            fontFamily: hw.font.mono, fontSize: 10,
-            color: hw.textFaint, letterSpacing: hw.tracking.wide,
-            textTransform: 'uppercase',
-          }}>
-            Project files will<br />appear here
-          </div>
-        )}
+        {activeTab === 'favorites' && <FavoritesTab />}
+        {activeTab === 'folders'   && <FilesTab />}
+        {activeTab === 'audio'     && <FilesTab audioOnly />}
+        {activeTab === 'lists'     && <PluginsTab />}
+        {activeTab === 'search'    && <SearchTab />}
       </div>
     </div>
+  )
+}
+
+/* ─── Favorites tab — combined starred plugins + starred files ──────────── */
+function FavoritesTab() {
+  const plugins = usePluginStore(s => s.plugins)
+  const pluginFavorites = useBrowserStore(s => s.pluginFavorites)
+  const fileFavorites = useBrowserStore(s => s.fileFavorites)
+  const togglePluginFav = useBrowserStore(s => s.togglePluginFavorite)
+  const { selectedTrackId } = useTrackStore()
+  const [pluginsOpen, setPluginsOpen] = useState(true)
+  const [filesOpen, setFilesOpen] = useState(true)
+
+  const favPlugins = useMemo(
+    () => plugins.filter(p => pluginFavorites.has(p.id)),
+    [plugins, pluginFavorites],
+  )
+  const favFiles = useMemo(() => Array.from(fileFavorites), [fileFavorites])
+
+  if (favPlugins.length === 0 && favFiles.length === 0) {
+    return (
+      <div style={{
+        padding: 18, textAlign: 'center', fontSize: 10,
+        color: hw.textFaint, fontFamily: hw.font.mono,
+        letterSpacing: hw.tracking.wide, lineHeight: 1.6,
+      }}>
+        Star plugins or files in the<br />other tabs to see them here.
+      </div>
+    )
+  }
+
+  return (
+    <>
+      {favPlugins.length > 0 && (
+        <TreeGroup
+          label="Plugins"
+          count={favPlugins.length}
+          expanded={pluginsOpen}
+          onToggle={() => setPluginsOpen(v => !v)}
+        >
+          {favPlugins.map(p => (
+            <PluginItem
+              key={p.id}
+              plugin={p}
+              canAdd={!!selectedTrackId}
+              isFavorite
+              onToggleFavorite={() => togglePluginFav(p.id)}
+            />
+          ))}
+        </TreeGroup>
+      )}
+      {favFiles.length > 0 && (
+        <TreeGroup
+          label="Files"
+          count={favFiles.length}
+          expanded={filesOpen}
+          onToggle={() => setFilesOpen(v => !v)}
+        >
+          {favFiles.map(path => (
+            <div key={path} className="fl-bt-leaf" title={path}>
+              {path.split(/[\\/]/).pop() || path}
+            </div>
+          ))}
+        </TreeGroup>
+      )}
+    </>
+  )
+}
+
+/* ─── Search tab — cross-domain (plugins + favorited files) ──────────────── */
+function SearchTab() {
+  const [query, setQuery] = useState('')
+  const plugins = usePluginStore(s => s.plugins)
+  const fileFavorites = useBrowserStore(s => s.fileFavorites)
+  const fileRecents = useBrowserStore(s => s.fileRecents)
+  const { selectedTrackId } = useTrackStore()
+  const togglePluginFav = useBrowserStore(s => s.togglePluginFavorite)
+  const pluginFavorites = useBrowserStore(s => s.pluginFavorites)
+
+  const q = query.trim().toLowerCase()
+  const matchedPlugins = useMemo(() => {
+    if (!q) return []
+    return plugins.filter(p =>
+      p.name.toLowerCase().includes(q) ||
+      (p.vendor || '').toLowerCase().includes(q) ||
+      (p.category || '').toLowerCase().includes(q),
+    )
+  }, [plugins, q])
+  const matchedFiles = useMemo(() => {
+    if (!q) return []
+    const all = Array.from(new Set([...fileFavorites, ...fileRecents]))
+    return all.filter(p => p.toLowerCase().includes(q))
+  }, [fileFavorites, fileRecents, q])
+
+  return (
+    <>
+      <div style={{ padding: '6px 8px' }}>
+        <input
+          autoFocus
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search plugins & files..."
+          style={{
+            width: '100%', padding: '4px 8px', fontSize: 10,
+            background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
+            border: `1px solid ${hw.border}`, borderRadius: hw.radius.md, outline: 'none',
+          }}
+        />
+      </div>
+      {!q && (
+        <div style={{
+          padding: 18, textAlign: 'center', fontSize: 10,
+          color: hw.textFaint, fontFamily: hw.font.mono,
+          letterSpacing: hw.tracking.wide,
+        }}>
+          Type to search across plugins<br />and starred / recent files.
+        </div>
+      )}
+      {q && matchedPlugins.length === 0 && matchedFiles.length === 0 && (
+        <div style={{
+          padding: 18, textAlign: 'center', fontSize: 10,
+          color: hw.textFaint, fontFamily: hw.font.mono,
+          letterSpacing: hw.tracking.wide,
+        }}>
+          No matches.
+        </div>
+      )}
+      {matchedPlugins.length > 0 && (
+        <TreeGroup label="Plugins" count={matchedPlugins.length} expanded onToggle={() => {}}>
+          {matchedPlugins.map(p => (
+            <PluginItem
+              key={p.id}
+              plugin={p}
+              canAdd={!!selectedTrackId}
+              isFavorite={pluginFavorites.has(p.id)}
+              onToggleFavorite={() => togglePluginFav(p.id)}
+            />
+          ))}
+        </TreeGroup>
+      )}
+      {matchedFiles.length > 0 && (
+        <TreeGroup label="Files" count={matchedFiles.length} expanded onToggle={() => {}}>
+          {matchedFiles.map(path => (
+            <div key={path} className="fl-bt-leaf" title={path}>
+              {path.split(/[\\/]/).pop() || path}
+            </div>
+          ))}
+        </TreeGroup>
+      )}
+    </>
   )
 }
 
@@ -200,7 +366,10 @@ function PluginsTab() {
   )
 }
 
-function FilesTab() {
+/** Audio file extensions used by the Audio tab to narrow the file list. */
+const AUDIO_EXTENSIONS = new Set(['wav', 'mp3', 'flac', 'aiff', 'aif', 'ogg', 'm4a'])
+
+function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
   const fileRecents = useBrowserStore(s => s.fileRecents)
   const fileFavorites = useBrowserStore(s => s.fileFavorites)
   const folders = useBrowserStore(s => s.folders)
@@ -245,6 +414,12 @@ function FilesTab() {
 
   const q = query.trim().toLowerCase()
   const filter = (p: string) => {
+    // When the Audio tab is active, drop anything that isn't a recognised
+    // audio file. Extension parsed from the last `.` segment, lowercased.
+    if (audioOnly) {
+      const ext = p.split('.').pop()?.toLowerCase() ?? ''
+      if (!AUDIO_EXTENSIONS.has(ext)) return false
+    }
     if (!q) return true
     if (p.toLowerCase().includes(q)) return true
     const tags = fileTags[p]
