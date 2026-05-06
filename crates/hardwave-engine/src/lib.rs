@@ -4,6 +4,7 @@ pub mod audio_pool;
 pub mod engine;
 pub mod graph;
 pub mod input_node;
+pub use input_node::CaptureTap;
 pub mod insert_chain;
 pub mod master_node;
 pub mod master_tap;

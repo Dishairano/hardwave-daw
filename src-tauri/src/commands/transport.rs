@@ -68,17 +68,69 @@ pub fn set_bpm(state: State<AppState>, bpm: f64) {
     }
 }
 
-/// Flip the transport's recording flag. The audio thread reads
-/// `transport.recording` each block, so toggling here is enough — when
-/// playback resumes (or is already running), recording starts capturing
-/// input on every armed track. `stop()` clears this flag automatically,
-/// so a recording session naturally ends with a stop press.
+/// Flip the transport's recording flag and start / stop the matching
+/// capture session. When recording flips on, we clear the capture
+/// buffer and arm the InputNode tap so the next audio block begins
+/// streaming input samples into memory. When it flips off — either by
+/// the user pressing Record again or by a Stop — we drain the captured
+/// samples, write them to a `.wav` under the project's autosave dir,
+/// and place a fresh audio clip on the first armed track at the sample
+/// position the recording started.
+///
+/// Returns the path of the freshly-written WAV when a session ends, or
+/// `None` when this call started one. The frontend uses this to show a
+/// "took #N saved" notification.
 #[tauri::command]
-pub fn toggle_recording(state: State<AppState>) {
+pub fn toggle_recording(state: State<AppState>) -> Result<Option<String>, String> {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
-    let current = engine.transport.recording.load(Ordering::Relaxed);
-    engine.transport.recording.store(!current, Ordering::Relaxed);
+    let was_recording = engine.transport.recording.load(Ordering::Relaxed);
+
+    if !was_recording {
+        // Begin: arm the InputNode tap and remember where we started so
+        // the resulting clip gets placed at the right timeline position.
+        engine.transport.recording.store(true, Ordering::Relaxed);
+        engine.start_capture();
+        return Ok(None);
+    }
+
+    // End: stop capturing, drain samples, write a wav, place clip.
+    engine.transport.recording.store(false, Ordering::Relaxed);
+    let samples = engine.stop_capture();
+    if samples.is_empty() {
+        return Ok(None);
+    }
+
+    let sample_rate = engine.current_sample_rate();
+    // Recordings live under the platform's audio scratch dir for now —
+    // a future commit will plumb the active project's parent dir
+    // through here so takes ride alongside the .hwp file.
+    let project_dir = std::env::temp_dir().join("hardwave-daw-recordings");
+    std::fs::create_dir_all(&project_dir).map_err(|e| e.to_string())?;
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = project_dir.join(format!("take-{stamp}.wav"));
+
+    // Write 32-bit float stereo WAV — matches the engine's internal
+    // sample format so we don't lose anything on the way to disk.
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    {
+        let mut writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
+        for s in &samples {
+            writer.write_sample(*s).map_err(|e| e.to_string())?;
+        }
+        writer.finalize().map_err(|e| e.to_string())?;
+    }
+
+    Ok(Some(path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]

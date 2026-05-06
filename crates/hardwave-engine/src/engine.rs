@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use crate::audio_pool::{AudioBuffer, AudioPool};
 use crate::graph::{AudioGraph, AudioNode, ProcessContext};
-use crate::input_node::{InputNode, SharedInputConsumer};
+use crate::input_node::{CaptureTap, InputNode, SharedInputConsumer};
 use crate::master_node::MasterNode;
 use crate::master_tap::{self, SharedMasterTap};
 use crate::track_node::{ClipRegion, TrackMeterState, TrackNode};
@@ -116,6 +116,12 @@ pub struct DawEngine {
     /// and restarted without rebuilding the whole engine.
     input_consumer: SharedInputConsumer,
 
+    /// Recording capture target. The audio thread's InputNode appends
+    /// interleaved L/R samples here when [`CaptureTap::recording`] is
+    /// true. The UI thread can drain this on stop to write a WAV file
+    /// and place a clip on the armed track.
+    pub capture: Arc<CaptureTap>,
+
     /// Undo/redo history. Take a snapshot BEFORE mutating the project.
     pub history: Arc<Mutex<History>>,
 
@@ -163,6 +169,7 @@ impl DawEngine {
             meter_cache: MeterSnapshot::default(),
             track_meters: Arc::new(Mutex::new(HashMap::new())),
             input_consumer: Arc::new(Mutex::new(None)),
+            capture: Arc::new(CaptureTap::default()),
             history: Arc::new(Mutex::new(History::new())),
             master_tap: master_tap::new_shared(),
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -239,6 +246,36 @@ impl DawEngine {
         self.history.lock().sizes()
     }
 
+    /// Begin a recording capture. Clears any previously buffered samples
+    /// and flips the `recording` flag so the audio thread starts pushing
+    /// input blocks into the capture buffer immediately. Idempotent — a
+    /// second call while already recording is a no-op.
+    pub fn start_capture(&self) {
+        use std::sync::atomic::Ordering;
+        if self.capture.recording.load(Ordering::Relaxed) {
+            return;
+        }
+        self.capture.buffer.lock().clear();
+        self.capture.recording.store(true, Ordering::Relaxed);
+    }
+
+    /// Finish the active capture and return the interleaved L/R samples
+    /// captured since `start_capture()`. The buffer is left empty so a
+    /// follow-up start_capture begins from scratch.
+    pub fn stop_capture(&self) -> Vec<f32> {
+        use std::sync::atomic::Ordering;
+        self.capture.recording.store(false, Ordering::Relaxed);
+        std::mem::take(&mut *self.capture.buffer.lock())
+    }
+
+    /// Sample rate of the running audio device, or the offline default
+    /// when the engine isn't started yet. Needed by the recording
+    /// pipeline to write the right WAV header.
+    pub fn current_sample_rate(&self) -> u32 {
+        let sr = self.audio_device.sample_rate;
+        if sr > 0 { sr } else { 48_000 }
+    }
+
     /// Start the audio engine.
     pub fn start(&mut self) -> Result<(), String> {
         let transport = self.transport.clone();
@@ -276,6 +313,7 @@ impl DawEngine {
             audio_pool,
             Arc::clone(&self.track_meters),
             Arc::clone(&self.input_consumer),
+            Arc::clone(&self.capture),
             Arc::clone(&self.master_tap),
             Arc::clone(&self.graph_latency_samples),
             cmd_rx,
@@ -682,6 +720,10 @@ impl DawEngine {
             self.audio_pool.clone(),
             track_meters,
             input_consumer,
+            // Offline render doesn't capture anything — the recording tap
+            // only matters for live audio. Pass a fresh detached tap so the
+            // signature stays uniform without polluting the live capture.
+            Arc::new(CaptureTap::default()),
             offline_tap,
             offline_latency,
             offline_cmd_rx,
@@ -749,6 +791,9 @@ struct EngineCallback {
     /// When false AND the transport isn't playing, we can short-circuit the
     /// graph and emit silence to save CPU.
     has_monitored_input: bool,
+    /// Shared with `DawEngine.capture`. Forwarded into the InputNode each
+    /// rebuild so the recording tap survives graph rebuilds.
+    capture: Arc<CaptureTap>,
     graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
     /// Per-track plug-in command receiver. Drained at the start of every
     /// audio block; commands route to TrackNodes by track_id.
@@ -772,6 +817,7 @@ impl EngineCallback {
         audio_pool: AudioPool,
         track_meters: TrackMeterMap,
         input_consumer: SharedInputConsumer,
+        capture: Arc<CaptureTap>,
         master_tap: SharedMasterTap,
         graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
         insert_command_rx: crate::insert_chain::InsertCommandReceiver,
@@ -794,6 +840,7 @@ impl EngineCallback {
             needs_rebuild: true,
             master_id: None,
             has_monitored_input: false,
+            capture,
             graph_latency_samples,
             insert_command_rx,
             insert_graveyard_tx,
@@ -1228,7 +1275,10 @@ impl EngineCallback {
                 .transport
                 .direct_monitoring
                 .load(std::sync::atomic::Ordering::Relaxed);
-            let input_node = InputNode::new(Arc::clone(&self.input_consumer));
+            let mut input_node = InputNode::new(Arc::clone(&self.input_consumer));
+            // Recording capture survives graph rebuilds because it's the same
+            // CaptureTap Arc handed to every InputNode we ever build.
+            input_node.set_capture(Some(Arc::clone(&self.capture)));
             let input_id = self.graph.add_node(Box::new(input_node));
             if direct {
                 // Direct monitoring: bypass the track FX chain and route live

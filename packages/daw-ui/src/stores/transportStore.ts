@@ -237,12 +237,27 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     invoke('toggle_loop')
     set(s => ({ looping: !s.looping }))
   },
-  toggleRecording: () => {
-    // Engine flips the recording flag atomically; we mirror it locally
-    // for UI feedback. `stop()` (engine-side) clears recording too, so a
-    // subsequent stop press automatically ends the session.
-    invoke('toggle_recording')
+  toggleRecording: async () => {
+    // Engine flips the recording flag and starts/stops the capture
+    // session. On the trailing edge it returns the path of the WAV
+    // that was just written to disk; we then drop a clip on the first
+    // armed track so the take is immediately visible on the timeline.
+    const wasRecording = get().recording
     set(s => ({ recording: !s.recording }))
+    try {
+      const path = (await invoke('toggle_recording')) as string | null
+      if (wasRecording && path) {
+        const { useTrackStore } = await import('./trackStore')
+        const armedTrack = useTrackStore.getState().tracks.find(t => t.armed)
+        if (armedTrack) {
+          await useTrackStore.getState().importAudioFile(armedTrack.id, path, 0)
+        }
+      }
+    } catch (e) {
+      // Roll back the optimistic toggle if the engine rejected the call.
+      set({ recording: wasRecording })
+      throw e
+    }
   },
   setLoop: (start, end) => {
     invoke('set_loop', { start, end })
