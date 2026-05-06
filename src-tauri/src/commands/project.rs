@@ -78,6 +78,17 @@ pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> 
     engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
     engine.reset_history();
     engine.rebuild_graph();
+    drop(engine);
+
+    // Rehydrate plug-in chains for every PluginSlot in the loaded
+    // project. Done after rebuild_graph so the freshly-built TrackNodes
+    // are reachable by the dispatcher; failures (missing plug-in,
+    // queue full) are logged and the project still opens — the user
+    // surfaces them via `find_missing_plugins`.
+    if let Err(e) = crate::commands::plugins::hydrate_chains_from_project(&state) {
+        log::warn!("load_project: chain hydration failed: {e}");
+    }
+
     {
         let mut m = state.midi_mappings.lock();
         match mapping_blob.as_deref() {

@@ -1,4 +1,6 @@
 use crate::AppState;
+use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
+use hardwave_native_plugins::{NativeCompressor, NativeEq};
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
 use hardwave_plugin_host::{
@@ -9,6 +11,35 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
+
+/// Factory: turn a scanner descriptor into a live `HostedPlugin`. The
+/// dispatch covers three sources:
+///   * Native plug-ins shipped with the DAW (path is `<native>`).
+///   * VST3 plug-ins on disk, loaded via `Vst3PluginInstance`.
+///   * CLAP plug-ins on disk, loaded via `ClapPluginInstance`.
+///
+/// Used both by the chain hydration path (`add_plugin_to_track`,
+/// `load_project`) and the editor path (`open_plugin_editor`). The
+/// editor path may want a *separate* instance from the chain so the
+/// returned Box is intentionally not tied to chain lifecycle.
+fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlugin>, String> {
+    let native_path = PathBuf::from("<native>");
+    if descriptor.path == native_path {
+        return match descriptor.id.as_str() {
+            id if id == NativeEq::ID => Ok(Box::new(NativeEq::new())),
+            id if id == NativeCompressor::ID => Ok(Box::new(NativeCompressor::new())),
+            other => Err(format!("Unknown native plug-in id: {other}")),
+        };
+    }
+    match descriptor.format {
+        PluginFormat::Vst3 => Ok(Box::new(
+            Vst3PluginInstance::load(descriptor.clone()).map_err(|e| e.to_string())?,
+        )),
+        PluginFormat::Clap => Ok(Box::new(
+            ClapPluginInstance::load(descriptor.clone()).map_err(|e| e.to_string())?,
+        )),
+    }
+}
 
 #[tauri::command]
 pub fn scan_plugins(app: AppHandle, state: State<AppState>) -> Vec<PluginDescriptor> {
@@ -224,27 +255,62 @@ pub fn add_plugin_to_track(
     plugin_id: String,
 ) -> Result<String, String> {
     state.engine.lock().snapshot_before_mutation();
-    let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    let scanner = engine.plugin_scanner.lock();
 
-    let descriptor = scanner
-        .find(&plugin_id)
-        .ok_or_else(|| format!("Plugin not found: {}", plugin_id))?;
+    // Phase 1: clone descriptor and push project metadata while holding
+    // the engine + project locks. Drop them before instantiation so the
+    // (potentially slow) VST3 / CLAP load doesn't block other commands.
+    let (descriptor, slot_id) = {
+        let engine = state.engine.lock();
+        let scanner = engine.plugin_scanner.lock();
+        let descriptor = scanner
+            .find(&plugin_id)
+            .ok_or_else(|| format!("Plugin not found: {}", plugin_id))?
+            .clone();
+        drop(scanner);
 
-    let track = project
-        .track_mut(&track_id)
-        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        let slot_id = uuid::Uuid::new_v4().to_string();
+        track.inserts.push(hardwave_project::track::PluginSlot {
+            id: slot_id.clone(),
+            plugin_id: descriptor.id.clone(),
+            enabled: true,
+            state: None,
+            sidechain_source: None,
+            wet: 1.0,
+        });
+        (descriptor, slot_id)
+    };
 
-    let slot_id = uuid::Uuid::new_v4().to_string();
-    track.inserts.push(hardwave_project::track::PluginSlot {
-        id: slot_id.clone(),
-        plugin_id: descriptor.id.clone(),
-        enabled: true,
-        state: None,
-        sidechain_source: None,
-        wet: 1.0,
-    });
+    // Phase 2: instantiate the plug-in off the audio path, without
+    // holding any locks. VST3 / CLAP loaders may scan the bundle, dlopen
+    // the library, or call into platform code — none of that is fast
+    // enough to do under a Mutex.
+    let plugin = instantiate_plugin(&descriptor)?;
+
+    // Phase 3: ship the freshly-built LiveSlot to the audio thread via
+    // the lock-free InsertCommand queue. The chain takes ownership and
+    // calls activate() before processing the next block.
+    let cmd = InsertCommand::Add {
+        track_id: track_id.clone(),
+        slot: LiveSlot {
+            slot_id: slot_id.clone(),
+            plugin,
+            enabled: true,
+            wet: 1.0,
+        },
+    };
+    state
+        .engine
+        .lock()
+        .try_send_insert_command(cmd)
+        .map_err(|_| "insert command queue full or engine not started".to_string())?;
+
+    // Drain graveyard opportunistically so prior removes don't pile up
+    // before something else triggers a drain.
+    state.engine.lock().drain_insert_graveyard();
 
     Ok(slot_id)
 }
@@ -256,16 +322,20 @@ pub fn remove_plugin_from_track(
     slot_id: String,
 ) -> Result<(), String> {
     state.engine.lock().snapshot_before_mutation();
-    let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-
-    let track = project
-        .track_mut(&track_id)
-        .ok_or_else(|| format!("Track not found: {}", track_id))?;
-
-    track.inserts.retain(|s| s.id != slot_id);
-    drop(project);
-    engine.rebuild_graph();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        track.inserts.retain(|s| s.id != slot_id);
+    }
+    let cmd = InsertCommand::Remove {
+        track_id: track_id.clone(),
+        slot_id: slot_id.clone(),
+    };
+    let _ = state.engine.lock().try_send_insert_command(cmd);
+    state.engine.lock().drain_insert_graveyard();
     Ok(())
 }
 
@@ -277,20 +347,25 @@ pub fn set_insert_enabled(
     enabled: bool,
 ) -> Result<(), String> {
     state.engine.lock().snapshot_before_mutation();
-    let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-
-    let track = project
-        .track_mut(&track_id)
-        .ok_or_else(|| format!("Track not found: {}", track_id))?;
-    let slot = track
-        .inserts
-        .iter_mut()
-        .find(|s| s.id == slot_id)
-        .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
-    slot.enabled = enabled;
-    drop(project);
-    engine.rebuild_graph();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        let slot = track
+            .inserts
+            .iter_mut()
+            .find(|s| s.id == slot_id)
+            .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
+        slot.enabled = enabled;
+    }
+    let cmd = InsertCommand::SetEnabled {
+        track_id: track_id.clone(),
+        slot_id: slot_id.clone(),
+        enabled,
+    };
+    let _ = state.engine.lock().try_send_insert_command(cmd);
     Ok(())
 }
 
@@ -302,24 +377,32 @@ pub fn reorder_insert(
     new_index: usize,
 ) -> Result<(), String> {
     state.engine.lock().snapshot_before_mutation();
-    let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-
-    let track = project
-        .track_mut(&track_id)
-        .ok_or_else(|| format!("Track not found: {}", track_id))?;
-    let from = track
-        .inserts
-        .iter()
-        .position(|s| s.id == slot_id)
-        .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
-    let to = new_index.min(track.inserts.len().saturating_sub(1));
+    let (from, to) = {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        let from = track
+            .inserts
+            .iter()
+            .position(|s| s.id == slot_id)
+            .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
+        let to = new_index.min(track.inserts.len().saturating_sub(1));
+        if from != to {
+            let slot = track.inserts.remove(from);
+            track.inserts.insert(to, slot);
+        }
+        (from, to)
+    };
     if from != to {
-        let slot = track.inserts.remove(from);
-        track.inserts.insert(to, slot);
+        let cmd = InsertCommand::Reorder {
+            track_id: track_id.clone(),
+            from,
+            to,
+        };
+        let _ = state.engine.lock().try_send_insert_command(cmd);
     }
-    drop(project);
-    engine.rebuild_graph();
     Ok(())
 }
 
@@ -332,20 +415,111 @@ pub fn set_insert_wet(
 ) -> Result<(), String> {
     let wet = wet.clamp(0.0, 1.0);
     state.engine.lock().snapshot_before_mutation();
-    let engine = state.engine.lock();
-    let mut project = engine.project.lock();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        let slot = track
+            .inserts
+            .iter_mut()
+            .find(|s| s.id == slot_id)
+            .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
+        slot.wet = wet;
+    }
+    let cmd = InsertCommand::SetWet {
+        track_id: track_id.clone(),
+        slot_id: slot_id.clone(),
+        wet,
+    };
+    let _ = state.engine.lock().try_send_insert_command(cmd);
+    Ok(())
+}
 
-    let track = project
-        .track_mut(&track_id)
-        .ok_or_else(|| format!("Track not found: {}", track_id))?;
-    let slot = track
-        .inserts
-        .iter_mut()
-        .find(|s| s.id == slot_id)
-        .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
-    slot.wet = wet;
-    drop(project);
-    engine.rebuild_graph();
+/// Live parameter change for a chain-resident plug-in. Sends a
+/// `SetParameter` command to the audio thread so the next block
+/// reflects the new value. Project state is NOT updated here — the
+/// caller is responsible for snapshotting periodically (or the editor
+/// can store a parameter map separately for save/load).
+#[tauri::command]
+pub fn set_plugin_parameter(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    param_id: u32,
+    value: f64,
+) -> Result<(), String> {
+    let cmd = InsertCommand::SetParameter {
+        track_id,
+        slot_id,
+        param_id,
+        value,
+    };
+    state
+        .engine
+        .lock()
+        .try_send_insert_command(cmd)
+        .map_err(|_| "insert command queue full or engine not started".to_string())?;
+    Ok(())
+}
+
+/// Hydrate every persisted PluginSlot in the current project into the
+/// audio thread's chains. Called from `load_project` after the project
+/// state has been replaced. For each insert: instantiate the plug-in,
+/// ship an Add command. Plug-ins missing from the scanner cache are
+/// skipped with a warning so the project still opens — the user gets a
+/// "missing plug-ins" notice via `find_missing_plugins`.
+pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
+    // Snapshot what we need under the locks, then drop them before we
+    // start instantiating plug-ins (slow VST3 / CLAP loads).
+    let plan: Vec<(String, String, PluginDescriptor, bool, f32)> = {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        let scanner = engine.plugin_scanner.lock();
+        let mut acc = Vec::new();
+        for track in &project.tracks {
+            for slot in &track.inserts {
+                if let Some(descriptor) = scanner.find(&slot.plugin_id) {
+                    acc.push((
+                        track.id.clone(),
+                        slot.id.clone(),
+                        descriptor.clone(),
+                        slot.enabled,
+                        slot.wet,
+                    ));
+                } else {
+                    log::warn!(
+                        "load_project: skipping missing plug-in {} on track {}",
+                        slot.plugin_id,
+                        track.id
+                    );
+                }
+            }
+        }
+        acc
+    };
+
+    for (track_id, slot_id, descriptor, enabled, wet) in plan {
+        match instantiate_plugin(&descriptor) {
+            Ok(plugin) => {
+                let cmd = InsertCommand::Add {
+                    track_id,
+                    slot: LiveSlot {
+                        slot_id,
+                        plugin,
+                        enabled,
+                        wet,
+                    },
+                };
+                if state.engine.lock().try_send_insert_command(cmd).is_err() {
+                    log::warn!("hydrate: insert command queue full, will retry on next save");
+                    break;
+                }
+            }
+            Err(e) => log::warn!("hydrate: failed to load {}: {e}", descriptor.id),
+        }
+    }
     Ok(())
 }
 
