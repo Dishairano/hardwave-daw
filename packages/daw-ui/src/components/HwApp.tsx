@@ -81,6 +81,7 @@ function HwTopbar({ menus }: { menus?: MenuDef[] }) {
   const stop = useTransportStore(s => s.stop)
   const setPosition = useTransportStore(s => s.setPosition)
   const toggleLoop = useTransportStore(s => s.toggleLoop)
+  const toggleRecording = useTransportStore(s => s.toggleRecording)
   const setBpm = useTransportStore(s => s.setBpm)
 
   const { barBeatTick, minSec } = useTransportClock()
@@ -174,7 +175,7 @@ function HwTopbar({ menus }: { menus?: MenuDef[] }) {
             <path d="M4.5 3l8.5 5-8.5 5z" fill="currentColor"/>
           </svg>
         </div>
-        <div className={`fl-trans-btn ${recording ? 'rec' : ''}`} title="Record">
+        <div className={`fl-trans-btn ${recording ? 'rec' : ''}`} title="Record" onClick={() => toggleRecording()}>
           <svg className="ic" width="12" height="12" viewBox="0 0 16 16" fill="none">
             <circle cx="8" cy="8" r="4.5" fill="currentColor"/>
           </svg>

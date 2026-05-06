@@ -136,6 +136,7 @@ interface TransportState {
   setPosition: (pos: number) => void
   setBpm: (bpm: number) => void
   toggleLoop: () => void
+  toggleRecording: () => void
   setLoop: (start: number, end: number) => void
   setMasterVolume: (db: number) => void
   setTimeSignature: (num: number, den: number) => void
@@ -235,6 +236,13 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   toggleLoop: () => {
     invoke('toggle_loop')
     set(s => ({ looping: !s.looping }))
+  },
+  toggleRecording: () => {
+    // Engine flips the recording flag atomically; we mirror it locally
+    // for UI feedback. `stop()` (engine-side) clears recording too, so a
+    // subsequent stop press automatically ends the session.
+    invoke('toggle_recording')
+    set(s => ({ recording: !s.recording }))
   },
   setLoop: (start, end) => {
     invoke('set_loop', { start, end })

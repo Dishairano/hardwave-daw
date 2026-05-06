@@ -68,6 +68,19 @@ pub fn set_bpm(state: State<AppState>, bpm: f64) {
     }
 }
 
+/// Flip the transport's recording flag. The audio thread reads
+/// `transport.recording` each block, so toggling here is enough — when
+/// playback resumes (or is already running), recording starts capturing
+/// input on every armed track. `stop()` clears this flag automatically,
+/// so a recording session naturally ends with a stop press.
+#[tauri::command]
+pub fn toggle_recording(state: State<AppState>) {
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    let current = engine.transport.recording.load(Ordering::Relaxed);
+    engine.transport.recording.store(!current, Ordering::Relaxed);
+}
+
 #[tauri::command]
 pub fn toggle_loop(state: State<AppState>) {
     use std::sync::atomic::Ordering;
