@@ -204,24 +204,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
 
-    // Track lane backgrounds — always render 500 slots, mockup-style.
-    // Real tracks fill the first N slots; the remainder is empty placeholder rows.
-    const TOTAL_SLOTS = 500
-    for (let i = 0; i < TOTAL_SLOTS; i++) {
-      const y = Math.floor(RULER_HEIGHT + i * trackHeight) + 0.5
-      if (y > h + trackHeight) break
-      if (y + trackHeight < RULER_HEIGHT) continue
-      // Mockup palette: subtle alternation, darker than before
-      ctx.fillStyle = i % 2 === 0 ? '#08080c' : '#0b0b10'
-      ctx.fillRect(0, y - 0.5, w, trackHeight)
-
-      ctx.strokeStyle = '#0a0a0e'
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(0, y + trackHeight - 0.5)
-      ctx.lineTo(w, y + trackHeight - 0.5)
-      ctx.stroke()
-    }
+    // (Earlier code drew alternating opaque row backgrounds for 500
+    // slots here. That fillRect ran AFTER the bar/beat grid and the
+    // row-separator strokes, painting solid #08080c/#0b0b10 over both
+    // and leaving the empty playlist with just flat alternating
+    // stripes — no visible bars, no visible beats. The mockup has no
+    // alternating row colours: it's a single #15091a fill plus the
+    // horizontal row-separator and vertical bar/beat lines drawn
+    // above. Removing the loop exposes the grid that was always being
+    // drawn underneath.)
 
     // Clips
     for (let i = 0; i < audioTracks.length; i++) {
