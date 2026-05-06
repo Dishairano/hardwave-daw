@@ -436,6 +436,7 @@ const PLAYLIST_TOTAL_SLOTS = 500
 
 function HwPlaylistTracks() {
   const tracks = useTrackStore(s => s.tracks)
+  const toggleArm = useTrackStore(s => s.toggleArm)
   const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
   return (
     <div className="fl-pl-tracks">
@@ -444,13 +445,22 @@ function HwPlaylistTracks() {
         {tracks.map((t, i) => (
           <div
             key={t.id}
-            className="fl-tr"
+            className={`fl-tr${t.armed ? ' armed' : ''}`}
             style={{ ['--track-color' as any]: t.color || '#06b6d4' }}
             title={t.name}
           >
             <span className="num">{i + 1}</span>
             <span className="led off"></span>
             <span className="nm">{t.name}</span>
+            <button
+              type="button"
+              className={`fl-tr-arm${t.armed ? ' on' : ''}`}
+              onClick={(e) => { e.stopPropagation(); toggleArm(t.id) }}
+              title={t.armed ? 'Track armed — click to disarm' : 'Arm for recording'}
+              aria-label={t.armed ? `Disarm ${t.name}` : `Arm ${t.name} for recording`}
+            >
+              R
+            </button>
           </div>
         ))}
         {Array.from({ length: placeholderCount }, (_, i) => {
