@@ -1,4 +1,5 @@
 name: Functional Smoke
+run-name: Functional Smoke · ${{ github.ref_name }}
 
 # Runs the killer-watch tests in `crates/hardwave-engine/tests/functional_smoke.rs`.
 # These tests are gated with `#[ignore]` so the default `cargo test --workspace`

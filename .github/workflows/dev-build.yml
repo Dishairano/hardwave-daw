@@ -1,4 +1,7 @@
 name: Dev Build
+# Per-run display label so the Actions list distinguishes branch /
+# manual / scheduled triggers at a glance instead of a wall of "Dev Build".
+run-name: Dev Build · ${{ github.ref_name }} · ${{ github.sha }}
 
 # Builds Tauri installers for Win/Mac/Linux WITHOUT creating a public
 # GitHub Release, WITHOUT bumping the version, and WITHOUT posting to

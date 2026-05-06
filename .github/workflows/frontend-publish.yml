@@ -1,4 +1,5 @@
 name: Frontend Publish
+run-name: Frontend Publish · ${{ github.ref_name }}
 
 # Builds the React frontend, packages it as a versioned zip, computes the
 # manifest, and rsyncs both to /var/www/hardwave-app/daw/frontend/ on the

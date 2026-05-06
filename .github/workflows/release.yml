@@ -1,4 +1,8 @@
 name: Release
+# Per-run display label — without this every entry in the Actions list
+# reads as a generic "Release" with no way to tell v0.157.36 apart from
+# v0.157.37 at a glance. github.ref_name resolves to the pushed tag.
+run-name: Release ${{ github.ref_name }}
 
 on:
   push:
