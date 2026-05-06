@@ -20,7 +20,7 @@ members = [
 # `env!("CARGO_PKG_VERSION")` and reports it as `API_VERSION` to the
 # resolver — drift here disables hot-swap for every running binary on
 # the next manifest publish.
-version = "0.157.35"
+version = "0.157.36"
 edition = "2021"
 license = "MIT"
 authors = ["Hardwave Studios"]
