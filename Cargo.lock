@@ -1834,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-audio-io"
-version = "0.157.36"
+version = "0.157.37"
 dependencies = [
  "cpal",
  "log",
@@ -1847,7 +1847,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-daw"
-version = "0.157.36"
+version = "0.157.37"
 dependencies = [
  "dirs 5.0.1",
  "env_logger",
@@ -1888,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-dsp"
-version = "0.157.36"
+version = "0.157.37"
 dependencies = [
  "hound",
  "log",
@@ -1901,7 +1901,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-engine"
-version = "0.157.36"
+version = "0.157.37"
 dependencies = [
  "atomic_float",
  "crossbeam-channel",
@@ -1924,14 +1924,14 @@ dependencies = [
 
 [[package]]
 name = "hardwave-metering"
-version = "0.157.36"
+version = "0.157.37"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "hardwave-midi"
-version = "0.157.36"
+version = "0.157.37"
 dependencies = [
  "log",
  "midir",
@@ -1943,7 +1943,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-native-plugins"
-version = "0.157.36"
+version = "0.157.37"
 dependencies = [
  "hardwave-dsp",
  "hardwave-engine",
@@ -1956,7 +1956,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-plugin-host"
-version = "0.157.36"
+version = "0.157.37"
 dependencies = [
  "dirs 5.0.1",
  "hardwave-midi",
@@ -1974,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-project"
-version = "0.157.36"
+version = "0.157.37"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
