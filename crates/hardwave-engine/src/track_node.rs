@@ -230,6 +230,18 @@ pub struct TrackNode {
     /// Reusable scratch buffers for `chain.process` so the audio thread
     /// stays allocation-free in steady state.
     chain_scratch: crate::insert_chain::Scratch,
+    /// Active automation lanes — evaluated at the start of each block
+    /// to override the static `volume` / `pan` values when a lane
+    /// targets them. The Vec is replaced wholesale on `rebuild_graph`,
+    /// so the audio thread never allocates here in steady state.
+    automation_lanes: Vec<hardwave_project::automation::AutomationLane>,
+    /// Cached static fader value so we can restore it when an
+    /// automation lane is removed mid-session. We store the linear
+    /// gain so the runtime path stays branch-light.
+    static_volume: f32,
+    /// Cached static pan setting (-1..=1). Same restore-on-clear story
+    /// as `static_volume`.
+    static_pan: f32,
 }
 
 const TRACK_DELAY_CAPACITY: usize = 4800; // 100 ms at 48 kHz, both directions
@@ -267,6 +279,9 @@ impl TrackNode {
             filter: BiquadStereo::default(),
             chain: crate::insert_chain::InsertChain::new(),
             chain_scratch: crate::insert_chain::Scratch::default(),
+            automation_lanes: Vec::new(),
+            static_volume: 1.0,
+            static_pan: 0.0,
         }
     }
 
@@ -315,12 +330,30 @@ impl TrackNode {
         self.clips = clips;
     }
 
+    /// Replace the automation lane snapshot the audio thread evaluates
+    /// each block. Lanes are pre-cloned on the UI thread (off the audio
+    /// path) and shipped here through `rebuild_graph`. Empty list means
+    /// no automation — volume / pan stick to the static values that
+    /// `set_volume_db` / `set_pan` last applied.
+    pub fn set_automation_lanes(
+        &mut self,
+        lanes: Vec<hardwave_project::automation::AutomationLane>,
+    ) {
+        self.automation_lanes = lanes;
+    }
+
     pub fn set_volume_db(&mut self, db: f64) {
-        self.volume = db_to_linear(db);
+        let lin = db_to_linear(db);
+        self.volume = lin;
+        // Cache so an automation lane can be deleted mid-session and
+        // we still know the user-set fader value to fall back to.
+        self.static_volume = lin;
     }
 
     pub fn set_pan(&mut self, pan: f64) {
-        self.pan = pan as f32;
+        let p = pan as f32;
+        self.pan = p;
+        self.static_pan = p;
     }
 
     pub fn set_muted(&mut self, muted: bool) {
@@ -422,6 +455,48 @@ impl AudioNode for TrackNode {
 
         if self.muted || !ctx.playing {
             return;
+        }
+
+        // Evaluate automation lanes that target this track's fader and
+        // pan. We compute the playback position in ticks once, then walk
+        // each lane and override the static volume / pan with whatever
+        // the lane curve says at that tick. Lanes that target plugin
+        // parameters or sends are forwarded in a follow-up pass —
+        // volume + pan are the highest-impact targets and fully wire
+        // up the automation pipeline end-to-end.
+        if !self.automation_lanes.is_empty() && ctx.sample_rate > 0.0 && ctx.tempo > 0.0 {
+            let secs = ctx.position_samples as f64 / ctx.sample_rate;
+            let beats = secs * ctx.tempo / 60.0;
+            // 960 ticks per quarter (PPQ) matches the project default.
+            let tick = (beats * 960.0).max(0.0) as u64;
+            let mut volume = self.static_volume;
+            let mut pan = self.static_pan;
+            for lane in &self.automation_lanes {
+                if !lane.visible {
+                    continue;
+                }
+                use hardwave_project::automation::AutomationTarget;
+                match &lane.target {
+                    AutomationTarget::TrackVolume => {
+                        // Stored normalized 0..1, mapped to the
+                        // standard fader range (-60dB..=+6dB).
+                        let v = lane.denormalized_value_at(tick, -60.0, 6.0);
+                        volume = db_to_linear(v);
+                    }
+                    AutomationTarget::TrackPan => {
+                        let v = lane.denormalized_value_at(tick, -1.0, 1.0);
+                        pan = v as f32;
+                    }
+                    _ => {
+                        // PluginParam / SendLevel / TrackMute targets
+                        // route through different machinery (insert
+                        // chain SetParameter, send matrix, mute flag);
+                        // wired in follow-up commits.
+                    }
+                }
+            }
+            self.volume = volume;
+            self.pan = pan;
         }
 
         // Mix in send inputs arriving at this track (return routing). Sends
