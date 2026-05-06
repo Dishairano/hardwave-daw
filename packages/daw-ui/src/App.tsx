@@ -1,8 +1,10 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { SplashScreen } from './components/SplashScreen'
 import { TitleBar } from './components/transport/TitleBar'
 import { Toolbar } from './components/transport/Toolbar'
 import { HwApp } from './components/HwApp'
+import type { MenuDef, MenuItem } from './components/HwTopMenu'
+import { usePatternStore } from './stores/patternStore'
 import { TrackList } from './components/arrangement/TrackList'
 import { Arrangement } from './components/arrangement/Arrangement'
 import { MixerPanel } from './components/mixer/MixerPanel'
@@ -96,6 +98,12 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function shortenRecentPath(p: string): string {
+  const parts = p.replace(/\\/g, '/').split('/')
+  const name = parts[parts.length - 1] || p
+  return name.length > 40 ? name.slice(0, 37) + '...' : name
 }
 
 export function App() {
@@ -936,6 +944,128 @@ export function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [handleNewProject, handleOpenProject, handleSaveProject, handleSaveProjectAs, fetchTracks, duplicateSelection, cutSelection, pasteAtPlayhead])
 
+  // Top-bar menus — built here because every action (new/open/save, undo/
+  // redo, view toggles, dialog opens, view scale) lives in App's scope.
+  // HwApp renders the dropdown chrome via <HwTopMenu menus={...} />. The
+  // memo deps include only the values that actually change menu labels
+  // (recent list, view toggles, pdc state) — all callbacks are stable.
+  const menus: MenuDef[] = useMemo(() => {
+    const recentItems: MenuItem[] = recentProjects.length === 0
+      ? [{ label: '(none)', disabled: true }]
+      : [
+          ...recentProjects.slice(0, 10).map((p) => ({
+            label: shortenRecentPath(p),
+            action: () => handleOpenRecent(p),
+          })),
+          { separator: true, label: '' },
+          { label: 'Clear recent', action: () => useProjectStore.getState().recentProjects.forEach(p => useProjectStore.getState().removeRecent(p)) },
+        ]
+
+    return [
+      {
+        label: 'File',
+        items: [
+          { label: 'New project', shortcut: 'Ctrl+N', action: handleNewProject },
+          { label: 'Open project…', shortcut: 'Ctrl+O', action: handleOpenProject },
+          { label: 'Recent projects', submenu: recentItems },
+          { separator: true, label: '' },
+          { label: 'Save', shortcut: 'Ctrl+S', action: handleSaveProject },
+          { label: 'Save as…', shortcut: 'Ctrl+Shift+S', action: handleSaveProjectAs },
+          { label: 'Save as template…', action: handleSaveAsTemplate },
+          { separator: true, label: '' },
+          { label: 'Export audio…', action: handleExportAudio },
+          { separator: true, label: '' },
+          { label: 'Exit', action: async () => {
+            try {
+              const { getCurrentWindow } = await import('@tauri-apps/api/window')
+              await getCurrentWindow().close()
+            } catch {}
+          } },
+        ],
+      },
+      {
+        label: 'Edit',
+        items: [
+          { label: 'Undo', shortcut: 'Ctrl+Z', action: () => useTrackStore.getState().undo() },
+          { label: 'Redo', shortcut: 'Ctrl+Y', action: () => useTrackStore.getState().redo() },
+          { label: 'History…', action: () => setShowHistory(true) },
+          { separator: true, label: '' },
+          { label: 'Cut', shortcut: 'Ctrl+X', action: cutSelection },
+          { label: 'Copy', shortcut: 'Ctrl+C', action: () => useTrackStore.getState().copySelectedClips() },
+          { label: 'Paste', shortcut: 'Ctrl+V', action: pasteAtPlayhead },
+          { label: 'Duplicate', shortcut: 'Ctrl+D', action: duplicateSelection },
+          { separator: true, label: '' },
+          { label: 'Select all', shortcut: 'Ctrl+A', action: () => useTrackStore.getState().selectAllClips() },
+        ],
+      },
+      {
+        label: 'Add',
+        items: [
+          { label: 'Audio track', action: () => useTrackStore.getState().addAudioTrack() },
+          { label: 'Instrument track', action: () => useTrackStore.getState().addMidiTrack() },
+          { label: 'Automation track', action: handleAddAutomationTrack },
+          { separator: true, label: '' },
+          { label: 'Manage track templates…', action: () => setShowTrackTemplateManager(true) },
+        ],
+      },
+      {
+        label: 'Patterns',
+        items: [
+          { label: 'New pattern', action: () => usePatternStore.getState().addPattern() },
+          { label: 'Clone pattern', action: () => usePatternStore.getState().clonePattern() },
+          { label: 'Delete pattern', action: () => usePatternStore.getState().deletePattern() },
+        ],
+      },
+      {
+        label: 'View',
+        items: [
+          { label: `${showBrowser ? '✓ ' : '   '}Browser`, shortcut: 'F8', action: () => setShowBrowser(v => !v) },
+          { label: `${showPlaylist ? '✓ ' : '   '}Playlist`, shortcut: 'F5', action: () => setShowPlaylist(v => !v) },
+          { label: `${showChannelRack ? '✓ ' : '   '}Channel Rack`, shortcut: 'F6', action: () => setShowChannelRack(v => !v) },
+          { label: `${showPianoRoll ? '✓ ' : '   '}Piano Roll`, shortcut: 'F7', action: () => setShowPianoRoll(v => !v) },
+          { label: `${showMixer ? '✓ ' : '   '}Mixer`, shortcut: 'F9', action: () => setShowMixer(v => !v) },
+        ],
+      },
+      {
+        label: 'Options',
+        items: [
+          { label: 'Audio settings…', action: () => setShowAudioSettings(true) },
+          { label: 'Tempo map…', action: () => setShowTempoMap(true) },
+          { label: `${pdcEnabled ? '✓ ' : '   '}Plugin delay compensation`, action: () => setPdcEnabled(v => !v) },
+          { separator: true, label: '' },
+          { label: 'Theme…', action: () => setShowThemePicker(true) },
+        ],
+      },
+      {
+        label: 'Tools',
+        items: [
+          { label: 'Loudness meter…', action: () => setShowLoudness(true) },
+          { label: 'Oscilloscope…', action: () => setShowOscilloscope(true) },
+          { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },
+          { label: 'MIDI mappings…', action: () => setShowMidiMappings(true) },
+        ],
+      },
+      {
+        label: 'Help',
+        items: [
+          { label: 'Help topics', shortcut: 'F1', action: () => setShowHelp(v => !v) },
+          { label: 'Keyboard shortcuts', shortcut: 'Shift+F1', action: () => setShowShortcuts(v => !v) },
+          { label: 'Roadmap', action: () => setShowRoadmap(v => !v) },
+          { separator: true, label: '' },
+          { label: 'Online user manual', action: () => window.open('https://github.com/Dishairano/hardwave-daw/wiki', '_blank', 'noopener,noreferrer') },
+          { label: 'Release notes', action: () => window.open('https://github.com/Dishairano/hardwave-daw/releases', '_blank', 'noopener,noreferrer') },
+          { label: 'Report an issue', action: () => window.open('https://github.com/Dishairano/hardwave-daw/issues', '_blank', 'noopener,noreferrer') },
+          { separator: true, label: '' },
+          { label: 'About Hardwave DAW', action: () => setShowAbout(true) },
+        ],
+      },
+    ]
+  }, [
+    recentProjects, showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer, pdcEnabled,
+    handleNewProject, handleOpenProject, handleSaveProject, handleSaveProjectAs, handleSaveAsTemplate,
+    handleExportAudio, handleOpenRecent, handleAddAutomationTrack, cutSelection, pasteAtPlayhead, duplicateSelection,
+  ])
+
   return (
     <div style={{
       display: 'flex',
@@ -960,6 +1090,7 @@ export function App() {
         showMixer={showMixer}
         isMobile={isMobile}
         mobilePanel={mobilePanel}
+        menus={menus}
         onToggleBrowser={() => setShowBrowser(v => !v)}
         onToggleChannelRack={() => setShowChannelRack(v => !v)}
         onTogglePianoRoll={() => setShowPianoRoll(v => !v)}

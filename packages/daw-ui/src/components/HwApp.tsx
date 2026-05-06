@@ -18,6 +18,7 @@ import { Arrangement } from './arrangement/Arrangement'
 import { ChannelRack } from './channelrack/ChannelRack'
 import { PianoRoll } from './piano-roll/PianoRoll'
 import { MixerPanel } from './mixer/MixerPanel'
+import { HwTopMenu, type MenuDef } from './HwTopMenu'
 import { useTransportStore } from '../stores/transportStore'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
@@ -32,6 +33,14 @@ interface HwAppProps {
   showMixer: boolean
   isMobile: boolean
   mobilePanel: MobilePanel
+  /**
+   * Top-bar menu structure. Built in App.tsx (where all dialog state +
+   * project handlers live) and passed down so HwApp doesn't need to
+   * thread 30+ individual callbacks through its prop interface.
+   * If omitted, the menu strip falls back to the legacy non-functional
+   * label set so existing tests/storybooks don't break.
+   */
+  menus?: MenuDef[]
   onTogglePianoRoll?: () => void
   onToggleChannelRack?: () => void
   onToggleMixer?: () => void
@@ -62,7 +71,7 @@ function useTransportClock() {
 
 // ─── Top bar (fl-topbar) ─────────────────────────────────────────────────────
 
-function HwTopbar() {
+function HwTopbar({ menus }: { menus?: MenuDef[] }) {
   const playing = useTransportStore(s => s.playing)
   const recording = useTransportStore(s => s.recording)
   const looping = useTransportStore(s => s.looping)
@@ -111,16 +120,20 @@ function HwTopbar() {
   return (
     <div className="fl-topbar">
       <div className="fl-logo">HARD<span>WAVE</span></div>
-      <div className="fl-menu">
-        <span>File</span>
-        <span>Edit</span>
-        <span>Add</span>
-        <span>Patterns</span>
-        <span>View</span>
-        <span>Options</span>
-        <span>Tools</span>
-        <span>Help</span>
-      </div>
+      {menus && menus.length > 0 ? (
+        <HwTopMenu menus={menus} />
+      ) : (
+        <div className="fl-menu">
+          <span>File</span>
+          <span>Edit</span>
+          <span>Add</span>
+          <span>Patterns</span>
+          <span>View</span>
+          <span>Options</span>
+          <span>Tools</span>
+          <span>Help</span>
+        </div>
+      )}
 
       <div className="fl-trans">
         <div className="fl-trans-btn" title="Skip back" onClick={() => setPosition(0)}>
@@ -553,6 +566,7 @@ export function HwApp({
   showMixer,
   isMobile,
   mobilePanel,
+  menus,
   onTogglePianoRoll,
   onToggleChannelRack,
   onToggleMixer,
@@ -584,7 +598,7 @@ export function HwApp({
 
   return (
     <div className="fl-app" data-testid="hw-app">
-      <HwTopbar />
+      <HwTopbar menus={menus} />
       <HwSecondRow hint={hint} projectName={projectName} />
 
       <div className="fl-body">

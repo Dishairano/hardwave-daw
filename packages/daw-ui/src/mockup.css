@@ -97,8 +97,60 @@
   height: 100%;
   align-items: center;
 }
-.fl-menu span { cursor: pointer; -webkit-app-region: no-drag; }
+.fl-menu span { cursor: pointer; -webkit-app-region: no-drag; position: relative; padding: 0 2px; }
 .fl-menu span:hover { color: var(--red); }
+.fl-menu span.open { color: var(--red); background: rgba(220,38,38,.06); }
+
+/* ─── Top-menu dropdowns (HwTopMenu) ─────────────────────────── */
+.fl-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: -2px;
+  min-width: 220px;
+  background: #07070a;
+  border: 1px solid var(--border-strong, rgba(255,255,255,.14));
+  border-radius: 4px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.6);
+  padding: 4px 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  letter-spacing: 0;
+  text-transform: none;
+  z-index: 200;
+  cursor: default;
+}
+.fl-menu-dropdown.submenu {
+  top: -5px;
+  left: 100%;
+  margin-left: 2px;
+}
+
+.fl-menu-row-host { position: relative; }
+
+.fl-menu-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 16px;
+  padding: 6px 12px;
+  align-items: center;
+  cursor: pointer;
+  color: var(--text);
+  white-space: nowrap;
+}
+.fl-menu-row:hover { background: rgba(220,38,38,.10); color: #fff; }
+.fl-menu-row.submenu-open { background: rgba(220,38,38,.10); color: #fff; }
+.fl-menu-row.disabled { color: var(--text-dim); cursor: default; }
+.fl-menu-row.disabled:hover { background: transparent; color: var(--text-dim); }
+.fl-menu-row .lbl { color: inherit; }
+.fl-menu-row .kbd { color: var(--text-dim); font-size: 10px; }
+.fl-menu-row .arrow { color: var(--text-dim); font-size: 9px; }
+
+.fl-menu-sep {
+  height: 1px;
+  background: var(--border-strong, rgba(255,255,255,.14));
+  margin: 4px 8px;
+}
 
 .fl-trans {
   display: flex;
