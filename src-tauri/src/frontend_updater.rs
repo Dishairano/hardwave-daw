@@ -1195,9 +1195,101 @@ pub fn handle_request(
         .unwrap()
 }
 
+/// Validate that the cached frontend bundle for `version` is structurally
+/// usable — index.html exists, parses, and references at least one
+/// non-empty JS asset that is also present and non-empty on disk. This
+/// catches half-downloaded bundles, partial deletions, and zero-byte
+/// stubs that would otherwise navigate the webview to a blank page with
+/// no fallback path.
+///
+/// Returns the index.html bytes when the bundle passes; `None` when it
+/// doesn't (caller should fall back to the bundled UI and quarantine the
+/// broken cache version).
+fn validate_cached_bundle(cache: &Path, version: &str) -> Option<Vec<u8>> {
+    let bundle_dir = cache.join(version);
+    let index_path = bundle_dir.join("index.html");
+    let index_bytes = std::fs::read(&index_path).ok()?;
+    if index_bytes.is_empty() {
+        log::warn!("frontend updater: cached index.html for {version} is empty");
+        return None;
+    }
+    let html = std::str::from_utf8(&index_bytes).ok()?;
+    // Pull every src="…" / href="…" referenced from index.html that points
+    // to a relative path inside the bundle. We don't parse HTML — a regex
+    // against quoted attributes is enough for Vite's emit format.
+    let re = regex::Regex::new(r#"(?:src|href)\s*=\s*["']([^"']+)["']"#).ok()?;
+    let mut checked = 0usize;
+    for cap in re.captures_iter(html) {
+        let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        // Only validate same-bundle assets. Skip absolute URLs, data:,
+        // and the custom protocol root.
+        if raw.is_empty() || raw.starts_with("http") || raw.starts_with("data:")
+            || raw.starts_with("hardwave-app://") || raw.starts_with("//") {
+            continue;
+        }
+        let stripped = raw.trim_start_matches('/').split('?').next().unwrap_or(raw);
+        if stripped.is_empty() { continue; }
+        let asset_path = bundle_dir.join(stripped);
+        match std::fs::metadata(&asset_path) {
+            Ok(m) if m.len() > 0 => { checked += 1; }
+            Ok(_) => {
+                log::warn!("frontend updater: cached asset {stripped} is zero-length for {version}");
+                return None;
+            }
+            Err(e) => {
+                log::warn!("frontend updater: cached asset {stripped} missing for {version}: {e}");
+                return None;
+            }
+        }
+    }
+    if checked == 0 {
+        log::warn!("frontend updater: index.html for {version} has zero referenced assets — treating as corrupt");
+        return None;
+    }
+    Some(index_bytes)
+}
+
+/// Move a corrupt cache version into `<cache>/.quarantine/<version>/` so
+/// it stops being activated next launch but evidence survives for
+/// post-mortem. Best-effort: failure to quarantine is logged and ignored.
+fn quarantine_cache_version(cache: &Path, version: &str) {
+    let src = cache.join(version);
+    if !src.exists() { return; }
+    let qdir = cache.join(".quarantine");
+    if let Err(e) = std::fs::create_dir_all(&qdir) {
+        log::warn!("frontend updater: cannot create quarantine dir: {e}");
+        return;
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dst = qdir.join(format!("{version}-{stamp}"));
+    if let Err(e) = std::fs::rename(&src, &dst) {
+        log::warn!("frontend updater: quarantine rename {version} → {dst:?} failed: {e}");
+        return;
+    }
+    // Drop active.txt so we don't re-attempt the same version next launch.
+    let active = cache.join("active.txt");
+    if let Err(e) = std::fs::remove_file(&active) {
+        log::warn!("frontend updater: could not clear active.txt after quarantine: {e}");
+    } else {
+        log::info!("frontend updater: quarantined corrupt cache {version} → {dst:?} and cleared active.txt");
+    }
+}
+
 /// Decide at startup whether the main window should load from cache or
 /// stay on the bundled default. Called from the `setup` closure in
 /// `lib.rs`. Returns `true` when navigation happened.
+///
+/// Validation order:
+///   1. cache root readable, active.txt present
+///   2. bundle structurally valid (index.html + every referenced asset
+///      present and non-empty) — catches the grey-screen-of-death from
+///      half-downloaded or partially-deleted bundles
+///   3. main webview window is mounted
+/// On any failure we quarantine the broken version and return `false`,
+/// letting Tauri's bundled UI load.
 pub fn maybe_activate_cache(app: &AppHandle) -> bool {
     let cache = match cache_root(app) {
         Ok(c) => c,
@@ -1209,11 +1301,11 @@ pub fn maybe_activate_cache(app: &AppHandle) -> bool {
     let Some(version) = read_active_version(&cache) else {
         return false;
     };
-    let entry = cache.join(&version).join("index.html");
-    if !entry.exists() {
+    if validate_cached_bundle(&cache, &version).is_none() {
         log::warn!(
-            "frontend updater: active.txt points to {version} but {entry:?} is missing — falling back to bundled"
+            "frontend updater: cached bundle {version} failed validation — quarantining and falling back to bundled"
         );
+        quarantine_cache_version(&cache, &version);
         return false;
     }
     let url_str = cache_navigation_url();
@@ -1711,5 +1803,136 @@ mod tests {
         );
         let served = cached_entry_to_state(&entry);
         assert!(matches!(served.decision, VersionContractDecision::HotSwap));
+    }
+
+    // ---------- validate_cached_bundle / quarantine ----------
+
+    fn write_bundle(cache: &Path, version: &str, files: &[(&str, &[u8])]) {
+        let dir = cache.join(version);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, bytes) in files {
+            let target = dir.join(name);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(target, bytes).unwrap();
+        }
+    }
+
+    const VALID_INDEX_HTML: &str = r#"<!doctype html>
+<html><head>
+<link rel="stylesheet" href="/assets/index.css">
+<script type="module" src="/assets/index.js"></script>
+</head><body><div id="root"></div></body></html>"#;
+
+    #[test]
+    fn validate_passes_when_index_and_assets_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_bundle(
+            tmp.path(),
+            "0.157.42",
+            &[
+                ("index.html", VALID_INDEX_HTML.as_bytes()),
+                ("assets/index.css", b"body{color:red}"),
+                ("assets/index.js", b"console.log('ok')"),
+            ],
+        );
+        assert!(validate_cached_bundle(tmp.path(), "0.157.42").is_some());
+    }
+
+    #[test]
+    fn validate_rejects_missing_referenced_asset() {
+        let tmp = tempfile::tempdir().unwrap();
+        // index.html references index.js but we never wrote it.
+        write_bundle(
+            tmp.path(),
+            "0.157.42",
+            &[
+                ("index.html", VALID_INDEX_HTML.as_bytes()),
+                ("assets/index.css", b"body{color:red}"),
+            ],
+        );
+        assert!(
+            validate_cached_bundle(tmp.path(), "0.157.42").is_none(),
+            "missing JS asset should fail validation"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_byte_referenced_asset() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_bundle(
+            tmp.path(),
+            "0.157.42",
+            &[
+                ("index.html", VALID_INDEX_HTML.as_bytes()),
+                ("assets/index.css", b"body{color:red}"),
+                ("assets/index.js", b""),
+            ],
+        );
+        assert!(
+            validate_cached_bundle(tmp.path(), "0.157.42").is_none(),
+            "zero-byte asset is treated as half-downloaded"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_index_html() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_bundle(tmp.path(), "0.157.42", &[("index.html", b"")]);
+        assert!(validate_cached_bundle(tmp.path(), "0.157.42").is_none());
+    }
+
+    #[test]
+    fn validate_rejects_index_html_without_relative_assets() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Only absolute URLs — no own-bundle assets to verify.
+        write_bundle(
+            tmp.path(),
+            "0.157.42",
+            &[(
+                "index.html",
+                br#"<html><body>
+<script src="https://cdn.example.com/x.js"></script>
+</body></html>"#,
+            )],
+        );
+        assert!(
+            validate_cached_bundle(tmp.path(), "0.157.42").is_none(),
+            "index.html with zero same-bundle assets is suspicious — fail closed"
+        );
+    }
+
+    #[test]
+    fn quarantine_moves_version_and_clears_active_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path();
+        write_bundle(cache, "0.157.42", &[("index.html", b"x")]);
+        std::fs::write(cache.join("active.txt"), "0.157.42").unwrap();
+
+        quarantine_cache_version(cache, "0.157.42");
+
+        assert!(
+            !cache.join("0.157.42").exists(),
+            "original version dir should be moved away"
+        );
+        assert!(!cache.join("active.txt").exists(), "active.txt should be cleared");
+        let qdir = cache.join(".quarantine");
+        assert!(qdir.exists(), "quarantine dir created");
+        let entries: Vec<_> = std::fs::read_dir(&qdir).unwrap().collect();
+        assert_eq!(entries.len(), 1, "exactly one quarantined version");
+        assert!(
+            entries[0].as_ref().unwrap().file_name().to_string_lossy().starts_with("0.157.42-"),
+            "quarantine entry name keeps version prefix + timestamp"
+        );
+    }
+
+    #[test]
+    fn quarantine_is_safe_when_version_dir_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No-op should not panic when the version dir doesn't exist —
+        // e.g. someone deleted it manually before the next launch.
+        quarantine_cache_version(tmp.path(), "0.157.42");
+        assert!(!tmp.path().join("0.157.42").exists());
     }
 }

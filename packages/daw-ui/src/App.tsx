@@ -131,6 +131,56 @@ export function App() {
   const closeBeatSlicer = useBeatSlicerStore(s => s.close)
   const [showDevPanel, setShowDevPanel] = useState(false) // DEV ONLY
 
+  // Block browser-default chrome that leaks through Tauri's webview: the
+  // right-click context menu (save / print / refresh) and the standard
+  // reload + devtools keybindings (Ctrl+R, F5, F12, Ctrl+Shift+I/J/C, etc).
+  // We keep INPUT / TEXTAREA / SELECT untouched so users can still right-
+  // click for paste and use Ctrl+A/C/V/X/Z inside text fields. The dev
+  // shortcut Ctrl+Shift+D is the single intentional debug entry point and
+  // is wired in the keydown handler further down — it stays untouched.
+  useEffect(() => {
+    const isFormElement = (target: EventTarget | null): boolean => {
+      const el = target as HTMLElement | null
+      if (!el || !el.tagName) return false
+      const tag = el.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+      if (el.isContentEditable) return true
+      return false
+    }
+
+    const blockContextMenu = (e: MouseEvent) => {
+      if (isFormElement(e.target)) return
+      e.preventDefault()
+    }
+
+    const blockBrowserKeys = (e: KeyboardEvent) => {
+      const cmd = e.ctrlKey || e.metaKey
+      // Reload variants — never useful in production.
+      if (cmd && (e.key === 'r' || e.key === 'R')) { e.preventDefault(); return }
+      if (e.key === 'F5') { e.preventDefault(); return }
+      // Devtools — we have Ctrl+Shift+D for the in-app DevPanel.
+      if (e.key === 'F12') { e.preventDefault(); return }
+      if (cmd && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.key === 'J' || e.key === 'j' || e.key === 'C' || e.key === 'c')) {
+        // Ctrl+Shift+C is "inspect element" in browsers but also "copy" in
+        // some text contexts — only block when no form element is focused.
+        if (!isFormElement(e.target)) { e.preventDefault(); return }
+      }
+      // Print / view-source — produce useless output for a DAW window.
+      if (cmd && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); return }
+      if (cmd && (e.key === 'u' || e.key === 'U')) { e.preventDefault(); return }
+    }
+
+    // Capture phase so we run before any user-bound shortcut, but we don't
+    // stopPropagation — the app's own keydown handler still fires for
+    // shortcuts like save/cut/paste/undo at bubble phase.
+    window.addEventListener('contextmenu', blockContextMenu, { capture: true })
+    window.addEventListener('keydown', blockBrowserKeys, { capture: true })
+    return () => {
+      window.removeEventListener('contextmenu', blockContextMenu, { capture: true } as EventListenerOptions)
+      window.removeEventListener('keydown', blockBrowserKeys, { capture: true } as EventListenerOptions)
+    }
+  }, [])
+
   // Splash screen
   const [showSplash, setShowSplash] = useState(true)
   // Splash gate is split into two parallel readiness flags. Both must flip

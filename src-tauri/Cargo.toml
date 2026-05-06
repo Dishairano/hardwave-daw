@@ -40,6 +40,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 sha2 = "0.10"
 hex = "0.4"
 semver = "1"
+# Tiny dep used only by frontend_updater::validate_cached_bundle to scan
+# index.html for src/href asset references. We strip prefixes manually
+# rather than parse HTML — the regex is enough for Vite's emit format.
+regex = { version = "1", default-features = false, features = ["std"] }
 zip = { version = "4", default-features = false, features = ["deflate"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util"] }
 futures-util = "0.3"
@@ -49,6 +53,9 @@ hound.workspace = true
 flacenc.workspace = true
 shine-rs.workspace = true
 vorbis_rs.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
 
 [lib]
 name = "hardwave_daw_lib"
