@@ -199,6 +199,39 @@ jobs:
           tauriScript: tauri
           args: --target ${{ matrix.target }} --features asio
 
+      # Custom branded launcher-style installer (the small Tauri app
+      # under `installer/`). Built with --no-bundle so we get the raw
+      # executable instead of yet another NSIS wrap; a separate rename
+      # step labels it "HardwaveDAW-Setup.exe" so the GitHub release
+      # asset list reads cleanly. The launcher downloads the main DAW
+      # NSIS .exe at install time and runs it silently — the user only
+      # ever interacts with the branded GUI.
+      - name: Build Hardwave DAW launcher installer (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        working-directory: installer
+        run: |
+          npm install
+          npm run tauri:build -- --no-bundle
+
+      - name: Stage HardwaveDAW-Setup.exe
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $installerExe = Get-ChildItem -Path installer/src-tauri/target/release -Filter "hardwave-daw-installer.exe" -File | Select-Object -First 1
+          if (-not $installerExe) { throw "hardwave-daw-installer.exe not found" }
+          Copy-Item $installerExe.FullName "HardwaveDAW-Setup.exe"
+          Get-Item HardwaveDAW-Setup.exe | Select-Object Name,Length
+
+      - name: Upload HardwaveDAW-Setup.exe to release
+        if: matrix.platform == 'windows-latest'
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          tag_name: ${{ github.ref_name }}
+          files: |
+            HardwaveDAW-Setup.exe
+
       - name: Build Tauri app (macOS)
         if: matrix.platform == 'macos-latest'
         uses: tauri-apps/tauri-action@v0
