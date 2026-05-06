@@ -4,6 +4,7 @@ pub mod audio_pool;
 pub mod engine;
 pub mod graph;
 pub mod input_node;
+pub mod insert_chain;
 pub mod master_node;
 pub mod master_tap;
 pub mod parallel_eval;

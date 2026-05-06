@@ -26,3 +26,8 @@ serde_json.workspace = true
 log.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+# raw-window-handle is exposed transitively via hardwave-plugin-host's
+# `HostedPlugin::open_editor` signature; we depend on it directly so test
+# mocks of the trait can name the type without the path leaking.
+raw-window-handle.workspace = true
+
