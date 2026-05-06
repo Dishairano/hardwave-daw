@@ -179,18 +179,28 @@ jobs:
       # always has. Idempotent: `gh release view` first, only create when
       # missing. Runs on every platform so a parallel-build race can't
       # leave any matrix leg without a release to upload to.
+      # NOTE: Pass the changelog body via env var, NOT via `${{ }}` shell
+      # interpolation. The body is user-supplied (from the tag message)
+      # and may contain backticks, $variables, or quotes that bash would
+      # interpret as command substitution. v0.157.39's body contained the
+      # word `log` in backticks, which expanded to a `log` subshell call
+      # and crashed the step on every platform with exit 1. Reading from
+      # env via "$RELEASE_BODY" is shell-safe.
       - name: Pre-create GitHub release shell
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          REPO_NAME: ${{ github.repository }}
+          RELEASE_BODY: ${{ needs.changelog.outputs.body }}
         shell: bash
         run: |
-          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "release ${{ github.ref_name }} already exists; skipping create"
+          if gh release view "$TAG_NAME" --repo "$REPO_NAME" >/dev/null 2>&1; then
+            echo "release $TAG_NAME already exists; skipping create"
           else
-            gh release create "${{ github.ref_name }}" \
-              --repo "${{ github.repository }}" \
-              --title "Hardwave DAW ${{ github.ref_name }}" \
-              --notes "${{ needs.changelog.outputs.body }}" \
+            gh release create "$TAG_NAME" \
+              --repo "$REPO_NAME" \
+              --title "Hardwave DAW $TAG_NAME" \
+              --notes "$RELEASE_BODY" \
               --prerelease
           fi
 
