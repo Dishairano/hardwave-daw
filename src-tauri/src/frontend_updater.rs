@@ -95,6 +95,10 @@ pub enum UpdateStatus {
     /// resolver path so the frontend can recognise the explicit hot-swap
     /// outcome and suppress its own auto-updater check for this session.
     HotSwapReady { version: String },
+    /// Update applied; the app is about to restart to activate it. The
+    /// splash should swap to "Restarting..." for the brief window before
+    /// the process actually relaunches.
+    Restarting { version: String },
 }
 
 /// Outgoing-feed identifier for the Tauri auto-updater. Pivoting a user
@@ -450,19 +454,28 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
             // Backwards-compat: legacy splash text mapping listens for
             // `Ready`. Emitting both means an older bundle still in cache
             // continues to render the right copy after this commit lands.
-            emit(&app, UpdateStatus::Ready { version });
-            // Mark the cached plan as applied — a subsequent
-            // `version_contract_state` call now reports the bundle as
-            // already-staged rather than telling App.tsx the same
-            // ApplyBundle action is still pending. Without this, a
-            // settings page polling the resolver would render "update
-            // available — restart to apply" forever even after the
-            // staged bundle is sitting on disk waiting for relaunch.
+            emit(&app, UpdateStatus::Ready { version: version.clone() });
             if let Some(state) = app.try_state::<AppState>() {
                 if let Some(entry) = state.frontend_launch_plan.lock().as_mut() {
                     entry.applied = true;
                 }
             }
+            // Auto-restart so the staged bundle activates without the user
+            // having to click anything. The updater only ever runs during
+            // splash — no project is loaded yet, no unsaved-state risk.
+            // Hold the splash for ~700ms so the "Restarting..." copy
+            // actually paints before tauri kills the process.
+            emit(
+                &app,
+                UpdateStatus::Restarting {
+                    version: version.clone(),
+                },
+            );
+            let app_for_restart = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(700)).await;
+                app_for_restart.restart();
+            });
             Ok(())
         }
         LaunchPlan::InstallerModal {

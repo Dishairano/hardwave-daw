@@ -338,7 +338,14 @@ export function App() {
               setSplashStatus('Applying update...'); break
             case 'ready':
             case 'hot_swap_ready':
-              setSplashStatus(`Update ${p.version ?? ''} ready — restart to apply`)
+              // Auto-restart kicks in ~700ms after this event from the
+              // Rust side; the dedicated `restarting` event below paints
+              // the actual user-facing copy. Keep this branch quiet so
+              // the splash doesn't briefly say "ready — restart to apply"
+              // before flipping to "Restarting…".
+              break
+            case 'restarting':
+              setSplashStatus(`Updating to ${p.version ?? ''} — restarting…`)
               break
             case 'installer_required':
               // Splash status copy aligned with surface A in the mockup.
