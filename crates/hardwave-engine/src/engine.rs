@@ -985,6 +985,54 @@ impl EngineCallback {
                 .or_insert_with(|| Arc::new(TrackMeterState::default()))
                 .clone();
 
+            // MIDI tracks get an entirely separate node type — a built-in
+            // monosynth that converts pre-resolved note schedules into
+            // audio. The TrackNode path below is for audio-bearing tracks
+            // that play sample clips, which can't service MIDI content.
+            if matches!(track.kind, hardwave_project::TrackKind::Midi) {
+                let mut midi_node = crate::midi_track_node::MidiTrackNode::new(
+                    track.id.clone(),
+                    track.name.clone(),
+                    meter.clone(),
+                );
+                midi_node.set_volume_db(track.volume_db);
+                midi_node.set_pan(track.pan);
+                let effective_mute_midi =
+                    track.muted || (any_soloed && !track.soloed && !track.solo_safe);
+                midi_node.set_muted(effective_mute_midi);
+                midi_node.set_soloed(track.soloed);
+
+                // Walk the clip placements and turn each MIDI note into a
+                // sample-positioned MidiNoteRegion. Tempo-map lookups happen
+                // here on the UI thread so the audio thread sees a flat
+                // sorted list.
+                let mut note_regions: Vec<crate::midi_track_node::MidiNoteRegion> = Vec::new();
+                for clip in &track.clips {
+                    let hardwave_project::clip::ClipContent::Midi(midi_ref) = &clip.content
+                    else {
+                        continue;
+                    };
+                    for note in &midi_ref.clip.notes {
+                        let on_tick = clip.position_ticks + note.start_tick;
+                        let off_tick = on_tick + note.duration_ticks.max(1);
+                        let note_on = tempo_map.tick_to_samples(on_tick, sample_rate);
+                        let note_off = tempo_map.tick_to_samples(off_tick, sample_rate);
+                        note_regions.push(crate::midi_track_node::MidiNoteRegion {
+                            note_on_sample: note_on,
+                            note_off_sample: note_off,
+                            pitch: note.pitch,
+                            velocity: note.velocity,
+                            muted: note.muted,
+                        });
+                    }
+                }
+                midi_node.set_notes(note_regions);
+
+                let node_id = self.graph.add_node(Box::new(midi_node));
+                track_id_to_node.insert(track.id.clone(), node_id);
+                continue;
+            }
+
             let mut node = TrackNode::new(
                 track.id.clone(),
                 track.name.clone(),
