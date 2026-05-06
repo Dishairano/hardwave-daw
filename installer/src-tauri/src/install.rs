@@ -221,7 +221,7 @@ async fn run_platform_installer(
         // the exe to launch. Return the install_dir as the path so the
         // Done screen can show "files installed at <path>" and offer a
         // manual-launch link via the OS file explorer.
-        log::warn!(
+        eprintln!(
             "post-install probe could not locate Hardwave DAW.exe under any of {:?}; returning install_dir as best-effort path so the Done screen still works",
             search_roots
         );
