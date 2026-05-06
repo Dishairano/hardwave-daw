@@ -397,6 +397,19 @@
   gap: 6px;
   flex-shrink: 0;
 }
+.fl-browser-head .disclosure {
+  color: var(--red);
+  font-size: 10px;
+  margin-right: -2px;
+  flex: 0 0 auto;
+}
+.fl-browser-head .count {
+  margin-right: 4px;
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: 9px;
+  letter-spacing: 1px;
+}
 .fl-browser-tabs {
   display: flex;
   gap: 0;
@@ -473,7 +486,14 @@
   gap: 6px;
 }
 .fl-bt-leaf:hover { color: #fff; background: #0a0a0e; }
-.fl-bt-leaf.on { color: var(--red); background: rgba(220,38,38,0.06); }
+.fl-bt-leaf.on {
+  color: #fff;
+  background: rgba(220,38,38,0.08);
+  /* Mockup parity — 2px red left-border on the selected leaf. We use
+     box-shadow inset so the row keeps its existing horizontal padding
+     without nudging icons/labels rightward. */
+  box-shadow: inset 2px 0 0 0 var(--red);
+}
 .fl-bt-leaf .meta {
   margin-left: auto;
   font-family: var(--mono);

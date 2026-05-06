@@ -11,6 +11,16 @@ type Tab = 'plugins' | 'files' | 'project'
 
 export function Browser() {
   const [activeTab, setActiveTab] = useState<Tab>('plugins')
+  // Item count shown in the header — switches with the active tab so the
+  // user always sees how many items are available in the current scope.
+  const pluginCount = usePluginStore(s => s.plugins.length)
+  const fileFavCount = useBrowserStore(s => s.fileFavorites.size)
+  const fileRecentCount = useBrowserStore(s => s.fileRecents.length)
+  const folderCount = useBrowserStore(s => s.folders.length)
+  const headerCount =
+    activeTab === 'plugins' ? pluginCount :
+    activeTab === 'files'   ? (fileFavCount + fileRecentCount + folderCount) :
+    0
 
   return (
     // Root is intentionally unstyled — the parent .fl-browser (mockup class
@@ -18,7 +28,9 @@ export function Browser() {
     // This avoids dual chrome that fights with the mockup look.
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div className="fl-browser-head">
+        <span className="disclosure" aria-hidden="true">▾</span>
         <span style={{ flex: 1 }}>Browser</span>
+        {headerCount > 0 && <span className="count">{headerCount}</span>}
         <DetachButton panelId="browser" />
       </div>
 
