@@ -311,8 +311,14 @@ async fn resolve_download_url() -> Result<String, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    let gh: serde_json::Value = client
-        .get("https://api.github.com/repos/Dishairano/hardwave-daw/releases/latest")
+    // See lib.rs::fetch_latest_version for the rationale: GitHub's
+    // /releases/latest skips prereleases, but every CI build is
+    // currently tagged prerelease. Use /releases?per_page=1 to get
+    // the most recently published release regardless of prerelease
+    // status — otherwise the launcher resolves to v0.2.11's assets,
+    // which predate the entire redesign port.
+    let releases: serde_json::Value = client
+        .get("https://api.github.com/repos/Dishairano/hardwave-daw/releases?per_page=1")
         .send()
         .await
         .map_err(|e| format!("GitHub API failed: {e}"))?
@@ -322,6 +328,10 @@ async fn resolve_download_url() -> Result<String, String> {
         .await
         .map_err(|e| format!("GitHub API parse failed: {e}"))?;
 
+    let gh = releases
+        .as_array()
+        .and_then(|arr| arr.first())
+        .ok_or("GitHub returned no releases for this repo")?;
     let assets = gh
         .get("assets")
         .and_then(|v| v.as_array())

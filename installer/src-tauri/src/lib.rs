@@ -88,9 +88,20 @@ async fn fetch_latest_version() -> Result<LatestVersion, String> {
         }
     }
 
-    // Fallback: GitHub API for the latest release tag.
-    let gh: serde_json::Value = client
-        .get("https://api.github.com/repos/Dishairano/hardwave-daw/releases/latest")
+    // Fallback: GitHub API. We use `/releases?per_page=1` instead of
+    // `/releases/latest` because GitHub's "latest" endpoint silently
+    // skips every release marked as prerelease — and our CI marks
+    // every build as prerelease while the redesign port is in flight
+    // (see `prerelease: true` in .github/workflows/release.yml). With
+    // /releases/latest the launcher would resolve to the last stable
+    // release (v0.2.11 from before the mockup port), download it, and
+    // present the user with a UI that looks completely outdated
+    // because it predates every redesign commit. /releases?per_page=1
+    // returns the most recently published release regardless of
+    // prerelease status, which matches what the user actually expects
+    // from "install the latest version".
+    let releases: serde_json::Value = client
+        .get("https://api.github.com/repos/Dishairano/hardwave-daw/releases?per_page=1")
         .send()
         .await
         .map_err(|e| format!("GitHub API request failed: {e}"))?
@@ -100,6 +111,10 @@ async fn fetch_latest_version() -> Result<LatestVersion, String> {
         .await
         .map_err(|e| format!("Parsing GitHub response failed: {e}"))?;
 
+    let gh = releases
+        .as_array()
+        .and_then(|arr| arr.first())
+        .ok_or("GitHub returned no releases for this repo")?;
     let tag = gh
         .get("tag_name")
         .and_then(|v| v.as_str())
