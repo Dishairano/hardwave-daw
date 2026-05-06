@@ -610,6 +610,15 @@
   text-overflow: ellipsis;
 }
 
+/* Empty placeholder rows fill the playlist out to PLAYLIST_TOTAL_SLOTS so
+   the tracks column matches the grid's lane count visually. They keep the
+   row height + striping but dim the slot number and disable hover. */
+.fl-tr-empty .num {
+  color: var(--text-dim, #3f3f46);
+  opacity: 0.55;
+}
+.fl-tr-empty:hover { background: transparent; }
+
 /* === Playlist grid (right column — purple gradient backdrop) === */
 .fl-pl-grid {
   flex-grow: 1;

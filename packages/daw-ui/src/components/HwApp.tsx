@@ -406,9 +406,17 @@ function HwPlaylistTools() {
 }
 
 // ─── Playlist track-name column (mockup: .fl-pl-tracks) ─────────────────────
+//
+// The arrangement grid (Arrangement.tsx) always renders 500 lanes per the
+// mockup. This column has to mirror that count or the tracks list and the
+// grid drift apart vertically — real tracks at the top, empty grid below
+// them. We render `tracks.map()` first, then pad with numbered placeholder
+// rows so the totals line up.
+const PLAYLIST_TOTAL_SLOTS = 500
 
 function HwPlaylistTracks() {
   const tracks = useTrackStore(s => s.tracks)
+  const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
   return (
     <div className="fl-pl-tracks">
       <div className="fl-pl-tracks-head">TRACKS</div>
@@ -425,11 +433,21 @@ function HwPlaylistTracks() {
             <span className="nm">{t.name}</span>
           </div>
         ))}
-        {tracks.length === 0 && (
-          <div style={{ padding: '6px 8px', color: 'var(--text-dim)', fontSize: 9, fontFamily: 'var(--mono)' }}>
-            no tracks
-          </div>
-        )}
+        {Array.from({ length: placeholderCount }, (_, i) => {
+          const slotNum = tracks.length + i + 1
+          return (
+            <div
+              key={`pl-slot-${slotNum}`}
+              className="fl-tr fl-tr-empty"
+              style={{ ['--track-color' as any]: 'transparent' }}
+              aria-hidden="true"
+            >
+              <span className="num">{slotNum}</span>
+              <span className="led off"></span>
+              <span className="nm" />
+            </div>
+          )
+        })}
       </div>
     </div>
   )
