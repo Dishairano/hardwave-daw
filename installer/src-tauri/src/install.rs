@@ -14,7 +14,12 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
 #[cfg(windows)]
-const DAW_EXE_NAME: &str = "Hardwave DAW.exe";
+/// Candidate executable names the post-install probe walks for. Tauri's
+/// NSIS bundle uses `productName` (with spaces) for the binary; some
+/// builds also leave a lower-case copy of the cargo `name`. List both
+/// so detection works regardless of how the underlying installer
+/// was bundled.
+const DAW_EXE_CANDIDATES: &[&str] = &["Hardwave DAW.exe", "hardwave-daw.exe"];
 
 /// Default install directory:
 ///   - Windows: %LocalAppData%\Programs\Hardwave\DAW
@@ -167,25 +172,60 @@ async fn run_platform_installer(
                 status.code().unwrap_or(-1)
             ));
         }
-        let direct = install_dir.join(DAW_EXE_NAME);
-        if direct.exists() {
-            return Ok(direct);
+        // Walk well-known Tauri-NSIS install layouts plus the per-user
+        // and per-machine fallbacks so we find the binary even when
+        // the inner installer ignored /D= (perMachine bundles often do)
+        // or used a different binary name. Returning a path lets the
+        // launcher's `launch_after` step actually launch; if every
+        // candidate misses, fall back to the user's chosen install_dir
+        // — the install genuinely succeeded, the launcher just can't
+        // auto-start the binary, and that is recoverable from the
+        // Done screen.
+        let mut search_roots: Vec<PathBuf> = vec![install_dir.to_path_buf()];
+        if let Some(local) = dirs::data_local_dir() {
+            search_roots.push(local.join("Programs").join("Hardwave").join("DAW"));
+            search_roots.push(local.join("Programs").join("Hardwave DAW"));
         }
-        if let Ok(entries) = std::fs::read_dir(install_dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_dir() {
-                    let candidate = p.join(DAW_EXE_NAME);
-                    if candidate.exists() {
-                        return Ok(candidate);
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            search_roots.push(PathBuf::from(&pf).join("Hardwave").join("DAW"));
+            search_roots.push(PathBuf::from(&pf).join("Hardwave DAW"));
+        }
+        if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+            search_roots.push(PathBuf::from(&pf86).join("Hardwave").join("DAW"));
+            search_roots.push(PathBuf::from(&pf86).join("Hardwave DAW"));
+        }
+        for root in &search_roots {
+            for name in DAW_EXE_CANDIDATES {
+                let direct = root.join(name);
+                if direct.exists() {
+                    return Ok(direct);
+                }
+            }
+            // One level deep — Tauri sometimes nests inside a versioned subdir.
+            if let Ok(entries) = std::fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if !p.is_dir() {
+                        continue;
+                    }
+                    for name in DAW_EXE_CANDIDATES {
+                        let candidate = p.join(name);
+                        if candidate.exists() {
+                            return Ok(candidate);
+                        }
                     }
                 }
             }
         }
-        Err(format!(
-            "Installer succeeded but {DAW_EXE_NAME} was not found under {}",
-            install_dir.display()
-        ))
+        // Soft-fail: install really did finish; we just couldn't find
+        // the exe to launch. Return the install_dir as the path so the
+        // Done screen can show "files installed at <path>" and offer a
+        // manual-launch link via the OS file explorer.
+        log::warn!(
+            "post-install probe could not locate Hardwave DAW.exe under any of {:?}; returning install_dir as best-effort path so the Done screen still works",
+            search_roots
+        );
+        Ok(install_dir.to_path_buf())
     }
     #[cfg(target_os = "macos")]
     {

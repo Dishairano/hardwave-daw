@@ -169,6 +169,31 @@ jobs:
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli@latest
 
+      # Pre-create the GitHub release if it doesn't exist yet. tauri-action
+      # auto-creates releases with the GITHUB_TOKEN, but during periods of
+      # parallel-run contention (e.g. v0.157.36 + v0.157.37 finalising
+      # together) the create-release REST call intermittently returns
+      # "Resource not accessible by integration". Creating the empty
+      # release upfront via gh CLI sidesteps this — every later
+      # tauri-action call only needs upload permission, which the token
+      # always has. Idempotent: `gh release view` first, only create when
+      # missing. Runs on every platform so a parallel-build race can't
+      # leave any matrix leg without a release to upload to.
+      - name: Pre-create GitHub release shell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "release ${{ github.ref_name }} already exists; skipping create"
+          else
+            gh release create "${{ github.ref_name }}" \
+              --repo "${{ github.repository }}" \
+              --title "Hardwave DAW ${{ github.ref_name }}" \
+              --notes "${{ needs.changelog.outputs.body }}" \
+              --prerelease
+          fi
+
       - name: Build Tauri app (Linux — with JACK)
         if: matrix.platform == 'ubuntu-22.04'
         uses: tauri-apps/tauri-action@v0

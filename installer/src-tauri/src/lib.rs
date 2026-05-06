@@ -145,21 +145,36 @@ fn cancel_install(state: State<'_, InstallState>) {
         .store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Launch the installed DAW at the given path.
+/// Launch the installed DAW at the given path. When `exe_path` resolves
+/// to a directory (the install succeeded but the post-install probe
+/// couldn't pin down the exact binary), we open the OS file manager at
+/// that location so the user can find + run the DAW manually instead
+/// of getting a generic "Launch failed".
 #[tauri::command]
 fn launch_installed(exe_path: String) -> Result<(), String> {
     let path = std::path::PathBuf::from(&exe_path);
     if !path.exists() {
-        return Err(format!("Executable not found: {exe_path}"));
+        return Err(format!("Path not found: {exe_path}"));
     }
+    let is_dir = path.is_dir();
+
     #[cfg(windows)]
     {
-        std::process::Command::new(&path)
-            .spawn()
-            .map_err(|e| format!("Launch failed: {e}"))?;
+        if is_dir {
+            // Open File Explorer at the install root.
+            std::process::Command::new("explorer")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("Could not open install folder: {e}"))?;
+        } else {
+            std::process::Command::new(&path)
+                .spawn()
+                .map_err(|e| format!("Launch failed: {e}"))?;
+        }
     }
     #[cfg(target_os = "macos")]
     {
+        // `open` works for both directories (Finder window) and .app bundles.
         std::process::Command::new("open")
             .arg(&path)
             .spawn()
@@ -167,9 +182,17 @@ fn launch_installed(exe_path: String) -> Result<(), String> {
     }
     #[cfg(all(not(windows), not(target_os = "macos")))]
     {
-        std::process::Command::new(&path)
-            .spawn()
-            .map_err(|e| format!("Launch failed: {e}"))?;
+        if is_dir {
+            // xdg-open handles directories on every desktop env.
+            std::process::Command::new("xdg-open")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("Could not open install folder: {e}"))?;
+        } else {
+            std::process::Command::new(&path)
+                .spawn()
+                .map_err(|e| format!("Launch failed: {e}"))?;
+        }
     }
     Ok(())
 }
