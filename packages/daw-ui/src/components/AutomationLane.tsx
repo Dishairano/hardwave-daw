@@ -18,7 +18,7 @@ import {
   type AutomationTargetInfo,
   useTrackStore,
 } from '../stores/trackStore'
-import { useTransportStore } from '../stores/transportStore'
+import { snapToTicks, useTransportStore } from '../stores/transportStore'
 
 const PPQ = 960
 
@@ -48,6 +48,8 @@ export function AutomationLane({ trackId, lane }: Props) {
   const deleteLane = useTrackStore(s => s.deleteAutomationLane)
   const horizontalZoom = useTransportStore(s => s.horizontalZoom)
   const trackHeight = useTransportStore(s => s.trackHeight)
+  const snapValue = useTransportStore(s => s.snapValue)
+  const snapEnabled = useTransportStore(s => s.snapEnabled)
   const bodyRef = useRef<HTMLDivElement | null>(null)
 
   // Drag state. We track which point is being dragged + its original
@@ -105,7 +107,9 @@ export function AutomationLane({ trackId, lane }: Props) {
     (value: number) => (1 - value) * trackHeight,
     [trackHeight],
   )
-  /** Inverse: a click at (clientX, clientY) → (tick, value). */
+  /** Inverse: a click at (clientX, clientY) → (tick, value). Snaps the
+   * tick to the playlist's current grid setting when snap is enabled,
+   * so points always land on bar/beat boundaries you can predict. */
   const eventToTickValue = useCallback(
     (e: { clientX: number; clientY: number }): { tick: number; value: number } | null => {
       const el = bodyRef.current
@@ -113,11 +117,15 @@ export function AutomationLane({ trackId, lane }: Props) {
       const r = el.getBoundingClientRect()
       const x = Math.max(0, e.clientX - r.left)
       const y = Math.max(0, Math.min(r.height, e.clientY - r.top))
-      const tick = Math.round((x / PX_PER_BAR) * TICKS_PER_BAR)
+      let tick = Math.round((x / PX_PER_BAR) * TICKS_PER_BAR)
+      const snap = snapToTicks(snapValue, snapEnabled)
+      if (snap > 0) {
+        tick = Math.round(tick / snap) * snap
+      }
       const value = 1 - y / r.height
       return { tick, value: Math.max(0, Math.min(1, value)) }
     },
-    [PX_PER_BAR, TICKS_PER_BAR],
+    [PX_PER_BAR, TICKS_PER_BAR, snapValue, snapEnabled],
   )
 
   // Build the SVG path connecting all points, treating the lane's
