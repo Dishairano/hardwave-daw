@@ -746,27 +746,36 @@
 }
 
 /* ─── Automation lane (under a track row) ─────────────────────── */
+/* The lane is rendered INSIDE the .fl-pl-tracks-list column (which is
+   only ~140px wide). To present the curve at the full playlist width
+   we let the lane absolutely-overflow out to the right; pointer-events
+   stay on this label container so we don't block clicks on the
+   playlist clips. */
 .fl-lane {
-  display: grid;
-  grid-template-columns: 168px 1fr;
+  display: flex;
+  width: 100%;
   border-bottom: 1px solid #0a0a0e;
   background: rgba(168, 85, 247, 0.04);
+  position: relative;
+  flex-shrink: 0;
 }
 .fl-lane .fl-lane-label {
   background: rgba(168, 85, 247, 0.07);
   border-right: 1px solid var(--border);
   box-shadow: inset 2px 0 0 0 var(--accent, #a855f7);
   display: grid;
-  grid-template-columns: 8px 1fr auto auto;
-  gap: 6px;
+  grid-template-columns: 6px 1fr auto auto;
+  gap: 4px;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 6px;
   font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 1.2px;
+  font-size: 8px;
+  letter-spacing: 0.8px;
   text-transform: uppercase;
   color: var(--accent, #a855f7);
   font-style: italic;
+  width: 100%;
+  flex-shrink: 0;
 }
 .fl-lane .fl-lane-label .led {
   width: 6px;
@@ -813,7 +822,15 @@
 }
 
 .fl-lane-body {
-  position: relative;
+  position: absolute;
+  /* Body extends from the right edge of the tracks-list column out
+     to the right edge of the playlist grid. We measure that
+     dynamically via inline style on the host so the rendered body
+     matches the playlist canvas width exactly. */
+  left: 100%;
+  top: 0;
+  bottom: 0;
+  width: var(--lane-body-w, 1200px);
   background:
     linear-gradient(to bottom, rgba(168, 85, 247, 0.10) 0%, rgba(168, 85, 247, 0) 100%),
     linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px);

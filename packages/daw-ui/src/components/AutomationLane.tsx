@@ -52,6 +52,24 @@ export function AutomationLane({ trackId, lane }: Props) {
   const snapValue = useTransportStore(s => s.snapValue)
   const snapEnabled = useTransportStore(s => s.snapEnabled)
   const bodyRef = useRef<HTMLDivElement | null>(null)
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  // Measure the playlist grid width dynamically so the lane body
+  // overlay extends across the full timeline. Re-measure on resize.
+  const [bodyWidth, setBodyWidth] = useState<number>(1200)
+  useEffect(() => {
+    const update = () => {
+      const grid = document.querySelector('.fl-pl-grid') as HTMLElement | null
+      const tracksList = document.querySelector('.fl-pl-tracks-list') as HTMLElement | null
+      if (!grid || !tracksList) return
+      // Body width = playlist grid width. Label sits over the
+      // tracks-list column so total horizontal coverage is the
+      // playlist body width.
+      setBodyWidth(grid.offsetWidth)
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [horizontalZoom])
 
   // Drag state. We track which point is being dragged + its original
   // tick/value so we can render a live preview without round-tripping
@@ -195,8 +213,9 @@ export function AutomationLane({ trackId, lane }: Props) {
 
   return (
     <div
+      ref={hostRef}
       className={`fl-lane${lane.visible ? '' : ' hidden'}`}
-      style={{ height: trackHeight }}
+      style={{ height: trackHeight, ['--lane-body-w' as any]: `${bodyWidth}px` }}
       data-lane-id={lane.id}
     >
       <div className="fl-lane-label">
