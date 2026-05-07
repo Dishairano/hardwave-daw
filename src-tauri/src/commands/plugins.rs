@@ -3,6 +3,7 @@ use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
 use hardwave_native_plugins::{
     NativeCompressor, NativeDelay, NativeDistortion, NativeEq, NativeFilter, NativeLimiter,
     NativeFmSynth, NativeMultiband, NativeReverb, NativeStereo, NativeTripleOsc,
+    NativeWavetable,
 };
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
@@ -40,6 +41,7 @@ fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlu
             id if id == NativeMultiband::ID => Ok(Box::new(NativeMultiband::new())),
             id if id == NativeTripleOsc::ID => Ok(Box::new(NativeTripleOsc::new())),
             id if id == NativeFmSynth::ID => Ok(Box::new(NativeFmSynth::new())),
+            id if id == NativeWavetable::ID => Ok(Box::new(NativeWavetable::new())),
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }
