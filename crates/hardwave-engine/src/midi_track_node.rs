@@ -99,6 +99,20 @@ pub struct MidiTrackNode {
     /// reads for audio tracks, so MIDI tracks light up the meter strip too.
     meter: Arc<TrackMeterState>,
     rms_smooth: f32,
+    /// Native instrument the track is voiced with. When set to
+    /// [`Instrument::KickSynth`] the built-in sine voicing below is
+    /// bypassed and each note-on retriggers the kick synth instead.
+    instrument: Instrument,
+    kick: hardwave_dsp::kick_synth::KickSynth,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Instrument {
+    /// Default — monosynth with sine osc + ADSR. Pitch-aware.
+    BuiltinSine,
+    /// Native KickSynth — every note-on retriggers the kick voice
+    /// regardless of MIDI pitch. Velocity scales the layer mix.
+    KickSynth,
 }
 
 impl MidiTrackNode {
@@ -115,6 +129,23 @@ impl MidiTrackNode {
             soloed: false,
             meter,
             rms_smooth: 0.0,
+            instrument: Instrument::BuiltinSine,
+            kick: hardwave_dsp::kick_synth::KickSynth::new(48_000.0),
+        }
+    }
+
+    /// Switch which native instrument voices this track. Cheap — flag
+    /// flip + reset of the relevant voice state. Audio thread sees the
+    /// change on the next block.
+    pub fn set_instrument(&mut self, kind: Instrument, sample_rate: f32) {
+        self.instrument = kind;
+        match kind {
+            Instrument::BuiltinSine => {
+                self.voice = None;
+            }
+            Instrument::KickSynth => {
+                self.kick = hardwave_dsp::kick_synth::KickSynth::new(sample_rate.max(1.0));
+            }
         }
     }
 
@@ -229,6 +260,19 @@ impl AudioNode for MidiTrackNode {
         let mut peak_r = 0.0_f32;
         let mut energy_acc = 0.0_f32;
 
+        // KickSynth voicing: render the entire block into a temp
+        // buffer up-front, then mix it in below. The sine voicing
+        // takes the per-sample path inside the loop. We split the
+        // L/R mixing per-sample so volume + pan still apply uniformly
+        // regardless of which instrument is active.
+        let mut kick_l: Vec<f32> = Vec::new();
+        let mut kick_r: Vec<f32> = Vec::new();
+        if matches!(self.instrument, Instrument::KickSynth) {
+            kick_l.resize(block_size, 0.0);
+            kick_r.resize(block_size, 0.0);
+            self.kick.render_into(&mut kick_l, &mut kick_r);
+        }
+
         // Skip notes that ended before the block starts. This fast-forwards
         // `next_note_idx` after a seek so we don't fire stale note-ons.
         while self.next_note_idx < self.notes.len()
@@ -246,19 +290,24 @@ impl AudioNode for MidiTrackNode {
             {
                 let note = &self.notes[self.next_note_idx];
                 if !note.muted {
-                    // Carry the previous voice's envelope value forward
-                    // into the new attack so a quick legato note-on
-                    // doesn't restart from silence and click. With pure
-                    // monophony, the new note takes over from wherever
-                    // the previous voice was in its envelope.
-                    let carry_gain = self.voice.as_ref().map(|v| v.env_value).unwrap_or(0.0);
-                    self.voice = Some(Voice {
-                        freq: pitch_to_freq(note.pitch),
-                        velocity: note.velocity.clamp(0.0, 1.0),
-                        phase: 0.0,
-                        stage: EnvStage::Attack,
-                        env_value: carry_gain,
-                    });
+                    match self.instrument {
+                        Instrument::BuiltinSine => {
+                            // Carry the previous voice's envelope
+                            // forward so legato re-triggers don't click.
+                            let carry_gain =
+                                self.voice.as_ref().map(|v| v.env_value).unwrap_or(0.0);
+                            self.voice = Some(Voice {
+                                freq: pitch_to_freq(note.pitch),
+                                velocity: note.velocity.clamp(0.0, 1.0),
+                                phase: 0.0,
+                                stage: EnvStage::Attack,
+                                env_value: carry_gain,
+                            });
+                        }
+                        Instrument::KickSynth => {
+                            self.kick.note_on(note.pitch, note.velocity);
+                        }
+                    }
                 }
                 self.next_note_idx += 1;
             }
@@ -280,26 +329,35 @@ impl AudioNode for MidiTrackNode {
             }
 
             // Sample the synth.
-            let sample = if let Some(v) = self.voice.as_mut() {
-                let env = Self::step_envelope(v, sr);
-                let osc = v.phase.sin();
-                v.phase += TWO_PI * v.freq / sr;
-                if v.phase >= TWO_PI {
-                    v.phase -= TWO_PI;
+            let (sample_l_raw, sample_r_raw) = match self.instrument {
+                Instrument::BuiltinSine => {
+                    let s = if let Some(v) = self.voice.as_mut() {
+                        let env = Self::step_envelope(v, sr);
+                        let osc = v.phase.sin();
+                        v.phase += TWO_PI * v.freq / sr;
+                        if v.phase >= TWO_PI {
+                            v.phase -= TWO_PI;
+                        }
+                        if matches!(v.stage, EnvStage::Idle) {
+                            self.voice = None;
+                            0.0
+                        } else {
+                            osc * env * v.velocity
+                        }
+                    } else {
+                        0.0
+                    };
+                    (s, s)
                 }
-                if matches!(v.stage, EnvStage::Idle) {
-                    self.voice = None;
-                    0.0
-                } else {
-                    osc * env * v.velocity
+                Instrument::KickSynth => {
+                    // Pre-rendered block — pull the i-th sample. Kick
+                    // is mono internally so L == R before pan.
+                    (kick_l[i], kick_r[i])
                 }
-            } else {
-                0.0
             };
 
-            let mixed = sample * self.volume;
-            let l = mixed * pan_l;
-            let r = mixed * pan_r;
+            let l = sample_l_raw * self.volume * pan_l;
+            let r = sample_r_raw * self.volume * pan_r;
 
             if let Some(buf) = outputs.get_mut(0) {
                 buf[i] = l;

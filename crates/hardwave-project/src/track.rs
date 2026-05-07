@@ -73,12 +73,29 @@ fn default_filter_resonance() -> f32 {
     0.0
 }
 
+/// Voicing for MIDI tracks. The audio thread looks at this in
+/// `MidiTrackNode` to decide whether to render the built-in sine
+/// monosynth or one of Hardwave's native instruments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeInstrument {
+    #[default]
+    BuiltinSine,
+    KickSynth,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
     pub name: String,
     pub kind: TrackKind,
     pub color: String,
+    /// Native instrument used by MIDI tracks. Audio / Bus / Master /
+    /// Automation tracks ignore this. Defaults to `BuiltinSine` so
+    /// projects without this field deserialize without changing
+    /// behavior.
+    #[serde(default)]
+    pub instrument: NativeInstrument,
 
     // Audio routing
     pub volume_db: f64,
@@ -148,6 +165,7 @@ impl Track {
             name,
             kind: TrackKind::Audio,
             color: "#7c3aed".into(),
+            instrument: NativeInstrument::default(),
             volume_db: 0.0,
             pan: 0.0,
             muted: false,

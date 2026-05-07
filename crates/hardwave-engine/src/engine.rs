@@ -1048,6 +1048,18 @@ impl EngineCallback {
                     track.muted || (any_soloed && !track.soloed && !track.solo_safe);
                 midi_node.set_muted(effective_mute_midi);
                 midi_node.set_soloed(track.soloed);
+                // Map the project's NativeInstrument enum to the
+                // engine's Instrument enum (they're separate so the
+                // engine doesn't take a project-crate dep cycle).
+                use crate::midi_track_node::Instrument as EngInstr;
+                use hardwave_project::track::NativeInstrument as ProjInstr;
+                midi_node.set_instrument(
+                    match track.instrument {
+                        ProjInstr::BuiltinSine => EngInstr::BuiltinSine,
+                        ProjInstr::KickSynth => EngInstr::KickSynth,
+                    },
+                    self.sample_rate as f32,
+                );
 
                 // Walk the clip placements and turn each MIDI note into a
                 // sample-positioned MidiNoteRegion. Tempo-map lookups happen

@@ -250,6 +250,36 @@ pub fn remove_track(state: State<AppState>, track_id: String) {
     engine.rebuild_graph();
 }
 
+/// Switch the native instrument that voices a MIDI track. Audio /
+/// Master / Bus tracks ignore this — the call is still safe (no-op).
+/// `kind` is the snake-case name of one of `NativeInstrument`'s
+/// variants: `"builtin_sine"` or `"kick_synth"`.
+#[tauri::command]
+pub fn set_track_instrument(
+    state: State<AppState>,
+    track_id: String,
+    kind: String,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        track.instrument = match kind.as_str() {
+            "kick_synth" | "kicksynth" => {
+                hardwave_project::track::NativeInstrument::KickSynth
+            }
+            "builtin_sine" | "sine" | _ => {
+                hardwave_project::track::NativeInstrument::BuiltinSine
+            }
+        };
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
 #[tauri::command]
 pub fn set_track_volume(state: State<AppState>, track_id: String, volume_db: f64) {
     state.engine.lock().snapshot_before_mutation();
