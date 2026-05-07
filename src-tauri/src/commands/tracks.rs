@@ -59,6 +59,26 @@ pub struct TrackInfo {
     /// Native instrument voicing for MIDI tracks. Snake-case to match
     /// the project's `NativeInstrument` discriminator.
     instrument: String,
+    /// Per-track KickSynth patch. Only meaningful when
+    /// `instrument == "kick_synth"`. Layers with `null` mean "use the
+    /// engine's hardstyle default for this layer".
+    #[serde(rename = "kickPatch")]
+    kick_patch: KickPatchInfo,
+}
+
+#[derive(Serialize)]
+pub struct KickPatchInfo {
+    pub layers: [Option<KickLayerPatchInfo>; 4],
+}
+
+#[derive(Serialize)]
+pub struct KickLayerPatchInfo {
+    pub peak_gain: f32,
+    pub length_secs: f32,
+    pub release_secs: f32,
+    pub sweep_start_hz: f32,
+    pub sweep_end_hz: f32,
+    pub sweep_secs: f32,
 }
 
 /// Wire format for an automation lane. Mirrors the project shape but
@@ -181,6 +201,42 @@ fn track_to_info(
         instrument: match t.instrument {
             hardwave_project::track::NativeInstrument::BuiltinSine => "builtin_sine".to_string(),
             hardwave_project::track::NativeInstrument::KickSynth => "kick_synth".to_string(),
+        },
+        kick_patch: KickPatchInfo {
+            layers: [
+                t.kick_patch.layers[0].map(|l| KickLayerPatchInfo {
+                    peak_gain: l.peak_gain,
+                    length_secs: l.length_secs,
+                    release_secs: l.release_secs,
+                    sweep_start_hz: l.sweep_start_hz,
+                    sweep_end_hz: l.sweep_end_hz,
+                    sweep_secs: l.sweep_secs,
+                }),
+                t.kick_patch.layers[1].map(|l| KickLayerPatchInfo {
+                    peak_gain: l.peak_gain,
+                    length_secs: l.length_secs,
+                    release_secs: l.release_secs,
+                    sweep_start_hz: l.sweep_start_hz,
+                    sweep_end_hz: l.sweep_end_hz,
+                    sweep_secs: l.sweep_secs,
+                }),
+                t.kick_patch.layers[2].map(|l| KickLayerPatchInfo {
+                    peak_gain: l.peak_gain,
+                    length_secs: l.length_secs,
+                    release_secs: l.release_secs,
+                    sweep_start_hz: l.sweep_start_hz,
+                    sweep_end_hz: l.sweep_end_hz,
+                    sweep_secs: l.sweep_secs,
+                }),
+                t.kick_patch.layers[3].map(|l| KickLayerPatchInfo {
+                    peak_gain: l.peak_gain,
+                    length_secs: l.length_secs,
+                    release_secs: l.release_secs,
+                    sweep_start_hz: l.sweep_start_hz,
+                    sweep_end_hz: l.sweep_end_hz,
+                    sweep_secs: l.sweep_secs,
+                }),
+            ],
         },
     }
 }

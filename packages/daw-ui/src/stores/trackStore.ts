@@ -67,6 +67,19 @@ export interface TrackInfo {
   /** Native voicing for MIDI tracks. `'sine'` is the default
    *  monosynth, `'kick_synth'` swaps in Hardwave's 4-layer kick. */
   instrument?: NativeInstrumentId
+  /** Per-track KickSynth layer patch. 4 layers, each may be null
+   *  meaning "use engine default for this layer". Only meaningful
+   *  when `instrument === 'kick_synth'`. */
+  kickPatch?: { layers: (KickLayerPatch | null)[] }
+}
+
+export interface KickLayerPatch {
+  peak_gain: number
+  length_secs: number
+  release_secs: number
+  sweep_start_hz: number
+  sweep_end_hz: number
+  sweep_secs: number
 }
 
 export type NativeInstrumentId = 'builtin_sine' | 'kick_synth'

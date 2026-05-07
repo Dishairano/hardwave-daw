@@ -20,6 +20,7 @@ import { PianoRoll } from './piano-roll/PianoRoll'
 import { MixerPanel } from './mixer/MixerPanel'
 import { HwTopMenu, type MenuDef } from './HwTopMenu'
 import { AutomationLane } from './AutomationLane'
+import { KickSynthEditor } from './KickSynthEditor'
 import type { AutomationTargetInfo } from '../stores/trackStore'
 import { useTransportStore } from '../stores/transportStore'
 import { useTrackStore } from '../stores/trackStore'
@@ -443,6 +444,10 @@ function HwPlaylistTracks() {
   const addAutomationLane = useTrackStore(s => s.addAutomationLane)
   const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
   const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
+  // Which track currently has its KickSynth editor open, if any.
+  // Editor pops up when the user double-clicks the instrument badge
+  // on a kick_synth-voiced track.
+  const [kickEditorTrack, setKickEditorTrack] = useState<string | null>(null)
   return (
     <div className="fl-pl-tracks">
       <div className="fl-pl-tracks-head">TRACKS</div>
@@ -464,6 +469,11 @@ function HwPlaylistTracks() {
                   trackId={t.id}
                   current={(t.instrument as any) || 'builtin_sine'}
                   onPick={setTrackInstrument}
+                  onOpenEditor={
+                    t.instrument === 'kick_synth'
+                      ? () => setKickEditorTrack(t.id)
+                      : undefined
+                  }
                 />
               )}
               <button
@@ -509,6 +519,17 @@ function HwPlaylistTracks() {
           )
         })}
       </div>
+      {kickEditorTrack && (() => {
+        const t = tracks.find(x => x.id === kickEditorTrack)
+        if (!t) return null
+        return (
+          <KickSynthEditor
+            trackId={t.id}
+            patchLayers={t.kickPatch?.layers ?? [null, null, null, null]}
+            onClose={() => setKickEditorTrack(null)}
+          />
+        )
+      })()}
     </div>
   )
 }
@@ -584,10 +605,14 @@ function HwInstrumentPicker({
   trackId,
   current,
   onPick,
+  onOpenEditor,
 }: {
   trackId: string
   current: import('../stores/trackStore').NativeInstrumentId
   onPick: (trackId: string, kind: import('../stores/trackStore').NativeInstrumentId) => Promise<void>
+  /** When set, double-clicking the badge opens the instrument's
+   *  per-track editor panel. Only wired for kick_synth right now. */
+  onOpenEditor?: () => void
 }) {
   const [open, setOpen] = useState(false)
   useEffect(() => {
@@ -603,7 +628,12 @@ function HwInstrumentPicker({
         type="button"
         className={`fl-tr-instr${current === 'kick_synth' ? ' kicksynth' : ''}`}
         onMouseDown={(e) => { e.stopPropagation(); setOpen(v => !v) }}
-        title={`Native instrument — currently ${currentLabel}`}
+        onDoubleClick={(e) => { e.stopPropagation(); setOpen(false); onOpenEditor?.() }}
+        title={
+          onOpenEditor
+            ? `${currentLabel} — click to switch · double-click to edit patch`
+            : `Native instrument — currently ${currentLabel}`
+        }
       >
         {currentLabel}
       </button>
