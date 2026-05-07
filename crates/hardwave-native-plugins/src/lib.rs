@@ -9,6 +9,7 @@ pub mod eq;
 pub mod filter;
 pub mod limiter;
 pub mod reverb;
+pub mod stereo;
 
 pub use compressor::NativeCompressor;
 pub use delay::NativeDelay;
@@ -17,6 +18,7 @@ pub use eq::NativeEq;
 pub use filter::NativeFilter;
 pub use limiter::NativeLimiter;
 pub use reverb::NativeReverb;
+pub use stereo::NativeStereo;
 
 use hardwave_plugin_host::types::PluginDescriptor;
 
@@ -29,6 +31,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeFilter::descriptor(),
         NativeDelay::descriptor(),
         NativeReverb::descriptor(),
+        NativeStereo::descriptor(),
     ]
 }
 
@@ -41,6 +44,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeFilter::ID,
         NativeDelay::ID,
         NativeReverb::ID,
+        NativeStereo::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
