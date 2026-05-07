@@ -1,11 +1,11 @@
 use crate::AppState;
 use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
 use hardwave_native_plugins::{
-    NativeAutoPan, NativeBitcrush, NativeChorus, NativeCompressor, NativeConvReverb, NativeDelay,
-    NativeDistortion, NativeEq, NativeFilter, NativeFlanger, NativeFmSynth, NativeGain, NativeGate,
-    NativeLimiter, NativeMidSide, NativeMultiband, NativeNoise, NativePhaser, NativeReverb,
-    NativeSaturator, NativeStereo, NativeSubBass, NativeTransient, NativeTremolo, NativeTripleOsc,
-    NativeVibrato, NativeWavetable,
+    NativeAutoPan, NativeBitcrush, NativeChorus, NativeClipper, NativeCompressor, NativeConvReverb,
+    NativeDelay, NativeDistortion, NativeEq, NativeExciter, NativeFilter, NativeFlanger,
+    NativeFmSynth, NativeGain, NativeGate, NativeLimiter, NativeMidSide, NativeMultiband,
+    NativeNoise, NativePhaser, NativeReverb, NativeSaturator, NativeStereo, NativeSubBass,
+    NativeTransient, NativeTremolo, NativeTripleOsc, NativeVibrato, NativeWavetable,
 };
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
@@ -59,6 +59,8 @@ fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlu
             id if id == NativeMidSide::ID => Ok(Box::new(NativeMidSide::new())),
             id if id == NativeGate::ID => Ok(Box::new(NativeGate::new())),
             id if id == NativeTransient::ID => Ok(Box::new(NativeTransient::new())),
+            id if id == NativeClipper::ID => Ok(Box::new(NativeClipper::new())),
+            id if id == NativeExciter::ID => Ok(Box::new(NativeExciter::new())),
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }

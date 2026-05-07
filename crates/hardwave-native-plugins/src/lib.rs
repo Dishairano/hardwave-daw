@@ -5,11 +5,13 @@
 pub mod auto_pan;
 pub mod bitcrush;
 pub mod chorus;
+pub mod clipper;
 pub mod compressor;
 pub mod conv_reverb;
 pub mod delay;
 pub mod distortion;
 pub mod eq;
+pub mod exciter;
 pub mod filter;
 pub mod flanger;
 pub mod fm;
@@ -33,11 +35,13 @@ pub mod wavetable;
 pub use auto_pan::NativeAutoPan;
 pub use bitcrush::NativeBitcrush;
 pub use chorus::NativeChorus;
+pub use clipper::NativeClipper;
 pub use compressor::NativeCompressor;
 pub use conv_reverb::NativeConvReverb;
 pub use delay::NativeDelay;
 pub use distortion::NativeDistortion;
 pub use eq::NativeEq;
+pub use exciter::NativeExciter;
 pub use filter::NativeFilter;
 pub use flanger::NativeFlanger;
 pub use fm::NativeFmSynth;
@@ -89,6 +93,8 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeMidSide::descriptor(),
         NativeGate::descriptor(),
         NativeTransient::descriptor(),
+        NativeClipper::descriptor(),
+        NativeExciter::descriptor(),
     ]
 }
 
@@ -121,6 +127,8 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeMidSide::ID,
         NativeGate::ID,
         NativeTransient::ID,
+        NativeClipper::ID,
+        NativeExciter::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
