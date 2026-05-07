@@ -8,6 +8,7 @@ import { DetachButton } from '../FloatingWindow'
 import { ParameterContextMenu } from '../ParameterContextMenu'
 import { SendsEditor } from './SendsEditor'
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 
 export function MixerPanel() {
   const {
@@ -1214,6 +1215,26 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                 <div style={{ fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', color: hw.textFaint }}>
                   {descriptor?.has_editor ? 'Parameters' : 'Generic parameters (no GUI)'}
                 </div>
+                {descriptor?.has_editor && (
+                  <button
+                    onClick={async () => {
+                      const label = `pluginEditor_${slot.id}`
+                      try {
+                        await invoke('open_plugin_editor', { pluginId: descriptor.id, windowLabel: label })
+                      } catch (err) {
+                        console.error('open_plugin_editor failed', err)
+                      }
+                    }}
+                    data-testid="plugin-window-open-gui"
+                    style={{
+                      padding: '6px 10px', fontSize: 10, fontWeight: 600, letterSpacing: 0.4,
+                      background: 'rgba(220, 38, 38, 0.18)',
+                      color: '#fff',
+                      border: '1px solid rgba(220, 38, 38, 0.5)',
+                      borderRadius: hw.radius.sm, cursor: 'pointer',
+                    }}
+                  >Open Plugin GUI</button>
+                )}
                 <button
                   onClick={async () => {
                     await setInsertEnabled(trackId, slot.id, !slot.enabled)
