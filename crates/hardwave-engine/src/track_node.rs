@@ -471,6 +471,10 @@ impl AudioNode for TrackNode {
             let tick = (beats * 960.0).max(0.0) as u64;
             let mut volume = self.static_volume;
             let mut pan = self.static_pan;
+            // Mute lanes can flip the running mute state mid-block;
+            // we treat values > 0.5 as muted so a step lane between
+            // 0.0 and 1.0 acts like a kill switch.
+            let mut mute_override: Option<bool> = None;
             for lane in &self.automation_lanes {
                 if !lane.visible {
                     continue;
@@ -487,16 +491,36 @@ impl AudioNode for TrackNode {
                         let v = lane.denormalized_value_at(tick, -1.0, 1.0);
                         pan = v as f32;
                     }
-                    _ => {
-                        // PluginParam / SendLevel / TrackMute targets
-                        // route through different machinery (insert
-                        // chain SetParameter, send matrix, mute flag);
-                        // wired in follow-up commits.
+                    AutomationTarget::TrackMute => {
+                        mute_override = Some(lane.value_at(tick) > 0.5);
+                    }
+                    AutomationTarget::PluginParam { slot_id, param_id } => {
+                        // Plug-in parameters are stored normalized 0..1
+                        // in the lane and the host expects the same
+                        // shape on the controller. Apply directly to
+                        // the chain so the next sample inside this
+                        // block already reflects the new value.
+                        let v = lane.value_at(tick);
+                        self.chain.set_parameter(slot_id, *param_id, v);
+                    }
+                    AutomationTarget::SendLevel { .. } => {
+                        // Send routing automation lands in a follow-up
+                        // commit: the send matrix lives outside
+                        // TrackNode (in the engine's send pass) and
+                        // needs its own value-cache plumbing.
                     }
                 }
             }
             self.volume = volume;
             self.pan = pan;
+            if let Some(m) = mute_override {
+                if m {
+                    // Don't permanently store muted=true so a deleted
+                    // lane immediately restores audio. Just early-exit
+                    // the block at silence.
+                    return;
+                }
+            }
         }
 
         // Mix in send inputs arriving at this track (return routing). Sends
