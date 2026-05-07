@@ -11,6 +11,7 @@ pub mod filter;
 pub mod fm;
 pub mod limiter;
 pub mod multiband;
+pub mod phaser;
 pub mod reverb;
 pub mod stereo;
 pub mod triple_osc;
@@ -25,6 +26,7 @@ pub use filter::NativeFilter;
 pub use fm::NativeFmSynth;
 pub use limiter::NativeLimiter;
 pub use multiband::NativeMultiband;
+pub use phaser::NativePhaser;
 pub use reverb::NativeReverb;
 pub use stereo::NativeStereo;
 pub use triple_osc::NativeTripleOsc;
@@ -47,6 +49,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeFmSynth::descriptor(),
         NativeWavetable::descriptor(),
         NativeChorus::descriptor(),
+        NativePhaser::descriptor(),
     ]
 }
 
@@ -65,6 +68,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeFmSynth::ID,
         NativeWavetable::ID,
         NativeChorus::ID,
+        NativePhaser::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
