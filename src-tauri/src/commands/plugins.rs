@@ -3,7 +3,7 @@ use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
 use hardwave_native_plugins::{
     NativeChorus, NativeCompressor, NativeConvReverb, NativeDelay, NativeDistortion, NativeEq,
     NativeFilter, NativeFmSynth, NativeLimiter, NativeMultiband, NativePhaser, NativeReverb,
-    NativeStereo, NativeTripleOsc, NativeWavetable,
+    NativeStereo, NativeTremolo, NativeTripleOsc, NativeWavetable,
 };
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
@@ -45,6 +45,7 @@ fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlu
             id if id == NativeChorus::ID => Ok(Box::new(NativeChorus::new())),
             id if id == NativePhaser::ID => Ok(Box::new(NativePhaser::new())),
             id if id == NativeConvReverb::ID => Ok(Box::new(NativeConvReverb::new())),
+            id if id == NativeTremolo::ID => Ok(Box::new(NativeTremolo::new())),
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }

@@ -15,6 +15,7 @@ pub mod multiband;
 pub mod phaser;
 pub mod reverb;
 pub mod stereo;
+pub mod tremolo;
 pub mod triple_osc;
 pub mod wavetable;
 
@@ -31,6 +32,7 @@ pub use multiband::NativeMultiband;
 pub use phaser::NativePhaser;
 pub use reverb::NativeReverb;
 pub use stereo::NativeStereo;
+pub use tremolo::NativeTremolo;
 pub use triple_osc::NativeTripleOsc;
 pub use wavetable::NativeWavetable;
 
@@ -53,6 +55,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeChorus::descriptor(),
         NativePhaser::descriptor(),
         NativeConvReverb::descriptor(),
+        NativeTremolo::descriptor(),
     ]
 }
 
@@ -73,6 +76,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeChorus::ID,
         NativePhaser::ID,
         NativeConvReverb::ID,
+        NativeTremolo::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
