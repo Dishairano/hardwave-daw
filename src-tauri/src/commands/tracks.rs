@@ -354,6 +354,57 @@ pub fn set_kick_layer(
     Ok(())
 }
 
+/// Apply a named KickSynth preset. The named layer set replaces the
+/// track's `kick_patch` wholesale. Names match
+/// `hardwave_dsp::kick_synth::PRESET_NAMES`. Returns `Ok(())` even
+/// when the preset name is unknown — the engine falls back to the
+/// default preset, matching `preset_layers`'s soft-fail.
+#[tauri::command]
+pub fn apply_kick_preset(
+    state: State<AppState>,
+    track_id: String,
+    preset_name: String,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    let layers = hardwave_dsp::kick_synth::preset_layers(&preset_name);
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        track.kick_patch.layers = [
+            Some(layer_to_patch(&layers[0])),
+            Some(layer_to_patch(&layers[1])),
+            Some(layer_to_patch(&layers[2])),
+            Some(layer_to_patch(&layers[3])),
+        ];
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// Returns the static list of available preset names so the UI can
+/// populate its dropdown without hard-coding the values.
+#[tauri::command]
+pub fn list_kick_presets() -> Vec<String> {
+    hardwave_dsp::kick_synth::PRESET_NAMES
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn layer_to_patch(l: &hardwave_dsp::kick_synth::Layer) -> hardwave_project::track::KickLayerPatch {
+    hardwave_project::track::KickLayerPatch {
+        peak_gain: l.envelope.peak_gain,
+        length_secs: l.envelope.length_secs,
+        release_secs: l.envelope.release_secs,
+        sweep_start_hz: l.sweep.start_hz,
+        sweep_end_hz: l.sweep.end_hz,
+        sweep_secs: l.sweep.sweep_secs,
+    }
+}
+
 /// Reset a track's KickSynth patch back to engine defaults.
 #[tauri::command]
 pub fn reset_kick_patch(

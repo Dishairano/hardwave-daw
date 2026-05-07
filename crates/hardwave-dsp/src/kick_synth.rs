@@ -198,6 +198,93 @@ fn soft_clip(x: f32) -> f32 {
     x.tanh()
 }
 
+/// Named preset bank. Each preset returns a full 4-layer setup the
+/// user can drop onto a KickSynth track in one click. The defaults
+/// below cover the core sub-genres of "harder styles" that Hardwave
+/// targets — adding more is a matter of appending to this list and
+/// the matching `apply_preset` arm.
+pub const PRESET_NAMES: &[&str] = &[
+    "Hardstyle Default",
+    "Frenchcore Punch",
+    "Rawphoric Long",
+    "Uptempo Tight",
+];
+
+/// Apply a named preset by overwriting all four layers. Unknown
+/// names fall back to the hardstyle default — easier than returning
+/// an error at this callsite.
+pub fn preset_layers(name: &str) -> [Layer; 4] {
+    match name {
+        "Frenchcore Punch" => [
+            // Tight bright transient
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.004, release_secs: 0.010, peak_gain: 0.40 },
+                sweep:    FrequencySweep { start_hz: 4500.0, end_hz: 800.0, sweep_secs: 0.004 },
+            },
+            // Punchy mid
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.020, release_secs: 0.025, peak_gain: 0.65 },
+                sweep:    FrequencySweep { start_hz: 280.0, end_hz: 80.0, sweep_secs: 0.020 },
+            },
+            // Short body — frenchcore is fast so kicks don't ring
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.090, release_secs: 0.080, peak_gain: 0.40 },
+                sweep:    FrequencySweep { start_hz: 70.0, end_hz: 55.0, sweep_secs: 0.090 },
+            },
+            // Minimal tail
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.180, release_secs: 0.140, peak_gain: 0.20 },
+                sweep:    FrequencySweep { start_hz: 38.0, end_hz: 35.0, sweep_secs: 0.180 },
+            },
+        ],
+        "Rawphoric Long" => [
+            // Dirty sweep
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.008, release_secs: 0.025, peak_gain: 0.35 },
+                sweep:    FrequencySweep { start_hz: 2400.0, end_hz: 400.0, sweep_secs: 0.008 },
+            },
+            // Heavy punch with wider sweep
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.040, release_secs: 0.080, peak_gain: 0.60 },
+                sweep:    FrequencySweep { start_hz: 180.0, end_hz: 55.0, sweep_secs: 0.040 },
+            },
+            // Long body — the rawphoric "ringing" feel
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.300, release_secs: 0.300, peak_gain: 0.50 },
+                sweep:    FrequencySweep { start_hz: 55.0, end_hz: 45.0, sweep_secs: 0.300 },
+            },
+            // Big sub tail
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.700, release_secs: 0.500, peak_gain: 0.40 },
+                sweep:    FrequencySweep { start_hz: 32.0, end_hz: 28.0, sweep_secs: 0.700 },
+            },
+        ],
+        "Uptempo Tight" => [
+            // Snappy click
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.003, release_secs: 0.008, peak_gain: 0.50 },
+                sweep:    FrequencySweep { start_hz: 5000.0, end_hz: 900.0, sweep_secs: 0.003 },
+            },
+            // Hard punch
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.018, release_secs: 0.022, peak_gain: 0.70 },
+                sweep:    FrequencySweep { start_hz: 320.0, end_hz: 70.0, sweep_secs: 0.018 },
+            },
+            // Short body for fast tempo (180+ BPM)
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.070, release_secs: 0.060, peak_gain: 0.45 },
+                sweep:    FrequencySweep { start_hz: 75.0, end_hz: 60.0, sweep_secs: 0.070 },
+            },
+            // Cut tail short
+            Layer {
+                envelope: LayerEnvelope { length_secs: 0.120, release_secs: 0.080, peak_gain: 0.25 },
+                sweep:    FrequencySweep { start_hz: 40.0, end_hz: 36.0, sweep_secs: 0.120 },
+            },
+        ],
+        _ => hardstyle_default_layers(),
+    }
+}
+
 /// Hard-coded "default Hardstyle" layer definitions. These are tuned
 /// to land on the right side of "punchy but not honky" and are good
 /// enough to be the first audible kick out of a fresh KickSynth.

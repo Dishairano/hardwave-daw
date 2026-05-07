@@ -10,7 +10,7 @@
  * Defaults shown when the project's `kick_patch` for that layer is
  * `None` mirror the engine's hard-coded hardstyle preset.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 
 const LAYER_NAMES = ['Transient', 'Punch', 'Bass', 'Tail'] as const
@@ -44,6 +44,19 @@ interface Props {
 
 export function KickSynthEditor({ trackId, patchLayers, onClose }: Props) {
   const [activeLayer, setActiveLayer] = useState<LayerIdx>(1) // Punch is the most-tweaked
+  const [presets, setPresets] = useState<string[]>([])
+  // Lazy-load the preset list once so we don't make every editor open
+  // hit the engine; the list is static for the lifetime of the app.
+  useEffect(() => {
+    let alive = true
+    invoke<string[]>('list_kick_presets').then(p => { if (alive) setPresets(p) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+
+  const applyPreset = async (name: string) => {
+    if (!name) return
+    await invoke('apply_kick_preset', { trackId, presetName: name })
+  }
 
   const effective: LayerPatch[] = useMemo(
     () => DEFAULT_LAYERS.map((d, i) => patchLayers[i] ?? d),
@@ -79,6 +92,21 @@ export function KickSynthEditor({ trackId, patchLayers, onClose }: Props) {
     <div className="fl-kick-editor" onMouseDown={(e) => e.stopPropagation()}>
       <div className="fl-kick-editor-head">
         <span className="title">KickSynth</span>
+        {presets.length > 0 && (
+          <select
+            className="preset"
+            defaultValue=""
+            onChange={(e) => {
+              const v = e.target.value
+              e.currentTarget.value = ''
+              applyPreset(v)
+            }}
+            title="Load a named preset — overwrites all layers"
+          >
+            <option value="" disabled>Preset…</option>
+            {presets.map(name => <option key={name} value={name}>{name}</option>)}
+          </select>
+        )}
         <button className="reset" type="button" onClick={reset} title="Reset to engine defaults">↺ Reset</button>
         <button className="close" type="button" onClick={onClose} title="Close editor">×</button>
       </div>

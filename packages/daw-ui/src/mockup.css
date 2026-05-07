@@ -811,6 +811,28 @@
   text-transform: uppercase;
   letter-spacing: 1px;
 }
+.fl-kick-editor-head .preset {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  outline: none;
+}
+.fl-kick-editor-head .preset:hover {
+  border-color: var(--brand);
+  color: #fff;
+}
+.fl-kick-editor-head .preset option {
+  background: #08080c;
+  color: var(--text);
+  text-transform: none;
+}
 .fl-kick-editor-head .reset:hover { color: var(--accent, #a855f7); border-color: rgba(168, 85, 247, 0.4); }
 .fl-kick-editor-head .close { width: 24px; padding: 3px; }
 .fl-kick-editor-head .close:hover { color: var(--brand-hover, #ef4444); border-color: rgba(220, 38, 38, 0.4); }
