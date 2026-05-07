@@ -3,7 +3,7 @@ use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
 use hardwave_native_plugins::{
     NativeAutoPan, NativeBitcrush, NativeChorus, NativeClipper, NativeCompressor, NativeConvReverb,
     NativeDelay, NativeDistortion, NativeEq, NativeExciter, NativeFilter, NativeFlanger,
-    NativeFmSynth, NativeGain, NativeGate, NativeLimiter, NativeMidSide, NativeMultiband,
+    NativeFmSynth, NativeGain, NativeGate, NativeLimiter, NativeMidSide, NativeMonoFold, NativeMultiband,
     NativeNoise, NativePhaser, NativeReverb, NativeSaturator, NativeSoundgoodizer, NativeStereo,
     NativeSubBass, NativeTape, NativeTransient, NativeTremolo, NativeTripleOsc, NativeVibrato,
     NativeWavetable,
@@ -64,6 +64,7 @@ fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlu
             id if id == NativeExciter::ID => Ok(Box::new(NativeExciter::new())),
             id if id == NativeTape::ID => Ok(Box::new(NativeTape::new())),
             id if id == NativeSoundgoodizer::ID => Ok(Box::new(NativeSoundgoodizer::new())),
+            id if id == NativeMonoFold::ID => Ok(Box::new(NativeMonoFold::new())),
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }

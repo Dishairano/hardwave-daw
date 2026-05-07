@@ -19,6 +19,7 @@ pub mod gain;
 pub mod gate;
 pub mod limiter;
 pub mod mid_side;
+pub mod mono_fold;
 pub mod multiband;
 pub mod noise;
 pub mod phaser;
@@ -51,6 +52,7 @@ pub use gain::NativeGain;
 pub use gate::NativeGate;
 pub use limiter::NativeLimiter;
 pub use mid_side::NativeMidSide;
+pub use mono_fold::NativeMonoFold;
 pub use multiband::NativeMultiband;
 pub use noise::NativeNoise;
 pub use phaser::NativePhaser;
@@ -101,6 +103,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeExciter::descriptor(),
         NativeTape::descriptor(),
         NativeSoundgoodizer::descriptor(),
+        NativeMonoFold::descriptor(),
     ]
 }
 
@@ -137,6 +140,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeExciter::ID,
         NativeTape::ID,
         NativeSoundgoodizer::ID,
+        NativeMonoFold::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
