@@ -3,21 +3,23 @@
 //! them alongside VST3 / CLAP plugins without an FFI roundtrip.
 
 pub mod compressor;
+pub mod delay;
 pub mod distortion;
 pub mod eq;
 pub mod filter;
 pub mod limiter;
+pub mod reverb;
 
 pub use compressor::NativeCompressor;
+pub use delay::NativeDelay;
 pub use distortion::NativeDistortion;
 pub use eq::NativeEq;
 pub use filter::NativeFilter;
 pub use limiter::NativeLimiter;
+pub use reverb::NativeReverb;
 
 use hardwave_plugin_host::types::PluginDescriptor;
 
-/// Return the catalog of native-plugin descriptors the scanner should
-/// register alongside external VST3 / CLAP scan results.
 pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
     vec![
         NativeEq::descriptor(),
@@ -25,14 +27,11 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeLimiter::descriptor(),
         NativeDistortion::descriptor(),
         NativeFilter::descriptor(),
+        NativeDelay::descriptor(),
+        NativeReverb::descriptor(),
     ]
 }
 
-/// Stable plugin ids — matches `PluginDescriptor::id`. Kept for
-/// backwards compatibility; the four prior webview-only plugins
-/// (analyser / loudlab / wettboi / kickforge) are still listed so the
-/// UI can reference them even before the webview host is wired into
-/// `native_plugin_descriptors`.
 pub fn native_plugin_ids() -> Vec<&'static str> {
     vec![
         NativeEq::ID,
@@ -40,6 +39,8 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeLimiter::ID,
         NativeDistortion::ID,
         NativeFilter::ID,
+        NativeDelay::ID,
+        NativeReverb::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
