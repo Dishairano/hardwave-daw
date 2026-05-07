@@ -24,6 +24,7 @@ pub mod multiband;
 pub mod noise;
 pub mod phaser;
 pub mod reverb;
+pub mod ring_mod;
 pub mod saturator;
 pub mod soundgoodizer;
 pub mod stereo;
@@ -57,6 +58,7 @@ pub use multiband::NativeMultiband;
 pub use noise::NativeNoise;
 pub use phaser::NativePhaser;
 pub use reverb::NativeReverb;
+pub use ring_mod::NativeRingMod;
 pub use saturator::NativeSaturator;
 pub use soundgoodizer::NativeSoundgoodizer;
 pub use stereo::NativeStereo;
@@ -104,6 +106,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeTape::descriptor(),
         NativeSoundgoodizer::descriptor(),
         NativeMonoFold::descriptor(),
+        NativeRingMod::descriptor(),
     ]
 }
 
@@ -141,6 +144,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeTape::ID,
         NativeSoundgoodizer::ID,
         NativeMonoFold::ID,
+        NativeRingMod::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
