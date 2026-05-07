@@ -3,10 +3,12 @@
 //! them alongside VST3 / CLAP plugins without an FFI roundtrip.
 
 pub mod compressor;
+pub mod distortion;
 pub mod eq;
 pub mod limiter;
 
 pub use compressor::NativeCompressor;
+pub use distortion::NativeDistortion;
 pub use eq::NativeEq;
 pub use limiter::NativeLimiter;
 
@@ -19,6 +21,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeEq::descriptor(),
         NativeCompressor::descriptor(),
         NativeLimiter::descriptor(),
+        NativeDistortion::descriptor(),
     ]
 }
 
@@ -32,6 +35,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeEq::ID,
         NativeCompressor::ID,
         NativeLimiter::ID,
+        NativeDistortion::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",

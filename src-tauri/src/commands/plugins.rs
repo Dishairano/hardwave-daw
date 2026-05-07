@@ -1,6 +1,6 @@
 use crate::AppState;
 use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
-use hardwave_native_plugins::{NativeCompressor, NativeEq, NativeLimiter};
+use hardwave_native_plugins::{NativeCompressor, NativeDistortion, NativeEq, NativeLimiter};
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
 use hardwave_plugin_host::{
@@ -29,6 +29,7 @@ fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlu
             id if id == NativeEq::ID => Ok(Box::new(NativeEq::new())),
             id if id == NativeCompressor::ID => Ok(Box::new(NativeCompressor::new())),
             id if id == NativeLimiter::ID => Ok(Box::new(NativeLimiter::new())),
+            id if id == NativeDistortion::ID => Ok(Box::new(NativeDistortion::new())),
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }
