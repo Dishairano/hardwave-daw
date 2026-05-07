@@ -17,6 +17,7 @@ pub mod fm_synth;
 pub mod gpu_buffers;
 pub mod granular;
 pub mod ir_library;
+pub mod kick_synth;
 pub mod latency;
 pub mod loudness;
 pub mod mastering;
