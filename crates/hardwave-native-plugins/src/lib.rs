@@ -15,6 +15,7 @@ pub mod flanger;
 pub mod fm;
 pub mod gain;
 pub mod limiter;
+pub mod mid_side;
 pub mod multiband;
 pub mod noise;
 pub mod phaser;
@@ -24,6 +25,7 @@ pub mod stereo;
 pub mod sub_bass;
 pub mod tremolo;
 pub mod triple_osc;
+pub mod vibrato;
 pub mod wavetable;
 
 pub use auto_pan::NativeAutoPan;
@@ -39,6 +41,7 @@ pub use flanger::NativeFlanger;
 pub use fm::NativeFmSynth;
 pub use gain::NativeGain;
 pub use limiter::NativeLimiter;
+pub use mid_side::NativeMidSide;
 pub use multiband::NativeMultiband;
 pub use noise::NativeNoise;
 pub use phaser::NativePhaser;
@@ -48,6 +51,7 @@ pub use stereo::NativeStereo;
 pub use sub_bass::NativeSubBass;
 pub use tremolo::NativeTremolo;
 pub use triple_osc::NativeTripleOsc;
+pub use vibrato::NativeVibrato;
 pub use wavetable::NativeWavetable;
 
 use hardwave_plugin_host::types::PluginDescriptor;
@@ -77,6 +81,8 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeSaturator::descriptor(),
         NativeNoise::descriptor(),
         NativeSubBass::descriptor(),
+        NativeVibrato::descriptor(),
+        NativeMidSide::descriptor(),
     ]
 }
 
@@ -105,6 +111,8 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeSaturator::ID,
         NativeNoise::ID,
         NativeSubBass::ID,
+        NativeVibrato::ID,
+        NativeMidSide::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
