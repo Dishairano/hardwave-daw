@@ -12,6 +12,7 @@
  * contract at /var/www/hardwave-app/automation-lane-mockup/.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import {
   type AutomationLaneInfo,
   type AutomationTargetInfo,
@@ -20,6 +21,20 @@ import {
 import { useTransportStore } from '../stores/transportStore'
 
 const PPQ = 960
+
+type CurveMode = 'linear' | 'bezier' | 'step' | 'stairs' | 'smooth_stairs'
+const CURVE_MODES: { id: CurveMode; label: string }[] = [
+  { id: 'linear',        label: 'Linear' },
+  { id: 'bezier',        label: 'Bezier' },
+  { id: 'step',          label: 'Step' },
+  { id: 'stairs',        label: 'Stairs' },
+  { id: 'smooth_stairs', label: 'Smooth Stairs' },
+]
+function curveFromBackend(s: string): CurveMode {
+  // Rust serializes via Debug ("Linear", "Bezier", ...); strip + lowercase.
+  const k = s.toLowerCase().replace(/\s+/g, '_')
+  return (CURVE_MODES.find(c => c.id === k)?.id) ?? 'linear'
+}
 
 interface Props {
   trackId: string
@@ -42,6 +57,36 @@ export function AutomationLane({ trackId, lane }: Props) {
     | { pointIndex: number; tick: number; value: number }
     | null
   >(null)
+
+  /** Right-click context menu state — anchored to the dot under the cursor. */
+  const [ctx, setCtx] = useState<
+    | { pointIndex: number; x: number; y: number }
+    | null
+  >(null)
+  // Close the menu if user clicks anywhere else.
+  useEffect(() => {
+    if (!ctx) return
+    const onAnyClick = () => setCtx(null)
+    window.addEventListener('mousedown', onAnyClick)
+    return () => window.removeEventListener('mousedown', onAnyClick)
+  }, [ctx])
+
+  const setCurve = useCallback(
+    async (pointIndex: number, mode: CurveMode) => {
+      // Use invoke directly — the store's helper would refetch tracks
+      // before we close the menu, leading to a tiny visual jitter.
+      await invoke('set_automation_point_curve', {
+        trackId,
+        laneId: lane.id,
+        pointIndex,
+        curve: mode,
+      })
+      // Refresh the lane snapshot after the curve change.
+      await useTrackStore.getState().fetchTracks()
+      setCtx(null)
+    },
+    [trackId, lane.id],
+  )
 
   const targetLabel = describeTarget(lane.target)
 
@@ -173,14 +218,56 @@ export function AutomationLane({ trackId, lane }: Props) {
               className={`fl-lane-dot${isDragging ? ' dragging' : ''}`}
               style={{ left, top }}
               onMouseDown={(e) => beginDrag(i, e)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const r = bodyRef.current?.getBoundingClientRect()
+                setCtx({
+                  pointIndex: i,
+                  x: e.clientX - (r?.left ?? 0),
+                  y: e.clientY - (r?.top ?? 0),
+                })
+              }}
               onDoubleClick={(e) => {
                 e.stopPropagation()
                 deletePoint(trackId, lane.id, i)
               }}
-              title={`tick ${tick} · value ${(value * 100).toFixed(0)}% · double-click to delete`}
+              title={`tick ${tick} · value ${(value * 100).toFixed(0)}% · ${p.curve} · right-click for curve modes · double-click to delete`}
             />
           )
         })}
+        {ctx && (
+          <div
+            className="fl-lane-ctx"
+            style={{ left: ctx.x, top: ctx.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {CURVE_MODES.map(m => {
+              const active = curveFromBackend(lane.points[ctx.pointIndex]?.curve ?? '') === m.id
+              return (
+                <div
+                  key={m.id}
+                  className={`item${active ? ' active' : ''}`}
+                  onClick={() => setCurve(ctx.pointIndex, m.id)}
+                >
+                  <span>{m.label}</span>
+                  <span className="check">{active ? '✓' : ''}</span>
+                </div>
+              )
+            })}
+            <div className="sep" />
+            <div
+              className="item danger"
+              onClick={() => {
+                deletePoint(trackId, lane.id, ctx.pointIndex)
+                setCtx(null)
+              }}
+            >
+              <span>Delete point</span>
+              <span className="kbd">Del</span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
