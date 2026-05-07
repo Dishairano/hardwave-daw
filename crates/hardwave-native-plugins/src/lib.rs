@@ -5,11 +5,13 @@
 pub mod compressor;
 pub mod distortion;
 pub mod eq;
+pub mod filter;
 pub mod limiter;
 
 pub use compressor::NativeCompressor;
 pub use distortion::NativeDistortion;
 pub use eq::NativeEq;
+pub use filter::NativeFilter;
 pub use limiter::NativeLimiter;
 
 use hardwave_plugin_host::types::PluginDescriptor;
@@ -22,6 +24,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeCompressor::descriptor(),
         NativeLimiter::descriptor(),
         NativeDistortion::descriptor(),
+        NativeFilter::descriptor(),
     ]
 }
 
@@ -36,6 +39,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeCompressor::ID,
         NativeLimiter::ID,
         NativeDistortion::ID,
+        NativeFilter::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
