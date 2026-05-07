@@ -24,6 +24,7 @@ pub mod noise;
 pub mod phaser;
 pub mod reverb;
 pub mod saturator;
+pub mod soundgoodizer;
 pub mod stereo;
 pub mod sub_bass;
 pub mod tape;
@@ -55,6 +56,7 @@ pub use noise::NativeNoise;
 pub use phaser::NativePhaser;
 pub use reverb::NativeReverb;
 pub use saturator::NativeSaturator;
+pub use soundgoodizer::NativeSoundgoodizer;
 pub use stereo::NativeStereo;
 pub use sub_bass::NativeSubBass;
 pub use tape::NativeTape;
@@ -98,6 +100,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeClipper::descriptor(),
         NativeExciter::descriptor(),
         NativeTape::descriptor(),
+        NativeSoundgoodizer::descriptor(),
     ]
 }
 
@@ -133,6 +136,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeClipper::ID,
         NativeExciter::ID,
         NativeTape::ID,
+        NativeSoundgoodizer::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
