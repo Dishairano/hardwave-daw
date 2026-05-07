@@ -16,6 +16,7 @@ pub mod fm;
 pub mod gain;
 pub mod limiter;
 pub mod multiband;
+pub mod noise;
 pub mod phaser;
 pub mod reverb;
 pub mod saturator;
@@ -38,6 +39,7 @@ pub use fm::NativeFmSynth;
 pub use gain::NativeGain;
 pub use limiter::NativeLimiter;
 pub use multiband::NativeMultiband;
+pub use noise::NativeNoise;
 pub use phaser::NativePhaser;
 pub use reverb::NativeReverb;
 pub use saturator::NativeSaturator;
@@ -71,6 +73,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeBitcrush::descriptor(),
         NativeGain::descriptor(),
         NativeSaturator::descriptor(),
+        NativeNoise::descriptor(),
     ]
 }
 
@@ -97,6 +100,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeBitcrush::ID,
         NativeGain::ID,
         NativeSaturator::ID,
+        NativeNoise::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
