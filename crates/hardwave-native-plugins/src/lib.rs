@@ -29,6 +29,7 @@ pub mod ring_mod;
 pub mod saturator;
 pub mod soundgoodizer;
 pub mod stereo;
+pub mod stereo_double;
 pub mod sub_bass;
 pub mod tape;
 pub mod transient;
@@ -64,6 +65,7 @@ pub use ring_mod::NativeRingMod;
 pub use saturator::NativeSaturator;
 pub use soundgoodizer::NativeSoundgoodizer;
 pub use stereo::NativeStereo;
+pub use stereo_double::NativeStereoDouble;
 pub use sub_bass::NativeSubBass;
 pub use tape::NativeTape;
 pub use transient::NativeTransient;
@@ -110,6 +112,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeMonoFold::descriptor(),
         NativeRingMod::descriptor(),
         NativeAutoFilter::descriptor(),
+        NativeStereoDouble::descriptor(),
     ]
 }
 
@@ -149,6 +152,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeMonoFold::ID,
         NativeRingMod::ID,
         NativeAutoFilter::ID,
+        NativeStereoDouble::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
