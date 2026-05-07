@@ -56,6 +56,9 @@ pub struct TrackInfo {
     /// track row. Lanes may be empty; an empty list means no automation.
     #[serde(rename = "automationLanes")]
     automation_lanes: Vec<AutomationLaneInfo>,
+    /// Native instrument voicing for MIDI tracks. Snake-case to match
+    /// the project's `NativeInstrument` discriminator.
+    instrument: String,
 }
 
 /// Wire format for an automation lane. Mirrors the project shape but
@@ -175,6 +178,10 @@ fn track_to_info(
                 visible: l.visible,
             })
             .collect(),
+        instrument: match t.instrument {
+            hardwave_project::track::NativeInstrument::BuiltinSine => "builtin_sine".to_string(),
+            hardwave_project::track::NativeInstrument::KickSynth => "kick_synth".to_string(),
+        },
     }
 }
 

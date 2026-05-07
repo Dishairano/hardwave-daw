@@ -64,7 +64,12 @@ export interface TrackInfo {
   insert_count: number
   inserts: InsertInfo[]
   automationLanes: AutomationLaneInfo[]
+  /** Native voicing for MIDI tracks. `'sine'` is the default
+   *  monosynth, `'kick_synth'` swaps in Hardwave's 4-layer kick. */
+  instrument?: NativeInstrumentId
 }
+
+export type NativeInstrumentId = 'builtin_sine' | 'kick_synth'
 
 export type AutomationTargetInfo =
   | { kind: 'track_volume' }
@@ -146,6 +151,9 @@ interface TrackState {
   setTrackOutputBus: (id: string, outputBus: string | null) => Promise<void>
   trackHeights: Record<string, number>
   setTrackHeight: (id: string, height: number) => void
+
+  // Native instrument selection (MIDI tracks only)
+  setTrackInstrument: (trackId: string, kind: NativeInstrumentId) => Promise<void>
 
   // Automation
   addAutomationLane: (trackId: string, target: AutomationTargetInfo) => Promise<string>
@@ -405,6 +413,11 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   trackHeights: {},
   setTrackHeight: (id, height) =>
     set(s => ({ trackHeights: { ...s.trackHeights, [id]: Math.max(14, Math.min(240, height)) } })),
+
+  setTrackInstrument: async (trackId, kind) => {
+    await invoke('set_track_instrument', { trackId, kind })
+    await get().fetchTracks()
+  },
 
   // ─── Automation ─────────────────────────────────────────────────
   // Each call mutates the project on the Rust side and triggers an

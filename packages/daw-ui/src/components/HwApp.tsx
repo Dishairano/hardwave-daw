@@ -441,12 +441,14 @@ function HwPlaylistTracks() {
   const tracks = useTrackStore(s => s.tracks)
   const toggleArm = useTrackStore(s => s.toggleArm)
   const addAutomationLane = useTrackStore(s => s.addAutomationLane)
+  const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
   const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
   return (
     <div className="fl-pl-tracks">
       <div className="fl-pl-tracks-head">TRACKS</div>
       <div className="fl-pl-tracks-list">
         {tracks.flatMap((t, i) => {
+          const isMidi = (t.kind || '').toLowerCase() === 'midi'
           const row = (
             <div
               key={t.id}
@@ -457,6 +459,13 @@ function HwPlaylistTracks() {
               <span className="num">{i + 1}</span>
               <span className="led off"></span>
               <span className="nm">{t.name}</span>
+              {isMidi && (
+                <HwInstrumentPicker
+                  trackId={t.id}
+                  current={(t.instrument as any) || 'builtin_sine'}
+                  onPick={setTrackInstrument}
+                />
+              )}
               <button
                 type="button"
                 className={`fl-tr-arm${t.armed ? ' on' : ''}`}
@@ -553,6 +562,64 @@ function HwAddLaneButton({
               }}
             >
               {t.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Instrument picker on a MIDI track row ──────────────────────────────────
+// Tiny inline dropdown that lets the user swap a MIDI track between the
+// default sine monosynth and Hardwave's KickSynth. New voicings land here
+// as we ship them.
+
+const NATIVE_INSTRUMENTS: { id: import('../stores/trackStore').NativeInstrumentId; label: string; abbr: string }[] = [
+  { id: 'builtin_sine', label: 'Sine (default)', abbr: 'SIN' },
+  { id: 'kick_synth',   label: 'KickSynth',      abbr: 'KIK' },
+]
+
+function HwInstrumentPicker({
+  trackId,
+  current,
+  onPick,
+}: {
+  trackId: string
+  current: import('../stores/trackStore').NativeInstrumentId
+  onPick: (trackId: string, kind: import('../stores/trackStore').NativeInstrumentId) => Promise<void>
+}) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [open])
+  const currentLabel = NATIVE_INSTRUMENTS.find(n => n.id === current)?.abbr ?? 'SIN'
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button"
+        className={`fl-tr-instr${current === 'kick_synth' ? ' kicksynth' : ''}`}
+        onMouseDown={(e) => { e.stopPropagation(); setOpen(v => !v) }}
+        title={`Native instrument — currently ${currentLabel}`}
+      >
+        {currentLabel}
+      </button>
+      {open && (
+        <div className="fl-tr-instr-pop" onMouseDown={(e) => e.stopPropagation()}>
+          {NATIVE_INSTRUMENTS.map(n => (
+            <div
+              key={n.id}
+              className={`item${n.id === current ? ' active' : ''}`}
+              onClick={async () => {
+                setOpen(false)
+                await onPick(trackId, n.id)
+              }}
+            >
+              <span>{n.label}</span>
+              {n.id === current && <span className="check">✓</span>}
             </div>
           ))}
         </div>

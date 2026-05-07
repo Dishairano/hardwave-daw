@@ -667,10 +667,11 @@
   height: var(--row-h, 56px);
   border-bottom: 1px solid #0a0a0e;
   display: grid;
-  /* num · LED · name · arm button. Last column auto-sized so the R badge
-     hugs the right edge of every track row. */
-  grid-template-columns: 22px 6px 1fr auto;
-  gap: 8px;
+  /* num · LED · name · [optional instrument badge] · arm button. The
+     name column flexes; the trailing two cells are auto-sized so the
+     instrument + R badges hug the right edge of every track row. */
+  grid-template-columns: 22px 6px 1fr auto auto;
+  gap: 6px;
   align-items: center;
   padding: 0 8px;
   font-family: var(--mono);
@@ -680,7 +681,7 @@
   cursor: pointer;
   flex-shrink: 0;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 .fl-tr.armed {
   background: rgba(220, 38, 38, 0.06);
@@ -709,6 +710,63 @@
   color: #fff;
   border-color: rgba(220, 38, 38, 0.4);
 }
+.fl-tr-instr {
+  width: 28px;
+  height: 14px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+}
+.fl-tr-instr:hover {
+  color: #fff;
+  border-color: rgba(168,85,247,.4);
+}
+.fl-tr-instr.kicksynth {
+  color: #fff;
+  background: rgba(168,85,247,.18);
+  border-color: rgba(168,85,247,.45);
+}
+.fl-tr-instr-pop {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 2px;
+  background: #07070a;
+  border: 1px solid var(--border-strong, rgba(255,255,255,.14));
+  border-radius: 4px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.6);
+  padding: 4px 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  letter-spacing: 0;
+  text-transform: none;
+  z-index: 50;
+  min-width: 160px;
+  cursor: default;
+}
+.fl-tr-instr-pop .item {
+  padding: 6px 12px;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+}
+.fl-tr-instr-pop .item:hover { background: rgba(168,85,247,.10); color: #fff; }
+.fl-tr-instr-pop .item.active { color: var(--accent, #a855f7); }
+.fl-tr-instr-pop .check { color: var(--accent, #a855f7); font-size: 10px; }
+
 .fl-tr-arm.on {
   color: #fff;
   background: var(--brand);
