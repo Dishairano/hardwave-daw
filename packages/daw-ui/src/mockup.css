@@ -757,7 +757,7 @@
   border-right: 1px solid var(--border);
   box-shadow: inset 2px 0 0 0 var(--accent, #a855f7);
   display: grid;
-  grid-template-columns: 8px 1fr auto;
+  grid-template-columns: 8px 1fr auto auto;
   gap: 6px;
   align-items: center;
   padding: 0 8px;
@@ -782,6 +782,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.fl-lane .fl-lane-label .vis,
 .fl-lane .fl-lane-label .del {
   width: 16px;
   height: 14px;
@@ -792,11 +793,23 @@
   line-height: 1;
   cursor: pointer;
   border-radius: 3px;
+  padding: 0;
+}
+.fl-lane .fl-lane-label .vis:hover {
+  color: var(--accent, #a855f7);
+  border-color: rgba(168, 85, 247, 0.4);
 }
 .fl-lane .fl-lane-label .del:hover {
   background: rgba(239, 68, 68, 0.15);
   color: var(--brand-hover, #ef4444);
   border-color: var(--brand-hover, #ef4444);
+}
+.fl-lane.hidden .fl-lane-svg path {
+  stroke-dasharray: 4 3;
+  opacity: 0.4;
+}
+.fl-lane.hidden .fl-lane-dot {
+  opacity: 0.4;
 }
 
 .fl-lane-body {

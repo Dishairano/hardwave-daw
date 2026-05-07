@@ -46,6 +46,7 @@ export function AutomationLane({ trackId, lane }: Props) {
   const movePoint = useTrackStore(s => s.moveAutomationPoint)
   const deletePoint = useTrackStore(s => s.deleteAutomationPoint)
   const deleteLane = useTrackStore(s => s.deleteAutomationLane)
+  const setVisible = useTrackStore(s => s.setAutomationLaneVisible)
   const horizontalZoom = useTransportStore(s => s.horizontalZoom)
   const trackHeight = useTransportStore(s => s.trackHeight)
   const snapValue = useTransportStore(s => s.snapValue)
@@ -193,10 +194,22 @@ export function AutomationLane({ trackId, lane }: Props) {
   }, [drag, trackId, lane.id, movePoint, eventToTickValue])
 
   return (
-    <div className="fl-lane" style={{ height: trackHeight }} data-lane-id={lane.id}>
+    <div
+      className={`fl-lane${lane.visible ? '' : ' hidden'}`}
+      style={{ height: trackHeight }}
+      data-lane-id={lane.id}
+    >
       <div className="fl-lane-label">
         <span className="led" />
         <span className="target">▾ {targetLabel}</span>
+        <button
+          type="button"
+          className="vis"
+          title={lane.visible ? 'Hide lane (bypass automation)' : 'Show lane (re-engage automation)'}
+          onClick={() => setVisible(trackId, lane.id, !lane.visible)}
+        >
+          {lane.visible ? '◉' : '◌'}
+        </button>
         <button
           type="button"
           className="del"
