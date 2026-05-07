@@ -2,9 +2,9 @@ use crate::AppState;
 use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
 use hardwave_native_plugins::{
     NativeAutoPan, NativeBitcrush, NativeChorus, NativeCompressor, NativeConvReverb, NativeDelay,
-    NativeDistortion, NativeEq, NativeFilter, NativeFlanger, NativeFmSynth, NativeLimiter,
-    NativeMultiband, NativePhaser, NativeReverb, NativeStereo, NativeTremolo, NativeTripleOsc,
-    NativeWavetable,
+    NativeDistortion, NativeEq, NativeFilter, NativeFlanger, NativeFmSynth, NativeGain,
+    NativeLimiter, NativeMultiband, NativePhaser, NativeReverb, NativeSaturator, NativeStereo,
+    NativeTremolo, NativeTripleOsc, NativeWavetable,
 };
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
@@ -50,6 +50,8 @@ fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlu
             id if id == NativeFlanger::ID => Ok(Box::new(NativeFlanger::new())),
             id if id == NativeAutoPan::ID => Ok(Box::new(NativeAutoPan::new())),
             id if id == NativeBitcrush::ID => Ok(Box::new(NativeBitcrush::new())),
+            id if id == NativeGain::ID => Ok(Box::new(NativeGain::new())),
+            id if id == NativeSaturator::ID => Ok(Box::new(NativeSaturator::new())),
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }

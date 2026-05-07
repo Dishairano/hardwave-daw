@@ -13,10 +13,12 @@ pub mod eq;
 pub mod filter;
 pub mod flanger;
 pub mod fm;
+pub mod gain;
 pub mod limiter;
 pub mod multiband;
 pub mod phaser;
 pub mod reverb;
+pub mod saturator;
 pub mod stereo;
 pub mod tremolo;
 pub mod triple_osc;
@@ -33,10 +35,12 @@ pub use eq::NativeEq;
 pub use filter::NativeFilter;
 pub use flanger::NativeFlanger;
 pub use fm::NativeFmSynth;
+pub use gain::NativeGain;
 pub use limiter::NativeLimiter;
 pub use multiband::NativeMultiband;
 pub use phaser::NativePhaser;
 pub use reverb::NativeReverb;
+pub use saturator::NativeSaturator;
 pub use stereo::NativeStereo;
 pub use tremolo::NativeTremolo;
 pub use triple_osc::NativeTripleOsc;
@@ -65,6 +69,8 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeFlanger::descriptor(),
         NativeAutoPan::descriptor(),
         NativeBitcrush::descriptor(),
+        NativeGain::descriptor(),
+        NativeSaturator::descriptor(),
     ]
 }
 
@@ -89,6 +95,8 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeFlanger::ID,
         NativeAutoPan::ID,
         NativeBitcrush::ID,
+        NativeGain::ID,
+        NativeSaturator::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
