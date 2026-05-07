@@ -21,6 +21,7 @@ pub mod phaser;
 pub mod reverb;
 pub mod saturator;
 pub mod stereo;
+pub mod sub_bass;
 pub mod tremolo;
 pub mod triple_osc;
 pub mod wavetable;
@@ -44,6 +45,7 @@ pub use phaser::NativePhaser;
 pub use reverb::NativeReverb;
 pub use saturator::NativeSaturator;
 pub use stereo::NativeStereo;
+pub use sub_bass::NativeSubBass;
 pub use tremolo::NativeTremolo;
 pub use triple_osc::NativeTripleOsc;
 pub use wavetable::NativeWavetable;
@@ -74,6 +76,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeGain::descriptor(),
         NativeSaturator::descriptor(),
         NativeNoise::descriptor(),
+        NativeSubBass::descriptor(),
     ]
 }
 
@@ -101,6 +104,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeGain::ID,
         NativeSaturator::ID,
         NativeNoise::ID,
+        NativeSubBass::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",

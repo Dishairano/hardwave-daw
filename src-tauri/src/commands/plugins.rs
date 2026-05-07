@@ -4,7 +4,7 @@ use hardwave_native_plugins::{
     NativeAutoPan, NativeBitcrush, NativeChorus, NativeCompressor, NativeConvReverb, NativeDelay,
     NativeDistortion, NativeEq, NativeFilter, NativeFlanger, NativeFmSynth, NativeGain,
     NativeLimiter, NativeMultiband, NativeNoise, NativePhaser, NativeReverb, NativeSaturator,
-    NativeStereo, NativeTremolo, NativeTripleOsc, NativeWavetable,
+    NativeStereo, NativeSubBass, NativeTremolo, NativeTripleOsc, NativeWavetable,
 };
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
@@ -53,6 +53,7 @@ fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlu
             id if id == NativeGain::ID => Ok(Box::new(NativeGain::new())),
             id if id == NativeSaturator::ID => Ok(Box::new(NativeSaturator::new())),
             id if id == NativeNoise::ID => Ok(Box::new(NativeNoise::new())),
+            id if id == NativeSubBass::ID => Ok(Box::new(NativeSubBass::new())),
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }
