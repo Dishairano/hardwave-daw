@@ -264,6 +264,15 @@ pub fn open_plugin_editor(
         }
     };
 
+    // If the same window label is already open (user clicked "Open
+    // Plugin GUI" twice on the same slot), focus the existing window
+    // instead of erroring on duplicate label.
+    if let Some(existing) = app.get_webview_window(&window_label) {
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return Ok(window_label);
+    }
+
     let url = tauri::WebviewUrl::App("about:blank".into());
     let editor_window = tauri::WebviewWindowBuilder::new(&app, &window_label, url)
         .title(format!("{} — Plugin Editor", descriptor.name))
