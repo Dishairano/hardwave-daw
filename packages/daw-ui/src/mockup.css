@@ -745,6 +745,123 @@
   text-overflow: ellipsis;
 }
 
+/* ─── Automation lane (under a track row) ─────────────────────── */
+.fl-lane {
+  display: grid;
+  grid-template-columns: 168px 1fr;
+  border-bottom: 1px solid #0a0a0e;
+  background: rgba(168, 85, 247, 0.04);
+}
+.fl-lane .fl-lane-label {
+  background: rgba(168, 85, 247, 0.07);
+  border-right: 1px solid var(--border);
+  box-shadow: inset 2px 0 0 0 var(--accent, #a855f7);
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  gap: 6px;
+  align-items: center;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--accent, #a855f7);
+  font-style: italic;
+}
+.fl-lane .fl-lane-label .led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #a855f7);
+  box-shadow: 0 0 6px var(--accent, #a855f7);
+}
+.fl-lane .fl-lane-label .target {
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fl-lane .fl-lane-label .del {
+  width: 16px;
+  height: 14px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.fl-lane .fl-lane-label .del:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--brand-hover, #ef4444);
+  border-color: var(--brand-hover, #ef4444);
+}
+
+.fl-lane-body {
+  position: relative;
+  background:
+    linear-gradient(to bottom, rgba(168, 85, 247, 0.10) 0%, rgba(168, 85, 247, 0) 100%),
+    linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 100% 100%, 24px 100%;
+  cursor: crosshair;
+  overflow: hidden;
+}
+.fl-lane-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.fl-lane-svg path {
+  fill: none;
+  stroke: var(--accent, #a855f7);
+  stroke-width: 1.5;
+}
+.fl-lane-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--accent, #a855f7);
+  border: 1.5px solid #fff;
+  cursor: grab;
+  z-index: 2;
+}
+.fl-lane-dot:hover { transform: scale(1.15); }
+.fl-lane-dot.dragging {
+  cursor: grabbing;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.4);
+}
+
+.fl-add-lane {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  background: rgba(168, 85, 247, 0.04);
+  border: none;
+  border-bottom: 1px solid #0a0a0e;
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--accent, #a855f7);
+  cursor: pointer;
+  width: 100%;
+  padding: 0;
+  transition: background 120ms;
+  grid-column: 1 / -1;
+}
+.fl-add-lane:hover {
+  background: rgba(168, 85, 247, 0.10);
+  color: #fff;
+}
+
 /* Empty placeholder rows fill the playlist out to PLAYLIST_TOTAL_SLOTS so
    the tracks column matches the grid's lane count visually. They keep the
    row height + striping but dim the slot number and disable hover. */

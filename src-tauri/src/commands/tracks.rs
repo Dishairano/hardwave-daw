@@ -51,6 +51,47 @@ pub struct TrackInfo {
     output_bus: Option<String>,
     insert_count: usize,
     inserts: Vec<InsertInfo>,
+    /// Automation lanes attached to this track. Surfaced to the UI so
+    /// the playlist can render a paarse curve strip directly under the
+    /// track row. Lanes may be empty; an empty list means no automation.
+    #[serde(rename = "automationLanes")]
+    automation_lanes: Vec<AutomationLaneInfo>,
+}
+
+/// Wire format for an automation lane. Mirrors the project shape but
+/// uses camelCase + a string-tagged enum so the TS side is ergonomic.
+#[derive(Serialize)]
+pub struct AutomationLaneInfo {
+    pub id: String,
+    pub target: AutomationTargetInfo,
+    pub points: Vec<AutomationPointInfo>,
+    pub visible: bool,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AutomationTargetInfo {
+    TrackVolume,
+    TrackPan,
+    TrackMute,
+    PluginParam {
+        #[serde(rename = "slotId")]
+        slot_id: String,
+        #[serde(rename = "paramId")]
+        param_id: u32,
+    },
+    SendLevel {
+        #[serde(rename = "sendIndex")]
+        send_index: usize,
+    },
+}
+
+#[derive(Serialize)]
+pub struct AutomationPointInfo {
+    pub tick: u64,
+    pub value: f64,
+    pub curve: String,
+    pub tension: f64,
 }
 
 fn track_to_info(
@@ -93,6 +134,47 @@ fn track_to_info(
         output_bus: t.output_bus.clone(),
         insert_count: t.inserts.len(),
         inserts,
+        automation_lanes: t
+            .automation_lanes
+            .iter()
+            .map(|l| AutomationLaneInfo {
+                id: l.id.clone(),
+                target: match &l.target {
+                    hardwave_project::automation::AutomationTarget::TrackVolume => {
+                        AutomationTargetInfo::TrackVolume
+                    }
+                    hardwave_project::automation::AutomationTarget::TrackPan => {
+                        AutomationTargetInfo::TrackPan
+                    }
+                    hardwave_project::automation::AutomationTarget::TrackMute => {
+                        AutomationTargetInfo::TrackMute
+                    }
+                    hardwave_project::automation::AutomationTarget::PluginParam {
+                        slot_id,
+                        param_id,
+                    } => AutomationTargetInfo::PluginParam {
+                        slot_id: slot_id.clone(),
+                        param_id: *param_id,
+                    },
+                    hardwave_project::automation::AutomationTarget::SendLevel { send_index } => {
+                        AutomationTargetInfo::SendLevel {
+                            send_index: *send_index,
+                        }
+                    }
+                },
+                points: l
+                    .points
+                    .iter()
+                    .map(|p| AutomationPointInfo {
+                        tick: p.tick,
+                        value: p.value,
+                        curve: format!("{:?}", p.curve),
+                        tension: p.tension,
+                    })
+                    .collect(),
+                visible: l.visible,
+            })
+            .collect(),
     }
 }
 

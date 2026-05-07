@@ -112,6 +112,14 @@ pub fn run() {
             commands::transport::set_time_signature,
             commands::transport::set_pattern_mode,
             commands::transport::get_transport_state,
+            // Automation
+            commands::automation::add_automation_lane,
+            commands::automation::delete_automation_lane,
+            commands::automation::add_automation_point,
+            commands::automation::move_automation_point,
+            commands::automation::delete_automation_point,
+            commands::automation::set_automation_point_curve,
+            commands::automation::set_automation_lane_visible,
             // Tracks
             commands::tracks::get_tracks,
             commands::tracks::add_audio_track,

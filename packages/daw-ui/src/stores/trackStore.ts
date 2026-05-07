@@ -63,6 +63,28 @@ export interface TrackInfo {
   outputBus: string | null
   insert_count: number
   inserts: InsertInfo[]
+  automationLanes: AutomationLaneInfo[]
+}
+
+export type AutomationTargetInfo =
+  | { kind: 'track_volume' }
+  | { kind: 'track_pan' }
+  | { kind: 'track_mute' }
+  | { kind: 'plugin_param'; slotId: string; paramId: number }
+  | { kind: 'send_level'; sendIndex: number }
+
+export interface AutomationPointInfo {
+  tick: number
+  value: number
+  curve: string
+  tension: number
+}
+
+export interface AutomationLaneInfo {
+  id: string
+  target: AutomationTargetInfo
+  points: AutomationPointInfo[]
+  visible: boolean
 }
 
 export interface TrackWithClips extends TrackInfo {
@@ -124,6 +146,14 @@ interface TrackState {
   setTrackOutputBus: (id: string, outputBus: string | null) => Promise<void>
   trackHeights: Record<string, number>
   setTrackHeight: (id: string, height: number) => void
+
+  // Automation
+  addAutomationLane: (trackId: string, target: AutomationTargetInfo) => Promise<string>
+  deleteAutomationLane: (trackId: string, laneId: string) => Promise<void>
+  addAutomationPoint: (trackId: string, laneId: string, tick: number, value: number) => Promise<number>
+  moveAutomationPoint: (trackId: string, laneId: string, pointIndex: number, tick: number, value: number) => Promise<number>
+  deleteAutomationPoint: (trackId: string, laneId: string, pointIndex: number) => Promise<void>
+  setAutomationLaneVisible: (trackId: string, laneId: string, visible: boolean) => Promise<void>
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
   moveClip: (trackId: string, clipId: string, newPositionTicks: number) => Promise<void>
   resizeClip: (trackId: string, clipId: string, newLengthTicks: number) => Promise<void>
@@ -375,6 +405,40 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   trackHeights: {},
   setTrackHeight: (id, height) =>
     set(s => ({ trackHeights: { ...s.trackHeights, [id]: Math.max(14, Math.min(240, height)) } })),
+
+  // ─── Automation ─────────────────────────────────────────────────
+  // Each call mutates the project on the Rust side and triggers an
+  // engine rebuild; we then refetch tracks to pick up the new lane
+  // / point shape. Mutations are rare (one click per gesture), so the
+  // round-trip is fine — drag-move calls are coalesced UI-side
+  // before they hit invoke().
+  addAutomationLane: async (trackId, target) => {
+    const id = await invoke<string>('add_automation_lane', { trackId, target })
+    await get().fetchTracks()
+    return id
+  },
+  deleteAutomationLane: async (trackId, laneId) => {
+    await invoke('delete_automation_lane', { trackId, laneId })
+    await get().fetchTracks()
+  },
+  addAutomationPoint: async (trackId, laneId, tick, value) => {
+    const idx = await invoke<number>('add_automation_point', { trackId, laneId, tick, value })
+    await get().fetchTracks()
+    return idx
+  },
+  moveAutomationPoint: async (trackId, laneId, pointIndex, tick, value) => {
+    const idx = await invoke<number>('move_automation_point', { trackId, laneId, pointIndex, tick, value })
+    await get().fetchTracks()
+    return idx
+  },
+  deleteAutomationPoint: async (trackId, laneId, pointIndex) => {
+    await invoke('delete_automation_point', { trackId, laneId, pointIndex })
+    await get().fetchTracks()
+  },
+  setAutomationLaneVisible: async (trackId, laneId, visible) => {
+    await invoke('set_automation_lane_visible', { trackId, laneId, visible })
+    await get().fetchTracks()
+  },
 
   importAudioFile: async (trackId, filePath, positionTicks) => {
     try {

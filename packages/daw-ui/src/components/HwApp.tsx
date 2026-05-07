@@ -19,6 +19,7 @@ import { ChannelRack } from './channelrack/ChannelRack'
 import { PianoRoll } from './piano-roll/PianoRoll'
 import { MixerPanel } from './mixer/MixerPanel'
 import { HwTopMenu, type MenuDef } from './HwTopMenu'
+import { AutomationLane } from './AutomationLane'
 import { useTransportStore } from '../stores/transportStore'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
@@ -437,32 +438,54 @@ const PLAYLIST_TOTAL_SLOTS = 500
 function HwPlaylistTracks() {
   const tracks = useTrackStore(s => s.tracks)
   const toggleArm = useTrackStore(s => s.toggleArm)
+  const addAutomationLane = useTrackStore(s => s.addAutomationLane)
   const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
   return (
     <div className="fl-pl-tracks">
       <div className="fl-pl-tracks-head">TRACKS</div>
       <div className="fl-pl-tracks-list">
-        {tracks.map((t, i) => (
-          <div
-            key={t.id}
-            className={`fl-tr${t.armed ? ' armed' : ''}`}
-            style={{ ['--track-color' as any]: t.color || '#06b6d4' }}
-            title={t.name}
-          >
-            <span className="num">{i + 1}</span>
-            <span className="led off"></span>
-            <span className="nm">{t.name}</span>
-            <button
-              type="button"
-              className={`fl-tr-arm${t.armed ? ' on' : ''}`}
-              onClick={(e) => { e.stopPropagation(); toggleArm(t.id) }}
-              title={t.armed ? 'Track armed — click to disarm' : 'Arm for recording'}
-              aria-label={t.armed ? `Disarm ${t.name}` : `Arm ${t.name} for recording`}
+        {tracks.flatMap((t, i) => {
+          const row = (
+            <div
+              key={t.id}
+              className={`fl-tr${t.armed ? ' armed' : ''}`}
+              style={{ ['--track-color' as any]: t.color || '#06b6d4' }}
+              title={t.name}
             >
-              R
+              <span className="num">{i + 1}</span>
+              <span className="led off"></span>
+              <span className="nm">{t.name}</span>
+              <button
+                type="button"
+                className={`fl-tr-arm${t.armed ? ' on' : ''}`}
+                onClick={(e) => { e.stopPropagation(); toggleArm(t.id) }}
+                title={t.armed ? 'Track armed — click to disarm' : 'Arm for recording'}
+                aria-label={t.armed ? `Disarm ${t.name}` : `Arm ${t.name} for recording`}
+              >
+                R
+              </button>
+            </div>
+          )
+          // Render the track's automation lanes directly under it.
+          // Phase 1 ships volume + pan; future commits expose plugin-
+          // param targets through the (currently hard-coded volume)
+          // add-lane button.
+          const laneRows = t.automationLanes.map(lane => (
+            <AutomationLane key={lane.id} trackId={t.id} lane={lane} />
+          ))
+          const addLane = (
+            <button
+              key={`addlane-${t.id}`}
+              type="button"
+              className="fl-add-lane"
+              onClick={() => addAutomationLane(t.id, { kind: 'track_volume' })}
+              title="Add a volume automation lane to this track"
+            >
+              + Automation lane
             </button>
-          </div>
-        ))}
+          )
+          return [row, ...laneRows, addLane]
+        })}
         {Array.from({ length: placeholderCount }, (_, i) => {
           const slotNum = tracks.length + i + 1
           return (

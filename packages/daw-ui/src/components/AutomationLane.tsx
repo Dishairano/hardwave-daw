@@ -1,0 +1,197 @@
+/*
+ * AutomationLane — paarse curve-strip rendered direct under the track
+ * row inside the playlist. Phase 1 of the automation UI rollout:
+ *  - reads `track.automationLanes` from the track store
+ *  - draws the curve as an SVG path scaled to the lane's pixel width
+ *  - dubbel-click op de lijn voegt een nieuw punt toe (mid-value)
+ *  - drag op een punt = move (commit op mouseup)
+ *  - delete-knop in de lane label verwijdert hem
+ *
+ * Stays narrow on purpose. Curve modes, target picker, snap, and
+ * plugin-param target ship in follow-up commits per the mockup
+ * contract at /var/www/hardwave-app/automation-lane-mockup/.
+ */
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  type AutomationLaneInfo,
+  type AutomationTargetInfo,
+  useTrackStore,
+} from '../stores/trackStore'
+import { useTransportStore } from '../stores/transportStore'
+
+const PPQ = 960
+
+interface Props {
+  trackId: string
+  lane: AutomationLaneInfo
+}
+
+export function AutomationLane({ trackId, lane }: Props) {
+  const addPoint = useTrackStore(s => s.addAutomationPoint)
+  const movePoint = useTrackStore(s => s.moveAutomationPoint)
+  const deletePoint = useTrackStore(s => s.deleteAutomationPoint)
+  const deleteLane = useTrackStore(s => s.deleteAutomationLane)
+  const horizontalZoom = useTransportStore(s => s.horizontalZoom)
+  const trackHeight = useTransportStore(s => s.trackHeight)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+
+  // Drag state. We track which point is being dragged + its original
+  // tick/value so we can render a live preview without round-tripping
+  // through the store on every mousemove.
+  const [drag, setDrag] = useState<
+    | { pointIndex: number; tick: number; value: number }
+    | null
+  >(null)
+
+  const targetLabel = describeTarget(lane.target)
+
+  // Visible bars on the playlist — must match the playlist's own
+  // horizontal mapping. The playlist uses 96px per bar at zoom 1.0.
+  const PX_PER_BAR = 96 * horizontalZoom
+  const TICKS_PER_BAR = PPQ * 4
+
+  /** Convert a tick to an x pixel inside this lane's body. */
+  const tickToX = useCallback(
+    (tick: number) => (tick / TICKS_PER_BAR) * PX_PER_BAR,
+    [PX_PER_BAR, TICKS_PER_BAR],
+  )
+  /** Convert a normalized value (0..1) to a y pixel. y=0 top means value=1. */
+  const valueToY = useCallback(
+    (value: number) => (1 - value) * trackHeight,
+    [trackHeight],
+  )
+  /** Inverse: a click at (clientX, clientY) → (tick, value). */
+  const eventToTickValue = useCallback(
+    (e: { clientX: number; clientY: number }): { tick: number; value: number } | null => {
+      const el = bodyRef.current
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      const x = Math.max(0, e.clientX - r.left)
+      const y = Math.max(0, Math.min(r.height, e.clientY - r.top))
+      const tick = Math.round((x / PX_PER_BAR) * TICKS_PER_BAR)
+      const value = 1 - y / r.height
+      return { tick, value: Math.max(0, Math.min(1, value)) }
+    },
+    [PX_PER_BAR, TICKS_PER_BAR],
+  )
+
+  // Build the SVG path connecting all points, treating the lane's
+  // horizontal extent as the viewport. Empty / single-point lanes get
+  // a flat line at the (only) value or the default 0.5.
+  const pathD = useCallback(() => {
+    if (lane.points.length === 0) return ''
+    if (lane.points.length === 1) {
+      const x = tickToX(lane.points[0].tick)
+      const y = valueToY(lane.points[0].value)
+      return `M0,${y} L${x},${y}`
+    }
+    let d = ''
+    lane.points.forEach((p, i) => {
+      const x = tickToX(p.tick)
+      const y = valueToY(p.value)
+      d += i === 0 ? `M${x},${y}` : ` L${x},${y}`
+    })
+    return d
+  }, [lane.points, tickToX, valueToY])
+
+  /** Double-click on empty lane area → insert a new point there. */
+  const onLaneDoubleClick = useCallback(
+    async (e: React.MouseEvent<HTMLDivElement>) => {
+      // Bail if the click landed on a dot — its handler manages this.
+      if ((e.target as HTMLElement).classList.contains('fl-lane-dot')) return
+      const tv = eventToTickValue(e)
+      if (!tv) return
+      await addPoint(trackId, lane.id, tv.tick, tv.value)
+    },
+    [trackId, lane.id, addPoint, eventToTickValue],
+  )
+
+  /** Drag a single point. */
+  const beginDrag = useCallback(
+    (idx: number, e: React.MouseEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setDrag({ pointIndex: idx, tick: lane.points[idx].tick, value: lane.points[idx].value })
+    },
+    [lane.points],
+  )
+
+  useEffect(() => {
+    if (drag === null) return
+    const onMove = (e: MouseEvent) => {
+      const tv = eventToTickValue(e)
+      if (!tv) return
+      setDrag(prev => (prev ? { ...prev, tick: tv.tick, value: tv.value } : prev))
+    }
+    const onUp = async () => {
+      // Commit the final tick/value. Drag may have crossed neighbouring
+      // points, so the new index can differ from the original.
+      if (drag) {
+        await movePoint(trackId, lane.id, drag.pointIndex, drag.tick, drag.value)
+      }
+      setDrag(null)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [drag, trackId, lane.id, movePoint, eventToTickValue])
+
+  return (
+    <div className="fl-lane" style={{ height: trackHeight }} data-lane-id={lane.id}>
+      <div className="fl-lane-label">
+        <span className="led" />
+        <span className="target">▾ {targetLabel}</span>
+        <button
+          type="button"
+          className="del"
+          title="Delete automation lane"
+          onClick={() => deleteLane(trackId, lane.id)}
+        >
+          ×
+        </button>
+      </div>
+      <div
+        ref={bodyRef}
+        className="fl-lane-body"
+        onDoubleClick={onLaneDoubleClick}
+      >
+        <svg className="fl-lane-svg" preserveAspectRatio="none">
+          <path d={pathD()} />
+        </svg>
+        {lane.points.map((p, i) => {
+          const isDragging = drag?.pointIndex === i
+          const tick = isDragging ? drag!.tick : p.tick
+          const value = isDragging ? drag!.value : p.value
+          const left = tickToX(tick)
+          const top = valueToY(value)
+          return (
+            <div
+              key={i}
+              className={`fl-lane-dot${isDragging ? ' dragging' : ''}`}
+              style={{ left, top }}
+              onMouseDown={(e) => beginDrag(i, e)}
+              onDoubleClick={(e) => {
+                e.stopPropagation()
+                deletePoint(trackId, lane.id, i)
+              }}
+              title={`tick ${tick} · value ${(value * 100).toFixed(0)}% · double-click to delete`}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function describeTarget(t: AutomationTargetInfo): string {
+  switch (t.kind) {
+    case 'track_volume': return 'VOLUME'
+    case 'track_pan':    return 'PAN'
+    case 'track_mute':   return 'MUTE'
+    case 'plugin_param': return `PLUGIN ${t.paramId}`
+    case 'send_level':   return `SEND ${t.sendIndex}`
+  }
+}
