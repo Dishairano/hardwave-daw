@@ -2,6 +2,7 @@
 //! primitives in the `HostedPlugin` trait so the audio engine can host
 //! them alongside VST3 / CLAP plugins without an FFI roundtrip.
 
+pub mod chorus;
 pub mod compressor;
 pub mod delay;
 pub mod distortion;
@@ -15,6 +16,7 @@ pub mod stereo;
 pub mod triple_osc;
 pub mod wavetable;
 
+pub use chorus::NativeChorus;
 pub use compressor::NativeCompressor;
 pub use delay::NativeDelay;
 pub use distortion::NativeDistortion;
@@ -44,6 +46,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeTripleOsc::descriptor(),
         NativeFmSynth::descriptor(),
         NativeWavetable::descriptor(),
+        NativeChorus::descriptor(),
     ]
 }
 
@@ -61,6 +64,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeTripleOsc::ID,
         NativeFmSynth::ID,
         NativeWavetable::ID,
+        NativeChorus::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
