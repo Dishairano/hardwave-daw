@@ -121,7 +121,7 @@ struct Vst3Inner {
     /// with the GUI's display state. Without this, knob movements in
     /// the floating editor window were silent — the host never heard
     /// about them and the live audio kept rendering from stale values.
-    pending_params: Arc<Mutex<Vec<(ParamID, ParamValue)>>>,
+    pending_params: Arc<Mutex<Vec<(u32, f64)>>>,
     /// Holds the IComponentHandler ComWrapper alive for the lifetime
     /// of the plugin instance. Dropping the wrapper would invalidate
     /// the pointer the controller still holds.
@@ -137,7 +137,7 @@ struct Vst3Inner {
 /// `controller.setParamNormalized` so the audio side hears the change
 /// on the next block.
 struct HardwaveComponentHandler {
-    pending: Arc<Mutex<Vec<(ParamID, ParamValue)>>>,
+    pending: Arc<Mutex<Vec<(u32, f64)>>>,
 }
 
 impl vst3::Class for HardwaveComponentHandler {
@@ -156,6 +156,8 @@ impl IComponentHandlerTrait for HardwaveComponentHandler {
         // Capture the change for the audio thread. We try_lock to keep
         // GUI events non-blocking; if the audio thread is mid-drain we
         // skip this notification — the next move re-fires it.
+        let id = id as u32;
+        let value = value as f64;
         if let Some(mut q) = self.pending.try_lock() {
             // De-dupe consecutive edits on the same param so a fast
             // knob spin doesn't queue a thousand intermediate values.
@@ -175,6 +177,25 @@ impl IComponentHandlerTrait for HardwaveComponentHandler {
 
 impl Vst3PluginInstance {
     pub fn load(descriptor: PluginDescriptor) -> Result<Self, String> {
+        Self::load_inner(descriptor, None)
+    }
+
+    /// Load the plug-in but reuse the supplied parameter queue instead
+    /// of creating a fresh one. Used by the floating-editor path to
+    /// route the editor's `IComponentHandler::performEdit` events into
+    /// the same queue the chain instance drains, so GUI knob movements
+    /// reach the audio chain.
+    pub fn load_with_shared_pending(
+        descriptor: PluginDescriptor,
+        shared: Arc<Mutex<Vec<(u32, f64)>>>,
+    ) -> Result<Self, String> {
+        Self::load_inner(descriptor, Some(shared))
+    }
+
+    fn load_inner(
+        descriptor: PluginDescriptor,
+        shared_pending: Option<Arc<Mutex<Vec<(u32, f64)>>>>,
+    ) -> Result<Self, String> {
         let binary = resolve_vst3_binary(&descriptor.path).ok_or_else(|| {
             format!(
                 "Could not resolve VST3 binary: {}",
@@ -331,8 +352,8 @@ impl Vst3PluginInstance {
         // the handler's COM pointer to the controller so the plugin
         // notifies us on every performEdit. The wrapper is held in
         // Vst3Inner so its lifetime tracks the plugin instance.
-        let pending_params: Arc<Mutex<Vec<(ParamID, ParamValue)>>> =
-            Arc::new(Mutex::new(Vec::new()));
+        let pending_params: Arc<Mutex<Vec<(u32, f64)>>> =
+            shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
         let handler_wrapper = vst3::ComWrapper::new(HardwaveComponentHandler {
             pending: Arc::clone(&pending_params),
         });
@@ -568,14 +589,14 @@ impl HostedPlugin for Vst3PluginInstance {
         // pipeline aligned without breaking through to the IParameterChanges
         // wire format (which would require building a per-block
         // parameter-changes stream and is the next milestone).
-        let pending: Vec<(ParamID, ParamValue)> = {
+        let pending: Vec<(u32, f64)> = {
             let mut q = inner.pending_params.lock();
             std::mem::take(&mut *q)
         };
         if !pending.is_empty() {
             if let Some(ctrl) = &inner.controller {
                 for (id, value) in pending {
-                    unsafe { ctrl.setParamNormalized(id, value) };
+                    unsafe { ctrl.setParamNormalized(id as ParamID, value as ParamValue) };
                 }
             }
         }
@@ -780,6 +801,10 @@ impl HostedPlugin for Vst3PluginInstance {
 
     fn has_editor(&self) -> bool {
         self.inner.descriptor.has_editor
+    }
+
+    fn vst3_pending_params(&self) -> Option<Arc<Mutex<Vec<(u32, f64)>>>> {
+        Some(Arc::clone(&self.inner.pending_params))
     }
 }
 

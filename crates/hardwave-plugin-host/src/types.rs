@@ -90,4 +90,23 @@ pub trait HostedPlugin: Send {
     fn open_editor(&mut self, parent_handle: raw_window_handle::RawWindowHandle) -> bool;
     fn close_editor(&mut self);
     fn has_editor(&self) -> bool;
+
+    /// Returns the shared parameter queue used by the plug-in's GUI to
+    /// emit knob movements.
+    ///
+    /// VST3 plug-ins return `Some` so a separate editor instance and the
+    /// chain instance can be wired to the same queue: the editor's
+    /// `IComponentHandler::performEdit` pushes into the queue and the
+    /// chain's audio thread drains it via `setParamNormalized`. Without
+    /// this shared queue, GUI knob movements in the floating editor are
+    /// silent because the audio chain holds a different `pending_params`
+    /// allocation.
+    ///
+    /// CLAP and native plug-ins use direct parameter setters and have no
+    /// asynchronous GUI→audio queue, so they return `None`.
+    fn vst3_pending_params(
+        &self,
+    ) -> Option<std::sync::Arc<parking_lot::Mutex<Vec<(u32, f64)>>>> {
+        None
+    }
 }

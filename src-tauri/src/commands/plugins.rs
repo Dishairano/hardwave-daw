@@ -224,6 +224,8 @@ pub fn open_plugin_editor(
     state: State<'_, AppState>,
     plugin_id: String,
     window_label: String,
+    track_id: Option<String>,
+    slot_id: Option<String>,
 ) -> Result<String, String> {
     let engine = state.engine.lock();
     let scanner = engine.plugin_scanner.lock();
@@ -234,9 +236,28 @@ pub fn open_plugin_editor(
     drop(scanner);
     drop(engine);
 
+    // If the caller provided (track_id, slot_id) and we have a
+    // registered chain queue for that slot, build the editor instance
+    // with the chain's `pending_params` Arc so GUI knob movements land
+    // in the same queue the audio chain drains. Otherwise fall back to
+    // an isolated editor instance (knob movements stay GUI-only).
+    let shared_queue = match (track_id.as_deref(), slot_id.as_deref()) {
+        (Some(t), Some(s)) => state
+            .slot_param_queues
+            .lock()
+            .get(&(t.to_string(), s.to_string()))
+            .cloned(),
+        _ => None,
+    };
+
     let mut hosted: Box<dyn HostedPlugin> = match descriptor.format {
         PluginFormat::Vst3 => {
-            Box::new(Vst3PluginInstance::load(descriptor.clone()).map_err(|e| e.to_string())?)
+            let inst = if let Some(queue) = shared_queue {
+                Vst3PluginInstance::load_with_shared_pending(descriptor.clone(), queue)
+            } else {
+                Vst3PluginInstance::load(descriptor.clone())
+            };
+            Box::new(inst.map_err(|e| e.to_string())?)
         }
         PluginFormat::Clap => {
             Box::new(ClapPluginInstance::load(descriptor.clone()).map_err(|e| e.to_string())?)
@@ -330,6 +351,17 @@ pub fn add_plugin_to_track(
     // enough to do under a Mutex.
     let plugin = instantiate_plugin(&descriptor)?;
 
+    // Phase 2b: capture the slot's parameter queue (VST3 only) BEFORE
+    // shipping the plug-in to the audio thread. This lets the editor
+    // path wire a fresh editor instance to the same queue so GUI knob
+    // movements reach the audio chain.
+    if let Some(queue) = plugin.vst3_pending_params() {
+        state
+            .slot_param_queues
+            .lock()
+            .insert((track_id.clone(), slot_id.clone()), queue);
+    }
+
     // Phase 3: ship the freshly-built LiveSlot to the audio thread via
     // the lock-free InsertCommand queue. The chain takes ownership and
     // calls activate() before processing the next block.
@@ -376,6 +408,10 @@ pub fn remove_plugin_from_track(
     };
     let _ = state.engine.lock().try_send_insert_command(cmd);
     state.engine.lock().drain_insert_graveyard();
+    state
+        .slot_param_queues
+        .lock()
+        .remove(&(track_id, slot_id));
     Ok(())
 }
 

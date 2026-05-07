@@ -1220,7 +1220,12 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     onClick={async () => {
                       const label = `pluginEditor_${slot.id}`
                       try {
-                        await invoke('open_plugin_editor', { pluginId: descriptor.id, windowLabel: label })
+                        await invoke('open_plugin_editor', {
+                          pluginId: descriptor.id,
+                          windowLabel: label,
+                          trackId,
+                          slotId: slot.id,
+                        })
                       } catch (err) {
                         console.error('open_plugin_editor failed', err)
                       }

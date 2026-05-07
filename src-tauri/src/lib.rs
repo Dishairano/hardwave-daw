@@ -35,6 +35,21 @@ pub struct AppState {
             std::collections::HashMap<String, Box<dyn hardwave_plugin_host::types::HostedPlugin>>,
         >,
     >,
+    /// Side-table mapping `(track_id, slot_id)` to the chain plug-in's
+    /// `pending_params` queue. Populated when `add_plugin_to_track`
+    /// builds a Vst3PluginInstance and is about to ship it to the audio
+    /// thread; consumed by `open_plugin_editor` to wire a freshly-built
+    /// editor instance to the same queue. Without this table, the
+    /// editor and chain hold separate queues and GUI knob movements
+    /// never reach the audio thread.
+    pub slot_param_queues: Arc<
+        Mutex<
+            std::collections::HashMap<
+                (String, String),
+                Arc<Mutex<Vec<(u32, f64)>>>,
+            >,
+        >,
+    >,
     /// Cached launch-time decision from `resolve_launch_plan`. Populated
     /// by the splash-driven `frontend_update_check_and_apply` and READ by
     /// the follow-up `version_contract_state` command so both fronts of
@@ -79,6 +94,7 @@ pub fn run() {
         engine: Arc::new(Mutex::new(engine)),
         export_cancel: Arc::new(AtomicBool::new(false)),
         plugin_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
         midi_mappings: Arc::clone(&midi_mappings),
         midi_clock: Arc::clone(&midi_clock),
         midi_sync: Arc::clone(&midi_sync),
