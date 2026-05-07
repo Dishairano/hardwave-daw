@@ -11,6 +11,7 @@ pub mod limiter;
 pub mod multiband;
 pub mod reverb;
 pub mod stereo;
+pub mod triple_osc;
 
 pub use compressor::NativeCompressor;
 pub use delay::NativeDelay;
@@ -21,6 +22,7 @@ pub use limiter::NativeLimiter;
 pub use multiband::NativeMultiband;
 pub use reverb::NativeReverb;
 pub use stereo::NativeStereo;
+pub use triple_osc::NativeTripleOsc;
 
 use hardwave_plugin_host::types::PluginDescriptor;
 
@@ -35,6 +37,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeReverb::descriptor(),
         NativeStereo::descriptor(),
         NativeMultiband::descriptor(),
+        NativeTripleOsc::descriptor(),
     ]
 }
 
@@ -49,6 +52,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeReverb::ID,
         NativeStereo::ID,
         NativeMultiband::ID,
+        NativeTripleOsc::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
