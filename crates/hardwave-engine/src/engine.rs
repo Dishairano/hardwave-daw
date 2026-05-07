@@ -1060,6 +1060,11 @@ impl EngineCallback {
                     },
                     self.sample_rate as f32,
                 );
+                if matches!(track.instrument, ProjInstr::KickSynth)
+                    && track.kick_patch.has_overrides()
+                {
+                    midi_node.apply_kick_patch(&track.kick_patch);
+                }
 
                 // Walk the clip placements and turn each MIDI note into a
                 // sample-positioned MidiNoteRegion. Tempo-map lookups happen

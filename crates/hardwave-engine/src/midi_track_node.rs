@@ -149,6 +149,35 @@ impl MidiTrackNode {
         }
     }
 
+    /// Push a per-track KickSynth patch onto the synth. Layers with
+    /// `Some(...)` overrides replace the corresponding default; `None`
+    /// entries leave the engine's hardstyle preset intact for that
+    /// layer. Called from `rebuild_graph` once the project patch is
+    /// known. Cheap — just writes 4 structs into the layer array.
+    pub fn apply_kick_patch(&mut self, patch: &hardwave_project::track::KickPatch) {
+        if !matches!(self.instrument, Instrument::KickSynth) {
+            return;
+        }
+        for (i, slot) in patch.layers.iter().enumerate() {
+            let Some(p) = slot else { continue };
+            self.kick.set_layer(
+                i,
+                hardwave_dsp::kick_synth::Layer {
+                    envelope: hardwave_dsp::kick_synth::LayerEnvelope {
+                        peak_gain: p.peak_gain,
+                        length_secs: p.length_secs,
+                        release_secs: p.release_secs,
+                    },
+                    sweep: hardwave_dsp::kick_synth::FrequencySweep {
+                        start_hz: p.sweep_start_hz,
+                        end_hz: p.sweep_end_hz,
+                        sweep_secs: p.sweep_secs,
+                    },
+                },
+            );
+        }
+    }
+
     /// Replace this node's note schedule. Caller must pre-sort by
     /// `note_on_sample`; the audio thread relies on monotonic ordering for
     /// its linear scan.

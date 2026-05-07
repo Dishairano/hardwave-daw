@@ -134,6 +134,15 @@ impl KickSynth {
         self.voice = Some(KickVoice::new(velocity));
     }
 
+    /// Replace one layer's params wholesale. Cheap struct copy; safe
+    /// to call from a graph rebuild on the UI thread before audio
+    /// resumes processing this instance.
+    pub fn set_layer(&mut self, idx: usize, layer: Layer) {
+        if idx < self.layers.len() {
+            self.layers[idx] = layer;
+        }
+    }
+
     /// Note-off currently a no-op — the envelope's natural release
     /// drives decay. Kicks aren't gated like sustained synths.
     pub fn note_off(&mut self) {}

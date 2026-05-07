@@ -257,6 +257,66 @@ pub fn remove_track(state: State<AppState>, track_id: String) {
     engine.rebuild_graph();
 }
 
+/// Set one layer of a track's KickSynth patch. The frontend sends
+/// the full layer (peak/length/release/sweep_start/sweep_end/sweep_secs);
+/// we replace `track.kick_patch.layers[idx]` and trigger a rebuild
+/// so the audio thread picks up the new params on the next block.
+/// Indices: 0=Transient, 1=Punch, 2=Bass, 3=Tail.
+#[tauri::command]
+pub fn set_kick_layer(
+    state: State<AppState>,
+    track_id: String,
+    layer_index: usize,
+    peak_gain: f32,
+    length_secs: f32,
+    release_secs: f32,
+    sweep_start_hz: f32,
+    sweep_end_hz: f32,
+    sweep_secs: f32,
+) -> Result<(), String> {
+    if layer_index >= 4 {
+        return Err(format!("Layer index out of range (0..=3): {layer_index}"));
+    }
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        track.kick_patch.layers[layer_index] =
+            Some(hardwave_project::track::KickLayerPatch {
+                peak_gain,
+                length_secs,
+                release_secs,
+                sweep_start_hz,
+                sweep_end_hz,
+                sweep_secs,
+            });
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// Reset a track's KickSynth patch back to engine defaults.
+#[tauri::command]
+pub fn reset_kick_patch(
+    state: State<AppState>,
+    track_id: String,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        track.kick_patch = hardwave_project::track::KickPatch::default();
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
 /// Switch the native instrument that voices a MIDI track. Audio /
 /// Master / Bus tracks ignore this — the call is still safe (no-op).
 /// `kind` is the snake-case name of one of `NativeInstrument`'s

@@ -84,6 +84,38 @@ pub enum NativeInstrument {
     KickSynth,
 }
 
+/// One layer's parameters as the user has tweaked them. The engine
+/// crate owns the actual synthesis; this struct is the
+/// source-of-truth that round-trips through save/load and powers the
+/// kick-editor UI. Defaults mirror the engine's "hardstyle default"
+/// constants so a fresh KickSynth track sounds identical with or
+/// without an explicit patch on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct KickLayerPatch {
+    pub peak_gain: f32,
+    pub length_secs: f32,
+    pub release_secs: f32,
+    pub sweep_start_hz: f32,
+    pub sweep_end_hz: f32,
+    pub sweep_secs: f32,
+}
+
+/// 4-layer kick patch — Transient · Punch · Bass · Tail in fixed
+/// indices `[0, 1, 2, 3]`. Stored on the track when its
+/// `NativeInstrument` is `KickSynth`. Empty = use engine defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct KickPatch {
+    pub layers: [Option<KickLayerPatch>; 4],
+}
+
+impl KickPatch {
+    /// Was any layer customised? Used by the engine to decide whether
+    /// to use the patch or the hardcoded defaults.
+    pub fn has_overrides(&self) -> bool {
+        self.layers.iter().any(|l| l.is_some())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
@@ -96,6 +128,11 @@ pub struct Track {
     /// behavior.
     #[serde(default)]
     pub instrument: NativeInstrument,
+    /// Per-track KickSynth patch. Only consulted when `instrument` is
+    /// `KickSynth`; ignored for the builtin sine. Defaults to all-None
+    /// so a fresh track inherits the engine's hardstyle preset.
+    #[serde(default)]
+    pub kick_patch: KickPatch,
 
     // Audio routing
     pub volume_db: f64,
@@ -166,6 +203,7 @@ impl Track {
             kind: TrackKind::Audio,
             color: "#7c3aed".into(),
             instrument: NativeInstrument::default(),
+            kick_patch: KickPatch::default(),
             volume_db: 0.0,
             pan: 0.0,
             muted: false,

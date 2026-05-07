@@ -125,6 +125,8 @@ pub fn run() {
             commands::tracks::add_audio_track,
             commands::tracks::add_midi_track,
             commands::tracks::set_track_instrument,
+            commands::tracks::set_kick_layer,
+            commands::tracks::reset_kick_patch,
             commands::tracks::add_automation_track,
             commands::tracks::remove_track,
             commands::tracks::set_track_volume,
