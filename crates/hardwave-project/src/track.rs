@@ -98,6 +98,15 @@ pub struct KickLayerPatch {
     pub sweep_start_hz: f32,
     pub sweep_end_hz: f32,
     pub sweep_secs: f32,
+    /// Oscillator shape — `"sine" | "saw" | "square" | "triangle"`. The
+    /// engine's `LayerWaveform` enum mirrors these. Defaulted at
+    /// deserialize so existing project files load unchanged.
+    #[serde(default = "default_layer_waveform")]
+    pub waveform: String,
+}
+
+fn default_layer_waveform() -> String {
+    "sine".to_string()
 }
 
 /// 4-layer kick patch — Transient · Punch · Bass · Tail in fixed

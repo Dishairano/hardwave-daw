@@ -160,6 +160,13 @@ impl MidiTrackNode {
         }
         for (i, slot) in patch.layers.iter().enumerate() {
             let Some(p) = slot else { continue };
+            use hardwave_dsp::kick_synth::LayerWaveform;
+            let waveform = match p.waveform.as_str() {
+                "saw" => LayerWaveform::Saw,
+                "square" => LayerWaveform::Square,
+                "triangle" => LayerWaveform::Triangle,
+                _ => LayerWaveform::Sine,
+            };
             self.kick.set_layer(
                 i,
                 hardwave_dsp::kick_synth::Layer {
@@ -173,6 +180,7 @@ impl MidiTrackNode {
                         end_hz: p.sweep_end_hz,
                         sweep_secs: p.sweep_secs,
                     },
+                    waveform,
                 },
             );
         }

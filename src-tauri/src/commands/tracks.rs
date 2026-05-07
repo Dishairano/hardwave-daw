@@ -79,6 +79,7 @@ pub struct KickLayerPatchInfo {
     pub sweep_start_hz: f32,
     pub sweep_end_hz: f32,
     pub sweep_secs: f32,
+    pub waveform: String,
 }
 
 /// Wire format for an automation lane. Mirrors the project shape but
@@ -211,6 +212,7 @@ fn track_to_info(
                     sweep_start_hz: l.sweep_start_hz,
                     sweep_end_hz: l.sweep_end_hz,
                     sweep_secs: l.sweep_secs,
+                    waveform: l.waveform.clone(),
                 }),
                 t.kick_patch.layers[1].map(|l| KickLayerPatchInfo {
                     peak_gain: l.peak_gain,
@@ -219,6 +221,7 @@ fn track_to_info(
                     sweep_start_hz: l.sweep_start_hz,
                     sweep_end_hz: l.sweep_end_hz,
                     sweep_secs: l.sweep_secs,
+                    waveform: l.waveform.clone(),
                 }),
                 t.kick_patch.layers[2].map(|l| KickLayerPatchInfo {
                     peak_gain: l.peak_gain,
@@ -227,6 +230,7 @@ fn track_to_info(
                     sweep_start_hz: l.sweep_start_hz,
                     sweep_end_hz: l.sweep_end_hz,
                     sweep_secs: l.sweep_secs,
+                    waveform: l.waveform.clone(),
                 }),
                 t.kick_patch.layers[3].map(|l| KickLayerPatchInfo {
                     peak_gain: l.peak_gain,
@@ -235,6 +239,7 @@ fn track_to_info(
                     sweep_start_hz: l.sweep_start_hz,
                     sweep_end_hz: l.sweep_end_hz,
                     sweep_secs: l.sweep_secs,
+                    waveform: l.waveform.clone(),
                 }),
             ],
         },
@@ -329,6 +334,9 @@ pub fn set_kick_layer(
     sweep_start_hz: f32,
     sweep_end_hz: f32,
     sweep_secs: f32,
+    /// `"sine" | "saw" | "square" | "triangle"`. Optional; defaults
+    /// to "sine" if the caller omits it.
+    waveform: Option<String>,
 ) -> Result<(), String> {
     if layer_index >= 4 {
         return Err(format!("Layer index out of range (0..=3): {layer_index}"));
@@ -348,6 +356,7 @@ pub fn set_kick_layer(
                 sweep_start_hz,
                 sweep_end_hz,
                 sweep_secs,
+                waveform: waveform.unwrap_or_else(|| "sine".to_string()),
             });
     }
     state.engine.lock().rebuild_graph();
@@ -395,6 +404,14 @@ pub fn list_kick_presets() -> Vec<String> {
 }
 
 fn layer_to_patch(l: &hardwave_dsp::kick_synth::Layer) -> hardwave_project::track::KickLayerPatch {
+    use hardwave_dsp::kick_synth::LayerWaveform;
+    let waveform = match l.waveform {
+        LayerWaveform::Sine => "sine",
+        LayerWaveform::Saw => "saw",
+        LayerWaveform::Square => "square",
+        LayerWaveform::Triangle => "triangle",
+    }
+    .to_string();
     hardwave_project::track::KickLayerPatch {
         peak_gain: l.envelope.peak_gain,
         length_secs: l.envelope.length_secs,
@@ -402,6 +419,7 @@ fn layer_to_patch(l: &hardwave_dsp::kick_synth::Layer) -> hardwave_project::trac
         sweep_start_hz: l.sweep.start_hz,
         sweep_end_hz: l.sweep.end_hz,
         sweep_secs: l.sweep.sweep_secs,
+        waveform,
     }
 }
 

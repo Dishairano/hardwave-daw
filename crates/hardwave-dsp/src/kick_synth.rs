@@ -78,10 +78,59 @@ impl FrequencySweep {
     }
 }
 
+/// Per-layer oscillator waveform. Sine is the cleanest, saw / square
+/// add hard upper harmonics for raw / uptempo character, triangle is
+/// in between. Phase 1 of layer-waveform support: each layer picks
+/// independently. Phase 2 will add per-layer drive / saturation.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum LayerWaveform {
+    #[default]
+    Sine,
+    Saw,
+    Square,
+    Triangle,
+}
+
+impl LayerWaveform {
+    /// Sample the waveform at `phase` in radians (0..2π).
+    #[inline]
+    pub fn sample(self, phase: f32) -> f32 {
+        match self {
+            LayerWaveform::Sine => phase.sin(),
+            LayerWaveform::Saw => {
+                // 0..2π → -1..1, descending. Bandlimited not needed at
+                // kick frequencies since the human ear quietly tolerates
+                // aliasing here.
+                let t = phase / std::f32::consts::TAU;
+                2.0 * (t - (t + 0.5).floor())
+            }
+            LayerWaveform::Square => {
+                if phase < std::f32::consts::PI { 1.0 } else { -1.0 }
+            }
+            LayerWaveform::Triangle => {
+                let t = phase / std::f32::consts::TAU;
+                let a = (t - 0.5).abs() * 4.0 - 1.0;
+                a.clamp(-1.0, 1.0)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Layer {
     pub envelope: LayerEnvelope,
     pub sweep: FrequencySweep,
+    /// Oscillator waveform for this layer. Defaults to Sine for
+    /// backward compatibility with the old preset definitions.
+    pub waveform: LayerWaveform,
+}
+
+impl Layer {
+    /// Helper constructor for the existing preset literal style. Lets
+    /// us extend the struct without rewriting every literal.
+    pub const fn sine(envelope: LayerEnvelope, sweep: FrequencySweep) -> Self {
+        Self { envelope, sweep, waveform: LayerWaveform::Sine }
+    }
 }
 
 /// One in-flight KickSynth voice. Tracks the elapsed time since
@@ -165,7 +214,7 @@ impl KickSynth {
                 }
                 let freq = layer.sweep.at(t);
                 let mut phase = voice.phase_per_layer[li];
-                let s = phase.sin() * env;
+                let s = layer.waveform.sample(phase) * env;
                 phase += TAU * freq * inv_sr;
                 if phase >= TAU {
                     phase -= TAU;
@@ -217,69 +266,69 @@ pub fn preset_layers(name: &str) -> [Layer; 4] {
     match name {
         "Frenchcore Punch" => [
             // Tight bright transient
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.004, release_secs: 0.010, peak_gain: 0.40 },
-                sweep:    FrequencySweep { start_hz: 4500.0, end_hz: 800.0, sweep_secs: 0.004 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.004, release_secs: 0.010, peak_gain: 0.40 },
+                FrequencySweep { start_hz: 4500.0, end_hz: 800.0, sweep_secs: 0.004 },
+            ),
             // Punchy mid
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.020, release_secs: 0.025, peak_gain: 0.65 },
-                sweep:    FrequencySweep { start_hz: 280.0, end_hz: 80.0, sweep_secs: 0.020 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.020, release_secs: 0.025, peak_gain: 0.65 },
+                FrequencySweep { start_hz: 280.0, end_hz: 80.0, sweep_secs: 0.020 },
+            ),
             // Short body — frenchcore is fast so kicks don't ring
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.090, release_secs: 0.080, peak_gain: 0.40 },
-                sweep:    FrequencySweep { start_hz: 70.0, end_hz: 55.0, sweep_secs: 0.090 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.090, release_secs: 0.080, peak_gain: 0.40 },
+                FrequencySweep { start_hz: 70.0, end_hz: 55.0, sweep_secs: 0.090 },
+            ),
             // Minimal tail
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.180, release_secs: 0.140, peak_gain: 0.20 },
-                sweep:    FrequencySweep { start_hz: 38.0, end_hz: 35.0, sweep_secs: 0.180 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.180, release_secs: 0.140, peak_gain: 0.20 },
+                FrequencySweep { start_hz: 38.0, end_hz: 35.0, sweep_secs: 0.180 },
+            ),
         ],
         "Rawphoric Long" => [
             // Dirty sweep
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.008, release_secs: 0.025, peak_gain: 0.35 },
-                sweep:    FrequencySweep { start_hz: 2400.0, end_hz: 400.0, sweep_secs: 0.008 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.008, release_secs: 0.025, peak_gain: 0.35 },
+                FrequencySweep { start_hz: 2400.0, end_hz: 400.0, sweep_secs: 0.008 },
+            ),
             // Heavy punch with wider sweep
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.040, release_secs: 0.080, peak_gain: 0.60 },
-                sweep:    FrequencySweep { start_hz: 180.0, end_hz: 55.0, sweep_secs: 0.040 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.040, release_secs: 0.080, peak_gain: 0.60 },
+                FrequencySweep { start_hz: 180.0, end_hz: 55.0, sweep_secs: 0.040 },
+            ),
             // Long body — the rawphoric "ringing" feel
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.300, release_secs: 0.300, peak_gain: 0.50 },
-                sweep:    FrequencySweep { start_hz: 55.0, end_hz: 45.0, sweep_secs: 0.300 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.300, release_secs: 0.300, peak_gain: 0.50 },
+                FrequencySweep { start_hz: 55.0, end_hz: 45.0, sweep_secs: 0.300 },
+            ),
             // Big sub tail
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.700, release_secs: 0.500, peak_gain: 0.40 },
-                sweep:    FrequencySweep { start_hz: 32.0, end_hz: 28.0, sweep_secs: 0.700 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.700, release_secs: 0.500, peak_gain: 0.40 },
+                FrequencySweep { start_hz: 32.0, end_hz: 28.0, sweep_secs: 0.700 },
+            ),
         ],
         "Uptempo Tight" => [
             // Snappy click
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.003, release_secs: 0.008, peak_gain: 0.50 },
-                sweep:    FrequencySweep { start_hz: 5000.0, end_hz: 900.0, sweep_secs: 0.003 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.003, release_secs: 0.008, peak_gain: 0.50 },
+                FrequencySweep { start_hz: 5000.0, end_hz: 900.0, sweep_secs: 0.003 },
+            ),
             // Hard punch
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.018, release_secs: 0.022, peak_gain: 0.70 },
-                sweep:    FrequencySweep { start_hz: 320.0, end_hz: 70.0, sweep_secs: 0.018 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.018, release_secs: 0.022, peak_gain: 0.70 },
+                FrequencySweep { start_hz: 320.0, end_hz: 70.0, sweep_secs: 0.018 },
+            ),
             // Short body for fast tempo (180+ BPM)
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.070, release_secs: 0.060, peak_gain: 0.45 },
-                sweep:    FrequencySweep { start_hz: 75.0, end_hz: 60.0, sweep_secs: 0.070 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.070, release_secs: 0.060, peak_gain: 0.45 },
+                FrequencySweep { start_hz: 75.0, end_hz: 60.0, sweep_secs: 0.070 },
+            ),
             // Cut tail short
-            Layer {
-                envelope: LayerEnvelope { length_secs: 0.120, release_secs: 0.080, peak_gain: 0.25 },
-                sweep:    FrequencySweep { start_hz: 40.0, end_hz: 36.0, sweep_secs: 0.120 },
-            },
+            Layer::sine(
+                LayerEnvelope { length_secs: 0.120, release_secs: 0.080, peak_gain: 0.25 },
+                FrequencySweep { start_hz: 40.0, end_hz: 36.0, sweep_secs: 0.120 },
+            ),
         ],
         _ => hardstyle_default_layers(),
     }
@@ -291,25 +340,25 @@ pub fn preset_layers(name: &str) -> [Layer; 4] {
 fn hardstyle_default_layers() -> [Layer; 4] {
     [
         // Transient — the click. Sweeps high to mid, very short.
-        Layer {
-            envelope: LayerEnvelope { length_secs: 0.005, release_secs: 0.015, peak_gain: 0.30 },
-            sweep:    FrequencySweep { start_hz: 3000.0, end_hz: 600.0, sweep_secs: 0.005 },
-        },
+        Layer::sine(
+                LayerEnvelope { length_secs: 0.005, release_secs: 0.015, peak_gain: 0.30 },
+                FrequencySweep { start_hz: 3000.0, end_hz: 600.0, sweep_secs: 0.005 },
+            ),
         // Punch 1 — fundamental thump.
-        Layer {
-            envelope: LayerEnvelope { length_secs: 0.025, release_secs: 0.040, peak_gain: 0.55 },
-            sweep:    FrequencySweep { start_hz: 220.0, end_hz: 65.0, sweep_secs: 0.025 },
-        },
+        Layer::sine(
+                LayerEnvelope { length_secs: 0.025, release_secs: 0.040, peak_gain: 0.55 },
+                FrequencySweep { start_hz: 220.0, end_hz: 65.0, sweep_secs: 0.025 },
+            ),
         // Bass — sustained body of the kick.
-        Layer {
-            envelope: LayerEnvelope { length_secs: 0.180, release_secs: 0.180, peak_gain: 0.45 },
-            sweep:    FrequencySweep { start_hz: 60.0, end_hz: 50.0, sweep_secs: 0.180 },
-        },
+        Layer::sine(
+                LayerEnvelope { length_secs: 0.180, release_secs: 0.180, peak_gain: 0.45 },
+                FrequencySweep { start_hz: 60.0, end_hz: 50.0, sweep_secs: 0.180 },
+            ),
         // Tail — the long sub-bass rumble.
-        Layer {
-            envelope: LayerEnvelope { length_secs: 0.450, release_secs: 0.350, peak_gain: 0.30 },
-            sweep:    FrequencySweep { start_hz: 35.0, end_hz: 32.0, sweep_secs: 0.450 },
-        },
+        Layer::sine(
+                LayerEnvelope { length_secs: 0.450, release_secs: 0.350, peak_gain: 0.30 },
+                FrequencySweep { start_hz: 35.0, end_hz: 32.0, sweep_secs: 0.450 },
+            ),
     ]
 }
 

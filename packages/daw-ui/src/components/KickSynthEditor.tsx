@@ -16,6 +16,9 @@ import { invoke } from '@tauri-apps/api/core'
 const LAYER_NAMES = ['Transient', 'Punch', 'Bass', 'Tail'] as const
 type LayerIdx = 0 | 1 | 2 | 3
 
+type Waveform = 'sine' | 'saw' | 'square' | 'triangle'
+const WAVEFORMS: Waveform[] = ['sine', 'saw', 'square', 'triangle']
+
 interface LayerPatch {
   peak_gain: number
   length_secs: number
@@ -23,16 +26,17 @@ interface LayerPatch {
   sweep_start_hz: number
   sweep_end_hz: number
   sweep_secs: number
+  waveform: Waveform
 }
 
 // Engine defaults, matched from `hardstyle_default_layers()` in
 // `crates/hardwave-dsp/src/kick_synth.rs`. Keeping them in sync is
 // manual but the values rarely move.
 const DEFAULT_LAYERS: LayerPatch[] = [
-  { peak_gain: 0.30, length_secs: 0.005, release_secs: 0.015, sweep_start_hz: 3000, sweep_end_hz: 600,  sweep_secs: 0.005 },
-  { peak_gain: 0.55, length_secs: 0.025, release_secs: 0.040, sweep_start_hz: 220,  sweep_end_hz: 65,   sweep_secs: 0.025 },
-  { peak_gain: 0.45, length_secs: 0.180, release_secs: 0.180, sweep_start_hz: 60,   sweep_end_hz: 50,   sweep_secs: 0.180 },
-  { peak_gain: 0.30, length_secs: 0.450, release_secs: 0.350, sweep_start_hz: 35,   sweep_end_hz: 32,   sweep_secs: 0.450 },
+  { peak_gain: 0.30, length_secs: 0.005, release_secs: 0.015, sweep_start_hz: 3000, sweep_end_hz: 600,  sweep_secs: 0.005, waveform: 'sine' },
+  { peak_gain: 0.55, length_secs: 0.025, release_secs: 0.040, sweep_start_hz: 220,  sweep_end_hz: 65,   sweep_secs: 0.025, waveform: 'sine' },
+  { peak_gain: 0.45, length_secs: 0.180, release_secs: 0.180, sweep_start_hz: 60,   sweep_end_hz: 50,   sweep_secs: 0.180, waveform: 'sine' },
+  { peak_gain: 0.30, length_secs: 0.450, release_secs: 0.350, sweep_start_hz: 35,   sweep_end_hz: 32,   sweep_secs: 0.450, waveform: 'sine' },
 ]
 
 interface Props {
@@ -75,6 +79,7 @@ export function KickSynthEditor({ trackId, patchLayers, onClose }: Props) {
       sweepStartHz: next.sweep_start_hz,
       sweepEndHz: next.sweep_end_hz,
       sweepSecs: next.sweep_secs,
+      waveform: next.waveform,
     })
     // Refetch tracks happens via project store mutation listeners
     // attached elsewhere; we don't need to do it inline.
@@ -129,6 +134,20 @@ export function KickSynthEditor({ trackId, patchLayers, onClose }: Props) {
         <Knob label="Sweep ↑"   value={layer.sweep_start_hz} min={20} max={5000} step={1} unit="Hz" onChange={(v) => onParam('sweep_start_hz', v)} />
         <Knob label="Sweep ↓"   value={layer.sweep_end_hz}   min={20} max={5000} step={1} unit="Hz" onChange={(v) => onParam('sweep_end_hz', v)} />
         <Knob label="Sweep T"   value={layer.sweep_secs}     min={0.001} max={2} step={0.001} unit="s"  onChange={(v) => onParam('sweep_secs', v)} />
+      </div>
+      <div className="fl-kick-editor-waves">
+        <span className="lbl">Wave</span>
+        {WAVEFORMS.map(w => (
+          <button
+            key={w}
+            type="button"
+            className={`wave${layer.waveform === w ? ' on' : ''}`}
+            onClick={() => writeLayer({ ...layer, waveform: w })}
+            title={`${w} oscillator on this layer`}
+          >
+            {w}
+          </button>
+        ))}
       </div>
     </div>
   )

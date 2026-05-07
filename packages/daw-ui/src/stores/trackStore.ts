@@ -80,6 +80,7 @@ export interface KickLayerPatch {
   sweep_start_hz: number
   sweep_end_hz: number
   sweep_secs: number
+  waveform: 'sine' | 'saw' | 'square' | 'triangle'
 }
 
 export type NativeInstrumentId = 'builtin_sine' | 'kick_synth'
