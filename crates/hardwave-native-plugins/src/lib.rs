@@ -26,6 +26,7 @@ pub mod reverb;
 pub mod saturator;
 pub mod stereo;
 pub mod sub_bass;
+pub mod tape;
 pub mod transient;
 pub mod tremolo;
 pub mod triple_osc;
@@ -56,6 +57,7 @@ pub use reverb::NativeReverb;
 pub use saturator::NativeSaturator;
 pub use stereo::NativeStereo;
 pub use sub_bass::NativeSubBass;
+pub use tape::NativeTape;
 pub use transient::NativeTransient;
 pub use tremolo::NativeTremolo;
 pub use triple_osc::NativeTripleOsc;
@@ -95,6 +97,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeTransient::descriptor(),
         NativeClipper::descriptor(),
         NativeExciter::descriptor(),
+        NativeTape::descriptor(),
     ]
 }
 
@@ -129,6 +132,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeTransient::ID,
         NativeClipper::ID,
         NativeExciter::ID,
+        NativeTape::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
