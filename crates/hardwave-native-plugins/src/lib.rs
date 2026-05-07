@@ -2,6 +2,7 @@
 //! primitives in the `HostedPlugin` trait so the audio engine can host
 //! them alongside VST3 / CLAP plugins without an FFI roundtrip.
 
+pub mod auto_filter;
 pub mod auto_pan;
 pub mod bitcrush;
 pub mod chorus;
@@ -36,6 +37,7 @@ pub mod triple_osc;
 pub mod vibrato;
 pub mod wavetable;
 
+pub use auto_filter::NativeAutoFilter;
 pub use auto_pan::NativeAutoPan;
 pub use bitcrush::NativeBitcrush;
 pub use chorus::NativeChorus;
@@ -107,6 +109,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeSoundgoodizer::descriptor(),
         NativeMonoFold::descriptor(),
         NativeRingMod::descriptor(),
+        NativeAutoFilter::descriptor(),
     ]
 }
 
@@ -145,6 +148,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeSoundgoodizer::ID,
         NativeMonoFold::ID,
         NativeRingMod::ID,
+        NativeAutoFilter::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",

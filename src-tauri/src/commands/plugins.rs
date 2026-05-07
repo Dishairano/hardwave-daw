@@ -1,7 +1,7 @@
 use crate::AppState;
 use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
 use hardwave_native_plugins::{
-    NativeAutoPan, NativeBitcrush, NativeChorus, NativeClipper, NativeCompressor, NativeConvReverb,
+    NativeAutoFilter, NativeAutoPan, NativeBitcrush, NativeChorus, NativeClipper, NativeCompressor, NativeConvReverb,
     NativeDelay, NativeDistortion, NativeEq, NativeExciter, NativeFilter, NativeFlanger,
     NativeFmSynth, NativeGain, NativeGate, NativeLimiter, NativeMidSide, NativeMonoFold, NativeMultiband,
     NativeNoise, NativePhaser, NativeReverb, NativeRingMod, NativeSaturator, NativeSoundgoodizer, NativeStereo,
@@ -66,6 +66,7 @@ fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlu
             id if id == NativeSoundgoodizer::ID => Ok(Box::new(NativeSoundgoodizer::new())),
             id if id == NativeMonoFold::ID => Ok(Box::new(NativeMonoFold::new())),
             id if id == NativeRingMod::ID => Ok(Box::new(NativeRingMod::new())),
+            id if id == NativeAutoFilter::ID => Ok(Box::new(NativeAutoFilter::new())),
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }
