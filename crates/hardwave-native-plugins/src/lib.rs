@@ -4,16 +4,22 @@
 
 pub mod compressor;
 pub mod eq;
+pub mod limiter;
 
 pub use compressor::NativeCompressor;
 pub use eq::NativeEq;
+pub use limiter::NativeLimiter;
 
 use hardwave_plugin_host::types::PluginDescriptor;
 
 /// Return the catalog of native-plugin descriptors the scanner should
 /// register alongside external VST3 / CLAP scan results.
 pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
-    vec![NativeEq::descriptor(), NativeCompressor::descriptor()]
+    vec![
+        NativeEq::descriptor(),
+        NativeCompressor::descriptor(),
+        NativeLimiter::descriptor(),
+    ]
 }
 
 /// Stable plugin ids — matches `PluginDescriptor::id`. Kept for
@@ -25,6 +31,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
     vec![
         NativeEq::ID,
         NativeCompressor::ID,
+        NativeLimiter::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
