@@ -10,6 +10,20 @@ async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: strin
   return r
 }
 
+const TRACK_LIMIT = 500
+
+/**
+ * Compute the next default track name. Counts every non-Master track
+ * (Audio + MIDI + Automation + Bus + Return) and returns "Track N+1",
+ * mirroring FL Studio's unified channel numbering. Returns null if the
+ * 500-track cap has been reached.
+ */
+function nextTrackName(tracks: { kind: string }[]): string | null {
+  const used = tracks.filter(t => t.kind !== 'Master').length
+  if (used >= TRACK_LIMIT) return null
+  return `Track ${used + 1}`
+}
+
 export type FadeCurveKind = 'linear' | 'equal_power' | 's_curve' | 'logarithmic'
 
 export interface ClipInfo {
@@ -264,22 +278,31 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   }),
 
   addAudioTrack: async (name) => {
-    const n = get().tracks.filter(t => t.kind === 'Audio').length + 1
-    const finalName = name || `Audio ${n}`
+    const finalName = name || nextTrackName(get().tracks)
+    if (!finalName) {
+      console.warn('Track limit reached (500)')
+      return
+    }
     await mut('add_audio_track', { name: finalName }, `Add audio track "${finalName}"`)
     await get().fetchTracks()
   },
 
   addMidiTrack: async (name) => {
-    const n = get().tracks.filter(t => t.kind === 'Midi').length + 1
-    const finalName = name || `MIDI ${n}`
+    const finalName = name || nextTrackName(get().tracks)
+    if (!finalName) {
+      console.warn('Track limit reached (500)')
+      return
+    }
     await mut('add_midi_track', { name: finalName }, `Add MIDI track "${finalName}"`)
     await get().fetchTracks()
   },
 
   addAutomationTrack: async (name) => {
-    const n = get().tracks.filter(t => t.kind === 'Automation').length + 1
-    const finalName = name || `Automation ${n}`
+    const finalName = name || nextTrackName(get().tracks)
+    if (!finalName) {
+      console.warn('Track limit reached (500)')
+      return
+    }
     await mut('add_automation_track', { name: finalName }, `Add automation track "${finalName}"`)
     await get().fetchTracks()
   },
