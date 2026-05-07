@@ -4,6 +4,7 @@
 
 pub mod chorus;
 pub mod compressor;
+pub mod conv_reverb;
 pub mod delay;
 pub mod distortion;
 pub mod eq;
@@ -19,6 +20,7 @@ pub mod wavetable;
 
 pub use chorus::NativeChorus;
 pub use compressor::NativeCompressor;
+pub use conv_reverb::NativeConvReverb;
 pub use delay::NativeDelay;
 pub use distortion::NativeDistortion;
 pub use eq::NativeEq;
@@ -50,6 +52,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeWavetable::descriptor(),
         NativeChorus::descriptor(),
         NativePhaser::descriptor(),
+        NativeConvReverb::descriptor(),
     ]
 }
 
@@ -69,6 +72,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeWavetable::ID,
         NativeChorus::ID,
         NativePhaser::ID,
+        NativeConvReverb::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
