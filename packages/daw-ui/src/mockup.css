@@ -900,6 +900,34 @@
   color: #fff;
 }
 
+/* ─── Target picker popover (Volume/Pan/Mute) ─────────────────── */
+.fl-lane-target-pop {
+  position: absolute;
+  top: 100%;
+  left: 8px;
+  margin-top: 2px;
+  background: #07070a;
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, .14));
+  border-radius: 4px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .6);
+  padding: 4px 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  letter-spacing: 0;
+  text-transform: none;
+  z-index: 50;
+  min-width: 140px;
+}
+.fl-lane-target-pop .item {
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.fl-lane-target-pop .item:hover {
+  background: rgba(168, 85, 247, 0.10);
+  color: #fff;
+}
+
 /* Empty placeholder rows fill the playlist out to PLAYLIST_TOTAL_SLOTS so
    the tracks column matches the grid's lane count visually. They keep the
    row height + striping but dim the slot number and disable hover. */

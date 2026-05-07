@@ -12,7 +12,7 @@
  * Replaces `MainLayout` from App.tsx. The CSS lives in `../mockup.css`.
  */
 
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Browser } from './browser/Browser'
 import { Arrangement } from './arrangement/Arrangement'
 import { ChannelRack } from './channelrack/ChannelRack'
@@ -20,6 +20,7 @@ import { PianoRoll } from './piano-roll/PianoRoll'
 import { MixerPanel } from './mixer/MixerPanel'
 import { HwTopMenu, type MenuDef } from './HwTopMenu'
 import { AutomationLane } from './AutomationLane'
+import type { AutomationTargetInfo } from '../stores/trackStore'
 import { useTransportStore } from '../stores/transportStore'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
@@ -474,15 +475,11 @@ function HwPlaylistTracks() {
             <AutomationLane key={lane.id} trackId={t.id} lane={lane} />
           ))
           const addLane = (
-            <button
+            <HwAddLaneButton
               key={`addlane-${t.id}`}
-              type="button"
-              className="fl-add-lane"
-              onClick={() => addAutomationLane(t.id, { kind: 'track_volume' })}
-              title="Add a volume automation lane to this track"
-            >
-              + Automation lane
-            </button>
+              trackId={t.id}
+              onAdd={addAutomationLane}
+            />
           )
           return [row, ...laneRows, addLane]
         })}
@@ -502,6 +499,63 @@ function HwPlaylistTracks() {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// ─── Add automation lane button ─────────────────────────────────────────────
+// Click → opens a small popover to pick the target. Self-contained so we
+// don't have to thread Volume/Pan picker state through HwPlaylistTracks.
+
+const LANE_TARGETS: { spec: AutomationTargetInfo; label: string }[] = [
+  { spec: { kind: 'track_volume' }, label: 'Volume' },
+  { spec: { kind: 'track_pan' },    label: 'Pan' },
+  { spec: { kind: 'track_mute' },   label: 'Mute' },
+]
+
+function HwAddLaneButton({
+  trackId,
+  onAdd,
+}: {
+  trackId: string
+  onAdd: (trackId: string, target: AutomationTargetInfo) => Promise<string>
+}) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [open])
+  return (
+    <div style={{ position: 'relative', gridColumn: '1 / -1' }}>
+      <button
+        type="button"
+        className="fl-add-lane"
+        onMouseDown={(e) => { e.stopPropagation(); setOpen(v => !v) }}
+        title="Add an automation lane — pick its target"
+      >
+        + Automation lane
+      </button>
+      {open && (
+        <div
+          className="fl-lane-target-pop"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {LANE_TARGETS.map(t => (
+            <div
+              key={t.label}
+              className="item"
+              onClick={async () => {
+                setOpen(false)
+                await onAdd(trackId, t.spec)
+              }}
+            >
+              {t.label}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
