@@ -90,7 +90,11 @@ pub enum NativeInstrument {
 /// kick-editor UI. Defaults mirror the engine's "hardstyle default"
 /// constants so a fresh KickSynth track sounds identical with or
 /// without an explicit patch on disk.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+// Not Copy: `waveform` is a String. Clone is plenty for the few
+// callsites that need to duplicate a layer (preset apply, Tauri
+// snapshot to UI), and the struct is small enough that clone cost
+// is irrelevant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KickLayerPatch {
     pub peak_gain: f32,
     pub length_secs: f32,

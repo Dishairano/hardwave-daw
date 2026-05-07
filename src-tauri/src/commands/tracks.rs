@@ -207,7 +207,7 @@ fn track_to_info(
         kick_patch: KickPatchInfo {
             drive: t.kick_patch.drive,
             layers: [
-                t.kick_patch.layers[0].map(|l| KickLayerPatchInfo {
+                t.kick_patch.layers[0].as_ref().map(|l| KickLayerPatchInfo {
                     peak_gain: l.peak_gain,
                     length_secs: l.length_secs,
                     release_secs: l.release_secs,
@@ -216,7 +216,7 @@ fn track_to_info(
                     sweep_secs: l.sweep_secs,
                     waveform: l.waveform.clone(),
                 }),
-                t.kick_patch.layers[1].map(|l| KickLayerPatchInfo {
+                t.kick_patch.layers[1].as_ref().map(|l| KickLayerPatchInfo {
                     peak_gain: l.peak_gain,
                     length_secs: l.length_secs,
                     release_secs: l.release_secs,
@@ -225,7 +225,7 @@ fn track_to_info(
                     sweep_secs: l.sweep_secs,
                     waveform: l.waveform.clone(),
                 }),
-                t.kick_patch.layers[2].map(|l| KickLayerPatchInfo {
+                t.kick_patch.layers[2].as_ref().map(|l| KickLayerPatchInfo {
                     peak_gain: l.peak_gain,
                     length_secs: l.length_secs,
                     release_secs: l.release_secs,
@@ -234,7 +234,7 @@ fn track_to_info(
                     sweep_secs: l.sweep_secs,
                     waveform: l.waveform.clone(),
                 }),
-                t.kick_patch.layers[3].map(|l| KickLayerPatchInfo {
+                t.kick_patch.layers[3].as_ref().map(|l| KickLayerPatchInfo {
                     peak_gain: l.peak_gain,
                     length_secs: l.length_secs,
                     release_secs: l.release_secs,
