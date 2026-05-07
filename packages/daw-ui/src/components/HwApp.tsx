@@ -25,6 +25,7 @@ import { useTransportStore } from '../stores/transportStore'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePanelLayoutStore } from '../stores/panelLayoutStore'
+import { useProjectStore } from '../stores/projectStore'
 import type { MobilePanel } from './MobileTabBar'
 
 interface HwAppProps {
@@ -666,7 +667,17 @@ export function HwApp({
   onToggleMixer,
 }: HwAppProps) {
   const [hint, setHint] = useState('')
-  const projectName = '[ddeboer] · Untitled.flp'
+  // Read the live project name from the store so save/load actually
+  // affects what's shown in the hint bar. Falls back to the friendly
+  // default when nothing has been opened yet.
+  const projectFileName = useProjectStore(s => s.projectName)
+  const projectDirty = useProjectStore(s => s.dirty)
+  const projectName = `${projectDirty ? '*' : ''}${projectFileName}.hwp`
+  // Mirror the same string into the OS window title via document.title
+  // so the taskbar / dock entry matches what the hint bar shows.
+  useEffect(() => {
+    document.title = `${projectFileName}${projectDirty ? ' *' : ''} — Hardwave DAW`
+  }, [projectFileName, projectDirty])
   // Track lane height — drives both the canvas (Arrangement reads from store)
   // and the HTML track-name column (.fl-tr) via the --row-h CSS variable.
   const trackHeight = useTransportStore(s => s.trackHeight)
