@@ -2,7 +2,7 @@ use crate::AppState;
 use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
 use hardwave_native_plugins::{
     NativeCompressor, NativeDelay, NativeDistortion, NativeEq, NativeFilter, NativeLimiter,
-    NativeReverb, NativeStereo,
+    NativeMultiband, NativeReverb, NativeStereo,
 };
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
@@ -37,6 +37,7 @@ fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlu
             id if id == NativeDelay::ID => Ok(Box::new(NativeDelay::new())),
             id if id == NativeReverb::ID => Ok(Box::new(NativeReverb::new())),
             id if id == NativeStereo::ID => Ok(Box::new(NativeStereo::new())),
+            id if id == NativeMultiband::ID => Ok(Box::new(NativeMultiband::new())),
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }
