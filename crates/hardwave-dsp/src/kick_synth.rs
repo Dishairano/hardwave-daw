@@ -160,6 +160,11 @@ pub struct KickSynth {
     pub sample_rate: f32,
     pub layers: [Layer; 4],
     pub voice: Option<KickVoice>,
+    /// Post-mix drive (0..=1). 0 = clean tanh @ unity gain. Higher
+    /// values pre-multiply the summed signal before tanh, so the
+    /// soft-clipper bites harder and brings up upper harmonics —
+    /// the classic raw / uptempo "distorted kick" sound.
+    pub drive: f32,
 }
 
 impl Default for KickSynth {
@@ -174,7 +179,13 @@ impl KickSynth {
             sample_rate,
             layers: hardstyle_default_layers(),
             voice: None,
+            drive: 0.0,
         }
+    }
+
+    /// Set the post-mix drive amount (0..=1). Clamped on entry.
+    pub fn set_drive(&mut self, d: f32) {
+        self.drive = d.clamp(0.0, 1.0);
     }
 
     /// Trigger a new voice. Replaces any in-flight voice (mono mode);
@@ -223,8 +234,12 @@ impl KickSynth {
                 sample += s;
             }
             sample *= voice.velocity;
-            // Soft clip at unity so a stacked kick doesn't blast out.
-            let clipped = soft_clip(sample);
+            // Pre-clip drive: at drive=0 we're at 1.0×, at drive=1
+            // we're at ~5× → tanh's nonlinearity dominates and the
+            // kick gets aggressive harmonics. Math: 1 + 4·drive.
+            let drive_gain = 1.0 + 4.0 * self.drive;
+            let driven = sample * drive_gain;
+            let clipped = soft_clip(driven);
             out_l[i] += clipped;
             out_r[i] += clipped;
             voice.age_samples += 1;

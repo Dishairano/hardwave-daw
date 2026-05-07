@@ -158,6 +158,7 @@ impl MidiTrackNode {
         if !matches!(self.instrument, Instrument::KickSynth) {
             return;
         }
+        self.kick.set_drive(patch.drive);
         for (i, slot) in patch.layers.iter().enumerate() {
             let Some(p) = slot else { continue };
             use hardwave_dsp::kick_synth::LayerWaveform;

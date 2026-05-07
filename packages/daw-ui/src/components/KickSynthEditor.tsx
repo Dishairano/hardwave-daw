@@ -43,10 +43,12 @@ interface Props {
   trackId: string
   /** May be partially populated; missing layers fall back to defaults. */
   patchLayers: (LayerPatch | null)[]
+  /** Post-mix drive 0..=1. */
+  drive: number
   onClose: () => void
 }
 
-export function KickSynthEditor({ trackId, patchLayers, onClose }: Props) {
+export function KickSynthEditor({ trackId, patchLayers, drive, onClose }: Props) {
   const [activeLayer, setActiveLayer] = useState<LayerIdx>(1) // Punch is the most-tweaked
   const [presets, setPresets] = useState<string[]>([])
   // Lazy-load the preset list once so we don't make every editor open
@@ -134,6 +136,21 @@ export function KickSynthEditor({ trackId, patchLayers, onClose }: Props) {
         <Knob label="Sweep ↑"   value={layer.sweep_start_hz} min={20} max={5000} step={1} unit="Hz" onChange={(v) => onParam('sweep_start_hz', v)} />
         <Knob label="Sweep ↓"   value={layer.sweep_end_hz}   min={20} max={5000} step={1} unit="Hz" onChange={(v) => onParam('sweep_end_hz', v)} />
         <Knob label="Sweep T"   value={layer.sweep_secs}     min={0.001} max={2} step={0.001} unit="s"  onChange={(v) => onParam('sweep_secs', v)} />
+      </div>
+      <div className="fl-kick-editor-drive">
+        <span className="lbl">Drive</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={drive}
+          onChange={(e) => {
+            const v = parseFloat(e.target.value)
+            invoke('set_kick_drive', { trackId, drive: v }).catch(() => {})
+          }}
+        />
+        <span className="val">{Math.round(drive * 100)}%</span>
       </div>
       <div className="fl-kick-editor-waves">
         <span className="lbl">Wave</span>

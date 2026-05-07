@@ -896,6 +896,33 @@
   text-transform: lowercase;
 }
 
+.fl-kick-editor-drive {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 14px 8px;
+  border-top: 1px solid var(--border);
+}
+.fl-kick-editor-drive .lbl {
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  font-weight: 600;
+  min-width: 36px;
+}
+.fl-kick-editor-drive input[type="range"] {
+  flex: 1;
+  accent-color: var(--brand);
+}
+.fl-kick-editor-drive .val {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text);
+  min-width: 32px;
+  text-align: right;
+}
+
 .fl-kick-editor-waves {
   display: flex;
   gap: 6px;

@@ -115,13 +115,19 @@ fn default_layer_waveform() -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct KickPatch {
     pub layers: [Option<KickLayerPatch>; 4],
+    /// Post-mix drive 0..=1. Applied AFTER the four layers sum. 0 by
+    /// default so old patches without this field load identical to
+    /// before.
+    #[serde(default)]
+    pub drive: f32,
 }
 
 impl KickPatch {
-    /// Was any layer customised? Used by the engine to decide whether
-    /// to use the patch or the hardcoded defaults.
+    /// Was any layer customised, OR drive set above zero? Used by
+    /// the engine to decide whether to bother applying the patch on
+    /// rebuild — a no-op patch can be skipped.
     pub fn has_overrides(&self) -> bool {
-        self.layers.iter().any(|l| l.is_some())
+        self.layers.iter().any(|l| l.is_some()) || self.drive > 0.0
     }
 }
 

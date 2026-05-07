@@ -129,6 +129,7 @@ pub fn run() {
             commands::tracks::reset_kick_patch,
             commands::tracks::apply_kick_preset,
             commands::tracks::list_kick_presets,
+            commands::tracks::set_kick_drive,
             commands::tracks::add_automation_track,
             commands::tracks::remove_track,
             commands::tracks::set_track_volume,

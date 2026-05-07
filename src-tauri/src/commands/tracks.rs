@@ -69,6 +69,7 @@ pub struct TrackInfo {
 #[derive(Serialize)]
 pub struct KickPatchInfo {
     pub layers: [Option<KickLayerPatchInfo>; 4],
+    pub drive: f32,
 }
 
 #[derive(Serialize)]
@@ -204,6 +205,7 @@ fn track_to_info(
             hardwave_project::track::NativeInstrument::KickSynth => "kick_synth".to_string(),
         },
         kick_patch: KickPatchInfo {
+            drive: t.kick_patch.drive,
             layers: [
                 t.kick_patch.layers[0].map(|l| KickLayerPatchInfo {
                     peak_gain: l.peak_gain,
@@ -421,6 +423,28 @@ fn layer_to_patch(l: &hardwave_dsp::kick_synth::Layer) -> hardwave_project::trac
         sweep_secs: l.sweep.sweep_secs,
         waveform,
     }
+}
+
+/// Set the post-mix drive amount for a track's KickSynth (0..=1).
+/// Drive runs after the four layers are summed and sharpens the
+/// soft-clipper for hardstyle / raw / uptempo bite.
+#[tauri::command]
+pub fn set_kick_drive(
+    state: State<AppState>,
+    track_id: String,
+    drive: f32,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        track.kick_patch.drive = drive.clamp(0.0, 1.0);
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
 }
 
 /// Reset a track's KickSynth patch back to engine defaults.

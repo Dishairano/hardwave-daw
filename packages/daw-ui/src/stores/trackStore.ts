@@ -70,7 +70,7 @@ export interface TrackInfo {
   /** Per-track KickSynth layer patch. 4 layers, each may be null
    *  meaning "use engine default for this layer". Only meaningful
    *  when `instrument === 'kick_synth'`. */
-  kickPatch?: { layers: (KickLayerPatch | null)[] }
+  kickPatch?: { layers: (KickLayerPatch | null)[]; drive: number }
 }
 
 export interface KickLayerPatch {

@@ -526,6 +526,7 @@ function HwPlaylistTracks() {
           <KickSynthEditor
             trackId={t.id}
             patchLayers={t.kickPatch?.layers ?? [null, null, null, null]}
+            drive={t.kickPatch?.drive ?? 0}
             onClose={() => setKickEditorTrack(null)}
           />
         )
