@@ -336,8 +336,8 @@ pub fn set_kick_layer(
     sweep_start_hz: f32,
     sweep_end_hz: f32,
     sweep_secs: f32,
-    /// `"sine" | "saw" | "square" | "triangle"`. Optional; defaults
-    /// to "sine" if the caller omits it.
+    // `waveform` accepts "sine" | "saw" | "square" | "triangle".
+    // Optional: when None we default to "sine".
     waveform: Option<String>,
 ) -> Result<(), String> {
     if layer_index >= 4 {
