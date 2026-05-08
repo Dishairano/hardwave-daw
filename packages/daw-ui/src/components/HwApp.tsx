@@ -439,7 +439,11 @@ function HwPlaylistTools() {
 const PLAYLIST_TOTAL_SLOTS = 500
 
 function HwPlaylistTracks() {
-  const tracks = useTrackStore(s => s.tracks)
+  const allTracks = useTrackStore(s => s.tracks)
+  // Filter out Master — the master channel lives in the mixer, not the
+  // playlist row list. Without this, the playlist shows "Master" as
+  // its first track row.
+  const tracks = allTracks.filter(t => t.kind !== 'Master')
   const toggleArm = useTrackStore(s => s.toggleArm)
   const addAutomationLane = useTrackStore(s => s.addAutomationLane)
   const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
