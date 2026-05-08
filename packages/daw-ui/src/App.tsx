@@ -1074,6 +1074,32 @@ export function App() {
           { label: 'Release notes', action: () => window.open('https://github.com/Dishairano/hardwave-daw/releases', '_blank', 'noopener,noreferrer') },
           { label: 'Report an issue', action: () => window.open('https://github.com/Dishairano/hardwave-daw/issues', '_blank', 'noopener,noreferrer') },
           { separator: true, label: '' },
+          {
+            label: 'Check for updates…',
+            action: async () => {
+              const push = useNotificationStore.getState().push
+              try {
+                const { check } = await import('@tauri-apps/plugin-updater')
+                const { getVersion } = await import('@tauri-apps/api/app')
+                const [update, currentVersion] = await Promise.all([check(), getVersion()])
+                if (update?.available) {
+                  setUpdateInfo(prev => ({
+                    ...prev,
+                    available: true,
+                    dismissed: false,
+                    version: update.version,
+                    changelog: update.body || '',
+                    date: update.date || null,
+                  }))
+                } else {
+                  push('info', `You're up to date — running v${currentVersion}`)
+                }
+              } catch (err) {
+                push('error', 'Update check failed', { detail: String(err) })
+              }
+            },
+          },
+          { separator: true, label: '' },
           { label: 'About Hardwave DAW', action: () => setShowAbout(true) },
         ],
       },
