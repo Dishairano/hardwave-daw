@@ -979,6 +979,65 @@ export function App() {
           { separator: true, label: '' },
           { label: 'Export audio…', action: handleExportAudio },
           { separator: true, label: '' },
+          {
+            label: 'Import audio file…',
+            shortcut: 'Ctrl+I',
+            action: async () => {
+              const push = useNotificationStore.getState().push
+              try {
+                const { open } = await import('@tauri-apps/plugin-dialog')
+                const selected = await open({
+                  multiple: true,
+                  filters: [{ name: 'Audio', extensions: ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a'] }],
+                })
+                if (!selected) return
+                const paths = Array.isArray(selected) ? selected : [selected]
+                if (paths.length === 0) return
+
+                const ts = useTrackStore.getState()
+                const audio = ts.tracks.filter(t => t.kind === 'Audio')
+                let trackId = ts.selectedTrackId
+                if (!trackId || !audio.find(t => t.id === trackId)) {
+                  if (audio.length === 0) {
+                    await ts.addAudioTrack()
+                    trackId = useTrackStore.getState().tracks.find(t => t.kind === 'Audio')?.id || null
+                  } else {
+                    trackId = audio[0].id
+                  }
+                }
+                if (!trackId) {
+                  push('error', 'Could not find or create an audio track')
+                  return
+                }
+
+                const track = useTrackStore.getState().tracks.find(t => t.id === trackId)
+                let offsetTicks = 0
+                if (track) {
+                  for (const clip of track.clips) {
+                    const end = clip.position_ticks + clip.length_ticks
+                    if (end > offsetTicks) offsetTicks = end
+                  }
+                }
+
+                let imported = 0
+                for (const path of paths) {
+                  try {
+                    const result = await ts.importAudioFile(trackId, path, offsetTicks)
+                    offsetTicks += result.length_ticks
+                    imported++
+                  } catch (err) {
+                    console.error('Import failed:', path, err)
+                  }
+                }
+                push('info', imported === paths.length
+                  ? `Imported ${imported} file${imported === 1 ? '' : 's'}`
+                  : `Imported ${imported} of ${paths.length} files — ${paths.length - imported} failed`)
+              } catch (err) {
+                push('error', 'Import failed', { detail: String(err) })
+              }
+            },
+          },
+          { separator: true, label: '' },
           { label: 'Exit', action: async () => {
             try {
               const { getCurrentWindow } = await import('@tauri-apps/api/window')

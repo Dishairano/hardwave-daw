@@ -5,6 +5,7 @@ import { useTransportStore, snapToTicks } from '../../stores/transportStore'
 import { useMarkerStore } from '../../stores/markerStore'
 import { useClipGroupStore } from '../../stores/clipGroupStore'
 import { useTrackFolderStore } from '../../stores/trackFolderStore'
+import { useNotificationStore } from '../../stores/notificationStore'
 import { hw } from '../../theme'
 
 const PPQ = 960
@@ -1032,13 +1033,22 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   useEffect(() => {
     const audioExts = ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a']
     const { importAudioFile, addAudioTrack } = useTrackStore.getState()
+    const pushNotif = useNotificationStore.getState().push
 
     const unlistenDrop = listen<{ paths: string[] }>('tauri://drag-drop', async (event) => {
       setDropHighlight(false)
-      const files = event.payload.paths.filter(p => {
+      const allPaths = event.payload?.paths ?? []
+      console.log('[playlist] tauri://drag-drop fired with', allPaths.length, 'paths', allPaths)
+      const files = allPaths.filter(p => {
         const ext = p.split('.').pop()?.toLowerCase() || ''
         return audioExts.includes(ext)
       })
+      if (allPaths.length > 0 && files.length === 0) {
+        pushNotif('warning', 'Dropped file is not a supported audio format', {
+          detail: `Supported: ${audioExts.join(', ')}`,
+        })
+        return
+      }
       if (files.length === 0) return
 
       const state = useTrackStore.getState()
@@ -1052,7 +1062,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           trackId = audio[0].id
         }
       }
-      if (!trackId) return
+      if (!trackId) {
+        pushNotif('error', 'Could not find or create an audio track for dropped file')
+        return
+      }
 
       let offsetTicks = 0
       const track = useTrackStore.getState().tracks.find(t => t.id === trackId)
@@ -1065,14 +1078,22 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
       const { useBrowserStore } = await import('../../stores/browserStore')
       const pushRecent = useBrowserStore.getState().pushFileRecent
+      let imported = 0
       for (const file of files) {
         try {
           const result = await importAudioFile(trackId, file, offsetTicks)
           offsetTicks += result.length_ticks
           pushRecent(file)
+          imported++
         } catch (e) {
           console.error('Failed to import:', file, e)
+          pushNotif('error', `Failed to import ${file.split('/').pop()}`, { detail: String(e) })
         }
+      }
+      if (imported > 0) {
+        pushNotif('info', imported === files.length
+          ? `Imported ${imported} file${imported === 1 ? '' : 's'}`
+          : `Imported ${imported} of ${files.length} files`)
       }
     })
 
