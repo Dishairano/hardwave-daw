@@ -665,15 +665,42 @@ function HwInstrumentPicker({
 
 // ─── Playlist HTML ruler (mockup: .fl-pl-ruler) ─────────────────────────────
 
+const PLAYLIST_PIXELS_PER_SECOND_BASE = 100
+const PLAYLIST_BEATS_PER_BAR = 4
+
 function HwPlaylistRuler({ totalBars = 64, step = 4 }: { totalBars?: number; step?: number }) {
-  // Render a bar-marker every `step` bars, evenly spaced via flex.
-  // Width scales with --h-zoom on the parent (.fl-pl-body) per mockup.
+  // Pixel math must match Arrangement.tsx exactly so the bar numbers
+  // line up with the canvas grid. Both compute pixelsPerBar from
+  // horizontalZoom + bpm:
+  //   pixelsPerSecond = 100 * horizontalZoom
+  //   beatsPerSecond  = bpm / 60
+  //   pixelsPerBeat   = pixelsPerSecond / beatsPerSecond
+  //   pixelsPerBar    = pixelsPerBeat * 4
+  const horizontalZoom = useTransportStore(s => s.horizontalZoom)
+  const bpm = useTransportStore(s => s.bpm)
+
+  const pixelsPerSecond = PLAYLIST_PIXELS_PER_SECOND_BASE * horizontalZoom
+  const beatsPerSecond = bpm / 60
+  const pixelsPerBeat = pixelsPerSecond / beatsPerSecond
+  const pixelsPerBar = pixelsPerBeat * PLAYLIST_BEATS_PER_BAR
+
   const markers: number[] = []
   for (let bar = 1; bar <= totalBars; bar += step) markers.push(bar)
+
   return (
-    <div className="fl-pl-ruler">
+    <div className="fl-pl-ruler" style={{ width: totalBars * pixelsPerBar }}>
       {markers.map(b => (
-        <i key={b}>{b}</i>
+        <i
+          key={b}
+          style={{
+            position: 'absolute',
+            left: (b - 1) * pixelsPerBar,
+            top: 0,
+            width: step * pixelsPerBar,
+          }}
+        >
+          {b}
+        </i>
       ))}
     </div>
   )

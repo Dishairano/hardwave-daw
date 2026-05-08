@@ -1562,30 +1562,36 @@
   --row-h: 56px;
 }
 
-/* HTML ruler (sticky top, scales with --h-zoom) */
+/* HTML ruler (sticky top). Inline width set by HwPlaylistRuler to match
+   pixelsPerBar × totalBars from the Arrangement canvas; min-width keeps
+   the strip filling the viewport when fewer bars are visible. */
 .fl-pl-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   height: 28px;
   background: #040406;
   border-bottom: 1px solid var(--border);
-  display: flex;
   font-family: var(--mono);
   font-size: 9px;
   color: var(--text-dim);
   letter-spacing: 1px;
   flex-shrink: 0;
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  width: calc(100% * var(--h-zoom, 1));
   min-width: 100%;
 }
 .fl-pl-ruler i {
-  flex: 1;
+  /* Absolute positioning keeps bar numbers aligned with the Arrangement
+     canvas grid (both compute their x via pixelsPerBar). The previous
+     flex: 1 distribution evenly spaced markers regardless of zoom +
+     tempo, so they never matched the canvas bar lines. */
+  position: absolute;
+  height: 100%;
   border-right: 1px solid #0a0a0e;
   padding: 8px 0 0 4px;
   font-style: normal;
   font-weight: 500;
   color: var(--text-muted);
+  box-sizing: border-box;
 }
 
 /* Inner area where Arrangement renders its canvas */
