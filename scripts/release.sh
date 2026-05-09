@@ -47,6 +47,38 @@ case "$BUMP_TYPE" in
     ;;
 esac
 
+# Enforce changelog bullet discipline.
+#
+# Per memory feedback_daw_commit_bullets.md: hardwave-daw release commits
+# MUST use multi-line body with `-` bullets prefixed by feat: / fix: /
+# improve: / perf: / refactor: / ui: / ux: / chore: — otherwise the
+# auto-generated changelog degrades to a paragraph dump and Discord
+# falls back to "Bug fixes and improvements". This check refuses the
+# release before any tag lands.
+MSG_BULLETS=$(printf '%s\n' "$MSG" | grep -cE '^- (feat|feature|add|new|fix|bug|bugfix|improve|perf|refactor|ui|ux|chore):' || true)
+if [ "$MSG_BULLETS" -lt 1 ]; then
+  cat <<'BULLETERR' >&2
+release.sh: commit message has no `- prefix:` bullets. Required format:
+
+    fix(daw): one-line subject
+
+    Optional context paragraph.
+
+    - fix: short description of fix #1
+    - fix: short description of fix #2
+    - improve: side improvement
+
+Bullet prefixes that route the changelog correctly:
+  - feat: / feature: / add: / new:        → "New features"
+  - fix: / bug: / bugfix:                   → "Bug fixes"
+  - improve: / perf: / refactor: / ui:      → "Improvements"
+  - ux: / chore:                            → "Improvements"
+
+Refusing release until commit body has at least one prefixed bullet.
+BULLETERR
+  exit 1
+fi
+
 CONF="src-tauri/tauri.conf.json"
 cd "$(git rev-parse --show-toplevel)"
 
