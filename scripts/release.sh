@@ -109,6 +109,35 @@ esac
 echo "Bump type: $BUMP_TYPE"
 echo "Version: $CURRENT -> $NEW_VERSION"
 
+# Detect if any backend (Rust) files changed since the last release tag.
+# If only frontend / TS / CSS changed, we can publish via the much faster
+# `fe-v*` tag pipeline (frontend-publish.yml) which skips the Windows /
+# Mac / Linux Tauri rebuild and only ships a frontend bundle for the
+# hot-swap updater. Saves ~25 minutes of CI per release.
+LAST_VTAG=$(git tag --list 'v*' --sort=-v:refname | head -1 || echo "")
+FRONTEND_ONLY=0
+if [ -n "$LAST_VTAG" ]; then
+  # If git diff returns nothing for the backend paths, all changes are
+  # frontend-only. Backend paths cover Rust crates, src-tauri config,
+  # workflow files, and the release script itself (changing how we
+  # build is itself a backend concern).
+  CHANGED_BACKEND=$(git diff --name-only "${LAST_VTAG}..HEAD" -- \
+      'src-tauri/**' \
+      'crates/**' \
+      'Cargo.toml' \
+      'Cargo.lock' \
+      '.github/workflows/release.yml' \
+    | head -1)
+  if [ -z "$CHANGED_BACKEND" ]; then
+    FRONTEND_ONLY=1
+    echo "release.sh: only frontend files changed since $LAST_VTAG — will tag as fe-v$NEW_VERSION (hot-swap path, ~2min CI)"
+  else
+    echo "release.sh: backend changes detected since $LAST_VTAG — full v$NEW_VERSION build (all platforms, ~30min CI)"
+  fi
+else
+  echo "release.sh: no prior v* tag found — defaulting to full release"
+fi
+
 # Generate changelog from commits since last tag, categorized into 3 sections.
 # Bullet convention in commit bodies:
 #   - feat: ...       → New features
@@ -269,10 +298,29 @@ fi
 git add -A
 git commit -m "$MSG"
 git push origin master
-git tag -a "v$NEW_VERSION" -m "$(cat "$CHANGELOG_FILE")"
-git push origin "v$NEW_VERSION"
+
+# Pick the tag prefix based on whether this release touched any backend
+# code. fe-v* triggers frontend-publish.yml only (~2min); v* triggers
+# the full release.yml across Windows / Mac / Linux (~30min).
+# Always also push a v* tag for full builds so the auto-updater feed
+# advances and users get a fresh installer eventually — but only when
+# backend actually changed, so we are not wasting Windows minutes on
+# pure-CSS days.
+if [ "$FRONTEND_ONLY" = "1" ]; then
+  TAG_NAME="fe-v$NEW_VERSION"
+else
+  TAG_NAME="v$NEW_VERSION"
+fi
+git tag -a "$TAG_NAME" -m "$(cat "$CHANGELOG_FILE")"
+git push origin "$TAG_NAME"
 
 # Clean up changelog file
 rm -f "$CHANGELOG_FILE"
 
-echo "Released v$NEW_VERSION ($BUMP_TYPE bump) — CI building at https://github.com/Dishairano/hardwave-daw/actions"
+if [ "$FRONTEND_ONLY" = "1" ]; then
+  echo "Released $TAG_NAME ($BUMP_TYPE, frontend-only) — fast CI at https://github.com/Dishairano/hardwave-daw/actions"
+  echo "Existing installed apps will hot-swap to this frontend on next launch."
+else
+  echo "Released $TAG_NAME ($BUMP_TYPE, full build) — CI at https://github.com/Dishairano/hardwave-daw/actions"
+  echo "Users update via Help → Check for updates… once Windows / Mac / Linux artifacts are ready."
+fi
