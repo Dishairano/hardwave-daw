@@ -1154,7 +1154,33 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const unlistenOver = listen('tauri://drag-over', () => setDropHighlight(true))
     const unlistenLeave = listen('tauri://drag-leave', () => setDropHighlight(false))
 
+    // Browser-native fallback diagnostics. With dragDropEnabled:true on
+    // tauri.conf, these should NOT fire (Tauri intercepts). If they do
+    // fire, it means WebView2 is delivering the drop to the page but
+    // Tauri's interceptor isn't catching it — that's a real signal.
+    const winDragEnter = (e: DragEvent) => {
+      e.preventDefault()
+      log({ level: 'event', test: 'drag-drop', message: 'browser:dragenter (Tauri did NOT intercept)', actual: `types=${Array.from(e.dataTransfer?.types ?? []).join(',')}` })
+    }
+    const winDragOver = (e: DragEvent) => { e.preventDefault() }
+    const winDrop = (e: DragEvent) => {
+      e.preventDefault()
+      const filesArr = Array.from(e.dataTransfer?.files ?? [])
+      log({
+        level: 'fail',
+        test: 'drag-drop',
+        message: 'browser:drop fired (Tauri bridge missed)',
+        actual: filesArr.map(f => `${f.name} (${f.size}B)`).join(', ') || '(no files)',
+      })
+    }
+    window.addEventListener('dragenter', winDragEnter)
+    window.addEventListener('dragover', winDragOver)
+    window.addEventListener('drop', winDrop)
+
     return () => {
+      window.removeEventListener('dragenter', winDragEnter)
+      window.removeEventListener('dragover', winDragOver)
+      window.removeEventListener('drop', winDrop)
       unlistenDrop.then(f => f())
       unlistenNativeDrop.then(f => f())
       unlistenOver.then(f => f())
