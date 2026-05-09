@@ -284,22 +284,58 @@ function HwSecondRow({ hint, projectName }: { hint: string; projectName: string 
 
 // ─── Pattern picker (fl-picker) ─────────────────────────────────────────────
 
+type PickerTab = 'ALL' | 'PAT' | 'AUD' | 'AUT'
+
 function HwPicker() {
-  // Picker shows patterns only — per FL Studio convention. The 500
-  // pre-allocated inserts (introduced v0.158.0) are NOT items you pick;
-  // they are rows you place patterns onto. Listing every insert here
-  // would just be noise.
+  // Picker shows patterns + audio tracks that have content + automation
+  // tracks that have lanes. The 500 pre-allocated empty Inserts
+  // (v0.158.0) stay out — only tracks the user has actually used join
+  // the picker. Tabs filter by category.
   const patterns = usePatternStore(s => s.patterns)
   const activeId = usePatternStore(s => s.activeId)
   const setActive = usePatternStore(s => s.setActive)
+  const tracks = useTrackStore(s => s.tracks)
+  const [tab, setTab] = useState<PickerTab>('ALL')
+
+  const audioTracksWithContent = useMemo(
+    () => tracks.filter(t => t.kind === 'Audio' && t.clips && t.clips.length > 0),
+    [tracks],
+  )
+  const automationTracksWithLanes = useMemo(
+    () => tracks.filter(
+      t => t.kind === 'Automation' && t.automationLanes && t.automationLanes.length > 0,
+    ),
+    [tracks],
+  )
+
+  const showPatterns = tab === 'ALL' || tab === 'PAT'
+  const showAudio = tab === 'ALL' || tab === 'AUD'
+  const showAuto = tab === 'ALL' || tab === 'AUT'
+
+  const totalCount =
+    (showPatterns ? patterns.length : 0) +
+    (showAudio ? audioTracksWithContent.length : 0) +
+    (showAuto ? automationTracksWithLanes.length : 0)
 
   return (
     <div className="fl-picker">
       <div className="fl-picker-head">
-        PICKER<span className="ct">{patterns.length}</span>
+        PICKER<span className="ct">{totalCount}</span>
+      </div>
+      <div className="fl-picker-tabs">
+        {(['ALL', 'PAT', 'AUD', 'AUT'] as PickerTab[]).map(t => (
+          <button
+            key={t}
+            type="button"
+            className={`fl-picker-tab${tab === t ? ' on' : ''}`}
+            onClick={() => setTab(t)}
+          >
+            {t}
+          </button>
+        ))}
       </div>
       <div className="fl-picker-list">
-        {patterns.map(p => (
+        {showPatterns && patterns.map(p => (
           <div
             key={p.id}
             className={`fl-pi${p.id === activeId ? ' on' : ''}`}
@@ -311,9 +347,33 @@ function HwPicker() {
             <span className="nm">▸ {p.name}</span>
           </div>
         ))}
-        {patterns.length === 0 && (
+        {showAudio && audioTracksWithContent.map(t => (
+          <div
+            key={`aud-${t.id}`}
+            className="fl-pi"
+            style={{ ['--col' as any]: t.color || '#06b6d4' }}
+            title={`${t.name} — ${t.clips.length} clip${t.clips.length === 1 ? '' : 's'}`}
+          >
+            <span className="ic" />
+            <span className="nm">♫ {t.name}</span>
+          </div>
+        ))}
+        {showAuto && automationTracksWithLanes.map(t => (
+          <div
+            key={`aut-${t.id}`}
+            className="fl-pi"
+            title={`${t.name} — ${t.automationLanes.length} lane${t.automationLanes.length === 1 ? '' : 's'}`}
+          >
+            <span className="ic" style={{ background: '#1a0e26', border: '1px solid var(--purple)' }} />
+            <span className="nm" style={{ color: 'var(--purple)' }}>⌇ {t.name}</span>
+          </div>
+        ))}
+        {totalCount === 0 && (
           <div style={{ padding: '10px 8px', color: 'var(--text-dim)', fontSize: 9, fontFamily: 'var(--mono)' }}>
-            No patterns yet
+            {tab === 'ALL' && 'Drop a sample or create a pattern'}
+            {tab === 'PAT' && 'No patterns yet'}
+            {tab === 'AUD' && 'No audio with content yet'}
+            {tab === 'AUT' && 'No automation lanes yet'}
           </div>
         )}
       </div>
