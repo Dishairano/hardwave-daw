@@ -1035,10 +1035,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const { importAudioFile, addAudioTrack } = useTrackStore.getState()
     const pushNotif = useNotificationStore.getState().push
 
-    const unlistenDrop = listen<{ paths: string[] }>('tauri://drag-drop', async (event) => {
+    // Native bridge: the Rust on_window_event re-emits drag/drop as
+    // `daw:drag-drop` so we have a path that works on Windows + WebView2
+    // even when the built-in tauri://drag-drop event is flaky there.
+    // Both listeners stay registered; whichever fires first wins. The
+    // import is idempotent enough that an accidental double-fire just
+    // imports twice (unlikely — only one channel actually fires per drop).
+    const handleDropPayload = async (allPaths: string[]) => {
       setDropHighlight(false)
-      const allPaths = event.payload?.paths ?? []
-      console.log('[playlist] tauri://drag-drop fired with', allPaths.length, 'paths', allPaths)
+      console.log('[playlist] drag-drop received', allPaths.length, 'paths', allPaths)
       const files = allPaths.filter(p => {
         const ext = p.split('.').pop()?.toLowerCase() || ''
         return audioExts.includes(ext)
@@ -1095,13 +1100,39 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           ? `Imported ${imported} file${imported === 1 ? '' : 's'}`
           : `Imported ${imported} of ${files.length} files`)
       }
-    })
+    }
 
+    // De-dupe: if both channels fire for the same drop within 200 ms,
+    // ignore the second one. Windows users will likely receive the
+    // native `daw:drag-drop` first; macOS / Linux users get the
+    // standard `tauri://drag-drop` channel.
+    let lastDropAt = 0
+    const dispatchDrop = (paths: string[]) => {
+      const now = Date.now()
+      if (now - lastDropAt < 200) return
+      lastDropAt = now
+      void handleDropPayload(paths)
+    }
+
+    const unlistenDrop = listen<{ paths: string[] }>('tauri://drag-drop', (event) => {
+      dispatchDrop(event.payload?.paths ?? [])
+    })
+    const unlistenNativeDrop = listen<{ kind: string; paths?: string[] }>(
+      'daw:drag-drop',
+      (event) => {
+        const payload = event.payload
+        if (!payload) return
+        if (payload.kind === 'enter' || payload.kind === 'over') setDropHighlight(true)
+        else if (payload.kind === 'leave') setDropHighlight(false)
+        else if (payload.kind === 'drop') dispatchDrop(payload.paths ?? [])
+      },
+    )
     const unlistenOver = listen('tauri://drag-over', () => setDropHighlight(true))
     const unlistenLeave = listen('tauri://drag-leave', () => setDropHighlight(false))
 
     return () => {
       unlistenDrop.then(f => f())
+      unlistenNativeDrop.then(f => f())
       unlistenOver.then(f => f())
       unlistenLeave.then(f => f())
     }

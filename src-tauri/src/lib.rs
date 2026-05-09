@@ -473,13 +473,55 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                // Reliable clean-shutdown hook: clear the alive marker so the
-                // next launch does not mistake this for a crash.
-                if let Ok(dir) = window.app_handle().path().app_cache_dir() {
-                    let marker = dir.join("autosaves").join("session.alive");
-                    let _ = std::fs::remove_file(marker);
+            match event {
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    // Reliable clean-shutdown hook: clear the alive marker so
+                    // the next launch does not mistake this for a crash.
+                    if let Ok(dir) = window.app_handle().path().app_cache_dir() {
+                        let marker = dir.join("autosaves").join("session.alive");
+                        let _ = std::fs::remove_file(marker);
+                    }
                 }
+                tauri::WindowEvent::DragDrop(drag_event) => {
+                    // Native-side drag-drop bridge. On Windows + WebView2 with
+                    // a custom-decoration window, the JS-level
+                    // `tauri://drag-drop` event sometimes does not fire even
+                    // though Tauri itself receives the OLE drop. Re-emit the
+                    // payload as `daw:drag-drop` so the frontend has a
+                    // reliable signal regardless of the WebView2 quirk.
+                    let payload = match drag_event {
+                        tauri::DragDropEvent::Enter { paths, position } => {
+                            serde_json::json!({
+                                "kind": "enter",
+                                "paths": paths,
+                                "x": position.x,
+                                "y": position.y,
+                            })
+                        }
+                        tauri::DragDropEvent::Over { position } => {
+                            serde_json::json!({
+                                "kind": "over",
+                                "x": position.x,
+                                "y": position.y,
+                            })
+                        }
+                        tauri::DragDropEvent::Drop { paths, position } => {
+                            serde_json::json!({
+                                "kind": "drop",
+                                "paths": paths,
+                                "x": position.x,
+                                "y": position.y,
+                            })
+                        }
+                        tauri::DragDropEvent::Leave => {
+                            serde_json::json!({ "kind": "leave" })
+                        }
+                        _ => return,
+                    };
+                    use tauri::Emitter;
+                    let _ = window.emit("daw:drag-drop", payload);
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())
