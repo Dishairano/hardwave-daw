@@ -153,7 +153,7 @@ interface TrackState {
   selectClip: (clipId: string | null, trackId?: string) => void
   setActiveMidiClip: (trackId: string | null, clipId: string | null) => void
   ensureMidiClipOnTrack: (trackId: string) => Promise<string | null>
-  addAudioTrack: (name?: string) => Promise<void>
+  addAudioTrack: (name?: string) => Promise<string | null>
   addMidiTrack: (name?: string) => Promise<void>
   addAutomationTrack: (name?: string) => Promise<void>
   removeTrack: (id: string) => Promise<void>
@@ -287,10 +287,14 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const finalName = name || nextTrackName(get().tracks)
     if (!finalName) {
       console.warn('Track limit reached (500)')
-      return
+      return null
     }
-    await mut('add_audio_track', { name: finalName }, `Add audio track "${finalName}"`)
+    // Backend returns the new track id; surface it so callers (e.g. the
+    // drag-drop importer) can target the freshly-created track without
+    // racing against fetchTracks() repopulating the store.
+    const id = await mut<string>('add_audio_track', { name: finalName }, `Add audio track "${finalName}"`)
     await get().fetchTracks()
+    return id
   },
 
   addMidiTrack: async (name) => {

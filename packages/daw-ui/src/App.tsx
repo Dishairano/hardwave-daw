@@ -1018,11 +1018,10 @@ export function App() {
 
                 const ts = useTrackStore.getState()
                 const audio = ts.tracks.filter(t => t.kind === 'Audio')
-                let trackId = ts.selectedTrackId
+                let trackId: string | null = ts.selectedTrackId
                 if (!trackId || !audio.find(t => t.id === trackId)) {
                   if (audio.length === 0) {
-                    await ts.addAudioTrack()
-                    trackId = useTrackStore.getState().tracks.find(t => t.kind === 'Audio')?.id || null
+                    trackId = await ts.addAudioTrack()
                   } else {
                     trackId = audio[0].id
                   }

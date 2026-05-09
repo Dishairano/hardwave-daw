@@ -1137,12 +1137,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
 
       const state = useTrackStore.getState()
-      let trackId = state.selectedTrackId
+      let trackId: string | null = state.selectedTrackId
       const audio = state.tracks.filter(t => t.kind === 'Audio')
       if (!trackId || !audio.find(t => t.id === trackId)) {
         if (audio.length === 0) {
-          await addAudioTrack()
-          trackId = useTrackStore.getState().tracks.find(t => t.kind === 'Audio')?.id || null
+          // Use the id returned by addAudioTrack directly. Looking it up
+          // via store.tracks.find afterwards can race against React's
+          // commit cycle on a fresh project, leaving trackId null even
+          // though the backend created the track — the symptom the user
+          // reported as "imported but not visible".
+          trackId = await addAudioTrack()
         } else {
           trackId = audio[0].id
         }

@@ -47,8 +47,25 @@ pub struct PluginStateEntry {
     pub chunk: Vec<u8>,
 }
 
+/// How many empty audio inserts a fresh project starts with.
+///
+/// Per the playlist/mixer decoupling design (mockup at
+/// `playlist-mixer-decoupling-mockup`): a new project ships with 500
+/// pre-allocated playlist inserts so the user never has to "Add new
+/// track" — they just drop on Insert 27 if they want it there. Inserts
+/// stay zero-cost when empty (no clips, no chain) so memory + audio
+/// graph overhead is negligible.
+pub const DEFAULT_INSERT_COUNT: usize = 500;
+
 impl Default for Project {
     fn default() -> Self {
+        let mut tracks = Vec::with_capacity(DEFAULT_INSERT_COUNT + 1);
+        tracks.push(Track::new_master("master".into()));
+        for i in 1..=DEFAULT_INSERT_COUNT {
+            let id = format!("insert-{:03}", i);
+            tracks.push(Track::new_audio(id, format!("Insert {}", i)));
+        }
+
         Self {
             version: 1,
             metadata: ProjectMetadata {
@@ -59,7 +76,7 @@ impl Default for Project {
                 modified_at: chrono::Utc::now().to_rfc3339(),
             },
             tempo_map: TempoMap::default(),
-            tracks: vec![Track::new_master("master".into())],
+            tracks,
             channel_rack_state: None,
             midi_mappings: None,
             plugin_states: Vec::new(),
