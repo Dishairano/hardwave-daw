@@ -312,6 +312,17 @@ export function App() {
     })
     fetchTracks().finally(() => setTracksReady(true))
 
+    // Block WebView2's default file-drop behaviour at the document
+    // capture phase so dropped files never navigate the page to the
+    // file URL (which is what was making the dragged audio "open in
+    // the browser first"). Tauri's interceptor still imports the file
+    // via the daw:drag-drop / tauri://drag-drop channels — this just
+    // makes sure the WebView's default handler can never claim it.
+    const blockDefaultDrag = (e: DragEvent) => { e.preventDefault() }
+    document.addEventListener('dragenter', blockDefaultDrag, { capture: true })
+    document.addEventListener('dragover', blockDefaultDrag, { capture: true })
+    document.addEventListener('drop', blockDefaultDrag, { capture: true })
+
     // Splash gate part 2 — run the frontend updater. The Rust side is
     // budgeted (5s total) so this always resolves; on error we still set
     // ready so the splash can advance. Status events from the Rust side
@@ -479,6 +490,9 @@ export function App() {
     return () => {
       cancelled = true
       clearInterval(dailyRecheck)
+      document.removeEventListener('dragenter', blockDefaultDrag, { capture: true })
+      document.removeEventListener('dragover', blockDefaultDrag, { capture: true })
+      document.removeEventListener('drop', blockDefaultDrag, { capture: true })
     }
   }, [])
 
