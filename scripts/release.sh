@@ -1,9 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: ./scripts/release.sh "commit message"
-# Bumps patch version in tauri.conf.json, commits, pushes, and tags.
-# Generates a changelog from git commits since the last tag.
+# Hardwave DAW release script — strict SemVer enforced per
+# memory feedback_daw_versioning.md.
+#
+# Usage:
+#   ./scripts/release.sh <patch|minor|major> "commit message"
+#
+#   patch  — bug fix, polish, refactor          (0.X.Y → 0.X.Y+1)
+#   minor  — new user-visible feature           (0.X.Y → 0.X+1.0, patch resets)
+#   major  — breaking change / major redesign   (X.Y.Z → X+1.0.0, both reset)
+#
+# No default. The script refuses to run without an explicit bump type
+# so we cannot silently patch-bump a feature ever again.
+
+if [ $# -lt 2 ]; then
+  cat <<'USAGE' >&2
+Usage: ./scripts/release.sh <patch|minor|major> "commit message"
+
+  patch  bug fix, polish, refactor          (0.X.Y → 0.X.Y+1)
+  minor  new user-visible feature           (0.X.Y → 0.X+1.0)
+  major  breaking change / major redesign   (X.Y.Z → X+1.0.0)
+
+Pick honestly:
+  - new plug-in / new menu item / new panel  → minor
+  - drag-drop fix / regression fix / polish  → patch
+  - removed feature / changed API contract   → major
+
+Examples:
+  ./scripts/release.sh patch "fix(daw): drag-drop on Windows"
+  ./scripts/release.sh minor "feat(daw): KickSynth visual redesign"
+  ./scripts/release.sh major "BREAKING: renamed project file format"
+USAGE
+  exit 1
+fi
+
+BUMP_TYPE="$1"
+MSG="$2"
+
+case "$BUMP_TYPE" in
+  patch|minor|major) ;;
+  *)
+    echo "release.sh: bump type must be 'patch', 'minor', or 'major' — got '$BUMP_TYPE'" >&2
+    echo "Run with no args for usage." >&2
+    exit 1
+    ;;
+esac
 
 CONF="src-tauri/tauri.conf.json"
 cd "$(git rev-parse --show-toplevel)"
@@ -17,9 +59,22 @@ CURRENT=$(grep '"version"' "$CONF" | head -1 | sed 's/.*"\([0-9]*\.[0-9]*\.[0-9]
 MAJOR=$(echo "$CURRENT" | cut -d. -f1)
 MINOR=$(echo "$CURRENT" | cut -d. -f2)
 PATCH=$(echo "$CURRENT" | cut -d. -f3)
-NEW_PATCH=$((PATCH + 1))
-NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
 
+# Compute new version per the chosen bump type. Major resets minor+patch;
+# minor resets patch; patch increments only the last segment.
+case "$BUMP_TYPE" in
+  major)
+    NEW_VERSION="$((MAJOR + 1)).0.0"
+    ;;
+  minor)
+    NEW_VERSION="$MAJOR.$((MINOR + 1)).0"
+    ;;
+  patch)
+    NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+    ;;
+esac
+
+echo "Bump type: $BUMP_TYPE"
 echo "Version: $CURRENT -> $NEW_VERSION"
 
 # Generate changelog from commits since last tag, categorized into 3 sections.
@@ -178,9 +233,6 @@ if command -v cargo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   fi
 fi
 
-# Commit message from arg or default
-MSG="${1:-Release v$NEW_VERSION}"
-
 # Stage all changes, commit, push, tag
 git add -A
 git commit -m "$MSG"
@@ -191,4 +243,4 @@ git push origin "v$NEW_VERSION"
 # Clean up changelog file
 rm -f "$CHANGELOG_FILE"
 
-echo "Released v$NEW_VERSION — CI building at https://github.com/Dishairano/hardwave-daw/actions"
+echo "Released v$NEW_VERSION ($BUMP_TYPE bump) — CI building at https://github.com/Dishairano/hardwave-daw/actions"
