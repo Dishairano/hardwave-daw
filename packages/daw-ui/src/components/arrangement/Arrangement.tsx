@@ -6,6 +6,7 @@ import { useMarkerStore } from '../../stores/markerStore'
 import { useClipGroupStore } from '../../stores/clipGroupStore'
 import { useTrackFolderStore } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
+import { useLogStore } from '../../dev/logStore'
 import { hw } from '../../theme'
 
 const PPQ = 960
@@ -1034,6 +1035,11 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const audioExts = ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a']
     const { importAudioFile, addAudioTrack } = useTrackStore.getState()
     const pushNotif = useNotificationStore.getState().push
+    useLogStore.getState().append({
+      level: 'event',
+      test: 'drag-drop',
+      message: 'listeners registered (tauri:// + daw: channels)',
+    })
 
     // Native bridge: the Rust on_window_event re-emits drag/drop as
     // `daw:drag-drop` so we have a path that works on Windows + WebView2
@@ -1041,20 +1047,31 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // Both listeners stay registered; whichever fires first wins. The
     // import is idempotent enough that an accidental double-fire just
     // imports twice (unlikely — only one channel actually fires per drop).
+    const log = useLogStore.getState().append
     const handleDropPayload = async (allPaths: string[]) => {
       setDropHighlight(false)
       console.log('[playlist] drag-drop received', allPaths.length, 'paths', allPaths)
+      log({
+        level: 'event',
+        test: 'drag-drop',
+        message: `drag-drop received ${allPaths.length} path(s)`,
+        actual: allPaths.length === 0 ? '(empty)' : allPaths.join(', '),
+      })
       const files = allPaths.filter(p => {
         const ext = p.split('.').pop()?.toLowerCase() || ''
         return audioExts.includes(ext)
       })
       if (allPaths.length > 0 && files.length === 0) {
+        log({ level: 'fail', test: 'drag-drop', message: 'unsupported file format', actual: allPaths.join(', ') })
         pushNotif('warning', 'Dropped file is not a supported audio format', {
           detail: `Supported: ${audioExts.join(', ')}`,
         })
         return
       }
-      if (files.length === 0) return
+      if (files.length === 0) {
+        log({ level: 'event', test: 'drag-drop', message: 'no paths in payload (empty drop)' })
+        return
+      }
 
       const state = useTrackStore.getState()
       let trackId = state.selectedTrackId
@@ -1090,12 +1107,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           offsetTicks += result.length_ticks
           pushRecent(file)
           imported++
+          log({ level: 'pass', test: 'drag-drop', message: `imported ${file.split(/[\\/]/).pop() || file}`, actual: `+${result.length_ticks} ticks` })
         } catch (e) {
           console.error('Failed to import:', file, e)
-          pushNotif('error', `Failed to import ${file.split('/').pop()}`, { detail: String(e) })
+          log({ level: 'fail', test: 'drag-drop', message: `import failed: ${file.split(/[\\/]/).pop() || file}`, actual: String(e) })
+          pushNotif('error', `Failed to import ${file.split(/[\\/]/).pop()}`, { detail: String(e) })
         }
       }
       if (imported > 0) {
+        log({ level: 'info', test: 'drag-drop', message: `imported ${imported}/${files.length} file(s) on track ${trackId}` })
         pushNotif('info', imported === files.length
           ? `Imported ${imported} file${imported === 1 ? '' : 's'}`
           : `Imported ${imported} of ${files.length} files`)
@@ -1115,6 +1135,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
 
     const unlistenDrop = listen<{ paths: string[] }>('tauri://drag-drop', (event) => {
+      log({ level: 'event', test: 'drag-drop', message: 'channel:tauri://drag-drop fired', actual: `${event.payload?.paths?.length ?? 0} path(s)` })
       dispatchDrop(event.payload?.paths ?? [])
     })
     const unlistenNativeDrop = listen<{ kind: string; paths?: string[] }>(
@@ -1124,7 +1145,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         if (!payload) return
         if (payload.kind === 'enter' || payload.kind === 'over') setDropHighlight(true)
         else if (payload.kind === 'leave') setDropHighlight(false)
-        else if (payload.kind === 'drop') dispatchDrop(payload.paths ?? [])
+        else if (payload.kind === 'drop') {
+          log({ level: 'event', test: 'drag-drop', message: 'channel:daw:drag-drop (native) fired', actual: `${payload.paths?.length ?? 0} path(s)` })
+          dispatchDrop(payload.paths ?? [])
+        }
       },
     )
     const unlistenOver = listen('tauri://drag-over', () => setDropHighlight(true))
