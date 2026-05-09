@@ -301,7 +301,15 @@ export function App() {
     // setUpdateInfo on an unmounted component. Mirrored on cleanup.
     let cancelled = false
 
-    // Splash gate part 1 — load track state for the project.
+    // Splash gate part 1 — load track state for the project AND start the
+    // audio engine. Without start_engine the cpal output stream is never
+    // opened so play() just flips a flag and no audio comes out, no time
+    // advances. Bug regressed silently because only test code was
+    // invoking start_engine. Wire it on every launch here.
+    invoke('start_engine').catch((err) => {
+      console.error('start_engine failed at boot:', err)
+      useNotificationStore.getState().push('error', 'Audio engine failed to start', { detail: String(err) })
+    })
     fetchTracks().finally(() => setTracksReady(true))
 
     // Splash gate part 2 — run the frontend updater. The Rust side is
