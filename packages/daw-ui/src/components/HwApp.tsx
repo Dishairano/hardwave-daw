@@ -284,76 +284,36 @@ function HwSecondRow({ hint, projectName }: { hint: string; projectName: string 
 
 // ─── Pattern picker (fl-picker) ─────────────────────────────────────────────
 
-type PickerTab = 'ALL' | 'PAT' | 'AUD' | 'AUT'
-
 function HwPicker() {
+  // Picker shows patterns only — per FL Studio convention. The 500
+  // pre-allocated inserts (introduced v0.158.0) are NOT items you pick;
+  // they are rows you place patterns onto. Listing every insert here
+  // would just be noise.
   const patterns = usePatternStore(s => s.patterns)
   const activeId = usePatternStore(s => s.activeId)
   const setActive = usePatternStore(s => s.setActive)
-  const tracks = useTrackStore(s => s.tracks)
-  const [tab, setTab] = useState<PickerTab>('ALL')
-
-  const audioTracks = useMemo(() => tracks.filter(t => t.kind === 'Audio'), [tracks])
-  const automationTracks = useMemo(() => tracks.filter(t => t.kind === 'Automation'), [tracks])
-
-  const showPatterns = tab === 'ALL' || tab === 'PAT'
-  const showAudio = tab === 'ALL' || tab === 'AUD'
-  const showAuto = tab === 'ALL' || tab === 'AUT'
-
-  const totalCount =
-    (showPatterns ? patterns.length : 0) +
-    (showAudio ? audioTracks.length : 0) +
-    (showAuto ? automationTracks.length : 0)
 
   return (
     <div className="fl-picker">
       <div className="fl-picker-head">
-        PICKER<span className="ct">{totalCount}</span>
-      </div>
-      <div className="fl-picker-tabs">
-        {(['ALL', 'PAT', 'AUD', 'AUT'] as PickerTab[]).map(t => (
-          <button key={t} type="button" className={`fl-picker-tab${tab === t ? ' on' : ''}`} onClick={() => setTab(t)}>
-            {t}
-          </button>
-        ))}
+        PICKER<span className="ct">{patterns.length}</span>
       </div>
       <div className="fl-picker-list">
-        {showPatterns && patterns.map(p => (
+        {patterns.map(p => (
           <div
             key={p.id}
             className={`fl-pi${p.id === activeId ? ' on' : ''}`}
             style={{ ['--col' as any]: p.color || '#22c55e' }}
             onClick={() => setActive(p.id)}
-            title={`Switch to ${p.name}`}
+            title={`Select ${p.name} — left-click in the playlist to place`}
           >
             <span className="ic" />
             <span className="nm">▸ {p.name}</span>
           </div>
         ))}
-        {showAudio && audioTracks.map(t => (
-          <div
-            key={`aud-${t.id}`}
-            className="fl-pi"
-            style={{ ['--col' as any]: '#06b6d4' }}
-            title={t.name}
-          >
-            <span className="ic" />
-            <span className="nm">♫ {t.name}</span>
-          </div>
-        ))}
-        {showAuto && automationTracks.map(t => (
-          <div
-            key={`aut-${t.id}`}
-            className="fl-pi"
-            title={t.name}
-          >
-            <span className="ic" style={{ background: '#1a0e26', border: '1px solid var(--purple)' }} />
-            <span className="nm" style={{ color: 'var(--purple)' }}>⌇ {t.name}</span>
-          </div>
-        ))}
-        {totalCount === 0 && (
+        {patterns.length === 0 && (
           <div style={{ padding: '10px 8px', color: 'var(--text-dim)', fontSize: 9, fontFamily: 'var(--mono)' }}>
-            No items
+            No patterns yet
           </div>
         )}
       </div>
