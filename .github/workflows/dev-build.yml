@@ -164,6 +164,11 @@ jobs:
             choco install llvm -y --no-progress --force
           }
           echo "LIBCLANG_PATH=$llvmBin" >> $env:GITHUB_ENV
+          # Same lld-link switch as release.yml — keeps dev builds in sync
+          # with what release builds use, so we surface linker problems
+          # before tagging a release.
+          echo "$llvmBin" >> $env:GITHUB_PATH
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=lld-link.exe" >> $env:GITHUB_ENV
 
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli@latest
