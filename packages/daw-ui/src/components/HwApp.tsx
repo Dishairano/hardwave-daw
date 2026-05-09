@@ -665,21 +665,12 @@ function HwInstrumentPicker({
 
 // ─── Playlist HTML ruler (mockup: .fl-pl-ruler) ─────────────────────────────
 
-function HwPlaylistRuler({ totalBars = 64, step = 4 }: { totalBars?: number; step?: number }) {
-  // Render a bar-marker every `step` bars, evenly spaced via flex.
-  // Width scales with --h-zoom on the parent (.fl-pl-body) per mockup.
-  // Pixel-exact alignment with the canvas grid is handled by the
-  // canvas itself drawing the ruler band — see Arrangement.tsx
-  // RULER_HEIGHT constant. This HTML strip is decorative numbers only.
-  const markers: number[] = []
-  for (let bar = 1; bar <= totalBars; bar += step) markers.push(bar)
-  return (
-    <div className="fl-pl-ruler">
-      {markers.map(b => (
-        <i key={b}>{b}</i>
-      ))}
-    </div>
-  )
+function HwPlaylistRuler(_props: { totalBars?: number; step?: number }) {
+  // Disabled — canvas owns the ruler now (Arrangement.tsx, RULER_HEIGHT
+  // = 22). Returning null instead of removing the call site keeps
+  // existing layout slots intact in case we want to A/B between
+  // canvas + HTML rulers later.
+  return null
 }
 
 // ─── Playlist panel header ───────────────────────────────────────────────────

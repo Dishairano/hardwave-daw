@@ -13,11 +13,11 @@ const PPQ = 960
 const PIXELS_PER_SECOND_BASE = 100
 // (mockup-aligned)
 const RESIZE_HANDLE_PX = 6
-// HTML ruler now lives in HwApp.tsx (.fl-pl-ruler). Canvas reserves no top
-// space for ruler — track lanes start at y=0. Kept as a named constant so
-// scroll math stays readable; flip back to a positive value if the canvas
-// needs to render its own ruler again.
-const RULER_HEIGHT = 0
+// Canvas-internal bar ruler — 22 px reserved at the top for bar numbers
+// drawn in the same pixel-space as the grid lines underneath. The HTML
+// ruler in HwApp.tsx is hidden via .fl-pl-ruler-hidden when the canvas
+// owns the ruler so we never have two competing visual layers.
+const RULER_HEIGHT = 22
 
 type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left' | 'fade-in' | 'fade-out' | 'rubber' | 'scrub'
 
@@ -167,8 +167,25 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
 
+    // Top ruler band — bar numbers drawn in the SAME pixel space as the
+    // grid lines below. Previously the ruler was an HTML element in
+    // HwApp.tsx that flex-distributed its markers regardless of zoom +
+    // tempo, so the numbers never lined up with the canvas vertical
+    // grid lines. Drawing inside the canvas guarantees alignment by
+    // construction.
+    if (RULER_HEIGHT > 0) {
+      ctx.fillStyle = '#040406'
+      ctx.fillRect(0, 0, w, RULER_HEIGHT)
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(0, RULER_HEIGHT - 0.5)
+      ctx.lineTo(w, RULER_HEIGHT - 0.5)
+      ctx.stroke()
+    }
+
     // Beat grid — HQ pixel-snapped, mockup palette.
-    // (The ruler bar itself is now an HTML element in HwApp .fl-pl-ruler.)
+    const pixelsPerBar = pixelsPerBeat * 4
     const startBeat = Math.floor(scrollOffset / pixelsPerBeat)
     for (let i = startBeat; i < startBeat + Math.ceil(w / pixelsPerBeat) + 2; i++) {
       const xRaw = i * pixelsPerBeat - scrollOffset
@@ -183,6 +200,24 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.moveTo(x, 0)
       ctx.lineTo(x, h)
       ctx.stroke()
+    }
+
+    // Bar number labels in the ruler band. One label every 4 bars so
+    // they don't crowd at low zoom; per-bar labels at high zoom.
+    if (RULER_HEIGHT > 0 && pixelsPerBar > 0) {
+      const labelEvery = pixelsPerBar >= 80 ? 1 : pixelsPerBar >= 40 ? 2 : 4
+      ctx.fillStyle = 'rgba(180, 180, 200, 0.7)'
+      ctx.font = '600 10px "JetBrains Mono", ui-monospace, Consolas, monospace'
+      ctx.textBaseline = 'middle'
+      const startBar = Math.max(0, Math.floor(scrollOffset / pixelsPerBar))
+      const endBar = startBar + Math.ceil(w / pixelsPerBar) + 1
+      for (let bar = startBar; bar <= endBar; bar++) {
+        if (bar % labelEvery !== 0) continue
+        const xRaw = bar * pixelsPerBar - scrollOffset
+        const x = Math.floor(xRaw) + 4
+        if (x < -20 || x > w) continue
+        ctx.fillText(String(bar + 1), x, RULER_HEIGHT / 2 + 1)
+      }
     }
 
     // Sub-beat snap grid — only when snap is finer than 1/4 and lines won't be too dense
@@ -828,8 +863,12 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // the clip to that track instead of just shifting position.
       // Refuses on type mismatch (audio→midi or vice-versa); the
       // backend command also enforces this with a hard error.
-      const trackIdx = Math.floor(mouseY / trackHeight)
-      const targetTrack = audioTracks[trackIdx]
+      // Skip the ruler band so a near-top mouseY does not register as
+      // track index -1 / 0 incorrectly.
+      const trackIdx = mouseY >= RULER_HEIGHT
+        ? Math.floor((mouseY - RULER_HEIGHT) / trackHeight)
+        : -1
+      const targetTrack = trackIdx >= 0 ? audioTracks[trackIdx] : undefined
       const sourceTrack = audioTracks.find(t => t.id === drag.trackId)
       const canMoveAcross =
         targetTrack &&
