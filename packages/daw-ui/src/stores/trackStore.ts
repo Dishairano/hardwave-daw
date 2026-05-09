@@ -192,6 +192,12 @@ interface TrackState {
   setAutomationLaneVisible: (trackId: string, laneId: string, visible: boolean) => Promise<void>
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
   moveClip: (trackId: string, clipId: string, newPositionTicks: number) => Promise<void>
+  moveClipToTrack: (
+    fromTrackId: string,
+    toTrackId: string,
+    clipId: string,
+    newPositionTicks: number,
+  ) => Promise<void>
   resizeClip: (trackId: string, clipId: string, newLengthTicks: number) => Promise<void>
   deleteClip: (trackId: string, clipId: string) => Promise<void>
   deleteSelectedClip: () => Promise<void>
@@ -513,6 +519,15 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   moveClip: async (trackId, clipId, newPositionTicks) => {
     await mut('move_clip', { trackId, clipId, newPositionTicks }, 'Move clip')
+    await get().fetchTracks()
+  },
+
+  moveClipToTrack: async (fromTrackId, toTrackId, clipId, newPositionTicks) => {
+    await mut(
+      'move_clip_to_track',
+      { fromTrackId, toTrackId, clipId, newPositionTicks },
+      'Move clip to track',
+    )
     await get().fetchTracks()
   },
 

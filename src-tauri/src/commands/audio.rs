@@ -484,6 +484,66 @@ pub fn move_clip(
     Ok(())
 }
 
+/// Move a clip from one track to another at a new position.
+///
+/// Both tracks must have a kind compatible with the clip content
+/// (audio clip ↔ audio track, midi clip ↔ midi track). Refuses the
+/// move otherwise so a stray vertical drag onto an audio track does
+/// not corrupt a midi-bearing chain.
+#[tauri::command]
+pub fn move_clip_to_track(
+    state: State<AppState>,
+    from_track_id: String,
+    to_track_id: String,
+    clip_id: String,
+    new_position_ticks: u64,
+) -> Result<(), String> {
+    if from_track_id == to_track_id {
+        // Degenerate case — fall through to the position-only mover so
+        // the audio thread does the cheap path.
+        return move_clip(state, from_track_id, clip_id, new_position_ticks);
+    }
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+
+    // Pluck the clip out of the source track first so we hold no
+    // borrow when we touch the destination. Audio + Midi content
+    // types use independent id strings; check both shapes.
+    let src = project
+        .track_mut(&from_track_id)
+        .ok_or_else(|| format!("Source track not found: {}", from_track_id))?;
+    let idx = src
+        .clips
+        .iter()
+        .position(|c| match &c.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+            hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
+        })
+        .ok_or_else(|| format!("Clip not found on source track: {}", clip_id))?;
+    let mut clip = src.clips.remove(idx);
+    clip.position_ticks = new_position_ticks;
+
+    let clip_is_audio = matches!(&clip.content, hardwave_project::clip::ClipContent::Audio(_));
+
+    let dst = project
+        .track_mut(&to_track_id)
+        .ok_or_else(|| format!("Destination track not found: {}", to_track_id))?;
+    let dst_is_audio = matches!(dst.kind, hardwave_project::track::TrackKind::Audio);
+    let dst_is_midi = matches!(dst.kind, hardwave_project::track::TrackKind::Midi);
+    if clip_is_audio && !dst_is_audio {
+        return Err("Cannot move audio clip to a non-audio track".into());
+    }
+    if !clip_is_audio && !dst_is_midi {
+        return Err("Cannot move MIDI clip to a non-MIDI track".into());
+    }
+    dst.clips.push(clip);
+
+    drop(project);
+    engine.rebuild_graph();
+    Ok(())
+}
+
 /// Resize a clip (change its length in ticks).
 #[tauri::command]
 pub fn resize_clip(

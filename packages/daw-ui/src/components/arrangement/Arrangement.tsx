@@ -73,7 +73,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
   const {
     tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
-    moveClip, resizeClip, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
+    moveClip, moveClipToTrack, resizeClip, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
     setClipFadeCurves, toggleClipReverse, setClipGain, setClipPitch, setClipStretch,
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -821,7 +821,31 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     if (drag.mode === 'move') {
       const snapped = applySnap(Math.max(0, drag.originalPositionTicks + dTicks))
       const effectiveDelta = snapped - drag.originalPositionTicks
-      moveClip(drag.trackId, drag.clipId, snapped)
+
+      // Cross-track move — hit-test the cursor's vertical position
+      // against the visible audio-track stack. If the cursor lands
+      // inside a different track row than where the drag started, ship
+      // the clip to that track instead of just shifting position.
+      // Refuses on type mismatch (audio→midi or vice-versa); the
+      // backend command also enforces this with a hard error.
+      const trackIdx = Math.floor(mouseY / trackHeight)
+      const targetTrack = audioTracks[trackIdx]
+      const sourceTrack = audioTracks.find(t => t.id === drag.trackId)
+      const canMoveAcross =
+        targetTrack &&
+        sourceTrack &&
+        targetTrack.id !== drag.trackId &&
+        targetTrack.kind === sourceTrack.kind
+
+      if (canMoveAcross) {
+        moveClipToTrack(drag.trackId, targetTrack.id, drag.clipId, snapped)
+        // Update the drag ref so subsequent mousemoves treat the new
+        // track as the source (otherwise the clip would teleport back
+        // every frame).
+        drag.trackId = targetTrack.id
+      } else {
+        moveClip(drag.trackId, drag.clipId, snapped)
+      }
       if (drag.groupMoveOriginals) {
         for (const m of drag.groupMoveOriginals) {
           const memberPos = Math.max(0, m.origPos + effectiveDelta)
@@ -841,7 +865,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       moveClip(drag.trackId, drag.clipId, newPos)
       resizeClip(drag.trackId, drag.clipId, newLen)
     }
-  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, resizeClip, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint])
+  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, moveClipToTrack, resizeClip, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint, trackHeight, audioTracks])
 
   const handleMouseUp = useCallback(() => {
     const drag = dragRef.current
