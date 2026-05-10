@@ -73,7 +73,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
   const {
     tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
-    moveClip, moveClipToTrack, resizeClip, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
+    moveClip, moveClipLocal, resizeClipLocal, commitClipDrag,
+    moveClipToTrack, resizeClip, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
     setClipFadeCurves, toggleClipReverse, setClipGain, setClipPitch, setClipStretch,
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -877,23 +878,30 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         targetTrack.kind === sourceTrack.kind
 
       if (canMoveAcross) {
+        // Cross-track move still goes through the IPC path because it
+        // needs to mutate Rust-side track membership, not just a clip
+        // position. Rare event (one-off per drag), so the cost is OK.
         moveClipToTrack(drag.trackId, targetTrack.id, drag.clipId, snapped)
         // Update the drag ref so subsequent mousemoves treat the new
         // track as the source (otherwise the clip would teleport back
         // every frame).
         drag.trackId = targetTrack.id
       } else {
-        moveClip(drag.trackId, drag.clipId, snapped)
+        // Hot path — fires every mousemove. Local-only update keeps the
+        // 60fps drag fluid even with 500 pre-allocated tracks. The
+        // backend gets the final position via commitClipDrag in
+        // handleMouseUp.
+        moveClipLocal(drag.trackId, drag.clipId, snapped)
       }
       if (drag.groupMoveOriginals) {
         for (const m of drag.groupMoveOriginals) {
           const memberPos = Math.max(0, m.origPos + effectiveDelta)
-          moveClip(m.trackId, m.clipId, memberPos)
+          moveClipLocal(m.trackId, m.clipId, memberPos)
         }
       }
     } else if (drag.mode === 'resize-right') {
       const newLen = Math.max(minLen, drag.originalLengthTicks + dTicks)
-      resizeClip(drag.trackId, drag.clipId, applySnap(newLen))
+      resizeClipLocal(drag.trackId, drag.clipId, applySnap(newLen))
     } else if (drag.mode === 'resize-left') {
       // Keep the right edge anchored; shift position and shrink length.
       const rightEdge = drag.originalPositionTicks + drag.originalLengthTicks
@@ -901,10 +909,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       newPos = applySnap(newPos)
       if (newPos > rightEdge - minLen) newPos = rightEdge - minLen
       const newLen = rightEdge - newPos
-      moveClip(drag.trackId, drag.clipId, newPos)
-      resizeClip(drag.trackId, drag.clipId, newLen)
+      moveClipLocal(drag.trackId, drag.clipId, newPos)
+      resizeClipLocal(drag.trackId, drag.clipId, newLen)
     }
-  }, [hitTest, getScrollOffset, pixelsPerTick, moveClip, moveClipToTrack, resizeClip, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint, trackHeight, audioTracks])
+  }, [hitTest, getScrollOffset, pixelsPerTick, moveClipLocal, moveClipToTrack, resizeClipLocal, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint, trackHeight, audioTracks])
 
   const handleMouseUp = useCallback(() => {
     const drag = dragRef.current
@@ -933,10 +941,33 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           return { selectedClipIds: next, selectedClipId: picked[0] }
         })
       }
+    } else if (drag && (drag.mode === 'move' || drag.mode === 'resize-right' || drag.mode === 'resize-left')) {
+      // Flush the drag's optimistic local state to the backend in one
+      // shot. We've been updating the store in-memory during mousemove
+      // (moveClipLocal / resizeClipLocal) without IPC — now persist the
+      // final position/length so save/load + audio engine see it.
+      const liveTrack = useTrackStore.getState().tracks.find(t => t.id === drag.trackId)
+      const liveClip = liveTrack?.clips?.find(c => c.id === drag.clipId)
+      if (liveClip) {
+        const lengthArg = drag.mode === 'move' ? undefined : liveClip.length_ticks
+        commitClipDrag(drag.trackId, drag.clipId, liveClip.position_ticks, lengthArg)
+          .catch(err => console.error('commitClipDrag failed', err))
+      }
+      // Group-move members each need their own commit too.
+      if (drag.groupMoveOriginals) {
+        for (const m of drag.groupMoveOriginals) {
+          const t = useTrackStore.getState().tracks.find(tt => tt.id === m.trackId)
+          const c = t?.clips?.find(cc => cc.id === m.clipId)
+          if (c) {
+            commitClipDrag(m.trackId, m.clipId, c.position_ticks)
+              .catch(err => console.error('commitClipDrag (group) failed', err))
+          }
+        }
+      }
     }
     dragRef.current = null
     forceRender(n => n + 1)
-  }, [audioTracks, pixelsPerTick, trackHeight, getScrollOffset])
+  }, [audioTracks, pixelsPerTick, trackHeight, getScrollOffset, commitClipDrag])
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect()

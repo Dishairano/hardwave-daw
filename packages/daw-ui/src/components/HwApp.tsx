@@ -297,10 +297,36 @@ function HwPicker() {
   const tracks = useTrackStore(s => s.tracks)
   const [tab, setTab] = useState<PickerTab>('ALL')
 
-  const audioTracksWithContent = useMemo(
-    () => tracks.filter(t => t.kind === 'Audio' && t.clips && t.clips.length > 0),
-    [tracks],
-  )
+  // The picker is clip-level for audio, not track-level. With 500
+  // pre-allocated inserts (all named "Insert N"), showing parent track
+  // names would just display "Insert 1", "Insert 2"… which tells the
+  // user nothing about what's actually in the project. Flatten every
+  // audio clip into its own row labelled with the clip name (typically
+  // the sample filename).
+  const audioClipEntries = useMemo(() => {
+    const out: Array<{
+      key: string
+      name: string
+      color: string
+      trackId: string
+      clipId: string
+      trackName: string
+    }> = []
+    for (const t of tracks) {
+      if (t.kind !== 'Audio' || !t.clips || t.clips.length === 0) continue
+      for (const c of t.clips) {
+        out.push({
+          key: `${t.id}::${c.id}`,
+          name: c.name || t.name,
+          color: t.color || '#06b6d4',
+          trackId: t.id,
+          clipId: c.id,
+          trackName: t.name,
+        })
+      }
+    }
+    return out
+  }, [tracks])
   const automationTracksWithLanes = useMemo(
     () => tracks.filter(
       t => t.kind === 'Automation' && t.automationLanes && t.automationLanes.length > 0,
@@ -314,7 +340,7 @@ function HwPicker() {
 
   const totalCount =
     (showPatterns ? patterns.length : 0) +
-    (showAudio ? audioTracksWithContent.length : 0) +
+    (showAudio ? audioClipEntries.length : 0) +
     (showAuto ? automationTracksWithLanes.length : 0)
 
   return (
@@ -347,15 +373,15 @@ function HwPicker() {
             <span className="nm">▸ {p.name}</span>
           </div>
         ))}
-        {showAudio && audioTracksWithContent.map(t => (
+        {showAudio && audioClipEntries.map(e => (
           <div
-            key={`aud-${t.id}`}
+            key={e.key}
             className="fl-pi"
-            style={{ ['--col' as any]: t.color || '#06b6d4' }}
-            title={`${t.name} — ${t.clips.length} clip${t.clips.length === 1 ? '' : 's'}`}
+            style={{ ['--col' as any]: e.color }}
+            title={`${e.name} — on ${e.trackName}`}
           >
             <span className="ic" />
-            <span className="nm">♫ {t.name}</span>
+            <span className="nm">♫ {e.name}</span>
           </div>
         ))}
         {showAuto && automationTracksWithLanes.map(t => (

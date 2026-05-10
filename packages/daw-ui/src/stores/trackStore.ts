@@ -192,6 +192,23 @@ interface TrackState {
   setAutomationLaneVisible: (trackId: string, laneId: string, visible: boolean) => Promise<void>
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
   moveClip: (trackId: string, clipId: string, newPositionTicks: number) => Promise<void>
+  /// Optimistic local-only update — mutates the clip's position in the
+  /// store without an IPC round-trip or fetchTracks. Used during a
+  /// drag's mousemove path so 60fps drag isn't bottlenecked by 500-track
+  /// state refresh. Caller MUST call moveClip (or commitClipDrag) on
+  /// mouseup to persist the final position to the backend.
+  moveClipLocal: (trackId: string, clipId: string, newPositionTicks: number) => void
+  /// Same idea as moveClipLocal but for resize — local-only length update.
+  resizeClipLocal: (trackId: string, clipId: string, newLengthTicks: number) => void
+  /// Persist a clip's final post-drag position+length to the backend in
+  /// one IPC + one fetchTracks. Call this once on mouseup after a drag
+  /// that used moveClipLocal/resizeClipLocal.
+  commitClipDrag: (
+    trackId: string,
+    clipId: string,
+    newPositionTicks: number,
+    newLengthTicks?: number,
+  ) => Promise<void>
   moveClipToTrack: (
     fromTrackId: string,
     toTrackId: string,
@@ -523,6 +540,47 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   moveClip: async (trackId, clipId, newPositionTicks) => {
     await mut('move_clip', { trackId, clipId, newPositionTicks }, 'Move clip')
+    await get().fetchTracks()
+  },
+
+  moveClipLocal: (trackId, clipId, newPositionTicks) => {
+    set(state => ({
+      tracks: state.tracks.map(t => {
+        if (t.id !== trackId || !t.clips) return t
+        return {
+          ...t,
+          clips: t.clips.map(c =>
+            c.id === clipId ? { ...c, position_ticks: newPositionTicks } : c,
+          ),
+        }
+      }),
+    }))
+  },
+
+  resizeClipLocal: (trackId, clipId, newLengthTicks) => {
+    set(state => ({
+      tracks: state.tracks.map(t => {
+        if (t.id !== trackId || !t.clips) return t
+        return {
+          ...t,
+          clips: t.clips.map(c =>
+            c.id === clipId ? { ...c, length_ticks: newLengthTicks } : c,
+          ),
+        }
+      }),
+    }))
+  },
+
+  commitClipDrag: async (trackId, clipId, newPositionTicks, newLengthTicks) => {
+    // Single IPC roundtrip at the end of the drag. We deliberately skip
+    // the per-frame fetchTracks() that the regular moveClip/resizeClip
+    // would do — the store has been kept in sync optimistically by
+    // moveClipLocal/resizeClipLocal during the drag, so one final
+    // fetchTracks at the end is enough to reconcile with the backend.
+    await invoke('move_clip', { trackId, clipId, newPositionTicks })
+    if (newLengthTicks !== undefined) {
+      await invoke('resize_clip', { trackId, clipId, newLengthTicks })
+    }
     await get().fetchTracks()
   },
 

@@ -37,7 +37,11 @@ export function ChannelRack() {
   const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan, setTrackPitchSemitones, setTrackFineTuneCents, setTrackFilterType, setTrackFilterCutoffHz, setTrackFilterResonance, setTrackOutputBus } = useTrackStore()
   const folders = useTrackFolderStore(s => s.folders)
   const toggleFolderCollapsed = useTrackFolderStore(s => s.toggleCollapsed)
-  const allChannels = tracks.filter(t => t.kind !== 'Master')
+  // Channels are decoupled from playlist inserts. The 500 pre-allocated
+  // `insert-NNN` tracks are mixer/playlist slots, not channels — they
+  // don't belong in the Channel Rack. Channels start empty; the user
+  // creates them via the [+] button.
+  const allChannels = tracks.filter(t => t.kind !== 'Master' && !t.id.startsWith('insert-'))
   const folderByTrack = new Map<string, TrackFolder>()
   for (const f of folders) for (const tid of f.trackIds) folderByTrack.set(tid, f)
   const channels = allChannels.filter(t => {
