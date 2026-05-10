@@ -667,10 +667,12 @@
   height: var(--row-h, 56px);
   border-bottom: 1px solid #0a0a0e;
   display: grid;
-  /* num · LED · name · [optional instrument badge] · arm button. The
+  /* LED · name · [optional instrument badge] · arm button. The
      name column flexes; the trailing two cells are auto-sized so the
-     instrument + R badges hug the right edge of every track row. */
-  grid-template-columns: 22px 6px 1fr auto auto;
+     instrument + R badges hug the right edge of every track row. The
+     leading numeric index column was dropped — track names already
+     identify the row, the number was redundant noise. */
+  grid-template-columns: 6px 1fr auto auto;
   gap: 6px;
   align-items: center;
   padding: 0 8px;
@@ -1303,12 +1305,6 @@
   50% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0); }
 }
 .fl-tr:hover { background: rgba(255,255,255,0.02); }
-.fl-tr .num {
-  font-size: 9px;
-  color: var(--text-dim);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
 .fl-tr .led {
   width: 6px;
   height: 6px;
@@ -1541,12 +1537,8 @@
 }
 
 /* Empty placeholder rows fill the playlist out to PLAYLIST_TOTAL_SLOTS so
-   the tracks column matches the grid's lane count visually. They keep the
-   row height + striping but dim the slot number and disable hover. */
-.fl-tr-empty .num {
-  color: var(--text-dim, #3f3f46);
-  opacity: 0.55;
-}
+   the tracks column matches the grid's lane count visually. Hover is
+   disabled so empties don't visually compete with real rows. */
 .fl-tr-empty:hover { background: transparent; }
 
 /* === Playlist grid (right column — purple gradient backdrop) === */

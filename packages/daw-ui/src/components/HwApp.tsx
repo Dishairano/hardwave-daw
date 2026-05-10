@@ -486,10 +486,11 @@ const PLAYLIST_TOTAL_SLOTS = 500
 
 function HwPlaylistTracks() {
   const allTracks = useTrackStore(s => s.tracks)
-  // Filter out Master — the master channel lives in the mixer, not the
-  // playlist row list. Without this, the playlist shows "Master" as
-  // its first track row.
-  const tracks = allTracks.filter(t => t.kind !== 'Master')
+  // Playlist sidebar shows ONLY the pre-allocated inserts. Channels
+  // (non-insert tracks created via Channel Rack [+] or audio drop)
+  // belong in the Channel Rack panel, not here. Master always stays
+  // out — it lives in the mixer.
+  const tracks = allTracks.filter(t => t.kind !== 'Master' && t.id.startsWith('insert-'))
   const toggleArm = useTrackStore(s => s.toggleArm)
   const addAutomationLane = useTrackStore(s => s.addAutomationLane)
   const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
@@ -511,7 +512,6 @@ function HwPlaylistTracks() {
               style={{ ['--track-color' as any]: t.color || '#06b6d4' }}
               title={t.name}
             >
-              <span className="num">{i + 1}</span>
               <span className="led off"></span>
               <span className="nm">{t.name}</span>
               {isMidi && (
@@ -562,7 +562,6 @@ function HwPlaylistTracks() {
               style={{ ['--track-color' as any]: 'transparent' }}
               aria-hidden="true"
             >
-              <span className="num">{slotNum}</span>
               <span className="led off"></span>
               <span className="nm" />
             </div>

@@ -1168,18 +1168,18 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
 
       const state = useTrackStore.getState()
+      // Clip placement target: prefer a selected insert, else fall back
+      // to the first pre-allocated insert (insert-001). The 500-insert
+      // architecture means there's always at least one insert ready —
+      // the only reason addAudioTrack runs is the legacy edge case
+      // where a project was loaded without inserts.
       let trackId: string | null = state.selectedTrackId
-      const audio = state.tracks.filter(t => t.kind === 'Audio')
-      if (!trackId || !audio.find(t => t.id === trackId)) {
-        if (audio.length === 0) {
-          // Use the id returned by addAudioTrack directly. Looking it up
-          // via store.tracks.find afterwards can race against React's
-          // commit cycle on a fresh project, leaving trackId null even
-          // though the backend created the track — the symptom the user
-          // reported as "imported but not visible".
+      const inserts = state.tracks.filter(t => t.id.startsWith('insert-'))
+      if (!trackId || !inserts.find(t => t.id === trackId)) {
+        if (inserts.length === 0) {
           trackId = await addAudioTrack()
         } else {
-          trackId = audio[0].id
+          trackId = inserts[0].id
         }
       }
       if (!trackId) {
@@ -1201,6 +1201,18 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       let imported = 0
       for (const file of files) {
         try {
+          // Auto-create a Channel Rack entry for the dropped sample.
+          // Channels are decoupled from playlist inserts: dropping
+          // kick.wav puts the clip on Insert 1 AND surfaces "kick" as
+          // its own channel so the user can manage the source (sample
+          // params, sends, automation) separately from where it plays.
+          const sampleName =
+            file
+              .split(/[\\/]/)
+              .pop()
+              ?.replace(/\.[^.]+$/, '') || 'Sample'
+          await addAudioTrack(sampleName)
+
           const result = await importAudioFile(trackId, file, offsetTicks)
           offsetTicks += result.length_ticks
           pushRecent(file)
