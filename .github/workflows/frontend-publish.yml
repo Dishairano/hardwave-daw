@@ -412,6 +412,10 @@ jobs:
           HOST: ${{ secrets.VST_WEB01_HOST }}
         run: |
           set -euo pipefail
+          # Each `run:` block is its own shell, so $VERSION from the
+          # previous "Publish bundle" step is gone here. Re-resolve from
+          # the meta step output so the fan-out script has it under -u.
+          VERSION="${{ steps.meta.outputs.version }}"
           # vst-web01 already has SSH credentials for web02/web03 (per
           # /opt/vst-webviews/scripts/deploy.sh) — let it fan out.
           ssh -i ~/.ssh/id_publish -o BatchMode=yes "root@${HOST}" \
