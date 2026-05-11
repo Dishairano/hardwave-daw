@@ -302,13 +302,19 @@ function HwPicker() {
   const toggleAutomation = usePickerStore(s => s.toggleAutomation)
   const [tab, setTab] = useState<PickerTab>('ALL')
 
-  // The picker is clip-level for audio, not track-level. With 500
-  // pre-allocated inserts (all named "Insert N"), showing parent track
-  // names would just display "Insert 1", "Insert 2"… which tells the
-  // user nothing about what's actually in the project. Flatten every
-  // audio clip into its own row labelled with the clip name (typically
-  // the sample filename).
+  // The picker is sample-level (FL Studio model): one row per unique
+  // source audio file, regardless of how many times it's been placed
+  // in the playlist. Two clips that reference the same source_id
+  // collapse into one picker entry — clicking it arms place-mode for
+  // that sample, and every subsequent left-click in the playlist
+  // drops another copy.
+  //
+  // Track-name ("Insert N") would be the wrong identifier here: the
+  // 500 pre-allocated inserts all carry generic names, and the same
+  // sample can be spread across multiple inserts. source_id is the
+  // stable key.
   const audioClipEntries = useMemo(() => {
+    const seen = new Set<string>()
     const out: Array<{
       key: string
       name: string
@@ -320,8 +326,10 @@ function HwPicker() {
     for (const t of tracks) {
       if (t.kind !== 'Audio' || !t.clips || t.clips.length === 0) continue
       for (const c of t.clips) {
+        if (seen.has(c.source_id)) continue
+        seen.add(c.source_id)
         out.push({
-          key: `${t.id}::${c.id}`,
+          key: c.source_id,
           name: c.name || t.name,
           color: t.color || '#06b6d4',
           trackId: t.id,

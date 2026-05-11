@@ -1221,17 +1221,29 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       let imported = 0
       for (const file of files) {
         try {
-          // Auto-create a Channel Rack entry for the dropped sample.
-          // Channels are decoupled from playlist inserts: dropping
-          // kick.wav puts the clip on Insert 1 AND surfaces "kick" as
-          // its own channel so the user can manage the source (sample
-          // params, sends, automation) separately from where it plays.
+          // Channel Rack entry per UNIQUE sample (FL Studio model).
+          // Dropping kick.wav three times must produce one "kick"
+          // channel and three playlist clips, not three identical
+          // channels. We dedupe on the basename: if a non-insert
+          // audio track named after this sample already exists, skip
+          // the addAudioTrack call and let the clip on the insert
+          // share the existing channel's identity.
           const sampleName =
             file
               .split(/[\\/]/)
               .pop()
               ?.replace(/\.[^.]+$/, '') || 'Sample'
-          await addAudioTrack(sampleName)
+          const existingChannel = useTrackStore
+            .getState()
+            .tracks.find(
+              t =>
+                t.kind === 'Audio' &&
+                !t.id.startsWith('insert-') &&
+                t.name === sampleName,
+            )
+          if (!existingChannel) {
+            await addAudioTrack(sampleName)
+          }
 
           const result = await importAudioFile(trackId, file, offsetTicks)
           offsetTicks += result.length_ticks
