@@ -117,18 +117,20 @@ echo "Version: $CURRENT -> $NEW_VERSION"
 LAST_VTAG=$(git tag --list 'v*' --sort=-v:refname | head -1 || echo "")
 FRONTEND_ONLY=0
 if [ -n "$LAST_VTAG" ]; then
-  # If git diff returns nothing for the backend paths, all changes are
-  # frontend-only. Backend paths cover Rust crates, src-tauri config,
-  # workflow files, and the release script itself (changing how we
-  # build is itself a backend concern).
-  CHANGED_BACKEND=$(git diff --name-only "${LAST_VTAG}..HEAD" -- \
-      'src-tauri/**' \
-      'crates/**' \
-      'Cargo.toml' \
-      'Cargo.lock' \
-      '.github/workflows/release.yml' \
-    | head -1)
-  if [ -z "$CHANGED_BACKEND" ]; then
+  # Look at BOTH the committed diff against the last v* tag AND the
+  # currently staged/unstaged changes. Detection used to compare just
+  # `${LAST_VTAG}..HEAD` which excluded uncommitted Rust edits — the
+  # script then tagged a Rust-containing release as `fe-v*` and the
+  # backend never shipped. Cover both surfaces:
+  #   - tag..HEAD: edits already committed since the last release
+  #   - git diff HEAD: edits in the working tree about to be committed
+  COMMITTED_BACKEND=$(git diff --name-only "${LAST_VTAG}..HEAD" -- \
+      'src-tauri/**' 'crates/**' 'Cargo.toml' 'Cargo.lock' \
+      '.github/workflows/release.yml' 2>/dev/null | head -1)
+  PENDING_BACKEND=$(git diff --name-only HEAD -- \
+      'src-tauri/**' 'crates/**' 'Cargo.toml' 'Cargo.lock' \
+      '.github/workflows/release.yml' 2>/dev/null | head -1)
+  if [ -z "$COMMITTED_BACKEND" ] && [ -z "$PENDING_BACKEND" ]; then
     FRONTEND_ONLY=1
     echo "release.sh: only frontend files changed since $LAST_VTAG — will tag as fe-v$NEW_VERSION (hot-swap path, ~2min CI)"
   else
