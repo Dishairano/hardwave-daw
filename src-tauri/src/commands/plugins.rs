@@ -557,8 +557,12 @@ pub fn set_plugin_parameter(
 /// "missing plug-ins" notice via `find_missing_plugins`.
 pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
     // Snapshot what we need under the locks, then drop them before we
-    // start instantiating plug-ins (slow VST3 / CLAP loads).
-    let plan: Vec<(String, String, PluginDescriptor, bool, f32)> = {
+    // start instantiating plug-ins (slow VST3 / CLAP loads). We also
+    // collect any saved plug-in state chunks here so we can restore
+    // them onto the fresh instance below — without this step every
+    // load() round-trip silently reset plug-in knobs to defaults
+    // (`PluginSlot.state` was being serialized but never replayed).
+    let plan: Vec<(String, String, PluginDescriptor, bool, f32, Option<Vec<u8>>)> = {
         let engine = state.engine.lock();
         let project = engine.project.lock();
         let scanner = engine.plugin_scanner.lock();
@@ -566,12 +570,16 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
         for track in &project.tracks {
             for slot in &track.inserts {
                 if let Some(descriptor) = scanner.find(&slot.plugin_id) {
+                    let saved_state = project
+                        .plugin_state(&slot.id)
+                        .map(|entry| entry.chunk.clone());
                     acc.push((
                         track.id.clone(),
                         slot.id.clone(),
                         descriptor.clone(),
                         slot.enabled,
                         slot.wet,
+                        saved_state,
                     ));
                 } else {
                     log::warn!(
@@ -585,9 +593,21 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
         acc
     };
 
-    for (track_id, slot_id, descriptor, enabled, wet) in plan {
+    for (track_id, slot_id, descriptor, enabled, wet, saved_state) in plan {
         match instantiate_plugin(&descriptor) {
-            Ok(plugin) => {
+            Ok(mut plugin) => {
+                // Restore the persisted state BEFORE the plug-in joins
+                // the audio chain — once it's on the audio thread we
+                // have no synchronous way to push state into it.
+                if let Some(bytes) = saved_state {
+                    if let Err(e) = plugin.set_state(&bytes) {
+                        log::warn!(
+                            "hydrate: set_state failed for {} on track {}: {e}",
+                            slot_id,
+                            track_id
+                        );
+                    }
+                }
                 let cmd = InsertCommand::Add {
                     track_id,
                     slot: LiveSlot {

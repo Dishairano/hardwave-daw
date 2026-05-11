@@ -142,6 +142,23 @@ pub struct DawEngine {
     /// the audio thread never frees memory directly.
     pub insert_graveyard:
         Arc<Mutex<Option<crate::insert_chain::PluginGraveyardReceiver>>>,
+
+    /// One-shot plug-in state snapshot request channel. The UI thread
+    /// places a SyncSender here just before `save_project`, then waits
+    /// on the matching Receiver. The audio thread polls this slot on
+    /// every block and, if it finds a Sender, walks all chains, calls
+    /// `plugin.get_state()` per slot, and sends the resulting map back.
+    /// Used to capture plug-in state into `Project.plugin_states` so
+    /// save/load round-trips preserve the user's knob tweaks.
+    pub pending_state_snapshot: Arc<
+        Mutex<
+            Option<
+                std::sync::mpsc::SyncSender<
+                    std::collections::HashMap<(String, String), Vec<u8>>,
+                >,
+            >,
+        >,
+    >,
 }
 
 /// Commands sent from UI thread to audio thread.
@@ -175,7 +192,30 @@ impl DawEngine {
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
+            pending_state_snapshot: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Block the calling thread (UI) up to `timeout` while the audio
+    /// thread snapshots the current state of every loaded plug-in
+    /// instance into a `(track_id, slot_id) -> state_bytes` map. Returns
+    /// `None` on timeout or if the engine hasn't been started yet.
+    pub fn snapshot_plugin_states(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Option<std::collections::HashMap<(String, String), Vec<u8>>> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        {
+            let mut slot = self.pending_state_snapshot.lock();
+            // If a previous request is still pending, just bail — caller
+            // can retry. We don't queue requests because the audio thread
+            // only services one per block anyway.
+            if slot.is_some() {
+                return None;
+            }
+            *slot = Some(tx);
+        }
+        rx.recv_timeout(timeout).ok()
     }
 
     /// Try to push a per-track plug-in command onto the audio-thread
@@ -318,6 +358,7 @@ impl DawEngine {
             Arc::clone(&self.graph_latency_samples),
             cmd_rx,
             grave_tx,
+            Arc::clone(&self.pending_state_snapshot),
             sample_rate,
             buffer_size,
         );
@@ -728,6 +769,10 @@ impl DawEngine {
             offline_latency,
             offline_cmd_rx,
             offline_grave_tx,
+            // Offline render doesn't need snapshot capability — the
+            // export pipeline never asks for it. Pass a parked Arc that
+            // can never be filled.
+            Arc::new(Mutex::new(None)),
             sample_rate,
             buffer_size as u32,
         );
@@ -805,6 +850,18 @@ struct EngineCallback {
     /// Stable track-id → graph-NodeId map maintained across rebuilds so
     /// per-track commands resolve to the right TrackNode in O(1).
     track_id_to_node: HashMap<String, crate::graph::NodeId>,
+    /// UI-thread snapshot request slot. Cloned from `DawEngine`. When a
+    /// `SyncSender` lands here the audio thread harvests `get_state()`
+    /// from every loaded plug-in and ships the resulting map back.
+    pending_state_snapshot: Arc<
+        Mutex<
+            Option<
+                std::sync::mpsc::SyncSender<
+                    std::collections::HashMap<(String, String), Vec<u8>>,
+                >,
+            >,
+        >,
+    >,
 }
 
 impl EngineCallback {
@@ -822,6 +879,15 @@ impl EngineCallback {
         graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
         insert_command_rx: crate::insert_chain::InsertCommandReceiver,
         insert_graveyard_tx: crate::insert_chain::PluginGraveyardSender,
+        pending_state_snapshot: Arc<
+            Mutex<
+                Option<
+                    std::sync::mpsc::SyncSender<
+                        std::collections::HashMap<(String, String), Vec<u8>>,
+                    >,
+                >,
+            >,
+        >,
         sample_rate: u32,
         buffer_size: u32,
     ) -> Self {
@@ -845,9 +911,50 @@ impl EngineCallback {
             insert_command_rx,
             insert_graveyard_tx,
             track_id_to_node: HashMap::new(),
+            pending_state_snapshot,
         };
         cb.rebuild_graph();
         cb
+    }
+
+    /// Honour a one-shot plug-in state snapshot request from the UI
+    /// thread, if any. Called once per audio block. If the UI placed a
+    /// SyncSender into `pending_state_snapshot`, we drain it here, walk
+    /// every track in `track_id_to_node`, call `get_state()` on each
+    /// loaded plug-in slot, and ship the map back via the channel.
+    ///
+    /// `get_state` is allowed on the audio thread for the formats we
+    /// host today: native plug-ins return tiny JSON blobs (single-digit
+    /// kilobytes), CLAP / VST3 chunks are also small and the
+    /// implementations don't allocate beyond a `Vec<u8>`. A future
+    /// commit can move this to a worker thread if a third-party plug-in
+    /// turns out to misbehave.
+    fn service_snapshot_request(&mut self) {
+        let tx = {
+            let mut slot = self.pending_state_snapshot.lock();
+            slot.take()
+        };
+        let Some(tx) = tx else { return };
+
+        let mut map: std::collections::HashMap<(String, String), Vec<u8>> =
+            std::collections::HashMap::new();
+        // Clone the (track_id, node_id) pairs first so the iteration
+        // borrow doesn't conflict with the mutable graph access below.
+        let pairs: Vec<(String, crate::graph::NodeId)> = self
+            .track_id_to_node
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        for (track_id, node_id) in pairs {
+            if let Some(node) = self.graph.node_mut(node_id) {
+                for (slot_id, bytes) in node.snapshot_plugin_states() {
+                    map.insert((track_id.clone(), slot_id), bytes);
+                }
+            }
+        }
+        // Best-effort send — if the UI thread dropped the receiver
+        // (e.g. on save abort) we silently discard.
+        let _ = tx.try_send(map);
     }
 
     /// Drain pending insert-chain commands and dispatch each to the
@@ -1392,6 +1499,13 @@ impl AudioCallback for EngineCallback {
         // and BEFORE graph.process so the chain reflects the latest
         // requested state for this block.
         self.dispatch_insert_commands();
+
+        // Honour any pending plug-in state snapshot request from the UI
+        // thread. Done AFTER dispatch so newly-added plug-ins from the
+        // same UI tick are captured, and BEFORE graph.process so the
+        // returned bytes reflect end-of-prior-block state instead of
+        // a half-written block.
+        self.service_snapshot_request();
 
         let playing = self.transport.is_playing();
         // When transport is stopped AND nothing is monitoring live input,

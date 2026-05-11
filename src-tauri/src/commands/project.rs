@@ -42,7 +42,17 @@ pub fn new_project(state: State<AppState>) {
 
 #[tauri::command]
 pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> {
-    let engine = state.engine.lock();
+    // Ask the audio thread to snapshot plug-in state BEFORE we take the
+    // project lock. snapshot_plugin_states blocks the UI thread on a
+    // SyncReceiver while the audio thread harvests `get_state()` from
+    // every loaded plug-in. With a 500 ms timeout the call almost
+    // always returns within one or two audio blocks — and on the rare
+    // miss we silently fall back to whatever was previously written.
+    let snapshot = {
+        let engine = state.engine.lock();
+        engine.snapshot_plugin_states(std::time::Duration::from_millis(500))
+    };
+
     let mapping_blob = {
         let m = state.midi_mappings.lock();
         if m.mappings.is_empty() {
@@ -51,8 +61,23 @@ pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> 
             serde_json::to_string(&m.mappings).ok()
         }
     };
+    let engine = state.engine.lock();
     let mut project = engine.project.lock();
     project.midi_mappings = mapping_blob;
+
+    // Write the harvested plug-in states into the project before we
+    // serialize. Looked up by slot_id so future `hydrate_chains_from_project`
+    // can replay the bytes via `plugin.set_state(...)`.
+    if let Some(map) = snapshot {
+        for (track_id, slot_id) in map.keys().cloned().collect::<Vec<_>>() {
+            // Format hint defaults to "unknown" — load only cares about
+            // matching slot_id, the format is preserved per slot's
+            // descriptor lookup at hydrate time.
+            let bytes = map[&(track_id.clone(), slot_id.clone())].clone();
+            project.set_plugin_state(slot_id, "unknown", bytes);
+        }
+    }
+
     project
         .save(&PathBuf::from(path))
         .map_err(|e| e.to_string())

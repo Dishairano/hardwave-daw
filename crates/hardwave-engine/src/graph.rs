@@ -54,6 +54,14 @@ pub trait AudioNode: Send {
         let _ = (cmd, graveyard, sample_rate, max_block_size);
     }
 
+    /// Snapshot the current state of every loaded plug-in slot on this
+    /// node as `(slot_id, state_bytes)`. Default empty so non-track
+    /// nodes contribute nothing. TrackNode overrides to walk its
+    /// `chain.slots` and call `plugin.get_state()` per entry.
+    fn snapshot_plugin_states(&self) -> Vec<(String, Vec<u8>)> {
+        Vec::new()
+    }
+
     /// Hand off this node's plug-in chain so it can be reattached to a
     /// freshly-built TrackNode after a graph rebuild. Default `None`.
     /// TrackNode overrides to swap in an empty chain and return the

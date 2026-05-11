@@ -374,6 +374,14 @@ impl AudioNode for TrackNode {
         Some(&self.track_id)
     }
 
+    fn snapshot_plugin_states(&self) -> Vec<(String, Vec<u8>)> {
+        self.chain
+            .slots
+            .iter()
+            .map(|slot| (slot.slot_id.clone(), slot.plugin.get_state()))
+            .collect()
+    }
+
     fn apply_insert_command(
         &mut self,
         cmd: crate::insert_chain::InsertCommand,
