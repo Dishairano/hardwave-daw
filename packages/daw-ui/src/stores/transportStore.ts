@@ -227,7 +227,29 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     }
     invoke('play'); set({ playing: true })
   },
-  stop: () => { cancelPrecount(); invoke('stop') },
+  stop: async () => {
+    cancelPrecount()
+    // If a recording is in flight when Stop fires (typically Spacebar
+    // mid-record), the Rust side finalises the capture buffer and
+    // returns the WAV path so we can drop the take on the first armed
+    // track — same trailing-edge behaviour as toggleRecording. Without
+    // this, Space mid-record silently discarded the take.
+    const wasRecording = get().recording
+    if (wasRecording) set({ recording: false })
+    try {
+      const path = (await invoke('stop')) as string | null
+      if (wasRecording && path) {
+        const { useTrackStore } = await import('./trackStore')
+        const armedTrack = useTrackStore.getState().tracks.find(t => t.armed)
+        if (armedTrack) {
+          await useTrackStore.getState().importAudioFile(armedTrack.id, path, 0)
+        }
+      }
+    } catch (e) {
+      if (wasRecording) set({ recording: wasRecording })
+      throw e
+    }
+  },
   togglePlayback: () => {
     if (get().playing) { get().stop() } else { get().play() }
   },

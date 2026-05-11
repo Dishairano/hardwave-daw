@@ -27,7 +27,7 @@ pub fn play(state: State<AppState>) {
 }
 
 #[tauri::command]
-pub fn stop(state: State<AppState>) {
+pub fn stop(state: State<AppState>) -> Result<Option<String>, String> {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
     let was_playing = engine.transport.playing.swap(false, Ordering::Relaxed);
@@ -39,8 +39,59 @@ pub fn stop(state: State<AppState>) {
         };
         engine.transport.set_position(loop_start);
     }
-    engine.transport.recording.store(false, Ordering::Relaxed);
+    // Stop also has to finalise an in-flight recording: previously this
+    // flipped the recording flag without draining the capture buffer,
+    // so pressing Space (which calls stop) mid-record silently dropped
+    // the take. Now we drain, write the WAV, and return its path so the
+    // frontend can place the clip on the armed track — mirroring how
+    // toggle_recording does it on the trailing edge.
+    let was_recording = engine.transport.recording.swap(false, Ordering::Relaxed);
     engine.send_command(TransportCommand::Stop);
+    if was_recording {
+        finalize_recording_session(&engine)
+    } else {
+        Ok(None)
+    }
+}
+
+/// Drain the engine's capture buffer and write a fresh WAV to the
+/// recordings scratch dir. Returns the file path on success or `None`
+/// when no samples were captured. Shared by `stop` and the trailing
+/// edge of `toggle_recording` so the two paths can't drift.
+fn finalize_recording_session(
+    engine: &hardwave_engine::DawEngine,
+) -> Result<Option<String>, String> {
+    let samples = engine.stop_capture();
+    if samples.is_empty() {
+        return Ok(None);
+    }
+
+    let sample_rate = engine.current_sample_rate();
+    let project_dir = std::env::temp_dir().join("hardwave-daw-recordings");
+    std::fs::create_dir_all(&project_dir).map_err(|e| e.to_string())?;
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = project_dir.join(format!("take-{stamp}.wav"));
+
+    // 32-bit float stereo WAV matches the engine's internal sample format.
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    {
+        let mut writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
+        for s in &samples {
+            writer.write_sample(*s).map_err(|e| e.to_string())?;
+        }
+        writer.finalize().map_err(|e| e.to_string())?;
+    }
+
+    Ok(Some(path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
@@ -94,43 +145,9 @@ pub fn toggle_recording(state: State<AppState>) -> Result<Option<String>, String
         return Ok(None);
     }
 
-    // End: stop capturing, drain samples, write a wav, place clip.
+    // End: stop capturing, drain samples, write a WAV, return its path.
     engine.transport.recording.store(false, Ordering::Relaxed);
-    let samples = engine.stop_capture();
-    if samples.is_empty() {
-        return Ok(None);
-    }
-
-    let sample_rate = engine.current_sample_rate();
-    // Recordings live under the platform's audio scratch dir for now —
-    // a future commit will plumb the active project's parent dir
-    // through here so takes ride alongside the .hwp file.
-    let project_dir = std::env::temp_dir().join("hardwave-daw-recordings");
-    std::fs::create_dir_all(&project_dir).map_err(|e| e.to_string())?;
-
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let path = project_dir.join(format!("take-{stamp}.wav"));
-
-    // Write 32-bit float stereo WAV — matches the engine's internal
-    // sample format so we don't lose anything on the way to disk.
-    let spec = hound::WavSpec {
-        channels: 2,
-        sample_rate,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
-    };
-    {
-        let mut writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
-        for s in &samples {
-            writer.write_sample(*s).map_err(|e| e.to_string())?;
-        }
-        writer.finalize().map_err(|e| e.to_string())?;
-    }
-
-    Ok(Some(path.to_string_lossy().to_string()))
+    finalize_recording_session(&engine)
 }
 
 #[tauri::command]
