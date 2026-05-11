@@ -1146,7 +1146,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const [dropHighlight, setDropHighlight] = useState(false)
 
   useEffect(() => {
-    const audioExts = ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a']
+    const audioExts = ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a', 'aiff', 'aif', 'aifc']
     const { importAudioFile, addAudioTrack } = useTrackStore.getState()
     const pushNotif = useNotificationStore.getState().push
     useLogStore.getState().append({

@@ -1,4 +1,6 @@
-//! Audio file reading via symphonia (WAV, FLAC, MP3, OGG, AAC).
+//! Audio file reading via symphonia (WAV, FLAC, MP3, OGG, AAC, ALAC, CAF, MP4).
+//! AIFF / AIFC dispatches to `crate::aiff_reader` — symphonia 0.5 ships no AIFF
+//! demuxer and we haven't migrated to 0.6.
 
 use rubato::{FftFixedIn, Resampler};
 use std::path::Path;
@@ -108,6 +110,11 @@ impl AudioFileReader {
     }
 
     pub fn read(path: &Path) -> Result<(AudioFileInfo, Vec<Vec<f32>>), AudioFileError> {
+        // symphonia 0.5 lacks AIFF — dispatch to our own reader.
+        if crate::aiff_reader::looks_like_aiff(path) {
+            return crate::aiff_reader::read_aiff(path);
+        }
+
         let file = std::fs::File::open(path)
             .map_err(|_| AudioFileError::NotFound(path.display().to_string()))?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());

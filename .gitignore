@@ -6,3 +6,4 @@ dist/
 RELEASE_CHANGELOG.md
 .DS_Store
 .tauri-updater-key
+packages/daw-ui/test-results/
