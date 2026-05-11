@@ -220,6 +220,16 @@ interface TrackState {
   deleteSelectedClip: () => Promise<void>
   deleteSelectedClips: () => Promise<void>
   duplicateClip: (trackId: string, clipId: string) => Promise<string>
+  /// Picker place-mode: clone an existing clip and drop it on (possibly
+  /// a different) track at the given tick. One commit, one fetch — the
+  /// canvas calls this on left-click while the picker has an audio
+  /// clip selected.
+  placeClipCopy: (
+    sourceTrackId: string,
+    sourceClipId: string,
+    targetTrackId: string,
+    positionTicks: number,
+  ) => Promise<string>
   splitClip: (trackId: string, clipId: string, atTicks: number) => Promise<string>
   toggleClipSelection: (clipId: string) => void
   clearSelection: () => void
@@ -637,6 +647,26 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   duplicateClip: async (trackId, clipId) => {
     const newId = await mut<string>('duplicate_clip', { trackId, clipId }, 'Duplicate clip')
+    await get().fetchTracks()
+    return newId
+  },
+
+  placeClipCopy: async (sourceTrackId, sourceClipId, targetTrackId, positionTicks) => {
+    const newId = await mut<string>(
+      'duplicate_clip',
+      { trackId: sourceTrackId, clipId: sourceClipId },
+      'Place clip',
+    )
+    if (sourceTrackId === targetTrackId) {
+      await invoke('move_clip', { trackId: targetTrackId, clipId: newId, newPositionTicks: positionTicks })
+    } else {
+      await invoke('move_clip_to_track', {
+        fromTrackId: sourceTrackId,
+        toTrackId: targetTrackId,
+        clipId: newId,
+        newPositionTicks: positionTicks,
+      })
+    }
     await get().fetchTracks()
     return newId
   },

@@ -553,6 +553,15 @@
 }
 .fl-pi:hover { background: rgba(255,255,255,0.04); }
 .fl-pi.on { background: rgba(220,38,38,0.06); color: #fff; border-left-color: var(--red); }
+/* Picker place-mode selection. Brighter than .on (the active pattern)
+   because .picked drives the playlist's left-click placement — the
+   user needs to see at a glance what will be placed when they click. */
+.fl-pi.picked {
+  background: rgba(168,85,247,0.16);
+  color: #fff;
+  border-left-color: var(--accent, #a855f7);
+  box-shadow: inset 0 0 0 1px rgba(168,85,247,0.35);
+}
 .fl-pi .ic { width: 14px; height: 12px; border-radius: 2px; background: var(--col, #888); }
 .fl-pi .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 

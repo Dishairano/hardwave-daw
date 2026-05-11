@@ -6,6 +6,7 @@ import { useMarkerStore } from '../../stores/markerStore'
 import { useClipGroupStore } from '../../stores/clipGroupStore'
 import { useTrackFolderStore } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
+import { usePickerStore } from '../../stores/pickerStore'
 import { useLogStore } from '../../dev/logStore'
 import { hw } from '../../theme'
 
@@ -767,6 +768,25 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         groupMoveOriginals,
       }
     } else {
+      // FL Studio place-mode: if the picker has an audio clip armed,
+      // left-click in a track row places a copy at the clicked tick.
+      // The rubber-band fallback only runs when no picker selection
+      // is active (so existing select-multiple workflow is untouched).
+      const pickerSel = usePickerStore.getState().selection
+      if (pickerSel?.kind === 'audioClip') {
+        const trackIdx = Math.floor((mouseY - RULER_HEIGHT) / trackHeight)
+        const targetTrack = trackIdx >= 0 ? audioTracks[trackIdx] : undefined
+        if (targetTrack) {
+          const tickAt = applySnap(
+            Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick)),
+          )
+          useTrackStore
+            .getState()
+            .placeClipCopy(pickerSel.trackId, pickerSel.clipId, targetTrack.id, tickAt)
+            .catch(err => console.error('placeClipCopy failed', err))
+          return
+        }
+      }
       if (!(e.ctrlKey || e.metaKey)) clearSelection()
       // Place the edit cursor at the clicked tick (snapped). It may be replaced by a
       // rubber-band selection if the user drags.

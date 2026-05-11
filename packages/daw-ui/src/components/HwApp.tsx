@@ -25,6 +25,7 @@ import type { AutomationTargetInfo } from '../stores/trackStore'
 import { useTransportStore } from '../stores/transportStore'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
+import { usePickerStore } from '../stores/pickerStore'
 import { usePanelLayoutStore } from '../stores/panelLayoutStore'
 import { useProjectStore } from '../stores/projectStore'
 import type { MobilePanel } from './MobileTabBar'
@@ -295,6 +296,10 @@ function HwPicker() {
   const activeId = usePatternStore(s => s.activeId)
   const setActive = usePatternStore(s => s.setActive)
   const tracks = useTrackStore(s => s.tracks)
+  const pickerSelection = usePickerStore(s => s.selection)
+  const togglePattern = usePickerStore(s => s.togglePattern)
+  const toggleAudioClip = usePickerStore(s => s.toggleAudioClip)
+  const toggleAutomation = usePickerStore(s => s.toggleAutomation)
   const [tab, setTab] = useState<PickerTab>('ALL')
 
   // The picker is clip-level for audio, not track-level. With 500
@@ -361,39 +366,65 @@ function HwPicker() {
         ))}
       </div>
       <div className="fl-picker-list">
-        {showPatterns && patterns.map(p => (
-          <div
-            key={p.id}
-            className={`fl-pi${p.id === activeId ? ' on' : ''}`}
-            style={{ ['--col' as any]: p.color || '#22c55e' }}
-            onClick={() => setActive(p.id)}
-            title={`Select ${p.name} — left-click in the playlist to place`}
-          >
-            <span className="ic" />
-            <span className="nm">▸ {p.name}</span>
-          </div>
-        ))}
-        {showAudio && audioClipEntries.map(e => (
-          <div
-            key={e.key}
-            className="fl-pi"
-            style={{ ['--col' as any]: e.color }}
-            title={`${e.name} — on ${e.trackName}`}
-          >
-            <span className="ic" />
-            <span className="nm">♫ {e.name}</span>
-          </div>
-        ))}
-        {showAuto && automationTracksWithLanes.map(t => (
-          <div
-            key={`aut-${t.id}`}
-            className="fl-pi"
-            title={`${t.name} — ${t.automationLanes.length} lane${t.automationLanes.length === 1 ? '' : 's'}`}
-          >
-            <span className="ic" style={{ background: '#1a0e26', border: '1px solid var(--purple)' }} />
-            <span className="nm" style={{ color: 'var(--purple)' }}>⌇ {t.name}</span>
-          </div>
-        ))}
+        {showPatterns && patterns.map(p => {
+          const isPickerSelected =
+            pickerSelection?.kind === 'pattern' && pickerSelection.patternId === p.id
+          return (
+            <div
+              key={p.id}
+              className={`fl-pi${p.id === activeId ? ' on' : ''}${isPickerSelected ? ' picked' : ''}`}
+              style={{ ['--col' as any]: p.color || '#22c55e' }}
+              onClick={() => {
+                // First-click activates for Channel Rack editing AND
+                // arms the playlist place-mode; second-click on the
+                // same item clears the place-mode but keeps it active
+                // in the Channel Rack.
+                setActive(p.id)
+                togglePattern(p.id)
+              }}
+              title={`Select ${p.name} — left-click in the playlist to place`}
+            >
+              <span className="ic" />
+              <span className="nm">▸ {p.name}</span>
+            </div>
+          )
+        })}
+        {showAudio && audioClipEntries.map(e => {
+          const isPickerSelected =
+            pickerSelection?.kind === 'audioClip' &&
+            pickerSelection.trackId === e.trackId &&
+            pickerSelection.clipId === e.clipId
+          return (
+            <div
+              key={e.key}
+              className={`fl-pi${isPickerSelected ? ' picked' : ''}`}
+              style={{ ['--col' as any]: e.color }}
+              onClick={() => toggleAudioClip(e.trackId, e.clipId)}
+              title={`${e.name} — left-click in the playlist to place a copy`}
+            >
+              <span className="ic" />
+              <span className="nm">♫ {e.name}</span>
+            </div>
+          )
+        })}
+        {showAuto && automationTracksWithLanes.map(t => {
+          const firstLane = t.automationLanes[0]
+          const isPickerSelected =
+            pickerSelection?.kind === 'automation' &&
+            pickerSelection.trackId === t.id &&
+            pickerSelection.laneId === firstLane?.id
+          return (
+            <div
+              key={`aut-${t.id}`}
+              className={`fl-pi${isPickerSelected ? ' picked' : ''}`}
+              onClick={() => firstLane && toggleAutomation(t.id, firstLane.id)}
+              title={`${t.name} — ${t.automationLanes.length} lane${t.automationLanes.length === 1 ? '' : 's'}`}
+            >
+              <span className="ic" style={{ background: '#1a0e26', border: '1px solid var(--purple)' }} />
+              <span className="nm" style={{ color: 'var(--purple)' }}>⌇ {t.name}</span>
+            </div>
+          )
+        })}
         {totalCount === 0 && (
           <div style={{ padding: '10px 8px', color: 'var(--text-dim)', fontSize: 9, fontFamily: 'var(--mono)' }}>
             {tab === 'ALL' && 'Drop a sample or create a pattern'}
