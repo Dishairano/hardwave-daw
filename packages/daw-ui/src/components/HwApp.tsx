@@ -303,16 +303,14 @@ function HwPicker() {
   const [tab, setTab] = useState<PickerTab>('ALL')
 
   // The picker is sample-level (FL Studio model): one row per unique
-  // source audio file, regardless of how many times it's been placed
-  // in the playlist. Two clips that reference the same source_id
-  // collapse into one picker entry — clicking it arms place-mode for
-  // that sample, and every subsequent left-click in the playlist
-  // drops another copy.
-  //
-  // Track-name ("Insert N") would be the wrong identifier here: the
-  // 500 pre-allocated inserts all carry generic names, and the same
-  // sample can be spread across multiple inserts. source_id is the
-  // stable key.
+  // sample, regardless of how many times it's been placed in the
+  // playlist. Dedup key is the clip name (= file basename without
+  // extension), matching how the Channel Rack auto-creates exactly
+  // one entry per filename. A source_id-based key drifted out of sync
+  // with the Channel Rack: two drops of the same file sometimes
+  // produced different source_ids (path normalization, re-imports
+  // across save/load) which surfaced as duplicate picker rows even
+  // though the Channel Rack showed one entry.
   const audioClipEntries = useMemo(() => {
     const seen = new Set<string>()
     const out: Array<{
@@ -326,11 +324,12 @@ function HwPicker() {
     for (const t of tracks) {
       if (t.kind !== 'Audio' || !t.clips || t.clips.length === 0) continue
       for (const c of t.clips) {
-        if (seen.has(c.source_id)) continue
-        seen.add(c.source_id)
+        const dedupKey = c.name || t.name
+        if (seen.has(dedupKey)) continue
+        seen.add(dedupKey)
         out.push({
-          key: c.source_id,
-          name: c.name || t.name,
+          key: dedupKey,
+          name: dedupKey,
           color: t.color || '#06b6d4',
           trackId: t.id,
           clipId: c.id,
