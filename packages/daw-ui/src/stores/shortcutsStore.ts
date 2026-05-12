@@ -17,6 +17,12 @@ export type ActionId =
   | 'gotoStart' | 'gotoEnd' | 'toggleLoop'
   | 'togglePlaylist' | 'toggleChannelRack' | 'togglePianoRoll'
   | 'toggleBrowser' | 'toggleMixer' | 'toggleShortcutsPanel'
+  // Playlist tool selection — single-key shortcuts that switch
+  // `playlistToolStore.tool`. The current default tool is also the
+  // default behaviour, so changing tools doesn't break existing
+  // mousedown flows.
+  | 'toolDraw' | 'toolPaint' | 'toolSlice' | 'toolDelete'
+  | 'toolMute' | 'toolSlip' | 'toolSelect' | 'toolZoom'
 
 export interface ActionDef {
   id: ActionId
@@ -51,6 +57,15 @@ export const ACTIONS: ActionDef[] = [
   { id: 'toggleBrowser',        label: 'Toggle Browser',             category: 'Panels' },
   { id: 'toggleMixer',          label: 'Toggle Mixer',               category: 'Panels' },
   { id: 'toggleShortcutsPanel', label: 'Toggle this shortcuts panel', category: 'Panels' },
+
+  { id: 'toolDraw',   label: 'Playlist tool · Draw',   category: 'Playlist tools' },
+  { id: 'toolPaint',  label: 'Playlist tool · Paint',  category: 'Playlist tools' },
+  { id: 'toolSlice',  label: 'Playlist tool · Slice',  category: 'Playlist tools' },
+  { id: 'toolDelete', label: 'Playlist tool · Delete', category: 'Playlist tools' },
+  { id: 'toolMute',   label: 'Playlist tool · Mute',   category: 'Playlist tools' },
+  { id: 'toolSlip',   label: 'Playlist tool · Slip',   category: 'Playlist tools' },
+  { id: 'toolSelect', label: 'Playlist tool · Select', category: 'Playlist tools' },
+  { id: 'toolZoom',   label: 'Playlist tool · Zoom',   category: 'Playlist tools' },
 ]
 
 export const DEFAULTS: Record<ActionId, Binding> = {
@@ -77,6 +92,14 @@ export const DEFAULTS: Record<ActionId, Binding> = {
   toggleBrowser:        { code: 'F8' },
   toggleMixer:          { code: 'F9' },
   toggleShortcutsPanel: { code: 'Slash', shift: true },
+  toolDraw:   { code: 'KeyP' },
+  toolPaint:  { code: 'KeyB' },
+  toolSlice:  { code: 'KeyN' },
+  toolDelete: { code: 'KeyG' },
+  toolMute:   { code: 'KeyT' },
+  toolSlip:   { code: 'KeyY' },
+  toolSelect: { code: 'KeyE' },
+  toolZoom:   { code: 'KeyZ' },
 }
 
 export interface Preset {

@@ -16,6 +16,7 @@ import { Roadmap } from './components/roadmap/Roadmap'
 import { AudioSettings } from './components/settings/AudioSettings'
 import { ThemePicker } from './components/settings/ThemePicker'
 import { useMixerSettingsStore } from './stores/mixerSettingsStore'
+import { usePlaylistToolStore } from './stores/playlistToolStore'
 import { UpdateModal } from './components/UpdateModal'
 import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow } from './components/FloatingWindow'
@@ -967,6 +968,14 @@ export function App() {
         case 'toggleBrowser':         setShowBrowser(v => !v); return
         case 'toggleMixer':           setShowMixer(v => !v); return
         case 'toggleShortcutsPanel':  setShowShortcuts(v => !v); return
+        case 'toolDraw':              usePlaylistToolStore.getState().setTool('draw'); return
+        case 'toolPaint':             usePlaylistToolStore.getState().setTool('paint'); return
+        case 'toolSlice':             usePlaylistToolStore.getState().setTool('slice'); return
+        case 'toolDelete':            usePlaylistToolStore.getState().setTool('delete'); return
+        case 'toolMute':              usePlaylistToolStore.getState().setTool('mute'); return
+        case 'toolSlip':              usePlaylistToolStore.getState().setTool('slip'); return
+        case 'toolSelect':            usePlaylistToolStore.getState().setTool('select'); return
+        case 'toolZoom':              usePlaylistToolStore.getState().setTool('zoom'); return
       }
     }
     window.addEventListener('keydown', handler)

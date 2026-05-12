@@ -1117,7 +1117,7 @@ function PlaylistToolPicker() {
     {
       id: 'slice',
       label: 'Slice',
-      keybind: 'S',
+      keybind: 'N',
       icon: (
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 10L9 1.5" />
@@ -1128,7 +1128,7 @@ function PlaylistToolPicker() {
     {
       id: 'delete',
       label: 'Delete',
-      keybind: 'D',
+      keybind: 'G',
       icon: (
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2.5" y="3.5" width="7" height="7" />

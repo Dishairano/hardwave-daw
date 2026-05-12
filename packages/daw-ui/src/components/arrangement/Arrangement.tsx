@@ -7,6 +7,7 @@ import { useClipGroupStore } from '../../stores/clipGroupStore'
 import { useTrackFolderStore } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { usePickerStore } from '../../stores/pickerStore'
+import { usePlaylistToolStore } from '../../stores/playlistToolStore'
 import { useLogStore } from '../../dev/logStore'
 import { hw } from '../../theme'
 
@@ -779,6 +780,59 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       return
     }
 
+    // Tool-mode branch — selected playlist tool wins over the default
+    // "draw + hold-to-marquee" behaviour. Each tool maps to a one-shot
+    // action with no follow-up drag (except `zoom` which keeps wheel
+    // semantics, and `select` which always starts an immediate
+    // rubber-band). Tools that need bigger plumbing (`paint`, `slip`,
+    // `mute`) currently fall through to default so users can still
+    // place clips while we wire them.
+    const currentTool = usePlaylistToolStore.getState().tool
+    if (currentTool === 'slice' || currentTool === 'delete') {
+      const hit = hitTest(mouseX, mouseY, scrollOffset)
+      if (!hit) return
+      if (currentTool === 'slice') {
+        // Split at the clicked tick, snapped. splitClip returns the new
+        // clip id but we ignore it — both halves stay on the track.
+        const sliceTick = applySnap(
+          Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick)),
+        )
+        useTrackStore
+          .getState()
+          .splitClip(hit.trackId, hit.clip.id, sliceTick)
+          .catch((err) => console.error('splitClip failed', err))
+      } else {
+        useTrackStore
+          .getState()
+          .deleteClip(hit.trackId, hit.clip.id)
+          .catch((err) => console.error('deleteClip failed', err))
+      }
+      return
+    }
+    if (currentTool === 'zoom') {
+      // Click in the playlist body → zoom in (or out with Alt). The
+      // zoom is centred on the wheel position so the bar under the
+      // cursor stays roughly fixed.
+      const factor = e.altKey ? 1 / 1.5 : 1.5
+      setHorizontalZoom(horizontalZoom * factor)
+      return
+    }
+    if (currentTool === 'select') {
+      // Pure rubber-band — skip the picker-paste fall-through and
+      // start the marquee immediately without the 4px threshold.
+      if (!(e.ctrlKey || e.metaKey)) clearSelection()
+      dragRef.current = {
+        mode: 'rubber', clipId: '', trackId: '',
+        startMouseX: mouseX, startMouseY: mouseY,
+        currentMouseX: mouseX, currentMouseY: mouseY,
+        originalPositionTicks: 0, originalLengthTicks: 0,
+        originalFadeInTicks: 0, originalFadeOutTicks: 0,
+      }
+      forceRender(n => n + 1)
+      return
+    }
+    // `mute` and `slip` fall through to default for now — wiring TBD.
+
     const hit = hitTest(mouseX, mouseY, scrollOffset)
     if (hit) {
       const gid = clipToGroup[hit.clip.id]
@@ -866,7 +920,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
       // No forceRender — pending state is invisible until promoted.
     }
-  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm])
+  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm, horizontalZoom, setHorizontalZoom])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const drag = dragRef.current
