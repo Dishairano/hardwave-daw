@@ -114,27 +114,32 @@ echo "Version: $CURRENT -> $NEW_VERSION"
 # `fe-v*` tag pipeline (frontend-publish.yml) which skips the Windows /
 # Mac / Linux Tauri rebuild and only ships a frontend bundle for the
 # hot-swap updater. Saves ~25 minutes of CI per release.
+#
+# Detection looks at actual SOURCE files only — `src-tauri/src/**`,
+# `crates/*/src/**`, build.rs files, and the release.yml workflow itself.
+# We deliberately EXCLUDE `Cargo.toml`, `Cargo.lock`, and `tauri.conf.json`
+# from the scan because every release tag bump touches all three with a
+# pure version field change — which used to flag every minor release as
+# "backend" and trigger a needless 30-minute build. A real backend change
+# always lands a source file too.
 LAST_VTAG=$(git tag --list 'v*' --sort=-v:refname | head -1 || echo "")
 FRONTEND_ONLY=0
 if [ -n "$LAST_VTAG" ]; then
-  # Look at BOTH the committed diff against the last v* tag AND the
-  # currently staged/unstaged changes. Detection used to compare just
-  # `${LAST_VTAG}..HEAD` which excluded uncommitted Rust edits — the
-  # script then tagged a Rust-containing release as `fe-v*` and the
-  # backend never shipped. Cover both surfaces:
-  #   - tag..HEAD: edits already committed since the last release
-  #   - git diff HEAD: edits in the working tree about to be committed
+  # Cover both already-committed diffs since the last v* tag AND any
+  # pending working-tree edits about to be committed by release.sh.
   COMMITTED_BACKEND=$(git diff --name-only "${LAST_VTAG}..HEAD" -- \
-      'src-tauri/**' 'crates/**' 'Cargo.toml' 'Cargo.lock' \
+      'src-tauri/src/**' 'src-tauri/build.rs' \
+      'crates/*/src/**' 'crates/*/build.rs' \
       '.github/workflows/release.yml' 2>/dev/null | head -1)
   PENDING_BACKEND=$(git diff --name-only HEAD -- \
-      'src-tauri/**' 'crates/**' 'Cargo.toml' 'Cargo.lock' \
+      'src-tauri/src/**' 'src-tauri/build.rs' \
+      'crates/*/src/**' 'crates/*/build.rs' \
       '.github/workflows/release.yml' 2>/dev/null | head -1)
   if [ -z "$COMMITTED_BACKEND" ] && [ -z "$PENDING_BACKEND" ]; then
     FRONTEND_ONLY=1
     echo "release.sh: only frontend files changed since $LAST_VTAG — will tag as fe-v$NEW_VERSION (hot-swap path, ~2min CI)"
   else
-    echo "release.sh: backend changes detected since $LAST_VTAG — full v$NEW_VERSION build (all platforms, ~30min CI)"
+    echo "release.sh: backend changes detected since $LAST_VTAG — full v$NEW_VERSION build (all platforms, ~25min CI)"
   fi
 else
   echo "release.sh: no prior v* tag found — defaulting to full release"
