@@ -32,6 +32,75 @@ pub struct AudioFileInfo {
     pub duration_secs: f64,
 }
 
+/// Offline resample a set of deinterleaved f32 channels from `src_sr` to
+/// `dst_sr` using rubato's FFT fixed-in converter. Used both by
+/// `AudioFileReader::read_resampled` at load time and by the engine when the
+/// audio device's sample rate changes after files were already loaded into
+/// the audio pool — in that case every cached buffer is re-resampled to keep
+/// playback pitch correct.
+pub fn resample_channels(
+    channels: &[Vec<f32>],
+    src_sr: u32,
+    dst_sr: u32,
+) -> Result<Vec<Vec<f32>>, AudioFileError> {
+    if channels.is_empty() {
+        return Ok(Vec::new());
+    }
+    if src_sr == dst_sr {
+        return Ok(channels.to_vec());
+    }
+
+    let chunk_size = 1024_usize;
+    let num_channels = channels.len();
+    let mut resampler = FftFixedIn::<f32>::new(
+        src_sr as usize,
+        dst_sr as usize,
+        chunk_size,
+        2,
+        num_channels,
+    )
+    .map_err(|e| AudioFileError::Decode(format!("resampler init: {e}")))?;
+
+    let input_frames = channels[0].len();
+    let mut out: Vec<Vec<f32>> = (0..num_channels).map(|_| Vec::new()).collect();
+    let mut cursor = 0_usize;
+
+    while cursor + chunk_size <= input_frames {
+        let input_slices: Vec<&[f32]> = channels
+            .iter()
+            .map(|ch| &ch[cursor..cursor + chunk_size])
+            .collect();
+        let processed = resampler
+            .process(&input_slices, None)
+            .map_err(|e| AudioFileError::Decode(format!("resample: {e}")))?;
+        for (ch_idx, chunk) in processed.into_iter().enumerate() {
+            out[ch_idx].extend_from_slice(&chunk);
+        }
+        cursor += chunk_size;
+    }
+    if cursor < input_frames {
+        let remaining = input_frames - cursor;
+        let padded: Vec<Vec<f32>> = channels
+            .iter()
+            .map(|ch| {
+                let mut v = ch[cursor..].to_vec();
+                v.resize(chunk_size, 0.0);
+                v
+            })
+            .collect();
+        let input_slices: Vec<&[f32]> = padded.iter().map(|v| v.as_slice()).collect();
+        if let Ok(processed) = resampler.process(&input_slices, None) {
+            let ratio = dst_sr as f64 / src_sr as f64;
+            let keep = (remaining as f64 * ratio).round() as usize;
+            for (ch_idx, chunk) in processed.into_iter().enumerate() {
+                let take = keep.min(chunk.len());
+                out[ch_idx].extend_from_slice(&chunk[..take]);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Reads an entire audio file into memory as deinterleaved f32 channels.
 pub struct AudioFileReader;
 
@@ -50,59 +119,7 @@ impl AudioFileReader {
         if target == info.sample_rate || channels.is_empty() {
             return Ok((info, channels));
         }
-
-        // Offline resample with rubato's FFT fixed-in converter.
-        let chunk_size = 1024_usize;
-        let num_channels = channels.len();
-        let mut resampler = FftFixedIn::<f32>::new(
-            info.sample_rate as usize,
-            target as usize,
-            chunk_size,
-            2,
-            num_channels,
-        )
-        .map_err(|e| AudioFileError::Decode(format!("resampler init: {e}")))?;
-
-        let input_frames = channels[0].len();
-        let mut out: Vec<Vec<f32>> = (0..num_channels).map(|_| Vec::new()).collect();
-        let mut cursor = 0_usize;
-
-        while cursor + chunk_size <= input_frames {
-            let input_slices: Vec<&[f32]> = channels
-                .iter()
-                .map(|ch| &ch[cursor..cursor + chunk_size])
-                .collect();
-            let processed = resampler
-                .process(&input_slices, None)
-                .map_err(|e| AudioFileError::Decode(format!("resample: {e}")))?;
-            for (ch_idx, chunk) in processed.into_iter().enumerate() {
-                out[ch_idx].extend_from_slice(&chunk);
-            }
-            cursor += chunk_size;
-        }
-        // Flush remaining frames (pad the final partial chunk with zeros).
-        if cursor < input_frames {
-            let remaining = input_frames - cursor;
-            let mut padded: Vec<Vec<f32>> = channels
-                .iter()
-                .map(|ch| {
-                    let mut v = ch[cursor..].to_vec();
-                    v.resize(chunk_size, 0.0);
-                    v
-                })
-                .collect();
-            let input_slices: Vec<&[f32]> = padded.iter_mut().map(|v| v.as_slice()).collect();
-            if let Ok(processed) = resampler.process(&input_slices, None) {
-                // Keep only the proportionally relevant output frames.
-                let ratio = target as f64 / info.sample_rate as f64;
-                let keep = (remaining as f64 * ratio).round() as usize;
-                for (ch_idx, chunk) in processed.into_iter().enumerate() {
-                    let take = keep.min(chunk.len());
-                    out[ch_idx].extend_from_slice(&chunk[..take]);
-                }
-            }
-        }
-
+        let out = resample_channels(&channels, info.sample_rate, target)?;
         info.sample_rate = target;
         info.total_frames = out.first().map(|c| c.len() as u64).unwrap_or(0);
         info.duration_secs = info.total_frames as f64 / target as f64;

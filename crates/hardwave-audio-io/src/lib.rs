@@ -359,14 +359,17 @@ impl AudioDeviceManager {
             .unwrap_or_default()
     }
 
-    /// Start the output audio stream with the given callback.
-    pub fn start<C: AudioCallback>(&mut self, callback: C) -> Result<(), AudioIoError> {
+    /// Resolve the output device and pick the sample rate cpal will actually
+    /// open the stream at. If `self.sample_rate` is not supported by the
+    /// device it is overwritten with the device's `default_output_config`
+    /// rate. Returns the final negotiated rate plus the resolved device.
+    ///
+    /// Callers that need to size buffers, build callbacks, or resample
+    /// already-loaded audio for the new rate must call this BEFORE invoking
+    /// `start()` so the rate is final before any downstream state is built.
+    pub fn negotiate_output_rate(&mut self) -> Result<u32, AudioIoError> {
         let device = self.resolve_output_device()?;
-
-        // Negotiate sample rate: check if the requested rate is supported,
-        // otherwise fall back to the device's preferred rate.
-        let supported_rate = self.is_rate_supported(&device, self.sample_rate);
-        if !supported_rate {
+        if !self.is_rate_supported(&device, self.sample_rate) {
             if let Ok(default_config) = device.default_output_config() {
                 let fallback = default_config.sample_rate().0;
                 log::warn!(
@@ -377,6 +380,19 @@ impl AudioDeviceManager {
                 self.sample_rate = fallback;
             }
         }
+        Ok(self.sample_rate)
+    }
+
+    /// Start the output audio stream with the given callback.
+    pub fn start<C: AudioCallback>(&mut self, callback: C) -> Result<(), AudioIoError> {
+        // Defensive re-negotiation: if a caller built the callback without
+        // first calling `negotiate_output_rate()` (or the device set has
+        // changed between the two calls), this guarantees the cpal stream
+        // still opens at a rate the device accepts. The caller's callback
+        // may now hold a stale rate, but at worst it produces wrong-rate
+        // audio rather than a stream init error.
+        let _ = self.negotiate_output_rate()?;
+        let device = self.resolve_output_device()?;
 
         let resolved_name = device.name().unwrap_or_default();
         let exclusive_requested =

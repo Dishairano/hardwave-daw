@@ -151,6 +151,51 @@ impl AudioPool {
         }
     }
 
+    /// Re-resample every cached buffer whose native sample rate differs from
+    /// `dst_sr` using the supplied closure (we don't import a DSP dep here —
+    /// the caller wires in `hardwave_dsp::resample_channels`). Returns the
+    /// number of buffers that were rewritten.
+    ///
+    /// Called by the engine when the audio device's sample rate changes
+    /// (user picks a new device / cpal falls back on stream open). Without
+    /// this the pool stays at the OLD rate while cpal pulls at the new one,
+    /// playing every clip back at the wrong pitch.
+    pub fn resample_all<F>(&self, dst_sr: u32, mut do_resample: F) -> usize
+    where
+        F: FnMut(&[Vec<f32>], u32, u32) -> Option<Vec<Vec<f32>>>,
+    {
+        let mut count = 0_usize;
+        let mut inner = self.inner.write();
+        let ids: Vec<String> = inner.buffers.keys().cloned().collect();
+        for id in ids {
+            let buf = match inner.buffers.get(&id) {
+                Some(b) => Arc::clone(b),
+                None => continue,
+            };
+            if buf.sample_rate == dst_sr || buf.num_frames == 0 {
+                continue;
+            }
+            let Some(new_channels) = do_resample(&buf.channels, buf.sample_rate, dst_sr) else {
+                continue;
+            };
+            let new_frames = new_channels.first().map(|c| c.len()).unwrap_or(0);
+            let new_buf = AudioBuffer {
+                channels: new_channels,
+                sample_rate: dst_sr,
+                num_frames: new_frames,
+            };
+            let old_bytes = buf.bytes();
+            let new_bytes = new_buf.bytes();
+            inner.bytes_used = inner
+                .bytes_used
+                .saturating_sub(old_bytes)
+                .saturating_add(new_bytes);
+            inner.buffers.insert(id, Arc::new(new_buf));
+            count += 1;
+        }
+        count
+    }
+
     /// Update the cache cap. Immediately evicts oldest entries if the new
     /// cap is lower than current usage.
     pub fn set_max_bytes(&self, max_bytes: u64) {
@@ -234,6 +279,44 @@ mod tests {
         assert!(!pool.contains("a"));
         assert!(!pool.contains("b"));
         assert!(pool.contains("c"));
+    }
+
+    #[test]
+    fn resample_all_rewrites_only_mismatched_buffers() {
+        let pool = AudioPool::new();
+        // 48k buffer that needs to drop to 44.1k.
+        pool.insert(
+            "a".into(),
+            AudioBuffer {
+                channels: vec![vec![1.0_f32; 4800]; 2],
+                sample_rate: 48_000,
+                num_frames: 4800,
+            },
+        );
+        // Already at the target rate — should be skipped.
+        pool.insert(
+            "b".into(),
+            AudioBuffer {
+                channels: vec![vec![0.5_f32; 441]; 2],
+                sample_rate: 44_100,
+                num_frames: 441,
+            },
+        );
+        let mut calls = 0;
+        let n = pool.resample_all(44_100, |chs, src, dst| {
+            calls += 1;
+            assert_eq!(src, 48_000);
+            assert_eq!(dst, 44_100);
+            // Pretend rubato gave us a 44.1k buffer of half the frames.
+            Some(chs.iter().map(|c| vec![1.0_f32; c.len() * 441 / 480]).collect())
+        });
+        assert_eq!(n, 1);
+        assert_eq!(calls, 1);
+        let a = pool.get("a").unwrap();
+        assert_eq!(a.sample_rate, 44_100);
+        let b = pool.get("b").unwrap();
+        assert_eq!(b.sample_rate, 44_100);
+        assert_eq!(b.num_frames, 441); // untouched
     }
 
     #[test]

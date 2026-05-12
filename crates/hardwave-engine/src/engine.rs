@@ -323,8 +323,31 @@ impl DawEngine {
         let command_rx = self.command_rx.clone();
         let audio_pool = self.audio_pool.clone();
 
+        // Negotiate the actual stream rate BEFORE building the callback.
+        // cpal can silently fall back from the requested rate to the device's
+        // default if the device doesn't accept the request — doing the
+        // negotiation up front guarantees the callback, transport, and any
+        // already-loaded audio buffers all agree on the same rate.
+        self.audio_device
+            .negotiate_output_rate()
+            .map_err(|e| e.to_string())?;
+
         let sample_rate = self.audio_device.sample_rate;
         let buffer_size = self.audio_device.buffer_size;
+
+        // Any audio buffer previously loaded at a different rate would play
+        // back at the wrong pitch after this restart — re-resample them to
+        // the negotiated rate before the audio thread sees the new pool.
+        let resampled = self.audio_pool.resample_all(sample_rate, |chs, src, dst| {
+            hardwave_dsp::resample_channels(chs, src, dst).ok()
+        });
+        if resampled > 0 {
+            log::info!(
+                "Re-resampled {} cached audio buffer(s) to {} Hz",
+                resampled,
+                sample_rate
+            );
+        }
 
         transport
             .sample_rate

@@ -43,7 +43,7 @@ pub mod time_pitch;
 pub mod wavetable;
 pub mod wavetable_display;
 
-pub use audio_file::{AudioFileInfo, AudioFileReader};
+pub use audio_file::{resample_channels, AudioFileError, AudioFileInfo, AudioFileReader};
 pub use biquad::{Biquad, BiquadKind};
 pub use convolution::ConvolutionReverb;
 pub use delay_line::StereoDelayLine;
