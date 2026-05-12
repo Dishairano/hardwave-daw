@@ -36,7 +36,13 @@ function persist(next: StoredSettings) {
 const initial = hydrate()
 
 export const useMixerSettingsStore = create<MixerSettingsState>((set) => ({
-  useNewMixer: initial.useNewMixer ?? false,
+  // Default ON: the FL Wide 2 mixer is what all the Phase 4 perf work
+  // targeted (virtualization, GPU compositor scroll, canvas meters via
+  // global rAF, fine-grained selectors, optimistic-local fader drag).
+  // Leaving this `false` meant every user landed on the legacy panel
+  // and none of those wins reached them. Users who hit a regression
+  // can toggle back via Options → "Experimental — FL Wide 2 mixer".
+  useNewMixer: initial.useNewMixer ?? true,
   showWidthKnob: initial.showWidthKnob ?? true,
   setUseNewMixer: (on) => {
     persist({ useNewMixer: on })
