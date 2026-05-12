@@ -74,12 +74,30 @@ jobs:
         include:
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            tauri-bundles: deb,appimage,updater
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            # NSIS is what the updater + branded launcher consume. .msi is
+            # a duplicate installer format end-users never asked for and
+            # adds ~90s to Windows bundle.
+            tauri-bundles: nsis,updater
           - platform: macos-latest
             target: aarch64-apple-darwin
+            # Skip rpm-equivalent extras. .app is implicit inside the DMG.
+            tauri-bundles: app,dmg,updater
 
     runs-on: ${{ matrix.platform }}
+
+    # Network + incremental hygiene applied to every leg:
+    # - CARGO_INCREMENTAL=0 means sccache can do its job without fighting
+    #   the local incremental cache. Saves a few minutes when cache hits.
+    # - The retry + git-cli flags keep transient network blips from
+    #   stalling the whole matrix.
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+      RUST_BACKTRACE: 1
 
     steps:
       - uses: actions/checkout@v4
@@ -225,7 +243,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           tauriScript: tauri
-          args: --target ${{ matrix.target }} --features jack
+          args: --target ${{ matrix.target }} --features jack --bundles ${{ matrix.tauri-bundles }}
 
       - name: Build Tauri app (Windows — with ASIO)
         if: matrix.platform == 'windows-latest'
@@ -243,7 +261,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           tauriScript: tauri
-          args: --target ${{ matrix.target }} --features asio
+          args: --target ${{ matrix.target }} --features asio --bundles ${{ matrix.tauri-bundles }}
 
       # Custom branded launcher-style installer (the small Tauri app
       # under `installer/`). Built with --no-bundle so we get the raw
@@ -285,6 +303,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Tell rustc to target Apple's M1 CPU baseline — every macOS user
+          # that can run the app has at least an M1 chip (aarch64 target),
+          # so this is free runtime perf with no build-time cost. Without
+          # this rustc generates conservative ARMv8 code that doesn't use
+          # M1-specific instructions.
+          RUSTFLAGS: '-C target-cpu=apple-m1'
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Hardwave DAW ${{ github.ref_name }}'
@@ -292,7 +316,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           tauriScript: tauri
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.tauri-bundles }}
 
   discord-changelog:
     needs: [build]
