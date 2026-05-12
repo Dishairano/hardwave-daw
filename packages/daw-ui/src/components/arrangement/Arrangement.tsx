@@ -863,17 +863,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // Pending empty-area press: only promote to a real rubber-band selection
     // once the pointer has traveled past the threshold. Up to that point the
     // press is a candidate "click" — released without crossing the threshold
-    // it's a no-op (handled in handleMouseUp).
+    // it's a no-op (handled in handleMouseUp). Crucially the promotion does
+    // NOT set the edit cursor: the user's spec is "left-click is always
+    // paste, hold-and-drag is select, neither one should ever flash a
+    // cursor line". The edit cursor (paste origin) is only moved via
+    // ruler clicks or future right-click context-menu actions.
     if (drag.mode === 'pending-empty') {
       const dy = mouseY - drag.startMouseY
       if (Math.sqrt(dx * dx + dy * dy) < RUBBER_PROMOTE_THRESHOLD_PX) return
       drag.mode = 'rubber'
-      // Now that we know this is a deliberate drag, commit the edit cursor at
-      // the original mousedown position so Ctrl+V paste origin reflects where
-      // the user actually started the selection.
-      if (drag.originalPositionTicks > 0 || drag.startMouseX === mouseX) {
-        setEditCursor(drag.originalPositionTicks)
-      }
       forceRender(n => n + 1)
       return
     }
