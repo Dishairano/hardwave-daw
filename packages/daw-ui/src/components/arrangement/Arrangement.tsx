@@ -20,7 +20,14 @@ const RESIZE_HANDLE_PX = 6
 // owns the ruler so we never have two competing visual layers.
 const RULER_HEIGHT = 22
 
-type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left' | 'fade-in' | 'fade-out' | 'rubber' | 'scrub'
+type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left' | 'fade-in' | 'fade-out' | 'rubber' | 'scrub' | 'pending-empty'
+
+// Pixel distance the pointer has to move from mousedown before an
+// empty-area press promotes into a rubber-band selection. Below this
+// threshold a left-click is treated as a no-op (or as a paste if the
+// picker has something to drop) — matching the FL Studio model where a
+// pure click is "paint", and only a held drag is "select".
+const RUBBER_PROMOTE_THRESHOLD_PX = 4
 
 interface DragState {
   mode: DragMode
@@ -788,17 +795,19 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         }
       }
       if (!(e.ctrlKey || e.metaKey)) clearSelection()
-      // Place the edit cursor at the clicked tick (snapped). It may be replaced by a
-      // rubber-band selection if the user drags.
+      // Don't commit anything yet — defer the decision until we know if the
+      // user is doing a simple click (paint/no-op) or a drag (marquee).
+      // The edit cursor and the rubber band both only kick in once we cross
+      // RUBBER_PROMOTE_THRESHOLD_PX in handleMouseMove. This kills the
+      // unwanted "teal edit-cursor line flashes on every click" UX.
       const tickAt = Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick))
-      setEditCursor(applySnap(tickAt))
       dragRef.current = {
-        mode: 'rubber', clipId: '', trackId: '',
+        mode: 'pending-empty', clipId: '', trackId: '',
         startMouseX: mouseX, startMouseY: mouseY, currentMouseX: mouseX, currentMouseY: mouseY,
-        originalPositionTicks: 0, originalLengthTicks: 0,
+        originalPositionTicks: applySnap(tickAt), originalLengthTicks: 0,
         originalFadeInTicks: 0, originalFadeOutTicks: 0,
       }
-      forceRender(n => n + 1)
+      // No forceRender — pending state is invisible until promoted.
     }
   }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm])
 
@@ -850,6 +859,24 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const dTicks = Math.round(dx / pixelsPerTick)
 
     const minLen = snapTicks > 0 ? snapTicks : PPQ
+
+    // Pending empty-area press: only promote to a real rubber-band selection
+    // once the pointer has traveled past the threshold. Up to that point the
+    // press is a candidate "click" — released without crossing the threshold
+    // it's a no-op (handled in handleMouseUp).
+    if (drag.mode === 'pending-empty') {
+      const dy = mouseY - drag.startMouseY
+      if (Math.sqrt(dx * dx + dy * dy) < RUBBER_PROMOTE_THRESHOLD_PX) return
+      drag.mode = 'rubber'
+      // Now that we know this is a deliberate drag, commit the edit cursor at
+      // the original mousedown position so Ctrl+V paste origin reflects where
+      // the user actually started the selection.
+      if (drag.originalPositionTicks > 0 || drag.startMouseX === mouseX) {
+        setEditCursor(drag.originalPositionTicks)
+      }
+      forceRender(n => n + 1)
+      return
+    }
 
     if (drag.mode === 'scrub') {
       const scrollOffset = getScrollOffset()
@@ -936,6 +963,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
   const handleMouseUp = useCallback(() => {
     const drag = dragRef.current
+    // Pending empty-area click that never moved past the threshold: pure
+    // no-op. No edit-cursor jump, no marquee, no selection change beyond
+    // what mousedown already cleared (when ctrl wasn't held).
+    if (drag && drag.mode === 'pending-empty') {
+      dragRef.current = null
+      return
+    }
     if (drag && drag.mode === 'rubber') {
       // Finalize rubber-band selection — any clip intersecting the box is selected.
       const scrollOffset = getScrollOffset()
