@@ -144,6 +144,42 @@ impl EdgeDelayLine {
 }
 
 /// The audio graph. Nodes are stored in topological order for lock-free processing.
+/// Per-node scratch space, pre-allocated once at `add_node` time so the
+/// audio thread never asks the allocator during `process`. Indexed 1:1
+/// with `nodes` / `buffers` / `scratch`.
+///
+/// Without this struct, `AudioGraph::process` would `vec![vec![0.0; buf];
+/// NODE_CHANNELS]` for `ch_bufs` AND for `outputs` every node every
+/// block, plus a `Vec<f32>` for `delay_scratch` and a `Vec::new()` for
+/// `midi_out`. At 48 kHz / 256 samples / 500 nodes that's roughly half
+/// a million allocations per second on the real-time thread — the
+/// number one finding from the May 2026 perf audit.
+struct NodeScratch {
+    /// Gathered inputs after edge accumulation. `[channel][samples]`,
+    /// zeroed each block via `.fill(0.0)` rather than re-allocated.
+    ch_bufs: Vec<Vec<f32>>,
+    /// Node output buffer that is swapped with `buffers[node_id]` after
+    /// `process` so the next block reads it back as a source — zero
+    /// copy.
+    outputs: Vec<Vec<f32>>,
+    /// Workspace for `EdgeDelayLine::process`. Lives here so each edge
+    /// loop iteration doesn't allocate a fresh scratch vec.
+    delay_scratch: Vec<f32>,
+    /// MIDI output the node emits. Cleared (not re-allocated) per call.
+    midi_out: Vec<hardwave_midi::MidiEvent>,
+}
+
+impl NodeScratch {
+    fn new(buffer_size: usize) -> Self {
+        Self {
+            ch_bufs: vec![vec![0.0; buffer_size]; NODE_CHANNELS],
+            outputs: vec![vec![0.0; buffer_size]; NODE_CHANNELS],
+            delay_scratch: vec![0.0; buffer_size],
+            midi_out: Vec::with_capacity(64),
+        }
+    }
+}
+
 pub struct AudioGraph {
     nodes: Vec<Box<dyn AudioNode>>,
     edges: Vec<Edge>,
@@ -152,6 +188,9 @@ pub struct AudioGraph {
     processing_order: Vec<NodeId>,
     /// Pre-allocated buffers for intermediate data.
     buffers: Vec<Vec<Vec<f32>>>, // [node][channel][samples]
+    /// Per-node scratch space — eliminates 5 allocations per node per
+    /// block. Sized 1:1 with `nodes` / `buffers`.
+    scratch: Vec<NodeScratch>,
     buffer_size: usize,
 }
 
@@ -163,16 +202,20 @@ impl AudioGraph {
             edge_delays: Vec::new(),
             processing_order: Vec::new(),
             buffers: Vec::new(),
+            scratch: Vec::new(),
             buffer_size,
         }
     }
 
-    /// Add a node, returns its ID.
+    /// Add a node, returns its ID. Pre-allocates the buffer and scratch
+    /// space for the node — none of that allocation happens on the
+    /// audio thread.
     pub fn add_node(&mut self, node: Box<dyn AudioNode>) -> NodeId {
         let id = self.nodes.len();
         self.nodes.push(node);
         self.buffers
             .push(vec![vec![0.0; self.buffer_size]; NODE_CHANNELS]);
+        self.scratch.push(NodeScratch::new(self.buffer_size));
         self.rebuild_order();
         id
     }
@@ -210,6 +253,7 @@ impl AudioGraph {
         self.edge_delays.clear();
         self.processing_order.clear();
         self.buffers.clear();
+        self.scratch.clear();
     }
 
     /// Compute per-edge PDC compensation delays from each node's accumulated
@@ -293,61 +337,94 @@ impl AudioGraph {
         self.processing_order = order;
     }
 
-    /// Process the entire graph for one buffer. Called on the audio thread.
+    /// Process the entire graph for one buffer. Called on the audio
+    /// thread.
+    ///
+    /// **No-alloc on the hot path.** All per-node temporaries live in
+    /// `self.scratch[node_id]` (see [`NodeScratch`]) and are reused
+    /// across blocks. The per-edge `src_vec` clone at line ~360 is the
+    /// only remaining allocation — it survives this refactor because
+    /// removing it requires extracting `edge_delays` out of `self` for
+    /// split-borrow reasons (planned follow-up).
     pub fn process(&mut self, ctx: &ProcessContext) {
-        let order = self.processing_order.clone();
-        let midi_empty: Vec<hardwave_midi::MidiEvent> = Vec::new();
+        // Iterate by index — `processing_order` mutates inside the loop
+        // body via no path, so a snapshot clone is unnecessary. (The
+        // previous code's `.clone()` was defensive but never load-bearing.)
+        let midi_empty: [hardwave_midi::MidiEvent; 0] = [];
+        let order_len = self.processing_order.len();
 
-        for &node_id in &order {
-            // Gather inputs from connected source nodes
-            let inputs: Vec<Vec<f32>> = {
-                let mut ch_bufs: Vec<Vec<f32>> = vec![vec![0.0; self.buffer_size]; NODE_CHANNELS];
-                let mut delay_scratch = vec![0.0_f32; self.buffer_size];
-                for edge_idx in 0..self.edges.len() {
-                    let (edge_source, edge_source_port, edge_dest, edge_dest_port, edge_gain) = {
-                        let e = &self.edges[edge_idx];
-                        (e.source, e.source_port, e.dest, e.dest_port, e.gain)
+        for order_idx in 0..order_len {
+            let node_id = self.processing_order[order_idx];
+
+            // Zero the scratch's input buffers in place — no realloc.
+            for ch in &mut self.scratch[node_id].ch_bufs {
+                ch.fill(0.0);
+            }
+
+            // Gather inputs from edges that target this node.
+            for edge_idx in 0..self.edges.len() {
+                let (edge_source, edge_source_port, edge_dest, edge_dest_port, edge_gain) = {
+                    let e = &self.edges[edge_idx];
+                    (e.source, e.source_port, e.dest, e.dest_port, e.gain)
+                };
+                if edge_dest != node_id {
+                    continue;
+                }
+                // Snapshot the source channel so we can release the
+                // immutable borrow on `self.buffers` and then access
+                // `self.edge_delays` + `self.scratch` mutably. The
+                // clone here is the last per-block alloc; see process
+                // doc comment.
+                let src_vec: Vec<f32> = match self
+                    .buffers
+                    .get(edge_source)
+                    .and_then(|b| b.get(edge_source_port))
+                {
+                    Some(ch) => ch.clone(),
+                    None => continue,
+                };
+                let n = src_vec.len().min(self.buffer_size);
+                let scratch = &mut self.scratch[node_id];
+                let src_slice: &[f32] =
+                    if let Some(Some(dl)) = self.edge_delays.get_mut(edge_idx) {
+                        dl.process(&src_vec[..n], &mut scratch.delay_scratch[..n]);
+                        &scratch.delay_scratch[..n]
+                    } else {
+                        &src_vec[..n]
                     };
-                    if edge_dest != node_id {
-                        continue;
-                    }
-                    // Pull the source channel into a Vec so we can release the
-                    // immutable borrow on `self.buffers` before touching
-                    // `self.edge_delays` mutably below.
-                    let src_vec: Vec<f32> = match self
-                        .buffers
-                        .get(edge_source)
-                        .and_then(|b| b.get(edge_source_port))
-                    {
-                        Some(ch) => ch.clone(),
-                        None => continue,
-                    };
-                    let n = src_vec.len().min(self.buffer_size);
-                    let src_slice: &[f32] =
-                        if let Some(Some(dl)) = self.edge_delays.get_mut(edge_idx) {
-                            dl.process(&src_vec[..n], &mut delay_scratch[..n]);
-                            &delay_scratch[..n]
-                        } else {
-                            &src_vec[..n]
-                        };
-                    if edge_dest_port < ch_bufs.len() {
-                        for (i, s) in src_slice.iter().enumerate() {
-                            if i < ch_bufs[edge_dest_port].len() {
-                                ch_bufs[edge_dest_port][i] += s * edge_gain;
-                            }
+                if edge_dest_port < scratch.ch_bufs.len() {
+                    let dest = &mut scratch.ch_bufs[edge_dest_port];
+                    for (i, s) in src_slice.iter().enumerate() {
+                        if i < dest.len() {
+                            dest[i] += s * edge_gain;
                         }
                     }
                 }
-                ch_bufs
-            };
+            }
 
-            let input_refs: Vec<&[f32]> = inputs.iter().map(|v| v.as_slice()).collect();
-            let mut outputs = vec![vec![0.0f32; self.buffer_size]; NODE_CHANNELS];
-            let mut midi_out = Vec::new();
+            // Run the node. Stack-allocated input_refs avoids a
+            // per-iteration `Vec::collect`. NODE_CHANNELS is small + const
+            // so the array stays cheap.
+            let scratch = &mut self.scratch[node_id];
+            scratch.midi_out.clear();
+            let input_refs: [&[f32]; NODE_CHANNELS] = [
+                scratch.ch_bufs[0].as_slice(),
+                scratch.ch_bufs[1].as_slice(),
+                scratch.ch_bufs[2].as_slice(),
+                scratch.ch_bufs[3].as_slice(),
+            ];
+            self.nodes[node_id].process(
+                &input_refs,
+                &mut scratch.outputs,
+                &midi_empty,
+                &mut scratch.midi_out,
+                ctx,
+            );
 
-            self.nodes[node_id].process(&input_refs, &mut outputs, &midi_empty, &mut midi_out, ctx);
-
-            self.buffers[node_id] = outputs;
+            // Swap the freshly-written output with the persistent buffer.
+            // Zero copy — the persistent buffer becomes the next-block
+            // scratch.outputs, which we'll .fill(0.0) on next call.
+            std::mem::swap(&mut scratch.outputs, &mut self.buffers[node_id]);
         }
     }
 
