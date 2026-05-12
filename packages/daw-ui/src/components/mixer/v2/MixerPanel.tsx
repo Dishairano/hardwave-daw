@@ -1,8 +1,10 @@
 import { memo, useCallback, useEffect } from 'react'
 import { MasterStrip } from './MasterStrip'
 import { StripsScroller } from './StripsScroller'
+import { FxRackPanel } from './FxRackPanel'
 import { useTrackStore } from '../../../stores/trackStore'
 import { useMeterStore } from '../../../stores/meterStore'
+import { useSendStore } from '../../../stores/sendStore'
 import { useMixerSelectionStore } from '../../../stores/mixerSelectionStore'
 import '../../primitives/Knob.css'
 import '../../primitives/Fader.css'
@@ -12,10 +14,10 @@ import './mixer-v2.css'
 /**
  * Phase 1 of the FL Studio Wide 2 mixer redesign.
  *
- * Layout: master pinned left · scrollable insert column · empty 360 px FX
- * rack placeholder right. No virtualizer yet (Phase 4), no canvas meter
- * yet (Phase 4), no FX rack content yet (Phase 3), no plug-in picker yet
- * (Phase 3). What we ARE shipping in P1:
+ * Layout: master pinned left · scrollable insert column · 360 px FX rack
+ * right. No virtualizer yet (Phase 4), no canvas meter yet (Phase 4).
+ * Phase 3 (this commit) wires the FX rack + plug-in picker. What we ARE
+ * shipping at this point:
  *  - the new visual shape exactly matching the approved mockup
  *  - the Knob / Fader / Meter primitives
  *  - selection state (click any strip retargets the future FX rack)
@@ -37,6 +39,15 @@ export const MixerPanelV2 = memo(function MixerPanelV2() {
     startListening()
   }, [startListening])
 
+  // The FX rack's RoutingMatrix reads from sendStore.byTrack — but only
+  // the Settings page used to call fetchAll(). Fire it once on mount so
+  // the rack has data the moment the user clicks a strip. Subsequent
+  // edits (addSend / setPreFader / etc) refetch internally.
+  const fetchAllSends = useSendStore((s) => s.fetchAll)
+  useEffect(() => {
+    fetchAllSends().catch((e) => console.error('initial sends fetch failed', e))
+  }, [fetchAllSends])
+
   // Selection lives in its own store — see mixerSelectionStore for why.
   const masterId = tracks.find((t) => t.kind === 'Master')?.id ?? null
   const selectedId = useMixerSelectionStore((s) => s.selectedTrackId)
@@ -54,12 +65,7 @@ export const MixerPanelV2 = memo(function MixerPanelV2() {
       <div className="mx-v2-body">
         <MasterStrip selected={selectedId === masterId} onSelect={onSelect} />
         <StripsScroller selectedId={selectedId} onSelect={onSelect} />
-        <div className="mx-fx-rack-placeholder" aria-label="FX rack (Phase 3)">
-          <div className="mx-fx-rack-stub">
-            <div className="mx-fx-rack-stub-title">FX RACK</div>
-            <div className="mx-fx-rack-stub-sub">Phase 3 — selected: {selectedId ?? 'none'}</div>
-          </div>
-        </div>
+        <FxRackPanel />
       </div>
     </div>
   )

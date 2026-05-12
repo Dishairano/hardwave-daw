@@ -385,31 +385,281 @@
   min-width: max-content;
 }
 
-/* ---- FX rack placeholder (Phase 3 fills this) ---- */
+/* ---- FX rack (Phase 3) ----
+ *
+ * 360 px right column. Three regions stack vertically:
+ *   .mx-fx-head     — target track badge + name + role line
+ *   .mx-fx-routing  — sends list (read + pre/post toggle this phase)
+ *   .mx-fx-slots    — 10 × .mx-fx-slot rows (inserts)
+ *
+ * Tokens read from `.mx-v2-root` above; modal/flyout primitives live in
+ * components/plugin-picker/picker.css with their own `hw-pf-` / `hw-pm-`
+ * namespace.
+ */
 
-.mx-fx-rack-placeholder {
+.mx-fx-rack {
   background: var(--mx-surface);
   border-left: 1px solid var(--mx-line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative; /* anchor for any in-rack popovers */
+}
+.mx-fx-rack-empty {
+  padding: 24px 12px;
+  color: var(--mx-dim);
+  font-size: 11px;
+  text-align: center;
+  font-style: italic;
+}
+
+/* ---- header ---- */
+.mx-fx-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--mx-line);
+  background: #0e0e13;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mx-fx-head-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mx-fx-head-num {
+  width: 22px;
+  height: 22px;
+  background: var(--mx-accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+}
+.mx-fx-head-name {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  font-size: 13px;
+  color: #fff;
+}
+.mx-fx-head-sub {
+  font-size: 10px;
+  color: var(--mx-muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ---- routing matrix ---- */
+.mx-fx-routing {
+  border-bottom: 1px solid var(--mx-line);
+  background: #0c0c11;
+  padding: 8px 12px 10px;
+}
+.mx-fx-routing-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.mx-fx-routing-head h4 {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mx-muted);
+  font-weight: 600;
+}
+.mx-fx-routing-empty {
+  font-size: 10px;
+  color: var(--mx-dim);
+  font-style: italic;
+  padding: 4px 0;
+}
+.mx-fx-route-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+}
+.mx-fx-route {
+  display: grid;
+  grid-template-columns: 18px 1fr 60px 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--mx-line);
+  background: #0a0a0d;
+  font-size: 10px;
+}
+.mx-fx-route-arr {
+  width: 0;
+  height: 0;
+  border-left: 8px solid var(--mx-dim);
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+.mx-fx-route.on .mx-fx-route-arr { border-left-color: var(--mx-green); }
+.mx-fx-route.on.rev .mx-fx-route-arr { border-left-color: var(--mx-blue); }
+.mx-fx-route-dest {
+  color: #fff;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mx-fx-route-amt {
+  color: var(--mx-muted);
+  text-align: right;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.mx-fx-route.on .mx-fx-route-amt { color: #fff; }
+.mx-fx-route-pp {
+  font-size: 9px;
+  color: var(--mx-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  text-align: right;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+.mx-fx-route.on .mx-fx-route-pp { color: var(--mx-green); }
+.mx-fx-route.on.rev .mx-fx-route-pp { color: var(--mx-blue); }
+.mx-fx-route-pp:hover { color: #fff; }
+
+/* ---- slots column ---- */
+.mx-fx-slots {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 12px 14px;
+}
+.mx-fx-slots h4 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mx-muted);
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.mx-fx-slots h4 span {
+  font-size: 9px;
+  color: var(--mx-dim);
+}
+
+/* ---- one slot row ---- */
+.mx-fx-slot {
+  display: grid;
+  grid-template-columns: 18px 22px 1fr 28px 36px;
+  align-items: center;
+  gap: 8px;
+  background: #0e0e13;
+  border: 1px solid var(--mx-line);
+  padding: 5px 7px;
+  margin-bottom: 3px;
+  font-size: 11px;
+  position: relative;
+}
+.mx-fx-slot-idx {
+  color: var(--mx-dim);
+  font-size: 9px;
+  text-align: center;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.mx-fx-slot-led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mx-green);
+  box-shadow: 0 0 5px #1f5c39;
+  justify-self: center;
+}
+.mx-fx-slot.bypass .mx-fx-slot-led {
+  background: var(--mx-accent-dim);
+  box-shadow: none;
+}
+.mx-fx-slot.empty .mx-fx-slot-led {
+  background: transparent;
+  border: 1px dashed var(--mx-line);
+  box-shadow: none;
+}
+.mx-fx-slot-name {
+  color: #fff;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mx-fx-slot.empty .mx-fx-slot-name {
+  color: var(--mx-dim);
+  font-style: italic;
+}
+.mx-fx-slot-wet {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--mx-muted);
+  text-align: right;
+}
+.mx-fx-slot.bypass {
+  opacity: 0.55;
+}
+.mx-fx-slot-knob {
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.mx-fx-rack-stub {
-  text-align: center;
-  color: var(--mx-dim);
+
+/* empty-slot click affordance — matches the mockup's hover */
+.mx-fx-slot.empty {
+  cursor: pointer;
+  transition: border-color 0.08s, background 0.08s;
+}
+.mx-fx-slot.empty:hover {
+  border-color: var(--mx-accent);
+  background: #160a0e;
+}
+.mx-fx-slot.empty:hover .mx-fx-slot-name {
+  color: #fff;
+  font-style: normal;
+}
+
+/* right-click context menu on a populated slot */
+.mx-fx-slot-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 40;
+  margin-top: 2px;
+  background: #0c0c11;
+  border: 1px solid var(--mx-line-strong);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 4px 0;
+}
+.mx-fx-slot-menu button {
+  background: transparent;
+  border: 0;
+  color: var(--mx-text);
+  padding: 6px 12px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
   font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
 }
-.mx-fx-rack-stub-title {
-  font-weight: 700;
-  color: var(--mx-muted);
-  margin-bottom: 6px;
+.mx-fx-slot-menu button:hover:not(:disabled) {
+  background: var(--mx-accent);
+  color: #1a0d11;
 }
-.mx-fx-rack-stub-sub {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 9px;
+.mx-fx-slot-menu button:disabled {
   color: var(--mx-dim);
-  text-transform: none;
-  letter-spacing: 0;
+  cursor: not-allowed;
 }
