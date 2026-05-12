@@ -16,7 +16,6 @@ import {
   useTrackSoloed,
   useTrackArmed,
 } from '../../../stores/trackStore'
-import { useTrackMeter } from '../../../stores/meterStore'
 import { useMixerSettingsStore } from '../../../stores/mixerSettingsStore'
 
 export interface ChannelStripProps {
@@ -61,7 +60,6 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const muted = useTrackMuted(trackId)
   const soloed = useTrackSoloed(trackId)
   const armed = useTrackArmed(trackId)
-  const meter = useTrackMeter(trackId)
   const showWidthKnob = useMixerSettingsStore((s) => s.showWidthKnob)
 
   // ---- volume ----
@@ -221,7 +219,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
           />
         </div>
         <DbScale />
-        <MeterPair peakL={meter.peakL} peakR={meter.peakR} />
+        <MeterPair trackId={trackId} />
       </div>
 
       <div className="mx-s-db">
