@@ -20,7 +20,20 @@ const RESIZE_HANDLE_PX = 6
 // owns the ruler so we never have two competing visual layers.
 const RULER_HEIGHT = 22
 
-type DragMode = 'none' | 'move' | 'resize-right' | 'resize-left' | 'fade-in' | 'fade-out' | 'rubber' | 'scrub' | 'pending-empty'
+type DragMode =
+  | 'none'
+  | 'move'
+  | 'resize-right'
+  | 'resize-left'
+  | 'fade-in'
+  | 'fade-out'
+  | 'rubber'
+  | 'scrub'
+  | 'pending-empty'
+  // Ctrl/⌘ + drag in the ruler band → define a loop region. The drag's
+  // origin tick anchors one edge, the live cursor tick anchors the
+  // other; mouseup commits via transport.setLoop and enables looping.
+  | 'loop-range'
 
 // Pixel distance the pointer has to move from mousedown before an
 // empty-area press promotes into a rubber-band selection. Below this
@@ -90,6 +103,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const [renamingMarker, setRenamingMarker] = useState<{ id: string; draft: string } | null>(null)
   const {
     positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
+    setLoop, toggleLoop,
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
     clipColorOverrides, editCursorTicks, setEditCursor, setClipColor,
     punchEnabled, punchInTicks, punchOutTicks, setPunchIn, setPunchOut, clearPunch, setPunchRangeFromLoop,
@@ -161,13 +175,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     // Horizontal track-row separators — match mockup's .fl-pl-canvas
     // background-image: rgba(0,0,0,.55) line every --row-h px. Drawn before
-    // beat lines so vertical bar lines appear on top.
+    // beat lines so vertical bar lines appear on top. Separators are
+    // offset by RULER_HEIGHT so they line up with the actual track rows
+    // which start under the ruler band — otherwise every row's separator
+    // sits 22 px too high relative to its row content.
     if (trackHeight > 0) {
       ctx.strokeStyle = 'rgba(0,0,0,0.55)'
       ctx.lineWidth = 1
-      const visibleRows = Math.ceil(h / trackHeight) + 1
+      const visibleRows = Math.ceil((h - RULER_HEIGHT) / trackHeight) + 1
       for (let r = 0; r <= visibleRows; r++) {
-        const y = Math.floor(r * trackHeight) + 0.5
+        const y = Math.floor(RULER_HEIGHT + r * trackHeight) + 0.5
         if (y > h) break
         ctx.beginPath()
         ctx.moveTo(0, y)
@@ -700,6 +717,22 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     // Clicking the ruler strip seeks the transport (and enables scrubbing while held).
     if (mouseY < RULER_HEIGHT) {
+      // Ctrl/⌘ + drag in the ruler → define a loop region. Pick this
+      // branch BEFORE the marker-hit + scrub branches so a held modifier
+      // wins over both. Anchor tick is snapped at mousedown; mousemove
+      // updates the live edge; mouseup commits via setLoop.
+      if (e.ctrlKey || e.metaKey) {
+        const anchorTick = Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick))
+        const snappedAnchor = applySnap(anchorTick)
+        dragRef.current = {
+          mode: 'loop-range', clipId: '', trackId: '',
+          startMouseX: mouseX, startMouseY: mouseY, currentMouseX: mouseX, currentMouseY: mouseY,
+          originalPositionTicks: snappedAnchor, originalLengthTicks: 0,
+          originalFadeInTicks: 0, originalFadeOutTicks: 0,
+        }
+        forceRender(n => n + 1)
+        return
+      }
       // Marker flag hit test — flag sits between x and x+10, top half of the ruler.
       const markerHit = markers.find(m => {
         const mx = m.tick * pixelsPerTick - scrollOffset
@@ -876,6 +909,31 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       return
     }
 
+    // Loop-range drag: update the live edge tick. Render the new range
+    // via a forceRender — the canvas pass reads loopStart/loopEnd from
+    // the transport store so we set those provisionally during the drag.
+    if (drag.mode === 'loop-range') {
+      const scrollOff = getScrollOffset()
+      const liveTick = Math.max(0, Math.round((mouseX + scrollOff) / pixelsPerTick))
+      const snappedLive = applySnap(liveTick)
+      const anchor = drag.originalPositionTicks
+      const a = Math.min(anchor, snappedLive)
+      const b = Math.max(anchor, snappedLive)
+      // Convert tick → samples using the same path the canvas uses to
+      // draw the loop region, so the visual preview matches whatever the
+      // engine will eventually loop.
+      const aSec = (a / PPQ) * (60 / Math.max(1, bpm))
+      const bSec = (b / PPQ) * (60 / Math.max(1, bpm))
+      const sr = sampleRate || 48000
+      // Live preview only — don't IPC on every mousemove. The commit
+      // happens once on mouseup via transport.setLoop.
+      useTransportStore.setState({
+        loopStart: Math.round(aSec * sr),
+        loopEnd: Math.round(bSec * sr),
+      })
+      forceRender(n => n + 1)
+      return
+    }
     if (drag.mode === 'scrub') {
       const scrollOffset = getScrollOffset()
       const seconds = Math.max(0, (mouseX + scrollOffset) / PIXELS_PER_SECOND)
@@ -966,6 +1024,20 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // what mousedown already cleared (when ctrl wasn't held).
     if (drag && drag.mode === 'pending-empty') {
       dragRef.current = null
+      return
+    }
+    // Loop-range drag commit: persist the final range to the engine and
+    // enable looping if it wasn't already on. Zero-width drag (user did
+    // ctrl+click without dragging) is a no-op so we don't accidentally
+    // wipe the existing loop on a stray click.
+    if (drag && drag.mode === 'loop-range') {
+      const ts = useTransportStore.getState()
+      if (ts.loopEnd > ts.loopStart) {
+        setLoop(ts.loopStart, ts.loopEnd)
+        if (!ts.looping) toggleLoop()
+      }
+      dragRef.current = null
+      forceRender(n => n + 1)
       return
     }
     if (drag && drag.mode === 'rubber') {

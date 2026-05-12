@@ -573,23 +573,19 @@ function HwPlaylistTracks() {
               >
                 R
               </button>
+              <HwAddLaneButton trackId={t.id} onAdd={addAutomationLane} />
             </div>
           )
-          // Render the track's automation lanes directly under it.
-          // Phase 1 ships volume + pan; future commits expose plugin-
-          // param targets through the (currently hard-coded volume)
-          // add-lane button.
+          // Render the track's automation lanes directly under it. The
+          // add-lane affordance used to sit on its own 18 px row after
+          // the lanes, but that broke canvas-grid alignment because the
+          // grid assumes every row is `trackHeight`. The "+L" button on
+          // the track header above opens the same lane-target picker
+          // without taking any vertical space.
           const laneRows = t.automationLanes.map(lane => (
             <AutomationLane key={lane.id} trackId={t.id} lane={lane} />
           ))
-          const addLane = (
-            <HwAddLaneButton
-              key={`addlane-${t.id}`}
-              trackId={t.id}
-              onAdd={addAutomationLane}
-            />
-          )
-          return [row, ...laneRows, addLane]
+          return [row, ...laneRows]
         })}
         {Array.from({ length: placeholderCount }, (_, i) => {
           const slotNum = tracks.length + i + 1
@@ -632,6 +628,13 @@ const LANE_TARGETS: { spec: AutomationTargetInfo; label: string }[] = [
   { spec: { kind: 'track_mute' },   label: 'Mute' },
 ]
 
+/**
+ * Compact "+L" pill in the track header that opens the automation lane
+ * target picker. Replaces the old full-width row button which sat between
+ * tracks at 18 px tall — a height that broke alignment with the canvas
+ * grid (canvas assumes every row is `trackHeight`). Moving the affordance
+ * INTO the row header eliminates the off-grid row entirely.
+ */
 function HwAddLaneButton({
   trackId,
   onAdd,
@@ -647,19 +650,23 @@ function HwAddLaneButton({
     return () => window.removeEventListener('mousedown', close)
   }, [open])
   return (
-    <div style={{ position: 'relative', gridColumn: '1 / -1' }}>
+    <span style={{ position: 'relative', display: 'inline-flex' }}>
       <button
         type="button"
-        className="fl-add-lane"
-        onMouseDown={(e) => { e.stopPropagation(); setOpen(v => !v) }}
-        title="Add an automation lane — pick its target"
+        className="fl-tr-arm"
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
+        onMouseDown={(e) => e.stopPropagation()}
+        title="Add automation lane"
+        aria-label="Add an automation lane to this track"
+        style={{ fontWeight: 600 }}
       >
-        + Automation lane
+        +L
       </button>
       {open && (
         <div
           className="fl-lane-target-pop"
           onMouseDown={(e) => e.stopPropagation()}
+          style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 20 }}
         >
           {LANE_TARGETS.map(t => (
             <div
@@ -675,7 +682,7 @@ function HwAddLaneButton({
           ))}
         </div>
       )}
-    </div>
+    </span>
   )
 }
 
