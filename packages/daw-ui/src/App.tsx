@@ -18,6 +18,8 @@ import { ThemePicker } from './components/settings/ThemePicker'
 import { useMixerSettingsStore } from './stores/mixerSettingsStore'
 import { usePlaylistToolStore } from './stores/playlistToolStore'
 import { useMarkerStore } from './stores/markerStore'
+import { ColorPicker } from './components/primitives/ColorPicker'
+import { useColorPickerStore } from './stores/colorPickerStore'
 import { UpdateModal } from './components/UpdateModal'
 import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow } from './components/FloatingWindow'
@@ -1294,6 +1296,8 @@ export function App() {
       {showRoadmap && <Roadmap onClose={() => setShowRoadmap(false)} />}
       {showAudioSettings && <AudioSettings onClose={() => setShowAudioSettings(false)} />}
       {showThemePicker && <ThemePicker onClose={() => setShowThemePicker(false)} />}
+      <ColorPicker />
+
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
       <ShortcutsPanel open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <HelpOverlay open={showHelp} onClose={() => setShowHelp(false)} />

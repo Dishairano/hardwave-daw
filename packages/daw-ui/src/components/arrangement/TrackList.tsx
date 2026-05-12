@@ -6,6 +6,7 @@ import { PATTERN_COLORS } from '../../stores/patternStore'
 import { useTrackTemplateStore } from '../../stores/trackTemplateStore'
 import { useTrackFolderStore, type TrackFolder } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
+import { useColorPickerStore } from '../../stores/colorPickerStore'
 import { DetachButton } from '../FloatingWindow'
 
 export function TrackList() {
@@ -392,6 +393,28 @@ export function TrackList() {
                 />
               ))}
             </div>
+            <button
+              type="button"
+              onClick={(e) => {
+                const anchor = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                setCtxMenu(null)
+                useColorPickerStore.getState().open({
+                  anchor,
+                  current: t.color,
+                  onPick: (c) => { setTrackColor(t.id, c).catch(console.error) },
+                  title: `Color · ${t.name}`,
+                })
+              }}
+              style={{
+                display: 'block', width: 'calc(100% - 12px)', margin: '0 6px 4px',
+                padding: '4px 8px', fontSize: 11, color: hw.textSecondary,
+                background: 'rgba(255,255,255,0.04)',
+                border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
+                cursor: 'pointer', textAlign: 'left',
+              }}
+            >
+              Custom color…
+            </button>
             <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
             <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
               Folder

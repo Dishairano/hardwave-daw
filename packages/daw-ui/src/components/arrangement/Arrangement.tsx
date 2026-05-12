@@ -8,6 +8,7 @@ import { useTrackFolderStore } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { usePickerStore } from '../../stores/pickerStore'
 import { usePlaylistToolStore } from '../../stores/playlistToolStore'
+import { useColorPickerStore } from '../../stores/colorPickerStore'
 import { useLogStore } from '../../dev/logStore'
 import { hw } from '../../theme'
 
@@ -1773,6 +1774,22 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
               )
             })}
           </div>
+          <MenuItem
+            label="Custom color…"
+            onClick={(e) => {
+              const trigger = e?.currentTarget as HTMLElement | undefined
+              const anchor = trigger?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0)
+              const clipId = contextMenu.clipId
+              useColorPickerStore.getState().open({
+                anchor,
+                current: clipColorOverrides[clipId] ?? null,
+                onPick: (c) => setClipColor(clipId, c),
+                onClear: () => setClipColor(clipId, null),
+                title: 'Clip color',
+              })
+              setContextMenu(null)
+            }}
+          />
           <MenuItem label="Clear color override" onClick={() => {
             setClipColor(contextMenu.clipId, null)
             setContextMenu(null)
@@ -1963,10 +1980,18 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   )
 }
 
-function MenuItem({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
+function MenuItem({
+  label,
+  onClick,
+  danger,
+}: {
+  label: string
+  onClick: (e?: React.MouseEvent<HTMLButtonElement>) => void
+  danger?: boolean
+}) {
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => onClick(e)}
       onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
       style={{
