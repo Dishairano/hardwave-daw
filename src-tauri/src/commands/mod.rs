@@ -10,6 +10,7 @@ pub mod midi_input;
 pub mod midi_learn;
 pub mod midi_output;
 pub mod plugins;
+pub mod plugin_presets;
 pub mod project;
 pub mod sends;
 pub mod tracks;

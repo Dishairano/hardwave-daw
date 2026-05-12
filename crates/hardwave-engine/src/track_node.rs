@@ -421,6 +421,9 @@ impl AudioNode for TrackNode {
             } => {
                 self.chain.set_parameter(&slot_id, param_id, value);
             }
+            InsertCommand::SetState { slot_id, bytes, .. } => {
+                self.chain.set_state(&slot_id, &bytes);
+            }
         }
     }
 

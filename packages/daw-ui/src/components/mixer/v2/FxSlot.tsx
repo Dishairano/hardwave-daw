@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Knob } from '../../primitives/Knob'
 import type { InsertInfo } from '../../../stores/trackStore'
+import { usePluginPresetStore } from '../../../stores/pluginPresetStore'
 
 export interface FxSlotProps {
   trackId: string
@@ -43,6 +44,9 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
   const { trackId, slotIndex, insert, onOpenPicker } = props
   const rowRef = useRef<HTMLDivElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  /// Preset dropdown anchor — click on plug-in name opens the list at
+  /// the name's bounding rect. null = closed.
+  const [presetMenuAnchor, setPresetMenuAnchor] = useState<DOMRect | null>(null)
 
   // Optimistic-local wet — same pattern as setVolumeLocal: drag mutates
   // a local mirror at 60fps, commit fires the IPC once on pointerup.
@@ -167,9 +171,46 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
     >
       <div className="mx-fx-slot-idx">{idxLabel}</div>
       <div className="mx-fx-slot-led" />
-      <div className="mx-fx-slot-name" title={insert.pluginName}>
+      <button
+        type="button"
+        className="mx-fx-preset-arrow"
+        title="Previous preset"
+        onClick={(e) => {
+          e.stopPropagation()
+          usePluginPresetStore
+            .getState()
+            .step(trackId, insert.id, insert.pluginId, -1)
+            .catch(console.error)
+        }}
+      >
+        ‹
+      </button>
+      <div
+        className="mx-fx-slot-name"
+        title={insert.pluginName + ' · right-click for preset menu'}
+        onClick={(e) => {
+          // Click on the plug-in name opens the preset list dropdown.
+          e.stopPropagation()
+          const anchor = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          setPresetMenuAnchor(anchor)
+        }}
+      >
         {insert.pluginName}
       </div>
+      <button
+        type="button"
+        className="mx-fx-preset-arrow"
+        title="Next preset"
+        onClick={(e) => {
+          e.stopPropagation()
+          usePluginPresetStore
+            .getState()
+            .step(trackId, insert.id, insert.pluginId, 1)
+            .catch(console.error)
+        }}
+      >
+        ›
+      </button>
       <div className="mx-fx-slot-knob">
         <Knob
           value={wetPct}
@@ -200,6 +241,120 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
           </button>
         </div>
       )}
+      {presetMenuAnchor && insert && (
+        <PresetDropdown
+          anchor={presetMenuAnchor}
+          trackId={trackId}
+          slotId={insert.id}
+          pluginId={insert.pluginId}
+          onClose={() => setPresetMenuAnchor(null)}
+        />
+      )}
     </div>
   )
 })
+
+// ---- Preset list dropdown ----
+// Lazy-mounts: only opened when the user clicks the slot's plug-in name.
+// On mount it refreshes the preset list for this plug-in (cheap — disk
+// read + JSON parse), then renders a scrollable list of saved presets
+// with click-to-load. Includes a "Save current as preset…" entry that
+// snapshots get_state via the engine's existing snapshot mechanism.
+function PresetDropdown(props: {
+  anchor: DOMRect
+  trackId: string
+  slotId: string
+  pluginId: string
+  onClose: () => void
+}) {
+  const { anchor, trackId, slotId, pluginId, onClose } = props
+  const ref = useRef<HTMLDivElement | null>(null)
+  const presets = usePluginPresetStore((s) => s.byPlugin[pluginId] ?? null)
+  const refresh = usePluginPresetStore((s) => s.refresh)
+  const load = usePluginPresetStore((s) => s.load)
+  const save = usePluginPresetStore((s) => s.save)
+
+  useEffect(() => {
+    refresh(pluginId).catch(console.error)
+  }, [pluginId, refresh])
+
+  // Outside click + Escape closes.
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      if (!ref.current) return
+      if (!ref.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    const t = window.setTimeout(() => {
+      window.addEventListener('pointerdown', onPointerDown)
+    }, 0)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.clearTimeout(t)
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  // Clamp to viewport.
+  const W = 220
+  const vh = window.innerHeight
+  const vw = window.innerWidth
+  let left = anchor.left
+  let top = anchor.bottom + 4
+  if (left + W > vw - 8) left = vw - W - 8
+  if (top + 240 > vh - 8) top = anchor.top - 240 - 4
+
+  return (
+    <div
+      ref={ref}
+      className="mx-fx-preset-menu"
+      style={{ position: 'fixed', left, top, width: W }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        className="mx-fx-preset-save"
+        onClick={async () => {
+          const name = window.prompt('Preset name:')?.trim()
+          if (!name) return
+          try {
+            await save(trackId, slotId, pluginId, name)
+          } catch (e) {
+            console.error('save preset failed', e)
+          }
+          onClose()
+        }}
+      >
+        + Save current as preset…
+      </button>
+      <div className="mx-fx-preset-list">
+        {presets == null && <div className="mx-fx-preset-empty">Loading…</div>}
+        {presets && presets.length === 0 && (
+          <div className="mx-fx-preset-empty">No saved presets yet</div>
+        )}
+        {presets &&
+          presets.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className="mx-fx-preset-item"
+              onClick={async () => {
+                try {
+                  await load(trackId, slotId, pluginId, p.id)
+                } catch (e) {
+                  console.error('load preset failed', e)
+                }
+                onClose()
+              }}
+              title={p.name}
+            >
+              {p.name}
+            </button>
+          ))}
+      </div>
+    </div>
+  )
+}

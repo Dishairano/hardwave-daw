@@ -173,6 +173,22 @@ impl InsertChain {
             false
         }
     }
+
+    /// Load opaque plug-in state bytes (the same blob `get_state` returns)
+    /// into the slot. Used by preset load. Audio-thread cost is the
+    /// plug-in's own `set_state` — same risk class as project save's
+    /// existing on-audio-thread `get_state`.
+    pub fn set_state(&mut self, slot_id: &str, bytes: &[u8]) -> bool {
+        if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
+            if let Err(e) = s.plugin.set_state(bytes) {
+                log::warn!("insert_chain::set_state for slot {slot_id}: {e}");
+                return false;
+            }
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Reusable scratch buffers for [`InsertChain::process`]. One instance
@@ -252,6 +268,16 @@ pub enum InsertCommand {
         param_id: u32,
         value: f64,
     },
+    /// Replace the plug-in's internal state — used by preset load. The
+    /// `bytes` are the same opaque blob the plug-in returns from
+    /// `get_state()`. Audio-thread cost is the plug-in's own
+    /// `set_state` implementation, which is also what runs at project
+    /// load — no new risk class introduced.
+    SetState {
+        track_id: String,
+        slot_id: String,
+        bytes: Vec<u8>,
+    },
 }
 
 /// UI-side handle for queueing commands toward the audio thread.
@@ -282,7 +308,8 @@ impl InsertCommand {
             | InsertCommand::Reorder { track_id, .. }
             | InsertCommand::SetEnabled { track_id, .. }
             | InsertCommand::SetWet { track_id, .. }
-            | InsertCommand::SetParameter { track_id, .. } => track_id,
+            | InsertCommand::SetParameter { track_id, .. }
+            | InsertCommand::SetState { track_id, .. } => track_id,
         }
     }
 }
@@ -428,6 +455,11 @@ impl InsertRouter {
             InsertCommand::SetParameter { track_id, slot_id, param_id, value } => {
                 if let Some(chain) = self.chains.get_mut(&track_id) {
                     chain.set_parameter(&slot_id, param_id, value);
+                }
+            }
+            InsertCommand::SetState { track_id, slot_id, bytes } => {
+                if let Some(chain) = self.chains.get_mut(&track_id) {
+                    chain.set_state(&slot_id, &bytes);
                 }
             }
         }

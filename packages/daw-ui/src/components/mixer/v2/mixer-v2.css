@@ -663,3 +663,92 @@
   color: var(--mx-dim);
   cursor: not-allowed;
 }
+
+/* Preset step arrows in each filled FX slot (FL Studio "Presets" pattern
+   from manual page "The User Interface"). Compact 12x14 char buttons
+   either side of the plug-in name. */
+.mx-fx-preset-arrow {
+  width: 12px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mx-muted);
+  font: 12px ui-monospace, monospace;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+}
+.mx-fx-preset-arrow:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+.mx-fx-slot .mx-fx-slot-name {
+  cursor: pointer;
+}
+.mx-fx-slot .mx-fx-slot-name:hover {
+  color: #fff;
+}
+
+/* Preset dropdown — list of saved user presets, rendered fixed and
+   anchored next to the plug-in name. Closes on outside click / Esc. */
+.mx-fx-preset-menu {
+  background: #0c0c11;
+  border: 1px solid var(--mx-line);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7);
+  z-index: 80;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 11px;
+  color: var(--mx-text);
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+}
+.mx-fx-preset-save {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--mx-accent);
+  background: rgba(255, 45, 79, 0.06);
+  border: 0;
+  border-bottom: 1px solid var(--mx-line);
+  cursor: pointer;
+  font-family: inherit;
+}
+.mx-fx-preset-save:hover {
+  background: rgba(255, 45, 79, 0.14);
+}
+.mx-fx-preset-list {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+.mx-fx-preset-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 12px;
+  background: transparent;
+  border: 0;
+  color: var(--mx-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+}
+.mx-fx-preset-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+.mx-fx-preset-empty {
+  padding: 12px;
+  color: var(--mx-dim);
+  font-size: 11px;
+  text-align: center;
+  font-style: italic;
+}
