@@ -191,6 +191,12 @@ pub struct AudioGraph {
     /// Per-node scratch space — eliminates 5 allocations per node per
     /// block. Sized 1:1 with `nodes` / `buffers`.
     scratch: Vec<NodeScratch>,
+    /// Per-node flag: when true, the live-MIDI slice passed to
+    /// `AudioGraph::process` is forwarded to this node. When false, the
+    /// node receives an empty slice. Set during `rebuild_graph` for
+    /// tracks where `armed && monitor_input` is true (and for every MIDI
+    /// track as a usability default — see `set_accepts_live_midi`).
+    accepts_live_midi: Vec<bool>,
     buffer_size: usize,
 }
 
@@ -203,7 +209,20 @@ impl AudioGraph {
             processing_order: Vec::new(),
             buffers: Vec::new(),
             scratch: Vec::new(),
+            accepts_live_midi: Vec::new(),
             buffer_size,
+        }
+    }
+
+    /// Mark a node as accepting external/live MIDI for the next call to
+    /// [`AudioGraph::process`]. The engine sets this during graph rebuild
+    /// based on `track.armed && track.monitor_input` (and as a default
+    /// for MIDI tracks). Out-of-range ids silently no-op so the engine's
+    /// rebuild ordering — `add_node` then `set_accepts_live_midi` — is
+    /// guaranteed safe.
+    pub fn set_accepts_live_midi(&mut self, node_id: NodeId, accepts: bool) {
+        if let Some(slot) = self.accepts_live_midi.get_mut(node_id) {
+            *slot = accepts;
         }
     }
 
@@ -216,6 +235,7 @@ impl AudioGraph {
         self.buffers
             .push(vec![vec![0.0; self.buffer_size]; NODE_CHANNELS]);
         self.scratch.push(NodeScratch::new(self.buffer_size));
+        self.accepts_live_midi.push(false);
         self.rebuild_order();
         id
     }
@@ -254,6 +274,7 @@ impl AudioGraph {
         self.processing_order.clear();
         self.buffers.clear();
         self.scratch.clear();
+        self.accepts_live_midi.clear();
     }
 
     /// Compute per-edge PDC compensation delays from each node's accumulated
@@ -340,13 +361,20 @@ impl AudioGraph {
     /// Process the entire graph for one buffer. Called on the audio
     /// thread.
     ///
+    /// `midi_in` is the buffer of live external MIDI events drained from
+    /// the input manager at the start of this block. The graph forwards
+    /// it only to nodes whose `accepts_live_midi[node_id]` flag is true
+    /// (set during `rebuild_graph` based on `track.armed && track.monitor_input`).
+    /// Every other node receives an empty slice, matching the
+    /// pre-live-MIDI behaviour.
+    ///
     /// **No-alloc on the hot path.** All per-node temporaries live in
     /// `self.scratch[node_id]` (see [`NodeScratch`]) and are reused
     /// across blocks. The per-edge `src_vec` clone at line ~360 is the
     /// only remaining allocation — it survives this refactor because
     /// removing it requires extracting `edge_delays` out of `self` for
     /// split-borrow reasons (planned follow-up).
-    pub fn process(&mut self, ctx: &ProcessContext) {
+    pub fn process(&mut self, ctx: &ProcessContext, midi_in: &[hardwave_midi::MidiEvent]) {
         // Iterate by index — `processing_order` mutates inside the loop
         // body via no path, so a snapshot clone is unnecessary. (The
         // previous code's `.clone()` was defensive but never load-bearing.)
@@ -413,10 +441,20 @@ impl AudioGraph {
                 scratch.ch_bufs[2].as_slice(),
                 scratch.ch_bufs[3].as_slice(),
             ];
+            let live: &[hardwave_midi::MidiEvent] = if self
+                .accepts_live_midi
+                .get(node_id)
+                .copied()
+                .unwrap_or(false)
+            {
+                midi_in
+            } else {
+                &midi_empty
+            };
             self.nodes[node_id].process(
                 &input_refs,
                 &mut scratch.outputs,
-                &midi_empty,
+                live,
                 &mut scratch.midi_out,
                 ctx,
             );

@@ -19,6 +19,7 @@
 //! unit-tested in isolation and so swapping the queue implementation
 //! later (e.g. multi-producer, scratch-buffer pooling) is a local change.
 
+use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::HostedPlugin;
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use std::collections::HashMap;
@@ -74,12 +75,19 @@ impl InsertChain {
         right: &mut [f32],
         num_samples: usize,
         scratch: &mut Scratch,
+        midi_in: &[MidiEvent],
     ) {
         let n = num_samples.min(left.len()).min(right.len());
         if n == 0 {
             return;
         }
         scratch.prepare(n);
+        // All plug-ins in the chain see the same incoming MIDI buffer.
+        // A real DAW would route midi_out of slot N into midi_in of
+        // slot N+1 so MIDI-effect plug-ins (arpeggiators, chord
+        // generators) can chain — that lands as a follow-up; for the
+        // initial wiring we just give every slot the external events
+        // so a synth plug-in becomes audible from a hardware controller.
         for slot in self.slots.iter_mut() {
             if !slot.enabled || slot.wet <= 0.0 {
                 continue;
@@ -91,8 +99,13 @@ impl InsertChain {
             scratch.channels[0].clear();
             scratch.channels[1].clear();
             scratch.midi_out.clear();
-            slot.plugin
-                .process(&inputs, &mut scratch.channels, &[], &mut scratch.midi_out, n);
+            slot.plugin.process(
+                &inputs,
+                &mut scratch.channels,
+                midi_in,
+                &mut scratch.midi_out,
+                n,
+            );
             let wet = slot.wet.clamp(0.0, 1.0);
             let dry = 1.0 - wet;
             // Plug-ins are allowed to under-fill their output buffer
@@ -624,7 +637,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
         assert!(left.iter().all(|&v| (v - 0.5).abs() < 1e-6));
         assert!(right.iter().all(|&v| (v - 0.5).abs() < 1e-6));
     }
@@ -637,7 +650,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
         assert!(left.iter().all(|&v| (v - 1.0).abs() < 1e-6));
         assert!(right.iter().all(|&v| (v - 1.0).abs() < 1e-6));
         assert_eq!(counter.load(Ordering::Relaxed), 1);
@@ -651,7 +664,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
         assert!(left.iter().all(|&v| (v - 0.5).abs() < 1e-6));
         assert_eq!(counter.load(Ordering::Relaxed), 0);
     }
@@ -665,7 +678,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
         assert!(left.iter().all(|&v| (v - 0.5).abs() < 1e-6));
     }
 
@@ -678,7 +691,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
         // 0.5 * 0.5 (dry) + 0.5 * 1.0 (wet) = 0.75
         assert!(left.iter().all(|&v| (v - 0.75).abs() < 1e-6));
     }
@@ -693,7 +706,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
         // 0.5 → ×2 = 1.0 → ×3 = 3.0
         assert!(left.iter().all(|&v| (v - 3.0).abs() < 1e-5));
     }
@@ -709,7 +722,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        router.chains.get_mut("t").unwrap().process(&mut left, &mut right, 256, &mut scratch);
+        router.chains.get_mut("t").unwrap().process(&mut left, &mut right, 256, &mut scratch, &[]);
         assert!(left.iter().all(|&v| (v - 1.0).abs() < 1e-6));
         assert_eq!(counter.load(Ordering::Relaxed), 1);
         assert_eq!(graveyard.drain_and_drop(), 0);
@@ -778,7 +791,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        router.chains.get_mut("t").unwrap().process(&mut left, &mut right, 256, &mut scratch);
+        router.chains.get_mut("t").unwrap().process(&mut left, &mut right, 256, &mut scratch, &[]);
         // 0.5 × gain(4.0) = 2.0
         assert!(left.iter().all(|&v| (v - 2.0).abs() < 1e-6));
     }
@@ -803,7 +816,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        router.chains.get_mut("t").unwrap().process(&mut left, &mut right, 256, &mut scratch);
+        router.chains.get_mut("t").unwrap().process(&mut left, &mut right, 256, &mut scratch, &[]);
         assert!(left.iter().all(|&v| (v - 0.5).abs() < 1e-6));
         assert_eq!(counter.load(Ordering::Relaxed), 0, "disabled slot should not call plugin");
     }

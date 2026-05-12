@@ -258,6 +258,82 @@ impl MidiRecorder {
     }
 }
 
+/// Rolling capture buffer of recent MIDI input. Always recording, never
+/// stopped — the audio thread pushes every drained event from
+/// [`crate::MidiInputManager::try_drain_events_into`] into this ring,
+/// and the user can "dump the last N seconds" into a pattern at any
+/// time without first arming a track.
+///
+/// Implemented as a fixed-capacity `VecDeque`-style ring so push is
+/// O(1) and the only allocation cost is the initial reserve. Sized for
+/// 3 minutes of dense input (~8 events/sec * 180s = 1440 conservative
+/// minimum; we allocate 8 192 entries to cover dense chord playing,
+/// CC sweeps, and pitch-bend streams from a real session).
+pub struct MidiCaptureRing {
+    /// (absolute sample position when captured, event). Position is
+    /// drawn from the transport so the UI can convert to ticks using
+    /// the same sample-rate / tempo it sees on screen.
+    entries: Vec<(u64, crate::MidiEvent)>,
+    head: usize,
+    full: bool,
+    capacity: usize,
+}
+
+impl MidiCaptureRing {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            entries: Vec::with_capacity(capacity),
+            head: 0,
+            full: false,
+            capacity: capacity.max(1),
+        }
+    }
+
+    /// Push a single event. Wraps around at capacity, overwriting the
+    /// oldest entry — never blocks, never allocates after warm-up.
+    pub fn push(&mut self, sample_pos: u64, ev: crate::MidiEvent) {
+        if self.entries.len() < self.capacity {
+            self.entries.push((sample_pos, ev));
+            self.head = self.entries.len() % self.capacity;
+            if self.entries.len() == self.capacity {
+                self.full = true;
+            }
+        } else {
+            self.entries[self.head] = (sample_pos, ev);
+            self.head = (self.head + 1) % self.capacity;
+        }
+    }
+
+    /// Iterate every entry oldest-to-newest. Useful for dumping into a
+    /// pattern; callers walk the slice and convert sample positions to
+    /// ticks against the project's tempo map.
+    pub fn entries_in_order(&self) -> Vec<(u64, crate::MidiEvent)> {
+        if !self.full {
+            return self.entries.clone();
+        }
+        let mut out = Vec::with_capacity(self.capacity);
+        out.extend_from_slice(&self.entries[self.head..]);
+        out.extend_from_slice(&self.entries[..self.head]);
+        out
+    }
+
+    /// Clear the ring — used when the user explicitly invalidates the
+    /// recent buffer (e.g. after a project switch).
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.head = 0;
+        self.full = false;
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

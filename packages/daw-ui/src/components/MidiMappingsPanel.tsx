@@ -13,6 +13,7 @@ export type MidiMapTarget =
   | { kind: 'trackVolume'; trackId: string }
   | { kind: 'trackPan'; trackId: string }
   | { kind: 'trackMute'; trackId: string }
+  | { kind: 'pluginParam'; trackId: string; slotId: string; paramId: number }
 
 interface MidiMapping {
   id: number
@@ -31,6 +32,7 @@ type TargetKind = 'masterVolume' | 'trackVolume' | 'trackPan' | 'trackMute'
 
 function targetKey(t: MidiMapTarget): string {
   if (t.kind === 'masterVolume') return 'master-volume'
+  if (t.kind === 'pluginParam') return `plugin-${t.trackId}-${t.slotId}-${t.paramId}`
   return `${t.kind}-${t.trackId}`
 }
 
@@ -40,7 +42,8 @@ function targetLabel(t: MidiMapTarget, tracks: TrackInfo[]): string {
   const name = tr ? tr.name : `track:${t.trackId.slice(0, 6)}`
   if (t.kind === 'trackVolume') return `${name} — Volume`
   if (t.kind === 'trackPan') return `${name} — Pan`
-  return `${name} — Mute`
+  if (t.kind === 'trackMute') return `${name} — Mute`
+  return `${name} — Plug-in ${t.slotId.slice(0, 4)} param ${t.paramId}`
 }
 
 function buildTarget(kind: TargetKind, trackId: string): MidiMapTarget {

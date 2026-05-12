@@ -447,7 +447,7 @@ impl AudioNode for TrackNode {
         &mut self,
         inputs: &[&[f32]],
         outputs: &mut [Vec<f32>],
-        _midi_in: &[hardwave_midi::MidiEvent],
+        midi_in: &[hardwave_midi::MidiEvent],
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
         ctx: &ProcessContext,
     ) {
@@ -760,7 +760,7 @@ impl AudioNode for TrackNode {
             let out_l = &mut out_left[0];
             let out_r = &mut out_rest[0];
             self.chain
-                .process(out_l, out_r, buf_size, &mut self.chain_scratch);
+                .process(out_l, out_r, buf_size, &mut self.chain_scratch, midi_in);
         }
 
         // Measure pre-fader peak and publish the pre-fader tap so pre-fader

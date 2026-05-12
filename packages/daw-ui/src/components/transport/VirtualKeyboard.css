@@ -1,0 +1,135 @@
+/*
+ * On-screen MIDI keyboard widget. Lives as a fixed-position panel that
+ * the Toolbar toggles via `useShowVirtualKeyboard`. Styled to sit on
+ * top of the playlist without obscuring the meters — slim height, dark
+ * surface, brand-accent active key.
+ */
+
+.hw-vkbd {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, 90vw);
+  background: var(--surface-1, #181820);
+  border: 1px solid var(--surface-3, #2a2a35);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  z-index: 80;
+  user-select: none;
+  font-family: var(--font-sans, system-ui);
+}
+
+.hw-vkbd-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--surface-2, #1d1d28);
+  border-bottom: 1px solid var(--surface-3, #2a2a35);
+  font-size: 11px;
+  color: var(--text-2, #b6b6c2);
+}
+
+.hw-vkbd-title {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hw-vkbd-octave {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hw-vkbd-octave-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--surface-3, #2a2a35);
+  background: var(--surface-1, #181820);
+  color: var(--text-1, #e8e8f0);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.hw-vkbd-octave-btn:hover { background: var(--surface-3, #2a2a35); }
+
+.hw-vkbd-octave-label {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  min-width: 28px;
+  text-align: center;
+  color: var(--text-1, #e8e8f0);
+}
+
+.hw-vkbd-close {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-2, #b6b6c2);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.hw-vkbd-close:hover { color: var(--text-1, #e8e8f0); }
+
+.hw-vkbd-keys {
+  position: relative;
+  height: 100px;
+  background: #0c0c12;
+  touch-action: none;
+}
+
+.hw-vkbd-white {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: linear-gradient(180deg, #f4f4f8 0%, #d8d8e0 100%);
+  border: 1px solid #1a1a22;
+  border-radius: 0 0 4px 4px;
+  cursor: pointer;
+  padding: 0;
+  color: #15151c;
+  font-size: 9px;
+  font-family: var(--font-mono, monospace);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 6px;
+}
+.hw-vkbd-white:hover { background: linear-gradient(180deg, #ffffff 0%, #e0e0e8 100%); }
+.hw-vkbd-white.is-active {
+  background: linear-gradient(180deg, var(--brand, #e94560) 0%, #b8334b 100%);
+  color: #fff;
+}
+
+.hw-vkbd-keylabel {
+  opacity: 0.7;
+}
+
+.hw-vkbd-black {
+  position: absolute;
+  top: 0;
+  height: 62%;
+  background: linear-gradient(180deg, #2a2a35 0%, #14141c 100%);
+  border: 1px solid #000;
+  border-radius: 0 0 3px 3px;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
+  z-index: 1;
+}
+.hw-vkbd-black:hover {
+  background: linear-gradient(180deg, #38384a 0%, #1c1c26 100%);
+}
+.hw-vkbd-black.is-active {
+  background: linear-gradient(180deg, var(--brand, #e94560) 0%, #6a1d2c 100%);
+}

@@ -42,6 +42,8 @@ import { useBeatSlicerStore } from './stores/beatSlicerStore'
 import { LoudnessMeter } from './components/LoudnessMeter'
 import { Oscilloscope } from './components/Oscilloscope'
 import { SpectrumAnalyzer } from './components/SpectrumAnalyzer'
+import { VirtualKeyboard } from './components/transport/VirtualKeyboard'
+import './components/transport/VirtualKeyboard.css'
 import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappingsPanel'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
@@ -56,6 +58,8 @@ import { useTrackStore } from './stores/trackStore'
 import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
 import { useShortcutsStore } from './stores/shortcutsStore'
+import { useComputerMidiKeyboard } from './hooks/useComputerMidiKeyboard'
+import { useTypingKeyboardStore } from './stores/typingKeyboardStore'
 import { useNotificationStore } from './stores/notificationStore'
 import { applyCustomBg, useThemeStore } from './stores/themeStore'
 import { hw } from './theme'
@@ -121,6 +125,11 @@ export function App() {
   const uiScaleEffective = useUiPreferencesStore(s => s.effectiveScale)
   const setUiScaleMode = useUiPreferencesStore(s => s.setUiScaleMode)
 
+  // QWERTY-as-MIDI-keyboard. Subscribes to the persisted toggle so a
+  // user flip in the toolbar instantly enables/disables note injection.
+  const typingKeyboardEnabled = useTypingKeyboardStore((s) => s.enabled)
+  useComputerMidiKeyboard({ enabled: typingKeyboardEnabled })
+
   // Panel visibility
   const [showBrowser, setShowBrowser] = useState(true)
   const [showMixer, setShowMixer] = useState(false)
@@ -139,6 +148,7 @@ export function App() {
   const [showSpectrum, setShowSpectrum] = useState(false)
   const [showMidiMappings, setShowMidiMappings] = useState(false)
   const [showTempoMap, setShowTempoMap] = useState(false)
+  const [showVirtualKeyboard, setShowVirtualKeyboard] = useState(false)
   const [pdcEnabled, setPdcEnabled] = useState(true)
   const useNewMixer = useMixerSettingsStore(s => s.useNewMixer)
   const setUseNewMixer = useMixerSettingsStore(s => s.setUseNewMixer)
@@ -1191,6 +1201,13 @@ export function App() {
           { label: 'Oscilloscope…', action: () => setShowOscilloscope(true) },
           { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },
           { label: 'MIDI mappings…', action: () => setShowMidiMappings(true) },
+          { label: 'On-screen keyboard', action: () => setShowVirtualKeyboard(v => !v) },
+          {
+            label: useTypingKeyboardStore.getState().enabled
+              ? 'Typing keyboard: On'
+              : 'Typing keyboard: Off',
+            action: () => useTypingKeyboardStore.getState().toggle(),
+          },
         ],
       },
       {
@@ -1307,6 +1324,7 @@ export function App() {
       {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}
       {showOscilloscope && <Oscilloscope onClose={() => setShowOscilloscope(false)} />}
       {showSpectrum && <SpectrumAnalyzer onClose={() => setShowSpectrum(false)} />}
+      <VirtualKeyboard visible={showVirtualKeyboard} onClose={() => setShowVirtualKeyboard(false)} />
       {showMidiMappings && (
         <MidiMappingsPanel
           onClose={() => { setShowMidiMappings(false); setMidiLearnPreset(undefined) }}

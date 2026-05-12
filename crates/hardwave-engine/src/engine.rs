@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use hardwave_audio_io::{AudioCallback, AudioDeviceManager};
 use hardwave_metering::{ChannelMeter, MeterSnapshot};
-use hardwave_midi::MidiInputManager;
+use hardwave_midi::{MidiCaptureRing, MidiInputManager};
 use hardwave_plugin_host::PluginScanner;
 use hardwave_project::Project;
 use rtrb::RingBuffer;
@@ -159,6 +159,13 @@ pub struct DawEngine {
             >,
         >,
     >,
+    /// Rolling 3-minute capture of every live MIDI event seen by the
+    /// engine. Audio thread pushes per-block; UI thread can dump the
+    /// last N seconds into a clip without arming a track. The ring is
+    /// always recording — there is no start/stop, just "dump from now
+    /// minus N seconds". Capacity sized for ~8k events which covers
+    /// dense input over the 3-minute window.
+    pub midi_capture_ring: Arc<Mutex<MidiCaptureRing>>,
 }
 
 /// Commands sent from UI thread to audio thread.
@@ -193,6 +200,7 @@ impl DawEngine {
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
             pending_state_snapshot: Arc::new(Mutex::new(None)),
+            midi_capture_ring: Arc::new(Mutex::new(MidiCaptureRing::new(8192))),
         }
     }
 
@@ -382,6 +390,8 @@ impl DawEngine {
             cmd_rx,
             grave_tx,
             Arc::clone(&self.pending_state_snapshot),
+            Arc::clone(&self.midi_input),
+            Arc::clone(&self.midi_capture_ring),
             sample_rate,
             buffer_size,
         );
@@ -885,6 +895,21 @@ struct EngineCallback {
             >,
         >,
     >,
+    /// Shared handle to the live MIDI input manager. Drained at the
+    /// start of every audio block via `try_drain_events_into` (non-
+    /// blocking — if the mutex is contended this block we just skip
+    /// drain and pick up the events on the next block, which adds at
+    /// most one block of latency). Cloned from
+    /// [`DawEngine::midi_input`] so injected events (from the on-screen
+    /// keyboard and Tauri `inject_midi_event` command) and external
+    /// hardware events flow through the exact same path.
+    midi_input: Arc<Mutex<MidiInputManager>>,
+    /// Reusable per-block scratch for live MIDI events. Pre-sized so
+    /// the audio thread doesn't allocate when the controller is busy.
+    midi_event_scratch: Vec<hardwave_midi::MidiEvent>,
+    /// Shared rolling capture for "dump last N seconds to pattern".
+    /// Pushed-into per block on the audio thread.
+    midi_capture_ring: Arc<Mutex<MidiCaptureRing>>,
 }
 
 impl EngineCallback {
@@ -911,6 +936,8 @@ impl EngineCallback {
                 >,
             >,
         >,
+        midi_input: Arc<Mutex<MidiInputManager>>,
+        midi_capture_ring: Arc<Mutex<MidiCaptureRing>>,
         sample_rate: u32,
         buffer_size: u32,
     ) -> Self {
@@ -935,6 +962,13 @@ impl EngineCallback {
             insert_graveyard_tx,
             track_id_to_node: HashMap::new(),
             pending_state_snapshot,
+            midi_input,
+            // 256 fits well above the typical few-events-per-block load
+            // even from a chord-spamming controller (~32 events). Sized
+            // up-front so the audio thread doesn't grow the Vec on its
+            // first busy block.
+            midi_event_scratch: Vec::with_capacity(256),
+            midi_capture_ring,
         };
         cb.rebuild_graph();
         cb
@@ -1223,6 +1257,17 @@ impl EngineCallback {
                 midi_node.set_notes(note_regions);
 
                 let node_id = self.graph.add_node(Box::new(midi_node));
+                // Every MIDI track accepts live input by default. This
+                // makes a freshly-created MIDI track immediately respond
+                // to a controller without needing the user to find the
+                // "arm" toggle. `armed && monitor_input` still narrows
+                // routing when the user explicitly sets it (the OR keeps
+                // the default-on behaviour while honouring the flags
+                // once set).
+                let accepts =
+                    matches!(track.kind, hardwave_project::TrackKind::Midi)
+                        || (track.armed && track.monitor_input);
+                self.graph.set_accepts_live_midi(node_id, accepts);
                 track_id_to_node.insert(track.id.clone(), node_id);
                 continue;
             }
@@ -1350,6 +1395,12 @@ impl EngineCallback {
             node.set_clips(regions);
 
             let node_id = self.graph.add_node(Box::new(node));
+            // Audio tracks accept live MIDI only when explicitly armed
+            // for input — common pattern for routing a controller into
+            // a synth plug-in loaded on an audio-bearing track. Hardware
+            // events flow through the insert chain to that plug-in.
+            self.graph
+                .set_accepts_live_midi(node_id, track.armed && track.monitor_input);
             track_id_to_node.insert(track.id.clone(), node_id);
         }
 
@@ -1573,8 +1624,31 @@ impl AudioCallback for EngineCallback {
             playing,
         };
 
+        // Drain external/injected MIDI events into the per-block scratch.
+        // try_lock keeps the audio thread non-blocking — on contention we
+        // simply pick up the events on the next block (~5ms later, well
+        // below human perception). The graph then forwards this slice
+        // only to nodes whose `accepts_live_midi` flag is set during
+        // rebuild (armed+monitor_input tracks + MIDI tracks).
+        self.midi_event_scratch.clear();
+        if let Some(mgr) = self.midi_input.try_lock() {
+            mgr.try_drain_events_into(&mut self.midi_event_scratch);
+        }
+
+        // Push drained events into the rolling capture ring. try_lock
+        // keeps the audio thread non-blocking — if the UI is mid-dump
+        // we skip this block (events still feed the graph below).
+        if !self.midi_event_scratch.is_empty() {
+            if let Some(mut ring) = self.midi_capture_ring.try_lock() {
+                let abs = self.transport.position();
+                for ev in &self.midi_event_scratch {
+                    ring.push(abs, *ev);
+                }
+            }
+        }
+
         // Process the audio graph
-        self.graph.process(&ctx);
+        self.graph.process(&ctx, &self.midi_event_scratch);
 
         // Pre-zero the output so any early-return / missing master silences
         // the speakers instead of leaking last block's samples.

@@ -87,6 +87,11 @@ pub struct MidiTrackNode {
     /// `notes` linearly each block; because `notes` is kept sorted by
     /// `note_on_sample`, the audio thread does no per-sample scanning.
     next_note_idx: usize,
+    /// Pitch currently held by an external/live MIDI NoteOn — distinct
+    /// from clip-driven notes so a live release doesn't kill a clip
+    /// note that happens to be playing the same pitch. When `Some(p)`,
+    /// a matching NoteOff transitions `voice` into the Release stage.
+    live_held_pitch: Option<u8>,
     /// Single playing voice. None when nothing is held.
     voice: Option<Voice>,
     /// Linear post-fader gain. Mirrors TrackNode's volume/pan model so
@@ -122,6 +127,7 @@ impl MidiTrackNode {
             name,
             notes: Vec::new(),
             next_note_idx: 0,
+            live_held_pitch: None,
             voice: None,
             volume: 1.0,
             pan: 0.0,
@@ -265,7 +271,7 @@ impl AudioNode for MidiTrackNode {
         &mut self,
         _inputs: &[&[f32]],
         outputs: &mut [Vec<f32>],
-        _midi_in: &[hardwave_midi::MidiEvent],
+        midi_in: &[hardwave_midi::MidiEvent],
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
         ctx: &ProcessContext,
     ) {
@@ -275,7 +281,57 @@ impl AudioNode for MidiTrackNode {
                 *s = 0.0;
             }
         }
-        if self.muted || !ctx.playing {
+        if self.muted {
+            // Still process events so live note-state stays correct
+            // when the user unmutes mid-hold — but emit silence.
+            return;
+        }
+
+        // Apply live MIDI input first so a NoteOn delivered this block
+        // is immediately audible, even when the transport is stopped.
+        // FL Studio / Logic / Ableton all let you audition a soft synth
+        // from a controller without engaging Play; this branch is what
+        // makes that work.
+        for ev in midi_in {
+            match *ev {
+                hardwave_midi::MidiEvent::NoteOn {
+                    note, velocity, ..
+                } => match self.instrument {
+                    Instrument::BuiltinSine => {
+                        let carry_gain =
+                            self.voice.as_ref().map(|v| v.env_value).unwrap_or(0.0);
+                        self.voice = Some(Voice {
+                            freq: pitch_to_freq(note),
+                            velocity: velocity.clamp(0.0, 1.0),
+                            phase: 0.0,
+                            stage: EnvStage::Attack,
+                            env_value: carry_gain,
+                        });
+                        self.live_held_pitch = Some(note);
+                    }
+                    Instrument::KickSynth => {
+                        self.kick.note_on(note, velocity);
+                        self.live_held_pitch = Some(note);
+                    }
+                },
+                hardwave_midi::MidiEvent::NoteOff { note, .. } => {
+                    if self.live_held_pitch == Some(note) {
+                        if let Some(v) = self.voice.as_mut() {
+                            if v.stage != EnvStage::Idle {
+                                v.stage = EnvStage::Release;
+                            }
+                        }
+                        self.live_held_pitch = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // When transport is stopped, render the live-MIDI voice tail
+        // (envelope release) but skip the clip-schedule path so we
+        // don't fire stale clip notes from a paused playhead.
+        if !ctx.playing && self.voice.is_none() {
             return;
         }
 
@@ -313,55 +369,68 @@ impl AudioNode for MidiTrackNode {
 
         // Skip notes that ended before the block starts. This fast-forwards
         // `next_note_idx` after a seek so we don't fire stale note-ons.
-        while self.next_note_idx < self.notes.len()
-            && self.notes[self.next_note_idx].note_off_sample < block_start
-        {
-            self.next_note_idx += 1;
+        if ctx.playing {
+            while self.next_note_idx < self.notes.len()
+                && self.notes[self.next_note_idx].note_off_sample < block_start
+            {
+                self.next_note_idx += 1;
+            }
         }
 
         for i in 0..block_size {
             let global_sample = block_start.saturating_add(i as u64);
 
-            // Fire any pending note-ons that land on this exact sample.
-            while self.next_note_idx < self.notes.len()
-                && self.notes[self.next_note_idx].note_on_sample <= global_sample
-            {
-                let note = &self.notes[self.next_note_idx];
-                if !note.muted {
-                    match self.instrument {
-                        Instrument::BuiltinSine => {
-                            // Carry the previous voice's envelope
-                            // forward so legato re-triggers don't click.
-                            let carry_gain =
-                                self.voice.as_ref().map(|v| v.env_value).unwrap_or(0.0);
-                            self.voice = Some(Voice {
-                                freq: pitch_to_freq(note.pitch),
-                                velocity: note.velocity.clamp(0.0, 1.0),
-                                phase: 0.0,
-                                stage: EnvStage::Attack,
-                                env_value: carry_gain,
-                            });
-                        }
-                        Instrument::KickSynth => {
-                            self.kick.note_on(note.pitch, note.velocity);
+            // Fire any pending clip-scheduled note-ons that land on this
+            // exact sample — only while the transport is playing. Stopped
+            // transport must not re-fire the same note every block.
+            if ctx.playing {
+                while self.next_note_idx < self.notes.len()
+                    && self.notes[self.next_note_idx].note_on_sample <= global_sample
+                {
+                    let note = &self.notes[self.next_note_idx];
+                    if !note.muted {
+                        match self.instrument {
+                            Instrument::BuiltinSine => {
+                                // Carry the previous voice's envelope
+                                // forward so legato re-triggers don't click.
+                                let carry_gain =
+                                    self.voice.as_ref().map(|v| v.env_value).unwrap_or(0.0);
+                                self.voice = Some(Voice {
+                                    freq: pitch_to_freq(note.pitch),
+                                    velocity: note.velocity.clamp(0.0, 1.0),
+                                    phase: 0.0,
+                                    stage: EnvStage::Attack,
+                                    env_value: carry_gain,
+                                });
+                                // A clip note-on takes over from any live
+                                // hold so the live release path doesn't
+                                // unexpectedly cut the clip note short.
+                                self.live_held_pitch = None;
+                            }
+                            Instrument::KickSynth => {
+                                self.kick.note_on(note.pitch, note.velocity);
+                                self.live_held_pitch = None;
+                            }
                         }
                     }
+                    self.next_note_idx += 1;
                 }
-                self.next_note_idx += 1;
-            }
 
-            // Trigger release when the active voice's note-off sample is reached.
-            if let Some(v) = self.voice.as_mut() {
-                if v.stage != EnvStage::Release && v.stage != EnvStage::Idle {
-                    // Find the note that owns this voice — cheap because
-                    // MidiTrackNode is monophonic and we just consumed it.
-                    let off_sample = self
-                        .notes
-                        .get(self.next_note_idx.saturating_sub(1))
-                        .map(|n| n.note_off_sample)
-                        .unwrap_or(global_sample);
-                    if off_sample <= global_sample {
-                        v.stage = EnvStage::Release;
+                // Trigger release when the active clip note's note-off
+                // sample is reached. Skipped while a live note is held
+                // so the live voice isn't killed by a stale clip end.
+                if self.live_held_pitch.is_none() {
+                    if let Some(v) = self.voice.as_mut() {
+                        if v.stage != EnvStage::Release && v.stage != EnvStage::Idle {
+                            let off_sample = self
+                                .notes
+                                .get(self.next_note_idx.saturating_sub(1))
+                                .map(|n| n.note_off_sample)
+                                .unwrap_or(global_sample);
+                            if off_sample <= global_sample {
+                                v.stage = EnvStage::Release;
+                            }
+                        }
                     }
                 }
             }

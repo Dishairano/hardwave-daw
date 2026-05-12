@@ -280,6 +280,9 @@ pub fn run() {
             commands::midi_input::get_midi_desired_ports,
             commands::midi_input::set_midi_clock_sync_enabled,
             commands::midi_input::get_midi_clock_sync_status,
+            commands::midi_input::inject_midi_event,
+            commands::midi_capture::dump_midi_capture,
+            commands::midi_capture::clear_midi_capture,
             // MIDI Learn
             commands::midi_learn::midi_learn_start,
             commands::midi_learn::midi_learn_cancel,

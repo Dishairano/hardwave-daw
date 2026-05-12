@@ -33,6 +33,16 @@ pub enum MidiMapTarget {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         track_id: Option<String>,
     },
+    /// A specific parameter of a plug-in slot inside a track's insert
+    /// chain. `param_id` matches the index/id the plug-in exposes via
+    /// its parameter list. CC values arrive normalised 0..1 and are
+    /// forwarded as f64 — plug-ins re-map to their own ranges
+    /// internally.
+    PluginParam {
+        track_id: String,
+        slot_id: String,
+        param_id: u32,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -218,6 +228,25 @@ fn apply_cc(engine: &Arc<Mutex<DawEngine>>, target: &MidiMapTarget, value: f32) 
                 }
             }
             eng.rebuild_graph();
+        }
+        MidiMapTarget::PluginParam {
+            track_id,
+            slot_id,
+            param_id,
+        } => {
+            // Plug-in parameters live on the live `Box<dyn HostedPlugin>`
+            // instance, which only the audio thread can mutate. Ship the
+            // change via the shared insert-command queue so the audio
+            // thread applies it at the start of its next block — exactly
+            // the same path the mixer UI uses for set_parameter clicks.
+            let cmd = hardwave_engine::insert_chain::InsertCommand::SetParameter {
+                track_id: track_id.clone(),
+                slot_id: slot_id.clone(),
+                param_id: *param_id,
+                value: value as f64,
+            };
+            let eng = engine.lock();
+            let _ = eng.try_send_insert_command(cmd);
         }
     }
 }

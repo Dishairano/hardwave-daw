@@ -6,6 +6,7 @@ pub mod engine;
 pub mod export;
 pub mod history;
 pub mod midi;
+pub mod midi_capture;
 pub mod midi_input;
 pub mod midi_learn;
 pub mod midi_output;

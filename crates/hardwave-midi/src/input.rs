@@ -209,6 +209,35 @@ impl MidiInputManager {
         state.events.drain(..).collect()
     }
 
+    /// Non-blocking drain into a caller-owned buffer. Returns true when the
+    /// lock was acquired (events may still be empty). Returns false on
+    /// contention — the audio thread calls this once per block and skipping
+    /// a single block of MIDI input adds at most ~5ms of latency, which is
+    /// inaudible compared to scheduler jitter. The midir callback path
+    /// continues to push into `shared.events` via `handle_input_bytes`,
+    /// so contended events are picked up on the next successful drain.
+    pub fn try_drain_events_into(&self, out: &mut Vec<MidiEvent>) -> bool {
+        let Some(mut state) = self.shared.try_lock() else {
+            return false;
+        };
+        out.extend(state.events.drain(..));
+        true
+    }
+
+    /// Inject a synthetic event into the same queue the midir callbacks
+    /// write to. Used by the inject-MIDI Tauri command for the computer
+    /// keyboard and on-screen virtual keyboard paths so they hit the
+    /// exact same drain pipeline as a physical controller.
+    pub fn inject(&self, ev: MidiEvent) {
+        let mut state = self.shared.lock();
+        if state.events.len() >= QUEUE_CAPACITY {
+            state.events.pop_front();
+            state.dropped = state.dropped.saturating_add(1);
+        }
+        state.events.push_back(ev);
+        state.last_event_at = Some(Instant::now());
+    }
+
     /// Return the current clock-sync observation and clear the pending
     /// transport flags so each Start/Continue/Stop message drives exactly
     /// one transport action in the caller.
