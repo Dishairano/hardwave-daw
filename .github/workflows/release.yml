@@ -73,30 +73,20 @@ jobs:
       matrix:
         include:
           - platform: ubuntu-22.04
-            runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             tauri-bundles: deb,appimage,updater
           - platform: windows-latest
-            # Self-hosted Windows runner on DESKTOP-R3EHHM9 (i9-10900K,
-            # 64 GB RAM). Replaces the 4-core github-hosted windows-latest
-            # — typical Windows leg drops from ~12-15 min warm to
-            # ~3-5 min warm. Service-managed, auto-starts on boot.
-            #
-            # Heads-up: if the PC is off when a tag is pushed, the run
-            # queues until the runner comes online (or fails after 24 h).
-            runner: [self-hosted, Windows, hardwave-daw]
             target: x86_64-pc-windows-msvc
             # NSIS is what the updater + branded launcher consume. .msi is
             # a duplicate installer format end-users never asked for and
             # adds ~90s to Windows bundle.
             tauri-bundles: nsis,updater
           - platform: macos-latest
-            runner: macos-latest
             target: aarch64-apple-darwin
             # Skip rpm-equivalent extras. .app is implicit inside the DMG.
             tauri-bundles: app,dmg,updater
 
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.platform }}
 
     # Network + incremental hygiene applied to every leg:
     # - CARGO_INCREMENTAL=0 means sccache can do its job without fighting
