@@ -5,6 +5,7 @@ import { useTransportStore, SNAP_VALUES } from '../../stores/transportStore'
 import { useTrackStore } from '../../stores/trackStore'
 import { usePatternStore } from '../../stores/patternStore'
 import { useMetronomeStore } from '../../stores/metronomeStore'
+import { usePlaylistToolStore, type PlaylistTool } from '../../stores/playlistToolStore'
 import { useIsMobile } from '../../hooks/useIsMobile'
 
 type Tool = 'draw' | 'paint' | 'delete' | 'mute' | 'slip' | 'slice' | 'select' | 'zoom'
@@ -270,6 +271,16 @@ export function Toolbar(props: ToolbarProps) {
           opacity: 0.5,
         }} />
       </div>
+
+      <Sep />
+
+      {/* 7b. Playlist tools — FL Studio set: draw / paint / slice / delete
+              / mute / slip / select / zoom. Click to activate; keybinds
+              (B paint, S slice, D delete, E select, etc) wire through
+              useShortcutsStore in App.tsx. Active tool is highlighted
+              with the accent rather than the dim background so the
+              user can read at a glance which mode they're in. */}
+      <PlaylistToolPicker />
 
       <Sep />
 
@@ -1071,4 +1082,152 @@ const lcdDigit: React.CSSProperties = {
   fontSize: 13, fontWeight: 700,
   whiteSpace: 'pre',
   letterSpacing: 0,
+}
+
+// ---- Playlist tool picker (FL Studio set) ----
+// Eight tools rendered as a compact row of icon buttons. Active tool
+// reads accent-coloured + filled background. Tooltips show the keybind
+// hint for each tool so users learn the shortcuts incidentally.
+function PlaylistToolPicker() {
+  const tool = usePlaylistToolStore((s) => s.tool)
+  const setTool = usePlaylistToolStore((s) => s.setTool)
+  const tools: Array<{ id: PlaylistTool; label: string; keybind: string; icon: React.ReactNode }> = [
+    {
+      id: 'draw',
+      label: 'Draw',
+      keybind: 'P',
+      icon: (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M8.5 1.5L10.5 3.5L4 10L1.5 10.5L2 8L8.5 1.5Z" />
+        </svg>
+      ),
+    },
+    {
+      id: 'paint',
+      label: 'Paint',
+      keybind: 'B',
+      icon: (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="6" y="1.5" width="4.5" height="3" />
+          <path d="M6 3h-2.5L2.5 4v1l1 1H6" />
+          <path d="M3.5 7.5v3L5 11" />
+        </svg>
+      ),
+    },
+    {
+      id: 'slice',
+      label: 'Slice',
+      keybind: 'S',
+      icon: (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 10L9 1.5" />
+          <path d="M3 10L2 11L4 11L5 8L3 10Z" fill="currentColor" />
+        </svg>
+      ),
+    },
+    {
+      id: 'delete',
+      label: 'Delete',
+      keybind: 'D',
+      icon: (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2.5" y="3.5" width="7" height="7" />
+          <path d="M4.5 3.5V2.5h3v1" />
+          <path d="M1.5 3.5h9" />
+          <path d="M5 5.5v3M7 5.5v3" />
+        </svg>
+      ),
+    },
+    {
+      id: 'mute',
+      label: 'Mute',
+      keybind: 'T',
+      icon: (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2 4.5h2L7 2v8L4 7.5H2z" />
+          <path d="M9 4.5l2 3M11 4.5l-2 3" />
+        </svg>
+      ),
+    },
+    {
+      id: 'slip',
+      label: 'Slip',
+      keybind: 'Y',
+      icon: (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="1.5" y="3.5" width="9" height="5" />
+          <path d="M3.5 6h1M6 6h1M8 6h1" />
+        </svg>
+      ),
+    },
+    {
+      id: 'select',
+      label: 'Select',
+      keybind: 'E',
+      icon: (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2 2L5.5 10L6.5 6.5L10 5.5L2 2Z" />
+        </svg>
+      ),
+    },
+    {
+      id: 'zoom',
+      label: 'Zoom',
+      keybind: 'Z',
+      icon: (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="5" cy="5" r="3" />
+          <path d="M7.5 7.5L10.5 10.5" />
+        </svg>
+      ),
+    },
+  ]
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 1,
+        background: 'rgba(255,255,255,0.02)',
+        border: `1px solid ${hw.borderDark}`,
+        borderRadius: 4,
+        padding: 2,
+      }}
+      data-testid="playlist-tools"
+    >
+      {tools.map((t) => {
+        const active = tool === t.id
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTool(t.id)}
+            title={`${t.label} (${t.keybind})`}
+            data-tool={t.id}
+            style={{
+              width: 22,
+              height: 20,
+              padding: 0,
+              border: 'none',
+              borderRadius: 3,
+              background: active ? hw.accentDim : 'transparent',
+              color: active ? hw.accentLight : hw.textMuted,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'background 60ms, color 60ms',
+            }}
+            onMouseEnter={(e) => {
+              if (!active) (e.currentTarget as HTMLButtonElement).style.color = hw.textSecondary
+            }}
+            onMouseLeave={(e) => {
+              if (!active) (e.currentTarget as HTMLButtonElement).style.color = hw.textMuted
+            }}
+          >
+            {t.icon}
+          </button>
+        )
+      })}
+    </div>
+  )
 }

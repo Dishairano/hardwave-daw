@@ -91,6 +91,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
   const [, forceRender] = useState(0)
+  /// Vertical scroll offset in pixels — how far down the user has
+  /// scrolled the track list. Plain wheel input on the playlist
+  /// (no Ctrl modifier) adjusts this. Clamped to
+  /// `0..(content_height - viewport_height)` in the wheel handler.
+  /// All canvas draws and hit-tests subtract this from their logical
+  /// Y so the visual band of tracks slides up under the ruler.
+  const [verticalScroll, setVerticalScroll] = useState(0)
 
   const {
     tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
@@ -182,10 +189,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     if (trackHeight > 0) {
       ctx.strokeStyle = 'rgba(0,0,0,0.55)'
       ctx.lineWidth = 1
-      const visibleRows = Math.ceil((h - RULER_HEIGHT) / trackHeight) + 1
-      for (let r = 0; r <= visibleRows; r++) {
-        const y = Math.floor(RULER_HEIGHT + r * trackHeight) + 0.5
+      // Track row separators scroll vertically with the user's wheel
+      // offset. Only draw rows whose y lands within the visible band
+      // below the ruler — avoid drawing thousands of off-screen rows.
+      const firstVisible = Math.floor(verticalScroll / trackHeight)
+      const lastVisible = firstVisible + Math.ceil((h - RULER_HEIGHT) / trackHeight) + 1
+      for (let r = firstVisible; r <= lastVisible; r++) {
+        const y = Math.floor(RULER_HEIGHT + r * trackHeight - verticalScroll) + 0.5
         if (y > h) break
+        if (y < RULER_HEIGHT) continue
         ctx.beginPath()
         ctx.moveTo(0, y)
         ctx.lineTo(w, y)
@@ -277,9 +289,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // above. Removing the loop exposes the grid that was always being
     // drawn underneath.)
 
-    // Clips
+    // Clips. The y for each track shifts up by `verticalScroll` so the
+    // visible band slides under the ruler. Tracks fully scrolled off
+    // the bottom or top of the viewport are skipped at the for-loop
+    // boundaries below for the trivial paint-cost win.
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * trackHeight
+      const y = RULER_HEIGHT + i * trackHeight - verticalScroll
+      // Cull tracks that fall entirely outside the visible viewport.
+      if (y + trackHeight < RULER_HEIGHT) continue
+      if (y > h) break
       const track = audioTracks[i]
       const defaultColor = CLIP_COLORS[i % CLIP_COLORS.length]
 
@@ -291,7 +309,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     // Crossfade overlay — shade any overlap between adjacent clips on the same track.
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * trackHeight
+      const y = RULER_HEIGHT + i * trackHeight - verticalScroll
+      if (y + trackHeight < RULER_HEIGHT) continue
+      if (y > h) break
       const clips = [...audioTracks[i].clips].sort((a, b) => a.position_ticks - b.position_ticks)
       for (let j = 1; j < clips.length; j++) {
         const prev = clips[j - 1]
@@ -511,7 +531,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -668,19 +688,23 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
   }
 
-  // Hit test
+  // Hit test. The incoming mouseY is viewport-relative; we convert it
+  // to logical (unscrolled) Y once and compare against each track's
+  // y from there, so the user's wheel-scroll position stays
+  // transparent to every caller.
   const hitTest = useCallback((mouseX: number, mouseY: number, scrollOffset: number): {
     clip: ClipInfo, trackId: string, edge: 'body' | 'left' | 'right' | 'fade-in' | 'fade-out'
   } | null => {
+    const logicalY = mouseY + verticalScroll
     for (let i = 0; i < audioTracks.length; i++) {
       const y = RULER_HEIGHT + i * trackHeight
-      if (mouseY < y + 2 || mouseY > y + trackHeight - 2) continue
+      if (logicalY < y + 2 || logicalY > y + trackHeight - 2) continue
       const track = audioTracks[i]
       for (const clip of track.clips) {
         const clipX = clip.position_ticks * pixelsPerTick - scrollOffset
         const clipW = clip.length_ticks * pixelsPerTick
         if (mouseX < clipX || mouseX > clipX + clipW) continue
-        const localY = mouseY - (y + 2)
+        const localY = logicalY - (y + 2)
         const withinFadeBand = localY >= HEADER_H && localY <= HEADER_H + FADE_HANDLE_PX && clipW > FADE_HANDLE_PX * 3
         // Fade handles take priority over resize edges within the narrow top band.
         if (withinFadeBand) {
@@ -698,7 +722,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
     return null
-  }, [audioTracks, pixelsPerTick, trackHeight])
+  }, [audioTracks, pixelsPerTick, trackHeight, verticalScroll])
 
   const getScrollOffset = useCallback(() => {
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
@@ -1042,11 +1066,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
     if (drag && drag.mode === 'rubber') {
       // Finalize rubber-band selection — any clip intersecting the box is selected.
+      // mouseY values were recorded in viewport space; lift them into
+      // logical (unscrolled) Y so we compare against each track's
+      // y consistently regardless of the user's current scroll offset.
       const scrollOffset = getScrollOffset()
       const x1 = Math.min(drag.startMouseX, drag.currentMouseX)
       const x2 = Math.max(drag.startMouseX, drag.currentMouseX)
-      const y1 = Math.min(drag.startMouseY, drag.currentMouseY)
-      const y2 = Math.max(drag.startMouseY, drag.currentMouseY)
+      const y1 = Math.min(drag.startMouseY, drag.currentMouseY) + verticalScroll
+      const y2 = Math.max(drag.startMouseY, drag.currentMouseY) + verticalScroll
       const picked: string[] = []
       for (let i = 0; i < audioTracks.length; i++) {
         const y = RULER_HEIGHT + i * trackHeight
@@ -1201,8 +1228,29 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       e.preventDefault()
       const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
       setHorizontalZoom(horizontalZoom * factor)
+      return
     }
-  }, [trackHeight, setTrackHeight, horizontalZoom, setHorizontalZoom])
+    // Plain wheel (no modifier) → scroll the track list vertically.
+    // The container is overflow:hidden + the canvas is absolutely
+    // positioned, so there's no native scroll to hand off to. We
+    // maintain our own offset that every draw + hit-test path
+    // subtracts from its logical Y. Shift+wheel also routes here so
+    // trackpad users who only have horizontal wheel can still scroll.
+    e.preventDefault()
+    const container = containerRef.current
+    if (!container) return
+    const viewportH = container.clientHeight - RULER_HEIGHT
+    const contentH = audioTracks.length * trackHeight
+    const maxScroll = Math.max(0, contentH - viewportH)
+    if (maxScroll <= 0) return
+    // Normalize deltaY across mouse / trackpad / line-mode wheels —
+    // pure line-mode (deltaMode=1) is the worst offender, sending ~3
+    // for a single notch which feels frozen if applied 1:1.
+    let dy = e.deltaY
+    if (e.deltaMode === 1) dy *= 16
+    else if (e.deltaMode === 2) dy *= viewportH
+    setVerticalScroll((v) => Math.max(0, Math.min(maxScroll, v + dy)))
+  }, [trackHeight, setTrackHeight, horizontalZoom, setHorizontalZoom, audioTracks.length])
 
   // Close marker context menu on outside mousedown
   useEffect(() => {
