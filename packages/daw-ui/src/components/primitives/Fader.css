@@ -1,0 +1,60 @@
+/*
+ * Fader primitive styles — paired with Fader.tsx.
+ *
+ * The cap rides over a fixed-position track. Cap vertical position is
+ * driven by the `--cap-top` CSS variable so pointer-drag updates a single
+ * style without re-rendering the children.
+ */
+
+.hw-fader {
+  --cap-top: 55%;
+  position: relative;
+  width: 8px;
+  min-width: 8px;
+  display: inline-block;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.hw-fader:focus-visible {
+  outline: 1px solid var(--accent, #ff2d4f);
+  outline-offset: 2px;
+}
+
+.hw-fader.dragging {
+  cursor: grabbing;
+}
+
+.hw-fader-track {
+  position: absolute;
+  inset: 0;
+  background: #08080a;
+  border: 1px solid #1a1a22;
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.hw-fader-cap {
+  position: absolute;
+  left: -9px;
+  right: -9px;
+  height: 14px;
+  top: var(--cap-top);
+  background: linear-gradient(180deg, #3a3a44, #1a1a22);
+  border: 1px solid #4a4a55;
+  border-radius: 1px;
+  box-shadow: 0 1px 0 #000;
+  pointer-events: none;
+}
+
+.hw-fader-cap::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 6px;
+  height: 1px;
+  background: var(--accent, #ff2d4f);
+  box-shadow: 0 0 4px var(--accent, #ff2d4f);
+}

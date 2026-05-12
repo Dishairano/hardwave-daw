@@ -159,6 +159,20 @@ interface TrackState {
   removeTrack: (id: string) => Promise<void>
   setVolume: (id: string, db: number) => Promise<void>
   setPan: (id: string, pan: number) => Promise<void>
+  /// Optimistic local-only volume update — mutates the track's volume in
+  /// the store without an IPC round-trip or fetchTracks. Used by the
+  /// fader's pointermove path so 60fps drag isn't bottlenecked by a
+  /// full-store refetch. Caller MUST call commitVolume (or setVolume) on
+  /// pointerup to persist the final value to the backend.
+  setVolumeLocal: (id: string, db: number) => void
+  /// Same idea as setVolumeLocal but for pan.
+  setPanLocal: (id: string, pan: number) => void
+  /// Persist a track's final post-drag volume to the backend in one IPC.
+  /// Triggers fetchTracks once at the end. Call this on pointerup after
+  /// a drag that used setVolumeLocal.
+  commitVolume: (id: string, db: number) => Promise<void>
+  /// Same idea as commitVolume but for pan.
+  commitPan: (id: string, pan: number) => Promise<void>
   toggleMute: (id: string) => Promise<void>
   toggleSolo: (id: string) => Promise<void>
   toggleArm: (id: string) => Promise<void>
@@ -359,6 +373,39 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   setPan: async (id, pan) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_pan', { trackId: id, pan }, `Set "${name}" pan to ${pan.toFixed(2)}`)
+    await get().fetchTracks()
+  },
+
+  // ---- optimistic-local versions for high-frequency drag/wheel updates ----
+  // These mutate the store in place without IPC or fetchTracks. Pair every
+  // drag session with a single commitVolume/commitPan on pointerup so the
+  // backend + redo history catch up. Mirrors moveClipLocal/commitClipDrag.
+  setVolumeLocal: (id, db) => {
+    set((s) => ({
+      tracks: s.tracks.map((t) => (t.id === id ? { ...t, volume_db: db } : t)),
+    }))
+  },
+  setPanLocal: (id, pan) => {
+    set((s) => ({
+      tracks: s.tracks.map((t) => (t.id === id ? { ...t, pan } : t)),
+    }))
+  },
+  commitVolume: async (id, db) => {
+    const name = get().tracks.find((t) => t.id === id)?.name ?? 'track'
+    await mut(
+      'set_track_volume',
+      { trackId: id, volumeDb: db },
+      `Set "${name}" volume to ${db.toFixed(1)} dB`,
+    )
+    await get().fetchTracks()
+  },
+  commitPan: async (id, pan) => {
+    const name = get().tracks.find((t) => t.id === id)?.name ?? 'track'
+    await mut(
+      'set_track_pan',
+      { trackId: id, pan },
+      `Set "${name}" pan to ${pan.toFixed(2)}`,
+    )
     await get().fetchTracks()
   },
 
@@ -803,3 +850,37 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     return peaks
   },
 }))
+
+// ---- fine-grained selector hooks ----
+// Use these inside `ChannelStrip` and friends so each strip only re-renders
+// when its own field changes, instead of every strip re-rendering on every
+// fetchTracks(). The new mixer enforces this via ESLint (no-bare-zustand-
+// track-store) once the rule is wired up.
+export const useTrackById = (id: string) =>
+  useTrackStore((s) => s.tracks.find((t) => t.id === id))
+export const useTrackVolume = (id: string) =>
+  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.volume_db ?? 0)
+export const useTrackPan = (id: string) =>
+  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.pan ?? 0)
+export const useTrackStereoSeparation = (id: string) =>
+  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.stereoSeparation ?? 1)
+export const useTrackMuted = (id: string) =>
+  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.muted ?? false)
+export const useTrackSoloed = (id: string) =>
+  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.soloed ?? false)
+export const useTrackArmed = (id: string) =>
+  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.armed ?? false)
+export const useTrackName = (id: string) =>
+  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.name ?? '')
+export const useTrackKind = (id: string) =>
+  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.kind)
+export const useTrackColor = (id: string) =>
+  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.color)
+/// Track ids in render order — stable across content updates, only changes
+/// when tracks are added/removed/reordered.
+export const useTrackIds = () =>
+  useTrackStore((s) => s.tracks.map((t) => t.id))
+/// Subset of track ids by kind (audio / midi / automation / bus / return /
+/// master). Useful for splitting the mixer's insert column from buses.
+export const useTrackIdsByKind = (kind: string) =>
+  useTrackStore((s) => s.tracks.filter((t) => t.kind === kind).map((t) => t.id))

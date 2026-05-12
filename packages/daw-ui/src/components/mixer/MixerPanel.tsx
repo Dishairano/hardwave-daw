@@ -4,13 +4,26 @@ import { usePluginStore } from '../../stores/pluginStore'
 import { useMeterStore, DEFAULT_TRACK_METER } from '../../stores/meterStore'
 import { PATTERN_COLORS } from '../../stores/patternStore'
 import { useSlotPresetStore } from '../../stores/slotPresetStore'
+import { useMixerSettingsStore } from '../../stores/mixerSettingsStore'
 import { DetachButton } from '../FloatingWindow'
 import { ParameterContextMenu } from '../ParameterContextMenu'
 import { SendsEditor } from './SendsEditor'
+import { MixerPanelV2 } from './v2/MixerPanel'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 
 export function MixerPanel() {
+  // Phase 1 feature flag — route to the new FL Wide 2 mixer when the user
+  // opts in via Settings. The legacy mixer below stays untouched until
+  // phase 3 lands the FX rack + plug-in picker.
+  const useNew = useMixerSettingsStore((s) => s.useNewMixer)
+  if (useNew) {
+    return <MixerPanelV2 />
+  }
+  return <MixerPanelLegacy />
+}
+
+function MixerPanelLegacy() {
   const {
     tracks, setVolume, setPan, toggleMute, toggleSolo, toggleSoloSafe, toggleArm, renameTrack, setTrackColor,
     setTrackPhaseInvert, setTrackSwapLr, setTrackStereoSeparation, setTrackDelaySamples, setTrackMonitorInput,

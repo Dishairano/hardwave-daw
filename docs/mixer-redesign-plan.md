@@ -455,4 +455,108 @@ To unlock keyboard tool-switching (CTRL+B duplicate, B paint, S slice, D delete,
 - `editCursorTicks` is the Ctrl+V paste origin (`App.tsx:817`, `:942`, `PianoRoll.tsx:1236,1335,1386`). With v0.159.2 it only moves on a deliberate drag-promoted click, otherwise stays where it was. Users who relied on click-to-position-paste need to either drag a tiny bit or use the ruler (which still sets transport position) — added to the changelog so it's not a silent UX regression.
 - Picker selections of kind `'pattern'` or `'automation'` still fall through to the new pending-empty mode (no paste path exists for them yet). Scoped into the v0.160.0 tool-mode work.
 
+---
+
+## 13. Maximum performance — Tier 1 / 2 / 3
+
+§5 covers the baseline that gets us to 60 fps with 500 strips on commodity hardware (virtualization, canvas meters via `meterStream` rAF singleton, RAF-batched drag, fine-grained Zustand selectors, `React.memo`, lazy mounts). This section adds the **to-the-max** layers on top, ranked by impact-per-engineering-hour.
+
+### 13.1 Tier 1 — High-impact extras (we commit these in Phase 4)
+
+| # | Optimization | Win | Cost |
+|---|---|---|---|
+| 1 | **OffscreenCanvas + Web Worker for meters.** The meter paint loop moves into a `dedicated worker` thread. Audio thread writes peak/RMS values into a `SharedArrayBuffer`, the worker reads them, paints into `OffscreenCanvas` per strip. Main thread never touches meter data. | Meter CPU 5 % → < 1 %, leaves the main thread free for everything else | 1 day |
+| 2 | **`content-visibility: auto` + `contain: strict` on every strip.** The browser can skip layout, paint, and even style invalidation entirely for off-screen strips. Stacks on top of the virtualizer — anything still mounted but scrolled out is also free. | Adds another ~30 % scroll headroom on top of virtualization | 1 hour |
+| 3 | **Binary Tauri events** (rmp-serde) instead of JSON for the meter batch payload. JSON serialization of 500 floats / frame is ~3–6 % CPU on its own. | 5–10× less serialization overhead per frame | 2 hours |
+| 4 | **Audio-thread silent-track skipping.** A track that has no playing clip, no live input, and no plug-in tail in the audio block is short-circuited before its DSP runs. The engine still tracks state, just doesn't process samples. | 500 tracks of which 30 are active = ~94 % less DSP work | 4 hours |
+| 5 | **GPU compositor scroll + rAF easing.** Replace direct `scrollLeft` mutations with two layers: (a) a `requestAnimationFrame` smoothing loop that lerps a `currentScroll` toward a `targetScroll` (smoothing 0.22, ~120 ms settle), and (b) the underlying scroll applied via `transform: translateX(-N px)` on the strips inner container so the compositor — not the renderer — owns the scroll. Wheel deltas accumulate into the target; rapid bursts and trackpad inertia feel buttery instead of choppy. | Scroll FPS 45 → solid 60 on M-series; eliminates choppy wheel jumps; gigantic win on Windows + low-power devices | 4 hours |
+| 6 | **Per-frame meter coalescing on the audio side.** The audio thread writes meter values for *only* the currently-visible track IDs (passed in via the SAB from the UI) — not for all 500. | 500 → ~25 floats per frame written | 2 hours |
+| 7 | **Pre-rendered knob sprites.** Bake the rotated knob indicator as a 256-frame sprite sheet at build time. Knob value changes the `background-position`, never repaints the indicator. | Zero paint-cost knob rotations | 4 hours |
+| 8 | **Cargo release profile tightening.** `lto = "fat"`, `codegen-units = 1`, `opt-level = 3`, `panic = "abort"`, strip = "symbols". | 15–25 % faster audio block processing, ~20 % smaller binary | 30 min |
+| 9 | **Plug-in lazy unload.** Suspend plug-in instances on tracks that have been silent for > N seconds (default 30 s). Resume transparently before the next audio block that needs them. | Memory 600 MB → 180 MB with 100 plug-ins loaded | 1 day |
+| 10 | **Vite `manualChunks` + lazy routes.** The picker modal, FX rack, plug-in GUIs, and tempo-map dialog each get their own chunk. Initial bundle drops below 400 KB gzipped. | Initial JS 936 KB → < 350 KB; first paint < 200 ms cold | 3 hours |
+
+**Tier 1 total:** ~6 engineering days on top of the §5 baseline (3–4 days) → **9–10 days for 60 fps, < 200 ms first paint, < 16 ms drag latency, with 500 strips**.
+
+### 13.2 Tier 2 — Nice-to-have (commit if budget allows)
+
+- **WebGL2 meter shader** as a fallback if canvas2d hits a ceiling with > 1000 simultaneous meters. Compile-once shader paints every meter as one quad per channel.
+- **IndexedDB cache** for plug-in catalog + waveform thumbnails — first mixer open after a cold boot < 100 ms once cache is warm.
+- **Service worker** for static asset caching — instant reload of the renderer process after Tauri updates.
+- **CSS `contain: paint`** on idle elements that aren't off-screen (e.g. FX rack panel while no strip is selected).
+- **`requestIdleCallback`** for non-critical work (thumbnail generation, telemetry batching, autosave).
+- **`@tanstack/react-virtual` with `paddingStart`/`paddingEnd`** instead of spacer divs — saves DOM nodes.
+- **React 19 `useTransition`** for selection state changes — keeps drag/animate hot paths uninterruptible.
+- **Compiled CSS-in-JS** (Linaria or Vanilla Extract) — zero runtime stylesheet evaluation cost.
+- **Compile-time plug-in GUI splitting** via Vite `import.meta.glob` — every plug-in GUI is its own chunk, loaded only when the user opens it.
+
+### 13.3 Tier 3 — Last 10 % (only if measurement justifies it)
+
+- **WASM** for the dB-scaling / log10 conversion that runs per meter per frame (JS Math.log10 is fast but not free at 60 × 500).
+- **SIMD JS** (`v128.abs`, `f32x4.add`) for batch dB conversion on browsers that support it (Chrome 91+, Safari 16.4+).
+- **Audio thread NUMA affinity pinning** on macOS via the Core Audio workgroup (already partially wired via `coreaudio_workgroup.rs`).
+- **Custom React reconciler** for the mixer subtree — only if the hot path is *still* a measurable issue after Tier 1+2.
+- **Skip-React strip-row** — hand-rolled imperative DOM updates outside of React entirely for the strips region. Last resort.
+
+### 13.4 Performance budgets — CI gates
+
+These are hard-enforced by CI. A PR that regresses any of them fails the build:
+
+```yaml
+mixer.scroll_fps           >= 58       # 500 strips, M-series MBP baseline
+mixer.meter_cpu            <  2 %      # all visible strips, 60 fps sustained
+mixer.fader_drag_latency   <  16 ms    # input → first frame
+mixer.first_paint          <  200 ms   # mixer route open, warm cache
+bundle.initial_js          <  400 KB   # gzipped
+bundle.lazy_picker         <  60 KB    # gzipped
+binary.tauri_release       <  18 MB    # macOS aarch64
+audio.block_processing     <  30 %     # of buffer-time @ 256 frames / 48 kHz
+```
+
+Implementation:
+- **Frontend perf:** Playwright + custom `perf-smoke` suite running on a fixed M-series CI runner. Each run records FPS, paint times, bundle sizes; fails the PR if any budget regresses.
+- **Audio perf:** `criterion` benchmarks on the Rust crates. Block-processing time per 256-frame buffer is the watchdog metric.
+- **Bundle perf:** `vite build` post-step that asserts gzip sizes against a checked-in `bundlesize.json`.
+- **Binary size:** `cargo bloat` + a CI step that fails if `target/release/Hardwave DAW.app` exceeds the budget.
+
+### 13.5 Implementation order
+
+Phase 4 (from §8) lands the Tier 1 items in this exact order so each ship is independently usable:
+
+| Version | Item | Effort |
+|---|---|---|
+| `v0.161.1` | Cargo release profile tweaks | 30 min |
+| `v0.161.2` | content-visibility + CSS containment | 1 hour |
+| `v0.161.3` | Binary Tauri events for meter batch | 2 hours |
+| `v0.161.4` | GPU compositor scroll | 3 hours |
+| `v0.161.5` | Audio-thread silent-track skipping | 4 hours |
+| `v0.161.6` | OffscreenCanvas + Worker meters | 1 day |
+| `v0.161.7` | Pre-rendered knob sprites | 4 hours |
+| `v0.161.8` | Plug-in lazy unload | 1 day |
+| `v0.161.9` | Vite manualChunks + lazy routes | 3 hours |
+| `v0.162.0` | Perf CI gates (§13.4) | 1 day |
+
+After `v0.162.0`, regressions can't slip silently — every subsequent change gates against the budgets above.
+
+### 13.6 What we explicitly will NOT do
+
+- **Server-side rendering.** This is a desktop app; SSR adds complexity for zero benefit.
+- **Concurrent Mode time-slicing for the audio path.** React's scheduler is fine for UI, but the audio thread is C++/Rust — React is invisible to it.
+- **Atomic-reactive state libraries** (Jotai, Recoil) as wholesale replacements for Zustand. The current store works; switching is risk for ~5 % theoretical gain.
+- **Component-level virtualization libraries** (e.g. `react-window` for individual strip children). The strip is small enough — virtualizing inside it adds overhead without payoff.
+
+### 13.7 Headroom check — what each phase unlocks
+
+| After phase | Tracks @ 60 fps | Drag latency | Cold open |
+|---|---|---|---|
+| Today (no work) | 80 (then drops to 25) | 40–80 ms | 1.5–3 s |
+| §5 baseline | 500 | 16 ms | 300 ms |
+| Tier 1 (§13.1) | 2000+ | < 8 ms | < 200 ms |
+| Tier 2 (§13.2) | 5000+ | < 4 ms | < 100 ms cached |
+| Tier 3 (§13.3) | bounded by audio thread, not UI | < 2 ms | bounded by Tauri WebView init |
+
+Tier 1 alone gives us 4× headroom over the user's stated 500-strip ceiling, so even the worst session imaginable still runs at 60 fps with room to spare.
+
+---
+
 *This plan supersedes any earlier informal mixer design notes. Updates land here, not in chat threads.*

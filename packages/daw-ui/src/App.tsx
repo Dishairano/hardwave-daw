@@ -15,6 +15,7 @@ import { PianoRoll } from './components/piano-roll/PianoRoll'
 import { Roadmap } from './components/roadmap/Roadmap'
 import { AudioSettings } from './components/settings/AudioSettings'
 import { ThemePicker } from './components/settings/ThemePicker'
+import { useMixerSettingsStore } from './stores/mixerSettingsStore'
 import { UpdateModal } from './components/UpdateModal'
 import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow } from './components/FloatingWindow'
@@ -135,6 +136,8 @@ export function App() {
   const [showMidiMappings, setShowMidiMappings] = useState(false)
   const [showTempoMap, setShowTempoMap] = useState(false)
   const [pdcEnabled, setPdcEnabled] = useState(true)
+  const useNewMixer = useMixerSettingsStore(s => s.useNewMixer)
+  const setUseNewMixer = useMixerSettingsStore(s => s.setUseNewMixer)
   const [midiLearnPreset, setMidiLearnPreset] = useState<MidiMapTarget | undefined>(undefined)
   const [showHistory, setShowHistory] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
@@ -1116,6 +1119,7 @@ export function App() {
           { label: 'Audio settings…', action: () => setShowAudioSettings(true) },
           { label: 'Tempo map…', action: () => setShowTempoMap(true) },
           { label: `${pdcEnabled ? '✓ ' : '   '}Plugin delay compensation`, action: () => setPdcEnabled(v => !v) },
+          { label: `${useNewMixer ? '✓ ' : '   '}Experimental — FL Wide 2 mixer`, action: () => setUseNewMixer(!useNewMixer) },
           { separator: true, label: '' },
           { label: 'Theme…', action: () => setShowThemePicker(true) },
           {

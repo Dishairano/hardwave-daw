@@ -52,3 +52,14 @@ export const useMeterStore = create<MeterState>((set) => ({
     )
   },
 }))
+
+// ---- fine-grained selector hooks ----
+// useTrackMeter(id) → only re-renders the consuming component when THAT
+// track's meter values change, instead of every strip re-rendering on
+// every meter tick. Phase 4 will replace this entirely with a canvas
+// painted from a single global rAF loop; until then this selector buys
+// us most of the perf back.
+export const useTrackMeter = (id: string): TrackMeter =>
+  useMeterStore((s) => s.tracks[id] ?? DEFAULT_TRACK_METER)
+export const useMasterMeter = (): MeterSnapshot =>
+  useMeterStore((s) => s.master)

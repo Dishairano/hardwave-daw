@@ -12,6 +12,7 @@
     "test:ui": "npx playwright test --ui"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-opener": "^2.5.3",

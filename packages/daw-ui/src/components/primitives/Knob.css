@@ -1,0 +1,67 @@
+/*
+ * Knob primitive styles — paired with Knob.tsx.
+ *
+ * The indicator is a single 1px pseudo-element rotated via the --rot CSS
+ * variable that the component sets on the host element. Rotating a CSS
+ * variable bypasses React for the visual update, so dragging a knob never
+ * triggers a re-render of anything but the controlled `value` prop the
+ * parent owns.
+ */
+
+.hw-knob {
+  --rot: 0deg;
+  position: relative;
+  display: inline-block;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #3a3a44 0%, #1a1a22 70%, #08080a 100%);
+  border: 1px solid #2a2a32;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.hw-knob:focus-visible {
+  outline: 1px solid var(--accent, #ff2d4f);
+  outline-offset: 2px;
+}
+
+.hw-knob.dragging {
+  cursor: grabbing;
+}
+
+.hw-knob .hw-knob-indicator {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 12%;
+  width: 1px;
+  height: 38%;
+  background: var(--accent, #ff2d4f);
+  transform-origin: 50% calc(100% + 12%);
+  transform: translateX(-50%) rotate(var(--rot));
+  pointer-events: none;
+}
+
+.hw-knob .hw-knob-tooltip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #0a0a0d;
+  border: 1px solid var(--accent, #ff2d4f);
+  color: #fff;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  padding: 2px 5px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.08s;
+  z-index: 20;
+}
+
+.hw-knob.dragging .hw-knob-tooltip,
+.hw-knob:hover .hw-knob-tooltip {
+  opacity: 1;
+}
