@@ -12,6 +12,9 @@ import {
   useTrackStore,
   useTrackKind,
   useTrackColor,
+  useTrackMuted,
+  useTrackSoloed,
+  useTrackArmed,
 } from '../../../stores/trackStore'
 import { useTrackMeter } from '../../../stores/meterStore'
 import { useMixerSettingsStore } from '../../../stores/mixerSettingsStore'
@@ -55,6 +58,9 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const volumeDb = useTrackVolume(trackId)
   const pan = useTrackPan(trackId)
   const stereoSep = useTrackStereoSeparation(trackId)
+  const muted = useTrackMuted(trackId)
+  const soloed = useTrackSoloed(trackId)
+  const armed = useTrackArmed(trackId)
   const meter = useTrackMeter(trackId)
   const showWidthKnob = useMixerSettingsStore((s) => s.showWidthKnob)
 
@@ -94,6 +100,32 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
 
   const onClick = useCallback(() => onSelect(trackId), [trackId, onSelect])
 
+  // ---- M/S/R pill handlers — stopPropagation so clicking the pill
+  // doesn't also re-select the strip ----
+  const onMute = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      useTrackStore.getState().toggleMute(trackId).catch(console.error)
+    },
+    [trackId],
+  )
+  const onSolo = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      useTrackStore.getState().toggleSolo(trackId).catch(console.error)
+    },
+    [trackId],
+  )
+  const onArm = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      useTrackStore.getState().toggleArm(trackId).catch(console.error)
+    },
+    [trackId],
+  )
+
+  const isAudioOrMidi = kind === 'Audio' || kind === 'Midi'
+
   // Color-tag class derived from the track's color field if present, else
   // from kind. Master variant overrides everything.
   const colorClass =
@@ -117,7 +149,36 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
       data-track-id={trackId}
       data-idx={index}
     >
-      <div className="mx-s-num">{index}</div>
+      <div className="mx-s-num">
+        <span className="mx-s-num-idx">{index}</span>
+        {variant !== 'master' && (
+          <div className="mx-s-pills">
+            <button
+              className={'mx-pill mx-pill-m' + (muted ? ' on' : '')}
+              onClick={onMute}
+              title={muted ? 'Unmute' : 'Mute'}
+            >
+              M
+            </button>
+            <button
+              className={'mx-pill mx-pill-s' + (soloed ? ' on' : '')}
+              onClick={onSolo}
+              title={soloed ? 'Unsolo' : 'Solo'}
+            >
+              S
+            </button>
+            {isAudioOrMidi && (
+              <button
+                className={'mx-pill mx-pill-r' + (armed ? ' on' : '')}
+                onClick={onArm}
+                title={armed ? 'Disarm' : 'Arm for recording'}
+              >
+                R
+              </button>
+            )}
+          </div>
+        )}
+      </div>
       <div className="mx-s-name">{name || 'Track'}</div>
 
       <div className="mx-s-knob-row">

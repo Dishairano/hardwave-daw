@@ -49,6 +49,16 @@
   background: linear-gradient(180deg, #16161c 0%, #101015 100%);
   cursor: pointer;
   position: relative;
+  /* `content-visibility: auto` lets the browser skip layout + paint for
+     strips scrolled out of the viewport (stacks on top of any virtualizer).
+     `contain-intrinsic-size` gives the browser a placeholder size for the
+     hidden strip so the scrollbar doesn't jump when strips materialize. */
+  content-visibility: auto;
+  contain-intrinsic-size: var(--mx-strip-w) 480px;
+  /* Strict containment — strip's own rendering can't affect outside layout,
+     paint, or style. Lets the compositor isolate each strip on its own
+     layer for cheaper repaints. */
+  contain: layout paint style;
 }
 .mx-strip:hover {
   background: linear-gradient(180deg, #1a1a22 0%, #131319 100%);
@@ -65,6 +75,7 @@
 }
 
 .mx-s-num {
+  position: relative;
   height: 16px;
   display: flex;
   align-items: center;
@@ -74,6 +85,60 @@
   color: var(--mx-muted);
   font-size: 10px;
   letter-spacing: 0.04em;
+}
+.mx-s-num-idx { z-index: 0; }
+
+/* Tiny M / S / R pill row. Sits absolutely on top of the strip number
+   when the strip is hovered or any pill is active, so the layout never
+   shifts. FL Studio classic — keeps the surface clean while letting the
+   user mute/solo/arm without leaving the strip. */
+.mx-s-pills {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  background: #0c0c10;
+  opacity: 0;
+  transition: opacity 0.08s;
+  z-index: 1;
+}
+.mx-strip:hover .mx-s-pills,
+.mx-strip .mx-s-pills:has(.mx-pill.on) {
+  opacity: 1;
+}
+/* Pill that's currently ON should always be visible even without hover */
+.mx-strip .mx-pill.on {
+  opacity: 1 !important;
+}
+.mx-pill {
+  width: 14px;
+  height: 12px;
+  font-size: 8px;
+  line-height: 1;
+  letter-spacing: 0;
+  background: #1a1a22;
+  border: 1px solid var(--mx-line-strong);
+  color: var(--mx-muted);
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mx-pill:hover { background: #24242c; color: #fff; }
+.mx-pill.on { color: #fff; }
+.mx-pill-m.on { background: var(--mx-accent); border-color: var(--mx-accent); }
+.mx-pill-s.on { background: var(--mx-amber, #f0a032); border-color: var(--mx-amber, #f0a032); color: #1a0d11; }
+.mx-pill-r.on { background: var(--mx-green); border-color: var(--mx-green); color: #0a0a0c; }
+
+/* When the strip itself is muted, dim the whole strip so the state is
+   instantly visible across the row. */
+.mx-strip:has(.mx-pill-m.on) {
+  opacity: 0.55;
 }
 
 .mx-s-name {

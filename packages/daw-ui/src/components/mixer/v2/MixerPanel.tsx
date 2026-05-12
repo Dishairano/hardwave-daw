@@ -1,8 +1,9 @@
-import { memo, useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect } from 'react'
 import { MasterStrip } from './MasterStrip'
-import { ChannelStrip } from './ChannelStrip'
+import { StripsScroller } from './StripsScroller'
 import { useTrackStore } from '../../../stores/trackStore'
 import { useMeterStore } from '../../../stores/meterStore'
+import { useMixerSelectionStore } from '../../../stores/mixerSelectionStore'
 import '../../primitives/Knob.css'
 import '../../primitives/Fader.css'
 import '../../primitives/Meter.css'
@@ -25,10 +26,9 @@ import './mixer-v2.css'
  * stays the default until phase 3 is done.
  */
 export const MixerPanelV2 = memo(function MixerPanelV2() {
-  // Master is special-cased; the insert column shows everything else that's
-  // a mixable kind (audio / midi / bus / return).
+  // Track list — only needed for the master id lookup. The inserts column
+  // (StripsScroller) subscribes itself.
   const tracks = useTrackStore((s) => s.tracks)
-  const inserts = tracks.filter((t) => t.kind !== 'Master' && t.kind !== 'Automation')
 
   // Start listening to audio-thread meter events. Idempotent — meterStore
   // itself guards against double-subscribing.
@@ -37,39 +37,23 @@ export const MixerPanelV2 = memo(function MixerPanelV2() {
     startListening()
   }, [startListening])
 
-  // Master starts selected so the FX rack panel has a sensible default
-  // target on first open.
+  // Selection lives in its own store — see mixerSelectionStore for why.
   const masterId = tracks.find((t) => t.kind === 'Master')?.id ?? null
-  const [selectedId, setSelectedId] = useState<string | null>(masterId)
-  // If the master id changes (project load) and we still pointed at the
-  // old one, snap to the new one.
+  const selectedId = useMixerSelectionStore((s) => s.selectedTrackId)
+  const selectTrack = useMixerSelectionStore((s) => s.selectTrack)
+  // Seed the selection with master on first mount + on project load so
+  // the FX rack always has a sensible target.
   useEffect(() => {
-    if (!selectedId && masterId) setSelectedId(masterId)
-  }, [masterId, selectedId])
+    if (!selectedId && masterId) selectTrack(masterId)
+  }, [masterId, selectedId, selectTrack])
 
-  const onSelect = useCallback((id: string) => setSelectedId(id), [])
+  const onSelect = useCallback((id: string) => selectTrack(id), [selectTrack])
 
   return (
     <div className="mx-v2-root">
       <div className="mx-v2-body">
         <MasterStrip selected={selectedId === masterId} onSelect={onSelect} />
-        <div className="mx-strips-wrap">
-          <div className="mx-strips-scroll" id="mx-strips-scroll">
-            <div className="mx-strips" id="mx-strips">
-              {inserts.map((t, i) => (
-                <ChannelStrip
-                  key={t.id}
-                  trackId={t.id}
-                  index={i + 1}
-                  selected={selectedId === t.id}
-                  onSelect={onSelect}
-                  variant="insert"
-                  separator={t.kind === 'Bus' || t.kind === 'Return' ? 'group' : 'none'}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
+        <StripsScroller selectedId={selectedId} onSelect={onSelect} />
         <div className="mx-fx-rack-placeholder" aria-label="FX rack (Phase 3)">
           <div className="mx-fx-rack-stub">
             <div className="mx-fx-rack-stub-title">FX RACK</div>
