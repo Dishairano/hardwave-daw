@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChannelStrip } from './ChannelStrip'
 import { useTrackStore } from '../../../stores/trackStore'
+import { useMultiTouchGestures } from '../../../hooks/useMultiTouchGestures'
 
 /**
  * Virtualized, GPU-composited horizontal scroller for the insert column.
@@ -170,6 +171,18 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [getMaxScroll, kick, normalizeWheelDelta])
+
+  // Two-finger horizontal swipe → horizontal scroll. Mirrors the wheel
+  // model: each pan delta becomes a target shift + velocity kick so
+  // the existing spring physics integrates the gesture naturally.
+  useMultiTouchGestures(viewportRef, {
+    onPan: (dx, _dy) => {
+      const max = getMaxScroll()
+      targetRef.current = Math.max(0, Math.min(max, targetRef.current - dx))
+      velocityRef.current += -dx * WHEEL_VELOCITY_GAIN
+      kick()
+    },
+  })
 
   // When the strip count changes, clamp the target to the new max so we
   // don't end up stuck scrolled past the last strip.

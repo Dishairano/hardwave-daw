@@ -10,6 +10,7 @@ import { usePickerStore } from '../../stores/pickerStore'
 import { usePlaylistToolStore } from '../../stores/playlistToolStore'
 import { useColorPickerStore } from '../../stores/colorPickerStore'
 import { useLogStore } from '../../dev/logStore'
+import { useMultiTouchGestures } from '../../hooks/useMultiTouchGestures'
 import { hw } from '../../theme'
 
 const PPQ = 960
@@ -143,6 +144,32 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const pixelsPerTick = pixelsPerBeat / PPQ
   const snapTicks = snapToTicks(snapValue, snapEnabled)
   const applySnap = (ticks: number): number => snapTicks > 0 ? Math.round(ticks / snapTicks) * snapTicks : ticks
+
+  // FL Studio multi-touch gestures on the playlist canvas (manual page
+  // "The User Interface" — Multi-Touch section):
+  //   - pinch    → horizontal zoom (same as Ctrl+wheel)
+  //   - 2-finger → 2D pan (mirrors right-mouse-drag for mouse users)
+  //   - 2-tap    → not used here (single-tap already selects clips)
+  // The hook attaches native listeners so we keep pinch + multi-finger
+  // logic out of every individual mousedown branch.
+  useMultiTouchGestures(containerRef, {
+    onPinch: (factor) => {
+      // factor is current/start; bound to a per-event 1.02..0.98
+      // range so a quick spread doesn't 4x the zoom instantly.
+      const clamped = Math.max(0.7, Math.min(1.5, factor))
+      setHorizontalZoom(horizontalZoom * clamped)
+    },
+    onPan: (_dx, dy) => {
+      // Vertical pan only — horizontal "pan" is derived from playhead
+      // position via getScrollOffset, not a user-settable offset.
+      const container = containerRef.current
+      if (!container) return
+      const viewportH = container.clientHeight - RULER_HEIGHT
+      const contentH = audioTracks.length * trackHeight
+      const maxScroll = Math.max(0, contentH - viewportH)
+      setVerticalScroll((v) => Math.max(0, Math.min(maxScroll, v - dy)))
+    },
+  })
 
   // Load waveforms. Multi-zoom tiering: cache by (sourceId, tier) so zooming in refetches
   // a higher-resolution peak set rather than stretching the existing buckets.
@@ -1605,6 +1632,11 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         flex: 1,
         position: 'relative',
         overflow: 'hidden',
+        // touch-action: none — block the browser's default pinch-zoom
+        // and scroll on this canvas. The multi-touch hook (`useMultiTouchGestures`)
+        // owns gesture detection and translates to our own zoom + pan
+        // state, so the browser's defaults would only fight us.
+        touchAction: 'none',
         // Background intentionally absent — the parent .fl-pl-grid renders
         // the mockup's purple gradient (#1a0e1f → #0e0716) and the canvas
         // is now transparent so it shows through.

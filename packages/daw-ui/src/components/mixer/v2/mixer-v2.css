@@ -368,6 +368,10 @@
   overflow: hidden;
   background: var(--mx-surface);
   border-right: 1px solid var(--mx-line);
+  /* Block browser default pinch + scroll on touch so the multi-touch
+     hook can own gestures cleanly. Knobs + faders inside the strip
+     have their own touch-action: none rules. */
+  touch-action: none;
 }
 .mx-strips-scroll {
   height: 100%;
