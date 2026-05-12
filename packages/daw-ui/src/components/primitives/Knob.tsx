@@ -99,6 +99,11 @@ export function Knob(props: KnobProps) {
   const ref = useRef<HTMLDivElement | null>(null)
   const wheelCommitTimer = useRef<number | null>(null)
   const [dragging, setDragging] = useState(false)
+  /// FL Studio-style "type in value" mode — opened by right-click on the
+  /// knob. While editing, the indicator is replaced by an inline number
+  /// input. Enter commits, Escape reverts, blur commits. Range-clamped
+  /// at commit so a user typing `9999` lands cleanly at `max`.
+  const [editing, setEditing] = useState<string | null>(null)
 
   // Normalize value → degrees for the indicator.
   const mid = (min + max) / 2
@@ -126,9 +131,13 @@ export function Knob(props: KnobProps) {
       const startY = e.clientY
       const startDeg = deg
 
+      // FL Studio convention: Ctrl = fine, Shift = bypass-snap (no
+      // effect on a continuous knob), no modifier = normal. Previously
+      // we had Shift=fine + Ctrl=coarse — flipped here so muscle memory
+      // from FL transfers cleanly.
       const onMove = (ev: PointerEvent) => {
         const dy = startY - ev.clientY // up = increase
-        const fine = ev.shiftKey ? 0.25 : ev.ctrlKey || ev.metaKey ? 4 : 1
+        const fine = ev.ctrlKey || ev.metaKey ? 0.25 : 1
         const nextDeg = startDeg + (dy / sensitivity) * fine
         onChange(valueFromDegrees(nextDeg))
       }
@@ -142,7 +151,7 @@ export function Knob(props: KnobProps) {
         // the parent's render flips `value`, but onChangeEnd needs the value
         // we landed on. Re-derive from the live event for correctness.
         const finalDy = startY - ev.clientY
-        const fine = ev.shiftKey ? 0.25 : ev.ctrlKey || ev.metaKey ? 4 : 1
+        const fine = ev.ctrlKey || ev.metaKey ? 0.25 : 1
         const finalDeg = startDeg + (finalDy / sensitivity) * fine
         onChangeEnd?.(valueFromDegrees(finalDeg))
       }
@@ -181,6 +190,33 @@ export function Knob(props: KnobProps) {
     onChangeEnd?.(clamped)
   }, [defaultValue, mid, min, max, onChange, onChangeStart, onChangeEnd])
 
+  // FL Studio "type in value" — right-click opens a tiny number input
+  // overlaying the knob. Parsing is forgiving: any non-numeric noise
+  // collapses to NaN and we ignore the commit so the user can Esc-out.
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      // Seed the input with the current value, formatted minimally so
+      // the user can drop straight to typing without manually clearing.
+      const seed =
+        Number.isFinite(value) ? value.toFixed(value === Math.round(value) ? 0 : 2) : '0'
+      setEditing(seed)
+    },
+    [value],
+  )
+
+  const commitEdit = useCallback(
+    (raw: string) => {
+      const parsed = parseFloat(raw)
+      if (!Number.isFinite(parsed)) return
+      const clamped = clamp(parsed, min, max)
+      onChangeStart?.()
+      onChange(clamped)
+      onChangeEnd?.(clamped)
+    },
+    [min, max, onChange, onChangeStart, onChangeEnd],
+  )
+
   // Cleanup on unmount — kill any pending wheel commit.
   useEffect(() => {
     return () => {
@@ -201,9 +237,10 @@ export function Knob(props: KnobProps) {
           ['--rot' as string]: deg.toFixed(1) + 'deg',
         } as React.CSSProperties
       }
-      onPointerDown={handlePointerDown}
-      onWheel={handleWheel}
-      onDoubleClick={handleDoubleClick}
+      onPointerDown={editing == null ? handlePointerDown : undefined}
+      onWheel={editing == null ? handleWheel : undefined}
+      onDoubleClick={editing == null ? handleDoubleClick : undefined}
+      onContextMenu={handleContextMenu}
       role="slider"
       aria-valuemin={min}
       aria-valuemax={max}
@@ -216,6 +253,33 @@ export function Knob(props: KnobProps) {
       <span className="hw-knob-tooltip" aria-hidden="true">
         {labelFor(kind, value, min, max)}
       </span>
+      {editing != null && (
+        <input
+          type="text"
+          inputMode="numeric"
+          className="hw-knob-edit"
+          value={editing}
+          autoFocus
+          onChange={(e) => setEditing(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              commitEdit(editing)
+              setEditing(null)
+              e.preventDefault()
+            } else if (e.key === 'Escape') {
+              setEditing(null)
+              e.preventDefault()
+            }
+            e.stopPropagation()
+          }}
+          onBlur={() => {
+            commitEdit(editing)
+            setEditing(null)
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        />
+      )}
     </div>
   )
 }

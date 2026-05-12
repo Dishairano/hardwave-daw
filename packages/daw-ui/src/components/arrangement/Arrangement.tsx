@@ -99,6 +99,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   /// All canvas draws and hit-tests subtract this from their logical
   /// Y so the visual band of tracks slides up under the ruler.
   const [verticalScroll, setVerticalScroll] = useState(0)
+  /// FL Studio convention: right-mouse-button + drag = 2D pan (vertical
+  /// scroll + horizontal pan via setting the playhead-derived offset).
+  /// We track that here so onContextMenu can suppress its menu when the
+  /// drag has moved past the threshold — i.e. when the user clearly
+  /// intended a pan, not a menu open.
+  const rightPanRef = useRef<{
+    startY: number
+    startVerticalScroll: number
+    moved: boolean
+  } | null>(null)
 
   const {
     tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
@@ -733,7 +743,18 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   }, [positionSamples, sampleRate])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button === 2) return // right-click handled by onContextMenu
+    if (e.button === 2) {
+      // Right-mouse-button drag → 2D pan. Stash the start position so
+      // pointermove can compute deltas and onContextMenu can decide
+      // whether to suppress the menu based on whether we actually
+      // panned (moved > 4px) or just clicked.
+      rightPanRef.current = {
+        startY: e.clientY,
+        startVerticalScroll: verticalScroll,
+        moved: false,
+      }
+      return
+    }
     setContextMenu(null)
     const rect = (e.target as HTMLElement).getBoundingClientRect()
     const mouseX = e.clientX - rect.left
@@ -923,6 +944,25 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm, horizontalZoom, setHorizontalZoom])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    // Right-mouse-button pan takes priority over any other drag mode.
+    // It only moves vertically here — horizontal "pan" in this codebase
+    // is derived from playhead position via getScrollOffset, not a
+    // user-settable offset, so right-drag-Y is the meaningful axis.
+    const rp = rightPanRef.current
+    if (rp) {
+      const dy = e.clientY - rp.startY
+      if (Math.abs(dy) >= 4) rp.moved = true
+      const container = containerRef.current
+      if (container) {
+        const viewportH = container.clientHeight - RULER_HEIGHT
+        const contentH = audioTracks.length * trackHeight
+        const maxScroll = Math.max(0, contentH - viewportH)
+        const next = Math.max(0, Math.min(maxScroll, rp.startVerticalScroll - dy))
+        setVerticalScroll(next)
+      }
+      return
+    }
+
     const drag = dragRef.current
     if (!drag || drag.mode === 'none') {
       const rect = (e.target as HTMLElement).getBoundingClientRect()
@@ -1096,6 +1136,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   }, [hitTest, getScrollOffset, pixelsPerTick, moveClipLocal, moveClipToTrack, resizeClipLocal, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint, trackHeight, audioTracks])
 
   const handleMouseUp = useCallback(() => {
+    // Right-mouse-button pan release. If we panned (moved past 4 px)
+    // the trailing onContextMenu must suppress its menu — `moved`
+    // flag stays set until onContextMenu reads + clears it.
+    if (rightPanRef.current) {
+      // Leave the ref intact so onContextMenu can see `moved`. It
+      // clears the ref itself after suppressing or showing the menu.
+      return
+    }
     const drag = dragRef.current
     // Pending empty-area click that never moved past the threshold: pure
     // no-op. No edit-cursor jump, no marquee, no selection change beyond
@@ -1189,6 +1237,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
+    // Right-mouse-button pan release: if the user actually panned
+    // (moved > 4 px) we swallow the context menu so the drag gesture
+    // doesn't surprise them with a menu pop. A static right-click
+    // (no drag) falls through to the normal context-menu code below.
+    const rp = rightPanRef.current
+    if (rp) {
+      const moved = rp.moved
+      rightPanRef.current = null
+      if (moved) return
+    }
     const rect = (e.target as HTMLElement).getBoundingClientRect()
     const mouseX = e.clientX - rect.left
     const mouseY = e.clientY - rect.top

@@ -17,6 +17,7 @@ import { AudioSettings } from './components/settings/AudioSettings'
 import { ThemePicker } from './components/settings/ThemePicker'
 import { useMixerSettingsStore } from './stores/mixerSettingsStore'
 import { usePlaylistToolStore } from './stores/playlistToolStore'
+import { useMarkerStore } from './stores/markerStore'
 import { UpdateModal } from './components/UpdateModal'
 import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow } from './components/FloatingWindow'
@@ -904,6 +905,40 @@ export function App() {
       if (e.code === 'KeyD' && e.ctrlKey && e.shiftKey) {
         e.preventDefault()
         setShowDevPanel(v => !v)
+        return
+      }
+
+      // Multimedia keyboard keys (FL Studio convention). These come
+      // through e.code as MediaPlayPause / MediaStop / MediaTrackNext /
+      // MediaTrackPrevious. Mapped to transport so the user's playback
+      // keyboard / Mac Touch Bar works without rebinding anything.
+      if (e.code === 'MediaPlayPause') {
+        e.preventDefault()
+        transport.togglePlayback()
+        return
+      }
+      if (e.code === 'MediaStop') {
+        e.preventDefault()
+        transport.stop()
+        return
+      }
+      if (e.code === 'MediaTrackNext' || e.code === 'MediaTrackPrevious') {
+        // FL maps FF/RW to "jump to next/previous time marker".
+        e.preventDefault()
+        const sr = transport.sampleRate || 48000
+        const PPQ = 960
+        const playheadTicks = Math.round(
+          (transport.positionSamples / sr) * (transport.bpm / 60) * PPQ,
+        )
+        const ms = useMarkerStore.getState()
+        const target =
+          e.code === 'MediaTrackNext'
+            ? ms.jumpToNext(playheadTicks)
+            : ms.jumpToPrev(playheadTicks)
+        if (target) {
+          const secs = target.tick / PPQ / (transport.bpm / 60)
+          transport.setPosition(Math.round(secs * sr))
+        }
         return
       }
 

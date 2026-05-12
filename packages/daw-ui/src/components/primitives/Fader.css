@@ -58,3 +58,30 @@
   background: var(--accent, #ff2d4f);
   box-shadow: 0 0 4px var(--accent, #ff2d4f);
 }
+
+/* Right-click "type in value" input — appears next to the fader cap,
+   anchored to the cap's current cap-top position. Enter commits,
+   Escape cancels, blur commits. */
+.hw-fader-edit {
+  position: absolute;
+  left: -34px;
+  top: var(--cap-top, 50%);
+  transform: translateY(-50%);
+  width: 50px;
+  height: 16px;
+  background: #0a0a0d;
+  border: 1px solid var(--accent, #ff2d4f);
+  color: #fff;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  text-align: center;
+  outline: none;
+  padding: 0;
+  border-radius: 2px;
+  z-index: 30;
+}
+.hw-fader-edit::-webkit-outer-spin-button,
+.hw-fader-edit::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}

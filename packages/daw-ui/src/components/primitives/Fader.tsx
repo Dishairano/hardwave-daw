@@ -68,6 +68,7 @@ export function Fader(props: FaderProps) {
   const ref = useRef<HTMLDivElement | null>(null)
   const wheelTimer = useRef<number | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
 
   // Map dB → top%. minDb at the bottom = 100%, maxDb at top = 0%.
   // Below silenceDb we pin to 100% so the cap reads as "off".
@@ -88,9 +89,10 @@ export function Fader(props: FaderProps) {
       const startY = e.clientY
       const startDb = valueDb
 
+      // FL Studio convention: Ctrl = fine, plain = normal.
       const onMove = (ev: PointerEvent) => {
         const dy = startY - ev.clientY
-        const fine = ev.shiftKey ? 0.25 : ev.ctrlKey || ev.metaKey ? 4 : 1
+        const fine = ev.ctrlKey || ev.metaKey ? 0.25 : 1
         const nextDb = clamp(startDb + (dy / sensitivity) * fine, minDb, maxDb)
         onChange(nextDb)
       }
@@ -101,7 +103,7 @@ export function Fader(props: FaderProps) {
         el.removeEventListener('pointercancel', onUp)
         setDragging(false)
         const dy = startY - ev.clientY
-        const fine = ev.shiftKey ? 0.25 : ev.ctrlKey || ev.metaKey ? 4 : 1
+        const fine = ev.ctrlKey || ev.metaKey ? 0.25 : 1
         const finalDb = clamp(startDb + (dy / sensitivity) * fine, minDb, maxDb)
         onChangeEnd?.(finalDb)
       }
@@ -137,6 +139,36 @@ export function Fader(props: FaderProps) {
     onChangeEnd?.(target)
   }, [unityDb, minDb, maxDb, onChange, onChangeStart, onChangeEnd])
 
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      const seed = Number.isFinite(valueDb) ? valueDb.toFixed(1) : '0'
+      setEditing(seed)
+    },
+    [valueDb],
+  )
+
+  const commitEdit = useCallback(
+    (raw: string) => {
+      // Accept "-inf", "inf", "-∞" as silence to match the dB readout's
+      // visual convention.
+      const trimmed = raw.trim().toLowerCase()
+      if (trimmed === '-inf' || trimmed === '-∞' || trimmed === '-infinity') {
+        onChangeStart?.()
+        onChange(minDb)
+        onChangeEnd?.(minDb)
+        return
+      }
+      const parsed = parseFloat(raw)
+      if (!Number.isFinite(parsed)) return
+      const clamped = clamp(parsed, minDb, maxDb)
+      onChangeStart?.()
+      onChange(clamped)
+      onChangeEnd?.(clamped)
+    },
+    [minDb, maxDb, onChange, onChangeStart, onChangeEnd],
+  )
+
   return (
     <div
       ref={ref}
@@ -147,9 +179,10 @@ export function Fader(props: FaderProps) {
           ['--cap-top' as string]: capTop.toFixed(2) + '%',
         } as React.CSSProperties
       }
-      onPointerDown={handlePointerDown}
-      onWheel={handleWheel}
-      onDoubleClick={handleDoubleClick}
+      onPointerDown={editing == null ? handlePointerDown : undefined}
+      onWheel={editing == null ? handleWheel : undefined}
+      onDoubleClick={editing == null ? handleDoubleClick : undefined}
+      onContextMenu={handleContextMenu}
       role="slider"
       aria-valuemin={minDb}
       aria-valuemax={maxDb}
@@ -160,6 +193,33 @@ export function Fader(props: FaderProps) {
     >
       <span className="hw-fader-track" aria-hidden="true" />
       <span className="hw-fader-cap" aria-hidden="true" />
+      {editing != null && (
+        <input
+          type="text"
+          inputMode="numeric"
+          className="hw-fader-edit"
+          value={editing}
+          autoFocus
+          onChange={(e) => setEditing(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              commitEdit(editing)
+              setEditing(null)
+              e.preventDefault()
+            } else if (e.key === 'Escape') {
+              setEditing(null)
+              e.preventDefault()
+            }
+            e.stopPropagation()
+          }}
+          onBlur={() => {
+            commitEdit(editing)
+            setEditing(null)
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        />
+      )}
     </div>
   )
 }

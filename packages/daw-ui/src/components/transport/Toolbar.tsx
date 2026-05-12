@@ -187,9 +187,37 @@ export function Toolbar(props: ToolbarProps) {
 
       <Sep />
 
-      {/* 5. Tempo LCD + Tap */}
+      {/* 5. Tempo LCD + Tap. FL Studio-style drag: vertical pointer drag
+              adjusts BPM (up = faster). Right-click still falls through
+              to native context menu for now; future iteration adds a
+              "set tempo" inline dialog. Ctrl+drag = fine (0.1 bpm). */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-        <div style={{ ...lcd, width: 68 }} onMouseEnter={hint('Tempo')} onMouseLeave={clear}>
+        <div
+          style={{ ...lcd, width: 68, cursor: 'ns-resize' }}
+          onMouseEnter={hint('Tempo · drag to adjust · Ctrl=fine')}
+          onMouseLeave={clear}
+          onPointerDown={(e) => {
+            if (e.target instanceof HTMLInputElement) return // let the input handle clicks
+            e.preventDefault()
+            const startY = e.clientY
+            const startBpm = bpm
+            const target = e.currentTarget
+            target.setPointerCapture(e.pointerId)
+            const onMove = (ev: PointerEvent) => {
+              const dy = startY - ev.clientY
+              const fine = ev.ctrlKey || ev.metaKey ? 0.1 : 1
+              const next = Math.max(20, Math.min(999, startBpm + dy * 0.5 * fine))
+              setBpm(Math.round(next * 10) / 10)
+            }
+            const onUp = (ev: PointerEvent) => {
+              target.releasePointerCapture(ev.pointerId)
+              target.removeEventListener('pointermove', onMove)
+              target.removeEventListener('pointerup', onUp)
+            }
+            target.addEventListener('pointermove', onMove)
+            target.addEventListener('pointerup', onUp)
+          }}
+        >
           <input
             type="number" value={bpm}
             onChange={e => setBpm(parseFloat(e.target.value) || 140)}
