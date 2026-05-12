@@ -465,6 +465,38 @@ impl AudioNode for TrackNode {
             return;
         }
 
+        // Lazy-promotion gate: a placeholder track (no clips, no chain
+        // slots, no automation) does no audible work. Skipping it here
+        // saves the per-block clip-overlap loop, filter stage, fader,
+        // pan, peak/RMS calc, and every plug-in in the chain — across
+        // 500 idle default-project tracks that's the bulk of audio CPU.
+        //
+        // Outputs were already filled with zero above, so an early
+        // return leaves the track silent (correct). The atomic meter
+        // stores stay at their last value; UI will show no movement on
+        // an inactive track, which is what the user expects.
+        //
+        // We DON'T gate on `armed` or `monitor_input` here — those
+        // imply a live input path the EngineCallback drains via a
+        // different code path (`input_consumer`), and we still want
+        // any chain slots on an armed track to process live monitoring.
+        // Hence the chain.slots check below covers the monitoring case
+        // implicitly: an armed track with no chain = nothing for us to
+        // do; an armed track WITH chain = process for monitoring.
+        if self.clips.is_empty()
+            && self.chain.slots.is_empty()
+            && self.automation_lanes.is_empty()
+        {
+            // Park the meter at silence so the UI doesn't show stale
+            // values from a previous active block.
+            use std::sync::atomic::Ordering;
+            self.meter.peak_db_l.store(-120.0, Ordering::Relaxed);
+            self.meter.peak_db_r.store(-120.0, Ordering::Relaxed);
+            self.meter.pre_fader_peak_db.store(-120.0, Ordering::Relaxed);
+            self.meter.rms_db.store(-120.0, Ordering::Relaxed);
+            return;
+        }
+
         // Evaluate automation lanes that target this track's fader and
         // pan. We compute the playback position in ticks once, then walk
         // each lane and override the static volume / pan with whatever
