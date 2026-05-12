@@ -296,10 +296,15 @@ if command -v cargo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   fi
 fi
 
-# Stage all changes, commit, push, tag
+# Stage all changes, commit, push, tag.
+# Pushes whichever branch is currently checked out — we live on
+# `redesign-port-from-master` for the duration of the redesign work, so a
+# hard-coded `master` aborts the release half-way through and leaves the
+# tree committed but unpushed.
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git add -A
 git commit -m "$MSG"
-git push origin master
+git push origin "$CURRENT_BRANCH"
 
 # Pick the tag prefix based on whether this release touched any backend
 # code. fe-v* triggers frontend-publish.yml only (~2min); v* triggers
