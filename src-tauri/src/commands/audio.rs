@@ -98,16 +98,10 @@ pub fn import_audio_file(
     })
 }
 
-/// Get clips for a specific track.
-#[tauri::command]
-pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo> {
-    let engine = state.engine.lock();
-    let project = engine.project.lock();
-    let track = match project.track(&track_id) {
-        Some(t) => t,
-        None => return vec![],
-    };
-
+/// Map a project-side `Track` into the serialized `ClipInfo` vector
+/// the frontend expects. Shared by `get_track_clips` and the bulk
+/// `get_tracks_with_clips` endpoint.
+pub(crate) fn track_clips_to_info(track: &hardwave_project::Track) -> Vec<ClipInfo> {
     track
         .clips
         .iter()
@@ -148,6 +142,17 @@ pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo
             },
         })
         .collect()
+}
+
+/// Get clips for a specific track.
+#[tauri::command]
+pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    match project.track(&track_id) {
+        Some(t) => track_clips_to_info(t),
+        None => vec![],
+    }
 }
 
 #[derive(Serialize)]

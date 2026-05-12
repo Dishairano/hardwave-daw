@@ -119,7 +119,7 @@ pub struct AutomationPointInfo {
     pub tension: f64,
 }
 
-fn track_to_info(
+pub(crate) fn track_to_info(
     t: &hardwave_project::Track,
     plugin_name_lookup: &dyn Fn(&str) -> String,
 ) -> TrackInfo {
@@ -266,6 +266,39 @@ pub fn get_tracks(state: State<AppState>) -> Vec<TrackInfo> {
         .tracks
         .iter()
         .map(|t| track_to_info(t, &name_of))
+        .collect()
+}
+
+/// One-shot endpoint that returns every track plus its clips in a
+/// single Tauri round-trip. Replaces the old pattern of `get_tracks` +
+/// N × `get_track_clips` which fired 1 + 500 = 501 IPC calls every time
+/// the store needed a refresh — burned visible time on every fader
+/// commit, mute toggle, etc. (See `docs/perf-audit.md` hotspot #5.)
+#[derive(serde::Serialize)]
+pub struct TrackWithClipsPayload {
+    #[serde(flatten)]
+    pub track: TrackInfo,
+    pub clips: Vec<crate::commands::audio::ClipInfo>,
+}
+
+#[tauri::command]
+pub fn get_tracks_with_clips(state: State<AppState>) -> Vec<TrackWithClipsPayload> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    let scanner = engine.plugin_scanner.lock();
+    let name_of = |id: &str| -> String {
+        scanner
+            .find(id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+    project
+        .tracks
+        .iter()
+        .map(|t| TrackWithClipsPayload {
+            track: track_to_info(t, &name_of),
+            clips: crate::commands::audio::track_clips_to_info(t),
+        })
         .collect()
 }
 

@@ -141,6 +141,12 @@ const waveformCache = new Map<string, [number, number][]>()
 
 interface TrackState {
   tracks: TrackWithClips[]
+  /// Per-id lookup map — same data as `tracks`, indexed by id for O(1)
+  /// access. Maintained automatically by `fetchTracks` and every
+  /// optimistic mutator that touches `tracks`. Used by the fine-grained
+  /// `useTrackVolume` / `useTrackPan` / etc. selectors so each strip's
+  /// per-field subscription is a hash lookup instead of an O(N) `find`.
+  tracksById: Record<string, TrackWithClips>
   selectedTrackId: string | null
   selectedClipId: string | null
   selectedClipIds: Set<string>
@@ -262,8 +268,18 @@ interface TrackState {
   getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<[number, number][]>
 }
 
+/// Build a fresh `tracksById` from a `tracks` array. Keep this in one
+/// place so `fetchTracks` and the optimistic mutators (`setVolumeLocal`,
+/// `setPanLocal`) agree on the index shape.
+function indexTracks(tracks: TrackWithClips[]): Record<string, TrackWithClips> {
+  const idx: Record<string, TrackWithClips> = {}
+  for (const t of tracks) idx[t.id] = t
+  return idx
+}
+
 export const useTrackStore = create<TrackState>((set, get) => ({
   tracks: [],
+  tracksById: {},
   selectedTrackId: null,
   selectedClipId: null,
   selectedClipIds: new Set(),
@@ -290,14 +306,29 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   },
 
   fetchTracks: async () => {
-    const trackList = await invoke<TrackInfo[]>('get_tracks')
-    const tracks: TrackWithClips[] = await Promise.all(
-      trackList.map(async (t) => {
-        const clips = await invoke<ClipInfo[]>('get_track_clips', { trackId: t.id })
-        return { ...t, clips }
-      })
-    )
-    set({ tracks })
+    // One IPC round-trip via get_tracks_with_clips replaces the old
+    // pattern of get_tracks + N × get_track_clips (1 + 500 = 501 calls
+    // for a default-sized session). See docs/perf-audit.md hotspot #5.
+    try {
+      const payload = await invoke<Array<TrackInfo & { clips: ClipInfo[] }>>(
+        'get_tracks_with_clips',
+      )
+      const tracks: TrackWithClips[] = payload.map((p) => ({ ...p, clips: p.clips ?? [] }))
+      set({ tracks, tracksById: indexTracks(tracks) })
+    } catch (e) {
+      // Fallback for older backends that haven't shipped the one-shot
+      // command yet (e.g. hot-swap frontend update against a stale
+      // Rust binary).
+      console.warn('get_tracks_with_clips unavailable; falling back to legacy multi-call path', e)
+      const trackList = await invoke<TrackInfo[]>('get_tracks')
+      const tracks: TrackWithClips[] = await Promise.all(
+        trackList.map(async (t) => {
+          const clips = await invoke<ClipInfo[]>('get_track_clips', { trackId: t.id })
+          return { ...t, clips }
+        }),
+      )
+      set({ tracks, tracksById: indexTracks(tracks) })
+    }
   },
 
   selectTrack: (id) => set({ selectedTrackId: id }),
@@ -381,14 +412,22 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   // drag session with a single commitVolume/commitPan on pointerup so the
   // backend + redo history catch up. Mirrors moveClipLocal/commitClipDrag.
   setVolumeLocal: (id, db) => {
-    set((s) => ({
-      tracks: s.tracks.map((t) => (t.id === id ? { ...t, volume_db: db } : t)),
-    }))
+    set((s) => {
+      const tracks = s.tracks.map((t) => (t.id === id ? { ...t, volume_db: db } : t))
+      const tracksById = s.tracksById[id]
+        ? { ...s.tracksById, [id]: { ...s.tracksById[id], volume_db: db } }
+        : s.tracksById
+      return { tracks, tracksById }
+    })
   },
   setPanLocal: (id, pan) => {
-    set((s) => ({
-      tracks: s.tracks.map((t) => (t.id === id ? { ...t, pan } : t)),
-    }))
+    set((s) => {
+      const tracks = s.tracks.map((t) => (t.id === id ? { ...t, pan } : t))
+      const tracksById = s.tracksById[id]
+        ? { ...s.tracksById, [id]: { ...s.tracksById[id], pan } }
+        : s.tracksById
+      return { tracks, tracksById }
+    })
   },
   commitVolume: async (id, db) => {
     const name = get().tracks.find((t) => t.id === id)?.name ?? 'track'
@@ -852,30 +891,30 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 }))
 
 // ---- fine-grained selector hooks ----
-// Use these inside `ChannelStrip` and friends so each strip only re-renders
-// when its own field changes, instead of every strip re-rendering on every
-// fetchTracks(). The new mixer enforces this via ESLint (no-bare-zustand-
-// track-store) once the rule is wired up.
+// Each selector reads through `tracksById` for O(1) lookup. Without this
+// every selector was `s.tracks.find(t => t.id === id)` — O(N) per
+// selector × 8 selectors per strip × 500 strips = 2 million comparisons
+// per store update. See docs/perf-audit.md hotspot #4.
 export const useTrackById = (id: string) =>
-  useTrackStore((s) => s.tracks.find((t) => t.id === id))
+  useTrackStore((s) => s.tracksById[id])
 export const useTrackVolume = (id: string) =>
-  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.volume_db ?? 0)
+  useTrackStore((s) => s.tracksById[id]?.volume_db ?? 0)
 export const useTrackPan = (id: string) =>
-  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.pan ?? 0)
+  useTrackStore((s) => s.tracksById[id]?.pan ?? 0)
 export const useTrackStereoSeparation = (id: string) =>
-  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.stereoSeparation ?? 1)
+  useTrackStore((s) => s.tracksById[id]?.stereoSeparation ?? 1)
 export const useTrackMuted = (id: string) =>
-  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.muted ?? false)
+  useTrackStore((s) => s.tracksById[id]?.muted ?? false)
 export const useTrackSoloed = (id: string) =>
-  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.soloed ?? false)
+  useTrackStore((s) => s.tracksById[id]?.soloed ?? false)
 export const useTrackArmed = (id: string) =>
-  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.armed ?? false)
+  useTrackStore((s) => s.tracksById[id]?.armed ?? false)
 export const useTrackName = (id: string) =>
-  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.name ?? '')
+  useTrackStore((s) => s.tracksById[id]?.name ?? '')
 export const useTrackKind = (id: string) =>
-  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.kind)
+  useTrackStore((s) => s.tracksById[id]?.kind)
 export const useTrackColor = (id: string) =>
-  useTrackStore((s) => s.tracks.find((t) => t.id === id)?.color)
+  useTrackStore((s) => s.tracksById[id]?.color)
 /// Track ids in render order — stable across content updates, only changes
 /// when tracks are added/removed/reordered.
 export const useTrackIds = () =>

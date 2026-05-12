@@ -138,6 +138,7 @@ pub fn run() {
             commands::automation::set_automation_lane_visible,
             // Tracks
             commands::tracks::get_tracks,
+            commands::tracks::get_tracks_with_clips,
             commands::tracks::add_audio_track,
             commands::tracks::add_midi_track,
             commands::tracks::set_track_instrument,
