@@ -70,8 +70,13 @@ impl CapturedMidiEntry {
 /// pushing) — the UI can retry immediately.
 #[tauri::command]
 pub fn dump_midi_capture(state: State<AppState>) -> Vec<CapturedMidiEntry> {
-    let engine = state.engine.lock();
-    let Some(ring) = engine.midi_capture_ring.try_lock() else {
+    // Same Arc-clone-then-drop-engine pattern as clear_midi_capture to
+    // keep the MutexGuard's borrow disjoint from the engine binding.
+    let ring_arc = {
+        let engine = state.engine.lock();
+        std::sync::Arc::clone(&engine.midi_capture_ring)
+    };
+    let Some(ring) = ring_arc.try_lock() else {
         return Vec::new();
     };
     ring.entries_in_order()
@@ -85,8 +90,16 @@ pub fn dump_midi_capture(state: State<AppState>) -> Vec<CapturedMidiEntry> {
 /// previously-loaded session into the new one.
 #[tauri::command]
 pub fn clear_midi_capture(state: State<AppState>) {
-    let engine = state.engine.lock();
-    if let Some(mut ring) = engine.midi_capture_ring.try_lock() {
+    // Clone the Arc out of engine FIRST, then drop the engine guard.
+    // That way the ring's MutexGuard temporary borrows the cloned Arc
+    // (which outlives the function) instead of the engine binding, and
+    // Rust's 2021-edition drop-order rules are satisfied without any
+    // hint diagnostics.
+    let ring_arc = {
+        let engine = state.engine.lock();
+        std::sync::Arc::clone(&engine.midi_capture_ring)
+    };
+    if let Some(mut ring) = ring_arc.try_lock() {
         ring.clear();
     }
 }
