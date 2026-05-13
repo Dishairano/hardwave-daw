@@ -600,11 +600,16 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
       <HwMiniScope />
 
       <div className="fl-master-vol">
-        <span style={{ textTransform: 'uppercase', fontWeight: 600, fontSize: 7, color: 'var(--text-dim)', letterSpacing: 0.6 }}>MASTER</span>
+        <span style={{ textTransform: 'uppercase', fontWeight: 600, fontSize: 7, color: 'var(--text-dim)', letterSpacing: 0.6 }}>VOL</span>
         <HwMasterSlider valueDb={masterDb} onChange={setMasterVolume} />
         <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text)', minWidth: 36, textAlign: 'right' }}>
           {masterDb >= 0 ? '+' : ''}{masterDb.toFixed(1)}dB
         </span>
+        {/* Ship 3c — Master pitch knob (Tier A surface, Tier B engine
+            wiring). The knob spins visually + persists value via the
+            existing transport store; the engine doesn't yet pull the
+            value into a master-pitch ratio. Tooltip is explicit. */}
+        <HwMasterPitchKnob />
       </div>
     </div>
     </>
@@ -937,6 +942,65 @@ function HwMiniScope() {
   )
 }
 
+// ─── Master pitch knob (Ship 3c — UI surface only) ─────────────────────────
+//
+// Rotates 0..360° driven by a local `cents` state (-1200..+1200, FL
+// default range). Drag vertically to set; double-click resets to 0.
+// Value is persisted in a tiny local-storage flag so a returning user
+// finds their tuning intact. Engine wiring (modulate every sample-
+// rate-aware oscillator's read pointer) is Tier B per the mockup.
+
+const PITCH_MIN = -1200
+const PITCH_MAX = 1200
+const PITCH_LS = 'hardwave.daw.masterPitchCents'
+
+function HwMasterPitchKnob() {
+  const [cents, setCents] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem(PITCH_LS)
+      const n = raw != null ? Number(raw) : 0
+      return isFinite(n) ? Math.max(PITCH_MIN, Math.min(PITCH_MAX, n)) : 0
+    } catch { return 0 }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(PITCH_LS, String(cents)) } catch {}
+  }, [cents])
+  // Map cents [-1200..+1200] to angle [-135..+135°] (FL knob arc).
+  const angle = (cents / PITCH_MAX) * 135
+  const handleDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const startY = e.clientY
+    const startCents = cents
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    const onMove = (ev: PointerEvent) => {
+      const dy = startY - ev.clientY
+      const fine = ev.ctrlKey || ev.metaKey ? 0.5 : 4
+      const next = Math.max(PITCH_MIN, Math.min(PITCH_MAX, Math.round(startCents + dy * fine)))
+      setCents(next)
+    }
+    const onUp = (ev: PointerEvent) => {
+      el.releasePointerCapture(ev.pointerId)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+    }
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+  }
+  return (
+    <div
+      onPointerDown={handleDrag}
+      onDoubleClick={() => setCents(0)}
+      title={`Master pitch · ${cents >= 0 ? '+' : ''}${cents} cents · drag · Ctrl=fine · 2× click resets · engine wiring deferred (Tier B)`}
+      className="fl-pit-knob"
+    >
+      <span className="lbl">PIT</span>
+      <div className="knob">
+        <div className="tick" style={{ transform: `translateX(-50%) rotate(${angle}deg)`, transformOrigin: '50% 100%' }} />
+      </div>
+    </div>
+  )
+}
+
 function SaveAsButton({ onClick }: { onClick: () => void }) {
   const dirty = useProjectStore(s => s.dirty)
   const [elapsed, setElapsed] = useState(0)
@@ -965,27 +1029,78 @@ function SaveAsButton({ onClick }: { onClick: () => void }) {
 // ─── Second row: hint + status pills ─────────────────────────────────────────
 
 function HwSecondRow({ hint, projectName }: { hint: string; projectName: string }) {
+  // Ship 3c — Hint Bar redesign. The legacy fl-tag-pill / fl-step-pill
+  // row duplicated controls now living on the toolbar (snap pill,
+  // time-sig, recording state). The new row mirrors FL's hint bar:
+  // an icon strip on the left telling the user what kind of object
+  // the hint is about (REC / MIDI / right-mouse-affordance / sad
+  // error / clock / sync), the live hint string in the middle,
+  // and a SYNC LED on the right that pulses on bar / beat starts.
+  const recording = useTransportStore(s => s.recording)
+  const playing = useTransportStore(s => s.playing)
   const tsNum = useTransportStore(s => s.timeSigNumerator)
   const tsDen = useTransportStore(s => s.timeSigDenominator)
-  const recording = useTransportStore(s => s.recording)
-  const snapValue = useTransportStore(s => s.snapValue)
-  const snapEnabled = useTransportStore(s => s.snapEnabled)
+  const positionSamples = useTransportStore(s => s.positionSamples)
+  const sampleRate = useTransportStore(s => s.sampleRate)
+  const bpm = useTransportStore(s => s.bpm)
+
+  // Compute whether the playhead just crossed a beat boundary so the
+  // sync LED can blink in time. Beats-per-second = bpm/60; a beat
+  // boundary is when (positionSamples / sampleRate / beatsPerSec) is
+  // within one frame of an integer.
+  const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
+  const beats = bpm > 0 ? (seconds * bpm / 60) : 0
+  const beatFrac = beats - Math.floor(beats)
+  const onBeat = playing && (beatFrac < 0.05 || beatFrac > 0.95)
+  const onBar = playing && onBeat && Math.floor(beats) % Math.max(1, tsNum) === 0
 
   const defaultHint = `${projectName}  ·  Hover anything for live info`
+
+  // Lightweight heuristic for the icon type — pick the highest-
+  // priority badge that applies right now. The full FL set (sad /
+  // happy / clock / fast-forward / rewind / left-arrow) joins
+  // when the hint origin emits a category, which is a Ship 4 ask.
+  const showRecIcon = recording
+  const showMidiIcon = hint.toLowerCase().includes('midi')
+  const showRmbIcon = hint.toLowerCase().includes('right-click') || hint.toLowerCase().includes('rmb')
+
   return (
-    <div className="fl-second-row">
+    <div className="fl-second-row fl-hint-row">
+      <div className="fl-hint-icons">
+        {showRecIcon && (
+          <span className="fl-hint-icon rec" title="Recording is armed">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <circle cx="6" cy="6" r="4.5" />
+              <circle cx="6" cy="6" r="1.6" fill="currentColor" />
+            </svg>
+          </span>
+        )}
+        {showMidiIcon && (
+          <span className="fl-hint-icon midi" title="MIDI control available">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1">
+              <circle cx="6" cy="6" r="4"/>
+              <circle cx="6" cy="6" r="1" fill="currentColor"/>
+              <line x1="6" y1="2" x2="6" y2="4"/>
+            </svg>
+          </span>
+        )}
+        {showRmbIcon && (
+          <span className="fl-hint-icon rmb" title="Right-click affordance">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1">
+              <path d="M6 2a3 3 0 0 0-3 3v3a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+              <path d="M6 2v3.5h2.5" fill="currentColor"/>
+            </svg>
+          </span>
+        )}
+      </div>
       <span className={`fl-hint${hint ? ' active' : ''}`}>
         {hint || defaultHint}
       </span>
-      <div className="fl-tag-pill" title="Recording mode">
-        {recording ? 'RECORDING' : 'AUTOMATION'}
+      <div className="fl-hint-sync" title="Transport sync (pulses on beat / bar starts)">
+        <span className={`led${onBar ? ' on-bar' : onBeat ? ' on-beat' : ''}`} />
+        <span className="label">SYNC</span>
       </div>
-      <div style={{ flex: 1 }} />
-      <div className="fl-step-pill" title="Step length">{snapValue} step</div>
-      <div className="fl-tag-pill" title="Snap mode">
-        SNAP · {snapEnabled ? snapValue : 'OFF'}
-      </div>
-      <div className="fl-tag-pill" title="Time signature">{tsNum}/{tsDen}</div>
+      <div className="fl-hint-tsig" title={`Time signature ${tsNum}/${tsDen}`}>{tsNum}/{tsDen}</div>
     </div>
   )
 }

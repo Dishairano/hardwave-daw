@@ -486,6 +486,78 @@
   font-weight: 600; text-transform: uppercase;
 }
 
+/* Master pitch knob (Ship 3c — UI surface, engine wiring deferred) */
+.fl-pit-knob {
+  display: flex; align-items: center; gap: 3px;
+  margin-left: 6px;
+  -webkit-app-region: no-drag;
+  cursor: ns-resize;
+  user-select: none;
+}
+.fl-pit-knob .lbl {
+  font-family: var(--mono); font-size: 7px;
+  color: var(--text-dim); letter-spacing: 0.5px;
+  font-weight: 600; text-transform: uppercase;
+}
+.fl-pit-knob .knob {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #1a1a20, #0a0a0c);
+  border: 1px solid var(--border);
+  position: relative;
+}
+.fl-pit-knob .knob .tick {
+  position: absolute;
+  left: 50%; top: 2px;
+  width: 1.5px; height: 5px;
+  background: var(--red);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* Ship 3c — Hint Bar redesign overrides the legacy pill row */
+.fl-hint-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.fl-hint-icons {
+  display: flex; align-items: center; gap: 4px;
+  min-width: 0;
+}
+.fl-hint-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+}
+.fl-hint-icon.rec { color: var(--red-bright); border-color: rgba(239,68,68,0.5); background: rgba(220,38,38,0.12); }
+.fl-hint-icon.midi { color: var(--cyan); border-color: rgba(6,182,212,0.4); background: rgba(6,182,212,0.10); }
+.fl-hint-icon.rmb { color: var(--purple); border-color: rgba(168,85,247,0.4); background: rgba(168,85,247,0.10); }
+.fl-hint-icon.warn { color: var(--amber); border-color: rgba(245,158,11,0.4); background: rgba(245,158,11,0.10); }
+.fl-hint-icon.sad { color: var(--red-bright); border-color: rgba(239,68,68,0.4); }
+.fl-hint-row .fl-hint { flex: 1; }
+.fl-hint-sync {
+  display: flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 7px;
+  color: var(--text-dim); letter-spacing: 0.5px;
+  text-transform: uppercase; font-weight: 600;
+}
+.fl-hint-sync .led {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-dim);
+  transition: background 0.08s linear, box-shadow 0.08s linear;
+}
+.fl-hint-sync .led.on-beat { background: var(--green); box-shadow: 0 0 5px var(--green); }
+.fl-hint-sync .led.on-bar  { background: var(--cyan);  box-shadow: 0 0 6px var(--cyan); }
+.fl-hint-tsig {
+  font-family: var(--mono); font-size: 9px;
+  color: var(--text); letter-spacing: 0.4px;
+  padding: 0 8px; height: 18px;
+  display: flex; align-items: center;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
 /* Mini output scope */
 .fl-mini-scope {
   width: 64px; height: 22px;
