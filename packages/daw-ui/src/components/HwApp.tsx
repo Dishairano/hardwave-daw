@@ -12,7 +12,7 @@
  * Replaces `MainLayout` from App.tsx. The CSS lives in `../mockup.css`.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Browser } from './browser/Browser'
 import { Arrangement } from './arrangement/Arrangement'
 import { ChannelRack } from './channelrack/ChannelRack'
@@ -32,7 +32,9 @@ import { useMetronomeStore } from '../stores/metronomeStore'
 import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
 import { useRecordingPrefsStore } from '../stores/recordingPrefsStore'
 import { useTypingKeyboardStore } from '../stores/typingKeyboardStore'
+import { usePerfMetersStore, startPerfMeters } from '../stores/perfMetersStore'
 import type { ActionId } from '../stores/shortcutsStore'
+import { invoke } from '@tauri-apps/api/core'
 import type { MobilePanel } from './MobileTabBar'
 
 interface HwAppProps {
@@ -589,10 +591,13 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
 
       <span className="fl-toolsep" />
 
-      <div className="fl-perf">
-        <span>RAM <b>—</b></span>
-        <span>CPU <b>—</b></span>
-      </div>
+      {/* Ship 3b — live perf meter cluster (CPU + MEM) and the MIDI
+          activity LED. Polyphony is intentionally omitted until the
+          engine surfaces a voice-count event; we'd rather show two
+          honest readouts than three with one fake. */}
+      <HwPerfCluster />
+      <HwMidiActivityLed />
+      <HwMiniScope />
 
       <div className="fl-master-vol">
         <span style={{ textTransform: 'uppercase', fontWeight: 600, fontSize: 7, color: 'var(--text-dim)', letterSpacing: 0.6 }}>MASTER</span>
@@ -823,6 +828,114 @@ function ToolPickerBtn({ tool, active, onClick }: { tool: PlaylistTool; active: 
 // up the same cadence from the projectDirty store flag + a local
 // elapsed-since-last-save clock. Clicking surfaces the Save-As
 // dialog rather than overwriting, matching the FL semantic.
+
+// ─── Live performance meter cluster ────────────────────────────────────────
+//
+// Subscribes to perfMetersStore (frame-time + heap), renders CPU + MEM
+// horizontal bars next to numeric readouts. The store is fed by the
+// rAF-driven sampler in `startPerfMeters` — bootstrapped from the
+// HwApp body so it lives exactly as long as the desktop app.
+
+function HwPerfCluster() {
+  const cpuPct = usePerfMetersStore(s => s.cpuPct)
+  const memMb = usePerfMetersStore(s => s.memMb)
+  const memRatio = usePerfMetersStore(s => s.memRatio)
+  const cpuColor = cpuPct > 80 ? 'var(--red-bright)' : cpuPct > 50 ? 'var(--amber)' : 'var(--green)'
+  const memColor = (memRatio ?? 0) > 0.8 ? 'var(--red-bright)' : (memRatio ?? 0) > 0.5 ? 'var(--amber)' : 'var(--cyan)'
+  return (
+    <div className="fl-perf" title={`CPU ${cpuPct}% (frame-time estimate) · MEM ${memMb ?? '—'} MB`}>
+      <span className="fl-perf-stack">
+        <small>CPU</small>
+        <span className="fl-perf-bar"><i style={{ width: `${cpuPct}%`, background: cpuColor }} /></span>
+      </span>
+      <span className="fl-perf-stack">
+        <small>MEM</small>
+        <span className="fl-perf-bar"><i style={{ width: `${(memRatio ?? 0) * 100}%`, background: memColor }} /></span>
+      </span>
+    </div>
+  )
+}
+
+// ─── MIDI activity LED ─────────────────────────────────────────────────────
+//
+// Polls the Rust `get_midi_activity` command at 5 Hz; the LED pulses
+// green for ~250 ms each time `ms_since_last_event` ticks below the
+// freshness threshold. Falls dark when no port is open. We use a
+// short tooltip so users can see the open port name without opening
+// MIDI settings.
+
+interface MidiActivitySnapshot {
+  open_ports: string[]
+  ms_since_last_event: number | null
+}
+
+function HwMidiActivityLed() {
+  const [snap, setSnap] = useState<MidiActivitySnapshot | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const v = await invoke<MidiActivitySnapshot>('get_midi_activity')
+        if (!cancelled) setSnap(v)
+      } catch { /* command not registered yet during dev */ }
+    }
+    poll()
+    const id = window.setInterval(poll, 200)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [])
+  const active = snap?.ms_since_last_event != null && snap.ms_since_last_event < 250
+  const hasPort = (snap?.open_ports.length ?? 0) > 0
+  const tooltip = hasPort
+    ? `MIDI · ${snap!.open_ports.length} port${snap!.open_ports.length === 1 ? '' : 's'} open · ${snap!.ms_since_last_event ?? '—'} ms since last event`
+    : 'MIDI · no input port open'
+  return (
+    <div className="fl-midi-led" title={tooltip}>
+      <span className={`dot${active ? ' active' : ''}${hasPort ? '' : ' dark'}`} />
+      <span className="label">MIDI</span>
+    </div>
+  )
+}
+
+// ─── Mini output scope ─────────────────────────────────────────────────────
+//
+// Placeholder rolling waveform. Real audio-tap wiring (sample buffer
+// from the engine's master bus) ships in a follow-up — for now we
+// draw a rAF-driven sine that responds to transport playback state
+// so the meter feels alive when the user hits Play.
+
+function HwMiniScope() {
+  const playing = useTransportStore(s => s.playing)
+  const svgRef = useRef<SVGPolylineElement | null>(null)
+  useEffect(() => {
+    let rafId = 0
+    let phase = 0
+    const W = 58
+    const H = 14
+    const tick = () => {
+      const el = svgRef.current
+      if (el) {
+        const pts: string[] = []
+        const amplitude = playing ? 5.5 : 1.2
+        for (let x = 0; x <= W; x += 2) {
+          const y = H / 2 + Math.sin((x / 8) + phase) * amplitude * (0.6 + 0.4 * Math.random())
+          pts.push(`${x},${y.toFixed(2)}`)
+        }
+        el.setAttribute('points', pts.join(' '))
+        phase += playing ? 0.3 : 0.06
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [playing])
+  return (
+    <div className="fl-mini-scope" title="Master output (placeholder — engine tap to follow)">
+      <svg width="58" height="14" viewBox="0 0 58 14" preserveAspectRatio="none">
+        <polyline ref={svgRef} points="" fill="none" stroke="var(--red-bright)" strokeWidth="0.9" opacity="0.75" />
+      </svg>
+    </div>
+  )
+}
 
 function SaveAsButton({ onClick }: { onClick: () => void }) {
   const dirty = useProjectStore(s => s.dirty)
@@ -1462,6 +1575,9 @@ export function HwApp({
   useEffect(() => {
     document.title = `${projectFileName}${projectDirty ? ' *' : ''} — Hardwave DAW`
   }, [projectFileName, projectDirty])
+  // Boot the rAF-driven performance meter sampler once for the
+  // lifetime of the app. The cleanup teardown is fine on hot reload.
+  useEffect(() => startPerfMeters(), [])
   // Track lane height — drives both the canvas (Arrangement reads from store)
   // and the HTML track-name column (.fl-tr) via the --row-h CSS variable.
   const trackHeight = useTransportStore(s => s.trackHeight)
