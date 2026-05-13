@@ -90,17 +90,10 @@ jobs:
           shared-key: release-lint-and-test
           cache-on-failure: true
 
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-        continue-on-error: true
-
-      - name: Configure sccache
-        shell: bash
-        run: |
-          if sccache --start-server 2>/dev/null; then
-            echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          fi
+      # No sccache here — same reason as dev-build.yml's lint-and-test
+      # job. When the Azure GHA cache backend is degraded, sccache
+      # breaks every rustc/clippy invocation. rust-cache@v2 alone is
+      # plenty for a Lint/Test pass.
 
       - name: Install Linux dependencies
         run: |

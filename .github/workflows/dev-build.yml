@@ -90,17 +90,14 @@ jobs:
           shared-key: dev-lint-and-test
           cache-on-failure: true
 
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-        continue-on-error: true
-
-      - name: Configure sccache
-        shell: bash
-        run: |
-          if sccache --start-server 2>/dev/null; then
-            echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          fi
+      # No sccache here on purpose — when the Azure-backed GHA cache
+      # backend goes down (returns 503), the `RUSTC_WRAPPER=sccache`
+      # env var keeps every rustc/clippy invocation failing with
+      # "cache storage failed to read". rust-cache@v2 above already
+      # restores `target/` between runs, which is the bulk of what
+      # sccache buys us here. Platform builds (Win/Mac/Linux installer
+      # jobs below) still use sccache because their compile time is
+      # much higher.
 
       - name: Install Linux dependencies
         run: |

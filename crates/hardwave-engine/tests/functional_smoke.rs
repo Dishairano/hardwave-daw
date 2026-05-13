@@ -209,6 +209,65 @@ fn solo_silences_other_tracks() {
 }
 
 #[test]
+fn kicksynth_instrument_produces_kick_audio() {
+    // PASS-required.
+    //
+    // A MIDI track with instrument=KickSynth must retrigger the kick
+    // voice on every note-on regardless of pitch. The clip-driven
+    // path inside MidiTrackNode (rebuild_graph maps NativeInstrument
+    // → engine Instrument enum) hits `self.kick.note_on(pitch, vel)`
+    // and renders the pre-baked kick block into the track output.
+    use hardwave_midi::MidiClip;
+    use hardwave_midi::MidiNote;
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+    use hardwave_project::track::NativeInstrument;
+
+    let engine = DawEngine::new();
+    {
+        let mut project = engine.project.lock();
+        let id = project.add_midi_track("Kick".to_string());
+
+        // Flip the track's instrument to KickSynth BEFORE the graph
+        // builds (rebuild_graph reads track.instrument at audio-node
+        // construction time).
+        if let Some(t) = project.track_mut(&id) {
+            t.instrument = NativeInstrument::KickSynth;
+        }
+
+        let mut clip = MidiClip::new("smoke-kick-clip".to_string(), "kick".to_string(), 1920);
+        clip.notes.push(MidiNote {
+            start_tick: 0,
+            duration_ticks: 480,
+            pitch: 36, // C2 — kick range, but the synth ignores pitch
+            velocity: 1.0,
+            channel: 0,
+            muted: false,
+        });
+        let mref = MidiClipRef {
+            id: "smoke-kick-clip".to_string(),
+            clip,
+        };
+        if let Some(track) = project.track_mut(&id) {
+            track.clips.push(ClipPlacement {
+                content: ClipContent::Midi(mref),
+                track_id: id.clone(),
+                position_ticks: 0,
+                length_ticks: 1920,
+                lane: 0,
+            });
+        }
+    }
+
+    let stats = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 2);
+    assert_eq!(stats.nan_count, 0, "kick synth produced NaN samples");
+    assert!(
+        stats.peak > 0.01,
+        "KickSynth note must produce audible kick output, got peak={:.6}",
+        stats.peak
+    );
+}
+
+#[test]
 fn two_tracks_mix_louder_than_one() {
     // PASS-required.
     // Two coherent sine sources at the same frequency must sum at the
