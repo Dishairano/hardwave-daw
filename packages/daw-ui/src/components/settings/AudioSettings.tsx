@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
+import { AUTOSAVE_OPTIONS, useAutosavePrefsStore } from '../../stores/autosavePrefsStore'
 
 interface AudioDevice {
   name: string
@@ -76,6 +77,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   // backend wiring queued for the Tier B / Rust ship). Persist via
   // audioPrefsStore so the user only sets these once.
   const audioPrefs = useAudioPrefsStore()
+  const autosavePrefs = useAutosavePrefsStore()
 
   useEffect(() => {
     Promise.all([
@@ -485,6 +487,21 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               </span>
             </div>
           </SettingRow>
+
+          {/* Autosave frequency — FL File Settings → Backup parity */}
+          <SettingRow label="Autosave">
+            <Select
+              value={autosavePrefs.frequency}
+              onChange={v => autosavePrefs.setFrequency(v as typeof autosavePrefs.frequency)}
+              options={AUTOSAVE_OPTIONS.map(o => ({ value: o.id, label: o.label }))}
+            />
+          </SettingRow>
+          <div style={{
+            fontSize: 9, color: hw.textFaint, lineHeight: 1.5,
+            margin: '-4px 4px 10px', maxWidth: 360,
+          }}>
+            {AUTOSAVE_OPTIONS.find(o => o.id === autosavePrefs.frequency)?.desc}
+          </div>
 
           {/* Input Device */}
           <SettingRow label="Input Device">

@@ -47,6 +47,11 @@ import './components/transport/VirtualKeyboard.css'
 import { SetupWizard } from './components/SetupWizard'
 import './components/SetupWizard.css'
 import { maybeAutoOpenSetupWizard, useSetupWizardStore } from './stores/setupWizardStore'
+import {
+  AUTOSAVE_OPTIONS,
+  frequencyIntervalMs,
+  useAutosavePrefsStore,
+} from './stores/autosavePrefsStore'
 import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappingsPanel'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
@@ -527,20 +532,23 @@ export function App() {
     }
   }, [])
 
-  // Auto-save: every 2 minutes, if project is dirty, write to the cache dir.
-  // Keeps the last 3 snapshots. Independent of any user-chosen file path.
+  // Auto-save: cadence driven by autosavePrefsStore (FL File Settings →
+  // Backup section). 'never' disables the timer entirely; every other
+  // option pings autosave_save while the project is dirty.
+  const autosaveFrequency = useAutosavePrefsStore((s) => s.frequency)
   useEffect(() => {
     const ENABLED = localStorage.getItem('hardwave.daw.autoSaveEnabled') !== 'false'
     if (!ENABLED) return
-    const INTERVAL_MS = 2 * 60 * 1000
+    const intervalMs = frequencyIntervalMs(autosaveFrequency)
+    if (intervalMs <= 0) return // 'never' — no timer
     const id = setInterval(() => {
       const { dirty } = useProjectStore.getState()
       if (dirty) {
         invoke('autosave_save').catch(() => {})
       }
-    }, INTERVAL_MS)
+    }, intervalMs)
     return () => clearInterval(id)
-  }, [])
+  }, [autosaveFrequency])
 
   useEffect(() => {
     let cancelled = false
