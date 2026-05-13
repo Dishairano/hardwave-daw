@@ -110,6 +110,10 @@ export function snapToTicks(snap: SnapValue, enabled: boolean): number {
 interface TransportState {
   playing: boolean
   recording: boolean
+  /** Sample position the playhead was at when `recording` flipped on.
+   * Used to commit_recording_to_midi_clip with the right window on the
+   * trailing edge of toggleRecording. `null` when not recording. */
+  recordStartSample: number | null
   looping: boolean
   positionSamples: number
   bpm: number
@@ -190,6 +194,7 @@ function writeBool(key: string, v: boolean) {
 export const useTransportStore = create<TransportState>((set, get) => ({
   playing: false,
   recording: false,
+  recordStartSample: null,
   looping: false,
   positionSamples: 0,
   bpm: 140,
@@ -264,20 +269,51 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     // session. On the trailing edge it returns the path of the WAV
     // that was just written to disk; we then drop a clip on the first
     // armed track so the take is immediately visible on the timeline.
+    //
+    // Audio vs MIDI armed track branch:
+    //   - Audio track: import the returned WAV path as an audio clip.
+    //   - MIDI track:  drop the WAV path, invoke `commit_recording_to_midi_clip`
+    //     to drain the engine's rolling capture ring into a MidiClip
+    //     placed at the start position. The capture ring is always
+    //     recording (see Page 7 work), so any notes played between the
+    //     leading + trailing edges of this toggle land in the clip.
     const wasRecording = get().recording
-    set(s => ({ recording: !s.recording }))
+    const startSample = wasRecording
+      ? (get().recordStartSample ?? 0)
+      : get().positionSamples
+    set(() => ({
+      recording: !wasRecording,
+      recordStartSample: wasRecording ? null : startSample,
+    }))
     try {
       const path = (await invoke('toggle_recording')) as string | null
-      if (wasRecording && path) {
-        const { useTrackStore } = await import('./trackStore')
-        const armedTrack = useTrackStore.getState().tracks.find(t => t.armed)
-        if (armedTrack) {
-          await useTrackStore.getState().importAudioFile(armedTrack.id, path, 0)
+      if (!wasRecording) return // leading edge, nothing more to do
+
+      const { useTrackStore } = await import('./trackStore')
+      const armedTrack = useTrackStore.getState().tracks.find(t => t.armed)
+      if (!armedTrack) return
+
+      const endSample = get().positionSamples
+      if (armedTrack.kind === 'Midi') {
+        try {
+          await invoke('commit_recording_to_midi_clip', {
+            trackId: armedTrack.id,
+            startSample,
+            endSample,
+            quantizeTicks: null,
+          })
+          await useTrackStore.getState().fetchTracks()
+        } catch (err) {
+          // No notes captured / no MIDI input — leave the take blank
+          // and surface in console for debugging.
+          console.warn('commit_recording_to_midi_clip:', err)
         }
+      } else if (path) {
+        await useTrackStore.getState().importAudioFile(armedTrack.id, path, 0)
       }
     } catch (e) {
       // Roll back the optimistic toggle if the engine rejected the call.
-      set({ recording: wasRecording })
+      set({ recording: wasRecording, recordStartSample: null })
       throw e
     }
   },
