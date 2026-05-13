@@ -1,8 +1,7 @@
 /*
- * On-screen MIDI keyboard widget. Lives as a fixed-position panel that
- * the Toolbar toggles via `useShowVirtualKeyboard`. Styled to sit on
- * top of the playlist without obscuring the meters — slim height, dark
- * surface, brand-accent active key.
+ * Touch Controllers widget — virtual MIDI keyboard + drum pad. Lives
+ * as a fixed-position panel above the playlist. Width grows with
+ * window; height bounded so the panel never eats the arrangement.
  */
 
 .hw-vkbd {
@@ -10,11 +9,11 @@
   bottom: 60px;
   left: 50%;
   transform: translateX(-50%);
-  width: min(720px, 90vw);
+  width: min(820px, 92vw);
   background: var(--surface-1, #181820);
   border: 1px solid var(--surface-3, #2a2a35);
   border-radius: 8px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6);
   overflow: hidden;
   z-index: 80;
   user-select: none;
@@ -24,7 +23,7 @@
 .hw-vkbd-titlebar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
   padding: 6px 10px;
   background: var(--surface-2, #1d1d28);
   border-bottom: 1px solid var(--surface-3, #2a2a35);
@@ -38,13 +37,38 @@
   text-transform: uppercase;
 }
 
+.hw-vkbd-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--surface-3, #2a2a35);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.hw-vkbd-mode-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  background: var(--surface-1, #181820);
+  color: var(--text-2, #b6b6c2);
+  border: 0;
+  cursor: pointer;
+}
+.hw-vkbd-mode-btn:hover { color: var(--text-1, #e8e8f0); }
+.hw-vkbd-mode-btn.is-active {
+  background: var(--brand, #e94560);
+  color: #fff;
+}
+
 .hw-vkbd-octave {
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-left: auto;
 }
 
-.hw-vkbd-octave-btn {
+.hw-vkbd-octave-btn,
+.hw-vkbd-gear,
+.hw-vkbd-close {
   width: 22px;
   height: 22px;
   border-radius: 4px;
@@ -58,34 +82,88 @@
   align-items: center;
   justify-content: center;
 }
-.hw-vkbd-octave-btn:hover { background: var(--surface-3, #2a2a35); }
+.hw-vkbd-octave-btn:hover,
+.hw-vkbd-gear:hover { background: var(--surface-3, #2a2a35); }
 
 .hw-vkbd-octave-label {
   font-family: var(--font-mono, monospace);
   font-size: 11px;
-  min-width: 28px;
+  min-width: 36px;
   text-align: center;
   color: var(--text-1, #e8e8f0);
 }
 
 .hw-vkbd-close {
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  border: none;
+  border: 0;
   background: transparent;
   color: var(--text-2, #b6b6c2);
-  cursor: pointer;
   font-size: 16px;
-  line-height: 1;
 }
 .hw-vkbd-close:hover { color: var(--text-1, #e8e8f0); }
+.hw-vkbd-gear { margin-left: auto; }
+.hw-vkbd-octave + .hw-vkbd-gear { margin-left: 0; }
+
+/* ── Settings panel ── */
+.hw-vkbd-settings {
+  background: var(--surface-2, #1d1d28);
+  border-bottom: 1px solid var(--surface-3, #2a2a35);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hw-vkbd-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-2, #b6b6c2);
+  gap: 12px;
+}
+.hw-vkbd-row span:first-child {
+  letter-spacing: 0.04em;
+}
+.hw-vkbd-row select,
+.hw-vkbd-row input[type="number"] {
+  padding: 3px 6px;
+  background: var(--surface-1, #181820);
+  border: 1px solid var(--surface-3, #2a2a35);
+  border-radius: 3px;
+  color: var(--text-1, #e8e8f0);
+  font-size: 11px;
+  font-family: inherit;
+  width: 80px;
+}
+.hw-vkbd-row input[type="checkbox"] {
+  cursor: pointer;
+}
+.hw-vkbd-color-swatches {
+  display: inline-flex;
+  gap: 6px;
+}
+.hw-vkbd-color-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: 0;
+  cursor: pointer;
+}
+.hw-vkbd-color-swatch:hover { transform: scale(1.1); }
+
+/* ── Keyboard body ── */
+.hw-vkbd-keyboard-body {
+  display: flex;
+  flex-direction: column;
+}
 
 .hw-vkbd-keys {
   position: relative;
   height: 100px;
   background: #0c0c12;
   touch-action: none;
+}
+.hw-vkbd-keyboard-body .hw-vkbd-keys + .hw-vkbd-keys {
+  border-top: 1px solid #1a1a22;
 }
 
 .hw-vkbd-white {
@@ -111,8 +189,16 @@
   color: #fff;
 }
 
-.hw-vkbd-keylabel {
-  opacity: 0.7;
+.hw-vkbd-keylabel { opacity: 0.7; pointer-events: none; }
+.hw-vkbd-blacklabel {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: var(--font-mono, monospace);
+  pointer-events: none;
 }
 
 .hw-vkbd-black {
@@ -133,3 +219,43 @@
 .hw-vkbd-black.is-active {
   background: linear-gradient(180deg, var(--brand, #e94560) 0%, #6a1d2c 100%);
 }
+
+/* ── Drum pad grid ── */
+.hw-vkbd-pads {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  background: #0c0c12;
+  touch-action: none;
+  min-height: 200px;
+  max-height: 50vh;
+}
+
+.hw-vkbd-pad {
+  border: 1px solid var(--surface-3, #2a2a35);
+  background: linear-gradient(180deg, #2a2a35 0%, #181820 100%);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-2, #b6b6c2);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 60ms, box-shadow 60ms;
+  min-height: 44px;
+}
+.hw-vkbd-pad:hover {
+  border-color: var(--text-2, #b6b6c2);
+}
+.hw-vkbd-pad.is-active {
+  transform: scale(0.97);
+  box-shadow: inset 0 0 0 2px var(--brand, #e94560), 0 0 12px rgba(233, 69, 96, 0.4);
+  color: #fff;
+}
+.hw-vkbd-pad.is-selected {
+  outline: 2px dashed var(--brand, #e94560);
+  outline-offset: -4px;
+}
+.hw-vkbd-padlabel { pointer-events: none; }

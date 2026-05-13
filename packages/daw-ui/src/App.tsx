@@ -60,6 +60,7 @@ import { useProjectStore } from './stores/projectStore'
 import { useShortcutsStore } from './stores/shortcutsStore'
 import { useComputerMidiKeyboard } from './hooks/useComputerMidiKeyboard'
 import { useTypingKeyboardStore } from './stores/typingKeyboardStore'
+import { useTouchControllerStore } from './stores/touchControllerStore'
 import { useNotificationStore } from './stores/notificationStore'
 import { applyCustomBg, useThemeStore } from './stores/themeStore'
 import { hw } from './theme'
@@ -148,7 +149,12 @@ export function App() {
   const [showSpectrum, setShowSpectrum] = useState(false)
   const [showMidiMappings, setShowMidiMappings] = useState(false)
   const [showTempoMap, setShowTempoMap] = useState(false)
-  const [showVirtualKeyboard, setShowVirtualKeyboard] = useState(false)
+  // Touch Controllers visibility is store-backed so View menu, Alt+F7
+  // shortcut, and the close button all share state and the panel
+  // remembers its open/closed status across reloads.
+  const touchControllerVisible = useTouchControllerStore((s) => s.visible)
+  const setTouchControllerVisible = useTouchControllerStore((s) => s.setVisible)
+  const toggleTouchController = useTouchControllerStore((s) => s.toggleVisible)
   const [pdcEnabled, setPdcEnabled] = useState(true)
   const useNewMixer = useMixerSettingsStore(s => s.useNewMixer)
   const setUseNewMixer = useMixerSettingsStore(s => s.setUseNewMixer)
@@ -1016,6 +1022,15 @@ export function App() {
         return
       }
 
+      // Alt+F7 toggles the Touch Controllers panel (FL Studio
+      // convention). Hard-bound here because it's a globally
+      // discoverable shortcut the user shouldn't have to rebind.
+      if (e.code === 'F7' && e.altKey) {
+        e.preventDefault()
+        toggleTouchController()
+        return
+      }
+
       // Capture mode swallows every keypress so it can bind a new shortcut.
       if (useShortcutsStore.getState().capturingFor) return
 
@@ -1255,7 +1270,7 @@ export function App() {
           { label: 'Oscilloscope…', action: () => setShowOscilloscope(true) },
           { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },
           { label: 'MIDI mappings…', action: () => setShowMidiMappings(true) },
-          { label: 'On-screen keyboard', action: () => setShowVirtualKeyboard(v => !v) },
+          { label: 'Touch Controller', shortcut: 'Alt+F7', action: () => toggleTouchController() },
           {
             label: useTypingKeyboardStore.getState().enabled
               ? 'Typing keyboard: On'
@@ -1378,7 +1393,7 @@ export function App() {
       {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}
       {showOscilloscope && <Oscilloscope onClose={() => setShowOscilloscope(false)} />}
       {showSpectrum && <SpectrumAnalyzer onClose={() => setShowSpectrum(false)} />}
-      <VirtualKeyboard visible={showVirtualKeyboard} onClose={() => setShowVirtualKeyboard(false)} />
+      <VirtualKeyboard visible={touchControllerVisible} onClose={() => setTouchControllerVisible(false)} />
       {showMidiMappings && (
         <MidiMappingsPanel
           onClose={() => { setShowMidiMappings(false); setMidiLearnPreset(undefined) }}
