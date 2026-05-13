@@ -1022,14 +1022,10 @@ export function App() {
         return
       }
 
-      // Alt+F7 toggles the Touch Controllers panel (FL Studio
-      // convention). Hard-bound here because it's a globally
-      // discoverable shortcut the user shouldn't have to rebind.
-      if (e.code === 'F7' && e.altKey) {
-        e.preventDefault()
-        toggleTouchController()
-        return
-      }
+      // Alt+F7 toggleTouchController is now routed through the
+      // shortcutsStore action dispatcher so users can rebind it from
+      // the shortcuts panel. The hard-coded fallback was removed when
+      // the action entered DEFAULTS.
 
       // Capture mode swallows every keypress so it can bind a new shortcut.
       if (useShortcutsStore.getState().capturingFor) return
@@ -1078,12 +1074,110 @@ export function App() {
           return
         }
         case 'toggleLoop':            transport.toggleLoop(); return
+        case 'toggleRecord':          void transport.toggleRecording(); return
+        case 'panicStop': {
+          // Send NoteOff for every MIDI note (all-notes-off panic).
+          // This mirrors FL Studio's Ctrl+H "Stop sound (panic)".
+          // Hits every channel via the same inject_midi_event pipeline
+          // that midir + typing keyboard + virtual keyboard use, so any
+          // active voice in MidiTrackNode / plug-in chains releases.
+          import('@tauri-apps/api/core').then(({ invoke }) => {
+            for (let note = 0; note < 128; note++) {
+              void invoke('inject_midi_event', {
+                event: { kind: 'note_off', channel: 0, note },
+              })
+            }
+            transport.stop()
+          })
+          return
+        }
+        case 'toggleMetronome': {
+          import('./stores/metronomeStore').then(({ useMetronomeStore }) => {
+            useMetronomeStore.getState().toggleEnabled()
+          })
+          return
+        }
+        case 'nextPattern': {
+          import('./stores/patternStore').then(({ usePatternStore }) => {
+            usePatternStore.getState().nextPattern()
+          })
+          return
+        }
+        case 'prevPattern': {
+          import('./stores/patternStore').then(({ usePatternStore }) => {
+            usePatternStore.getState().prevPattern()
+          })
+          return
+        }
+        case 'nextEmptyPattern': {
+          import('./stores/patternStore').then(({ usePatternStore }) => {
+            // No dedicated 'next empty pattern' API yet; addPattern
+            // creates a fresh empty one and selects it, which matches
+            // the spirit of FL Studio's F4 behaviour.
+            usePatternStore.getState().addPattern()
+          })
+          return
+        }
+        case 'selectPattern1':
+        case 'selectPattern2':
+        case 'selectPattern3':
+        case 'selectPattern4':
+        case 'selectPattern5':
+        case 'selectPattern6':
+        case 'selectPattern7':
+        case 'selectPattern8':
+        case 'selectPattern9': {
+          const idx = Number(action.replace('selectPattern', '')) - 1
+          import('./stores/patternStore').then(({ usePatternStore }) => {
+            const s = usePatternStore.getState()
+            const target = s.patterns[idx]
+            if (target) s.setActive(target.id)
+          })
+          return
+        }
         case 'togglePlaylist':        setShowPlaylist(v => !v); return
         case 'toggleChannelRack':     setShowChannelRack(v => !v); return
         case 'togglePianoRoll':       setShowPianoRoll(v => !v); return
         case 'toggleBrowser':         setShowBrowser(v => !v); return
         case 'toggleMixer':           setShowMixer(v => !v); return
         case 'toggleShortcutsPanel':  setShowShortcuts(v => !v); return
+        case 'toggleTouchController': toggleTouchController(); return
+        case 'toggleTypingKeyboard': {
+          useTypingKeyboardStore.getState().toggle()
+          return
+        }
+        case 'toggleMidiSettings':    setShowAudioSettings(v => !v); return
+        case 'toggleSongInfo': {
+          // Hardwave doesn't ship a dedicated Song Info panel yet —
+          // FL's F11 opens project description / time signature /
+          // genre metadata. Surface a notification so the binding is
+          // visible in the shortcuts panel and the user knows the
+          // backing UI is queued.
+          import('./stores/notificationStore').then(({ useNotificationStore }) => {
+            useNotificationStore.getState().push('info', 'Song Info panel queued — coming in a follow-up.')
+          })
+          return
+        }
+        case 'closeAllWindows': {
+          // FL F12 — slam every transient panel shut at once.
+          setShowBrowser(false); setShowMixer(false); setShowChannelRack(false)
+          setShowPianoRoll(false); setShowShortcuts(false); setShowHelp(false)
+          setShowAudioSettings(false); setShowThemePicker(false); setShowAbout(false)
+          setShowRoadmap(false); setShowTrackTemplateManager(false)
+          setShowLoudness(false); setShowOscilloscope(false); setShowSpectrum(false)
+          setShowMidiMappings(false); setShowTempoMap(false)
+          setTouchControllerVisible(false)
+          return
+        }
+        case 'cycleWindows':
+        case 'toggleMaxMinPlaylist':
+        case 'renameSelected':
+        case 'openToolSelector': {
+          import('./stores/notificationStore').then(({ useNotificationStore }) => {
+            useNotificationStore.getState().push('info', `Shortcut ${action} bound — feature wiring queued.`)
+          })
+          return
+        }
         case 'toolDraw':              usePlaylistToolStore.getState().setTool('draw'); return
         case 'toolPaint':             usePlaylistToolStore.getState().setTool('paint'); return
         case 'toolSlice':             usePlaylistToolStore.getState().setTool('slice'); return

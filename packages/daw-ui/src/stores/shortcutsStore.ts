@@ -14,9 +14,18 @@ export type ActionId =
   | 'selectAll' | 'duplicate' | 'copy' | 'cut' | 'paste'
   | 'undo' | 'redo'
   | 'togglePlay' | 'deleteSelection' | 'splitClip'
-  | 'gotoStart' | 'gotoEnd' | 'toggleLoop'
+  | 'gotoStart' | 'gotoEnd' | 'toggleLoop' | 'toggleRecord'
+  | 'panicStop' | 'toggleMetronome'
   | 'togglePlaylist' | 'toggleChannelRack' | 'togglePianoRoll'
   | 'toggleBrowser' | 'toggleMixer' | 'toggleShortcutsPanel'
+  | 'toggleTouchController' | 'toggleTypingKeyboard'
+  | 'toggleMidiSettings' | 'toggleSongInfo' | 'closeAllWindows'
+  | 'cycleWindows' | 'toggleMaxMinPlaylist'
+  | 'renameSelected' | 'openToolSelector'
+  | 'nextPattern' | 'prevPattern' | 'nextEmptyPattern'
+  | 'selectPattern1' | 'selectPattern2' | 'selectPattern3'
+  | 'selectPattern4' | 'selectPattern5' | 'selectPattern6'
+  | 'selectPattern7' | 'selectPattern8' | 'selectPattern9'
   // Playlist tool selection — single-key shortcuts that switch
   // `playlistToolStore.tool`. The current default tool is also the
   // default behaviour, so changing tools doesn't break existing
@@ -50,6 +59,21 @@ export const ACTIONS: ActionDef[] = [
   { id: 'gotoStart',        label: 'Return to start',            category: 'Transport' },
   { id: 'gotoEnd',          label: 'Jump to project end',        category: 'Transport' },
   { id: 'toggleLoop',       label: 'Toggle loop region',         category: 'Transport' },
+  { id: 'toggleRecord',     label: 'Toggle recording',           category: 'Transport' },
+  { id: 'panicStop',        label: 'Panic — stop all sound',     category: 'Transport' },
+  { id: 'toggleMetronome',  label: 'Toggle metronome',           category: 'Transport' },
+  { id: 'nextPattern',      label: 'Next pattern',               category: 'Transport' },
+  { id: 'prevPattern',      label: 'Previous pattern',           category: 'Transport' },
+  { id: 'nextEmptyPattern', label: 'Next empty pattern',         category: 'Transport' },
+  { id: 'selectPattern1',   label: 'Select pattern 1',           category: 'Patterns' },
+  { id: 'selectPattern2',   label: 'Select pattern 2',           category: 'Patterns' },
+  { id: 'selectPattern3',   label: 'Select pattern 3',           category: 'Patterns' },
+  { id: 'selectPattern4',   label: 'Select pattern 4',           category: 'Patterns' },
+  { id: 'selectPattern5',   label: 'Select pattern 5',           category: 'Patterns' },
+  { id: 'selectPattern6',   label: 'Select pattern 6',           category: 'Patterns' },
+  { id: 'selectPattern7',   label: 'Select pattern 7',           category: 'Patterns' },
+  { id: 'selectPattern8',   label: 'Select pattern 8',           category: 'Patterns' },
+  { id: 'selectPattern9',   label: 'Select pattern 9',           category: 'Patterns' },
 
   { id: 'togglePlaylist',       label: 'Toggle Playlist',            category: 'Panels' },
   { id: 'toggleChannelRack',    label: 'Toggle Channel Rack',        category: 'Panels' },
@@ -57,6 +81,15 @@ export const ACTIONS: ActionDef[] = [
   { id: 'toggleBrowser',        label: 'Toggle Browser',             category: 'Panels' },
   { id: 'toggleMixer',          label: 'Toggle Mixer',               category: 'Panels' },
   { id: 'toggleShortcutsPanel', label: 'Toggle this shortcuts panel', category: 'Panels' },
+  { id: 'toggleTouchController', label: 'Toggle Touch Controller',   category: 'Panels' },
+  { id: 'toggleTypingKeyboard', label: 'Toggle typing keyboard',     category: 'Panels' },
+  { id: 'toggleMidiSettings',   label: 'Toggle MIDI settings',       category: 'Panels' },
+  { id: 'toggleSongInfo',       label: 'Toggle Song Info',           category: 'Panels' },
+  { id: 'closeAllWindows',      label: 'Close all open windows',     category: 'Panels' },
+  { id: 'cycleWindows',         label: 'Cycle nested windows',       category: 'Panels' },
+  { id: 'toggleMaxMinPlaylist', label: 'Toggle Playlist Max/Min',    category: 'Panels' },
+  { id: 'renameSelected',       label: 'Rename selected item',       category: 'Panels' },
+  { id: 'openToolSelector',     label: 'Open tool selector',         category: 'Panels' },
 
   { id: 'toolDraw',   label: 'Playlist tool · Draw',   category: 'Playlist tools' },
   { id: 'toolPaint',  label: 'Playlist tool · Paint',  category: 'Playlist tools' },
@@ -89,9 +122,33 @@ export const DEFAULTS: Record<ActionId, Binding> = {
   togglePlaylist:       { code: 'F5' },
   toggleChannelRack:    { code: 'F6' },
   togglePianoRoll:      { code: 'F7' },
-  toggleBrowser:        { code: 'F8' },
+  toggleBrowser:        { code: 'F8', alt: true }, // FL: Alt+F8 = Sample Browser
   toggleMixer:          { code: 'F9' },
   toggleShortcutsPanel: { code: 'Slash', shift: true },
+  toggleTouchController: { code: 'F7', alt: true },
+  toggleTypingKeyboard:  { code: 'KeyT', ctrl: true },
+  toggleMidiSettings:    { code: 'F10' },
+  toggleSongInfo:        { code: 'F11' },
+  closeAllWindows:       { code: 'F12' },
+  cycleWindows:          { code: 'Tab' },
+  toggleMaxMinPlaylist:  { code: 'Enter' },
+  renameSelected:        { code: 'F2' },
+  openToolSelector:      { code: 'F3' },
+  toggleRecord:          { code: 'KeyR' },
+  panicStop:             { code: 'KeyH', ctrl: true },
+  toggleMetronome:       { code: 'KeyM', ctrl: true },
+  nextPattern:           { code: 'Equal' },
+  prevPattern:           { code: 'Minus' },
+  nextEmptyPattern:      { code: 'F4' },
+  selectPattern1: { code: 'Digit1' },
+  selectPattern2: { code: 'Digit2' },
+  selectPattern3: { code: 'Digit3' },
+  selectPattern4: { code: 'Digit4' },
+  selectPattern5: { code: 'Digit5' },
+  selectPattern6: { code: 'Digit6' },
+  selectPattern7: { code: 'Digit7' },
+  selectPattern8: { code: 'Digit8' },
+  selectPattern9: { code: 'Digit9' },
   toolDraw:   { code: 'KeyP' },
   toolPaint:  { code: 'KeyB' },
   toolSlice:  { code: 'KeyN' },
