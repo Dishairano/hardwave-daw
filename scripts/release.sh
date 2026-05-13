@@ -127,19 +127,34 @@ FRONTEND_ONLY=0
 if [ -n "$LAST_VTAG" ]; then
   # Cover both already-committed diffs since the last v* tag AND any
   # pending working-tree edits about to be committed by release.sh.
-  COMMITTED_BACKEND=$(git diff --name-only "${LAST_VTAG}..HEAD" -- \
-      'src-tauri/src/**' 'src-tauri/build.rs' \
-      'crates/*/src/**' 'crates/*/build.rs' \
-      '.github/workflows/release.yml' 2>/dev/null | head -1)
-  PENDING_BACKEND=$(git diff --name-only HEAD -- \
-      'src-tauri/src/**' 'src-tauri/build.rs' \
-      'crates/*/src/**' 'crates/*/build.rs' \
-      '.github/workflows/release.yml' 2>/dev/null | head -1)
+  # Backend trigger set: every file that affects the compiled Rust
+  # binary or Tauri runtime config. Cargo.toml + Cargo.lock changes
+  # add/remove crates so the binary needs a rebuild to pick them up
+  # (regression fe-v0.171.1 chrono dep + fe-v0.171.2 capability
+  # change were both shipped as fe-v* and silently never reached
+  # users on their installed binary). Capabilities live under
+  # src-tauri/capabilities/ and are compiled into the binary at
+  # tauri-build time. tauri.conf.json carries product-level config
+  # that the Rust shell reads on launch.
+  BACKEND_GLOBS=(
+      'src-tauri/src/**' 'src-tauri/build.rs'
+      'src-tauri/Cargo.toml' 'src-tauri/capabilities/**'
+      'src-tauri/tauri.conf.json'
+      'crates/*/src/**' 'crates/*/build.rs' 'crates/*/Cargo.toml'
+      'Cargo.toml' 'Cargo.lock'
+      '.github/workflows/release.yml'
+  )
+  COMMITTED_BACKEND=$(git diff --name-only "${LAST_VTAG}..HEAD" -- "${BACKEND_GLOBS[@]}" 2>/dev/null | head -1)
+  PENDING_BACKEND=$(git diff --name-only HEAD -- "${BACKEND_GLOBS[@]}" 2>/dev/null | head -1)
   if [ -z "$COMMITTED_BACKEND" ] && [ -z "$PENDING_BACKEND" ]; then
     FRONTEND_ONLY=1
     echo "release.sh: only frontend files changed since $LAST_VTAG — will tag as fe-v$NEW_VERSION (hot-swap path, ~2min CI)"
   else
     echo "release.sh: backend changes detected since $LAST_VTAG — full v$NEW_VERSION build (all platforms, ~25min CI)"
+    # Log which file triggered the backend rebuild so we can audit
+    # false positives without re-running this detection by hand.
+    TRIGGER="${COMMITTED_BACKEND:-$PENDING_BACKEND}"
+    echo "release.sh: backend trigger = $TRIGGER"
   fi
 else
   echo "release.sh: no prior v* tag found — defaulting to full release"

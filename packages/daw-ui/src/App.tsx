@@ -268,9 +268,46 @@ export function App() {
     // shortcuts like save/cut/paste/undo at bubble phase.
     window.addEventListener('contextmenu', blockContextMenu, { capture: true })
     window.addEventListener('keydown', blockBrowserKeys, { capture: true })
+
+    // Diagnostic click logger — captures EVERY mousedown anywhere in
+    // the document and writes a one-line summary (target tag + class
+    // + first ancestor className that looks meaningful) to the
+    // DevPanel Log. Filters out noise from regular text / icon hits
+    // by only logging mousedowns whose target or ancestor matches a
+    // window-control class. Lets us confirm whether the X click
+    // actually reaches the React tree at all — if even this logger
+    // is silent, the click is intercepted by the OS / drag region.
+    const logClick = (e: MouseEvent) => {
+      try {
+        const t = e.target as HTMLElement | null
+        if (!t) return
+        // Walk up the tree looking for window-control or close-related
+        // class names. Skip noisy clicks elsewhere in the UI.
+        let n: HTMLElement | null = t
+        let path: string[] = []
+        for (let i = 0; i < 6 && n; i++) {
+          const cls = (n.className && typeof n.className === 'string') ? n.className : ''
+          path.push(`${n.tagName.toLowerCase()}${cls ? '.' + cls.replace(/\s+/g, '.') : ''}`)
+          n = n.parentElement
+        }
+        const relevant = path.some(p => p.includes('fl-win-ctl') || p.includes('.x'))
+        if (!relevant) return
+        void (async () => {
+          try {
+            const mod = await import('./dev/logStore')
+            mod.useLogStore.getState().append({
+              level: 'event',
+              message: `mousedown path: ${path.slice(0, 3).join(' < ')} @ (${e.clientX},${e.clientY})`,
+            })
+          } catch {}
+        })()
+      } catch {}
+    }
+    window.addEventListener('mousedown', logClick, { capture: true })
     return () => {
       window.removeEventListener('contextmenu', blockContextMenu, { capture: true } as EventListenerOptions)
       window.removeEventListener('keydown', blockBrowserKeys, { capture: true } as EventListenerOptions)
+      window.removeEventListener('mousedown', logClick, { capture: true } as EventListenerOptions)
     }
   }, [])
 
