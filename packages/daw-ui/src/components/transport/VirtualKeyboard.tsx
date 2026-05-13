@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { defaultPadNote, useTouchControllerStore } from '../../stores/touchControllerStore'
+import { pitchToName as namePitch } from '../../stores/generalPrefsStore'
 
 /**
  * Touch Controllers — virtual on-screen MIDI keyboard + drum-pad
@@ -40,12 +41,12 @@ const BLACK_OFFSETS: Array<{ leftWhite: number; offset: number }> = [
 ]
 const DEFAULT_VELOCITY = 0.78
 const MIN_VELOCITY = 0.1
-const PITCH_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-
+// Pitch labels honour the System Settings → General "Note naming"
+// convention (English / Germanic / Solfège). Delegated to the
+// global generalPrefsStore so labels stay in sync across PianoRoll,
+// Touch Controller, Browser sample tags, etc.
 function pitchToName(pitch: number): string {
-  const name = PITCH_NAMES[pitch % 12]
-  const octave = Math.floor(pitch / 12) - 1 // MIDI 60 = C4
-  return `${name}${octave}`
+  return namePitch(pitch)
 }
 
 interface ActiveNote {

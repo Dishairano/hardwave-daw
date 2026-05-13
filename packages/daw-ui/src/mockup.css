@@ -1709,3 +1709,35 @@
 @media (max-width: 780px) {
   .fl-browser, .fl-picker { display: none; }
 }
+
+/* ── System Settings → General overrides ──
+ * Applied by App.tsx via useGeneralPrefsStore. Classes hang on <html>
+ * so the cascade reaches every component.
+ *
+ *  .hw-no-animations — short-circuits transitions / animations for
+ *  users who want FL Studio's "Don't distract me" behaviour. Mirrors
+ *  `prefers-reduced-motion` but as a conscious user choice.
+ *
+ *  .hw-high-vis — accessibility lane. Bumps text + border contrast,
+ *  adds an explicit focus-visible ring on every interactive element.
+ */
+html.hw-no-animations *,
+html.hw-no-animations *::before,
+html.hw-no-animations *::after {
+  transition-duration: 0.001ms !important;
+  animation-duration: 0.001ms !important;
+  animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
+}
+
+html.hw-high-vis {
+  --text-1: #ffffff;
+  --text-2: #e0e0e8;
+  --text-3: #b0b0bc;
+  --surface-3: #4a4a55;
+  --line-strong: #5a5a64;
+}
+html.hw-high-vis :focus-visible {
+  outline: 2px solid var(--brand, #ff2d4f) !important;
+  outline-offset: 2px !important;
+}

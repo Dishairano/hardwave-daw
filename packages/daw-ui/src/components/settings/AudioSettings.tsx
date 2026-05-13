@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
 import { AUTOSAVE_OPTIONS, useAutosavePrefsStore } from '../../stores/autosavePrefsStore'
+import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 
 interface AudioDevice {
   name: string
@@ -78,6 +79,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   // audioPrefsStore so the user only sets these once.
   const audioPrefs = useAudioPrefsStore()
   const autosavePrefs = useAutosavePrefsStore()
+  const generalPrefs = useGeneralPrefsStore()
 
   useEffect(() => {
     Promise.all([
@@ -487,6 +489,56 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               </span>
             </div>
           </SettingRow>
+
+          {/* System Settings — General (FL F10 → General page parity) */}
+          <SettingRow label="Note naming">
+            <Select
+              value={generalPrefs.noteNaming}
+              onChange={v => generalPrefs.setNoteNaming(v as typeof generalPrefs.noteNaming)}
+              options={[
+                { value: 'english', label: 'English (C-B)' },
+                { value: 'germanic', label: 'Germanic (C-H)' },
+                { value: 'solfege', label: 'Solfège (Do-Ti)' },
+              ]}
+            />
+          </SettingRow>
+
+          <div style={{
+            display: 'flex', gap: 8, padding: '0 0 12px 0',
+          }}>
+            <button
+              onClick={() => generalPrefs.setAnimationsEnabled(!generalPrefs.animationsEnabled)}
+              style={{
+                flex: 1,
+                padding: '6px 10px', fontSize: 10, fontWeight: 600,
+                borderRadius: hw.radius.sm,
+                cursor: 'pointer',
+                background: generalPrefs.animationsEnabled ? 'rgba(255,255,255,0.08)' : hw.accent,
+                color: generalPrefs.animationsEnabled ? hw.textSecondary : '#fff',
+                border: `1px solid ${generalPrefs.animationsEnabled ? hw.borderDark : hw.accent}`,
+                fontFamily: 'inherit',
+              }}
+              title="When off, the UI runs without transitions or animations (FL 'Don't distract me')"
+            >
+              Animations: {generalPrefs.animationsEnabled ? 'On' : 'Off'}
+            </button>
+            <button
+              onClick={() => generalPrefs.setHighVisibility(!generalPrefs.highVisibility)}
+              style={{
+                flex: 1,
+                padding: '6px 10px', fontSize: 10, fontWeight: 600,
+                borderRadius: hw.radius.sm,
+                cursor: 'pointer',
+                background: generalPrefs.highVisibility ? hw.accent : 'rgba(255,255,255,0.08)',
+                color: generalPrefs.highVisibility ? '#fff' : hw.textSecondary,
+                border: `1px solid ${generalPrefs.highVisibility ? hw.accent : hw.borderDark}`,
+                fontFamily: 'inherit',
+              }}
+              title="Bumps text + border contrast and adds focus rings for accessibility"
+            >
+              High-visibility: {generalPrefs.highVisibility ? 'On' : 'Off'}
+            </button>
+          </div>
 
           {/* Autosave frequency — FL File Settings → Backup parity */}
           <SettingRow label="Autosave">

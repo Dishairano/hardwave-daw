@@ -52,6 +52,7 @@ import {
   frequencyIntervalMs,
   useAutosavePrefsStore,
 } from './stores/autosavePrefsStore'
+import { useGeneralPrefsStore } from './stores/generalPrefsStore'
 import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappingsPanel'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
@@ -138,6 +139,17 @@ export function App() {
   // user flip in the toolbar instantly enables/disables note injection.
   const typingKeyboardEnabled = useTypingKeyboardStore((s) => s.enabled)
   useComputerMidiKeyboard({ enabled: typingKeyboardEnabled })
+
+  // Apply System Settings → General DOM classes. Animations toggle
+  // hangs `.hw-no-animations` on <html> so the global stylesheet can
+  // short-circuit transitions for every element below. High-visibility
+  // adds `.hw-high-vis` for the a11y contrast layer.
+  const animationsEnabled = useGeneralPrefsStore((s) => s.animationsEnabled)
+  const highVisibility = useGeneralPrefsStore((s) => s.highVisibility)
+  useEffect(() => {
+    document.documentElement.classList.toggle('hw-no-animations', !animationsEnabled)
+    document.documentElement.classList.toggle('hw-high-vis', highVisibility)
+  }, [animationsEnabled, highVisibility])
 
   // Panel visibility
   const [showBrowser, setShowBrowser] = useState(true)
