@@ -52,6 +52,9 @@ url = "2"
 hound.workspace = true
 flacenc.workspace = true
 shine-rs.workspace = true
+# Used by Project Info dialog handlers to stamp modified_at on metadata
+# changes (RFC3339). chrono is already a workspace dep — wire it through.
+chrono.workspace = true
 vorbis_rs.workspace = true
 
 [dev-dependencies]
