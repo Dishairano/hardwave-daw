@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
+import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
 
 interface AudioDevice {
   name: string
@@ -70,6 +71,11 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [directMonitoring, setDirectMonitoring] = useState(false)
   const [cacheStats, setCacheStats] = useState<{ bytesUsed: number; maxBytes: number; entryCount: number } | null>(null)
   const [cacheMaxMb, setCacheMaxMb] = useState<string>('2048')
+
+  // Audio behavioural preferences (UI-only at the time of writing —
+  // backend wiring queued for the Tier B / Rust ship). Persist via
+  // audioPrefsStore so the user only sets these once.
+  const audioPrefs = useAudioPrefsStore()
 
   useEffect(() => {
     Promise.all([
@@ -554,6 +560,65 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 }}
               >
                 {directMonitoring ? 'On' : 'Off'}
+              </button>
+            </div>
+
+            {/* Mixer-settings preferences (FL Audio Settings → Mixer settings) */}
+            <div style={{
+              marginTop: 8,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '6px 8px',
+              background: 'rgba(0,0,0,0.25)',
+              borderRadius: hw.radius.sm,
+              border: `1px solid ${audioPrefs.resetPluginsOnTransport ? hw.accent : hw.borderDark}`,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>Reset plug-ins on transport</span>
+                <span style={{ fontSize: 9, color: hw.textFaint }}>
+                  Calls <code>reset()</code> on every plug-in when transport stops or playhead jumps so delay tails, LFO phase and oscillator state start fresh. (Backend wiring queued.)
+                </span>
+              </div>
+              <button
+                onClick={() => audioPrefs.setResetPluginsOnTransport(!audioPrefs.resetPluginsOnTransport)}
+                style={{
+                  padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                  borderRadius: hw.radius.sm, border: 'none',
+                  cursor: 'pointer',
+                  background: audioPrefs.resetPluginsOnTransport ? hw.accent : 'rgba(255,255,255,0.08)',
+                  color: audioPrefs.resetPluginsOnTransport ? '#fff' : hw.textSecondary,
+                  fontFamily: 'inherit',
+                }}
+              >
+                {audioPrefs.resetPluginsOnTransport ? 'On' : 'Off'}
+              </button>
+            </div>
+
+            <div style={{
+              marginTop: 8,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '6px 8px',
+              background: 'rgba(0,0,0,0.25)',
+              borderRadius: hw.radius.sm,
+              border: `1px solid ${audioPrefs.playTruncatedNotes ? hw.accent : hw.borderDark}`,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>Play truncated notes</span>
+                <span style={{ fontSize: 9, color: hw.textFaint }}>
+                  When the playhead jumps mid-note, fire the remainder of the note from the new position. Off = only notes whose start sample falls after the jump fire. (Backend wiring queued.)
+                </span>
+              </div>
+              <button
+                onClick={() => audioPrefs.setPlayTruncatedNotes(!audioPrefs.playTruncatedNotes)}
+                style={{
+                  padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                  borderRadius: hw.radius.sm, border: 'none',
+                  cursor: 'pointer',
+                  background: audioPrefs.playTruncatedNotes ? hw.accent : 'rgba(255,255,255,0.08)',
+                  color: audioPrefs.playTruncatedNotes ? '#fff' : hw.textSecondary,
+                  fontFamily: 'inherit',
+                }}
+              >
+                {audioPrefs.playTruncatedNotes ? 'On' : 'Off'}
               </button>
             </div>
           </div>
