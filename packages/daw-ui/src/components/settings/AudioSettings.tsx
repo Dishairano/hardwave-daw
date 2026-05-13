@@ -431,12 +431,28 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
             <Select
               value={String(selectedBuffer)}
               onChange={v => setSelectedBuffer(Number(v))}
-              options={BUFFER_SIZES.map(b => ({
-                value: String(b),
-                label: `${b} samples`,
-              }))}
+              options={BUFFER_SIZES.map(b => {
+                const ms = ((b / selectedRate) * 1000).toFixed(1)
+                return {
+                  value: String(b),
+                  label: `${b} samples (${ms} ms)`,
+                }
+              })}
             />
           </SettingRow>
+
+          {/* Buffer-size guidance hint — matches FL Studio's documented
+             recommendations: 10 ms ≈ 441 samples is the sweet spot;
+             below that adds CPU for diminishing returns. */}
+          <div style={{
+            fontSize: 9, color: hw.textFaint, lineHeight: 1.5,
+            margin: '4px 4px 10px', maxWidth: 360,
+          }}>
+            <strong style={{ color: hw.textMuted }}>Latency = {latencyMs} ms.</strong>{' '}
+            Target ~10 ms (441 samples @ 44.1 kHz · 480 samples @ 48 kHz) for live play.
+            Below ~5 ms is "cutting edge" and CPU-heavy. 11–20 ms is "good".
+            Drop the buffer until you hear underruns, then step back up.
+          </div>
 
           {/* Audio cache */}
           <SettingRow label="Audio cache">
