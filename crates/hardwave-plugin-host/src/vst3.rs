@@ -121,7 +121,7 @@ struct Vst3Inner {
     /// with the GUI's display state. Without this, knob movements in
     /// the floating editor window were silent — the host never heard
     /// about them and the live audio kept rendering from stale values.
-    pending_params: Arc<Mutex<Vec<(u32, f64)>>>,
+    pending_params: crate::types::Vst3PendingParams,
     /// Holds the IComponentHandler ComWrapper alive for the lifetime
     /// of the plugin instance. Dropping the wrapper would invalidate
     /// the pointer the controller still holds.
@@ -137,7 +137,7 @@ struct Vst3Inner {
 /// `controller.setParamNormalized` so the audio side hears the change
 /// on the next block.
 struct HardwaveComponentHandler {
-    pending: Arc<Mutex<Vec<(u32, f64)>>>,
+    pending: crate::types::Vst3PendingParams,
 }
 
 impl vst3::Class for HardwaveComponentHandler {
@@ -156,8 +156,8 @@ impl IComponentHandlerTrait for HardwaveComponentHandler {
         // Capture the change for the audio thread. We try_lock to keep
         // GUI events non-blocking; if the audio thread is mid-drain we
         // skip this notification — the next move re-fires it.
-        let id = id as u32;
-        let value = value as f64;
+        // ParamID is already u32 and ParamValue is already f64 — no
+        // cast needed; rename for clarity in the queue tuple below.
         if let Some(mut q) = self.pending.try_lock() {
             // De-dupe consecutive edits on the same param so a fast
             // knob spin doesn't queue a thousand intermediate values.
@@ -191,14 +191,14 @@ impl Vst3PluginInstance {
     /// reach the audio chain.
     pub fn load_with_shared_pending(
         descriptor: PluginDescriptor,
-        shared: Arc<Mutex<Vec<(u32, f64)>>>,
+        shared: crate::types::Vst3PendingParams,
     ) -> Result<Self, String> {
         Self::load_inner(descriptor, Some(shared))
     }
 
     fn load_inner(
         descriptor: PluginDescriptor,
-        shared_pending: Option<Arc<Mutex<Vec<(u32, f64)>>>>,
+        shared_pending: Option<crate::types::Vst3PendingParams>,
     ) -> Result<Self, String> {
         let binary = resolve_vst3_binary(&descriptor.path).ok_or_else(|| {
             format!(
@@ -356,7 +356,7 @@ impl Vst3PluginInstance {
         // the handler's COM pointer to the controller so the plugin
         // notifies us on every performEdit. The wrapper is held in
         // Vst3Inner so its lifetime tracks the plugin instance.
-        let pending_params: Arc<Mutex<Vec<(u32, f64)>>> =
+        let pending_params: crate::types::Vst3PendingParams =
             shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
         let handler_wrapper = vst3::ComWrapper::new(HardwaveComponentHandler {
             pending: Arc::clone(&pending_params),
@@ -810,7 +810,7 @@ impl HostedPlugin for Vst3PluginInstance {
         self.inner.descriptor.has_editor
     }
 
-    fn vst3_pending_params(&self) -> Option<Arc<Mutex<Vec<(u32, f64)>>>> {
+    fn vst3_pending_params(&self) -> Option<crate::types::Vst3PendingParams> {
         Some(Arc::clone(&self.inner.pending_params))
     }
 }
