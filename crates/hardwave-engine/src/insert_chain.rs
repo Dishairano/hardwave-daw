@@ -113,11 +113,19 @@ impl InsertChain {
             // returned length as authoritative; samples past it stay dry.
             let valid_l = scratch.channels[0].len().min(n);
             let valid_r = scratch.channels[1].len().min(n);
-            for i in 0..valid_l {
-                left[i] = dry * left[i] + wet * scratch.channels[0][i];
+            for (l, s) in left
+                .iter_mut()
+                .zip(scratch.channels[0].iter())
+                .take(valid_l)
+            {
+                *l = dry * *l + wet * *s;
             }
-            for i in 0..valid_r {
-                right[i] = dry * right[i] + wet * scratch.channels[1][i];
+            for (r, s) in right
+                .iter_mut()
+                .zip(scratch.channels[1].iter())
+                .take(valid_r)
+            {
+                *r = dry * *r + wet * *s;
             }
         }
     }
@@ -219,9 +227,10 @@ pub struct Scratch {
 
 impl Scratch {
     pub fn with_capacity(capacity: usize) -> Self {
-        let mut channels = Vec::with_capacity(2);
-        channels.push(Vec::with_capacity(capacity));
-        channels.push(Vec::with_capacity(capacity));
+        let channels = vec![
+            Vec::with_capacity(capacity),
+            Vec::with_capacity(capacity),
+        ];
         Self {
             channels,
             midi_out: Vec::with_capacity(64),
@@ -420,7 +429,7 @@ impl InsertRouter {
     fn apply(&mut self, cmd: InsertCommand) {
         match cmd {
             InsertCommand::Add { track_id, slot } => {
-                let chain = self.chains.entry(track_id).or_insert_with(InsertChain::new);
+                let chain = self.chains.entry(track_id).or_default();
                 if let Err(e) = chain.push_slot(slot, self.sample_rate, self.max_block_size) {
                     log::warn!("insert chain: activate failed: {e}");
                 }

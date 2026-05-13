@@ -319,15 +319,15 @@ impl AudioNode for MidiTrackNode {
                         self.live_held_pitch = Some(note);
                     }
                 },
-                hardwave_midi::MidiEvent::NoteOff { note, .. } => {
-                    if self.live_held_pitch == Some(note) {
-                        if let Some(v) = self.voice.as_mut() {
-                            if v.stage != EnvStage::Idle {
-                                v.stage = EnvStage::Release;
-                            }
+                hardwave_midi::MidiEvent::NoteOff { note, .. }
+                    if self.live_held_pitch == Some(note) =>
+                {
+                    if let Some(v) = self.voice.as_mut() {
+                        if v.stage != EnvStage::Idle {
+                            v.stage = EnvStage::Release;
                         }
-                        self.live_held_pitch = None;
                     }
+                    self.live_held_pitch = None;
                 }
                 _ => {}
             }

@@ -86,6 +86,18 @@ impl Default for History {
     }
 }
 
+/// Channel sender the audio thread uses to ship its end-of-block
+/// plug-in state snapshot map back to the UI thread. Keyed by
+/// `(track_id, slot_id)` so the project save path can serialise each
+/// slot's opaque state blob.
+pub type PluginStateSnapshotSender =
+    std::sync::mpsc::SyncSender<HashMap<(String, String), Vec<u8>>>;
+
+/// UI-thread → audio-thread parking slot for `PluginStateSnapshotSender`.
+/// The UI places a sender here before `save_project`, the audio thread
+/// services exactly one snapshot request per audio block.
+pub type PluginStateSnapshotSlot = Arc<Mutex<Option<PluginStateSnapshotSender>>>;
+
 /// Main DAW engine.
 pub struct DawEngine {
     pub transport: TransportState,
@@ -148,13 +160,7 @@ pub struct DawEngine {
     /// `plugin.get_state()` per slot, and sends the resulting map back.
     /// Used to capture plug-in state into `Project.plugin_states` so
     /// save/load round-trips preserve the user's knob tweaks.
-    pub pending_state_snapshot: Arc<
-        Mutex<
-            Option<
-                std::sync::mpsc::SyncSender<std::collections::HashMap<(String, String), Vec<u8>>>,
-            >,
-        >,
-    >,
+    pub pending_state_snapshot: PluginStateSnapshotSlot,
     /// Rolling 3-minute capture of every live MIDI event seen by the
     /// engine. Audio thread pushes per-block; UI thread can dump the
     /// last N seconds into a clip without arming a track. The ring is
@@ -894,13 +900,7 @@ struct EngineCallback {
     /// UI-thread snapshot request slot. Cloned from `DawEngine`. When a
     /// `SyncSender` lands here the audio thread harvests `get_state()`
     /// from every loaded plug-in and ships the resulting map back.
-    pending_state_snapshot: Arc<
-        Mutex<
-            Option<
-                std::sync::mpsc::SyncSender<std::collections::HashMap<(String, String), Vec<u8>>>,
-            >,
-        >,
-    >,
+    pending_state_snapshot: PluginStateSnapshotSlot,
     /// Shared handle to the live MIDI input manager. Drained at the
     /// start of every audio block via `try_drain_events_into` (non-
     /// blocking — if the mutex is contended this block we just skip
@@ -933,14 +933,7 @@ impl EngineCallback {
         graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
         insert_command_rx: crate::insert_chain::InsertCommandReceiver,
         insert_graveyard_tx: crate::insert_chain::PluginGraveyardSender,
-        pending_state_snapshot: Arc<
-            Mutex<
-                Option<
-                    std::sync::mpsc::SyncSender<
-                        std::collections::HashMap<(String, String), Vec<u8>>,
-                    >,
-                >,
-            >,
+        pending_state_snapshot: PluginStateSnapshotSlot,
         >,
         midi_input: Arc<Mutex<MidiInputManager>>,
         midi_capture_ring: Arc<Mutex<MidiCaptureRing>>,
