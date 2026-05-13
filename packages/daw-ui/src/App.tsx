@@ -910,6 +910,49 @@ export function App() {
     }
   }, [saveProject, showErrorDialog])
 
+  // Save the current project under an auto-suffixed name. FL Studio's
+  // "Save new version" — picks the next free MyProject_N.hwd in the
+  // same directory and saves there without prompting. Useful for
+  // version-stamping after a big change.
+  const handleSaveNewVersion = useCallback(async () => {
+    const current = useProjectStore.getState().filePath
+    if (!current) {
+      // Not yet saved — fall through to Save As so the user names it.
+      await handleSaveProjectAs()
+      return
+    }
+    // Strip extension + trailing _N. e.g. "Track_3.hwd" → base "Track" + ext ".hwd"
+    const match = current.match(/^(.*?)(?:_(\d+))?(\.[^.]+)?$/)
+    const base = match?.[1] ?? current
+    const ext = match?.[3] ?? '.hwd'
+    let n = 2
+    if (match?.[2]) n = parseInt(match[2], 10) + 1
+    const candidate = `${base}_${n}${ext}`
+    try {
+      await saveProject(candidate)
+      await invoke('autosave_clear').catch(() => {})
+    } catch (err) {
+      await showErrorDialog('Save new version failed', String(err))
+    }
+  }, [saveProject, handleSaveProjectAs, showErrorDialog])
+
+  // Restore the last autosave snapshot. FL Studio's "Revert to last
+  // backup" — picks up the most recent autosave_latest path and
+  // loads it as if the user opened it manually. Fails silently when
+  // there's nothing to restore.
+  const handleRevertToBackup = useCallback(async () => {
+    try {
+      const latest = await invoke<{ path: string; modified_unix: number } | null>('autosave_latest')
+      if (!latest) {
+        await showErrorDialog('No backup found', 'No autosave snapshot is available for this session.')
+        return
+      }
+      await loadProject(latest.path)
+    } catch (err) {
+      await showErrorDialog('Revert failed', String(err))
+    }
+  }, [loadProject, showErrorDialog])
+
   const handleCrashChoice = useCallback(async (c: CrashChoice) => {
     const info = crashInfo
     setCrashInfo(null)
@@ -1272,7 +1315,10 @@ export function App() {
           { separator: true, label: '' },
           { label: 'Save', shortcut: 'Ctrl+S', action: handleSaveProject },
           { label: 'Save as…', shortcut: 'Ctrl+Shift+S', action: handleSaveProjectAs },
+          { label: 'Save new version', action: handleSaveNewVersion },
           { label: 'Save as template…', action: handleSaveAsTemplate },
+          { separator: true, label: '' },
+          { label: 'Revert to last backup', action: handleRevertToBackup },
           { separator: true, label: '' },
           { label: 'Project info…', shortcut: 'F11', action: () => setShowProjectInfo(true) },
           { separator: true, label: '' },
