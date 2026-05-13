@@ -332,6 +332,97 @@
 .fl-trans-btn.punch { color: #14B8A6; background: linear-gradient(180deg,#0a201e,#06120f); border-color: rgba(20,184,166,0.4); }
 .fl-trans-btn.metr { color: var(--red-bright); background: linear-gradient(180deg,#2a0e10,#180608); border-color: rgba(220,38,38,0.4); }
 
+/* Ship 2a — Snap pill (moved from row-3 hint bar) */
+.fl-snap {
+  display: flex; align-items: center; gap: 6px;
+  height: 22px; padding: 0 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  font-family: var(--mono); font-size: 9px; font-weight: 600;
+  letter-spacing: 0.6px; text-transform: uppercase;
+  color: var(--text-dim);
+  -webkit-app-region: no-drag;
+}
+.fl-snap.on {
+  background: rgba(220,38,38,0.12);
+  border-color: rgba(239,68,68,0.4);
+  color: var(--red-bright);
+}
+.fl-snap .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-dim);
+  border: 0; padding: 0;
+  cursor: pointer;
+}
+.fl-snap.on .dot { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.fl-snap .label { color: var(--text-dim); }
+.fl-snap select {
+  background: transparent; border: 0;
+  color: inherit; font-family: var(--mono); font-size: 9px; font-weight: 600;
+  letter-spacing: 0.6px; text-transform: uppercase;
+  outline: none; appearance: none; padding: 0;
+  cursor: pointer; min-width: 38px; text-align-last: center;
+}
+
+/* Zoom −/FIT/+ trio */
+.fl-zoom {
+  display: flex;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  height: 22px; padding: 0 1px; gap: 1px;
+  -webkit-app-region: no-drag;
+}
+.fl-zoom button {
+  width: 22px; height: 20px;
+  background: transparent; border: 0;
+  color: var(--text-muted);
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.fl-zoom button:hover { color: #fff; background: rgba(255,255,255,0.04); }
+.fl-zoom button.fit { font-size: 8px; letter-spacing: 0.3px; font-weight: 800; }
+
+/* 8-tool picker */
+.fl-tools {
+  display: flex;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+}
+.fl-tools button {
+  width: 22px; height: 24px;
+  background: transparent; border: 0;
+  color: var(--text-muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.fl-tools button:hover { background: rgba(255,255,255,0.05); color: #fff; }
+.fl-tools button.on {
+  background: rgba(220,38,38,0.18);
+  color: var(--red-bright);
+}
+
+/* Action icon row — Save / SaveAs / Render / Cut / Copy / Paste / Dup */
+.fl-action-row {
+  display: flex; gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+/* Save-as flashing reminder — kicks in at 5 minutes of unsaved edits */
+.fl-mini-btn.flash {
+  animation: hw-save-flash 1.6s ease-in-out infinite;
+  color: var(--red-bright);
+}
+@keyframes hw-save-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
+  50%      { box-shadow: 0 0 0 4px transparent; }
+}
+
 .fl-perf {
   display: flex; align-items: center; gap: 8px;
   font-family: var(--mono);

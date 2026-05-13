@@ -1625,6 +1625,23 @@ export function App() {
         onToggleMixer={() => setShowMixer(v => !v)}
         onTogglePlaylist={() => setShowPlaylist(v => !v)}
         onOpenTempoTapper={() => setShowTempoTapper(true)}
+        onAction={(id) => {
+          // Mirror the keyboard-shortcut dispatch path so toolbar
+          // buttons fire the same handlers. Only the actions the
+          // toolbar surfaces are routed; other ActionIds keep
+          // flowing through the existing keydown switch. `tracks`
+          // is scoped to the keydown effect, so read store state
+          // directly here for Copy.
+          switch (id) {
+            case 'save':       handleSaveProject(); return
+            case 'saveAs':     handleSaveProjectAs(); return
+            case 'cut':        cutSelection(); return
+            case 'copy':       useTrackStore.getState().copySelectedClips(); return
+            case 'paste':      pasteAtPlayhead(); return
+            case 'duplicate':  duplicateSelection(); return
+          }
+        }}
+        onOpenExport={() => setShowExport(true)}
       />
 
       {isMobile && (

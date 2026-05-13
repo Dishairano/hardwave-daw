@@ -22,13 +22,15 @@ import { HwTopMenu, type MenuDef } from './HwTopMenu'
 import { AutomationLane } from './AutomationLane'
 import { KickSynthEditor } from './KickSynthEditor'
 import type { AutomationTargetInfo } from '../stores/trackStore'
-import { useTransportStore } from '../stores/transportStore'
+import { useTransportStore, SNAP_VALUES } from '../stores/transportStore'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
 import { usePanelLayoutStore } from '../stores/panelLayoutStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useMetronomeStore } from '../stores/metronomeStore'
+import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
+import type { ActionId } from '../stores/shortcutsStore'
 import type { MobilePanel } from './MobileTabBar'
 
 interface HwAppProps {
@@ -57,6 +59,13 @@ interface HwAppProps {
   // Tempo right-click + TAP-right-click both open the standalone
   // Tempo Tapper modal (lives in App.tsx alongside other dialogs).
   onOpenTempoTapper?: () => void
+  // Ship 2a — toolbar action icons (Save / Save-as / Cut / Copy /
+  // Paste / Duplicate) fire through App.tsx's shortcut-dispatch
+  // switch so toolbar and keyboard share one code path.
+  onAction?: (id: ActionId) => void
+  // Render icon opens the existing Export Audio dialog directly —
+  // App.tsx owns the dialog's visibility flag.
+  onOpenExport?: () => void
 }
 
 /** Format `positionSamples` as "BAR : BEAT : TICK" using transport store metadata. */
@@ -99,11 +108,13 @@ function useTransportClock() {
 // keyboard / multilink / master pitch knob / CPU+MEM+POLY meters +
 // graph / MIDI activity LED / mini scope / hint-bar icon-types.
 
-function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTapper }: {
+function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTapper, onAction, onOpenExport }: {
   menus?: MenuDef[]
   onTogglePlaylist?: () => void
   onToggleChannelRack?: () => void
   onOpenTempoTapper?: () => void
+  onAction?: (id: ActionId) => void
+  onOpenExport?: () => void
 }) {
   const playing = useTransportStore(s => s.playing)
   const recording = useTransportStore(s => s.recording)
@@ -125,6 +136,16 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
   const tsNum = useTransportStore(s => s.timeSigNumerator)
   const tsDen = useTransportStore(s => s.timeSigDenominator)
   const setTimeSignature = useTransportStore(s => s.setTimeSignature)
+  // Ship 2a — snap pill / zoom / tool picker
+  const snapValue = useTransportStore(s => s.snapValue)
+  const snapEnabled = useTransportStore(s => s.snapEnabled)
+  const setSnapValue = useTransportStore(s => s.setSnapValue)
+  const toggleSnap = useTransportStore(s => s.toggleSnap)
+  const horizontalZoom = useTransportStore(s => s.horizontalZoom)
+  const setHorizontalZoom = useTransportStore(s => s.setHorizontalZoom)
+  const zoomToFit = useTransportStore(s => s.zoomToFit)
+  const activeTool = usePlaylistToolStore(s => s.tool)
+  const setTool = usePlaylistToolStore(s => s.setTool)
 
   const { barBeatTick, minSec } = useTransportClock()
 
@@ -407,6 +428,89 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
 
       <span className="fl-toolsep" />
 
+      {/* Ship 2a — Snap pill (moved from HwSecondRow). Pill toggles
+          on/off via the leading dot; the value-select changes the
+          grid resolution and auto-enables snap when set to anything
+          other than 'Off' (per setSnapValue's existing semantics). */}
+      <div
+        className={`fl-snap${snapEnabled ? ' on' : ''}`}
+        title={`Snap: ${snapEnabled ? snapValue : 'Off'} · alt-drag bypasses while moving clips`}
+      >
+        <button onClick={() => toggleSnap()} className="dot" title="Toggle snap" />
+        <span className="label">Snap</span>
+        <select
+          value={snapValue}
+          onChange={e => setSnapValue(e.target.value as any)}
+          data-testid="hw-toolbar-snap-select"
+        >
+          {SNAP_VALUES.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+      </div>
+
+      <span className="fl-toolsep" />
+
+      {/* Zoom trio — − / FIT / + */}
+      <div className="fl-zoom" title={`Zoom: ${horizontalZoom.toFixed(2)}×`}>
+        <button onClick={() => setHorizontalZoom(horizontalZoom / 1.25)} title="Zoom out">−</button>
+        <button onClick={() => zoomToFit()} className="fit" title="Zoom to fit">FIT</button>
+        <button onClick={() => setHorizontalZoom(horizontalZoom * 1.25)} title="Zoom in">+</button>
+      </div>
+
+      <span className="fl-toolsep" />
+
+      {/* 8-tool picker — draw / paint / slice / delete / mute / slip / select / zoom */}
+      <div className="fl-tools" role="toolbar" aria-label="Playlist tools">
+        {(['draw','paint','slice','delete','mute','slip','select','zoom'] as PlaylistTool[]).map(t => (
+          <ToolPickerBtn key={t} tool={t} active={activeTool === t} onClick={() => setTool(t)} />
+        ))}
+      </div>
+
+      <span className="fl-toolsep" />
+
+      {/* Action icon row — Save / Save-as / Render / Cut / Copy / Paste / Duplicate.
+          Save-as flashes as the FL 5/10/30-minute save reminder
+          would; the flash class is wired via the projectDirty store
+          flag so the cue only fires when there are unsaved edits. */}
+      <div className="fl-action-row">
+        <button onClick={() => onAction?.('save')} className="fl-mini-btn" title="Save (Ctrl+S)">
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round">
+            <path d="M2 2h8v8H2zM4 2v3h4V2M4 10v-3h4v3"/>
+          </svg>
+        </button>
+        <SaveAsButton onClick={() => onAction?.('saveAs')} />
+        <button onClick={() => onOpenExport?.()} className="fl-mini-btn" title="Render audio (Ctrl+R)">
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 1v6m-3-3 3 3 3-3M2 9v2h8V9"/>
+          </svg>
+        </button>
+        <button onClick={() => onAction?.('cut')} className="fl-mini-btn" title="Cut (Ctrl+X)">
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1">
+            <circle cx="3" cy="9" r="1.5"/><circle cx="9" cy="9" r="1.5"/>
+            <path d="M4.5 7.5L11 1M7.5 7.5L1 1"/>
+          </svg>
+        </button>
+        <button onClick={() => onAction?.('copy')} className="fl-mini-btn" title="Copy (Ctrl+C)">
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
+            <rect x="3" y="3" width="7" height="7" rx="1"/>
+            <path d="M3 3V2a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-1"/>
+          </svg>
+        </button>
+        <button onClick={() => onAction?.('paste')} className="fl-mini-btn" title="Paste at playhead (Ctrl+V)">
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
+            <rect x="2.5" y="3" width="7" height="8" rx="1"/>
+            <rect x="4.5" y="1.5" width="3" height="2" rx="0.5"/>
+          </svg>
+        </button>
+        <button onClick={() => onAction?.('duplicate')} className="fl-mini-btn" title="Duplicate selection (Ctrl+D)">
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
+            <rect x="1.5" y="3.5" width="5" height="5"/>
+            <rect x="5.5" y="3.5" width="5" height="5"/>
+          </svg>
+        </button>
+      </div>
+
+      <span className="fl-toolsep" />
+
       <div className="fl-perf">
         <span>RAM <b>—</b></span>
         <span>CPU <b>—</b></span>
@@ -552,6 +656,118 @@ function HwTempoContextMenu({
       <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
       <button style={item} onClick={onOpenTapper}>Tap tempo…</button>
     </div>
+  )
+}
+
+// ─── 8-tool picker button ──────────────────────────────────────────────────
+//
+// Each toolbar slot renders the FL-style line icon. Active tool is
+// highlighted via the .on class; tooltips spell out the keybind so
+// the user can learn shortcuts without opening the help panel.
+
+const TOOL_LABEL: Record<PlaylistTool, string> = {
+  draw: 'Draw (P)',
+  paint: 'Paint (B)',
+  slice: 'Slice (C)',
+  delete: 'Delete (D)',
+  mute: 'Mute (T)',
+  slip: 'Slip (S)',
+  select: 'Select (E)',
+  zoom: 'Zoom (Z)',
+}
+
+function ToolPickerBtn({ tool, active, onClick }: { tool: PlaylistTool; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={active ? 'on' : ''}
+      title={TOOL_LABEL[tool]}
+      aria-pressed={active}
+    >
+      {tool === 'draw' && (
+        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
+          <path d="M1.5 8.5L2 6L7 1L9 3L4 8Z" stroke="currentColor" strokeWidth="0.8" fill={active ? 'currentColor' : 'none'} opacity={active ? 0.3 : 1} />
+          <path d="M7 1L9 3" stroke="currentColor" strokeWidth="1" />
+        </svg>
+      )}
+      {tool === 'paint' && (
+        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
+          <rect x="1" y="6" width="3" height="3.5" rx="0.5" stroke="currentColor" strokeWidth="0.8" />
+          <path d="M2.5 6V2.5C2.5 1.5 3.5 0.5 5 0.5H8C8.5 0.5 9 1 9 1.5V3C9 3.5 8.5 4 8 4H5.5L4 5.5" stroke="currentColor" strokeWidth="0.8" />
+        </svg>
+      )}
+      {tool === 'slice' && (
+        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
+          <path d="M3 1L7 9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+          <circle cx="3" cy="1.5" r="1" stroke="currentColor" strokeWidth="0.6" />
+        </svg>
+      )}
+      {tool === 'delete' && (
+        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
+          <line x1="2" y1="2" x2="8" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          <line x1="8" y1="2" x2="2" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+      )}
+      {tool === 'mute' && (
+        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
+          <rect x="1" y="1" width="8" height="8" rx="1" stroke="currentColor" strokeWidth="0.8" />
+          <line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" strokeWidth="0.8" />
+        </svg>
+      )}
+      {tool === 'slip' && (
+        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
+          <rect x="1" y="3" width="8" height="4" rx="0.5" stroke="currentColor" strokeWidth="0.8" />
+          <path d="M4 3V7M6 3V7" stroke="currentColor" strokeWidth="0.6" strokeDasharray="1 1" />
+        </svg>
+      )}
+      {tool === 'select' && (
+        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
+          <path d="M2 1L2 9L5 6.5L7.5 9L8.5 8L6 5.5L9 5L2 1Z" stroke="currentColor" strokeWidth="0.7" fill={active ? 'currentColor' : 'none'} opacity={active ? 0.3 : 1} />
+        </svg>
+      )}
+      {tool === 'zoom' && (
+        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
+          <circle cx="4.5" cy="4.5" r="3" stroke="currentColor" strokeWidth="0.9" />
+          <line x1="7" y1="7" x2="9.5" y2="9.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+          <line x1="3" y1="4.5" x2="6" y2="4.5" stroke="currentColor" strokeWidth="0.7" />
+          <line x1="4.5" y1="3" x2="4.5" y2="6" stroke="currentColor" strokeWidth="0.7" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
+// ─── Save-As flashing reminder button ──────────────────────────────────────
+//
+// FL Studio flashes the Save button every 5 minutes after the first
+// unsaved edit, then every 30 s once you cross 10 minutes. We pick
+// up the same cadence from the projectDirty store flag + a local
+// elapsed-since-last-save clock. Clicking surfaces the Save-As
+// dialog rather than overwriting, matching the FL semantic.
+
+function SaveAsButton({ onClick }: { onClick: () => void }) {
+  const dirty = useProjectStore(s => s.dirty)
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    if (!dirty) { setElapsed(0); return }
+    const start = Date.now()
+    const id = window.setInterval(() => setElapsed(Date.now() - start), 1000)
+    return () => window.clearInterval(id)
+  }, [dirty])
+  // Flash class kicks in after 5 minutes of unsaved edits.
+  const FIVE_MIN = 5 * 60 * 1000
+  const flashing = dirty && elapsed >= FIVE_MIN
+  return (
+    <button
+      onClick={onClick}
+      className={`fl-mini-btn${flashing ? ' flash' : ''}`}
+      title={dirty ? 'Save as… (Ctrl+Shift+S) · unsaved changes pending' : 'Save as… (Ctrl+Shift+S)'}
+    >
+      <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round">
+        <path d="M2 2h6l2 2v6H2zM4 2v3h4V2M4 10v-3h3"/>
+      </svg>
+    </button>
   )
 }
 
@@ -1153,6 +1369,8 @@ export function HwApp({
   onToggleMixer,
   onTogglePlaylist,
   onOpenTempoTapper,
+  onAction,
+  onOpenExport,
 }: HwAppProps) {
   const [hint, setHint] = useState('')
   // Read the live project name from the store so save/load actually
@@ -1196,6 +1414,8 @@ export function HwApp({
         onTogglePlaylist={onTogglePlaylist}
         onToggleChannelRack={onToggleChannelRack}
         onOpenTempoTapper={onOpenTempoTapper}
+        onAction={onAction}
+        onOpenExport={onOpenExport}
       />
       <HwSecondRow hint={hint} projectName={projectName} />
 
