@@ -15,9 +15,7 @@
 //! `partition_point` contract happy.
 
 use crate::AppState;
-use hardwave_project::automation::{
-    AutomationLane, AutomationPoint, AutomationTarget, CurveMode,
-};
+use hardwave_project::automation::{AutomationLane, AutomationPoint, AutomationTarget, CurveMode};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
@@ -41,9 +39,7 @@ impl From<LaneTargetSpec> for AutomationTarget {
             LaneTargetSpec::PluginParam { slot_id, param_id } => {
                 AutomationTarget::PluginParam { slot_id, param_id }
             }
-            LaneTargetSpec::SendLevel { send_index } => {
-                AutomationTarget::SendLevel { send_index }
-            }
+            LaneTargetSpec::SendLevel { send_index } => AutomationTarget::SendLevel { send_index },
         }
     }
 }

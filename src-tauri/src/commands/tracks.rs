@@ -383,16 +383,15 @@ pub fn set_kick_layer(
         let track = project
             .track_mut(&track_id)
             .ok_or_else(|| format!("Track not found: {track_id}"))?;
-        track.kick_patch.layers[layer_index] =
-            Some(hardwave_project::track::KickLayerPatch {
-                peak_gain,
-                length_secs,
-                release_secs,
-                sweep_start_hz,
-                sweep_end_hz,
-                sweep_secs,
-                waveform: waveform.unwrap_or_else(|| "sine".to_string()),
-            });
+        track.kick_patch.layers[layer_index] = Some(hardwave_project::track::KickLayerPatch {
+            peak_gain,
+            length_secs,
+            release_secs,
+            sweep_start_hz,
+            sweep_end_hz,
+            sweep_secs,
+            waveform: waveform.unwrap_or_else(|| "sine".to_string()),
+        });
     }
     state.engine.lock().rebuild_graph();
     Ok(())
@@ -462,11 +461,7 @@ fn layer_to_patch(l: &hardwave_dsp::kick_synth::Layer) -> hardwave_project::trac
 /// Drive runs after the four layers are summed and sharpens the
 /// soft-clipper for hardstyle / raw / uptempo bite.
 #[tauri::command]
-pub fn set_kick_drive(
-    state: State<AppState>,
-    track_id: String,
-    drive: f32,
-) -> Result<(), String> {
+pub fn set_kick_drive(state: State<AppState>, track_id: String, drive: f32) -> Result<(), String> {
     state.engine.lock().snapshot_before_mutation();
     {
         let engine = state.engine.lock();
@@ -482,10 +477,7 @@ pub fn set_kick_drive(
 
 /// Reset a track's KickSynth patch back to engine defaults.
 #[tauri::command]
-pub fn reset_kick_patch(
-    state: State<AppState>,
-    track_id: String,
-) -> Result<(), String> {
+pub fn reset_kick_patch(state: State<AppState>, track_id: String) -> Result<(), String> {
     state.engine.lock().snapshot_before_mutation();
     {
         let engine = state.engine.lock();
@@ -517,12 +509,8 @@ pub fn set_track_instrument(
             .track_mut(&track_id)
             .ok_or_else(|| format!("Track not found: {track_id}"))?;
         track.instrument = match kind.as_str() {
-            "kick_synth" | "kicksynth" => {
-                hardwave_project::track::NativeInstrument::KickSynth
-            }
-            "builtin_sine" | "sine" | _ => {
-                hardwave_project::track::NativeInstrument::BuiltinSine
-            }
+            "kick_synth" | "kicksynth" => hardwave_project::track::NativeInstrument::KickSynth,
+            "builtin_sine" | "sine" | _ => hardwave_project::track::NativeInstrument::BuiltinSine,
         };
     }
     state.engine.lock().rebuild_graph();

@@ -124,11 +124,7 @@ impl MidiEventDto {
                 note,
                 velocity: 0.0,
             },
-            MidiEventDto::ControlChange {
-                channel,
-                cc,
-                value,
-            } => MidiEvent::ControlChange {
+            MidiEventDto::ControlChange { channel, cc, value } => MidiEvent::ControlChange {
                 timing: 0,
                 channel,
                 cc,

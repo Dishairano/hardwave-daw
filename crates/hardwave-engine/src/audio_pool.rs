@@ -308,7 +308,11 @@ mod tests {
             assert_eq!(src, 48_000);
             assert_eq!(dst, 44_100);
             // Pretend rubato gave us a 44.1k buffer of half the frames.
-            Some(chs.iter().map(|c| vec![1.0_f32; c.len() * 441 / 480]).collect())
+            Some(
+                chs.iter()
+                    .map(|c| vec![1.0_f32; c.len() * 441 / 480])
+                    .collect(),
+            )
         });
         assert_eq!(n, 1);
         assert_eq!(calls, 1);

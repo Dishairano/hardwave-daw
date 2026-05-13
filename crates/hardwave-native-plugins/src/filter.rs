@@ -90,8 +90,11 @@ impl NativeFilter {
     }
 
     fn ensure_coefs(&mut self) {
-        if !self.needs_recoef { return; }
-        self.biquad.set(self.mode, self.sample_rate, self.cutoff_hz, self.q, 0.0);
+        if !self.needs_recoef {
+            return;
+        }
+        self.biquad
+            .set(self.mode, self.sample_rate, self.cutoff_hz, self.q, 0.0);
         self.needs_recoef = false;
     }
 
@@ -120,11 +123,15 @@ impl NativeFilter {
 }
 
 impl Default for NativeFilter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeFilter {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -134,7 +141,9 @@ impl HostedPlugin for NativeFilter {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -167,29 +176,47 @@ impl HostedPlugin for NativeFilter {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         match index {
             PARAM_MODE => Some(ParameterInfo {
-                id: PARAM_MODE, name: "Mode".into(),
+                id: PARAM_MODE,
+                name: "Mode".into(),
                 default_value: mode_to_normalised(BiquadKind::LowPass) as f64,
-                min: 0.0, max: 1.0, unit: "".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "".into(),
+                automatable: true,
             }),
             PARAM_CUTOFF => Some(ParameterInfo {
-                id: PARAM_CUTOFF, name: "Cutoff".into(),
+                id: PARAM_CUTOFF,
+                name: "Cutoff".into(),
                 default_value: Self::cutoff_to_normalised(1_000.0),
-                min: 0.0, max: 1.0, unit: "Hz".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "Hz".into(),
+                automatable: true,
             }),
             PARAM_Q => Some(ParameterInfo {
-                id: PARAM_Q, name: "Q".into(),
+                id: PARAM_Q,
+                name: "Q".into(),
                 default_value: Self::q_to_normalised(0.7071),
-                min: 0.0, max: 1.0, unit: "".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "".into(),
+                automatable: true,
             }),
             PARAM_MIX => Some(ParameterInfo {
-                id: PARAM_MIX, name: "Mix".into(),
+                id: PARAM_MIX,
+                name: "Mix".into(),
                 default_value: 1.0,
-                min: 0.0, max: 1.0, unit: "%".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "%".into(),
+                automatable: true,
             }),
             _ => None,
         }
@@ -228,7 +255,8 @@ impl HostedPlugin for NativeFilter {
         format!(
             "{{\"mode\":{},\"cutoff\":{},\"q\":{},\"mix\":{}}}",
             self.mode as u32, self.cutoff_hz, self.q, self.mix
-        ).into_bytes()
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -237,7 +265,9 @@ impl HostedPlugin for NativeFilter {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
         if let Some(v) = read("mode") {
@@ -248,15 +278,27 @@ impl HostedPlugin for NativeFilter {
                 _ => BiquadKind::LowPass,
             };
         }
-        if let Some(v) = read("cutoff") { self.cutoff_hz = v; }
-        if let Some(v) = read("q") { self.q = v; }
-        if let Some(v) = read("mix") { self.mix = v.clamp(0.0, 1.0); }
+        if let Some(v) = read("cutoff") {
+            self.cutoff_hz = v;
+        }
+        if let Some(v) = read("q") {
+            self.q = v;
+        }
+        if let Some(v) = read("mix") {
+            self.mix = v.clamp(0.0, 1.0);
+        }
         self.needs_recoef = true;
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

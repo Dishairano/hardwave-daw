@@ -49,7 +49,10 @@ fn preset_dir(app: &AppHandle, plugin_id: &str) -> Result<PathBuf, String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("app_data_dir: {e}"))?;
-    let dir = base.join("hardwave").join("presets").join(sanitize(plugin_id));
+    let dir = base
+        .join("hardwave")
+        .join("presets")
+        .join(sanitize(plugin_id));
     fs::create_dir_all(&dir).map_err(|e| format!("create_dir_all {}: {e}", dir.display()))?;
     Ok(dir)
 }
@@ -85,10 +88,7 @@ fn unix_now() -> u64 {
 }
 
 #[tauri::command]
-pub fn list_plugin_presets(
-    app: AppHandle,
-    plugin_id: String,
-) -> Result<Vec<PresetInfo>, String> {
+pub fn list_plugin_presets(app: AppHandle, plugin_id: String) -> Result<Vec<PresetInfo>, String> {
     let dir = preset_dir(&app, &plugin_id)?;
     Ok(read_index(&dir))
 }
@@ -118,8 +118,7 @@ pub fn save_plugin_preset(
 
     let dir = preset_dir(&app, &plugin_id)?;
     let preset_id = uuid::Uuid::new_v4().to_string();
-    fs::write(blob_path(&dir, &preset_id), &bytes)
-        .map_err(|e| format!("write blob: {e}"))?;
+    fs::write(blob_path(&dir, &preset_id), &bytes).map_err(|e| format!("write blob: {e}"))?;
 
     let info = PresetInfo {
         id: preset_id.clone(),
@@ -146,8 +145,7 @@ pub fn load_plugin_preset(
     preset_id: String,
 ) -> Result<(), String> {
     let dir = preset_dir(&app, &plugin_id)?;
-    let bytes = fs::read(blob_path(&dir, &preset_id))
-        .map_err(|e| format!("read blob: {e}"))?;
+    let bytes = fs::read(blob_path(&dir, &preset_id)).map_err(|e| format!("read blob: {e}"))?;
     let cmd = InsertCommand::SetState {
         track_id,
         slot_id,

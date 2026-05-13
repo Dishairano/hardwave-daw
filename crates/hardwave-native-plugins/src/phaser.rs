@@ -84,11 +84,15 @@ impl NativePhaser {
 }
 
 impl Default for NativePhaser {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativePhaser {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -97,7 +101,9 @@ impl HostedPlugin for NativePhaser {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -123,8 +129,10 @@ impl HostedPlugin for NativePhaser {
         // at typical block sizes (64-256 samples).
         let base_l = self.modulated_base(self.lfo_phase_l);
         let base_r = self.modulated_base(self.lfo_phase_r);
-        self.chain_l.set_notches(base_l, self.spread_octaves, self.sample_rate);
-        self.chain_r.set_notches(base_r, self.spread_octaves, self.sample_rate);
+        self.chain_l
+            .set_notches(base_l, self.spread_octaves, self.sample_rate);
+        self.chain_r
+            .set_notches(base_r, self.spread_octaves, self.sample_rate);
 
         let mix = self.mix;
         let dry = 1.0 - mix;
@@ -143,20 +151,33 @@ impl HostedPlugin for NativePhaser {
         self.lfo_phase_r = (self.lfo_phase_r + dphase) % 1.0;
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
             PARAM_RATE => ("Rate", (0.5_f64 / 8.0).clamp(0.0, 1.0), "Hz"),
             PARAM_DEPTH => ("Depth", 1.5 / 4.0, "oct"),
-            PARAM_BASE => ("Base", ((500.0_f64.log10() - 100.0_f64.log10()) / (5_000.0_f64.log10() - 100.0_f64.log10())).clamp(0.0, 1.0), "Hz"),
+            PARAM_BASE => (
+                "Base",
+                ((500.0_f64.log10() - 100.0_f64.log10())
+                    / (5_000.0_f64.log10() - 100.0_f64.log10()))
+                .clamp(0.0, 1.0),
+                "Hz",
+            ),
             PARAM_SPREAD => ("Spread", 2.0 / 4.0, "oct"),
             PARAM_MIX => ("Mix", 0.5, "%"),
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -195,7 +216,8 @@ impl HostedPlugin for NativePhaser {
         format!(
             "{{\"rate\":{},\"depth\":{},\"base\":{},\"spread\":{},\"mix\":{}}}",
             self.rate_hz, self.depth_octaves, self.base_hz, self.spread_octaves, self.mix
-        ).into_bytes()
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -204,19 +226,37 @@ impl HostedPlugin for NativePhaser {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("rate") { self.rate_hz = v.clamp(0.0, 8.0); }
-        if let Some(v) = read("depth") { self.depth_octaves = v.clamp(0.0, 4.0); }
-        if let Some(v) = read("base") { self.base_hz = v.clamp(20.0, 20_000.0); }
-        if let Some(v) = read("spread") { self.spread_octaves = v.clamp(0.0, 4.0); }
-        if let Some(v) = read("mix") { self.mix = v.clamp(0.0, 1.0); }
+        if let Some(v) = read("rate") {
+            self.rate_hz = v.clamp(0.0, 8.0);
+        }
+        if let Some(v) = read("depth") {
+            self.depth_octaves = v.clamp(0.0, 4.0);
+        }
+        if let Some(v) = read("base") {
+            self.base_hz = v.clamp(20.0, 20_000.0);
+        }
+        if let Some(v) = read("spread") {
+            self.spread_octaves = v.clamp(0.0, 4.0);
+        }
+        if let Some(v) = read("mix") {
+            self.mix = v.clamp(0.0, 1.0);
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

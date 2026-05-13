@@ -42,14 +42,8 @@ pub struct AppState {
     /// editor instance to the same queue. Without this table, the
     /// editor and chain hold separate queues and GUI knob movements
     /// never reach the audio thread.
-    pub slot_param_queues: Arc<
-        Mutex<
-            std::collections::HashMap<
-                (String, String),
-                Arc<Mutex<Vec<(u32, f64)>>>,
-            >,
-        >,
-    >,
+    pub slot_param_queues:
+        Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
     /// Cached launch-time decision from `resolve_launch_plan`. Populated
     /// by the splash-driven `frontend_update_check_and_apply` and READ by
     /// the follow-up `version_contract_state` command so both fronts of

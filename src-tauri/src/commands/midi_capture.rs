@@ -29,35 +29,78 @@ impl CapturedMidiEntry {
     fn from(sample_pos: u64, ev: hardwave_midi::MidiEvent) -> Self {
         use hardwave_midi::MidiEvent;
         match ev {
-            MidiEvent::NoteOn { channel, note, velocity, .. } => Self {
-                sample_pos, kind: "note_on", channel,
-                note: Some(note), velocity: Some(velocity),
-                cc: None, value: None,
+            MidiEvent::NoteOn {
+                channel,
+                note,
+                velocity,
+                ..
+            } => Self {
+                sample_pos,
+                kind: "note_on",
+                channel,
+                note: Some(note),
+                velocity: Some(velocity),
+                cc: None,
+                value: None,
             },
-            MidiEvent::NoteOff { channel, note, velocity, .. } => Self {
-                sample_pos, kind: "note_off", channel,
-                note: Some(note), velocity: Some(velocity),
-                cc: None, value: None,
+            MidiEvent::NoteOff {
+                channel,
+                note,
+                velocity,
+                ..
+            } => Self {
+                sample_pos,
+                kind: "note_off",
+                channel,
+                note: Some(note),
+                velocity: Some(velocity),
+                cc: None,
+                value: None,
             },
-            MidiEvent::ControlChange { channel, cc, value, .. } => Self {
-                sample_pos, kind: "control_change", channel,
-                note: None, velocity: None,
-                cc: Some(cc), value: Some(value),
+            MidiEvent::ControlChange {
+                channel, cc, value, ..
+            } => Self {
+                sample_pos,
+                kind: "control_change",
+                channel,
+                note: None,
+                velocity: None,
+                cc: Some(cc),
+                value: Some(value),
             },
             MidiEvent::PitchBend { channel, value, .. } => Self {
-                sample_pos, kind: "pitch_bend", channel,
-                note: None, velocity: None,
-                cc: None, value: Some(value),
+                sample_pos,
+                kind: "pitch_bend",
+                channel,
+                note: None,
+                velocity: None,
+                cc: None,
+                value: Some(value),
             },
-            MidiEvent::Aftertouch { channel, note, pressure, .. } => Self {
-                sample_pos, kind: "aftertouch", channel,
-                note: Some(note), velocity: Some(pressure),
-                cc: None, value: None,
+            MidiEvent::Aftertouch {
+                channel,
+                note,
+                pressure,
+                ..
+            } => Self {
+                sample_pos,
+                kind: "aftertouch",
+                channel,
+                note: Some(note),
+                velocity: Some(pressure),
+                cc: None,
+                value: None,
             },
-            MidiEvent::ChannelPressure { channel, pressure, .. } => Self {
-                sample_pos, kind: "channel_pressure", channel,
-                note: None, velocity: Some(pressure),
-                cc: None, value: None,
+            MidiEvent::ChannelPressure {
+                channel, pressure, ..
+            } => Self {
+                sample_pos,
+                kind: "channel_pressure",
+                channel,
+                note: None,
+                velocity: Some(pressure),
+                cc: None,
+                value: None,
             },
         }
     }

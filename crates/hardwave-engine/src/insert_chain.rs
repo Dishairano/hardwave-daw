@@ -379,19 +379,13 @@ impl PluginGraveyardReceiver {
 /// Build a paired (sender, receiver) for the UI→audio command channel.
 pub fn command_channel(capacity: usize) -> (InsertCommandSender, InsertCommandReceiver) {
     let (tx, rx) = RingBuffer::<InsertCommand>::new(capacity);
-    (
-        InsertCommandSender { tx },
-        InsertCommandReceiver { rx },
-    )
+    (InsertCommandSender { tx }, InsertCommandReceiver { rx })
 }
 
 /// Build a paired (sender, receiver) for the audio→graveyard channel.
 pub fn graveyard_channel(capacity: usize) -> (PluginGraveyardSender, PluginGraveyardReceiver) {
     let (tx, rx) = RingBuffer::<LiveSlot>::new(capacity);
-    (
-        PluginGraveyardSender { tx },
-        PluginGraveyardReceiver { rx },
-    )
+    (PluginGraveyardSender { tx }, PluginGraveyardReceiver { rx })
 }
 
 /// Audio-thread orchestrator that drains the command queue and applies
@@ -406,11 +400,7 @@ pub struct InsertRouter {
 }
 
 impl InsertRouter {
-    pub fn new(
-        graveyard: PluginGraveyardSender,
-        sample_rate: f64,
-        max_block_size: u32,
-    ) -> Self {
+    pub fn new(graveyard: PluginGraveyardSender, sample_rate: f64, max_block_size: u32) -> Self {
         Self {
             chains: HashMap::new(),
             graveyard,
@@ -455,22 +445,39 @@ impl InsertRouter {
                     chain.reorder(from, to);
                 }
             }
-            InsertCommand::SetEnabled { track_id, slot_id, enabled } => {
+            InsertCommand::SetEnabled {
+                track_id,
+                slot_id,
+                enabled,
+            } => {
                 if let Some(chain) = self.chains.get_mut(&track_id) {
                     chain.set_enabled(&slot_id, enabled);
                 }
             }
-            InsertCommand::SetWet { track_id, slot_id, wet } => {
+            InsertCommand::SetWet {
+                track_id,
+                slot_id,
+                wet,
+            } => {
                 if let Some(chain) = self.chains.get_mut(&track_id) {
                     chain.set_wet(&slot_id, wet);
                 }
             }
-            InsertCommand::SetParameter { track_id, slot_id, param_id, value } => {
+            InsertCommand::SetParameter {
+                track_id,
+                slot_id,
+                param_id,
+                value,
+            } => {
                 if let Some(chain) = self.chains.get_mut(&track_id) {
                     chain.set_parameter(&slot_id, param_id, value);
                 }
             }
-            InsertCommand::SetState { track_id, slot_id, bytes } => {
+            InsertCommand::SetState {
+                track_id,
+                slot_id,
+                bytes,
+            } => {
                 if let Some(chain) = self.chains.get_mut(&track_id) {
                     chain.set_state(&slot_id, &bytes);
                 }
@@ -506,8 +513,8 @@ mod tests {
     };
     use raw_window_handle::RawWindowHandle;
     use std::path::PathBuf;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
 
     /// Minimal test plug-in: applies a constant gain stored in
     /// parameter 0. Lets us check end-to-end audio flow without a
@@ -753,9 +760,16 @@ mod tests {
         chain.process(&mut left, &mut right, 256, &mut scratch, &events);
 
         let captured = seen.lock().clone();
-        assert_eq!(captured.len(), 2, "MidiSinkPlugin should have received both events");
+        assert_eq!(
+            captured.len(),
+            2,
+            "MidiSinkPlugin should have received both events"
+        );
         assert!(matches!(captured[0], MidiEvent::NoteOn { note: 60, .. }));
-        assert!(matches!(captured[1], MidiEvent::ControlChange { cc: 7, .. }));
+        assert!(matches!(
+            captured[1],
+            MidiEvent::ControlChange { cc: 7, .. }
+        ));
     }
 
     #[test]
@@ -882,14 +896,23 @@ mod tests {
     fn router_add_then_process_runs_chain() {
         let (mut tx, mut rx, mut router, mut graveyard) = build_runtime(48_000.0, 512);
         let (slot, counter) = make_gain_slot("s1", 2.0, true);
-        tx.try_send(InsertCommand::Add { track_id: "t".into(), slot }).ok().unwrap();
+        tx.try_send(InsertCommand::Add {
+            track_id: "t".into(),
+            slot,
+        })
+        .ok()
+        .unwrap();
         router.drain(&mut rx);
         assert_eq!(router.chains.len(), 1);
 
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        router.chains.get_mut("t").unwrap().process(&mut left, &mut right, 256, &mut scratch, &[]);
+        router
+            .chains
+            .get_mut("t")
+            .unwrap()
+            .process(&mut left, &mut right, 256, &mut scratch, &[]);
         assert!(left.iter().all(|&v| (v - 1.0).abs() < 1e-6));
         assert_eq!(counter.load(Ordering::Relaxed), 1);
         assert_eq!(graveyard.drain_and_drop(), 0);
@@ -899,7 +922,12 @@ mod tests {
     fn router_remove_buries_slot_off_audio_thread() {
         let (mut tx, mut rx, mut router, mut graveyard) = build_runtime(48_000.0, 512);
         let (slot, _) = make_gain_slot("s1", 2.0, true);
-        tx.try_send(InsertCommand::Add { track_id: "t".into(), slot }).ok().unwrap();
+        tx.try_send(InsertCommand::Add {
+            track_id: "t".into(),
+            slot,
+        })
+        .ok()
+        .unwrap();
         router.drain(&mut rx);
         tx.try_send(InsertCommand::Remove {
             track_id: "t".into(),
@@ -917,7 +945,12 @@ mod tests {
         let (mut tx, mut rx, mut router, _) = build_runtime(48_000.0, 512);
         for id in ["a", "b", "c"] {
             let (slot, _) = make_gain_slot(id, 1.0, true);
-            tx.try_send(InsertCommand::Add { track_id: "t".into(), slot }).ok().unwrap();
+            tx.try_send(InsertCommand::Add {
+                track_id: "t".into(),
+                slot,
+            })
+            .ok()
+            .unwrap();
         }
         router.drain(&mut rx);
         tx.try_send(InsertCommand::Reorder {
@@ -943,7 +976,12 @@ mod tests {
     fn router_set_parameter_takes_effect_on_next_process() {
         let (mut tx, mut rx, mut router, _) = build_runtime(48_000.0, 512);
         let (slot, _) = make_gain_slot("s1", 1.0, true);
-        tx.try_send(InsertCommand::Add { track_id: "t".into(), slot }).ok().unwrap();
+        tx.try_send(InsertCommand::Add {
+            track_id: "t".into(),
+            slot,
+        })
+        .ok()
+        .unwrap();
         router.drain(&mut rx);
         tx.try_send(InsertCommand::SetParameter {
             track_id: "t".into(),
@@ -958,7 +996,11 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        router.chains.get_mut("t").unwrap().process(&mut left, &mut right, 256, &mut scratch, &[]);
+        router
+            .chains
+            .get_mut("t")
+            .unwrap()
+            .process(&mut left, &mut right, 256, &mut scratch, &[]);
         // 0.5 × gain(4.0) = 2.0
         assert!(left.iter().all(|&v| (v - 2.0).abs() < 1e-6));
     }
@@ -967,7 +1009,12 @@ mod tests {
     fn router_set_enabled_toggles_chain() {
         let (mut tx, mut rx, mut router, _) = build_runtime(48_000.0, 512);
         let (slot, counter) = make_gain_slot("s1", 2.0, true);
-        tx.try_send(InsertCommand::Add { track_id: "t".into(), slot }).ok().unwrap();
+        tx.try_send(InsertCommand::Add {
+            track_id: "t".into(),
+            slot,
+        })
+        .ok()
+        .unwrap();
         router.drain(&mut rx);
 
         // Disable.
@@ -983,8 +1030,16 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        router.chains.get_mut("t").unwrap().process(&mut left, &mut right, 256, &mut scratch, &[]);
+        router
+            .chains
+            .get_mut("t")
+            .unwrap()
+            .process(&mut left, &mut right, 256, &mut scratch, &[]);
         assert!(left.iter().all(|&v| (v - 0.5).abs() < 1e-6));
-        assert_eq!(counter.load(Ordering::Relaxed), 0, "disabled slot should not call plugin");
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            0,
+            "disabled slot should not call plugin"
+        );
     }
 }

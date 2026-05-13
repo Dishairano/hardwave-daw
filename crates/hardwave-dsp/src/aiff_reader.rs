@@ -122,8 +122,7 @@ pub fn decode_aiff(bytes: &[u8]) -> Result<(AudioFileInfo, Vec<Vec<f32>>), Audio
                 let num_channels = read_u16_be(&bytes[data_start..data_start + 2])?;
                 let num_sample_frames = read_u32_be(&bytes[data_start + 2..data_start + 6])?;
                 let sample_size_bits = read_u16_be(&bytes[data_start + 6..data_start + 8])?;
-                let sample_rate =
-                    read_extended_precision(&bytes[data_start + 8..data_start + 18])?;
+                let sample_rate = read_extended_precision(&bytes[data_start + 8..data_start + 18])?;
                 if is_aifc && size >= 22 {
                     let compression_type = &bytes[data_start + 18..data_start + 22];
                     // "NONE" = uncompressed big-endian PCM (standard)
@@ -171,7 +170,8 @@ pub fn decode_aiff(bytes: &[u8]) -> Result<(AudioFileInfo, Vec<Vec<f32>>), Audio
     }
 
     let comm = comm.ok_or_else(|| AudioFileError::Decode("AIFF: no COMM chunk".into()))?;
-    let ssnd_start = ssnd_start.ok_or_else(|| AudioFileError::Decode("AIFF: no SSND chunk".into()))?;
+    let ssnd_start =
+        ssnd_start.ok_or_else(|| AudioFileError::Decode("AIFF: no SSND chunk".into()))?;
 
     let channels = comm.num_channels as usize;
     if channels == 0 {
@@ -200,7 +200,8 @@ pub fn decode_aiff(bytes: &[u8]) -> Result<(AudioFileInfo, Vec<Vec<f32>>), Audio
     let frames_in_chunk = audio_bytes.len() / frame_size.max(1);
     let frames = frames_in_chunk.min(comm.num_sample_frames as usize);
 
-    let mut channel_bufs: Vec<Vec<f32>> = (0..channels).map(|_| Vec::with_capacity(frames)).collect();
+    let mut channel_bufs: Vec<Vec<f32>> =
+        (0..channels).map(|_| Vec::with_capacity(frames)).collect();
 
     for f in 0..frames {
         let frame_off = f * frame_size;
@@ -281,7 +282,9 @@ fn read_u32_be(b: &[u8]) -> Result<u32, AudioFileError> {
 /// so an integer-only path is sufficient.
 fn read_extended_precision(b: &[u8]) -> Result<u32, AudioFileError> {
     if b.len() < 10 {
-        return Err(AudioFileError::Decode("AIFF: short extended sample rate".into()));
+        return Err(AudioFileError::Decode(
+            "AIFF: short extended sample rate".into(),
+        ));
     }
     let exponent_be = ((b[0] as u32) << 8) | b[1] as u32;
     let sign = (exponent_be & 0x8000) != 0;

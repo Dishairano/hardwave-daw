@@ -84,11 +84,15 @@ impl NativeTransient {
 }
 
 impl Default for NativeTransient {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeTransient {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -99,7 +103,9 @@ impl HostedPlugin for NativeTransient {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -129,8 +135,10 @@ impl HostedPlugin for NativeTransient {
             let slow_l = self.env_slow_l.process(in_l);
             let slow_r = self.env_slow_r.process(in_r);
             // Transient amount = how much fast > slow (clamped 0..1)
-            let trans_l = ((linear_to_db(fast_l) - linear_to_db(slow_l) + 6.0) / 12.0).clamp(0.0, 1.0);
-            let trans_r = ((linear_to_db(fast_r) - linear_to_db(slow_r) + 6.0) / 12.0).clamp(0.0, 1.0);
+            let trans_l =
+                ((linear_to_db(fast_l) - linear_to_db(slow_l) + 6.0) / 12.0).clamp(0.0, 1.0);
+            let trans_r =
+                ((linear_to_db(fast_r) - linear_to_db(slow_r) + 6.0) / 12.0).clamp(0.0, 1.0);
             // Apply attack gain to transient portion, sustain gain to rest.
             let gain_l_db = trans_l * self.attack_db + (1.0 - trans_l) * self.sustain_db;
             let gain_r_db = trans_r * self.attack_db + (1.0 - trans_r) * self.sustain_db;
@@ -141,18 +149,25 @@ impl HostedPlugin for NativeTransient {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
-            PARAM_ATTACK => ("Attack", 0.5, "dB"),  // 0.5 = unity (-12..+12 mapping)
+            PARAM_ATTACK => ("Attack", 0.5, "dB"), // 0.5 = unity (-12..+12 mapping)
             PARAM_SUSTAIN => ("Sustain", 0.5, "dB"),
             PARAM_OUTPUT => ("Output", 0.5, "dB"),
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -180,7 +195,8 @@ impl HostedPlugin for NativeTransient {
         format!(
             "{{\"a\":{},\"s\":{},\"o\":{}}}",
             self.attack_db, self.sustain_db, self.output_db
-        ).into_bytes()
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -189,17 +205,31 @@ impl HostedPlugin for NativeTransient {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("a") { self.attack_db = v.clamp(-12.0, 12.0); }
-        if let Some(v) = read("s") { self.sustain_db = v.clamp(-12.0, 12.0); }
-        if let Some(v) = read("o") { self.output_db = v.clamp(-12.0, 12.0); }
+        if let Some(v) = read("a") {
+            self.attack_db = v.clamp(-12.0, 12.0);
+        }
+        if let Some(v) = read("s") {
+            self.sustain_db = v.clamp(-12.0, 12.0);
+        }
+        if let Some(v) = read("o") {
+            self.output_db = v.clamp(-12.0, 12.0);
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

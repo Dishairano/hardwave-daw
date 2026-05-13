@@ -223,7 +223,11 @@ impl MidiTrackNode {
         match voice.stage {
             EnvStage::Idle => 0.0,
             EnvStage::Attack => {
-                let step = if ATTACK_SECS > 0.0 { 1.0 / (ATTACK_SECS * sr) } else { 1.0 };
+                let step = if ATTACK_SECS > 0.0 {
+                    1.0 / (ATTACK_SECS * sr)
+                } else {
+                    1.0
+                };
                 voice.env_value += step;
                 if voice.env_value >= 1.0 {
                     voice.env_value = 1.0;
@@ -246,7 +250,11 @@ impl MidiTrackNode {
             }
             EnvStage::Sustain => SUSTAIN_LEVEL,
             EnvStage::Release => {
-                let step = if RELEASE_SECS > 0.0 { voice.env_value / (RELEASE_SECS * sr) } else { voice.env_value };
+                let step = if RELEASE_SECS > 0.0 {
+                    voice.env_value / (RELEASE_SECS * sr)
+                } else {
+                    voice.env_value
+                };
                 voice.env_value -= step;
                 if voice.env_value <= 0.0 {
                     voice.env_value = 0.0;
@@ -294,12 +302,9 @@ impl AudioNode for MidiTrackNode {
         // makes that work.
         for ev in midi_in {
             match *ev {
-                hardwave_midi::MidiEvent::NoteOn {
-                    note, velocity, ..
-                } => match self.instrument {
+                hardwave_midi::MidiEvent::NoteOn { note, velocity, .. } => match self.instrument {
                     Instrument::BuiltinSine => {
-                        let carry_gain =
-                            self.voice.as_ref().map(|v| v.env_value).unwrap_or(0.0);
+                        let carry_gain = self.voice.as_ref().map(|v| v.env_value).unwrap_or(0.0);
                         self.voice = Some(Voice {
                             freq: pitch_to_freq(note),
                             velocity: velocity.clamp(0.0, 1.0),
@@ -491,7 +496,9 @@ impl AudioNode for MidiTrackNode {
         self.meter.peak_db_l.store(peak_db_l, Ordering::Relaxed);
         self.meter.peak_db_r.store(peak_db_r, Ordering::Relaxed);
         self.meter.rms_db.store(rms_db, Ordering::Relaxed);
-        self.meter.pre_fader_peak_db.store(pre_peak_db, Ordering::Relaxed);
+        self.meter
+            .pre_fader_peak_db
+            .store(pre_peak_db, Ordering::Relaxed);
 
         // Soloed flag: the engine's mix step honours TrackKind solo across
         // the whole project, so we just expose our own solo bit unchanged.
@@ -554,7 +561,10 @@ mod tests {
             .iter()
             .chain(out[1].iter())
             .fold(0.0_f32, |a, b| a.max(b.abs()));
-        assert!(peak > 0.0, "live NoteOn should produce audible output, got peak={peak}");
+        assert!(
+            peak > 0.0,
+            "live NoteOn should produce audible output, got peak={peak}"
+        );
     }
 
     /// Live NoteOff while transport stopped — voice transitions into
@@ -584,7 +594,11 @@ mod tests {
         node.process(&inputs, &mut out, &off, &mut midi_out, &ctx);
 
         let stage = node.voice.as_ref().map(|v| v.stage);
-        assert_eq!(stage, Some(EnvStage::Release), "matching NoteOff should trigger release");
+        assert_eq!(
+            stage,
+            Some(EnvStage::Release),
+            "matching NoteOff should trigger release"
+        );
     }
 
     /// While the transport is stopped, clip-scheduled notes must NOT
@@ -610,6 +624,9 @@ mod tests {
 
         // With transport stopped, next_note_idx must stay at 0 — the
         // clip schedule never advances.
-        assert_eq!(node.next_note_idx, 0, "clip schedule must not advance while stopped");
+        assert_eq!(
+            node.next_note_idx, 0,
+            "clip schedule must not advance while stopped"
+        );
     }
 }

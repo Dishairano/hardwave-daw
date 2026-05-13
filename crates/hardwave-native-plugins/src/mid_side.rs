@@ -17,7 +17,11 @@ const PARAM_SOLO: u32 = 2;
 const PARAM_COUNT: u32 = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Solo { Off, Mid, Side }
+enum Solo {
+    Off,
+    Mid,
+    Side,
+}
 
 fn solo_from_norm(v: f32) -> Solo {
     let i = ((v.clamp(0.0, 1.0) * 3.0).floor() as i32).clamp(0, 2);
@@ -29,7 +33,11 @@ fn solo_from_norm(v: f32) -> Solo {
 }
 
 fn solo_to_norm(s: Solo) -> f64 {
-    let i = match s { Solo::Off => 0, Solo::Mid => 1, Solo::Side => 2 };
+    let i = match s {
+        Solo::Off => 0,
+        Solo::Mid => 1,
+        Solo::Side => 2,
+    };
     (i as f64 + 0.5) / 3.0
 }
 
@@ -72,17 +80,23 @@ impl NativeMidSide {
 }
 
 impl Default for NativeMidSide {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeMidSide {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, _sr: f64, _max: u32) -> Result<(), String> {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -122,18 +136,25 @@ impl HostedPlugin for NativeMidSide {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
-            PARAM_MID_GAIN => ("Mid", 0.5, "dB"),  // 0.5 = unity in -24..+24 mapping
+            PARAM_MID_GAIN => ("Mid", 0.5, "dB"), // 0.5 = unity in -24..+24 mapping
             PARAM_SIDE_GAIN => ("Side", 0.5, "dB"),
             PARAM_SOLO => ("Solo", solo_to_norm(Solo::Off), ""),
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -160,8 +181,11 @@ impl HostedPlugin for NativeMidSide {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"mid\":{},\"side\":{},\"solo\":{}}}",
-            self.mid_gain_db, self.side_gain_db, solo_to_norm(self.solo)
-        ).into_bytes()
+            self.mid_gain_db,
+            self.side_gain_db,
+            solo_to_norm(self.solo)
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -170,17 +194,31 @@ impl HostedPlugin for NativeMidSide {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("mid") { self.mid_gain_db = v.clamp(-24.0, 24.0); }
-        if let Some(v) = read("side") { self.side_gain_db = v.clamp(-24.0, 24.0); }
-        if let Some(v) = read("solo") { self.solo = solo_from_norm(v); }
+        if let Some(v) = read("mid") {
+            self.mid_gain_db = v.clamp(-24.0, 24.0);
+        }
+        if let Some(v) = read("side") {
+            self.side_gain_db = v.clamp(-24.0, 24.0);
+        }
+        if let Some(v) = read("solo") {
+            self.solo = solo_from_norm(v);
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

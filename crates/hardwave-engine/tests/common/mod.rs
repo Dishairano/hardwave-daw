@@ -99,11 +99,7 @@ pub struct RenderStats {
     pub inf_count: usize,
 }
 
-pub fn render_and_measure(
-    engine: &DawEngine,
-    sample_rate: u32,
-    total_samples: u64,
-) -> RenderStats {
+pub fn render_and_measure(engine: &DawEngine, sample_rate: u32, total_samples: u64) -> RenderStats {
     let mut peak = 0.0_f32;
     let mut sum_sq = 0.0_f64;
     let mut frames = 0_usize;

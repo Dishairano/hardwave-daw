@@ -57,11 +57,15 @@ impl NativeRingMod {
 }
 
 impl Default for NativeRingMod {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeRingMod {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -69,7 +73,9 @@ impl HostedPlugin for NativeRingMod {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -103,22 +109,30 @@ impl HostedPlugin for NativeRingMod {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
             // 1..2000 Hz log
             PARAM_FREQUENCY => (
                 "Frequency",
-                ((200.0_f64.log10() - 1.0_f64.log10()) / (2_000.0_f64.log10() - 1.0_f64.log10())).clamp(0.0, 1.0),
+                ((200.0_f64.log10() - 1.0_f64.log10()) / (2_000.0_f64.log10() - 1.0_f64.log10()))
+                    .clamp(0.0, 1.0),
                 "Hz",
             ),
             PARAM_MIX => ("Mix", 0.5, "%"),
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -157,16 +171,28 @@ impl HostedPlugin for NativeRingMod {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("freq") { self.frequency_hz = v.clamp(1.0, 2_000.0); }
-        if let Some(v) = read("mix") { self.mix = v.clamp(0.0, 1.0); }
+        if let Some(v) = read("freq") {
+            self.frequency_hz = v.clamp(1.0, 2_000.0);
+        }
+        if let Some(v) = read("mix") {
+            self.mix = v.clamp(0.0, 1.0);
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

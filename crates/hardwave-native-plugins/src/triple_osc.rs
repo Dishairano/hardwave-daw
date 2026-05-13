@@ -76,7 +76,11 @@ struct Voice {
 impl Voice {
     fn new(sr: f32) -> Self {
         Self {
-            oscs: [Oscillator::new(sr), Oscillator::new(sr), Oscillator::new(sr)],
+            oscs: [
+                Oscillator::new(sr),
+                Oscillator::new(sr),
+                Oscillator::new(sr),
+            ],
             env: AdsrEnvelope::new(sr),
             note: 0,
             velocity: 0.0,
@@ -151,19 +155,27 @@ impl NativeTripleOsc {
 }
 
 impl Default for NativeTripleOsc {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeTripleOsc {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
-        self.voices = (0..Self::POLYPHONY).map(|_| Voice::new(self.sample_rate)).collect();
+        self.voices = (0..Self::POLYPHONY)
+            .map(|_| Voice::new(self.sample_rate))
+            .collect();
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -218,7 +230,9 @@ impl HostedPlugin for NativeTripleOsc {
         }
 
         for v in self.voices.iter_mut() {
-            if !v.active { continue; }
+            if !v.active {
+                continue;
+            }
             for i in 0..num_samples {
                 let env = v.env.tick();
                 if env <= 0.0 && v.env.stage() == AdsrStage::Idle {
@@ -233,22 +247,35 @@ impl HostedPlugin for NativeTripleOsc {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let name = match index {
-            PARAM_OSC1_WAVE => "Osc1 Wave", PARAM_OSC1_DETUNE => "Osc1 Detune", PARAM_OSC1_LEVEL => "Osc1 Level",
-            PARAM_OSC2_WAVE => "Osc2 Wave", PARAM_OSC2_DETUNE => "Osc2 Detune", PARAM_OSC2_LEVEL => "Osc2 Level",
-            PARAM_OSC3_WAVE => "Osc3 Wave", PARAM_OSC3_DETUNE => "Osc3 Detune", PARAM_OSC3_LEVEL => "Osc3 Level",
-            PARAM_ATTACK => "Attack", PARAM_DECAY => "Decay",
-            PARAM_SUSTAIN => "Sustain", PARAM_RELEASE => "Release",
+            PARAM_OSC1_WAVE => "Osc1 Wave",
+            PARAM_OSC1_DETUNE => "Osc1 Detune",
+            PARAM_OSC1_LEVEL => "Osc1 Level",
+            PARAM_OSC2_WAVE => "Osc2 Wave",
+            PARAM_OSC2_DETUNE => "Osc2 Detune",
+            PARAM_OSC2_LEVEL => "Osc2 Level",
+            PARAM_OSC3_WAVE => "Osc3 Wave",
+            PARAM_OSC3_DETUNE => "Osc3 Detune",
+            PARAM_OSC3_LEVEL => "Osc3 Level",
+            PARAM_ATTACK => "Attack",
+            PARAM_DECAY => "Decay",
+            PARAM_SUSTAIN => "Sustain",
+            PARAM_RELEASE => "Release",
             _ => return None,
         };
         Some(ParameterInfo {
             id: index,
             name: name.into(),
             default_value: self.get_parameter_value(index),
-            min: 0.0, max: 1.0, unit: "".into(), automatable: true,
+            min: 0.0,
+            max: 1.0,
+            unit: "".into(),
+            automatable: true,
         })
     }
 
@@ -294,17 +321,35 @@ impl HostedPlugin for NativeTripleOsc {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"w\":[{},{},{}],\"d\":[{},{},{}],\"l\":[{},{},{}],\"adsr\":[{},{},{},{}]}}",
-            wave_index(self.waves[0]), wave_index(self.waves[1]), wave_index(self.waves[2]),
-            self.detune[0], self.detune[1], self.detune[2],
-            self.levels[0], self.levels[1], self.levels[2],
-            self.attack, self.decay, self.sustain, self.release
-        ).into_bytes()
+            wave_index(self.waves[0]),
+            wave_index(self.waves[1]),
+            wave_index(self.waves[2]),
+            self.detune[0],
+            self.detune[1],
+            self.detune[2],
+            self.levels[0],
+            self.levels[1],
+            self.levels[2],
+            self.attack,
+            self.decay,
+            self.sustain,
+            self.release
+        )
+        .into_bytes()
     }
 
-    fn set_state(&mut self, _state: &[u8]) -> Result<(), String> { Ok(()) }
+    fn set_state(&mut self, _state: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

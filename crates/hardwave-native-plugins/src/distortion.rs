@@ -8,8 +8,7 @@
 //! lands in a follow-up commit.
 
 use hardwave_dsp::distortion::{
-    bitcrush, drive_compensate, hard_clip, parallel_mix, soft_clip, tape_saturation,
-    tube_emulation,
+    bitcrush, drive_compensate, hard_clip, parallel_mix, soft_clip, tape_saturation, tube_emulation,
 };
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -62,10 +61,10 @@ impl Mode {
 
 pub struct NativeDistortion {
     descriptor: PluginDescriptor,
-    drive_db: f32,    // 0..=24
+    drive_db: f32, // 0..=24
     mode: Mode,
-    mix: f32,         // 0..=1 (0 = dry, 1 = wet)
-    output_db: f32,   // -24..=24
+    mix: f32,       // 0..=1 (0 = dry, 1 = wet)
+    output_db: f32, // -24..=24
     active: bool,
 }
 
@@ -108,8 +107,7 @@ impl NativeDistortion {
             Mode::Bitcrush => {
                 // Map drive 0..=24 dB → 16..=2 bits so cranking drive
                 // crushes harder. Inverse so the knob feels right.
-                let bits = (16.0 - (self.drive_db / 24.0).clamp(0.0, 1.0) * 14.0)
-                    .round() as u8;
+                let bits = (16.0 - (self.drive_db / 24.0).clamp(0.0, 1.0) * 14.0).round() as u8;
                 bitcrush(sample, bits.max(1))
             }
         }
@@ -138,16 +136,22 @@ impl NativeDistortion {
 }
 
 impl Default for NativeDistortion {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeDistortion {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
     fn activate(&mut self, _sr: f64, _max_block: u32) -> Result<(), String> {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -185,29 +189,47 @@ impl HostedPlugin for NativeDistortion {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         match index {
             PARAM_DRIVE => Some(ParameterInfo {
-                id: PARAM_DRIVE, name: "Drive".into(),
+                id: PARAM_DRIVE,
+                name: "Drive".into(),
                 default_value: Self::to_normalised(PARAM_DRIVE, 6.0),
-                min: 0.0, max: 1.0, unit: "dB".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "dB".into(),
+                automatable: true,
             }),
             PARAM_MODE => Some(ParameterInfo {
-                id: PARAM_MODE, name: "Mode".into(),
+                id: PARAM_MODE,
+                name: "Mode".into(),
                 default_value: Mode::Soft.to_normalised() as f64,
-                min: 0.0, max: 1.0, unit: "".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "".into(),
+                automatable: true,
             }),
             PARAM_MIX => Some(ParameterInfo {
-                id: PARAM_MIX, name: "Mix".into(),
+                id: PARAM_MIX,
+                name: "Mix".into(),
                 default_value: 1.0,
-                min: 0.0, max: 1.0, unit: "%".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "%".into(),
+                automatable: true,
             }),
             PARAM_OUTPUT => Some(ParameterInfo {
-                id: PARAM_OUTPUT, name: "Output".into(),
+                id: PARAM_OUTPUT,
+                name: "Output".into(),
                 default_value: Self::to_normalised(PARAM_OUTPUT, 0.0),
-                min: 0.0, max: 1.0, unit: "dB".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "dB".into(),
+                automatable: true,
             }),
             _ => None,
         }
@@ -247,23 +269,40 @@ impl HostedPlugin for NativeDistortion {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("drive") { self.drive_db = v; }
+        if let Some(v) = read("drive") {
+            self.drive_db = v;
+        }
         if let Some(v) = read("mode") {
             self.mode = match v as u32 {
-                1 => Mode::Hard, 2 => Mode::Tape, 3 => Mode::Tube,
-                4 => Mode::Bitcrush, _ => Mode::Soft,
+                1 => Mode::Hard,
+                2 => Mode::Tape,
+                3 => Mode::Tube,
+                4 => Mode::Bitcrush,
+                _ => Mode::Soft,
             };
         }
-        if let Some(v) = read("mix") { self.mix = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("output") { self.output_db = v; }
+        if let Some(v) = read("mix") {
+            self.mix = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("output") {
+            self.output_db = v;
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

@@ -134,14 +134,12 @@ pub struct DawEngine {
     /// callback; `None` before start or after stop. Wrapped in a Mutex
     /// because Tauri command handlers fire concurrently — the
     /// underlying rtrb Producer is single-producer.
-    pub insert_command_sender:
-        Arc<Mutex<Option<crate::insert_chain::InsertCommandSender>>>,
+    pub insert_command_sender: Arc<Mutex<Option<crate::insert_chain::InsertCommandSender>>>,
 
     /// Receiver side of the audio→drop graveyard. The UI thread (or
     /// engine shutdown) drains and drops vacated plug-in instances so
     /// the audio thread never frees memory directly.
-    pub insert_graveyard:
-        Arc<Mutex<Option<crate::insert_chain::PluginGraveyardReceiver>>>,
+    pub insert_graveyard: Arc<Mutex<Option<crate::insert_chain::PluginGraveyardReceiver>>>,
 
     /// One-shot plug-in state snapshot request channel. The UI thread
     /// places a SyncSender here just before `save_project`, then waits
@@ -153,9 +151,7 @@ pub struct DawEngine {
     pub pending_state_snapshot: Arc<
         Mutex<
             Option<
-                std::sync::mpsc::SyncSender<
-                    std::collections::HashMap<(String, String), Vec<u8>>,
-                >,
+                std::sync::mpsc::SyncSender<std::collections::HashMap<(String, String), Vec<u8>>>,
             >,
         >,
     >,
@@ -321,7 +317,11 @@ impl DawEngine {
     /// pipeline to write the right WAV header.
     pub fn current_sample_rate(&self) -> u32 {
         let sr = self.audio_device.sample_rate;
-        if sr > 0 { sr } else { 48_000 }
+        if sr > 0 {
+            sr
+        } else {
+            48_000
+        }
     }
 
     /// Start the audio engine.
@@ -781,10 +781,8 @@ impl DawEngine {
         // the snapshot project is frozen — but EngineCallback's
         // signature requires them. Capacities are tiny because nothing
         // ever pushes here during offline.
-        let (_offline_cmd_tx, offline_cmd_rx) =
-            crate::insert_chain::command_channel(8);
-        let (offline_grave_tx, _offline_grave_rx) =
-            crate::insert_chain::graveyard_channel(8);
+        let (_offline_cmd_tx, offline_cmd_rx) = crate::insert_chain::command_channel(8);
+        let (offline_grave_tx, _offline_grave_rx) = crate::insert_chain::graveyard_channel(8);
 
         let mut callback = EngineCallback::new(
             transport,
@@ -899,9 +897,7 @@ struct EngineCallback {
     pending_state_snapshot: Arc<
         Mutex<
             Option<
-                std::sync::mpsc::SyncSender<
-                    std::collections::HashMap<(String, String), Vec<u8>>,
-                >,
+                std::sync::mpsc::SyncSender<std::collections::HashMap<(String, String), Vec<u8>>>,
             >,
         >,
     >,
@@ -1159,8 +1155,7 @@ impl EngineCallback {
         // re-attach to the freshly-built TrackNode below — or, if a
         // track was deleted, ship its chain to the graveyard for an
         // off-RT thread to drop.
-        let mut stashed_chains: HashMap<String, crate::insert_chain::InsertChain> =
-            HashMap::new();
+        let mut stashed_chains: HashMap<String, crate::insert_chain::InsertChain> = HashMap::new();
         for node in self.graph.iter_nodes_mut() {
             if let Some(track_id) = node.track_id().map(|s| s.to_string()) {
                 if let Some(chain) = node.take_chain() {
@@ -1246,8 +1241,7 @@ impl EngineCallback {
                 // sorted list.
                 let mut note_regions: Vec<crate::midi_track_node::MidiNoteRegion> = Vec::new();
                 for clip in &track.clips {
-                    let hardwave_project::clip::ClipContent::Midi(midi_ref) = &clip.content
-                    else {
+                    let hardwave_project::clip::ClipContent::Midi(midi_ref) = &clip.content else {
                         continue;
                     };
                     for note in &midi_ref.clip.notes {
@@ -1274,9 +1268,8 @@ impl EngineCallback {
                 // routing when the user explicitly sets it (the OR keeps
                 // the default-on behaviour while honouring the flags
                 // once set).
-                let accepts =
-                    matches!(track.kind, hardwave_project::TrackKind::Midi)
-                        || (track.armed && track.monitor_input);
+                let accepts = matches!(track.kind, hardwave_project::TrackKind::Midi)
+                    || (track.armed && track.monitor_input);
                 self.graph.set_accepts_live_midi(node_id, accepts);
                 track_id_to_node.insert(track.id.clone(), node_id);
                 continue;

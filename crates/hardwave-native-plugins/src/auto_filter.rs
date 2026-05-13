@@ -85,22 +85,30 @@ impl NativeAutoFilter {
 }
 
 impl Default for NativeAutoFilter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeAutoFilter {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
-        self.env_l.set_times(self.attack_ms, self.release_ms, self.sample_rate);
-        self.env_r.set_times(self.attack_ms, self.release_ms, self.sample_rate);
+        self.env_l
+            .set_times(self.attack_ms, self.release_ms, self.sample_rate);
+        self.env_r
+            .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         self.biquad_l.reset();
         self.biquad_r.reset();
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -134,33 +142,67 @@ impl HostedPlugin for NativeAutoFilter {
             if self.block_counter % 16 == 0 {
                 let octave_offset = env_avg.clamp(0.0, 1.0) * self.sensitivity * self.range_octaves;
                 let cutoff = (self.base_hz * 2.0_f32.powf(octave_offset)).clamp(20.0, 18_000.0);
-                self.biquad_l.set(BiquadKind::LowPass, self.sample_rate, cutoff, self.resonance, 0.0);
-                self.biquad_r.set(BiquadKind::LowPass, self.sample_rate, cutoff, self.resonance, 0.0);
+                self.biquad_l.set(
+                    BiquadKind::LowPass,
+                    self.sample_rate,
+                    cutoff,
+                    self.resonance,
+                    0.0,
+                );
+                self.biquad_r.set(
+                    BiquadKind::LowPass,
+                    self.sample_rate,
+                    cutoff,
+                    self.resonance,
+                    0.0,
+                );
             }
             outputs[0][i] = self.biquad_l.process_mono(in_l);
             outputs[1][i] = self.biquad_r.process_mono(in_r);
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
             PARAM_BASE => (
                 "Base",
-                ((200.0_f64.log10() - 50.0_f64.log10()) / (2_000.0_f64.log10() - 50.0_f64.log10())).clamp(0.0, 1.0),
+                ((200.0_f64.log10() - 50.0_f64.log10()) / (2_000.0_f64.log10() - 50.0_f64.log10()))
+                    .clamp(0.0, 1.0),
                 "Hz",
             ),
             PARAM_RANGE => ("Range", 4.0 / 6.0, "oct"),
             PARAM_SENSITIVITY => ("Sense", 0.7, "%"),
-            PARAM_RESONANCE => ("Resonance", (4.0_f64.log10() / 10.0_f64.log10()).clamp(0.0, 1.0), ""),
-            PARAM_ATTACK => ("Attack", ((10.0_f64.log10() - 0.5_f64.log10()) / (200.0_f64.log10() - 0.5_f64.log10())).clamp(0.0, 1.0), "ms"),
-            PARAM_RELEASE => ("Release", ((100.0_f64.log10() - 5.0_f64.log10()) / (1000.0_f64.log10() - 5.0_f64.log10())).clamp(0.0, 1.0), "ms"),
+            PARAM_RESONANCE => (
+                "Resonance",
+                (4.0_f64.log10() / 10.0_f64.log10()).clamp(0.0, 1.0),
+                "",
+            ),
+            PARAM_ATTACK => (
+                "Attack",
+                ((10.0_f64.log10() - 0.5_f64.log10()) / (200.0_f64.log10() - 0.5_f64.log10()))
+                    .clamp(0.0, 1.0),
+                "ms",
+            ),
+            PARAM_RELEASE => (
+                "Release",
+                ((100.0_f64.log10() - 5.0_f64.log10()) / (1000.0_f64.log10() - 5.0_f64.log10()))
+                    .clamp(0.0, 1.0),
+                "ms",
+            ),
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -215,17 +257,24 @@ impl HostedPlugin for NativeAutoFilter {
             _ => {}
         }
         if update_env {
-            self.env_l.set_times(self.attack_ms, self.release_ms, self.sample_rate);
-            self.env_r.set_times(self.attack_ms, self.release_ms, self.sample_rate);
+            self.env_l
+                .set_times(self.attack_ms, self.release_ms, self.sample_rate);
+            self.env_r
+                .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         }
     }
 
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"base\":{},\"range\":{},\"sens\":{},\"res\":{},\"a\":{},\"r\":{}}}",
-            self.base_hz, self.range_octaves, self.sensitivity, self.resonance,
-            self.attack_ms, self.release_ms
-        ).into_bytes()
+            self.base_hz,
+            self.range_octaves,
+            self.sensitivity,
+            self.resonance,
+            self.attack_ms,
+            self.release_ms
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -234,22 +283,44 @@ impl HostedPlugin for NativeAutoFilter {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("base") { self.base_hz = v.clamp(50.0, 2_000.0); }
-        if let Some(v) = read("range") { self.range_octaves = v.clamp(0.0, 6.0); }
-        if let Some(v) = read("sens") { self.sensitivity = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("res") { self.resonance = v.clamp(0.1, 10.0); }
-        if let Some(v) = read("a") { self.attack_ms = v.clamp(0.5, 200.0); }
-        if let Some(v) = read("r") { self.release_ms = v.clamp(5.0, 1000.0); }
-        self.env_l.set_times(self.attack_ms, self.release_ms, self.sample_rate);
-        self.env_r.set_times(self.attack_ms, self.release_ms, self.sample_rate);
+        if let Some(v) = read("base") {
+            self.base_hz = v.clamp(50.0, 2_000.0);
+        }
+        if let Some(v) = read("range") {
+            self.range_octaves = v.clamp(0.0, 6.0);
+        }
+        if let Some(v) = read("sens") {
+            self.sensitivity = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("res") {
+            self.resonance = v.clamp(0.1, 10.0);
+        }
+        if let Some(v) = read("a") {
+            self.attack_ms = v.clamp(0.5, 200.0);
+        }
+        if let Some(v) = read("r") {
+            self.release_ms = v.clamp(5.0, 1000.0);
+        }
+        self.env_l
+            .set_times(self.attack_ms, self.release_ms, self.sample_rate);
+        self.env_r
+            .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

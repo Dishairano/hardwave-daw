@@ -71,11 +71,15 @@ impl NativeReverb {
 }
 
 impl Default for NativeReverb {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeReverb {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -84,7 +88,9 @@ impl HostedPlugin for NativeReverb {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -114,31 +120,56 @@ impl HostedPlugin for NativeReverb {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         match index {
             PARAM_ROOM_SIZE => Some(ParameterInfo {
-                id: PARAM_ROOM_SIZE, name: "Size".into(),
-                default_value: 0.6, min: 0.0, max: 1.0, unit: "".into(), automatable: true,
+                id: PARAM_ROOM_SIZE,
+                name: "Size".into(),
+                default_value: 0.6,
+                min: 0.0,
+                max: 1.0,
+                unit: "".into(),
+                automatable: true,
             }),
             PARAM_DECAY => Some(ParameterInfo {
-                id: PARAM_DECAY, name: "Decay".into(),
+                id: PARAM_DECAY,
+                name: "Decay".into(),
                 default_value: ((2.0_f64 - 0.1) / 9.9).clamp(0.0, 1.0),
-                min: 0.0, max: 1.0, unit: "s".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "s".into(),
+                automatable: true,
             }),
             PARAM_DAMPING => Some(ParameterInfo {
-                id: PARAM_DAMPING, name: "Damping".into(),
-                default_value: 0.5, min: 0.0, max: 1.0, unit: "".into(), automatable: true,
+                id: PARAM_DAMPING,
+                name: "Damping".into(),
+                default_value: 0.5,
+                min: 0.0,
+                max: 1.0,
+                unit: "".into(),
+                automatable: true,
             }),
             PARAM_PRE_DELAY => Some(ParameterInfo {
-                id: PARAM_PRE_DELAY, name: "Pre-Delay".into(),
+                id: PARAM_PRE_DELAY,
+                name: "Pre-Delay".into(),
                 default_value: (20.0_f64 / 200.0).clamp(0.0, 1.0),
-                min: 0.0, max: 1.0, unit: "ms".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "ms".into(),
+                automatable: true,
             }),
             PARAM_MIX => Some(ParameterInfo {
-                id: PARAM_MIX, name: "Mix".into(),
-                default_value: 0.3, min: 0.0, max: 1.0, unit: "%".into(), automatable: true,
+                id: PARAM_MIX,
+                name: "Mix".into(),
+                default_value: 0.3,
+                min: 0.0,
+                max: 1.0,
+                unit: "%".into(),
+                automatable: true,
             }),
             _ => None,
         }
@@ -172,7 +203,8 @@ impl HostedPlugin for NativeReverb {
         format!(
             "{{\"size\":{},\"decay\":{},\"damping\":{},\"pre\":{},\"mix\":{}}}",
             self.room_size, self.decay_secs, self.damping, self.pre_delay_ms, self.mix
-        ).into_bytes()
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -181,20 +213,38 @@ impl HostedPlugin for NativeReverb {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("size") { self.room_size = v; }
-        if let Some(v) = read("decay") { self.decay_secs = v; }
-        if let Some(v) = read("damping") { self.damping = v; }
-        if let Some(v) = read("pre") { self.pre_delay_ms = v; }
-        if let Some(v) = read("mix") { self.mix = v; }
+        if let Some(v) = read("size") {
+            self.room_size = v;
+        }
+        if let Some(v) = read("decay") {
+            self.decay_secs = v;
+        }
+        if let Some(v) = read("damping") {
+            self.damping = v;
+        }
+        if let Some(v) = read("pre") {
+            self.pre_delay_ms = v;
+        }
+        if let Some(v) = read("mix") {
+            self.mix = v;
+        }
         self.refresh();
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

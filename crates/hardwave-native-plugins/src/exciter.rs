@@ -67,19 +67,37 @@ impl NativeExciter {
     }
 
     fn ensure_coefs(&mut self) {
-        if !self.needs_recoef { return; }
-        self.hp_l.set(BiquadKind::HighPass, self.sample_rate, self.frequency_hz, 0.707, 0.0);
-        self.hp_r.set(BiquadKind::HighPass, self.sample_rate, self.frequency_hz, 0.707, 0.0);
+        if !self.needs_recoef {
+            return;
+        }
+        self.hp_l.set(
+            BiquadKind::HighPass,
+            self.sample_rate,
+            self.frequency_hz,
+            0.707,
+            0.0,
+        );
+        self.hp_r.set(
+            BiquadKind::HighPass,
+            self.sample_rate,
+            self.frequency_hz,
+            0.707,
+            0.0,
+        );
         self.needs_recoef = false;
     }
 }
 
 impl Default for NativeExciter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeExciter {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -90,7 +108,9 @@ impl HostedPlugin for NativeExciter {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -126,13 +146,17 @@ impl HostedPlugin for NativeExciter {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
             PARAM_FREQUENCY => (
                 "Frequency",
-                ((5_000.0_f64.log10() - 2_000.0_f64.log10()) / (15_000.0_f64.log10() - 2_000.0_f64.log10())).clamp(0.0, 1.0),
+                ((5_000.0_f64.log10() - 2_000.0_f64.log10())
+                    / (15_000.0_f64.log10() - 2_000.0_f64.log10()))
+                .clamp(0.0, 1.0),
                 "Hz",
             ),
             PARAM_AMOUNT => ("Amount", 0.4, "%"),
@@ -140,8 +164,13 @@ impl HostedPlugin for NativeExciter {
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -179,8 +208,11 @@ impl HostedPlugin for NativeExciter {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"freq\":{},\"amt\":{},\"mix\":{}}}",
-            self.frequency_hz, self.drive_l.amount(), self.mix
-        ).into_bytes()
+            self.frequency_hz,
+            self.drive_l.amount(),
+            self.mix
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -189,21 +221,34 @@ impl HostedPlugin for NativeExciter {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("freq") { self.frequency_hz = v.clamp(2_000.0, 15_000.0); self.needs_recoef = true; }
+        if let Some(v) = read("freq") {
+            self.frequency_hz = v.clamp(2_000.0, 15_000.0);
+            self.needs_recoef = true;
+        }
         if let Some(v) = read("amt") {
             let amt = v.clamp(0.0, 1.0);
             self.drive_l.set_amount(amt);
             self.drive_r.set_amount(amt);
         }
-        if let Some(v) = read("mix") { self.mix = v.clamp(0.0, 1.0); }
+        if let Some(v) = read("mix") {
+            self.mix = v.clamp(0.0, 1.0);
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

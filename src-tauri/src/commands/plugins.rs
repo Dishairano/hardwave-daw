@@ -1,12 +1,12 @@
 use crate::AppState;
 use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
 use hardwave_native_plugins::{
-    NativeAutoFilter, NativeAutoPan, NativeBitcrush, NativeChorus, NativeClipper, NativeCompressor, NativeConvReverb,
-    NativeDelay, NativeDistortion, NativeEq, NativeExciter, NativeFilter, NativeFlanger,
-    NativeFmSynth, NativeGain, NativeGate, NativeLimiter, NativeMidSide, NativeMonoFold, NativeMultiband,
-    NativeNoise, NativePhaser, NativeReverb, NativeRingMod, NativeSaturator, NativeSoundgoodizer, NativeStereo, NativeStereoDouble,
-    NativeSubBass, NativeTape, NativeTransient, NativeTremolo, NativeTripleOsc, NativeVibrato,
-    NativeWavetable,
+    NativeAutoFilter, NativeAutoPan, NativeBitcrush, NativeChorus, NativeClipper, NativeCompressor,
+    NativeConvReverb, NativeDelay, NativeDistortion, NativeEq, NativeExciter, NativeFilter,
+    NativeFlanger, NativeFmSynth, NativeGain, NativeGate, NativeLimiter, NativeMidSide,
+    NativeMonoFold, NativeMultiband, NativeNoise, NativePhaser, NativeReverb, NativeRingMod,
+    NativeSaturator, NativeSoundgoodizer, NativeStereo, NativeStereoDouble, NativeSubBass,
+    NativeTape, NativeTransient, NativeTremolo, NativeTripleOsc, NativeVibrato, NativeWavetable,
 };
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
@@ -417,10 +417,7 @@ pub fn remove_plugin_from_track(
     };
     let _ = state.engine.lock().try_send_insert_command(cmd);
     state.engine.lock().drain_insert_graveyard();
-    state
-        .slot_param_queues
-        .lock()
-        .remove(&(track_id, slot_id));
+    state.slot_param_queues.lock().remove(&(track_id, slot_id));
     Ok(())
 }
 

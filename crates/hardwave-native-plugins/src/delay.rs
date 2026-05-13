@@ -73,11 +73,15 @@ impl NativeDelay {
 }
 
 impl Default for NativeDelay {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeDelay {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -89,7 +93,9 @@ impl HostedPlugin for NativeDelay {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -121,26 +127,47 @@ impl HostedPlugin for NativeDelay {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         match index {
             PARAM_TIME_MS => Some(ParameterInfo {
-                id: PARAM_TIME_MS, name: "Time".into(),
+                id: PARAM_TIME_MS,
+                name: "Time".into(),
                 default_value: (250.0_f64 / MAX_DELAY_MS as f64).clamp(0.0, 1.0),
-                min: 0.0, max: 1.0, unit: "ms".into(), automatable: true,
+                min: 0.0,
+                max: 1.0,
+                unit: "ms".into(),
+                automatable: true,
             }),
             PARAM_FEEDBACK => Some(ParameterInfo {
-                id: PARAM_FEEDBACK, name: "Feedback".into(),
-                default_value: 0.35, min: 0.0, max: 1.0, unit: "%".into(), automatable: true,
+                id: PARAM_FEEDBACK,
+                name: "Feedback".into(),
+                default_value: 0.35,
+                min: 0.0,
+                max: 1.0,
+                unit: "%".into(),
+                automatable: true,
             }),
             PARAM_MIX => Some(ParameterInfo {
-                id: PARAM_MIX, name: "Mix".into(),
-                default_value: 0.3, min: 0.0, max: 1.0, unit: "%".into(), automatable: true,
+                id: PARAM_MIX,
+                name: "Mix".into(),
+                default_value: 0.3,
+                min: 0.0,
+                max: 1.0,
+                unit: "%".into(),
+                automatable: true,
             }),
             PARAM_PING_PONG => Some(ParameterInfo {
-                id: PARAM_PING_PONG, name: "Ping-Pong".into(),
-                default_value: 0.0, min: 0.0, max: 1.0, unit: "".into(), automatable: false,
+                id: PARAM_PING_PONG,
+                name: "Ping-Pong".into(),
+                default_value: 0.0,
+                min: 0.0,
+                max: 1.0,
+                unit: "".into(),
+                automatable: false,
             }),
             _ => None,
         }
@@ -151,7 +178,13 @@ impl HostedPlugin for NativeDelay {
             PARAM_TIME_MS => (self.time_ms / MAX_DELAY_MS).clamp(0.0, 1.0) as f64,
             PARAM_FEEDBACK => self.feedback.clamp(0.0, 1.0) as f64,
             PARAM_MIX => self.mix as f64,
-            PARAM_PING_PONG => if self.ping_pong { 1.0 } else { 0.0 },
+            PARAM_PING_PONG => {
+                if self.ping_pong {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             _ => 0.0,
         }
     }
@@ -179,8 +212,12 @@ impl HostedPlugin for NativeDelay {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"time\":{},\"fb\":{},\"mix\":{},\"pp\":{}}}",
-            self.time_ms, self.feedback, self.mix, if self.ping_pong { 1 } else { 0 }
-        ).into_bytes()
+            self.time_ms,
+            self.feedback,
+            self.mix,
+            if self.ping_pong { 1 } else { 0 }
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -189,21 +226,37 @@ impl HostedPlugin for NativeDelay {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("time") { self.time_ms = v.clamp(1.0, MAX_DELAY_MS); }
-        if let Some(v) = read("fb") { self.feedback = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("mix") { self.mix = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("pp") { self.ping_pong = v >= 0.5; }
+        if let Some(v) = read("time") {
+            self.time_ms = v.clamp(1.0, MAX_DELAY_MS);
+        }
+        if let Some(v) = read("fb") {
+            self.feedback = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("mix") {
+            self.mix = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("pp") {
+            self.ping_pong = v >= 0.5;
+        }
         self.refresh_time();
         self.line.set_feedback(self.feedback);
         self.line.set_ping_pong(self.ping_pong);
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

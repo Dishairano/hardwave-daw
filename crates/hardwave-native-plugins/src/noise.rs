@@ -19,7 +19,11 @@ const PARAM_RELEASE: u32 = 5;
 const PARAM_COUNT: u32 = 6;
 
 #[derive(Clone, Copy)]
-enum Colour { White, Pink, Brown }
+enum Colour {
+    White,
+    Pink,
+    Brown,
+}
 
 fn colour_from_norm(v: f32) -> Colour {
     let i = ((v.clamp(0.0, 1.0) * 3.0).floor() as i32).clamp(0, 2);
@@ -31,7 +35,11 @@ fn colour_from_norm(v: f32) -> Colour {
 }
 
 fn colour_to_norm(c: Colour) -> f64 {
-    let i = match c { Colour::White => 0, Colour::Pink => 1, Colour::Brown => 2 };
+    let i = match c {
+        Colour::White => 0,
+        Colour::Pink => 1,
+        Colour::Brown => 2,
+    };
     (i as f64 + 0.5) / 3.0
 }
 
@@ -42,7 +50,12 @@ struct PinkState {
 }
 
 impl PinkState {
-    fn new() -> Self { Self { rows: [0.0; 16], counter: 0 } }
+    fn new() -> Self {
+        Self {
+            rows: [0.0; 16],
+            counter: 0,
+        }
+    }
     fn tick(&mut self, white: f32) -> f32 {
         self.counter = self.counter.wrapping_add(1);
         let trailing_zeros = self.counter.trailing_zeros().min(15) as usize;
@@ -124,11 +137,15 @@ impl NativeNoise {
 }
 
 impl Default for NativeNoise {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeNoise {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -141,7 +158,9 @@ impl HostedPlugin for NativeNoise {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -155,7 +174,9 @@ impl HostedPlugin for NativeNoise {
             out.clear();
             out.resize(num_samples, 0.0);
         }
-        if !self.active || outputs.len() < 2 { return; }
+        if !self.active || outputs.len() < 2 {
+            return;
+        }
 
         for ev in midi_in {
             match ev {
@@ -175,7 +196,9 @@ impl HostedPlugin for NativeNoise {
             }
         }
 
-        if !self.env.is_active() { return; }
+        if !self.env.is_active() {
+            return;
+        }
 
         for i in 0..num_samples {
             let env_v = self.env.tick();
@@ -194,7 +217,9 @@ impl HostedPlugin for NativeNoise {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
@@ -207,8 +232,13 @@ impl HostedPlugin for NativeNoise {
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -252,9 +282,14 @@ impl HostedPlugin for NativeNoise {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"col\":{},\"lvl\":{},\"a\":{},\"d\":{},\"s\":{},\"r\":{}}}",
-            colour_to_norm(self.colour), self.level,
-            self.attack, self.decay, self.sustain, self.release
-        ).into_bytes()
+            colour_to_norm(self.colour),
+            self.level,
+            self.attack,
+            self.decay,
+            self.sustain,
+            self.release
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -263,22 +298,42 @@ impl HostedPlugin for NativeNoise {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("col") { self.colour = colour_from_norm(v); }
-        if let Some(v) = read("lvl") { self.level = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("a") { self.attack = v.max(0.001); }
-        if let Some(v) = read("d") { self.decay = v.max(0.001); }
-        if let Some(v) = read("s") { self.sustain = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("r") { self.release = v.max(0.001); }
+        if let Some(v) = read("col") {
+            self.colour = colour_from_norm(v);
+        }
+        if let Some(v) = read("lvl") {
+            self.level = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("a") {
+            self.attack = v.max(0.001);
+        }
+        if let Some(v) = read("d") {
+            self.decay = v.max(0.001);
+        }
+        if let Some(v) = read("s") {
+            self.sustain = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("r") {
+            self.release = v.max(0.001);
+        }
         self.env.set_times(self.attack, self.decay, self.release);
         self.env.set_sustain(self.sustain);
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

@@ -80,18 +80,26 @@ impl NativeFlanger {
         let depth_samples = (self.depth_ms / 1000.0) * self.sample_rate;
         self.delay_l.set_lfo_depth(depth_samples);
         self.delay_r.set_lfo_depth(depth_samples);
-        let fb = if self.invert { -self.feedback } else { self.feedback };
+        let fb = if self.invert {
+            -self.feedback
+        } else {
+            self.feedback
+        };
         self.delay_l.set_feedback(fb);
         self.delay_r.set_feedback(fb);
     }
 }
 
 impl Default for NativeFlanger {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeFlanger {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -105,7 +113,9 @@ impl HostedPlugin for NativeFlanger {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -138,7 +148,9 @@ impl HostedPlugin for NativeFlanger {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
@@ -150,8 +162,13 @@ impl HostedPlugin for NativeFlanger {
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -161,7 +178,13 @@ impl HostedPlugin for NativeFlanger {
             PARAM_DEPTH => (self.depth_ms / 5.0).clamp(0.0, 1.0) as f64,
             PARAM_FEEDBACK => self.feedback as f64,
             PARAM_MIX => self.mix as f64,
-            PARAM_INVERT => if self.invert { 1.0 } else { 0.0 },
+            PARAM_INVERT => {
+                if self.invert {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             _ => 0.0,
         }
     }
@@ -182,8 +205,13 @@ impl HostedPlugin for NativeFlanger {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"rate\":{},\"depth\":{},\"fb\":{},\"mix\":{},\"inv\":{}}}",
-            self.rate_hz, self.depth_ms, self.feedback, self.mix, if self.invert {1} else {0}
-        ).into_bytes()
+            self.rate_hz,
+            self.depth_ms,
+            self.feedback,
+            self.mix,
+            if self.invert { 1 } else { 0 }
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -192,20 +220,38 @@ impl HostedPlugin for NativeFlanger {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("rate") { self.rate_hz = v.clamp(0.0, 5.0); }
-        if let Some(v) = read("depth") { self.depth_ms = v.clamp(0.0, 5.0); }
-        if let Some(v) = read("fb") { self.feedback = v.clamp(0.0, 0.95); }
-        if let Some(v) = read("mix") { self.mix = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("inv") { self.invert = v >= 0.5; }
+        if let Some(v) = read("rate") {
+            self.rate_hz = v.clamp(0.0, 5.0);
+        }
+        if let Some(v) = read("depth") {
+            self.depth_ms = v.clamp(0.0, 5.0);
+        }
+        if let Some(v) = read("fb") {
+            self.feedback = v.clamp(0.0, 0.95);
+        }
+        if let Some(v) = read("mix") {
+            self.mix = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("inv") {
+            self.invert = v >= 0.5;
+        }
         self.refresh();
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

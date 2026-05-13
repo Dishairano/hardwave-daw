@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use vst3::Steinberg::Vst::{
     BusDirections_, BusInfo, Event, Event_::EventTypes_, IAudioProcessor, IAudioProcessorTrait,
-    IComponent, IComponentTrait, IComponentHandler, IComponentHandlerTrait, IEditController,
+    IComponent, IComponentHandler, IComponentHandlerTrait, IComponentTrait, IEditController,
     IEditControllerTrait, IEventList, IEventListTrait, IoModes_, MediaTypes_, NoteOffEvent,
     NoteOnEvent, ParamID, ParamValue, ProcessModes_, ProcessSetup, SymbolicSampleSizes_, ViewType,
 };
@@ -171,8 +171,12 @@ impl IComponentHandlerTrait for HardwaveComponentHandler {
         }
         kResultOk
     }
-    unsafe fn endEdit(&self, _id: ParamID) -> tresult { kResultOk }
-    unsafe fn restartComponent(&self, _flags: i32) -> tresult { kResultOk }
+    unsafe fn endEdit(&self, _id: ParamID) -> tresult {
+        kResultOk
+    }
+    unsafe fn restartComponent(&self, _flags: i32) -> tresult {
+        kResultOk
+    }
 }
 
 impl Vst3PluginInstance {
@@ -774,7 +778,10 @@ impl HostedPlugin for Vst3PluginInstance {
             #[cfg(target_os = "linux")]
             Rwh::Xlib(h) => (h.window as *mut c_void, kPlatformTypeX11EmbedWindowID),
             #[cfg(target_os = "linux")]
-            Rwh::Xcb(h) => (h.window.get() as usize as *mut c_void, kPlatformTypeX11EmbedWindowID),
+            Rwh::Xcb(h) => (
+                h.window.get() as usize as *mut c_void,
+                kPlatformTypeX11EmbedWindowID,
+            ),
             _ => return false,
         };
         // Some plugins need isPlatformTypeSupported first.

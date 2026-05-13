@@ -90,9 +90,23 @@ impl NativeTape {
     }
 
     fn ensure_coefs(&mut self) {
-        if !self.needs_recoef { return; }
-        self.lp_l.set(BiquadKind::LowPass, self.sample_rate, self.hf_loss_hz, 0.707, 0.0);
-        self.lp_r.set(BiquadKind::LowPass, self.sample_rate, self.hf_loss_hz, 0.707, 0.0);
+        if !self.needs_recoef {
+            return;
+        }
+        self.lp_l.set(
+            BiquadKind::LowPass,
+            self.sample_rate,
+            self.hf_loss_hz,
+            0.707,
+            0.0,
+        );
+        self.lp_r.set(
+            BiquadKind::LowPass,
+            self.sample_rate,
+            self.hf_loss_hz,
+            0.707,
+            0.0,
+        );
         self.needs_recoef = false;
     }
 
@@ -105,11 +119,15 @@ impl NativeTape {
 }
 
 impl Default for NativeTape {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeTape {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -130,7 +148,9 @@ impl HostedPlugin for NativeTape {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -168,7 +188,9 @@ impl HostedPlugin for NativeTape {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
@@ -176,15 +198,22 @@ impl HostedPlugin for NativeTape {
             PARAM_DRIVE => ("Drive", 0.4, "%"),
             PARAM_HF_LOSS => (
                 "HF Loss",
-                ((12_000.0_f64.log10() - 4_000.0_f64.log10()) / (20_000.0_f64.log10() - 4_000.0_f64.log10())).clamp(0.0, 1.0),
+                ((12_000.0_f64.log10() - 4_000.0_f64.log10())
+                    / (20_000.0_f64.log10() - 4_000.0_f64.log10()))
+                .clamp(0.0, 1.0),
                 "Hz",
             ),
             PARAM_OUTPUT => ("Output", 0.5, "dB"),
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -227,8 +256,12 @@ impl HostedPlugin for NativeTape {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"wow\":{},\"drv\":{},\"hf\":{},\"out\":{}}}",
-            self.wow_amount, self.drive_l.amount(), self.hf_loss_hz, self.output_db
-        ).into_bytes()
+            self.wow_amount,
+            self.drive_l.amount(),
+            self.hf_loss_hz,
+            self.output_db
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -237,7 +270,9 @@ impl HostedPlugin for NativeTape {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
         if let Some(v) = read("wow") {
@@ -249,13 +284,24 @@ impl HostedPlugin for NativeTape {
             self.drive_l.set_amount(amt);
             self.drive_r.set_amount(amt);
         }
-        if let Some(v) = read("hf") { self.hf_loss_hz = v.clamp(4_000.0, 20_000.0); self.needs_recoef = true; }
-        if let Some(v) = read("out") { self.output_db = v.clamp(-12.0, 12.0); }
+        if let Some(v) = read("hf") {
+            self.hf_loss_hz = v.clamp(4_000.0, 20_000.0);
+            self.needs_recoef = true;
+        }
+        if let Some(v) = read("out") {
+            self.output_db = v.clamp(-12.0, 12.0);
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

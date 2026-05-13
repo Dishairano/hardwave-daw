@@ -407,7 +407,9 @@ impl AudioNode for TrackNode {
                 }
             }
             InsertCommand::Reorder { from, to, .. } => self.chain.reorder(from, to),
-            InsertCommand::SetEnabled { slot_id, enabled, .. } => {
+            InsertCommand::SetEnabled {
+                slot_id, enabled, ..
+            } => {
                 self.chain.set_enabled(&slot_id, enabled);
             }
             InsertCommand::SetWet { slot_id, wet, .. } => {
@@ -486,16 +488,16 @@ impl AudioNode for TrackNode {
         // Hence the chain.slots check below covers the monitoring case
         // implicitly: an armed track with no chain = nothing for us to
         // do; an armed track WITH chain = process for monitoring.
-        if self.clips.is_empty()
-            && self.chain.slots.is_empty()
-            && self.automation_lanes.is_empty()
+        if self.clips.is_empty() && self.chain.slots.is_empty() && self.automation_lanes.is_empty()
         {
             // Park the meter at silence so the UI doesn't show stale
             // values from a previous active block.
             use std::sync::atomic::Ordering;
             self.meter.peak_db_l.store(-120.0, Ordering::Relaxed);
             self.meter.peak_db_r.store(-120.0, Ordering::Relaxed);
-            self.meter.pre_fader_peak_db.store(-120.0, Ordering::Relaxed);
+            self.meter
+                .pre_fader_peak_db
+                .store(-120.0, Ordering::Relaxed);
             self.meter.rms_db.store(-120.0, Ordering::Relaxed);
             return;
         }
@@ -862,7 +864,12 @@ mod tests {
     fn make_test_node() -> (TrackNode, Arc<TrackMeterState>) {
         let pool = AudioPool::new();
         let meter = Arc::new(TrackMeterState::default());
-        let node = TrackNode::new("test-track-id".into(), "Test".into(), pool, Arc::clone(&meter));
+        let node = TrackNode::new(
+            "test-track-id".into(),
+            "Test".into(),
+            pool,
+            Arc::clone(&meter),
+        );
         (node, meter)
     }
 

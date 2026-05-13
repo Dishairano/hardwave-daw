@@ -39,7 +39,15 @@ fn audio_clip_produces_sound() {
     // A sine clip on an audio track should produce non-silent output.
     // Roadmap covered: P1/Audio Output, P2/Clip System, P2/File Import (engine side).
     let engine = DawEngine::new();
-    add_audio_track_with_sine(&engine, "Sine", "smoke-sine-440", SAMPLE_RATE, 1.0, 440.0, 0.5);
+    add_audio_track_with_sine(
+        &engine,
+        "Sine",
+        "smoke-sine-440",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
 
     let render_samples = SAMPLE_RATE as u64 / 2; // 0.5 s
     let stats = render_and_measure(&engine, SAMPLE_RATE, render_samples);
@@ -60,13 +68,27 @@ fn master_volume_attenuates_output() {
     // Lowering master_volume_db should proportionally reduce the peak.
     // Roadmap covered: P1/Audio Graph/Master volume control.
     let engine = DawEngine::new();
-    add_audio_track_with_sine(&engine, "Sine", "smoke-sine-master", SAMPLE_RATE, 1.0, 440.0, 0.5);
+    add_audio_track_with_sine(
+        &engine,
+        "Sine",
+        "smoke-sine-master",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
     let render_samples = SAMPLE_RATE as u64 / 4; // 0.25 s
 
-    engine.transport.master_volume_db.store(0.0, Ordering::Relaxed);
+    engine
+        .transport
+        .master_volume_db
+        .store(0.0, Ordering::Relaxed);
     let unity = render_and_measure(&engine, SAMPLE_RATE, render_samples);
 
-    engine.transport.master_volume_db.store(-12.0, Ordering::Relaxed);
+    engine
+        .transport
+        .master_volume_db
+        .store(-12.0, Ordering::Relaxed);
     let attenuated = render_and_measure(&engine, SAMPLE_RATE, render_samples);
 
     assert!(unity.peak > 0.05, "unity render produced no audible signal");
@@ -104,7 +126,11 @@ fn mute_silences_track() {
 
     // Sanity — unmuted should be loud.
     let unmuted = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 4);
-    assert!(unmuted.peak > 0.05, "unmuted render is silent ({:?})", unmuted);
+    assert!(
+        unmuted.peak > 0.05,
+        "unmuted render is silent ({:?})",
+        unmuted
+    );
 
     // Mute the track.
     {
@@ -208,15 +234,8 @@ fn killer_track_insert_modifies_audio() {
     // changes the audio. If you wire a no-op pass-through and the test still
     // fails, the assertion can be loosened, but the wiring needs to land first.
     let engine = DawEngine::new();
-    let track_id = add_audio_track_with_sine(
-        &engine,
-        "FX",
-        "smoke-sine-fx",
-        SAMPLE_RATE,
-        1.0,
-        440.0,
-        0.5,
-    );
+    let track_id =
+        add_audio_track_with_sine(&engine, "FX", "smoke-sine-fx", SAMPLE_RATE, 1.0, 440.0, 0.5);
 
     let baseline = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 4);
     assert!(baseline.peak > 0.05, "baseline render is silent");

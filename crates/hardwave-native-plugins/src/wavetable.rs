@@ -154,15 +154,21 @@ impl NativeWavetable {
 }
 
 impl Default for NativeWavetable {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeWavetable {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
-        self.voices = (0..POLYPHONY).map(|_| VoiceSlot::new(self.sample_rate)).collect();
+        self.voices = (0..POLYPHONY)
+            .map(|_| VoiceSlot::new(self.sample_rate))
+            .collect();
         for v in self.voices.iter_mut() {
             v.env.set_times(self.attack, self.decay, self.release);
             v.env.set_sustain(self.sustain);
@@ -170,7 +176,9 @@ impl HostedPlugin for NativeWavetable {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -184,7 +192,9 @@ impl HostedPlugin for NativeWavetable {
             out.clear();
             out.resize(num_samples, 0.0);
         }
-        if !self.active || outputs.len() < 2 { return; }
+        if !self.active || outputs.len() < 2 {
+            return;
+        }
 
         for ev in midi_in {
             match ev {
@@ -220,7 +230,9 @@ impl HostedPlugin for NativeWavetable {
         }
 
         for slot in self.voices.iter_mut() {
-            if !slot.active { continue; }
+            if !slot.active {
+                continue;
+            }
             for i in 0..num_samples {
                 let env_v = slot.env.tick();
                 if !slot.env.is_active() {
@@ -234,7 +246,9 @@ impl HostedPlugin for NativeWavetable {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
@@ -249,8 +263,13 @@ impl HostedPlugin for NativeWavetable {
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -289,9 +308,16 @@ impl HostedPlugin for NativeWavetable {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"bank\":{},\"pos\":{},\"det\":{},\"a\":{},\"d\":{},\"s\":{},\"r\":{},\"m\":{}}}",
-            bank_to_norm(self.bank), self.position, self.unison_detune,
-            self.attack, self.decay, self.sustain, self.release, self.master_gain
-        ).into_bytes()
+            bank_to_norm(self.bank),
+            self.position,
+            self.unison_detune,
+            self.attack,
+            self.decay,
+            self.sustain,
+            self.release,
+            self.master_gain
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -300,25 +326,47 @@ impl HostedPlugin for NativeWavetable {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
         if let Some(v) = read("bank") {
             self.bank = bank_from_norm(v);
             self.table = build_table(self.bank);
         }
-        if let Some(v) = read("pos") { self.position = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("det") { self.unison_detune = v.clamp(-0.5, 0.5); }
-        if let Some(v) = read("a") { self.attack = v.max(0.001); }
-        if let Some(v) = read("d") { self.decay = v.max(0.001); }
-        if let Some(v) = read("s") { self.sustain = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("r") { self.release = v.max(0.001); }
-        if let Some(v) = read("m") { self.master_gain = v.clamp(0.0, 1.0); }
+        if let Some(v) = read("pos") {
+            self.position = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("det") {
+            self.unison_detune = v.clamp(-0.5, 0.5);
+        }
+        if let Some(v) = read("a") {
+            self.attack = v.max(0.001);
+        }
+        if let Some(v) = read("d") {
+            self.decay = v.max(0.001);
+        }
+        if let Some(v) = read("s") {
+            self.sustain = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("r") {
+            self.release = v.max(0.001);
+        }
+        if let Some(v) = read("m") {
+            self.master_gain = v.clamp(0.0, 1.0);
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

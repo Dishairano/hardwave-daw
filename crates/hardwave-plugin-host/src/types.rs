@@ -104,9 +104,7 @@ pub trait HostedPlugin: Send {
     ///
     /// CLAP and native plug-ins use direct parameter setters and have no
     /// asynchronous GUI→audio queue, so they return `None`.
-    fn vst3_pending_params(
-        &self,
-    ) -> Option<std::sync::Arc<parking_lot::Mutex<Vec<(u32, f64)>>>> {
+    fn vst3_pending_params(&self) -> Option<std::sync::Arc<parking_lot::Mutex<Vec<(u32, f64)>>>> {
         None
     }
 }

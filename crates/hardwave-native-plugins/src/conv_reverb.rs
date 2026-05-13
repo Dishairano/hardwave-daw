@@ -113,11 +113,15 @@ impl NativeConvReverb {
 }
 
 impl Default for NativeConvReverb {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeConvReverb {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -127,7 +131,9 @@ impl HostedPlugin for NativeConvReverb {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -157,7 +163,9 @@ impl HostedPlugin for NativeConvReverb {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
@@ -166,12 +174,15 @@ impl HostedPlugin for NativeConvReverb {
             PARAM_LOW_CPU => ("Low-CPU", 1.0, ""),
             PARAM_LOW_CUT => (
                 "Low Cut",
-                ((120.0_f64.log10() - 20.0_f64.log10()) / (1_000.0_f64.log10() - 20.0_f64.log10())).clamp(0.0, 1.0),
+                ((120.0_f64.log10() - 20.0_f64.log10()) / (1_000.0_f64.log10() - 20.0_f64.log10()))
+                    .clamp(0.0, 1.0),
                 "Hz",
             ),
             PARAM_HIGH_CUT => (
                 "High Cut",
-                ((12_000.0_f64.log10() - 1_000.0_f64.log10()) / (20_000.0_f64.log10() - 1_000.0_f64.log10())).clamp(0.0, 1.0),
+                ((12_000.0_f64.log10() - 1_000.0_f64.log10())
+                    / (20_000.0_f64.log10() - 1_000.0_f64.log10()))
+                .clamp(0.0, 1.0),
                 "Hz",
             ),
             PARAM_WIDTH => ("Width", 0.5, ""),
@@ -179,8 +190,13 @@ impl HostedPlugin for NativeConvReverb {
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -248,9 +264,15 @@ impl HostedPlugin for NativeConvReverb {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"preset\":{},\"pre\":{},\"cpu\":{},\"lc\":{},\"hc\":{},\"w\":{},\"mix\":{}}}",
-            preset_to_norm(self.preset), self.pre_delay_ms, self.low_cpu,
-            self.low_cut_hz, self.high_cut_hz, self.width, self.mix
-        ).into_bytes()
+            preset_to_norm(self.preset),
+            self.pre_delay_ms,
+            self.low_cpu,
+            self.low_cut_hz,
+            self.high_cut_hz,
+            self.width,
+            self.mix
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -259,23 +281,45 @@ impl HostedPlugin for NativeConvReverb {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("preset") { self.preset = preset_from_norm(v); }
-        if let Some(v) = read("pre") { self.pre_delay_ms = v.clamp(0.0, 200.0); }
-        if let Some(v) = read("cpu") { self.low_cpu = v.clamp(0.1, 1.0); }
-        if let Some(v) = read("lc") { self.low_cut_hz = v.clamp(20.0, 1_000.0); }
-        if let Some(v) = read("hc") { self.high_cut_hz = v.clamp(1_000.0, 20_000.0); }
-        if let Some(v) = read("w") { self.width = v.clamp(0.0, 2.0); }
-        if let Some(v) = read("mix") { self.mix = v.clamp(0.0, 1.0); }
+        if let Some(v) = read("preset") {
+            self.preset = preset_from_norm(v);
+        }
+        if let Some(v) = read("pre") {
+            self.pre_delay_ms = v.clamp(0.0, 200.0);
+        }
+        if let Some(v) = read("cpu") {
+            self.low_cpu = v.clamp(0.1, 1.0);
+        }
+        if let Some(v) = read("lc") {
+            self.low_cut_hz = v.clamp(20.0, 1_000.0);
+        }
+        if let Some(v) = read("hc") {
+            self.high_cut_hz = v.clamp(1_000.0, 20_000.0);
+        }
+        if let Some(v) = read("w") {
+            self.width = v.clamp(0.0, 2.0);
+        }
+        if let Some(v) = read("mix") {
+            self.mix = v.clamp(0.0, 1.0);
+        }
         self.rebuild_ir();
         self.refresh();
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

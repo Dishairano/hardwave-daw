@@ -73,20 +73,28 @@ impl NativeGate {
 }
 
 impl Default for NativeGate {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeGate {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
-        self.env_l.set_times(self.attack_ms, self.release_ms, self.sample_rate);
-        self.env_r.set_times(self.attack_ms, self.release_ms, self.sample_rate);
+        self.env_l
+            .set_times(self.attack_ms, self.release_ms, self.sample_rate);
+        self.env_r
+            .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -113,29 +121,55 @@ impl HostedPlugin for NativeGate {
             let env_l = self.env_l.process(in_l);
             let env_r = self.env_r.process(in_r);
             let level_db = linear_to_db(env_l.max(env_r));
-            let gain = gate_gain(level_db, self.threshold_db, self.range_db, self.hysteresis_db);
+            let gain = gate_gain(
+                level_db,
+                self.threshold_db,
+                self.range_db,
+                self.hysteresis_db,
+            );
             outputs[0][i] = in_l * gain;
             outputs[1][i] = in_r * gain;
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
             // -80..0 mapped to 0..1
-            PARAM_THRESHOLD => ("Threshold", ((-40.0_f64 + 80.0) / 80.0).clamp(0.0, 1.0), "dB"),
+            PARAM_THRESHOLD => (
+                "Threshold",
+                ((-40.0_f64 + 80.0) / 80.0).clamp(0.0, 1.0),
+                "dB",
+            ),
             // 0..80 dB
             PARAM_RANGE => ("Range", 60.0_f64 / 80.0, "dB"),
             // 0.1..200 ms log
-            PARAM_ATTACK => ("Attack", ((1.0_f64.log10() - 0.1_f64.log10()) / (200.0_f64.log10() - 0.1_f64.log10())).clamp(0.0, 1.0), "ms"),
-            PARAM_RELEASE => ("Release", ((50.0_f64.log10() - 0.1_f64.log10()) / (2000.0_f64.log10() - 0.1_f64.log10())).clamp(0.0, 1.0), "ms"),
+            PARAM_ATTACK => (
+                "Attack",
+                ((1.0_f64.log10() - 0.1_f64.log10()) / (200.0_f64.log10() - 0.1_f64.log10()))
+                    .clamp(0.0, 1.0),
+                "ms",
+            ),
+            PARAM_RELEASE => (
+                "Release",
+                ((50.0_f64.log10() - 0.1_f64.log10()) / (2000.0_f64.log10() - 0.1_f64.log10()))
+                    .clamp(0.0, 1.0),
+                "ms",
+            ),
             PARAM_HYSTERESIS => ("Hysteresis", 3.0 / 12.0, "dB"),
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -180,8 +214,10 @@ impl HostedPlugin for NativeGate {
             _ => {}
         }
         if update_env {
-            self.env_l.set_times(self.attack_ms, self.release_ms, self.sample_rate);
-            self.env_r.set_times(self.attack_ms, self.release_ms, self.sample_rate);
+            self.env_l
+                .set_times(self.attack_ms, self.release_ms, self.sample_rate);
+            self.env_r
+                .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         }
     }
 
@@ -189,7 +225,8 @@ impl HostedPlugin for NativeGate {
         format!(
             "{{\"thr\":{},\"rng\":{},\"a\":{},\"r\":{},\"hys\":{}}}",
             self.threshold_db, self.range_db, self.attack_ms, self.release_ms, self.hysteresis_db
-        ).into_bytes()
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -198,21 +235,41 @@ impl HostedPlugin for NativeGate {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("thr") { self.threshold_db = v.clamp(-80.0, 0.0); }
-        if let Some(v) = read("rng") { self.range_db = v.clamp(0.0, 80.0); }
-        if let Some(v) = read("a") { self.attack_ms = v.clamp(0.1, 200.0); }
-        if let Some(v) = read("r") { self.release_ms = v.clamp(0.1, 2000.0); }
-        if let Some(v) = read("hys") { self.hysteresis_db = v.clamp(0.0, 12.0); }
-        self.env_l.set_times(self.attack_ms, self.release_ms, self.sample_rate);
-        self.env_r.set_times(self.attack_ms, self.release_ms, self.sample_rate);
+        if let Some(v) = read("thr") {
+            self.threshold_db = v.clamp(-80.0, 0.0);
+        }
+        if let Some(v) = read("rng") {
+            self.range_db = v.clamp(0.0, 80.0);
+        }
+        if let Some(v) = read("a") {
+            self.attack_ms = v.clamp(0.1, 200.0);
+        }
+        if let Some(v) = read("r") {
+            self.release_ms = v.clamp(0.1, 2000.0);
+        }
+        if let Some(v) = read("hys") {
+            self.hysteresis_db = v.clamp(0.0, 12.0);
+        }
+        self.env_l
+            .set_times(self.attack_ms, self.release_ms, self.sample_rate);
+        self.env_r
+            .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

@@ -300,13 +300,19 @@ impl HostedPlugin for NativeLimiter {
                 .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("threshold") { self.threshold_db = v; }
-        if let Some(v) = read("ceiling") { self.ceiling_db = v; }
+        if let Some(v) = read("threshold") {
+            self.threshold_db = v;
+        }
+        if let Some(v) = read("ceiling") {
+            self.ceiling_db = v;
+        }
         if let Some(v) = read("release") {
             self.release_ms = v;
             self.update_envelope();
         }
-        if let Some(v) = read("drive") { self.drive_db = v; }
+        if let Some(v) = read("drive") {
+            self.drive_db = v;
+        }
         Ok(())
     }
 
@@ -320,5 +326,7 @@ impl HostedPlugin for NativeLimiter {
         false
     }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

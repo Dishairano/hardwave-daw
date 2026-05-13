@@ -48,17 +48,23 @@ impl NativeMonoFold {
 }
 
 impl Default for NativeMonoFold {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeMonoFold {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, _sr: f64, _max: u32) -> Result<(), String> {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -90,13 +96,20 @@ impl HostedPlugin for NativeMonoFold {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         match index {
             PARAM_AMOUNT => Some(ParameterInfo {
-                id: PARAM_AMOUNT, name: "Amount".into(),
-                default_value: 1.0, min: 0.0, max: 1.0, unit: "%".into(), automatable: true,
+                id: PARAM_AMOUNT,
+                name: "Amount".into(),
+                default_value: 1.0,
+                min: 0.0,
+                max: 1.0,
+                unit: "%".into(),
+                automatable: true,
             }),
             _ => None,
         }
@@ -126,15 +139,25 @@ impl HostedPlugin for NativeMonoFold {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("amt") { self.amount = v.clamp(0.0, 1.0); }
+        if let Some(v) = read("amt") {
+            self.amount = v.clamp(0.0, 1.0);
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

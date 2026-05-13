@@ -413,13 +413,12 @@ impl AudioGraph {
                 };
                 let n = src_vec.len().min(self.buffer_size);
                 let scratch = &mut self.scratch[node_id];
-                let src_slice: &[f32] =
-                    if let Some(Some(dl)) = self.edge_delays.get_mut(edge_idx) {
-                        dl.process(&src_vec[..n], &mut scratch.delay_scratch[..n]);
-                        &scratch.delay_scratch[..n]
-                    } else {
-                        &src_vec[..n]
-                    };
+                let src_slice: &[f32] = if let Some(Some(dl)) = self.edge_delays.get_mut(edge_idx) {
+                    dl.process(&src_vec[..n], &mut scratch.delay_scratch[..n]);
+                    &scratch.delay_scratch[..n]
+                } else {
+                    &src_vec[..n]
+                };
                 if edge_dest_port < scratch.ch_bufs.len() {
                     let dest = &mut scratch.ch_bufs[edge_dest_port];
                     for (i, s) in src_slice.iter().enumerate() {

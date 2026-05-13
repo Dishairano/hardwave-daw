@@ -32,7 +32,11 @@ fn shape_from_norm(v: f32) -> Shape {
 }
 
 fn shape_to_norm(s: Shape) -> f64 {
-    let i = match s { Shape::Sine => 0, Shape::Triangle => 1, Shape::Square => 2 };
+    let i = match s {
+        Shape::Sine => 0,
+        Shape::Triangle => 1,
+        Shape::Square => 2,
+    };
     (i as f64 + 0.5) / 3.0
 }
 
@@ -41,7 +45,13 @@ fn lfo_value(shape: Shape, phase: f32) -> f32 {
     match shape {
         Shape::Sine => (TAU * p).sin(),
         Shape::Triangle => 4.0 * (p - (p + 0.5).floor()).abs() - 1.0,
-        Shape::Square => if p < 0.5 { 1.0 } else { -1.0 },
+        Shape::Square => {
+            if p < 0.5 {
+                1.0
+            } else {
+                -1.0
+            }
+        }
     }
 }
 
@@ -92,11 +102,15 @@ impl NativeTremolo {
 }
 
 impl Default for NativeTremolo {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeTremolo {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
@@ -105,7 +119,9 @@ impl HostedPlugin for NativeTremolo {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -140,7 +156,9 @@ impl HostedPlugin for NativeTremolo {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
@@ -151,8 +169,13 @@ impl HostedPlugin for NativeTremolo {
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -183,8 +206,12 @@ impl HostedPlugin for NativeTremolo {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"rate\":{},\"depth\":{},\"shape\":{},\"stereo\":{}}}",
-            self.rate_hz, self.depth, shape_to_norm(self.shape), self.stereo_phase
-        ).into_bytes()
+            self.rate_hz,
+            self.depth,
+            shape_to_norm(self.shape),
+            self.stereo_phase
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -193,18 +220,34 @@ impl HostedPlugin for NativeTremolo {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("rate") { self.rate_hz = v.clamp(0.0, 20.0); }
-        if let Some(v) = read("depth") { self.depth = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("shape") { self.shape = shape_from_norm(v); }
-        if let Some(v) = read("stereo") { self.stereo_phase = v.clamp(0.0, 1.0); }
+        if let Some(v) = read("rate") {
+            self.rate_hz = v.clamp(0.0, 20.0);
+        }
+        if let Some(v) = read("depth") {
+            self.depth = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("shape") {
+            self.shape = shape_from_norm(v);
+        }
+        if let Some(v) = read("stereo") {
+            self.stereo_phase = v.clamp(0.0, 1.0);
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

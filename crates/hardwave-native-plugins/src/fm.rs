@@ -65,7 +65,11 @@ struct VoiceSlot {
 
 impl VoiceSlot {
     fn new(sr: f32) -> Self {
-        Self { voice: FmVoice::new(sr), note: 0, active: false }
+        Self {
+            voice: FmVoice::new(sr),
+            note: 0,
+            active: false,
+        }
     }
 }
 
@@ -164,20 +168,28 @@ impl NativeFmSynth {
 }
 
 impl Default for NativeFmSynth {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeFmSynth {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
-        self.voices = (0..POLYPHONY).map(|_| VoiceSlot::new(self.sample_rate)).collect();
+        self.voices = (0..POLYPHONY)
+            .map(|_| VoiceSlot::new(self.sample_rate))
+            .collect();
         self.refresh_static();
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -191,7 +203,9 @@ impl HostedPlugin for NativeFmSynth {
             out.clear();
             out.resize(num_samples, 0.0);
         }
-        if !self.active || outputs.len() < 2 { return; }
+        if !self.active || outputs.len() < 2 {
+            return;
+        }
 
         for ev in midi_in {
             match ev {
@@ -226,7 +240,9 @@ impl HostedPlugin for NativeFmSynth {
         }
 
         for slot in self.voices.iter_mut() {
-            if !slot.active { continue; }
+            if !slot.active {
+                continue;
+            }
             for i in 0..num_samples {
                 let s = slot.voice.tick() * self.master_gain;
                 outputs[0][i] += s;
@@ -238,7 +254,9 @@ impl HostedPlugin for NativeFmSynth {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
@@ -259,8 +277,13 @@ impl HostedPlugin for NativeFmSynth {
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -324,25 +347,52 @@ impl HostedPlugin for NativeFmSynth {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("alg") { self.algorithm = algo_from_norm(v); }
-        for (i, key) in [("r1","l1"),("r2","l2"),("r3","l3"),("r4","l4")].iter().enumerate() {
-            if let Some(v) = read(key.0) { self.op_ratios[i] = v.max(0.01); }
-            if let Some(v) = read(key.1) { self.op_levels[i] = v.clamp(0.0, 1.0); }
+        if let Some(v) = read("alg") {
+            self.algorithm = algo_from_norm(v);
         }
-        if let Some(v) = read("a") { self.attack = v.max(0.001); }
-        if let Some(v) = read("d") { self.decay = v.max(0.001); }
-        if let Some(v) = read("s") { self.sustain = v.clamp(0.0, 1.0); }
-        if let Some(v) = read("r") { self.release = v.max(0.001); }
-        if let Some(v) = read("m") { self.master_gain = v.clamp(0.0, 1.0); }
+        for (i, key) in [("r1", "l1"), ("r2", "l2"), ("r3", "l3"), ("r4", "l4")]
+            .iter()
+            .enumerate()
+        {
+            if let Some(v) = read(key.0) {
+                self.op_ratios[i] = v.max(0.01);
+            }
+            if let Some(v) = read(key.1) {
+                self.op_levels[i] = v.clamp(0.0, 1.0);
+            }
+        }
+        if let Some(v) = read("a") {
+            self.attack = v.max(0.001);
+        }
+        if let Some(v) = read("d") {
+            self.decay = v.max(0.001);
+        }
+        if let Some(v) = read("s") {
+            self.sustain = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("r") {
+            self.release = v.max(0.001);
+        }
+        if let Some(v) = read("m") {
+            self.master_gain = v.clamp(0.0, 1.0);
+        }
         self.refresh_static();
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

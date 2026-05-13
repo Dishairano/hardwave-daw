@@ -54,17 +54,23 @@ impl NativeClipper {
 }
 
 impl Default for NativeClipper {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostedPlugin for NativeClipper {
-    fn descriptor(&self) -> &PluginDescriptor { &self.descriptor }
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
 
     fn activate(&mut self, _sr: f64, _max: u32) -> Result<(), String> {
         self.active = true;
         Ok(())
     }
-    fn deactivate(&mut self) { self.active = false; }
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
 
     fn process(
         &mut self,
@@ -87,7 +93,11 @@ impl HostedPlugin for NativeClipper {
         }
         let drive_lin = 10.0_f32.powf(self.drive_db / 20.0);
         // Auto-gain compensates for drive so clipper doesn't get louder.
-        let comp = if self.auto_gain { 1.0 / drive_lin.max(1e-6) } else { 1.0 };
+        let comp = if self.auto_gain {
+            1.0 / drive_lin.max(1e-6)
+        } else {
+            1.0
+        };
         for i in 0..num_samples {
             let in_l = inputs[0].get(i).copied().unwrap_or(0.0);
             let in_r = inputs[1].get(i).copied().unwrap_or(0.0);
@@ -96,7 +106,9 @@ impl HostedPlugin for NativeClipper {
         }
     }
 
-    fn get_parameter_count(&self) -> u32 { PARAM_COUNT }
+    fn get_parameter_count(&self) -> u32 {
+        PARAM_COUNT
+    }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         let (name, default, unit) = match index {
@@ -106,8 +118,13 @@ impl HostedPlugin for NativeClipper {
             _ => return None,
         };
         Some(ParameterInfo {
-            id: index, name: name.into(), default_value: default,
-            min: 0.0, max: 1.0, unit: unit.into(), automatable: true,
+            id: index,
+            name: name.into(),
+            default_value: default,
+            min: 0.0,
+            max: 1.0,
+            unit: unit.into(),
+            automatable: true,
         })
     }
 
@@ -116,7 +133,13 @@ impl HostedPlugin for NativeClipper {
             // 0..36 dB
             PARAM_DRIVE => (self.drive_db / 36.0).clamp(0.0, 1.0) as f64,
             PARAM_CEILING => self.ceiling.clamp(0.0, 1.0) as f64,
-            PARAM_AUTO_GAIN => if self.auto_gain { 1.0 } else { 0.0 },
+            PARAM_AUTO_GAIN => {
+                if self.auto_gain {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             _ => 0.0,
         }
     }
@@ -134,8 +157,11 @@ impl HostedPlugin for NativeClipper {
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"drive\":{},\"ceil\":{},\"auto\":{}}}",
-            self.drive_db, self.ceiling, if self.auto_gain {1} else {0}
-        ).into_bytes()
+            self.drive_db,
+            self.ceiling,
+            if self.auto_gain { 1 } else { 0 }
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -144,17 +170,31 @@ impl HostedPlugin for NativeClipper {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ',' || c == '}')
+                .unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
-        if let Some(v) = read("drive") { self.drive_db = v.clamp(0.0, 36.0); }
-        if let Some(v) = read("ceil") { self.ceiling = v.clamp(0.01, 1.0); }
-        if let Some(v) = read("auto") { self.auto_gain = v >= 0.5; }
+        if let Some(v) = read("drive") {
+            self.drive_db = v.clamp(0.0, 36.0);
+        }
+        if let Some(v) = read("ceil") {
+            self.ceiling = v.clamp(0.01, 1.0);
+        }
+        if let Some(v) = read("auto") {
+            self.auto_gain = v >= 0.5;
+        }
         Ok(())
     }
 
-    fn latency_samples(&self) -> u32 { 0 }
-    fn open_editor(&mut self, _: RawWindowHandle) -> bool { false }
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    fn open_editor(&mut self, _: RawWindowHandle) -> bool {
+        false
+    }
     fn close_editor(&mut self) {}
-    fn has_editor(&self) -> bool { false }
+    fn has_editor(&self) -> bool {
+        false
+    }
 }

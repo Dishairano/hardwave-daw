@@ -454,7 +454,12 @@ async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
             // Backwards-compat: legacy splash text mapping listens for
             // `Ready`. Emitting both means an older bundle still in cache
             // continues to render the right copy after this commit lands.
-            emit(&app, UpdateStatus::Ready { version: version.clone() });
+            emit(
+                &app,
+                UpdateStatus::Ready {
+                    version: version.clone(),
+                },
+            );
             if let Some(state) = app.try_state::<AppState>() {
                 if let Some(entry) = state.frontend_launch_plan.lock().as_mut() {
                     entry.applied = true;
@@ -1236,17 +1241,27 @@ fn validate_cached_bundle(cache: &Path, version: &str) -> Option<Vec<u8>> {
         let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         // Only validate same-bundle assets. Skip absolute URLs, data:,
         // and the custom protocol root.
-        if raw.is_empty() || raw.starts_with("http") || raw.starts_with("data:")
-            || raw.starts_with("hardwave-app://") || raw.starts_with("//") {
+        if raw.is_empty()
+            || raw.starts_with("http")
+            || raw.starts_with("data:")
+            || raw.starts_with("hardwave-app://")
+            || raw.starts_with("//")
+        {
             continue;
         }
         let stripped = raw.trim_start_matches('/').split('?').next().unwrap_or(raw);
-        if stripped.is_empty() { continue; }
+        if stripped.is_empty() {
+            continue;
+        }
         let asset_path = bundle_dir.join(stripped);
         match std::fs::metadata(&asset_path) {
-            Ok(m) if m.len() > 0 => { checked += 1; }
+            Ok(m) if m.len() > 0 => {
+                checked += 1;
+            }
             Ok(_) => {
-                log::warn!("frontend updater: cached asset {stripped} is zero-length for {version}");
+                log::warn!(
+                    "frontend updater: cached asset {stripped} is zero-length for {version}"
+                );
                 return None;
             }
             Err(e) => {
@@ -1267,7 +1282,9 @@ fn validate_cached_bundle(cache: &Path, version: &str) -> Option<Vec<u8>> {
 /// post-mortem. Best-effort: failure to quarantine is logged and ignored.
 fn quarantine_cache_version(cache: &Path, version: &str) {
     let src = cache.join(version);
-    if !src.exists() { return; }
+    if !src.exists() {
+        return;
+    }
     let qdir = cache.join(".quarantine");
     if let Err(e) = std::fs::create_dir_all(&qdir) {
         log::warn!("frontend updater: cannot create quarantine dir: {e}");
@@ -1929,13 +1946,21 @@ mod tests {
             !cache.join("0.157.42").exists(),
             "original version dir should be moved away"
         );
-        assert!(!cache.join("active.txt").exists(), "active.txt should be cleared");
+        assert!(
+            !cache.join("active.txt").exists(),
+            "active.txt should be cleared"
+        );
         let qdir = cache.join(".quarantine");
         assert!(qdir.exists(), "quarantine dir created");
         let entries: Vec<_> = std::fs::read_dir(&qdir).unwrap().collect();
         assert_eq!(entries.len(), 1, "exactly one quarantined version");
         assert!(
-            entries[0].as_ref().unwrap().file_name().to_string_lossy().starts_with("0.157.42-"),
+            entries[0]
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("0.157.42-"),
             "quarantine entry name keeps version prefix + timestamp"
         );
     }

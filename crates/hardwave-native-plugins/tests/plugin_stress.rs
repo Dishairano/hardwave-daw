@@ -50,7 +50,13 @@ fn fifty_native_plugins_process_blocks_without_panic() {
         let input = sine_block(440.0, SAMPLE_RATE as f32, &mut phase);
         for eq in eqs.iter_mut() {
             let mut outputs = vec![Vec::new(), Vec::new()];
-            eq.process(&[&input, &input], &mut outputs, &[], &mut midi_out, BLOCK_SIZE);
+            eq.process(
+                &[&input, &input],
+                &mut outputs,
+                &[],
+                &mut midi_out,
+                BLOCK_SIZE,
+            );
             for ch in outputs {
                 for s in ch {
                     if s.is_nan() {
@@ -64,7 +70,13 @@ fn fifty_native_plugins_process_blocks_without_panic() {
         }
         for c in comps.iter_mut() {
             let mut outputs = vec![Vec::new(), Vec::new()];
-            c.process(&[&input, &input], &mut outputs, &[], &mut midi_out, BLOCK_SIZE);
+            c.process(
+                &[&input, &input],
+                &mut outputs,
+                &[],
+                &mut midi_out,
+                BLOCK_SIZE,
+            );
             for ch in outputs {
                 for s in ch {
                     if s.is_nan() {
