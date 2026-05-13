@@ -136,24 +136,71 @@ if [ -n "$LAST_VTAG" ]; then
   # src-tauri/capabilities/ and are compiled into the binary at
   # tauri-build time. tauri.conf.json carries product-level config
   # that the Rust shell reads on launch.
-  BACKEND_GLOBS=(
+  # Two-stage detection.
+  #
+  # Stage 1 — unambiguous backend files (any change recompiles). Source
+  # files under src-tauri/src/ + crates/*/src/, build.rs files, the
+  # capabilities directory, the release workflow itself.
+  HARD_BACKEND_GLOBS=(
       'src-tauri/src/**' 'src-tauri/build.rs'
-      'src-tauri/Cargo.toml' 'src-tauri/capabilities/**'
-      'src-tauri/tauri.conf.json'
-      'crates/*/src/**' 'crates/*/build.rs' 'crates/*/Cargo.toml'
-      'Cargo.toml' 'Cargo.lock'
+      'src-tauri/capabilities/**'
+      'crates/*/src/**' 'crates/*/build.rs'
       '.github/workflows/release.yml'
   )
-  COMMITTED_BACKEND=$(git diff --name-only "${LAST_VTAG}..HEAD" -- "${BACKEND_GLOBS[@]}" 2>/dev/null | head -1)
-  PENDING_BACKEND=$(git diff --name-only HEAD -- "${BACKEND_GLOBS[@]}" 2>/dev/null | head -1)
-  if [ -z "$COMMITTED_BACKEND" ] && [ -z "$PENDING_BACKEND" ]; then
+  # Stage 2 — files we touch on every release for pure version bumps
+  # (Cargo.toml + Cargo.lock + tauri.conf.json) but that ALSO matter
+  # when the diff includes non-version content (dep add/remove, config
+  # change, etc.). For these we look at the diff content, not just
+  # presence. If the only changed lines are `version = "..."` or the
+  # corresponding Cargo.lock package version refresh, treat as
+  # frontend-only.
+  SOFT_BACKEND_GLOBS=(
+      'src-tauri/Cargo.toml' 'src-tauri/tauri.conf.json'
+      'crates/*/Cargo.toml'
+      'Cargo.toml' 'Cargo.lock'
+  )
+
+  hard_diff() {
+    git diff --name-only "$1" -- "${HARD_BACKEND_GLOBS[@]}" 2>/dev/null | head -1
+  }
+  # Returns the first SOFT_BACKEND file that has non-version-bump
+  # content changes since $1. We strip out lines that only touch the
+  # `version = "..."` field and bump markers; if anything remains, the
+  # file genuinely changed.
+  soft_diff() {
+    local range="$1"
+    for glob in "${SOFT_BACKEND_GLOBS[@]}"; do
+      while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        # Filter out the version field and Cargo.lock's name+version
+        # pair (the only thing release.sh edits on a bump). Everything
+        # else surviving the grep means a real dep/config change.
+        local hunk
+        hunk=$(git diff "$range" -- "$f" 2>/dev/null | \
+               grep -E '^[+-][^+-]' | \
+               grep -vE '^[+-]version *= *"[0-9]+\.[0-9]+\.[0-9]+"' | \
+               grep -vE '^[+-]name *= *"' | \
+               grep -vE '^[+-]"version": *"[0-9]+\.[0-9]+\.[0-9]+"' || true)
+        if [ -n "$hunk" ]; then
+          echo "$f"
+          return 0
+        fi
+      done < <(git diff --name-only "$range" -- "$glob" 2>/dev/null)
+    done
+    return 0
+  }
+
+  HARD_COMMITTED=$(hard_diff "${LAST_VTAG}..HEAD")
+  HARD_PENDING=$(hard_diff "HEAD")
+  SOFT_COMMITTED=$(soft_diff "${LAST_VTAG}..HEAD")
+  SOFT_PENDING=$(soft_diff "HEAD")
+
+  if [ -z "$HARD_COMMITTED" ] && [ -z "$HARD_PENDING" ] && [ -z "$SOFT_COMMITTED" ] && [ -z "$SOFT_PENDING" ]; then
     FRONTEND_ONLY=1
     echo "release.sh: only frontend files changed since $LAST_VTAG — will tag as fe-v$NEW_VERSION (hot-swap path, ~2min CI)"
   else
     echo "release.sh: backend changes detected since $LAST_VTAG — full v$NEW_VERSION build (all platforms, ~25min CI)"
-    # Log which file triggered the backend rebuild so we can audit
-    # false positives without re-running this detection by hand.
-    TRIGGER="${COMMITTED_BACKEND:-$PENDING_BACKEND}"
+    TRIGGER="${HARD_COMMITTED:-${HARD_PENDING:-${SOFT_COMMITTED:-$SOFT_PENDING}}}"
     echo "release.sh: backend trigger = $TRIGGER"
   fi
 else
