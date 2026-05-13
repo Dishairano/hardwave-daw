@@ -195,27 +195,37 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
     } catch {}
   }, [])
   const onWindowClose = useCallback(async () => {
-    // Defensive close path. Tauri's `close()` fires CloseRequested,
-    // which goes through the App.tsx handler. If a stale Promise from
-    // a previous `ask()` dialog left the close pipeline locked, the
-    // window stays open silently — common after a hot-swap reload
-    // re-registers the listener without the old preventDefault'd
-    // event ever resolving. We race close() against an 800ms timer;
-    // when the timer wins we call `destroy()` which bypasses the
-    // CloseRequested event entirely and tears the window down hard.
+    // Defensive close path with in-app diagnostic breadcrumbs. We
+    // emit toasts at each step so the user can see WHERE the close
+    // pipeline stops without needing browser DevTools (Hardwave uses
+    // a custom Ctrl+Shift+D panel instead). Toasts cap themselves so
+    // a hung close path still surfaces immediately.
+    const notify = (await import('../stores/notificationStore')).useNotificationStore.getState().push
     try {
+      notify('info', 'close: clicked X')
       const { getCurrentWindow } = await import('@tauri-apps/api/window')
       const win = getCurrentWindow()
-      const closed = win.close().catch(() => false).then(() => true)
-      const timeout = new Promise<boolean>(resolve => setTimeout(() => resolve(false), 800))
-      const ok = await Promise.race([closed, timeout])
-      if (!ok) {
-        // close() hung past the timeout — assume the JS-side handler
-        // is wedged and force the window down. destroy() is not
-        // interceptable by user-land code.
-        await win.destroy()
+      notify('info', 'close: got window, calling close()')
+      const closedFlag = win.close().then(() => 'ok' as const).catch((e) => `err:${String(e)}`)
+      const timeout = new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), 1500))
+      const outcome = await Promise.race([closedFlag, timeout])
+      notify('info', `close: outcome = ${outcome}`)
+      if (outcome === 'timeout') {
+        // close() hung past the timeout — fall back to destroy()
+        // which bypasses CloseRequested entirely. On older binaries
+        // without core:window:allow-destroy this rejects silently and
+        // the user still sees the breadcrumb stream.
+        try {
+          notify('warning', 'close: trying destroy() fallback')
+          await win.destroy()
+          notify('info', 'close: destroy() returned')
+        } catch (e) {
+          notify('error', `close: destroy() failed — ${String(e)}`)
+        }
       }
-    } catch {}
+    } catch (e) {
+      notify('error', `close: unexpected — ${String(e)}`)
+    }
   }, [])
 
   const commitBpm = () => {
