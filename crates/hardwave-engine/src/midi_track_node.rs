@@ -504,3 +504,112 @@ impl AudioNode for MidiTrackNode {
         self.rms_smooth = 0.0;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::AudioNode;
+    use hardwave_midi::MidiEvent;
+
+    fn make_node() -> MidiTrackNode {
+        let meter = Arc::new(TrackMeterState::default());
+        MidiTrackNode::new("t1".into(), "Test MIDI".into(), meter)
+    }
+
+    fn block_outputs(n: usize) -> Vec<Vec<f32>> {
+        vec![vec![0.0; n], vec![0.0; n]]
+    }
+
+    fn ctx_at(sr: f64, n: u32, pos: u64, playing: bool) -> ProcessContext {
+        ProcessContext {
+            sample_rate: sr,
+            buffer_size: n,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: pos,
+            playing,
+        }
+    }
+
+    /// Regression test for beta blocker #4: live MIDI input must drive
+    /// the synth voice even when the transport is stopped. Pre-fix,
+    /// MidiTrackNode.process bailed on `!ctx.playing` and ignored the
+    /// midi_in slice entirely.
+    #[test]
+    fn live_note_on_makes_sound_with_transport_stopped() {
+        let mut node = make_node();
+        let mut out = block_outputs(256);
+        let ctx = ctx_at(48_000.0, 256, 0, false);
+        let inputs: [&[f32]; 0] = [];
+        let events = vec![MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 69, // A4 — 440 Hz, an easy sample to recognise
+            velocity: 0.9,
+        }];
+        let mut midi_out = Vec::new();
+        node.process(&inputs, &mut out, &events, &mut midi_out, &ctx);
+
+        let peak = out[0]
+            .iter()
+            .chain(out[1].iter())
+            .fold(0.0_f32, |a, b| a.max(b.abs()));
+        assert!(peak > 0.0, "live NoteOn should produce audible output, got peak={peak}");
+    }
+
+    /// Live NoteOff while transport stopped — voice transitions into
+    /// Release stage, output should decay rather than sustain.
+    #[test]
+    fn live_note_off_triggers_release() {
+        let mut node = make_node();
+        let mut out = block_outputs(256);
+        let ctx = ctx_at(48_000.0, 256, 0, false);
+        let inputs: [&[f32]; 0] = [];
+        let on = vec![MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.7,
+        }];
+        let mut midi_out = Vec::new();
+        node.process(&inputs, &mut out, &on, &mut midi_out, &ctx);
+
+        // Now send NoteOff — voice should still exist but be in Release.
+        let off = vec![MidiEvent::NoteOff {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.0,
+        }];
+        node.process(&inputs, &mut out, &off, &mut midi_out, &ctx);
+
+        let stage = node.voice.as_ref().map(|v| v.stage);
+        assert_eq!(stage, Some(EnvStage::Release), "matching NoteOff should trigger release");
+    }
+
+    /// While the transport is stopped, clip-scheduled notes must NOT
+    /// re-fire every block (position never advances). Without the
+    /// `ctx.playing` gate, the same note-on would land on every call.
+    #[test]
+    fn clip_notes_do_not_fire_when_stopped() {
+        let mut node = make_node();
+        node.set_notes(vec![MidiNoteRegion {
+            note_on_sample: 0,
+            note_off_sample: 96_000,
+            pitch: 64,
+            velocity: 0.8,
+            muted: false,
+        }]);
+        let mut out = block_outputs(256);
+        let ctx = ctx_at(48_000.0, 256, 0, false);
+        let inputs: [&[f32]; 0] = [];
+        let events: Vec<MidiEvent> = Vec::new();
+        let mut midi_out = Vec::new();
+        node.process(&inputs, &mut out, &events, &mut midi_out, &ctx);
+        node.process(&inputs, &mut out, &events, &mut midi_out, &ctx);
+
+        // With transport stopped, next_note_idx must stay at 0 — the
+        // clip schedule never advances.
+        assert_eq!(node.next_note_idx, 0, "clip schedule must not advance while stopped");
+    }
+}

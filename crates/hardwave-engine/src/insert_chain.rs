@@ -627,6 +627,173 @@ mod tests {
         (slot, counter)
     }
 
+    /// Records the midi_in slice it sees on every process call. Used to
+    /// verify that `InsertChain::process` actually forwards the live
+    /// MIDI buffer to each enabled plug-in (beta blocker #5).
+    struct MidiSinkPlugin {
+        descriptor: PluginDescriptor,
+        seen: Arc<parking_lot::Mutex<Vec<MidiEvent>>>,
+        active: bool,
+    }
+
+    impl MidiSinkPlugin {
+        fn new(seen: Arc<parking_lot::Mutex<Vec<MidiEvent>>>) -> Self {
+            Self {
+                descriptor: PluginDescriptor {
+                    id: "test.midi-sink".into(),
+                    name: "Midi Sink".into(),
+                    vendor: "Hardwave Tests".into(),
+                    version: "0.0.1".into(),
+                    format: PluginFormat::Clap,
+                    path: PathBuf::from("<test>"),
+                    category: PluginCategory::Instrument,
+                    num_inputs: 0,
+                    num_outputs: 2,
+                    has_midi_input: true,
+                    has_editor: false,
+                },
+                seen,
+                active: false,
+            }
+        }
+    }
+
+    impl HostedPlugin for MidiSinkPlugin {
+        fn descriptor(&self) -> &PluginDescriptor {
+            &self.descriptor
+        }
+        fn activate(&mut self, _sr: f64, _max: u32) -> Result<(), String> {
+            self.active = true;
+            Ok(())
+        }
+        fn deactivate(&mut self) {
+            self.active = false;
+        }
+        fn process(
+            &mut self,
+            _inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            num_samples: usize,
+        ) {
+            // Capture the events for the test to inspect.
+            self.seen.lock().extend_from_slice(midi_in);
+            // Emit silence so the chain's wet mix doesn't blow up.
+            for out in outputs.iter_mut().take(2) {
+                out.clear();
+                out.extend(std::iter::repeat(0.0).take(num_samples));
+            }
+        }
+        fn get_parameter_count(&self) -> u32 {
+            0
+        }
+        fn get_parameter_info(&self, _id: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _id: u32) -> f64 {
+            0.0
+        }
+        fn set_parameter_value(&mut self, _id: u32, _value: f64) {}
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&mut self, _bytes: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _parent: RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn process_forwards_midi_in_to_enabled_slots() {
+        // Regression test for beta blocker #5: InsertChain::process used
+        // to hard-code `&[]` for midi_in. Verify the slice actually
+        // reaches each enabled plug-in's process call.
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let mut chain = InsertChain::new();
+        chain
+            .push_slot(
+                LiveSlot {
+                    slot_id: "sink".into(),
+                    plugin: Box::new(MidiSinkPlugin::new(seen.clone())),
+                    enabled: true,
+                    wet: 1.0,
+                },
+                48_000.0,
+                256,
+            )
+            .unwrap();
+
+        let events = vec![
+            MidiEvent::NoteOn {
+                timing: 0,
+                channel: 0,
+                note: 60,
+                velocity: 0.8,
+            },
+            MidiEvent::ControlChange {
+                timing: 32,
+                channel: 0,
+                cc: 7,
+                value: 0.5,
+            },
+        ];
+        let mut scratch = Scratch::default();
+        let mut left = block(256, 0.0);
+        let mut right = block(256, 0.0);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &events);
+
+        let captured = seen.lock().clone();
+        assert_eq!(captured.len(), 2, "MidiSinkPlugin should have received both events");
+        assert!(matches!(captured[0], MidiEvent::NoteOn { note: 60, .. }));
+        assert!(matches!(captured[1], MidiEvent::ControlChange { cc: 7, .. }));
+    }
+
+    #[test]
+    fn process_does_not_forward_midi_to_disabled_slots() {
+        // Disabled (or wet=0) slots are skipped entirely; the audit
+        // expects them to incur zero cost including no MIDI delivery.
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let mut chain = InsertChain::new();
+        chain
+            .push_slot(
+                LiveSlot {
+                    slot_id: "sink".into(),
+                    plugin: Box::new(MidiSinkPlugin::new(seen.clone())),
+                    enabled: false,
+                    wet: 1.0,
+                },
+                48_000.0,
+                256,
+            )
+            .unwrap();
+
+        let events = vec![MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.8,
+        }];
+        let mut scratch = Scratch::default();
+        let mut left = block(256, 0.0);
+        let mut right = block(256, 0.0);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &events);
+
+        assert!(
+            seen.lock().is_empty(),
+            "disabled slot must not see any midi events"
+        );
+    }
+
     fn block(len: usize, value: f32) -> Vec<f32> {
         vec![value; len]
     }

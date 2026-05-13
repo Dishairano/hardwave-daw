@@ -564,4 +564,58 @@ mod tests {
         assert_eq!(notes.len(), 1);
         assert_eq!(rec.note_count(), 0);
     }
+
+    // ----- MidiCaptureRing -----
+
+    fn note_on(note: u8) -> crate::MidiEvent {
+        crate::MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note,
+            velocity: 1.0,
+        }
+    }
+
+    #[test]
+    fn capture_ring_grows_until_full_then_overwrites_oldest() {
+        let mut ring = MidiCaptureRing::new(3);
+        ring.push(100, note_on(60));
+        ring.push(200, note_on(61));
+        ring.push(300, note_on(62));
+        assert_eq!(ring.len(), 3);
+
+        // Fourth push wraps and overwrites the entry at index 0.
+        ring.push(400, note_on(63));
+        let entries = ring.entries_in_order();
+        assert_eq!(entries.len(), 3);
+        // Oldest is now sample_pos=200 (note 61), newest=400 (note 63).
+        assert_eq!(entries[0].0, 200);
+        assert_eq!(entries[2].0, 400);
+        let last_note = match entries[2].1 {
+            crate::MidiEvent::NoteOn { note, .. } => note,
+            _ => panic!("expected NoteOn"),
+        };
+        assert_eq!(last_note, 63);
+    }
+
+    #[test]
+    fn capture_ring_entries_in_order_handles_partial_fill() {
+        let mut ring = MidiCaptureRing::new(8);
+        ring.push(10, note_on(40));
+        ring.push(20, note_on(41));
+        let entries = ring.entries_in_order();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, 10);
+        assert_eq!(entries[1].0, 20);
+    }
+
+    #[test]
+    fn capture_ring_clear_resets_to_empty() {
+        let mut ring = MidiCaptureRing::new(4);
+        ring.push(1, note_on(60));
+        ring.push(2, note_on(61));
+        ring.clear();
+        assert!(ring.is_empty());
+        assert_eq!(ring.entries_in_order().len(), 0);
+    }
 }
