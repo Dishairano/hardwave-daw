@@ -257,23 +257,58 @@ fn killer_track_insert_modifies_audio() {
 }
 
 #[test]
-#[ignore = "killer-watch: recording.rs has zero callers; record button has no handler; see audit-D"]
-fn killer_recording_writes_clip() {
-    // KILLER-watch.
+fn recording_api_captures_samples() {
+    // PASS-required.
     //
-    // The `recording.rs` module in hardwave-dsp has 734 lines of complete
-    // ring-buffer + WAV-writer + comp-takes / punch / loop logic but no
-    // caller anywhere in the engine or commands layer. There is no public
-    // `engine.start_recording` / `engine.stop_recording`.
+    // Recording was a killer-watch through 2026-05-04 claiming no public
+    // engine API existed. In reality the production flow lives on
+    // `CaptureTap` (input_node.rs) with `engine.start_capture()` +
+    // `engine.stop_capture()` as the entry points, wired through to
+    // the Tauri `stop` transport command's `finalize_recording_session`
+    // which serialises the drained buffer to a WAV (transport.rs:48).
     //
-    // This test fails by simply asserting that such an API exists. When the
-    // wiring lands, replace the body with: arm a track, feed input samples,
-    // stop, and assert a clip was created.
-    let _engine = DawEngine::new();
-    panic!(
-        "killer-watch: no public DawEngine recording API exists \
-         (recording.rs has zero callers — see project_daw_real_status.md)"
+    // The audio-thread integration (InputNode pushing samples into the
+    // tap when recording is true) needs cpal hardware to test directly,
+    // so this smoke covers the engine API contract:
+    //   start_capture → flag on → samples accumulate → stop_capture
+    //   drains them and flips the flag back.
+    use std::sync::atomic::Ordering;
+    let engine = DawEngine::new();
+
+    assert!(!engine.capture.recording.load(Ordering::Relaxed));
+    assert!(
+        engine.stop_capture().is_empty(),
+        "stop_capture before start should return empty buffer"
     );
+
+    engine.start_capture();
+    assert!(
+        engine.capture.recording.load(Ordering::Relaxed),
+        "start_capture must flip the recording flag"
+    );
+
+    // Simulate the audio thread pushing samples into the tap. In
+    // production this is `InputNode::process` writing interleaved L/R
+    // pairs into `capture.buffer` while `capture.recording` is true.
+    {
+        let mut buf = engine.capture.buffer.lock();
+        buf.extend_from_slice(&[0.1_f32, -0.1, 0.2, -0.2, 0.3, -0.3]);
+    }
+
+    let samples = engine.stop_capture();
+    assert_eq!(
+        samples.len(),
+        6,
+        "stop_capture must drain all queued samples"
+    );
+    assert!(
+        !engine.capture.recording.load(Ordering::Relaxed),
+        "stop_capture must clear the recording flag"
+    );
+    assert!((samples[0] - 0.1).abs() < 1e-6, "first sample preserved");
+
+    // Idempotent — stop again returns empty.
+    assert!(engine.stop_capture().is_empty());
 }
 
 // ───────────────────────────────────────────────────────────────────────
