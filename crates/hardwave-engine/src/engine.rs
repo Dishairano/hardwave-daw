@@ -934,7 +934,6 @@ impl EngineCallback {
         insert_command_rx: crate::insert_chain::InsertCommandReceiver,
         insert_graveyard_tx: crate::insert_chain::PluginGraveyardSender,
         pending_state_snapshot: PluginStateSnapshotSlot,
-        >,
         midi_input: Arc<Mutex<MidiInputManager>>,
         midi_capture_ring: Arc<Mutex<MidiCaptureRing>>,
         sample_rate: u32,
