@@ -205,7 +205,7 @@ pub fn decode_aiff(bytes: &[u8]) -> Result<(AudioFileInfo, Vec<Vec<f32>>), Audio
 
     for f in 0..frames {
         let frame_off = f * frame_size;
-        for c in 0..channels {
+        for (c, buf) in channel_bufs.iter_mut().enumerate() {
             let sample_off = frame_off + c * bytes_per_sample;
             let raw = &audio_bytes[sample_off..sample_off + bytes_per_sample];
             let value = match comm.sample_size_bits {
@@ -244,7 +244,7 @@ pub fn decode_aiff(bytes: &[u8]) -> Result<(AudioFileInfo, Vec<Vec<f32>>), Audio
                 }
                 _ => 0.0,
             };
-            channel_bufs[c].push(value);
+            buf.push(value);
         }
     }
 
