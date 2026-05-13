@@ -158,18 +158,19 @@ fn mute_silences_track() {
 // ───────────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "killer-watch: MIDI clips are filtered out of the audio graph in engine.rs:887; no synth nodes are wired"]
-fn killer_midi_note_produces_sound() {
-    // KILLER-watch — see [[Killer Reality Breaks]] §3 in hardwave-brain vault.
+fn midi_clip_produces_sound() {
+    // PASS-required.
     //
-    // Add a MIDI track, place a MIDI clip with a single note, render — and assert
-    // we hear something. Today: rebuild_graph filters to ClipContent::Audio only,
-    // so any MIDI clip is silently dropped. There is no MIDI→synth path.
+    // A MIDI track with a clip containing a note must play through the
+    // BuiltinSine voice that MidiTrackNode wires up by default. Was a
+    // killer-watch through 2026-05-04 — the wiring landed in the
+    // MidiTrackNode lineage and the v0.164 work confirmed the live
+    // MIDI plumbing; clip notes ride the same code path.
     //
-    // This test will FAIL until either:
-    //   (a) a default sampler/synth is auto-instantiated on MIDI tracks, OR
-    //   (b) plugin instrument hosting is wired so a VST instrument can render
-    //       the MIDI through the audio graph.
+    // `render_offline_with` forces transport.playing=true (engine.rs:773),
+    // so we don't need to start playback explicitly. The MidiTrackNode
+    // builds `note_regions` from the clip during rebuild_graph and
+    // fires the voice on the first block where position_samples >= note_on_sample.
     use hardwave_midi::MidiClip;
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
 
@@ -211,10 +212,11 @@ fn killer_midi_note_produces_sound() {
     }
 
     let stats = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 2);
+    assert_eq!(stats.nan_count, 0, "MIDI track produced NaN samples");
     assert!(
         stats.peak > 0.001,
-        "MIDI track should produce audible output, got peak={:.6} — \
-         engine.rs:887 still filtering ClipContent::Audio only?",
+        "MIDI clip note should produce audible BuiltinSine output, got peak={:.6} — \
+         check MidiTrackNode wiring in rebuild_graph + voice/envelope state machine",
         stats.peak
     );
 }
