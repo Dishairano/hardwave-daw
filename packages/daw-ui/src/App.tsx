@@ -71,6 +71,7 @@ import { useProjectStore } from './stores/projectStore'
 import { useShortcutsStore } from './stores/shortcutsStore'
 import { useComputerMidiKeyboard } from './hooks/useComputerMidiKeyboard'
 import { useTypingKeyboardStore } from './stores/typingKeyboardStore'
+import { useMetronomeStore } from './stores/metronomeStore'
 import { useTouchControllerStore } from './stores/touchControllerStore'
 import { useNotificationStore } from './stores/notificationStore'
 import { applyCustomBg, useThemeStore } from './stores/themeStore'
@@ -141,6 +142,10 @@ export function App() {
   // user flip in the toolbar instantly enables/disables note injection.
   const typingKeyboardEnabled = useTypingKeyboardStore((s) => s.enabled)
   useComputerMidiKeyboard({ enabled: typingKeyboardEnabled })
+
+  // Reactive subscriptions for Options menu state mirrors — when the
+  // user toggles via shortcut, the menu checkmarks update on next open.
+  const metronomeEnabled = useMetronomeStore((s) => s.enabled)
 
   // Apply System Settings → General DOM classes. Animations toggle
   // hangs `.hw-no-animations` on <html> so the global stylesheet can
@@ -1463,12 +1468,24 @@ export function App() {
       {
         label: 'Options',
         items: [
+          // System settings — FL Options menu top group
+          { label: 'MIDI settings…', shortcut: 'F10', action: () => setShowAudioSettings(true) },
           { label: 'Audio settings…', action: () => setShowAudioSettings(true) },
+          { label: 'General settings…', action: () => setShowAudioSettings(true) },
+          { label: 'File settings…', action: () => setShowAudioSettings(true) },
+          { label: 'Theme settings…', action: () => setShowThemePicker(true) },
+          { separator: true, label: '' },
+          // Project settings
+          { label: 'Project info…', shortcut: 'F11', action: () => setShowProjectInfo(true) },
           { label: 'Tempo map…', action: () => setShowTempoMap(true) },
+          { separator: true, label: '' },
+          // Switches — togglable runtime state mirrors FL's Switches section
+          { label: `${typingKeyboardEnabled ? '✓ ' : '   '}Typing keyboard to piano`, shortcut: 'Ctrl+T', action: () => useTypingKeyboardStore.getState().toggle() },
+          { label: `${metronomeEnabled ? '✓ ' : '   '}Metronome`, shortcut: 'Ctrl+M', action: () => useMetronomeStore.getState().toggleEnabled() },
           { label: `${pdcEnabled ? '✓ ' : '   '}Plugin delay compensation`, action: () => setPdcEnabled(v => !v) },
           { label: `${useNewMixer ? '✓ ' : '   '}Experimental — FL Wide 2 mixer`, action: () => setUseNewMixer(!useNewMixer) },
           { separator: true, label: '' },
-          { label: 'Theme…', action: () => setShowThemePicker(true) },
+          // UI
           {
             label: 'UI scale',
             submenu: [
