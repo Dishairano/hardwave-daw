@@ -50,9 +50,24 @@ interface PatternState {
   nextPattern: () => void
   prevPattern: () => void
   addPattern: () => void
+  /** Insert a fresh empty pattern immediately after the active one
+   * (FL Studio Patterns menu → Insert one, Shift+Ctrl+Ins). Returns
+   * the new pattern id. */
+  insertAfterActive: () => string
   clonePattern: () => void
   deletePattern: () => void
   renamePattern: (id: string, name: string) => void
+  /** Reorder the active pattern up / down in the list. No-op when
+   * already at the top / bottom edge. */
+  moveActiveUp: () => void
+  moveActiveDown: () => void
+  /** Set the active pattern's color to a random entry from
+   * PATTERN_COLORS — FL Patterns menu → Random color. */
+  randomColorActive: () => void
+  /** Activate the lowest-index pattern with no notes anywhere, or
+   * append a new one when every pattern has content. FL Patterns
+   * menu → Find first empty (Shift+F4). */
+  findFirstEmpty: () => void
 
   setStep: (channelId: string, stepIndex: number, velocity: number) => void
   setPanStep: (channelId: string, stepIndex: number, pan: number) => void
@@ -130,6 +145,57 @@ export const usePatternStore = create<PatternState>((set, get) => ({
   addPattern: () => {
     const next = emptyPattern(get().patterns.length + 1)
     set(s => ({ patterns: [...s.patterns, next], activeId: next.id }))
+  },
+
+  insertAfterActive: () => {
+    const { patterns, activeId } = get()
+    const next = emptyPattern(patterns.length + 1)
+    const idx = patterns.findIndex(p => p.id === activeId)
+    const insertAt = idx < 0 ? patterns.length : idx + 1
+    const before = patterns.slice(0, insertAt)
+    const after = patterns.slice(insertAt)
+    set({ patterns: [...before, next, ...after], activeId: next.id })
+    return next.id
+  },
+
+  moveActiveUp: () => {
+    const { patterns, activeId } = get()
+    const i = patterns.findIndex(p => p.id === activeId)
+    if (i <= 0) return
+    const next = patterns.slice()
+    ;[next[i - 1], next[i]] = [next[i], next[i - 1]]
+    set({ patterns: next })
+  },
+
+  moveActiveDown: () => {
+    const { patterns, activeId } = get()
+    const i = patterns.findIndex(p => p.id === activeId)
+    if (i < 0 || i >= patterns.length - 1) return
+    const next = patterns.slice()
+    ;[next[i + 1], next[i]] = [next[i], next[i + 1]]
+    set({ patterns: next })
+  },
+
+  randomColorActive: () => {
+    const color = PATTERN_COLORS[Math.floor(Math.random() * PATTERN_COLORS.length)]
+    const { activeId } = get()
+    set(s => ({ patterns: s.patterns.map(p => p.id === activeId ? { ...p, color } : p) }))
+  },
+
+  findFirstEmpty: () => {
+    const { patterns } = get()
+    const isEmpty = (p: Pattern) =>
+      Object.values(p.steps).every(arr => arr.every(v => v === 0)) &&
+      (!p.panSteps || Object.values(p.panSteps).every(arr => arr.every(v => v === 0))) &&
+      (!p.pitchSteps || Object.values(p.pitchSteps).every(arr => arr.every(v => v === 0)))
+    const found = patterns.find(isEmpty)
+    if (found) {
+      set({ activeId: found.id })
+      return
+    }
+    // No empty pattern — append a fresh one and activate it.
+    const next = emptyPattern(patterns.length + 1)
+    set({ patterns: [...patterns, next], activeId: next.id })
   },
 
   clonePattern: () => {

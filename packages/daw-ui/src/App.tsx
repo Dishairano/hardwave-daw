@@ -1433,9 +1433,17 @@ export function App() {
       {
         label: 'Patterns',
         items: [
-          { label: 'New pattern', action: () => usePatternStore.getState().addPattern() },
+          { label: 'New pattern', shortcut: 'F4', action: () => usePatternStore.getState().addPattern() },
+          { label: 'Find first empty', action: () => usePatternStore.getState().findFirstEmpty() },
+          { label: 'Insert one (after active)', action: () => usePatternStore.getState().insertAfterActive() },
+          { separator: true, label: '' },
           { label: 'Clone pattern', action: () => usePatternStore.getState().clonePattern() },
-          { label: 'Delete pattern', action: () => usePatternStore.getState().deletePattern() },
+          { label: 'Delete pattern', shortcut: 'Del', action: () => usePatternStore.getState().deletePattern() },
+          { separator: true, label: '' },
+          { label: 'Move up', action: () => usePatternStore.getState().moveActiveUp() },
+          { label: 'Move down', action: () => usePatternStore.getState().moveActiveDown() },
+          { separator: true, label: '' },
+          { label: 'Random color', action: () => usePatternStore.getState().randomColorActive() },
         ],
       },
       {
