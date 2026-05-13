@@ -47,6 +47,7 @@ import './components/transport/VirtualKeyboard.css'
 import { SetupWizard } from './components/SetupWizard'
 import './components/SetupWizard.css'
 import { ProjectInfoDialog } from './components/ProjectInfoDialog'
+import { TempoTapper } from './components/TempoTapper'
 import { maybeAutoOpenSetupWizard, useSetupWizardStore } from './stores/setupWizardStore'
 import {
   AUTOSAVE_OPTIONS,
@@ -198,6 +199,7 @@ export function App() {
   const [showOscilloscope, setShowOscilloscope] = useState(false)
   const [showSpectrum, setShowSpectrum] = useState(false)
   const [showProjectInfo, setShowProjectInfo] = useState(false)
+  const [showTempoTapper, setShowTempoTapper] = useState(false)
   const [showMidiMappings, setShowMidiMappings] = useState(false)
   const [showTempoMap, setShowTempoMap] = useState(false)
   // Touch Controllers visibility is store-backed so View menu, Alt+F7
@@ -1449,11 +1451,13 @@ export function App() {
       {
         label: 'View',
         items: [
-          { label: `${showBrowser ? '✓ ' : '   '}Browser`, shortcut: 'F8', action: () => setShowBrowser(v => !v) },
+          { label: `${showBrowser ? '✓ ' : '   '}Browser`, shortcut: 'Alt+F8', action: () => setShowBrowser(v => !v) },
           { label: `${showPlaylist ? '✓ ' : '   '}Playlist`, shortcut: 'F5', action: () => setShowPlaylist(v => !v) },
           { label: `${showChannelRack ? '✓ ' : '   '}Channel Rack`, shortcut: 'F6', action: () => setShowChannelRack(v => !v) },
           { label: `${showPianoRoll ? '✓ ' : '   '}Piano Roll`, shortcut: 'F7', action: () => setShowPianoRoll(v => !v) },
           { label: `${showMixer ? '✓ ' : '   '}Mixer`, shortcut: 'F9', action: () => setShowMixer(v => !v) },
+          { separator: true, label: '' },
+          { label: 'Tempo tapper…', action: () => setShowTempoTapper(true) },
         ],
       },
       {
@@ -1615,6 +1619,7 @@ export function App() {
       <VirtualKeyboard visible={touchControllerVisible} onClose={() => setTouchControllerVisible(false)} />
       <SetupWizard />
       {showProjectInfo && <ProjectInfoDialog onClose={() => setShowProjectInfo(false)} />}
+      {showTempoTapper && <TempoTapper onClose={() => setShowTempoTapper(false)} />}
       {showMidiMappings && (
         <MidiMappingsPanel
           onClose={() => { setShowMidiMappings(false); setMidiLearnPreset(undefined) }}
