@@ -355,6 +355,45 @@ fn live_midi_noteon_audible_with_transport_stopped() {
 }
 
 #[test]
+fn armed_audio_track_drains_live_midi() {
+    // Beta blocker #5 routing guard.
+    //
+    // Pre-fix, the engine never drained MidiInputManager at all, so an
+    // armed audio track hosting a synth plug-in would stay silent.
+    // After the fix, audio tracks with `armed && monitor_input` are
+    // marked `accepts_live_midi=true` during rebuild_graph and the
+    // audio thread drains the queue and forwards to InsertChain.
+    //
+    // Verify the drain step actually happens: inject MIDI, render
+    // offline against an armed audio track, then check the capture
+    // ring — the audio thread pushes drained events into it as part
+    // of the same per-block routine. A non-empty ring proves the
+    // drain ran, which is the prerequisite for InsertChain forwarding
+    // to plug-ins (covered separately by the insert_chain.rs unit
+    // test `process_forwards_midi_in_to_enabled_slots`).
+    let engine = DawEngine::new();
+    add_armed_audio_track(&engine, "Armed audio");
+    engine
+        .midi_input
+        .lock()
+        .inject(hardwave_midi::MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.7,
+        });
+    engine.transport.playing.store(true, Ordering::Relaxed);
+
+    let _ = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 10);
+
+    let entries = engine.midi_capture_ring.lock().entries_in_order();
+    assert!(
+        !entries.is_empty(),
+        "armed audio track must trigger the live-MIDI drain; capture ring empty"
+    );
+}
+
+#[test]
 fn injected_events_land_in_capture_ring() {
     // PASS-required.
     // The rolling 3-min capture buffer is filled by the audio thread's

@@ -66,8 +66,71 @@ jobs:
           echo "$TAG_MSG" >> "$GITHUB_OUTPUT"
           echo "CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
 
+  lint-and-test:
+    # Mirrors the dev-build branch gate. Blocks tagged releases when
+    # fmt fails or any cargo test fails — including the functional
+    # smoke tests that exercise live MIDI end-to-end. Pre-add the
+    # branch can ship through release.yml even if the smoke tests
+    # regressed since the last successful Dev Build; this closes that
+    # window.
+    name: Lint & Test (Linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: release-lint-and-test
+          cache-on-failure: true
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+        continue-on-error: true
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          if sccache --start-server 2>/dev/null; then
+            echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          fi
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            mold clang
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      # Clippy advisory — same as dev-build. The merge-to-master gate
+      # (ci.yml) still treats clippy as a hard error.
+      - name: Clippy (advisory)
+        continue-on-error: true
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
   build:
-    needs: [frontend, changelog]
+    needs: [frontend, changelog, lint-and-test]
     strategy:
       fail-fast: false
       matrix:

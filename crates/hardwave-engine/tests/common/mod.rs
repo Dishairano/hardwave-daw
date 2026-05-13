@@ -88,6 +88,24 @@ pub fn add_audio_track_with_sine(
     track_id
 }
 
+/// Add an armed audio track. `monitor_input` is set so the engine
+/// marks the matching TrackNode as `accepts_live_midi=true` during
+/// `rebuild_graph` — the routing path that lets a synth plug-in on an
+/// audio track receive hardware MIDI events (beta blocker #5 territory).
+pub fn add_armed_audio_track(engine: &DawEngine, name: &str) -> String {
+    let id = {
+        let mut project = engine.project.lock();
+        let id = project.add_audio_track(name.to_string());
+        if let Some(t) = project.track_mut(&id) {
+            t.armed = true;
+            t.monitor_input = true;
+        }
+        id
+    };
+    engine.rebuild_graph();
+    id
+}
+
 /// Add a MIDI track to the project and rebuild the graph. Returns the
 /// track id so the test can later route MIDI events to it (the engine
 /// forwards live MIDI to every MIDI track by default — see
