@@ -806,6 +806,16 @@ impl DawEngine {
             // export pipeline never asks for it. Pass a parked Arc that
             // can never be filled.
             Arc::new(Mutex::new(None)),
+            // Offline render is fed from the frozen project snapshot, so
+            // there is no live MIDI input. A throwaway MidiInputManager
+            // satisfies the signature and stays permanently empty —
+            // try_drain_events_into returns true with no events every
+            // block.
+            Arc::new(Mutex::new(MidiInputManager::new())),
+            // Same for the capture ring — offline export has no
+            // "dump last N seconds" workflow. Detached ring is dropped
+            // when the offline session ends.
+            Arc::new(Mutex::new(hardwave_midi::MidiCaptureRing::new(8))),
             sample_rate,
             buffer_size as u32,
         );
