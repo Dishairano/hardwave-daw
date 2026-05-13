@@ -90,16 +90,15 @@ pub fn dump_midi_capture(state: State<AppState>) -> Vec<CapturedMidiEntry> {
 /// previously-loaded session into the new one.
 #[tauri::command]
 pub fn clear_midi_capture(state: State<AppState>) {
-    // Clone the Arc out of engine FIRST, then drop the engine guard.
-    // That way the ring's MutexGuard temporary borrows the cloned Arc
-    // (which outlives the function) instead of the engine binding, and
-    // Rust's 2021-edition drop-order rules are satisfied without any
-    // hint diagnostics.
     let ring_arc = {
         let engine = state.engine.lock();
         std::sync::Arc::clone(&engine.midi_capture_ring)
     };
-    if let Some(mut ring) = ring_arc.try_lock() {
+    // Bind the Option<MutexGuard> to a NAMED local. With a let-binding
+    // it's a proper variable rather than a tail-expression temporary,
+    // so drop order is declaration-reverse: opt drops before ring_arc.
+    let opt = ring_arc.try_lock();
+    if let Some(mut ring) = opt {
         ring.clear();
     }
 }
