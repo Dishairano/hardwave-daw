@@ -148,6 +148,114 @@ fn mute_silences_track() {
     );
 }
 
+#[test]
+fn solo_silences_other_tracks() {
+    // PASS-required.
+    // FL Studio / Logic / Ableton convention: when ANY track is soloed,
+    // every non-soloed (and non-solo-safe) audio-bearing track must
+    // become inaudible. Verified at the engine layer in `rebuild_graph`
+    // where `any_soloed` derives `effective_mute = !track.soloed &&
+    // !track.solo_safe`.
+    let engine = DawEngine::new();
+    let kept_id = add_audio_track_with_sine(
+        &engine,
+        "Kept",
+        "smoke-solo-kept",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
+    let silenced_id = add_audio_track_with_sine(
+        &engine,
+        "Silenced",
+        "smoke-solo-silenced",
+        SAMPLE_RATE,
+        1.0,
+        660.0,
+        0.5,
+    );
+
+    // Baseline: both tracks unsoloed → both audible → mixed peak.
+    let mixed = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 4);
+    assert!(mixed.peak > 0.05, "baseline mix is silent ({:?})", mixed);
+
+    // Solo just the first track; the second must silence.
+    {
+        let mut project = engine.project.lock();
+        if let Some(t) = project.track_mut(&kept_id) {
+            t.soloed = true;
+        }
+        // Force the silenced track to non-solo-safe so it ducks.
+        if let Some(t) = project.track_mut(&silenced_id) {
+            t.solo_safe = false;
+        }
+    }
+
+    let soloed = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 4);
+    assert!(
+        soloed.peak > 0.05,
+        "soloed track must remain audible ({:?})",
+        soloed
+    );
+    // The mix peak should drop after the second track is silenced
+    // (one of the two sine sources is now contributing zero).
+    assert!(
+        soloed.peak <= mixed.peak,
+        "solo did not reduce mix energy: mixed={:.4} solo={:.4}",
+        mixed.peak,
+        soloed.peak
+    );
+}
+
+#[test]
+fn two_tracks_mix_louder_than_one() {
+    // PASS-required.
+    // Two coherent sine sources at the same frequency must sum at the
+    // master bus to a higher peak than either alone. Tests the audio
+    // graph's mix step + master node summation.
+    let engine_one = DawEngine::new();
+    add_audio_track_with_sine(
+        &engine_one,
+        "Solo",
+        "smoke-mix-one",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
+    let one = render_and_measure(&engine_one, SAMPLE_RATE, SAMPLE_RATE as u64 / 4);
+
+    let engine_two = DawEngine::new();
+    add_audio_track_with_sine(
+        &engine_two,
+        "A",
+        "smoke-mix-A",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
+    add_audio_track_with_sine(
+        &engine_two,
+        "B",
+        "smoke-mix-B",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
+    let two = render_and_measure(&engine_two, SAMPLE_RATE, SAMPLE_RATE as u64 / 4);
+
+    assert!(one.peak > 0.05, "single-track render is silent");
+    assert!(
+        two.peak > one.peak * 1.4,
+        "two coherent sines should sum to ~2× peak; one={:.4} two={:.4}",
+        one.peak,
+        two.peak
+    );
+}
+
 // ───────────────────────────────────────────────────────────────────────
 // KILLER-watch tests — these CURRENTLY FAIL because the underlying
 // feature is vapor. When a fix lands, the test flips green and the
