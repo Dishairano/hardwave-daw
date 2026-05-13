@@ -372,6 +372,85 @@ export function ChannelRack() {
             onUnzipAll={() => { unzipAll(); setChannelMenuOpen(false) }}
             onZipSelected={() => { if (selectedTrackId) zipChannel(selectedTrackId); setChannelMenuOpen(false) }}
             selectedChannelId={selectedTrackId}
+            onSortColor={async () => {
+              // Sort by hex (red-violet gradient FL ordering). Channels
+              // without a color sort to the end. reorderTrack runs
+              // sequentially because the store keeps its own indexed
+              // list — bulk reorder needs one call per move.
+              const sorted = [...allChannels].sort((a, b) => {
+                const ac = a.color ?? '￿'
+                const bc = b.color ?? '￿'
+                return ac.localeCompare(bc)
+              })
+              for (let i = 0; i < sorted.length; i++) {
+                await reorderTrack(sorted[i].id, i)
+              }
+              setChannelMenuOpen(false)
+            }}
+            onSortName={async () => {
+              const sorted = [...allChannels].sort((a, b) => a.name.localeCompare(b.name))
+              for (let i = 0; i < sorted.length; i++) {
+                await reorderTrack(sorted[i].id, i)
+              }
+              setChannelMenuOpen(false)
+            }}
+            onSortTrack={async () => {
+              // 'Track number' = the underlying tracks[] index from the
+              // store, which is what reorderTrack uses anyway. Resets
+              // any user-applied reorders back to the engine default.
+              const sorted = [...allChannels].sort((a, b) => {
+                const ai = tracks.findIndex(t => t.id === a.id)
+                const bi = tracks.findIndex(t => t.id === b.id)
+                return ai - bi
+              })
+              for (let i = 0; i < sorted.length; i++) {
+                await reorderTrack(sorted[i].id, i)
+              }
+              setChannelMenuOpen(false)
+            }}
+            onColorRandom={async () => {
+              // FL "Color selected ▸ Random" — only applies to selected
+              // channels (or every channel if nothing selected).
+              const targets = selectedTrackId
+                ? allChannels.filter(c => c.id === selectedTrackId)
+                : allChannels
+              for (const ch of targets) {
+                const c = CHANNEL_COLORS[Math.floor(Math.random() * CHANNEL_COLORS.length)]
+                await setTrackColor(ch.id, c)
+              }
+              setChannelMenuOpen(false)
+            }}
+            onColorGradient={async () => {
+              // FL gradient picker — we prompt for start + end hex and
+              // interpolate linearly across the channel list. Channel
+              // count = 1 falls back to start; otherwise step = 1/(N-1).
+              const start = window.prompt('Gradient start color (hex):', '#DC2626')?.trim()
+              if (!start) return
+              const end = window.prompt('Gradient end color (hex):', '#7C3AED')?.trim()
+              if (!end) return
+              const targets = selectedTrackId
+                ? allChannels.filter(c => c.id === selectedTrackId)
+                : allChannels
+              const lerp = (a: number, b: number, t: number) => Math.round(a + (b - a) * t)
+              const hexToRgb = (h: string) => {
+                const m = /^#?([0-9a-f]{6})$/i.exec(h)
+                if (!m) return null
+                const n = parseInt(m[1], 16)
+                return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff }
+              }
+              const a = hexToRgb(start)
+              const b = hexToRgb(end)
+              if (!a || !b) return
+              for (let i = 0; i < targets.length; i++) {
+                const t = targets.length === 1 ? 0 : i / (targets.length - 1)
+                const r = lerp(a.r, b.r, t)
+                const g = lerp(a.g, b.g, t)
+                const bl = lerp(a.b, b.b, t)
+                const hex = `#${[r, g, bl].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+                await setTrackColor(targets[i].id, hex)
+              }
+              setChannelMenuOpen(false)
+            }}
             onClose={() => setChannelMenuOpen(false)}
           />
         )}
@@ -650,12 +729,25 @@ export function ChannelRack() {
                 style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 4px', gap: 1, overflow: 'hidden' }}
                 onContextMenu={(e) => { e.preventDefault(); clearChannel(ch.id) }}
               >
-                {Array.from({ length: STEPS }, (_, i) => {
+                {(() => {
+                  // Ghost step boundary — when a channel has Loop mode
+                  // on, steps past the loop point render as ghosts
+                  // (semi-transparent + dashed) so the user can see
+                  // where the audible cycle ends without losing their
+                  // step data. Per FL: 'bar' loops at 16 steps in 4/4,
+                  // 'beat' at 4, 'step' at 1; 'off' shows no ghosts.
+                  const mode = loopMode[ch.id] ?? 'off'
+                  const ghostFrom =
+                    mode === 'bar'  ? 16 :
+                    mode === 'beat' ? 4 :
+                    mode === 'step' ? 1 : STEPS
+                  return Array.from({ length: STEPS }, (_, i) => {
                   const vel = getSteps(ch.id)[i] || 0
                   const active = vel > 0
                   const groupIdx = Math.floor(i / 4)
                   const isOddGroup = groupIdx % 2 === 1
                   const inRange = i < activePatternLength
+                  const ghost = i >= ghostFrom
                   return (
                     <button
                       key={i}
@@ -670,20 +762,24 @@ export function ChannelRack() {
                         if (!active) return
                         startVelocityDrag(ch.id, i, e)
                       }}
-                      title={active ? `Velocity ${Math.round(vel * 127)} (drag up/down · Alt+click to preview)` : 'Click to add step'}
+                      title={ghost
+                        ? `Step beyond ${mode} loop boundary — ghost (will not play)`
+                        : active ? `Velocity ${Math.round(vel * 127)} (drag up/down · Alt+click to preview)` : 'Click to add step'}
                       style={{
                         flex: 1, maxWidth: 28, height: 22, position: 'relative',
                         background: active
                           ? 'rgba(0,0,0,0.25)'
                           : (isOddGroup ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.03)'),
-                        border: `1px solid ${active ? hw.accentLight : 'rgba(255,255,255,0.06)'}`,
+                        border: ghost
+                          ? `1px dashed ${active ? hw.accentLight : 'rgba(255,255,255,0.18)'}`
+                          : `1px solid ${active ? hw.accentLight : 'rgba(255,255,255,0.06)'}`,
                         borderRadius: hw.radius.sm,
-                        boxShadow: active ? `0 0 8px ${hw.accentGlow}` : 'none',
+                        boxShadow: active && !ghost ? `0 0 8px ${hw.accentGlow}` : 'none',
                         marginRight: i % 4 === 3 ? 4 : 0,
                         overflow: 'hidden',
                         transition: 'background 0.05s',
                         padding: 0,
-                        opacity: inRange ? 1 : 0.3,
+                        opacity: !inRange ? 0.3 : ghost ? 0.45 : 1,
                       }}
                     >
                       {active && (
@@ -692,13 +788,14 @@ export function ChannelRack() {
                           height: `${Math.round(vel * 100)}%`,
                           background: `linear-gradient(180deg, ${hw.accentLight}, ${hw.accent})`,
                           borderRadius: hw.radius.sm,
-                          opacity: 0.85 + vel * 0.15,
+                          opacity: ghost ? 0.4 : (0.85 + vel * 0.15),
                           pointerEvents: 'none',
                         }} />
                       )}
                     </button>
                   )
-                })}
+                  })
+                })()}
               </div>
             </div>
           )
@@ -1119,6 +1216,30 @@ export function ChannelRack() {
             for (let i = 0; i < STEPS; i++) setStep(id, i, 0)
             setCtxMenu(null)
           }} />
+          <MenuSep />
+          {/* Ship 5 — FL per-channel Loop mode. Ghost-step preview
+              lives inside the step grid; engine wiring (actually
+              restarting the channel at the loop point) is queued
+              for Tier B. The menu shows the current mode + 4
+              options so the user can preview their cycle. */}
+          <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            Looping ({loopMode[ctxMenu.trackId] ?? 'off'})
+          </div>
+          {(['off', 'bar', 'beat', 'step'] as LoopMode[]).map(m => (
+            <MenuItem
+              key={m}
+              label={
+                m === 'off'  ? 'Off (no loop)' :
+                m === 'bar'  ? 'Bar — loop at next bar' :
+                m === 'beat' ? 'Beat — loop at next beat' :
+                               'Step — loop at next step'
+              }
+              onClick={() => {
+                setLoopMode(ctxMenu.trackId, m)
+                setCtxMenu(null)
+              }}
+            />
+          ))}
           <MenuSep />
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
             Folder
@@ -1623,6 +1744,8 @@ function HwChannelOptionsMenu({
   zippedCount, selectedChannelId,
   onToggleMixerSelectors, onTogglePianoRollPreview, onToggleMuteRemovedSteps,
   onZipSelected, onUnzipAll, onClose,
+  onSortColor, onSortName, onSortTrack,
+  onColorRandom, onColorGradient,
 }: {
   showMixerSelectors: boolean
   showCompletePianoRoll: boolean
@@ -1635,6 +1758,11 @@ function HwChannelOptionsMenu({
   onZipSelected: () => void
   onUnzipAll: () => void
   onClose: () => void
+  onSortColor: () => void
+  onSortName: () => void
+  onSortTrack: () => void
+  onColorRandom: () => void
+  onColorGradient: () => void
 }) {
   useEffect(() => {
     const handle = () => onClose()
@@ -1671,9 +1799,15 @@ function HwChannelOptionsMenu({
       <HwMenuRow label="Move selected up" kbd="⌥↑" disabled />
       <HwMenuRow label="Move selected down" kbd="⌥↓" disabled />
       <HwDivider />
-      <HwMenuRow label="Sort ▸ Color / Name / Track #" disabled />
+      <HwMenuHeader>Sort by</HwMenuHeader>
+      <HwMenuRow label="Color" onClick={() => onSortColor()} />
+      <HwMenuRow label="Name" onClick={() => onSortName()} />
+      <HwMenuRow label="Track number" onClick={() => onSortTrack()} />
+      <HwDivider />
       <HwMenuRow label="Group selected" kbd="⌥G" disabled />
-      <HwMenuRow label="Color selected ▸ Random / Gradient" disabled />
+      <HwMenuHeader>Color selected</HwMenuHeader>
+      <HwMenuRow label="Random" onClick={() => onColorRandom()} />
+      <HwMenuRow label="Gradient (pick start + end)" onClick={() => onColorGradient()} />
       <HwDivider />
       <HwMenuRow label="Mute selected" disabled />
       <HwMenuRow label="Unmute selected" disabled />
