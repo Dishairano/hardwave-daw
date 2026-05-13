@@ -1,13 +1,19 @@
 import { useState, useEffect, useRef } from 'react'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
-import { usePatternStore, STEPS_PER_PATTERN, PATTERN_COLORS, STEP_GRAPH_RANGES, STEP_GRAPH_DEFAULTS, type StepGraphKind } from '../../stores/patternStore'
+import { usePatternStore, STEPS_PER_PATTERN, PATTERN_COLORS, STEP_GRAPH_RANGES, STEP_GRAPH_DEFAULTS, STEP_GRAPH_LABELS, type StepGraphKind } from '../../stores/patternStore'
 import { useTrackFolderStore, type TrackFolder } from '../../stores/trackFolderStore'
+import { useChannelRackPrefsStore, type LoopMode } from '../../stores/channelRackPrefsStore'
 import { DetachButton } from '../FloatingWindow'
 import { ParameterContextMenu } from '../ParameterContextMenu'
 
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
+
+// Module-level clipboard for Cut / Copy / Paste step rows on the
+// channel-button context menu. Survives the menu open/close cycle.
+// Each entry is the full velocity array (length STEPS_PER_PATTERN).
+let stepClipboard: number[] | null = null
 
 const CHANNEL_COLORS = [
   '#DC2626', '#EF4444', '#F59E0B', '#EAB308', '#10B981', '#06B6D4',
@@ -116,22 +122,66 @@ export function ChannelRack() {
   const addPattern = usePatternStore(s => s.addPattern)
   const clonePattern = usePatternStore(s => s.clonePattern)
   const deletePattern = usePatternStore(s => s.deletePattern)
-  const [swing] = useState(0)
+  // Ship 4 — channel-rack prefs (swing, pattern-length, loop modes,
+  // zipped channels, Channel Options menu toggles).
+  const globalSwing = useChannelRackPrefsStore(s => s.globalSwing)
+  const setGlobalSwing = useChannelRackPrefsStore(s => s.setGlobalSwing)
+  const patternLengthOverride = useChannelRackPrefsStore(s => s.patternLength)
+  const setPatternLengthOverride = useChannelRackPrefsStore(s => s.setPatternLength)
+  const loopMode = useChannelRackPrefsStore(s => s.loopMode)
+  const setLoopMode = useChannelRackPrefsStore(s => s.setLoopMode)
+  const zippedList = useChannelRackPrefsStore(s => s.zipped)
+  const zipChannel = useChannelRackPrefsStore(s => s.zip)
+  const unzipChannel = useChannelRackPrefsStore(s => s.unzip)
+  const unzipAll = useChannelRackPrefsStore(s => s.unzipAll)
+  const showMixerSelectors = useChannelRackPrefsStore(s => s.showMixerSelectors)
+  const showCompletePianoRoll = useChannelRackPrefsStore(s => s.showCompletePianoRoll)
+  const muteRemovedSteps = useChannelRackPrefsStore(s => s.muteRemovedSteps)
+  const colorfulLoopControls = useChannelRackPrefsStore(s => s.colorfulLoopControls)
+  const showAdvancedLoopControls = useChannelRackPrefsStore(s => s.showAdvancedLoopControls)
+  const loopStepChannels = useChannelRackPrefsStore(s => s.loopStepChannels)
+  const loopAllChannels = useChannelRackPrefsStore(s => s.loopAllChannels)
+  const toggleShowMixerSelectors = useChannelRackPrefsStore(s => s.toggleShowMixerSelectors)
+  const toggleShowCompletePianoRoll = useChannelRackPrefsStore(s => s.toggleShowCompletePianoRoll)
+  const toggleMuteRemovedSteps = useChannelRackPrefsStore(s => s.toggleMuteRemovedSteps)
+  const toggleColorfulLoopControls = useChannelRackPrefsStore(s => s.toggleColorfulLoopControls)
+  const toggleShowAdvancedLoopControls = useChannelRackPrefsStore(s => s.toggleShowAdvancedLoopControls)
+  const toggleLoopStepChannels = useChannelRackPrefsStore(s => s.toggleLoopStepChannels)
+  const toggleLoopAllChannels = useChannelRackPrefsStore(s => s.toggleLoopAllChannels)
+
+  const setPatternLengthInStore = usePatternStore(s => s.setPatternLength)
   const [graphEditor, setGraphEditor] = useState(false)
   const [graphMode, setGraphMode] = useState<StepGraphKind>('velocity')
+  // Title-bar Channel Options menu state
+  const [channelMenuOpen, setChannelMenuOpen] = useState(false)
+  const [loopMenuOpen, setLoopMenuOpen] = useState(false)
+  // Step length right-click bar selector
+  const [stepLenMenuOpen, setStepLenMenuOpen] = useState(false)
   const setPanStep = usePatternStore(s => s.setPanStep)
   const setPitchStep = usePatternStore(s => s.setPitchStep)
   const setFilterStep = usePatternStore(s => s.setFilterStep)
   const setGateStep = usePatternStore(s => s.setGateStep)
+  const setNoteStep = usePatternStore(s => s.setNoteStep)
+  const setReleaseStep = usePatternStore(s => s.setReleaseStep)
+  const setModYStep = usePatternStore(s => s.setModYStep)
+  const setRepStep = usePatternStore(s => s.setRepStep)
   const getStepGraphValues = usePatternStore(s => s.getStepGraphValues)
 
+  // Dispatch a graph-editor edit to the matching pattern-store setter.
+  // The 9 FL modes ladder up onto the existing 5 fields plus 4 fresh
+  // ones — Mod-X / Shift are stored in the legacy filterSteps / gateSteps
+  // keys so v0.169 saves keep loading.
   const setGraphStep = (channelId: string, i: number, value: number) => {
     switch (graphMode) {
       case 'velocity': setStep(channelId, i, value); break
-      case 'pan': setPanStep(channelId, i, value); break
-      case 'pitch': setPitchStep(channelId, i, value); break
-      case 'filter': setFilterStep(channelId, i, value); break
-      case 'gate': setGateStep(channelId, i, value); break
+      case 'note':     setNoteStep(channelId, i, value); break
+      case 'release':  setReleaseStep(channelId, i, value); break
+      case 'pitch':    setPitchStep(channelId, i, value); break
+      case 'modX':     setFilterStep(channelId, i, value); break
+      case 'modY':     setModYStep(channelId, i, value); break
+      case 'pan':      setPanStep(channelId, i, value); break
+      case 'shift':    setGateStep(channelId, i, value); break
+      case 'rep':      setRepStep(channelId, i, value); break
     }
   }
 
@@ -186,13 +236,25 @@ export function ChannelRack() {
 
   return (
     <div style={{ height: '100%', background: 'rgba(255,255,255,0.02)', backdropFilter: hw.blur.sm, display: 'flex', flexDirection: 'column' }}>
-      {/* Top toolbar */}
-      <div style={{
-        height: 26, background: 'rgba(255,255,255,0.01)',
-        borderBottom: `1px solid ${hw.border}`,
-        display: 'flex', alignItems: 'center', padding: '0 4px', gap: 2,
-      }}>
-        <button style={topBtn} title="Channel options">
+      {/* Top toolbar — Ship 4 FL Channel Rack title bar. The menu
+          icon opens the Channel Options dropdown (25 entries per
+          FL Studio's RMB title-bar set). Right-click on the toolbar
+          background also surfaces the same menu so muscle memory
+          from FL keeps working. */}
+      <div
+        style={{
+          height: 26, background: 'rgba(255,255,255,0.01)',
+          borderBottom: `1px solid ${hw.border}`,
+          display: 'flex', alignItems: 'center', padding: '0 4px', gap: 2,
+          position: 'relative',
+        }}
+        onContextMenu={(e) => { e.preventDefault(); setChannelMenuOpen(v => !v) }}
+      >
+        <button
+          style={topBtn}
+          title="Channel options"
+          onClick={() => setChannelMenuOpen(v => !v)}
+        >
           <svg width="8" height="8" viewBox="0 0 8 8"><path d="M1 2h6M1 4h6M1 6h6" stroke={hw.textMuted} strokeWidth="1"/></svg>
         </button>
 
@@ -211,26 +273,108 @@ export function ChannelRack() {
 
         <TbSep />
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+        {/* Global Swing — left-click drag the mini-knob, double-click resets to 0 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 3 }} title={`Global swing · ${Math.round(globalSwing * 100)}%`}>
           <span style={{ fontSize: 8, color: hw.textFaint }}>SWG</span>
-          <MiniKnob value={swing} color={hw.textMuted} size={14} />
+          <MiniKnob
+            value={globalSwing}
+            color={globalSwing > 0 ? hw.accent : hw.textMuted}
+            size={14}
+            onChange={setGlobalSwing}
+            onReset={() => setGlobalSwing(0)}
+            title={`Global swing — multiplied with each channel's swingmix`}
+          />
         </div>
 
         <TbSep />
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+        {/* Pattern length — click-to-edit input, right-click for bar selector */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, position: 'relative' }}>
           <span style={{ fontSize: 8, color: hw.textFaint }}>Steps</span>
-          <span style={{
-            fontSize: 10, color: hw.textPrimary, fontWeight: 700,
-            fontFamily: "'Consolas', monospace",
-            background: 'rgba(255,255,255,0.04)', padding: '1px 5px', borderRadius: hw.radius.sm,
-            border: `1px solid ${hw.borderDark}`,
-          }}>
-            {STEPS}
-          </span>
+          <input
+            type="number" min={1} max={512}
+            value={patternLengthOverride ?? activePatternLength}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10)
+              if (isFinite(n)) {
+                setPatternLengthOverride(n)
+                setPatternLengthInStore(activePattern.id, n)
+              }
+            }}
+            onContextMenu={(e) => { e.preventDefault(); setStepLenMenuOpen(v => !v) }}
+            title="Pattern length 1–512 · right-click for bar selector"
+            style={{
+              width: 42, height: 18, fontSize: 10, color: hw.textPrimary, fontWeight: 700,
+              fontFamily: "'Consolas', monospace", textAlign: 'center',
+              background: 'rgba(255,255,255,0.04)', padding: 0,
+              border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
+              outline: 'none',
+            }}
+          />
+          {stepLenMenuOpen && (
+            <HwStepLenMenu
+              current={patternLengthOverride ?? activePatternLength}
+              onPick={(n) => {
+                setPatternLengthOverride(n)
+                setPatternLengthInStore(activePattern.id, n)
+                setStepLenMenuOpen(false)
+              }}
+              onClose={() => setStepLenMenuOpen(false)}
+            />
+          )}
+        </div>
+
+        <TbSep />
+
+        {/* Loop icon — global toggle, right-click for per-channel modes */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => toggleLoopStepChannels()}
+            onContextMenu={(e) => { e.preventDefault(); setLoopMenuOpen(v => !v) }}
+            style={{
+              ...topBtn, width: 'auto', padding: '0 6px', fontSize: 9,
+              color: loopStepChannels ? hw.accent : hw.textMuted,
+              background: loopStepChannels ? hw.accentDim : 'transparent',
+            }}
+            title="Loop step channels · right-click for advanced modes"
+          >
+            <svg width="12" height="9" viewBox="0 0 12 9" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2.5 5a3 3 0 0 1 3-3h3M9.5 4a3 3 0 0 1-3 3h-3M8 1l1.5 1.5L8 4M4 6l-1.5 1.5L4 9"/>
+            </svg>
+          </button>
+          {loopMenuOpen && (
+            <HwLoopIconMenu
+              loopStepChannels={loopStepChannels}
+              loopAllChannels={loopAllChannels}
+              colorfulLoopControls={colorfulLoopControls}
+              showAdvancedLoopControls={showAdvancedLoopControls}
+              onToggleStep={() => toggleLoopStepChannels()}
+              onToggleAll={() => toggleLoopAllChannels()}
+              onToggleColorful={() => toggleColorfulLoopControls()}
+              onToggleAdvanced={() => toggleShowAdvancedLoopControls()}
+              onClose={() => setLoopMenuOpen(false)}
+            />
+          )}
         </div>
 
         <div style={{ flex: 1 }} />
+
+        {/* Channel Options dropdown — anchored under the menu icon */}
+        {channelMenuOpen && (
+          <HwChannelOptionsMenu
+            showMixerSelectors={showMixerSelectors}
+            showCompletePianoRoll={showCompletePianoRoll}
+            muteRemovedSteps={muteRemovedSteps}
+            zippedCount={zippedList.length}
+            onToggleMixerSelectors={toggleShowMixerSelectors}
+            onTogglePianoRollPreview={toggleShowCompletePianoRoll}
+            onToggleMuteRemovedSteps={toggleMuteRemovedSteps}
+            onUnzipAll={() => { unzipAll(); setChannelMenuOpen(false) }}
+            onZipSelected={() => { if (selectedTrackId) zipChannel(selectedTrackId); setChannelMenuOpen(false) }}
+            selectedChannelId={selectedTrackId}
+            onClose={() => setChannelMenuOpen(false)}
+          />
+        )}
 
         <button
           onClick={() => setGraphEditor(v => !v)}
@@ -313,6 +457,38 @@ export function ChannelRack() {
           const selected = selectedTrackId === ch.id
           const vol = dbToNorm(ch.volume_db)
           const pan = panToNorm(ch.pan)
+          // Ship 4 — zipped row (18px collapsed). Renders a summary
+          // strip with active-step count instead of the full grid
+          // + knobs. Click to unzip.
+          if (zippedList.includes(ch.id)) {
+            const steps = activePattern.steps[ch.id] || []
+            const activeSteps = steps.filter(v => v > 0).length
+            return (
+              <div
+                key={ch.id}
+                onClick={() => unzipChannel(ch.id)}
+                title="Click to unzip"
+                style={{
+                  height: 18, display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '0 8px',
+                  borderBottom: `1px solid ${hw.border}`,
+                  background: selected ? hw.selectionDim : 'rgba(255,255,255,0.015)',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{
+                  width: 6, height: 6, borderRadius: 3,
+                  background: ch.color || hw.textMuted, flexShrink: 0,
+                }} />
+                <span style={{ fontSize: 9, color: hw.textMuted, fontFamily: hw.font.mono, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {ch.name} <span style={{ color: hw.textFaint, fontStyle: 'italic' }}>▸ zipped</span>
+                </span>
+                <span style={{ fontSize: 8, color: hw.textFaint }}>
+                  {activeSteps}/{steps.length || STEPS} steps · click to unzip
+                </span>
+              </div>
+            )
+          }
           return (
             <div
               key={ch.id}
@@ -540,14 +716,15 @@ export function ChannelRack() {
         const target = channels.find(c => c.id === selectedTrackId) || channels[0]
         if (!target) return null
         const values = getStepGraphValues(target.id, graphMode)
-        const isBipolar = graphMode === 'pan' || graphMode === 'pitch'
+        const isBipolar = graphMode === 'pan' || graphMode === 'pitch' || graphMode === 'note'
         const range = graphMode === 'velocity'
           ? [0, 1] as [number, number]
           : STEP_GRAPH_RANGES[graphMode]
         const [rMin, rMax] = range
         const fmt = (v: number) => {
-          if (graphMode === 'pitch') return `${v >= 0 ? '+' : ''}${v.toFixed(1)} st`
+          if (graphMode === 'pitch' || graphMode === 'note') return `${v >= 0 ? '+' : ''}${v.toFixed(1)} st`
           if (graphMode === 'pan') return v === 0 ? 'C' : (v > 0 ? `R${Math.round(v * 100)}` : `L${Math.round(-v * 100)}`)
+          if (graphMode === 'rep') return `${Math.round(v)}×`
           return `${Math.round(v * 100)}%`
         }
         return (
@@ -562,13 +739,13 @@ export function ChannelRack() {
                 Graph
               </span>
               <span style={{ fontSize: 9, color: hw.accent, fontWeight: 600 }}>{target.name}</span>
-              <div style={{ display: 'flex', gap: 2, marginLeft: 8 }}>
-                {(['velocity', 'pan', 'pitch', 'filter', 'gate'] as StepGraphKind[]).map(k => (
+              <div style={{ display: 'flex', gap: 2, marginLeft: 8, flexWrap: 'wrap' }}>
+                {(['note', 'velocity', 'release', 'pitch', 'modX', 'modY', 'pan', 'shift', 'rep'] as StepGraphKind[]).map(k => (
                   <button
                     key={k}
                     onClick={() => setGraphMode(k)}
                     style={{
-                      padding: '1px 6px', fontSize: 8, textTransform: 'capitalize',
+                      padding: '1px 6px', fontSize: 8,
                       background: graphMode === k ? hw.accentDim : 'transparent',
                       border: `1px solid ${graphMode === k ? hw.accent : hw.border}`,
                       borderRadius: hw.radius.sm,
@@ -576,7 +753,7 @@ export function ChannelRack() {
                       cursor: 'pointer',
                     }}
                   >
-                    {k}
+                    {STEP_GRAPH_LABELS[k]}
                   </button>
                 ))}
               </div>
@@ -866,6 +1043,82 @@ export function ChannelRack() {
               />
             ))}
           </div>
+          <MenuSep />
+          {/* Ship 4 — FL Channel Button RMB step ops. Cut / Copy /
+              Paste move the active pattern's velocity row for this
+              channel through a tiny module-level clipboard; Fill
+              2/4/8 stamps DEFAULT_VEL on every Nth step; Rotate
+              shifts the row by one with wrap-around. */}
+          <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            Steps
+          </div>
+          <MenuItem label="Zip channel" shortcut="⌥Z" onClick={() => {
+            zipChannel(ctxMenu.trackId)
+            setCtxMenu(null)
+          }} />
+          <MenuItem label="Cut steps" shortcut="^X" onClick={() => {
+            const id = ctxMenu.trackId
+            const arr = activePattern.steps[id]
+            if (arr) {
+              stepClipboard = [...arr]
+              for (let i = 0; i < arr.length; i++) setStep(id, i, 0)
+            }
+            setCtxMenu(null)
+          }} />
+          <MenuItem label="Copy steps" shortcut="^C" onClick={() => {
+            const id = ctxMenu.trackId
+            const arr = activePattern.steps[id]
+            if (arr) stepClipboard = [...arr]
+            setCtxMenu(null)
+          }} />
+          <MenuItem label={stepClipboard ? `Paste (${stepClipboard.filter(v => v > 0).length} active)` : 'Paste'} shortcut="^V" onClick={() => {
+            const id = ctxMenu.trackId
+            if (stepClipboard) {
+              const buf = stepClipboard
+              for (let i = 0; i < buf.length; i++) setStep(id, i, buf[i])
+            }
+            setCtxMenu(null)
+          }} />
+          <MenuItem label="Fill every 2 steps" onClick={() => {
+            const id = ctxMenu.trackId
+            for (let i = 0; i < STEPS; i += 2) setStep(id, i, DEFAULT_VEL)
+            setCtxMenu(null)
+          }} />
+          <MenuItem label="Fill every 4 steps" onClick={() => {
+            const id = ctxMenu.trackId
+            for (let i = 0; i < STEPS; i += 4) setStep(id, i, DEFAULT_VEL)
+            setCtxMenu(null)
+          }} />
+          <MenuItem label="Fill every 8 steps" onClick={() => {
+            const id = ctxMenu.trackId
+            for (let i = 0; i < STEPS; i += 8) setStep(id, i, DEFAULT_VEL)
+            setCtxMenu(null)
+          }} />
+          <MenuItem label="Rotate left" shortcut="⇧^←" onClick={() => {
+            const id = ctxMenu.trackId
+            const arr = activePattern.steps[id]
+            if (arr && arr.length > 0) {
+              const head = arr[0]
+              for (let i = 0; i < arr.length - 1; i++) setStep(id, i, arr[i + 1])
+              setStep(id, arr.length - 1, head)
+            }
+            setCtxMenu(null)
+          }} />
+          <MenuItem label="Rotate right" shortcut="⇧^→" onClick={() => {
+            const id = ctxMenu.trackId
+            const arr = activePattern.steps[id]
+            if (arr && arr.length > 0) {
+              const tail = arr[arr.length - 1]
+              for (let i = arr.length - 1; i > 0; i--) setStep(id, i, arr[i - 1])
+              setStep(id, 0, tail)
+            }
+            setCtxMenu(null)
+          }} />
+          <MenuItem label="Clear all steps" onClick={() => {
+            const id = ctxMenu.trackId
+            for (let i = 0; i < STEPS; i++) setStep(id, i, 0)
+            setCtxMenu(null)
+          }} />
           <MenuSep />
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
             Folder
@@ -1244,4 +1497,267 @@ const topBtn: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   background: 'transparent', border: '1px solid transparent',
   borderRadius: 6, cursor: 'pointer',
+}
+
+// ─── Step length right-click menu (Ship 4 — FL bar selector) ───────────────
+//
+// Trigger: right-click on the Steps input. Picking a bar count
+// multiplies it by 16 (steps-per-bar in 4/4) and writes both the
+// channel-rack-prefs override + the active pattern's `length`.
+
+const STEP_LEN_PRESETS = [16, 32, 64, 128, 256, 512]
+function HwStepLenMenu({ current, onPick, onClose }: {
+  current: number
+  onPick: (n: number) => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const handle = () => onClose()
+    const id = window.setTimeout(() => window.addEventListener('click', handle), 0)
+    return () => { window.clearTimeout(id); window.removeEventListener('click', handle) }
+  }, [onClose])
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: 'absolute', top: 22, left: 0, zIndex: 500,
+        minWidth: 160,
+        background: 'rgba(12,12,18,0.97)',
+        border: `1px solid ${hw.borderLight}`,
+        borderRadius: hw.radius.md,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+        backdropFilter: hw.blur.md,
+        padding: 6, display: 'flex', flexDirection: 'column', gap: 2,
+      }}
+    >
+      <div style={{
+        padding: '4px 10px', fontSize: 8, color: hw.textFaint,
+        letterSpacing: 0.6, textTransform: 'uppercase',
+        borderBottom: `1px solid ${hw.border}`, marginBottom: 4,
+      }}>Pattern length</div>
+      {STEP_LEN_PRESETS.map(n => {
+        const active = current === n
+        return (
+          <button key={n} onClick={() => onPick(n)} style={{
+            padding: '5px 10px', fontSize: 10,
+            color: active ? hw.accent : hw.textPrimary,
+            background: active ? hw.accentDim : 'transparent',
+            border: 'none', textAlign: 'left', cursor: 'pointer',
+            borderRadius: hw.radius.sm, display: 'flex', justifyContent: 'space-between',
+          }}>
+            <span>{n / 16} bar{n / 16 === 1 ? '' : 's'}</span>
+            <span style={{ fontFamily: hw.font.mono, fontSize: 9, color: hw.textFaint }}>{n} st</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── Loop icon right-click menu (Ship 4 — FL Looping options) ──────────────
+//
+// Mirrors FL's Loop icon RMB set: global Loop step channels / Loop
+// all channels toggles, plus the rendering toggles (colorful loop
+// controls, always show advanced). Per-channel modes (Bar / Beat /
+// Step) live in each channel's RMB once the user enables looping.
+
+function HwLoopIconMenu({
+  loopStepChannels, loopAllChannels, colorfulLoopControls, showAdvancedLoopControls,
+  onToggleStep, onToggleAll, onToggleColorful, onToggleAdvanced, onClose,
+}: {
+  loopStepChannels: boolean
+  loopAllChannels: boolean
+  colorfulLoopControls: boolean
+  showAdvancedLoopControls: boolean
+  onToggleStep: () => void
+  onToggleAll: () => void
+  onToggleColorful: () => void
+  onToggleAdvanced: () => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const handle = () => onClose()
+    const id = window.setTimeout(() => window.addEventListener('click', handle), 0)
+    return () => { window.clearTimeout(id); window.removeEventListener('click', handle) }
+  }, [onClose])
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: 'absolute', top: 22, left: 0, zIndex: 500,
+        minWidth: 220,
+        background: 'rgba(12,12,18,0.97)',
+        border: `1px solid ${hw.borderLight}`,
+        borderRadius: hw.radius.md,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+        backdropFilter: hw.blur.md,
+        padding: 6, display: 'flex', flexDirection: 'column', gap: 2,
+      }}
+    >
+      <div style={{ padding: '4px 10px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.6, textTransform: 'uppercase', borderBottom: `1px solid ${hw.border}`, marginBottom: 4 }}>Looping</div>
+      <HwCheckRow label="Loop step channels" checked={loopStepChannels} onClick={onToggleStep} />
+      <HwCheckRow label="Loop all channels" checked={loopAllChannels} onClick={onToggleAll} />
+      <div style={{ height: 1, background: hw.border, margin: '4px 6px' }} />
+      <div style={{ padding: '2px 10px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.6, textTransform: 'uppercase' }}>Per-channel modes</div>
+      <div style={{ padding: '4px 10px', fontSize: 9, color: hw.textFaint, fontStyle: 'italic' }}>
+        Right-click any channel button → Looping ▸ Bar / Beat / Step
+      </div>
+      <div style={{ height: 1, background: hw.border, margin: '4px 6px' }} />
+      <HwCheckRow label="Colorful loop controls" checked={colorfulLoopControls} onClick={onToggleColorful} />
+      <HwCheckRow label="Always show advanced controls" checked={showAdvancedLoopControls} onClick={onToggleAdvanced} />
+    </div>
+  )
+}
+
+// ─── Channel Options dropdown (Ship 4 — FL title-bar 25-entry set) ─────────
+//
+// Trigger: click the menu icon or right-click the toolbar background.
+// FL Studio surfaces this as the "Channel options" RMB on the title
+// bar — we mirror the core 25 entries plus mark Tier B items as
+// disabled so the affordance is visible.
+
+function HwChannelOptionsMenu({
+  showMixerSelectors, showCompletePianoRoll, muteRemovedSteps,
+  zippedCount, selectedChannelId,
+  onToggleMixerSelectors, onTogglePianoRollPreview, onToggleMuteRemovedSteps,
+  onZipSelected, onUnzipAll, onClose,
+}: {
+  showMixerSelectors: boolean
+  showCompletePianoRoll: boolean
+  muteRemovedSteps: boolean
+  zippedCount: number
+  selectedChannelId: string | null
+  onToggleMixerSelectors: () => void
+  onTogglePianoRollPreview: () => void
+  onToggleMuteRemovedSteps: () => void
+  onZipSelected: () => void
+  onUnzipAll: () => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const handle = () => onClose()
+    const id = window.setTimeout(() => window.addEventListener('click', handle), 0)
+    return () => { window.clearTimeout(id); window.removeEventListener('click', handle) }
+  }, [onClose])
+  const dim: React.CSSProperties = {
+    padding: '5px 10px', fontSize: 10, color: hw.textFaint,
+    background: 'transparent', border: 'none', textAlign: 'left',
+    cursor: 'not-allowed', borderRadius: hw.radius.sm, width: '100%',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  }
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: 'absolute', top: 26, left: 0, zIndex: 500,
+        minWidth: 260, maxHeight: '70vh', overflowY: 'auto',
+        background: 'rgba(12,12,18,0.97)',
+        border: `1px solid ${hw.borderLight}`,
+        borderRadius: hw.radius.md,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+        backdropFilter: hw.blur.md,
+        padding: 6, display: 'flex', flexDirection: 'column', gap: 1,
+      }}
+    >
+      <HwMenuHeader>Channels</HwMenuHeader>
+      <HwMenuRow label="Add one…" kbd="⌥A" disabled />
+      <button style={dim} disabled title="Tier B — Loop Starter / genre-based sample generation"><span>Loop Starter…</span><span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>tier B</span></button>
+      <HwMenuRow label="Select unused channels" disabled />
+      <HwMenuRow label="Clone selected" kbd="⌥C" disabled />
+      <HwMenuRow label="Delete selected" kbd="⌥Del" disabled />
+      <HwMenuRow label="Move selected up" kbd="⌥↑" disabled />
+      <HwMenuRow label="Move selected down" kbd="⌥↓" disabled />
+      <HwDivider />
+      <HwMenuRow label="Sort ▸ Color / Name / Track #" disabled />
+      <HwMenuRow label="Group selected" kbd="⌥G" disabled />
+      <HwMenuRow label="Color selected ▸ Random / Gradient" disabled />
+      <HwDivider />
+      <HwMenuRow label="Mute selected" disabled />
+      <HwMenuRow label="Unmute selected" disabled />
+      <HwMenuRow label="Transpose selected…" disabled />
+      <HwMenuRow label="Set swingmix for selected…" disabled />
+      <button style={dim} disabled><span>Truncate swing notes</span><span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>tier B</span></button>
+      <HwDivider />
+      <HwMenuRow label="Assign to free mixer tracks" kbd="^L" disabled />
+      <HwCheckRow label="Show mixer-track selectors" kbd="⌥M" checked={showMixerSelectors} onClick={onToggleMixerSelectors} />
+      <HwDivider />
+      <HwMenuRow label={selectedChannelId ? 'Zip selected channel' : 'Zip selected (no selection)'} kbd="⌥Z" onClick={selectedChannelId ? onZipSelected : undefined} disabled={!selectedChannelId} />
+      <HwMenuRow label={`Unzip all (${zippedCount})`} kbd="⌥U" onClick={zippedCount > 0 ? onUnzipAll : undefined} disabled={zippedCount === 0} />
+      <HwCheckRow label="Mute removed steps" checked={muteRemovedSteps} onClick={onToggleMuteRemovedSteps} />
+      <HwCheckRow label="Show complete piano-roll preview" checked={showCompletePianoRoll} onClick={onTogglePianoRollPreview} />
+      <HwDivider />
+      <button style={dim} disabled><span>Switch all to Realtime</span><span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>tier B</span></button>
+      <button style={dim} disabled><span>Switch all to Elastique</span><span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>tier B</span></button>
+      <button style={dim} disabled><span>Detached (own window)</span><span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>tier B</span></button>
+    </div>
+  )
+}
+
+// ── Shared menu row components ────────────────────────────────────────────
+
+function HwMenuHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      padding: '4px 10px', fontSize: 8, color: hw.textFaint,
+      letterSpacing: 0.6, textTransform: 'uppercase',
+      borderBottom: `1px solid ${hw.border}`, marginBottom: 4,
+    }}>{children}</div>
+  )
+}
+function HwDivider() {
+  return <div style={{ height: 1, background: hw.border, margin: '4px 6px' }} />
+}
+function HwMenuRow({ label, kbd, onClick, disabled }: {
+  label: string; kbd?: string; onClick?: () => void; disabled?: boolean
+}) {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        padding: '5px 10px', fontSize: 10,
+        color: disabled ? hw.textFaint : (hover ? hw.accent : hw.textPrimary),
+        background: !disabled && hover ? hw.accentDim : 'transparent',
+        border: 'none', textAlign: 'left',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        borderRadius: hw.radius.sm, width: '100%',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+      }}
+    >
+      <span>{label}</span>
+      {kbd && <span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>{kbd}</span>}
+    </button>
+  )
+}
+function HwCheckRow({ label, kbd, checked, onClick }: {
+  label: string; kbd?: string; checked: boolean; onClick: () => void
+}) {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        padding: '5px 10px', fontSize: 10,
+        color: hover ? hw.accent : hw.textPrimary,
+        background: hover ? hw.accentDim : 'transparent',
+        border: 'none', textAlign: 'left',
+        cursor: 'pointer', borderRadius: hw.radius.sm, width: '100%',
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}
+    >
+      <span style={{ width: 12, color: checked ? hw.accent : 'transparent', fontWeight: 700 }}>✓</span>
+      <span style={{ flex: 1 }}>{label}</span>
+      {kbd && <span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>{kbd}</span>}
+    </button>
+  )
 }

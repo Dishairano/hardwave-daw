@@ -17,29 +17,60 @@ export interface Pattern {
   panSteps?: Record<string, number[]>
   /** channelId -> per-step pitch offset in semitones (-12..12). Defaults to 0. */
   pitchSteps?: Record<string, number[]>
-  /** channelId -> per-step filter cutoff (0..1 normalized). Defaults to 1. */
+  /** channelId -> per-step Mod-X / filter cutoff (0..1 normalized). Defaults to 1. Persisted as `filterSteps` for backward-compat with v0.169 saves. */
   filterSteps?: Record<string, number[]>
-  /** channelId -> per-step gate length (0..1 normalized). Defaults to 1. */
+  /** channelId -> per-step Shift / gate length (0..1 normalized). Defaults to 1. Persisted as `gateSteps` for backward-compat. */
   gateSteps?: Record<string, number[]>
+  /** Ship 4 — Note pitch offset per step in semitones (-12..12). FL "Note" graph editor mode — useful for tuning drum hits or chromatic FX. Defaults to 0. */
+  noteSteps?: Record<string, number[]>
+  /** Ship 4 — Release velocity per step (0..1). FL "Release" graph mode. Defaults to 1. */
+  releaseSteps?: Record<string, number[]>
+  /** Ship 4 — Mod-Y per step (0..1). FL "Mod-Y" graph mode — usually mapped to filter resonance. Defaults to 0.5. */
+  modYSteps?: Record<string, number[]>
+  /** Ship 4 — Repeat count per step (1..8 retriggers). FL "Rep" graph mode for rapid retriggers. Defaults to 1. */
+  repSteps?: Record<string, number[]>
   color?: string
   /** Pattern length in steps; when omitted, derives from longest channel or STEPS_PER_PATTERN. */
   length?: number
 }
 
-export type StepGraphKind = 'velocity' | 'pan' | 'pitch' | 'filter' | 'gate'
+export type StepGraphKind = 'note' | 'velocity' | 'release' | 'pitch' | 'modX' | 'modY' | 'pan' | 'shift' | 'rep'
 
+/** Defaults per non-velocity graph dimension. */
 export const STEP_GRAPH_DEFAULTS: Record<Exclude<StepGraphKind, 'velocity'>, number> = {
-  pan: 0,
+  note: 0,
+  release: 1,
   pitch: 0,
-  filter: 1,
-  gate: 1,
+  modX: 1,
+  modY: 0.5,
+  pan: 0,
+  shift: 1,
+  rep: 1,
 }
 
+/** [min, max] per non-velocity dimension. */
 export const STEP_GRAPH_RANGES: Record<Exclude<StepGraphKind, 'velocity'>, [number, number]> = {
-  pan: [-1, 1],
+  note: [-12, 12],
+  release: [0, 1],
   pitch: [-12, 12],
-  filter: [0, 1],
-  gate: [0, 1],
+  modX: [0, 1],
+  modY: [0, 1],
+  pan: [-1, 1],
+  shift: [0, 1],
+  rep: [1, 8],
+}
+
+/** User-facing labels for each graph mode. */
+export const STEP_GRAPH_LABELS: Record<StepGraphKind, string> = {
+  note: 'Note',
+  velocity: 'Velocity',
+  release: 'Release',
+  pitch: 'Fine pitch',
+  modX: 'Mod-X',
+  modY: 'Mod-Y',
+  pan: 'Pan',
+  shift: 'Shift',
+  rep: 'Rep',
 }
 
 interface PatternState {
@@ -72,8 +103,15 @@ interface PatternState {
   setStep: (channelId: string, stepIndex: number, velocity: number) => void
   setPanStep: (channelId: string, stepIndex: number, pan: number) => void
   setPitchStep: (channelId: string, stepIndex: number, semitones: number) => void
+  /** Legacy alias for Mod-X — same underlying `filterSteps` field. */
   setFilterStep: (channelId: string, stepIndex: number, cutoff: number) => void
+  /** Legacy alias for Shift — same underlying `gateSteps` field. */
   setGateStep: (channelId: string, stepIndex: number, gate: number) => void
+  /** Ship 4 — 4 new FL graph modes. Each writes the matching pat[*Steps] map. */
+  setNoteStep: (channelId: string, stepIndex: number, semitones: number) => void
+  setReleaseStep: (channelId: string, stepIndex: number, release: number) => void
+  setModYStep: (channelId: string, stepIndex: number, resonance: number) => void
+  setRepStep: (channelId: string, stepIndex: number, repeats: number) => void
   getStepGraphValues: (channelId: string, kind: StepGraphKind) => number[]
   clearChannel: (channelId: string) => void
   setPatternColor: (id: string, color: string) => void
@@ -84,7 +122,9 @@ interface PatternState {
   hydrate: (json: string | null) => void
 }
 
-type GraphKey = 'panSteps' | 'pitchSteps' | 'filterSteps' | 'gateSteps'
+type GraphKey =
+  | 'panSteps' | 'pitchSteps' | 'filterSteps' | 'gateSteps'
+  | 'noteSteps' | 'releaseSteps' | 'modYSteps' | 'repSteps'
 
 function updateStepGraph(
   s: PatternState,
@@ -245,14 +285,31 @@ export const usePatternStore = create<PatternState>((set, get) => ({
 
   setPanStep: (channelId, stepIndex, pan) => set(s => updateStepGraph(s, channelId, stepIndex, 'panSteps', Math.max(-1, Math.min(1, pan)), STEP_GRAPH_DEFAULTS.pan)),
   setPitchStep: (channelId, stepIndex, semitones) => set(s => updateStepGraph(s, channelId, stepIndex, 'pitchSteps', Math.max(-12, Math.min(12, semitones)), STEP_GRAPH_DEFAULTS.pitch)),
-  setFilterStep: (channelId, stepIndex, cutoff) => set(s => updateStepGraph(s, channelId, stepIndex, 'filterSteps', Math.max(0, Math.min(1, cutoff)), STEP_GRAPH_DEFAULTS.filter)),
-  setGateStep: (channelId, stepIndex, gate) => set(s => updateStepGraph(s, channelId, stepIndex, 'gateSteps', Math.max(0, Math.min(1, gate)), STEP_GRAPH_DEFAULTS.gate)),
+  setFilterStep: (channelId, stepIndex, cutoff) => set(s => updateStepGraph(s, channelId, stepIndex, 'filterSteps', Math.max(0, Math.min(1, cutoff)), STEP_GRAPH_DEFAULTS.modX)),
+  setGateStep: (channelId, stepIndex, gate) => set(s => updateStepGraph(s, channelId, stepIndex, 'gateSteps', Math.max(0, Math.min(1, gate)), STEP_GRAPH_DEFAULTS.shift)),
+  setNoteStep:    (channelId, stepIndex, semitones) => set(s => updateStepGraph(s, channelId, stepIndex, 'noteSteps',    Math.max(-12, Math.min(12, semitones)), STEP_GRAPH_DEFAULTS.note)),
+  setReleaseStep: (channelId, stepIndex, release)   => set(s => updateStepGraph(s, channelId, stepIndex, 'releaseSteps', Math.max(0, Math.min(1, release)),     STEP_GRAPH_DEFAULTS.release)),
+  setModYStep:    (channelId, stepIndex, resonance) => set(s => updateStepGraph(s, channelId, stepIndex, 'modYSteps',    Math.max(0, Math.min(1, resonance)),   STEP_GRAPH_DEFAULTS.modY)),
+  setRepStep:     (channelId, stepIndex, repeats)   => set(s => updateStepGraph(s, channelId, stepIndex, 'repSteps',     Math.max(1, Math.min(8, Math.round(repeats))), STEP_GRAPH_DEFAULTS.rep)),
 
   getStepGraphValues: (channelId, kind) => {
     const pat = get().patterns.find(p => p.id === get().activeId)
     if (!pat) return new Array(STEPS_PER_PATTERN).fill(0)
     if (kind === 'velocity') return pat.steps[channelId] ?? new Array(STEPS_PER_PATTERN).fill(0)
-    const key = (`${kind}Steps`) as 'panSteps' | 'pitchSteps' | 'filterSteps' | 'gateSteps'
+    // Mod-X / Shift reuse the legacy `filterSteps` / `gateSteps`
+    // fields so v0.169 saves keep loading. Note / Release / Mod-Y /
+    // Rep live in their own *Steps fields.
+    const fieldByKind: Record<Exclude<StepGraphKind, 'velocity'>, GraphKey> = {
+      note: 'noteSteps',
+      release: 'releaseSteps',
+      pitch: 'pitchSteps',
+      modX: 'filterSteps',
+      modY: 'modYSteps',
+      pan: 'panSteps',
+      shift: 'gateSteps',
+      rep: 'repSteps',
+    }
+    const key = fieldByKind[kind as Exclude<StepGraphKind, 'velocity'>]
     const def = STEP_GRAPH_DEFAULTS[kind as Exclude<StepGraphKind, 'velocity'>]
     return pat[key]?.[channelId] ?? new Array(STEPS_PER_PATTERN).fill(def)
   },
