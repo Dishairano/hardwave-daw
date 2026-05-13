@@ -371,49 +371,31 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
 
       <span className="fl-toolsep" />
 
-      {/* BPM — click to edit, drag to nudge, right-click for menu */}
+      {/* BPM — two drag zones (integer + decimal), click for edit, RMB
+          for menu. FL Studio parity: vertical drag on the integer
+          portion of the readout adjusts whole BPM (step 1, Ctrl=fine
+          0.1), drag on the decimal portion adjusts the fractional
+          portion only (step 0.001). Click-to-edit + right-click menu
+          live on the outer wrapper so the existing flow still works. */}
       <div style={{ position: 'relative' }}>
         <div
           className="fl-bpm"
-          title="Tempo · click to edit · drag vertical · right-click for menu"
-          onClick={() => {
+          title="Tempo · click to edit · drag integer for whole BPM · drag decimal for thousandths · right-click for menu"
+          onClick={(e) => {
+            // Suppress click-to-edit if a child digit drag just
+            // committed a new value — the per-zone handlers below
+            // set this flag on the wrapper element to short-circuit.
+            const w = e.currentTarget as HTMLElement & { dataset: DOMStringMap }
+            if (w.dataset.justDragged === '1') {
+              w.dataset.justDragged = '0'
+              return
+            }
             if (!editingBpm) {
               setBpmDraft(bpm.toFixed(3))
               setEditingBpm(true)
             }
           }}
           onContextMenu={(e) => { e.preventDefault(); setTempoMenuOpen(v => !v) }}
-          onPointerDown={(e) => {
-            if (editingBpm) return
-            if (e.button !== 0) return
-            if (e.target instanceof HTMLInputElement) return
-            const startY = e.clientY
-            const startBpm = bpm
-            const target = e.currentTarget
-            target.setPointerCapture(e.pointerId)
-            let moved = false
-            const onMove = (ev: PointerEvent) => {
-              const dy = startY - ev.clientY
-              if (Math.abs(dy) > 2) moved = true
-              const fine = ev.ctrlKey || ev.metaKey ? 0.1 : 1
-              const next = Math.max(20, Math.min(999, startBpm + dy * 0.3 * fine))
-              setBpm(Math.round(next * 10) / 10)
-            }
-            const onUp = (ev: PointerEvent) => {
-              target.releasePointerCapture(ev.pointerId)
-              target.removeEventListener('pointermove', onMove)
-              target.removeEventListener('pointerup', onUp)
-              // If the user dragged we suppress the click-to-edit
-              // that fires after pointerup — the click is treated as
-              // a value-edit, the drag as a value-nudge.
-              if (moved) {
-                const stop = (ce: MouseEvent) => { ce.stopPropagation(); window.removeEventListener('click', stop, true) }
-                window.addEventListener('click', stop, true)
-              }
-            }
-            target.addEventListener('pointermove', onMove)
-            target.addEventListener('pointerup', onUp)
-          }}
         >
           <small>BPM</small>
           {editingBpm ? (
@@ -428,7 +410,7 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
               }}
             />
           ) : (
-            <b>{bpm.toFixed(3)}</b>
+            <HwBpmSplitDisplay bpm={bpm} setBpm={setBpm} />
           )}
         </div>
         {tempoMenuOpen && (
@@ -648,6 +630,112 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
       </div>
     </div>
     </>
+  )
+}
+
+// ─── BPM split-display (FL per-zone drag) ──────────────────────────────────
+//
+// Renders the BPM readout as two independently draggable spans
+// separated by a static dot. Vertical drag on the integer span
+// adjusts whole BPM (step 1, Ctrl/Cmd = fine 0.1); drag on the
+// decimal span adjusts the fractional portion only (step 0.001).
+// FL Studio's tempo display works the same — sleep over a digit and
+// only that digit's place value moves. Click-to-edit lives on the
+// parent `.fl-bpm` div so a bare click anywhere still opens the
+// numeric editor.
+
+function HwBpmSplitDisplay({ bpm, setBpm }: { bpm: number; setBpm: (v: number) => void }) {
+  const intPart = Math.floor(bpm)
+  const decPart = bpm - intPart // 0..0.999
+  const decStr = (Math.round(decPart * 1000) / 1000).toFixed(3).slice(2) // '000'..'999'
+
+  // Walk up the DOM to the `.fl-bpm` wrapper and stamp a flag so the
+  // parent's onClick handler skips its click-to-edit branch on the
+  // pointerup that immediately follows a drag.
+  const markDragged = (el: HTMLElement) => {
+    let n: HTMLElement | null = el
+    while (n && !n.classList.contains('fl-bpm')) n = n.parentElement
+    if (n) (n as HTMLElement & { dataset: DOMStringMap }).dataset.justDragged = '1'
+  }
+
+  const handleIntDrag = (e: React.PointerEvent<HTMLSpanElement>) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    const startY = e.clientY
+    const startInt = intPart
+    const startDec = decPart
+    const target = e.currentTarget
+    target.setPointerCapture(e.pointerId)
+    let moved = false
+    const onMove = (ev: PointerEvent) => {
+      const dy = startY - ev.clientY
+      if (Math.abs(dy) > 2) moved = true
+      const fine = ev.ctrlKey || ev.metaKey ? 0.1 : 1
+      const stepped = Math.round(startInt + dy * 0.3 * fine)
+      const nextInt = Math.max(20, Math.min(999, stepped))
+      setBpm(nextInt + startDec)
+    }
+    const onUp = (ev: PointerEvent) => {
+      target.releasePointerCapture(ev.pointerId)
+      target.removeEventListener('pointermove', onMove)
+      target.removeEventListener('pointerup', onUp)
+      if (moved) markDragged(target)
+    }
+    target.addEventListener('pointermove', onMove)
+    target.addEventListener('pointerup', onUp)
+  }
+
+  const handleDecDrag = (e: React.PointerEvent<HTMLSpanElement>) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    const startY = e.clientY
+    const startInt = intPart
+    const startDec = decPart
+    const target = e.currentTarget
+    target.setPointerCapture(e.pointerId)
+    let moved = false
+    const onMove = (ev: PointerEvent) => {
+      const dy = startY - ev.clientY
+      if (Math.abs(dy) > 2) moved = true
+      const fine = ev.ctrlKey || ev.metaKey ? 0.1 : 1
+      // 0.005 BPM per pixel × fine — full screen drag = ~5 BPM.
+      const rawDec = Math.max(0, Math.min(0.999, startDec + dy * 0.005 * fine))
+      const nextDec = Math.round(rawDec * 1000) / 1000
+      setBpm(startInt + nextDec)
+    }
+    const onUp = (ev: PointerEvent) => {
+      target.releasePointerCapture(ev.pointerId)
+      target.removeEventListener('pointermove', onMove)
+      target.removeEventListener('pointerup', onUp)
+      if (moved) markDragged(target)
+    }
+    target.addEventListener('pointermove', onMove)
+    target.addEventListener('pointerup', onUp)
+  }
+
+  const zoneStyle: React.CSSProperties = {
+    cursor: 'ns-resize',
+    padding: '0 1px',
+    borderRadius: 2,
+    userSelect: 'none',
+    fontFamily: 'var(--mono)',
+    fontSize: 14,
+    fontWeight: 700,
+  }
+  return (
+    <b style={{ display: 'inline-flex', alignItems: 'baseline', fontFamily: 'var(--mono)' }}>
+      <span
+        onPointerDown={handleIntDrag}
+        style={zoneStyle}
+        title="Drag to adjust whole BPM"
+      >{intPart}</span>
+      <span style={{ ...zoneStyle, cursor: 'default', padding: 0, opacity: 0.5 }}>.</span>
+      <span
+        onPointerDown={handleDecDrag}
+        style={zoneStyle}
+        title="Drag to adjust thousandths"
+      >{decStr}</span>
+    </b>
   )
 }
 

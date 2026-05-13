@@ -236,6 +236,13 @@
 }
 .fl-bpm small { font-size: 7px; color: var(--text-dim); letter-spacing: 1.5px; line-height: 1; font-weight: 500; }
 .fl-bpm b { font-family: var(--mono); font-size: 11px; color: var(--red-bright); font-weight: 600; line-height: 1.1; }
+/* Split BPM zones — hover highlights the zone the pointer is over so
+   the user can see which range (integer / decimal) their drag will
+   change before they commit. */
+.fl-bpm b > span[title]:hover {
+  background: rgba(239,68,68,0.15);
+  box-shadow: inset 0 0 0 1px rgba(239,68,68,0.4);
+}
 .fl-bpm input {
   font-family: var(--mono); font-size: 11px; color: var(--red-bright); font-weight: 600;
   background: transparent; border: 0; width: 60px; padding: 0; outline: none;
