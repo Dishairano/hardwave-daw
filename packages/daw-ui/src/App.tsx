@@ -46,6 +46,7 @@ import { VirtualKeyboard } from './components/transport/VirtualKeyboard'
 import './components/transport/VirtualKeyboard.css'
 import { SetupWizard } from './components/SetupWizard'
 import './components/SetupWizard.css'
+import { ProjectInfoDialog } from './components/ProjectInfoDialog'
 import { maybeAutoOpenSetupWizard, useSetupWizardStore } from './stores/setupWizardStore'
 import {
   AUTOSAVE_OPTIONS,
@@ -151,6 +152,35 @@ export function App() {
     document.documentElement.classList.toggle('hw-high-vis', highVisibility)
   }, [animationsEnabled, highVisibility])
 
+  // Project working-time counter: every 30 seconds while the window has
+  // focus, bump the project metadata counter by 30 via tick_project_working_time.
+  // The Project Info dialog reads + can reset this.
+  useEffect(() => {
+    let lastTick = Date.now()
+    const id = setInterval(() => {
+      if (document.hidden) return
+      const elapsed = Math.round((Date.now() - lastTick) / 1000)
+      lastTick = Date.now()
+      if (elapsed > 0) {
+        invoke('tick_project_working_time', { seconds: elapsed }).catch(() => {})
+      }
+    }, 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Auto-open Project Info splash when a freshly-loaded project has
+  // show_on_open enabled. Runs once per project load — uses a one-shot
+  // ref so reopening the dialog manually doesn't trigger a loop.
+  const projectInfoCheckedRef = useRef('')
+  useEffect(() => {
+    const path = useProjectStore.getState().filePath ?? ''
+    if (projectInfoCheckedRef.current === path) return
+    projectInfoCheckedRef.current = path
+    invoke<{ show_on_open: boolean }>('get_project_meta')
+      .then(meta => { if (meta.show_on_open) setShowProjectInfo(true) })
+      .catch(() => {})
+  })
+
   // Panel visibility
   const [showBrowser, setShowBrowser] = useState(true)
   const [showMixer, setShowMixer] = useState(false)
@@ -167,6 +197,7 @@ export function App() {
   const [showLoudness, setShowLoudness] = useState(false)
   const [showOscilloscope, setShowOscilloscope] = useState(false)
   const [showSpectrum, setShowSpectrum] = useState(false)
+  const [showProjectInfo, setShowProjectInfo] = useState(false)
   const [showMidiMappings, setShowMidiMappings] = useState(false)
   const [showTempoMap, setShowTempoMap] = useState(false)
   // Touch Controllers visibility is store-backed so View menu, Alt+F7
@@ -1175,17 +1206,11 @@ export function App() {
           return
         }
         case 'toggleMidiSettings':    setShowAudioSettings(v => !v); return
-        case 'toggleSongInfo': {
-          // Hardwave doesn't ship a dedicated Song Info panel yet —
-          // FL's F11 opens project description / time signature /
-          // genre metadata. Surface a notification so the binding is
-          // visible in the shortcuts panel and the user knows the
-          // backing UI is queued.
-          import('./stores/notificationStore').then(({ useNotificationStore }) => {
-            useNotificationStore.getState().push('info', 'Song Info panel queued — coming in a follow-up.')
-          })
+        case 'toggleSongInfo':
+          // F11 — FL Studio convention. ProjectInfoDialog renders the
+          // metadata fields + auto-saves to the project on Save.
+          setShowProjectInfo(v => !v)
           return
-        }
         case 'closeAllWindows': {
           // FL F12 — slam every transient panel shut at once.
           setShowBrowser(false); setShowMixer(false); setShowChannelRack(false)
@@ -1248,6 +1273,8 @@ export function App() {
           { label: 'Save', shortcut: 'Ctrl+S', action: handleSaveProject },
           { label: 'Save as…', shortcut: 'Ctrl+Shift+S', action: handleSaveProjectAs },
           { label: 'Save as template…', action: handleSaveAsTemplate },
+          { separator: true, label: '' },
+          { label: 'Project info…', shortcut: 'F11', action: () => setShowProjectInfo(true) },
           { separator: true, label: '' },
           { label: 'Export audio…', action: handleExportAudio },
           { separator: true, label: '' },
@@ -1518,6 +1545,7 @@ export function App() {
       {showSpectrum && <SpectrumAnalyzer onClose={() => setShowSpectrum(false)} />}
       <VirtualKeyboard visible={touchControllerVisible} onClose={() => setTouchControllerVisible(false)} />
       <SetupWizard />
+      {showProjectInfo && <ProjectInfoDialog onClose={() => setShowProjectInfo(false)} />}
       {showMidiMappings && (
         <MidiMappingsPanel
           onClose={() => { setShowMidiMappings(false); setMidiLearnPreset(undefined) }}

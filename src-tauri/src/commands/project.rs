@@ -321,3 +321,69 @@ pub fn get_project_info(state: State<AppState>) -> ProjectInfo {
         bpm: project.tempo_map.entries[0].bpm,
     }
 }
+
+/// Full Project Info dialog payload. Mirrors FL Studio's Project Info
+/// fields one-to-one: title / genre / author / info / url + the
+/// "Show on open" splash toggle + the cumulative working-time counter.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ProjectInfoMeta {
+    pub title: String,
+    pub author: String,
+    pub genre: String,
+    pub info: String,
+    pub url: String,
+    pub show_on_open: bool,
+    pub working_time_seconds: u64,
+}
+
+#[tauri::command]
+pub fn get_project_meta(state: State<AppState>) -> ProjectInfoMeta {
+    let engine = state.engine.lock();
+    let m = &engine.project.lock().metadata;
+    ProjectInfoMeta {
+        title: m.title.clone(),
+        author: m.author.clone(),
+        genre: m.genre.clone(),
+        info: m.info.clone(),
+        url: m.url.clone(),
+        show_on_open: m.show_on_open,
+        working_time_seconds: m.working_time_seconds,
+    }
+}
+
+#[tauri::command]
+pub fn set_project_meta(state: State<AppState>, meta: ProjectInfoMeta) {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    project.metadata.title = meta.title;
+    project.metadata.author = meta.author;
+    project.metadata.genre = meta.genre;
+    project.metadata.info = meta.info;
+    project.metadata.url = meta.url;
+    project.metadata.show_on_open = meta.show_on_open;
+    project.metadata.working_time_seconds = meta.working_time_seconds;
+    project.metadata.modified_at = chrono::Utc::now().to_rfc3339();
+}
+
+/// Reset the cumulative working-time counter to zero. Wired to the
+/// "Reset working time" button on the Project Info dialog so users can
+/// kick off a fresh session counter without touching anything else.
+#[tauri::command]
+pub fn reset_project_working_time(state: State<AppState>) {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    project.metadata.working_time_seconds = 0;
+    project.metadata.modified_at = chrono::Utc::now().to_rfc3339();
+}
+
+/// Increment the working-time counter. The UI calls this on a 30s
+/// cadence while the window has focus.
+#[tauri::command]
+pub fn tick_project_working_time(state: State<AppState>, seconds: u64) {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    project.metadata.working_time_seconds = project
+        .metadata
+        .working_time_seconds
+        .saturating_add(seconds);
+}

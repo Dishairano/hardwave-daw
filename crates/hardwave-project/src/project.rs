@@ -11,6 +11,33 @@ pub struct ProjectMetadata {
     pub sample_rate: u32,
     pub created_at: String,
     pub modified_at: String,
+    /// Display title for export metadata + the "Show on Open" splash.
+    /// Distinct from `name` (which is the on-disk filename stem).
+    #[serde(default)]
+    pub title: String,
+    /// Free-text genre tag. Round-trips into rendered WAV/MP3 metadata
+    /// for distribution / DAW interop. ID3v1 has a fixed list but we
+    /// accept any string — exporters can map to the closest ID3 slot.
+    #[serde(default)]
+    pub genre: String,
+    /// Long-form description. Shown in the Project Info splash and
+    /// embedded in rendered audio file comments. Free-form text.
+    #[serde(default)]
+    pub info: String,
+    /// Homepage / contact URL. Embedded in rendered file metadata as a
+    /// link the listener can click.
+    #[serde(default)]
+    pub url: String,
+    /// When true, the Project Info dialog auto-opens whenever this
+    /// project is loaded — useful for sharing a project with notes for
+    /// the next collaborator.
+    #[serde(default)]
+    pub show_on_open: bool,
+    /// Accumulated seconds the user has had the project open and
+    /// active. UI ticks this periodically; reset via the Project Info
+    /// dialog's "Reset working time" button.
+    #[serde(default)]
+    pub working_time_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +101,12 @@ impl Default for Project {
                 sample_rate: 48000,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 modified_at: chrono::Utc::now().to_rfc3339(),
+                title: String::new(),
+                genre: String::new(),
+                info: String::new(),
+                url: String::new(),
+                show_on_open: false,
+                working_time_seconds: 0,
             },
             tempo_map: TempoMap::default(),
             tracks,
