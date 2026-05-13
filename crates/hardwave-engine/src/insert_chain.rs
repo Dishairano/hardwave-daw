@@ -227,10 +227,7 @@ pub struct Scratch {
 
 impl Scratch {
     pub fn with_capacity(capacity: usize) -> Self {
-        let channels = vec![
-            Vec::with_capacity(capacity),
-            Vec::with_capacity(capacity),
-        ];
+        let channels = vec![Vec::with_capacity(capacity), Vec::with_capacity(capacity)];
         Self {
             channels,
             midi_out: Vec::with_capacity(64),
