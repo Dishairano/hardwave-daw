@@ -195,36 +195,44 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
     } catch {}
   }, [])
   const onWindowClose = useCallback(async () => {
-    // Defensive close path with in-app diagnostic breadcrumbs. We
-    // emit toasts at each step so the user can see WHERE the close
-    // pipeline stops without needing browser DevTools (Hardwave uses
-    // a custom Ctrl+Shift+D panel instead). Toasts cap themselves so
-    // a hung close path still surfaces immediately.
-    const notify = (await import('../stores/notificationStore')).useNotificationStore.getState().push
+    // Defensive close with breadcrumbs into the DevPanel Log (the
+    // Hardwave custom dev panel opens with Ctrl+Shift+D and reads
+    // from `useLogStore`, not `useNotificationStore`). We also fire
+    // a custom `daw:close-clicked` event so the DevPanel's daw:*
+    // event subscription captures it, and console.log everywhere
+    // for completeness. Whichever surface the user has open shows
+    // the failing step.
+    let log: (level: 'info' | 'fail' | 'pass' | 'event', msg: string) => void = () => {}
     try {
-      notify('info', 'close: clicked X')
+      const mod = await import('../dev/logStore')
+      const append = mod.useLogStore.getState().append
+      log = (level, message) => append({ level, message })
+    } catch {}
+    const breadcrumb = (level: 'info' | 'fail' | 'pass' | 'event', msg: string) => {
+      try { console.log(`[close] ${msg}`) } catch {}
+      try { log(level, msg) } catch {}
+      try { window.dispatchEvent(new CustomEvent('daw:close-trace', { detail: { level, msg } })) } catch {}
+    }
+    breadcrumb('event', 'X clicked — entering close handler')
+    try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window')
       const win = getCurrentWindow()
-      notify('info', 'close: got window, calling close()')
+      breadcrumb('info', 'got window — calling close()')
       const closedFlag = win.close().then(() => 'ok' as const).catch((e) => `err:${String(e)}`)
       const timeout = new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), 1500))
       const outcome = await Promise.race([closedFlag, timeout])
-      notify('info', `close: outcome = ${outcome}`)
+      breadcrumb(outcome === 'ok' ? 'pass' : 'fail', `close() outcome = ${outcome}`)
       if (outcome === 'timeout') {
-        // close() hung past the timeout — fall back to destroy()
-        // which bypasses CloseRequested entirely. On older binaries
-        // without core:window:allow-destroy this rejects silently and
-        // the user still sees the breadcrumb stream.
         try {
-          notify('warning', 'close: trying destroy() fallback')
+          breadcrumb('info', 'trying destroy() fallback')
           await win.destroy()
-          notify('info', 'close: destroy() returned')
+          breadcrumb('pass', 'destroy() returned')
         } catch (e) {
-          notify('error', `close: destroy() failed — ${String(e)}`)
+          breadcrumb('fail', `destroy() failed — ${String(e)}`)
         }
       }
     } catch (e) {
-      notify('error', `close: unexpected — ${String(e)}`)
+      breadcrumb('fail', `unexpected error — ${String(e)}`)
     }
   }, [])
 
