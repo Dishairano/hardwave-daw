@@ -472,20 +472,86 @@ fn injected_events_land_in_capture_ring() {
 }
 
 #[test]
-#[ignore = "killer-watch: automation has no engine callers; ParameterContextMenu shows 'soon' placeholder"]
-fn killer_automation_changes_parameter() {
-    // KILLER-watch.
+fn automation_lane_silences_track_via_volume() {
+    // PASS-required.
     //
-    // automation.rs + automation_clip.rs + automation_recording.rs + lfo.rs
-    // contain ~1400 lines of types with zero callers. Project struct has no
-    // automation_clips field. UI shows a literal disabled "Create Automation
-    // (soon)" placeholder.
+    // Track-volume automation: was a killer-watch claiming "no engine
+    // callers". The Lane/Point/CurveMode types had unit tests but the
+    // audit didn't trace TrackNode.process — which DOES walk
+    // automation_lanes every block and overrides `volume` for the
+    // TrackVolume target (track_node.rs:526).
     //
-    // This test asserts that automation actually drives a parameter at render
-    // time. Today: no API exists to define an automation point + run.
+    // Construct a sine clip, attach a lane that pins value=0.0 across
+    // the render window (maps to -60 dB), render, and assert the
+    // automation actually pulled the audio to near-silence. Without
+    // the lane wiring the track would play at unity (peak > 0.05);
+    // with it the peak should be below the mute threshold.
+    use hardwave_project::automation::{
+        AutomationLane, AutomationPoint, AutomationTarget, CurveMode,
+    };
+    let engine = DawEngine::new();
+    let track_id = add_audio_track_with_sine(
+        &engine,
+        "Auto",
+        "smoke-sine-auto",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.automation_lanes.push(AutomationLane {
+                id: "lane-vol".to_string(),
+                target: AutomationTarget::TrackVolume,
+                // Single point at tick 0, value 0.0 — denormalises to
+                // -60 dB across the whole render. `value_at` for any
+                // tick beyond the last point returns the last point's
+                // value, so the whole render stays pinned at -60 dB.
+                points: vec![AutomationPoint {
+                    tick: 0,
+                    value: 0.0,
+                    curve: CurveMode::Linear,
+                    tension: 0.0,
+                }],
+                visible: true,
+            });
+        }
+    }
+
+    let stats = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 4);
+    assert!(
+        stats.peak < 0.01,
+        "TrackVolume automation pinned at value=0 (-60 dB) should produce \
+         near-silence; got peak={:.6}. TrackNode.process not honouring \
+         automation_lanes?",
+        stats.peak
+    );
+}
+
+#[test]
+#[ignore = "killer-watch: automation_clip.rs + automation_recording.rs + lfo.rs are still zero-caller (~1400 LOC)"]
+fn killer_automation_clips_and_lfo() {
+    // KILLER-watch — SCOPE NARROWED 2026-05-13.
+    //
+    // automation.rs ITSELF is now wired: TrackNode.process walks
+    // `track.automation_lanes` every block (track_node.rs:526) and
+    // overrides volume / pan / mute / plug-in param values.
+    // `automation_lane_silences_track_via_volume` (PASS-required, above)
+    // is the regression gate.
+    //
+    // What remains vapor:
+    //   - automation_clip.rs (per-clip automation tracks)
+    //   - automation_recording.rs (touch / write / latch record modes)
+    //   - lfo.rs (six built-in LFO shapes that nothing instantiates)
+    //
+    // When clip-based automation lands, replace this body with: create
+    // an automation CLIP (not lane), render, assert. Today: no public
+    // API to attach a clip-based automation track.
     let _engine = DawEngine::new();
     panic!(
-        "killer-watch: no public DawEngine automation API exists \
-         (automation.rs et al have zero callers — see project_daw_real_status.md)"
+        "killer-watch: automation lanes work; automation CLIPS + LFO + \
+         touch/write/latch recording have zero engine callers"
     );
 }
