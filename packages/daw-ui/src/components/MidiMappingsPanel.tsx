@@ -57,8 +57,14 @@ export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelP
   const [learnStatus, setLearnStatus] = useState<LearnStatus>({
     learning: false, target: null, lastLearned: null,
   })
+  // `initialTarget?.kind` includes `'pluginParam'`, which isn't a valid
+  // TargetKind for the Add-mapping dropdown — that dropdown only adds
+  // generic track/master mappings. Plugin-param mappings come from the
+  // Channel Rack's MIDI Learn flow and are filtered to a safe default.
   const [addKind, setAddKind] = useState<TargetKind>(
-    initialTarget?.kind ?? 'masterVolume'
+    initialTarget && initialTarget.kind !== 'pluginParam'
+      ? initialTarget.kind
+      : 'masterVolume'
   )
   const [addTrackId, setAddTrackId] = useState<string>(
     initialTarget && initialTarget.kind !== 'masterVolume'

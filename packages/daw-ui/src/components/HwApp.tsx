@@ -28,6 +28,7 @@ import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
 import { usePanelLayoutStore } from '../stores/panelLayoutStore'
 import { useProjectStore } from '../stores/projectStore'
+import { useMetronomeStore } from '../stores/metronomeStore'
 import type { MobilePanel } from './MobileTabBar'
 
 interface HwAppProps {
@@ -50,6 +51,12 @@ interface HwAppProps {
   onToggleChannelRack?: () => void
   onToggleMixer?: () => void
   onToggleBrowser?: () => void
+  // Ship 1 toolbar port (FL Tier A) — PAT/SONG right-click toggles
+  // Channel-Rack / Playlist visibility. Owned by App.tsx.
+  onTogglePlaylist?: () => void
+  // Tempo right-click + TAP-right-click both open the standalone
+  // Tempo Tapper modal (lives in App.tsx alongside other dialogs).
+  onOpenTempoTapper?: () => void
 }
 
 /** Format `positionSamples` as "BAR : BEAT : TICK" using transport store metadata. */
@@ -74,9 +81,30 @@ function useTransportClock() {
   }
 }
 
-// ─── Top bar (fl-topbar) ─────────────────────────────────────────────────────
+// ─── Top bar (fl-topbar) — Ship 1 of the Toolbar FL-parity port ────────────
+//
+// Mockup approved 2026-05-13. Layout follows
+// https://suite.hardwavestudios.com/toolbar-fl-parity-mockup/ section 2.
+// Ship 1 wires the high-impact controls that all map to existing
+// stores: PAT/SONG mode + right-click swap-window, pattern prev/next,
+// punch toggle, metronome toggle (with the existing precount menu
+// surfacing through the metronome button itself), BPM with a tempo
+// context menu (presets + half/double + open Tapper modal), TAP
+// button (left-click = inline rolling-avg, right-click = open Tapper),
+// time-signature inline editor, master volume drag-slider.
+//
+// Deferred to Ship 2/3 per the mockup tier ladder: snap pill /
+// zoom / 8-tool picker / save-as flashing / render / cut-copy-paste-
+// duplicate / step-edit / wait-for-input / count-in / blend / typing-
+// keyboard / multilink / master pitch knob / CPU+MEM+POLY meters +
+// graph / MIDI activity LED / mini scope / hint-bar icon-types.
 
-function HwTopbar({ menus }: { menus?: MenuDef[] }) {
+function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTapper }: {
+  menus?: MenuDef[]
+  onTogglePlaylist?: () => void
+  onToggleChannelRack?: () => void
+  onOpenTempoTapper?: () => void
+}) {
   const playing = useTransportStore(s => s.playing)
   const recording = useTransportStore(s => s.recording)
   const looping = useTransportStore(s => s.looping)
@@ -88,15 +116,33 @@ function HwTopbar({ menus }: { menus?: MenuDef[] }) {
   const toggleLoop = useTransportStore(s => s.toggleLoop)
   const toggleRecording = useTransportStore(s => s.toggleRecording)
   const setBpm = useTransportStore(s => s.setBpm)
+  const tapTempo = useTransportStore(s => s.tapTempo)
+  const patternMode = useTransportStore(s => s.patternMode)
+  const setPatternMode = useTransportStore(s => s.setPatternMode)
+  const punchEnabled = useTransportStore(s => s.punchEnabled)
+  const togglePunch = useTransportStore(s => s.togglePunch)
+  const setMasterVolume = useTransportStore(s => s.setMasterVolume)
+  const tsNum = useTransportStore(s => s.timeSigNumerator)
+  const tsDen = useTransportStore(s => s.timeSigDenominator)
+  const setTimeSignature = useTransportStore(s => s.setTimeSignature)
 
   const { barBeatTick, minSec } = useTransportClock()
 
   const patterns = usePatternStore(s => s.patterns)
   const activeId = usePatternStore(s => s.activeId)
   const activePattern = patterns.find(p => p.id === activeId)
+  const prevPattern = usePatternStore(s => s.prevPattern)
+  const nextPattern = usePatternStore(s => s.nextPattern)
+
+  const metronomeEnabled = useMetronomeStore(s => s.enabled)
+  const toggleMetronome = useMetronomeStore(s => s.toggleEnabled)
+
+  const undo = useTrackStore(s => s.undo)
+  const redo = useTrackStore(s => s.redo)
 
   const [editingBpm, setEditingBpm] = useState(false)
   const [bpmDraft, setBpmDraft] = useState('')
+  const [tempoMenuOpen, setTempoMenuOpen] = useState(false)
 
   const onWindowMin = useCallback(async () => {
     try {
@@ -122,6 +168,9 @@ function HwTopbar({ menus }: { menus?: MenuDef[] }) {
     if (isFinite(n) && n > 0) setBpm(Math.max(20, Math.min(999, n)))
     setEditingBpm(false)
   }
+
+  // FL tempo right-click presets — verbatim from the manual.
+  const tempoPresets = [80, 100, 120, 140, 160]
 
   return (
     <>
@@ -161,37 +210,189 @@ function HwTopbar({ menus }: { menus?: MenuDef[] }) {
       </div>
     </div>
 
-    {/* Row 2: transport + clock + bpm + pattern + perf + master meter,
-        left-aligned under HARDWAVE. Window controls stay in row 1. */}
+    {/* Row 2 — Ship 1 toolbar layout per approved mockup */}
     <div className="fl-toolrow">
+      {/* Undo / Redo */}
+      <div style={{ display: 'flex', gap: 2 }}>
+        <button onClick={() => undo()} className="fl-mini-btn" title="Undo (Ctrl+Z)">
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3.5 4.5 1.5 4.5 1.5 2.5"/>
+            <path d="M2 6.5a4 4 0 1 0 1.2-2.8L1.5 5.2"/>
+          </svg>
+        </button>
+        <button onClick={() => redo()} className="fl-mini-btn" title="Redo (Ctrl+Y)">
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="8.5 4.5 10.5 4.5 10.5 2.5"/>
+            <path d="M10 6.5a4 4 0 1 1-1.2-2.8L10.5 5.2"/>
+          </svg>
+        </button>
+      </div>
+
+      <span className="fl-toolsep" />
+
+      {/* PAT / SONG mode toggle. Right-click on PAT toggles Channel
+          Rack visibility; right-click on SONG toggles Playlist. */}
+      <div className="fl-mode-toggle">
+        <button
+          className={patternMode ? 'active' : ''}
+          onClick={() => setPatternMode(true)}
+          onContextMenu={(e) => { e.preventDefault(); onToggleChannelRack?.() }}
+          title="Pattern mode · right-click toggles Channel Rack"
+        >PAT</button>
+        <button
+          className={!patternMode ? 'active' : ''}
+          onClick={() => setPatternMode(false)}
+          onContextMenu={(e) => { e.preventDefault(); onTogglePlaylist?.() }}
+          title="Song mode · right-click toggles Playlist"
+        >SONG</button>
+      </div>
+
+      <span className="fl-toolsep" />
+
+      {/* Pattern pill with prev/next arrows */}
+      <div className="fl-pat-pill" title="Active pattern · click arrows to nav">
+        <span className="nav" onClick={() => prevPattern()} title="Previous pattern">‹</span>
+        <span className="name">{activePattern?.name || 'Pattern 1'}</span>
+        <span className="nav" onClick={() => nextPattern()} title="Next pattern">›</span>
+      </div>
+
+      <span className="fl-toolsep" />
+
+      {/* Transport cluster: REC · STOP · PLAY · LOOP · PUNCH · METR */}
       <div className="fl-trans">
-        <div className="fl-trans-btn" title="Skip back" onClick={() => setPosition(0)}>
-          <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
-            <path d="M3.5 2v12M5.5 8l8 5.5V2.5z" fill="currentColor" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.2"/>
-          </svg>
-        </div>
-        <div className="fl-trans-btn" title="Stop" onClick={() => stop()}>
-          <svg className="ic" width="11" height="11" viewBox="0 0 16 16" fill="none">
-            <rect x="3.5" y="3.5" width="9" height="9" rx="1" fill="currentColor"/>
-          </svg>
-        </div>
-        <div className={`fl-trans-btn ${playing ? 'play' : ''}`} title="Play" onClick={() => togglePlayback()}>
-          <svg className="ic" width="12" height="12" viewBox="0 0 16 16" fill="none">
-            <path d="M4.5 3l8.5 5-8.5 5z" fill="currentColor"/>
-          </svg>
-        </div>
-        <div className={`fl-trans-btn ${recording ? 'rec' : ''}`} title="Record" onClick={() => toggleRecording()}>
+        <div className={`fl-trans-btn ${recording ? 'rec' : ''}`} title="Record (R) · double-click cancels in-flight take" onClick={() => toggleRecording()}>
           <svg className="ic" width="12" height="12" viewBox="0 0 16 16" fill="none">
             <circle cx="8" cy="8" r="4.5" fill="currentColor"/>
           </svg>
         </div>
-        <div className={`fl-trans-btn ${looping ? 'on' : ''}`} title="Loop" onClick={() => toggleLoop()}>
+        <div className="fl-trans-btn" title="Stop · double-click = panic (stop all sound)" onClick={() => stop()} onDoubleClick={() => { stop(); setPosition(0) }}>
+          <svg className="ic" width="11" height="11" viewBox="0 0 16 16" fill="none">
+            <rect x="3.5" y="3.5" width="9" height="9" rx="1" fill="currentColor"/>
+          </svg>
+        </div>
+        <div className={`fl-trans-btn ${playing ? 'play' : ''}`} title="Play (Space)" onClick={() => togglePlayback()}>
+          <svg className="ic" width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <path d="M4.5 3l8.5 5-8.5 5z" fill="currentColor"/>
+          </svg>
+        </div>
+        <div className={`fl-trans-btn ${looping ? 'on' : ''}`} title="Loop (L)" onClick={() => toggleLoop()}>
           <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
             <path d="M2.5 6.5a4 4 0 014-4h4M13.5 9.5a4 4 0 01-4 4h-4M11 .5l2.5 2-2.5 2M5 11.5L2.5 13.5l2.5 2"
               fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         </div>
+        <div className={`fl-trans-btn ${punchEnabled ? 'punch' : ''}`} title="Punch range" onClick={() => togglePunch()}>
+          <svg className="ic" width="12" height="10" viewBox="0 0 12 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 1.5H1.5V8.5H3"/>
+            <path d="M9 1.5h1.5V8.5H9"/>
+          </svg>
+        </div>
+        <div className={`fl-trans-btn ${metronomeEnabled ? 'metr' : ''}`} title="Metronome (Ctrl+M)" onClick={() => toggleMetronome()}>
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round">
+            <path d="M3.5 10.5L5 1.5h2l1.5 9z"/>
+            <line x1="2.5" y1="10.5" x2="9.5" y2="10.5"/>
+            <line x1="6" y1="6" x2="9.5" y2="3"/>
+          </svg>
+        </div>
       </div>
+
+      <span className="fl-toolsep" />
+
+      {/* BPM — click to edit, drag to nudge, right-click for menu */}
+      <div style={{ position: 'relative' }}>
+        <div
+          className="fl-bpm"
+          title="Tempo · click to edit · drag vertical · right-click for menu"
+          onClick={() => {
+            if (!editingBpm) {
+              setBpmDraft(bpm.toFixed(3))
+              setEditingBpm(true)
+            }
+          }}
+          onContextMenu={(e) => { e.preventDefault(); setTempoMenuOpen(v => !v) }}
+          onPointerDown={(e) => {
+            if (editingBpm) return
+            if (e.button !== 0) return
+            if (e.target instanceof HTMLInputElement) return
+            const startY = e.clientY
+            const startBpm = bpm
+            const target = e.currentTarget
+            target.setPointerCapture(e.pointerId)
+            let moved = false
+            const onMove = (ev: PointerEvent) => {
+              const dy = startY - ev.clientY
+              if (Math.abs(dy) > 2) moved = true
+              const fine = ev.ctrlKey || ev.metaKey ? 0.1 : 1
+              const next = Math.max(20, Math.min(999, startBpm + dy * 0.3 * fine))
+              setBpm(Math.round(next * 10) / 10)
+            }
+            const onUp = (ev: PointerEvent) => {
+              target.releasePointerCapture(ev.pointerId)
+              target.removeEventListener('pointermove', onMove)
+              target.removeEventListener('pointerup', onUp)
+              // If the user dragged we suppress the click-to-edit
+              // that fires after pointerup — the click is treated as
+              // a value-edit, the drag as a value-nudge.
+              if (moved) {
+                const stop = (ce: MouseEvent) => { ce.stopPropagation(); window.removeEventListener('click', stop, true) }
+                window.addEventListener('click', stop, true)
+              }
+            }
+            target.addEventListener('pointermove', onMove)
+            target.addEventListener('pointerup', onUp)
+          }}
+        >
+          <small>BPM</small>
+          {editingBpm ? (
+            <input
+              autoFocus
+              value={bpmDraft}
+              onChange={e => setBpmDraft(e.target.value)}
+              onBlur={commitBpm}
+              onKeyDown={e => {
+                if (e.key === 'Enter') commitBpm()
+                if (e.key === 'Escape') setEditingBpm(false)
+              }}
+            />
+          ) : (
+            <b>{bpm.toFixed(3)}</b>
+          )}
+        </div>
+        {tempoMenuOpen && (
+          <HwTempoContextMenu
+            bpm={bpm}
+            presets={tempoPresets}
+            onPreset={(v) => { setBpm(v); setTempoMenuOpen(false) }}
+            onHalf={() => { setBpm(Math.max(20, Math.round(bpm * 0.5 * 10) / 10)); setTempoMenuOpen(false) }}
+            onDouble={() => { setBpm(Math.min(999, Math.round(bpm * 2 * 10) / 10)); setTempoMenuOpen(false) }}
+            onOpenTapper={() => { onOpenTempoTapper?.(); setTempoMenuOpen(false) }}
+            onClose={() => setTempoMenuOpen(false)}
+          />
+        )}
+      </div>
+
+      {/* TAP — click = inline tap, right-click = open Tapper modal */}
+      <button
+        onClick={() => tapTempo()}
+        onContextMenu={(e) => { e.preventDefault(); onOpenTempoTapper?.() }}
+        className="fl-mini-btn"
+        style={{ height: 26, padding: '0 8px', fontSize: 8, fontWeight: 700, letterSpacing: 0.4, fontFamily: 'var(--mono)' }}
+        title="Tap tempo · right-click opens Tempo Tapper modal"
+      >TAP</button>
+
+      {/* Time signature inline editor */}
+      <div className="fl-tsig" title="Time signature">
+        <input
+          type="number" min={1} max={32} value={tsNum}
+          onChange={e => setTimeSignature(Math.max(1, parseInt(e.target.value) || 4), tsDen)}
+        />
+        <span className="sl">/</span>
+        <select value={tsDen} onChange={e => setTimeSignature(tsNum, parseInt(e.target.value))}>
+          {[1, 2, 4, 8, 16, 32].map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+      </div>
+
+      <span className="fl-toolsep" />
 
       <div className="fl-clock" title="Playhead position">
         <div className="fl-clock-stack">
@@ -204,39 +405,7 @@ function HwTopbar({ menus }: { menus?: MenuDef[] }) {
         </div>
       </div>
 
-      <div
-        className="fl-bpm"
-        title="Tempo — click to edit"
-        onClick={() => {
-          if (!editingBpm) {
-            setBpmDraft(bpm.toFixed(3))
-            setEditingBpm(true)
-          }
-        }}
-      >
-        <small>BPM</small>
-        {editingBpm ? (
-          <input
-            autoFocus
-            value={bpmDraft}
-            onChange={e => setBpmDraft(e.target.value)}
-            onBlur={commitBpm}
-            onKeyDown={e => {
-              if (e.key === 'Enter') commitBpm()
-              if (e.key === 'Escape') setEditingBpm(false)
-            }}
-          />
-        ) : (
-          <b>{bpm.toFixed(3)}</b>
-        )}
-      </div>
-
-      <div className="fl-pat-pill" title="Active pattern">
-        <svg className="ic" width="10" height="10" viewBox="0 0 16 16" fill="none">
-          <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-        <span>{activePattern?.name || 'Pattern 1'}</span>
-      </div>
+      <span className="fl-toolsep" />
 
       <div className="fl-perf">
         <span>RAM <b>—</b></span>
@@ -244,14 +413,145 @@ function HwTopbar({ menus }: { menus?: MenuDef[] }) {
       </div>
 
       <div className="fl-master-vol">
-        <span style={{ textTransform: 'uppercase', fontWeight: 600 }}>MASTER</span>
-        <div className="fl-meter-mini"><i /><i /></div>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text)' }}>
+        <span style={{ textTransform: 'uppercase', fontWeight: 600, fontSize: 7, color: 'var(--text-dim)', letterSpacing: 0.6 }}>MASTER</span>
+        <HwMasterSlider valueDb={masterDb} onChange={setMasterVolume} />
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text)', minWidth: 36, textAlign: 'right' }}>
           {masterDb >= 0 ? '+' : ''}{masterDb.toFixed(1)}dB
         </span>
       </div>
     </div>
     </>
+  )
+}
+
+// ─── Master volume slider (FL toolbar parity) ──────────────────────────────
+//
+// Drag horizontally to set master gain in dB. Range −60..+6 like FL.
+// Double-click to reset to 0 dB. The store is driven directly via
+// setMasterVolume which already clamps + persists.
+const MASTER_MIN_DB = -60
+const MASTER_MAX_DB = 6
+function HwMasterSlider({ valueDb, onChange }: { valueDb: number; onChange: (db: number) => void }) {
+  const pct = Math.max(0, Math.min(1, (valueDb - MASTER_MIN_DB) / (MASTER_MAX_DB - MASTER_MIN_DB)))
+  const handleDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    const rect = el.getBoundingClientRect()
+    const apply = (clientX: number) => {
+      const p = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+      onChange(MASTER_MIN_DB + p * (MASTER_MAX_DB - MASTER_MIN_DB))
+    }
+    apply(e.clientX)
+    el.setPointerCapture(e.pointerId)
+    const onMove = (ev: PointerEvent) => apply(ev.clientX)
+    const onUp = (ev: PointerEvent) => {
+      el.releasePointerCapture(ev.pointerId)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+    }
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+  }
+  return (
+    <div
+      onPointerDown={handleDrag}
+      onDoubleClick={() => onChange(0)}
+      style={{
+        position: 'relative', width: 80, height: 8,
+        background: 'rgba(255,255,255,0.04)',
+        border: '1px solid var(--border)',
+        borderRadius: 3, cursor: 'ew-resize',
+      }}
+    >
+      <div style={{
+        position: 'absolute', left: 0, top: 0, height: '100%',
+        width: `${pct * 100}%`,
+        background: 'linear-gradient(90deg,#2a2a30,var(--red-bright))',
+        borderRadius: 3,
+      }} />
+    </div>
+  )
+}
+
+// ─── Tempo right-click menu ────────────────────────────────────────────────
+//
+// FL's tempo RMB reference set: type-in-value (handled by the inline
+// click-to-edit input), preset BPMs (80/100/120/140/160), Half/Double-
+// speed shortcuts, and a Tap sub-menu that surfaces the full Tempo
+// Tapper modal. Edit events / Create automation clip are stubs for
+// Tier B — they appear disabled so the affordance is visible.
+
+function HwTempoContextMenu({
+  bpm, presets, onPreset, onHalf, onDouble, onOpenTapper, onClose,
+}: {
+  bpm: number
+  presets: number[]
+  onPreset: (v: number) => void
+  onHalf: () => void
+  onDouble: () => void
+  onOpenTapper: () => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const handle = () => onClose()
+    // Defer so the right-click that opened the menu doesn't close it.
+    const id = window.setTimeout(() => window.addEventListener('click', handle), 0)
+    return () => { window.clearTimeout(id); window.removeEventListener('click', handle) }
+  }, [onClose])
+  const item: React.CSSProperties = {
+    padding: '6px 10px', fontSize: 11, color: 'var(--text)',
+    background: 'transparent', border: 'none', textAlign: 'left',
+    cursor: 'pointer', borderRadius: 3, width: '100%',
+  }
+  const itemDisabled: React.CSSProperties = { ...item, color: 'var(--text-dim)', cursor: 'not-allowed' }
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: 'absolute', top: 36, left: 0, zIndex: 500,
+        minWidth: 200,
+        background: 'rgba(12,12,18,0.97)',
+        border: '1px solid var(--border-strong)',
+        borderRadius: 6,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+        backdropFilter: 'blur(8px)',
+        padding: 6,
+        display: 'flex', flexDirection: 'column', gap: 2,
+      }}
+    >
+      <div style={{
+        padding: '4px 10px 6px', fontSize: 8, color: 'var(--text-dim)',
+        letterSpacing: 0.6, textTransform: 'uppercase',
+        borderBottom: '1px solid var(--border)', marginBottom: 4,
+      }}>
+        Tempo · {bpm.toFixed(1)} BPM
+      </div>
+      <button style={itemDisabled} disabled title="Coming in Tier B">Edit events…</button>
+      <button style={itemDisabled} disabled title="Coming in Tier B">Create automation clip…</button>
+      <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
+      <div style={{ padding: '2px 10px 4px', fontSize: 8, color: 'var(--text-dim)', letterSpacing: 0.6, textTransform: 'uppercase' }}>
+        Presets
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 3, padding: '0 4px' }}>
+        {presets.map(v => {
+          const active = Math.abs(bpm - v) < 0.05
+          return (
+            <button key={v} onClick={() => onPreset(v)} style={{
+              padding: '4px 0', fontSize: 9, fontWeight: 600,
+              color: active ? 'var(--red-bright)' : 'var(--text)',
+              background: active ? 'rgba(220,38,38,0.18)' : 'rgba(255,255,255,0.03)',
+              border: `1px solid ${active ? 'rgba(239,68,68,0.4)' : 'var(--border)'}`,
+              borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--mono)',
+            }}>{v}</button>
+          )
+        })}
+      </div>
+      <div style={{ height: 1, background: 'var(--border)', margin: '6px 6px 4px' }} />
+      <button style={item} onClick={onHalf}>Half-speed (÷2)</button>
+      <button style={item} onClick={onDouble}>Double-speed (×2)</button>
+      <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
+      <button style={item} onClick={onOpenTapper}>Tap tempo…</button>
+    </div>
   )
 }
 
@@ -851,6 +1151,8 @@ export function HwApp({
   onTogglePianoRoll,
   onToggleChannelRack,
   onToggleMixer,
+  onTogglePlaylist,
+  onOpenTempoTapper,
 }: HwAppProps) {
   const [hint, setHint] = useState('')
   // Read the live project name from the store so save/load actually
@@ -889,7 +1191,12 @@ export function HwApp({
 
   return (
     <div className="fl-app" data-testid="hw-app">
-      <HwTopbar menus={menus} />
+      <HwTopbar
+        menus={menus}
+        onTogglePlaylist={onTogglePlaylist}
+        onToggleChannelRack={onToggleChannelRack}
+        onOpenTempoTapper={onOpenTempoTapper}
+      />
       <HwSecondRow hint={hint} projectName={projectName} />
 
       <div className="fl-body">

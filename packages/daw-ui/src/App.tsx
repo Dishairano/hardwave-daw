@@ -1425,7 +1425,7 @@ export function App() {
               try {
                 const plugs = await invoke<unknown[]>('scan_plugins')
                 useNotificationStore.getState().push(
-                  'success',
+                  'info',
                   `Plug-in scan complete — ${plugs.length} discovered`,
                 )
               } catch (err) {
@@ -1623,6 +1623,8 @@ export function App() {
         onToggleChannelRack={() => setShowChannelRack(v => !v)}
         onTogglePianoRoll={() => setShowPianoRoll(v => !v)}
         onToggleMixer={() => setShowMixer(v => !v)}
+        onTogglePlaylist={() => setShowPlaylist(v => !v)}
+        onOpenTempoTapper={() => setShowTempoTapper(true)}
       />
 
       {isMobile && (

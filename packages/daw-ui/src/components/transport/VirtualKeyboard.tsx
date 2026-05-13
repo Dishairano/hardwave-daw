@@ -117,11 +117,21 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
 
   if (!visible) return null
 
-  // Velocity derived from vertical mouse position within the target.
-  // Position 0 (top edge) → MIN_VELOCITY, position 1 (bottom edge) → 1.0.
-  const computeVelocity = (e: { clientY: number }, rect: DOMRect): number => {
+  // Velocity derived from vertical mouse / first-touch position within
+  // the target. Position 0 (top edge) → MIN_VELOCITY, position 1
+  // (bottom edge) → 1.0. Accepts either React.MouseEvent or
+  // React.TouchEvent — TouchEvent has no top-level `clientY` so we
+  // pull the value from the first changed touch, falling back to the
+  // first active touch in case the event has already settled.
+  const computeVelocity = (
+    e: React.MouseEvent | React.TouchEvent,
+    rect: DOMRect,
+  ): number => {
     if (!settings.velocityFromPosition) return DEFAULT_VELOCITY
-    const ratio = (e.clientY - rect.top) / Math.max(1, rect.height)
+    const clientY = 'clientY' in e
+      ? e.clientY
+      : (e.changedTouches[0]?.clientY ?? e.touches[0]?.clientY ?? rect.top)
+    const ratio = (clientY - rect.top) / Math.max(1, rect.height)
     return Math.max(MIN_VELOCITY, Math.min(1, ratio))
   }
 

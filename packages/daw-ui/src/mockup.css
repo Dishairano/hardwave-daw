@@ -243,23 +243,94 @@
 }
 
 .fl-pat-pill {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 4px;
   background: #160a14;
   border: 1px solid rgba(168,85,247,0.4);
-  padding: 0 10px;
+  padding: 0 6px;
   border-radius: 3px;
   height: 26px;
   font-family: var(--mono);
   font-size: 10px;
   color: var(--purple);
   letter-spacing: 0.5px;
-  cursor: pointer;
-  margin-left: 6px;
+  cursor: default;
   font-weight: 600;
   -webkit-app-region: no-drag;
+  min-width: 130px;
 }
 .fl-pat-pill .ic { color: var(--purple); }
+.fl-pat-pill .nav { color: var(--text-dim); padding: 0 2px; cursor: pointer; font-size: 11px; line-height: 1; user-select: none; }
+.fl-pat-pill .nav:hover { color: #fff; }
+.fl-pat-pill .name { flex: 1; text-align: center; color: var(--purple); }
 .fl-pat-pill:hover { border-color: rgba(168,85,247,0.5); }
+
+/* Toolbar — Ship 1 FL-parity additions ------------------------------ */
+
+.fl-toolsep {
+  width: 1px; height: 22px; background: var(--border);
+  margin: 0 2px; flex-shrink: 0;
+}
+
+.fl-mini-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  padding: 0;
+  font-family: inherit;
+}
+.fl-mini-btn:hover { background: rgba(255,255,255,0.05); color: #fff; }
+
+.fl-mode-toggle {
+  display: flex;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  border-radius: 3px;
+  height: 24px;
+  -webkit-app-region: no-drag;
+}
+.fl-mode-toggle button {
+  padding: 0 9px; height: 100%;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  background: transparent; border: 0; border-right: 1px solid var(--border);
+  color: var(--text-dim); cursor: pointer;
+  font-family: var(--mono);
+}
+.fl-mode-toggle button:last-child { border-right: 0; }
+.fl-mode-toggle button.active {
+  background: rgba(220,38,38,0.18);
+  color: var(--red-bright);
+}
+.fl-mode-toggle button:hover:not(.active) { color: #fff; background: rgba(255,255,255,0.04); }
+
+.fl-tsig {
+  display: flex; align-items: center; gap: 2px;
+  height: 26px; padding: 0 8px;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--mono); font-size: 11px; font-weight: 700; color: #fff;
+  -webkit-app-region: no-drag;
+}
+.fl-tsig input, .fl-tsig select {
+  background: transparent; border: 0;
+  color: #fff; font-family: var(--mono); font-size: 11px; font-weight: 700;
+  text-align: center; width: 20px; outline: none;
+  appearance: none; -moz-appearance: textfield;
+  cursor: pointer;
+}
+.fl-tsig input::-webkit-inner-spin-button, .fl-tsig input::-webkit-outer-spin-button {
+  -webkit-appearance: none; margin: 0;
+}
+.fl-tsig .sl { color: var(--text-dim); }
+
+.fl-trans-btn.punch { color: #14B8A6; background: linear-gradient(180deg,#0a201e,#06120f); border-color: rgba(20,184,166,0.4); }
+.fl-trans-btn.metr { color: var(--red-bright); background: linear-gradient(180deg,#2a0e10,#180608); border-color: rgba(220,38,38,0.4); }
 
 .fl-perf {
   display: flex; align-items: center; gap: 8px;
