@@ -277,6 +277,7 @@ pub fn run() {
             commands::midi_input::inject_midi_event,
             commands::midi_capture::dump_midi_capture,
             commands::midi_capture::clear_midi_capture,
+            commands::midi_capture::commit_recording_to_midi_clip,
             // MIDI Learn
             commands::midi_learn::midi_learn_start,
             commands::midi_learn::midi_learn_cancel,

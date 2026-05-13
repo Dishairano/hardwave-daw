@@ -128,6 +128,116 @@ pub fn dump_midi_capture(state: State<AppState>) -> Vec<CapturedMidiEntry> {
         .collect()
 }
 
+/// Commit a slice of the rolling capture into a new MIDI clip placed
+/// on the target track at the given timeline position. Implements the
+/// "arm + record + play" flow on top of the always-on capture ring,
+/// reusing `hardwave_midi::MidiRecorder` to pair NoteOn / NoteOff
+/// events into `MidiNote`s.
+///
+/// `start_sample` / `end_sample` are absolute transport samples
+/// (typically `record_start_position` … `current_position`).
+/// `quantize_ticks` is optional input quantize (e.g. 240 = 1/16 note
+/// at 960 PPQ).
+///
+/// Returns the new clip id on success, or an error string when no
+/// events fell in the recording window.
+#[tauri::command]
+pub fn commit_recording_to_midi_clip(
+    state: State<AppState>,
+    track_id: String,
+    start_sample: u64,
+    end_sample: u64,
+    quantize_ticks: Option<u64>,
+) -> Result<String, String> {
+    use hardwave_midi::{MidiClip, MidiEvent, MidiRecorder};
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+
+    if end_sample <= start_sample {
+        return Err("end_sample must be > start_sample".into());
+    }
+
+    let engine = state.engine.lock();
+    let sample_rate = engine.current_sample_rate() as f64;
+    let bpm = engine
+        .transport
+        .bpm
+        .load(std::sync::atomic::Ordering::Relaxed);
+    if bpm <= 0.0 || sample_rate <= 0.0 {
+        return Err("invalid tempo / sample rate for tick conversion".into());
+    }
+    // 960 PPQ matches `hardwave_midi::PPQ` and is the project default.
+    let samples_per_tick = sample_rate * 60.0 / (bpm * 960.0);
+    if samples_per_tick <= 0.0 {
+        return Err("computed samples_per_tick is non-positive".into());
+    }
+
+    // Snapshot entries in range under the ring lock. try_lock would
+    // race against the audio thread's push; the command path can wait.
+    let entries: Vec<(u64, MidiEvent)> = engine
+        .midi_capture_ring
+        .lock()
+        .entries_in_order()
+        .into_iter()
+        .filter(|(pos, _)| *pos >= start_sample && *pos < end_sample)
+        .collect();
+
+    let mut recorder = MidiRecorder::default();
+    if let Some(q) = quantize_ticks {
+        recorder.set_quantize(Some(q));
+    }
+    recorder.start();
+    for (sample_pos, ev) in entries {
+        let rel = sample_pos.saturating_sub(start_sample);
+        let tick = (rel as f64 / samples_per_tick).round() as u64;
+        match ev {
+            MidiEvent::NoteOn {
+                note,
+                velocity,
+                channel,
+                ..
+            } => recorder.note_on(tick, note, velocity, channel),
+            MidiEvent::NoteOff { note, channel, .. } => recorder.note_off(tick, note, channel),
+            _ => {} // CC / pitch bend skipped — captured separately by automation
+        }
+    }
+    recorder.stop();
+
+    let notes = recorder.take_notes();
+    if notes.is_empty() {
+        return Err("no MIDI notes captured in the recording window".into());
+    }
+
+    let length_ticks = ((end_sample - start_sample) as f64 / samples_per_tick).ceil() as u64;
+    let position_ticks = (start_sample as f64 / samples_per_tick).round() as u64;
+    let clip_id = uuid::Uuid::new_v4().to_string();
+    let mut clip = MidiClip::new(clip_id.clone(), "Recording".into(), length_ticks);
+    clip.notes = notes;
+
+    {
+        let mut project = engine.project.lock();
+        let Some(track) = project.track_mut(&track_id) else {
+            return Err(format!("track {track_id} not found"));
+        };
+        track.clips.push(ClipPlacement {
+            content: ClipContent::Midi(MidiClipRef {
+                id: clip_id.clone(),
+                clip,
+            }),
+            track_id: track_id.clone(),
+            position_ticks,
+            length_ticks,
+            lane: 0,
+        });
+    }
+    drop(engine);
+
+    // Rebuild the audio graph so the new clip is picked up on the
+    // next audio block. Caller doesn't have to do this manually.
+    state.engine.lock().rebuild_graph();
+
+    Ok(clip_id)
+}
+
 /// Wipe the capture ring. Used by the UI on project switch so the
 /// next "dump last N seconds" doesn't smuggle events from the
 /// previously-loaded session into the new one.
