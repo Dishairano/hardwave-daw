@@ -632,35 +632,49 @@ export function App() {
     }
     window.addEventListener('beforeunload', handler)
 
-    // Wire Tauri close-requested. Dynamic import keeps the bundle
-    // resilient when the app runs in a plain browser context (dev
-    // mode, Storybook, etc.) — those builds simply don't get the
-    // listener, which is fine because beforeunload covers them.
+    // Wire Tauri close-requested. Uses the same in-app
+    // SaveChangesDialog as every other save-prompt path so the user
+    // sees a Hardwave-styled cancel / discard / save dialog instead
+    // of the OS-native modal. The earlier native `ask` dialog also
+    // turned out to be the most likely cause of the "X button does
+    // nothing" report — when `ask` fails to surface (plugin-dialog
+    // permission missing on older binaries, or a stale promise from
+    // a hot-swap reload), the close pipeline stays locked forever.
+    // Routing through React state + Promise instead removes that
+    // dependency entirely.
     let cleanupTauri: (() => void) | undefined
     void (async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window')
-        const { ask } = await import('@tauri-apps/plugin-dialog')
         const win = getCurrentWindow()
         const unlisten = await win.onCloseRequested(async (event) => {
           if (!useProjectStore.getState().dirty) return
           // Pause the native close until the user picks an action.
           event.preventDefault()
-          const shouldClose = await ask(
-            'Your project has unsaved changes. Close without saving?',
-            {
-              title: 'Unsaved changes',
-              kind: 'warning',
-              okLabel: 'Discard and close',
-              cancelLabel: 'Keep editing',
-            },
-          )
-          if (shouldClose) {
-            // Drop the dirty flag so the next close-requested round
-            // doesn't re-prompt, then close explicitly.
-            useProjectStore.setState({ dirty: false })
-            await win.close()
+          // Use the same styled SaveChangesDialog flow as the
+          // confirmDiscardIfDirty path. Cancel = abort the close.
+          // Discard = close immediately. Save = persist then close.
+          const choice = await new Promise<SaveChangesChoice>(resolve => {
+            savePromptResolver.current = resolve
+            setSavePromptAction('Close anyway')
+          })
+          setSavePromptAction(null)
+          savePromptResolver.current = null
+          if (choice === 'cancel') return
+          if (choice === 'save') {
+            try {
+              await useProjectStore.getState().saveProject()
+              if (useProjectStore.getState().dirty) {
+                // Save fell over — keep the window open so the user
+                // can recover and try again.
+                return
+              }
+            } catch {
+              return
+            }
           }
+          useProjectStore.setState({ dirty: false })
+          await win.close()
         })
         cleanupTauri = unlisten
       } catch {
