@@ -150,6 +150,25 @@ pub fn toggle_recording(state: State<AppState>) -> Result<Option<String>, String
     finalize_recording_session(&engine)
 }
 
+/// Cancel an in-flight recording without finalising the take. FL
+/// Studio's Tools → Macros → Panic → Cancel recording — drops the
+/// captured samples on the floor instead of writing the WAV, so the
+/// user can bail from a recording mistake without leaving an
+/// orphaned take on disk or in the project.
+///
+/// No-op when not currently recording.
+#[tauri::command]
+pub fn cancel_recording(state: State<AppState>) {
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    let was_recording = engine.transport.recording.swap(false, Ordering::Relaxed);
+    if !was_recording {
+        return;
+    }
+    // Drain and drop — same path as the regular stop, just no WAV write.
+    let _ = engine.stop_capture();
+}
+
 #[tauri::command]
 pub fn toggle_loop(state: State<AppState>) {
     use std::sync::atomic::Ordering;

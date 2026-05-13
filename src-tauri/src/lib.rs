@@ -117,6 +117,7 @@ pub fn run() {
             commands::transport::set_bpm,
             commands::transport::toggle_loop,
             commands::transport::toggle_recording,
+            commands::transport::cancel_recording,
             commands::transport::set_loop,
             commands::transport::set_master_volume,
             commands::transport::set_time_signature,

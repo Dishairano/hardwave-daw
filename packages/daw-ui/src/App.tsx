@@ -1505,16 +1505,43 @@ export function App() {
       {
         label: 'Tools',
         items: [
+          // Analyzers
           { label: 'Loudness meter…', action: () => setShowLoudness(true) },
           { label: 'Oscilloscope…', action: () => setShowOscilloscope(true) },
           { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },
+          { separator: true, label: '' },
+          // MIDI / controllers
           { label: 'MIDI mappings…', action: () => setShowMidiMappings(true) },
           { label: 'Touch Controller', shortcut: 'Alt+F7', action: () => toggleTouchController() },
           {
-            label: useTypingKeyboardStore.getState().enabled
+            label: typingKeyboardEnabled
               ? 'Typing keyboard: On'
               : 'Typing keyboard: Off',
             action: () => useTypingKeyboardStore.getState().toggle(),
+          },
+          { separator: true, label: '' },
+          // Macros — FL Tools menu parity
+          {
+            label: 'Macros',
+            submenu: [
+              {
+                label: 'Panic — stop all sound',
+                shortcut: 'Ctrl+H',
+                action: () => {
+                  for (let note = 0; note < 128; note++) {
+                    void invoke('inject_midi_event', { event: { kind: 'note_off', channel: 0, note } })
+                  }
+                  void invoke('stop')
+                },
+              },
+              {
+                label: 'Cancel recording',
+                action: async () => {
+                  await invoke('cancel_recording').catch(() => {})
+                  useTransportStore.setState({ recording: false, recordStartSample: null })
+                },
+              },
+            ],
           },
         ],
       },
