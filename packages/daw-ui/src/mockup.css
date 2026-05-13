@@ -284,6 +284,11 @@
   font-family: inherit;
 }
 .fl-mini-btn:hover { background: rgba(255,255,255,0.05); color: #fff; }
+.fl-mini-btn.on {
+  background: rgba(220,38,38,0.18);
+  border-color: rgba(239,68,68,0.4);
+  color: var(--red-bright);
+}
 
 .fl-mode-toggle {
   display: flex;
