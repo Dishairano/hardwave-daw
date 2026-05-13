@@ -88,6 +88,19 @@ pub fn add_audio_track_with_sine(
     track_id
 }
 
+/// Add a MIDI track to the project and rebuild the graph. Returns the
+/// track id so the test can later route MIDI events to it (the engine
+/// forwards live MIDI to every MIDI track by default — see
+/// `engine.rs::rebuild_graph` `accepts_live_midi` block).
+pub fn add_midi_track(engine: &DawEngine, name: &str) -> String {
+    let id = {
+        let mut project = engine.project.lock();
+        project.add_midi_track(name.to_string())
+    };
+    engine.rebuild_graph();
+    id
+}
+
 /// Result of an offline render — peak (max abs sample), RMS (root-mean-square),
 /// and counts that flag NaN / Inf for sanity.
 #[derive(Debug, Clone, Copy)]

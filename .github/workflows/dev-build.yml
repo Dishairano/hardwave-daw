@@ -131,10 +131,14 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
       - name: cargo test --workspace
-        # `--lib` keeps it fast — skips doc-tests and integration tests
-        # that need a running engine. Unit tests inside each crate cover
-        # the live MIDI plumbing, capture ring, insert chain, etc.
-        run: cargo test --workspace --lib
+        # Runs library unit tests AND `tests/` integration tests
+        # (functional_smoke.rs in hardwave-engine). The integration
+        # tests boot a real DawEngine and exercise end-to-end paths —
+        # they're the regression gate for beta blockers #4/#5 (live
+        # MIDI input → audible output) plus the existing audio
+        # rendering + master volume coverage. `--ignored` tests stay
+        # opt-in via the dedicated functional-smoke.yml job.
+        run: cargo test --workspace
 
   build:
     name: ${{ matrix.label }}

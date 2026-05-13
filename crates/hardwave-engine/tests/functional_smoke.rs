@@ -274,6 +274,127 @@ fn killer_recording_writes_clip() {
     );
 }
 
+// ───────────────────────────────────────────────────────────────────────
+// Live MIDI smoke tests — guard beta blockers #4 and #5 (v0.164.x).
+//
+// These prove the END-TO-END live MIDI path: an injected event into
+// MidiInputManager flows through the engine drain, the audio graph
+// forwards it to MIDI tracks, the synth voice fires, and the master
+// output picks up non-zero samples.
+//
+// Pre-v0.164.0 the engine NEVER drained MidiInputManager and the
+// MidiTrackNode underscored its midi_in parameter — these tests would
+// have failed silent (zero peak) before the fix.
+// ───────────────────────────────────────────────────────────────────────
+
+#[test]
+fn live_midi_noteon_drives_master_output() {
+    // PASS-required.
+    // Inject a NoteOn into MidiInputManager, render a short window with
+    // transport playing, expect the BuiltinSine voice to produce audible
+    // samples at the master output.
+    let engine = DawEngine::new();
+    add_midi_track(&engine, "Live MIDI test");
+
+    // Pre-load the injected event BEFORE render_offline. The shared
+    // midi_input means the throwaway audio thread inside render_offline
+    // drains the same queue.
+    engine
+        .midi_input
+        .lock()
+        .inject(hardwave_midi::MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 69, // A4 — 440 Hz
+            velocity: 0.9,
+        });
+
+    // Engage transport so MidiTrackNode treats it as playing.
+    engine.transport.playing.store(true, Ordering::Relaxed);
+
+    let render_samples = SAMPLE_RATE as u64 / 4; // 0.25 s window
+    let stats = render_and_measure(&engine, SAMPLE_RATE, render_samples);
+
+    assert_eq!(stats.nan_count, 0, "live MIDI produced NaN samples");
+    assert_eq!(stats.inf_count, 0, "live MIDI produced Inf samples");
+    assert!(
+        stats.peak > 0.01,
+        "expected audible output from injected NoteOn, got peak={:.5}",
+        stats.peak
+    );
+}
+
+#[test]
+fn live_midi_noteon_audible_with_transport_stopped() {
+    // PASS-required.
+    // FL Studio / Logic / Ableton convention: a soft synth must
+    // audition from a controller without engaging Play. This used to
+    // fail because MidiTrackNode::process bailed on `!ctx.playing`
+    // before consuming midi_in.
+    let engine = DawEngine::new();
+    add_midi_track(&engine, "Stopped audition");
+    engine
+        .midi_input
+        .lock()
+        .inject(hardwave_midi::MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.8,
+        });
+    // Transport explicitly NOT started — playing stays false.
+
+    let render_samples = SAMPLE_RATE as u64 / 4;
+    let stats = render_and_measure(&engine, SAMPLE_RATE, render_samples);
+
+    assert!(
+        stats.peak > 0.01,
+        "live NoteOn must audition while transport is stopped — peak={:.5}",
+        stats.peak
+    );
+}
+
+#[test]
+fn injected_events_land_in_capture_ring() {
+    // PASS-required.
+    // The rolling 3-min capture buffer is filled by the audio thread's
+    // post-drain push loop. After offline render, every injected event
+    // should be in the ring in oldest-first order.
+    let engine = DawEngine::new();
+    add_midi_track(&engine, "Capture test");
+    {
+        let mgr = engine.midi_input.lock();
+        for note in [60u8, 62, 64] {
+            mgr.inject(hardwave_midi::MidiEvent::NoteOn {
+                timing: 0,
+                channel: 0,
+                note,
+                velocity: 0.7,
+            });
+        }
+    }
+    engine.transport.playing.store(true, Ordering::Relaxed);
+
+    // Render long enough that the audio thread drains and pushes.
+    let _ = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 10);
+
+    let entries = engine.midi_capture_ring.lock().entries_in_order();
+    assert_eq!(
+        entries.len(),
+        3,
+        "capture ring should hold the 3 injected events, got {}",
+        entries.len()
+    );
+    let pitches: Vec<u8> = entries
+        .iter()
+        .filter_map(|(_, ev)| match ev {
+            hardwave_midi::MidiEvent::NoteOn { note, .. } => Some(*note),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pitches, vec![60, 62, 64]);
+}
+
 #[test]
 #[ignore = "killer-watch: automation has no engine callers; ParameterContextMenu shows 'soon' placeholder"]
 fn killer_automation_changes_parameter() {
