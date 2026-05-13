@@ -1412,6 +1412,21 @@ export function App() {
           { label: 'Instrument track', action: () => useTrackStore.getState().addMidiTrack() },
           { label: 'Automation track', action: handleAddAutomationTrack },
           { separator: true, label: '' },
+          {
+            label: 'Rescan plug-ins',
+            action: async () => {
+              try {
+                const plugs = await invoke<unknown[]>('scan_plugins')
+                useNotificationStore.getState().push(
+                  'success',
+                  `Plug-in scan complete — ${plugs.length} discovered`,
+                )
+              } catch (err) {
+                useNotificationStore.getState().push('error', `Plug-in scan failed: ${String(err)}`)
+              }
+            },
+          },
+          { separator: true, label: '' },
           { label: 'Manage track templates…', action: () => setShowTrackTemplateManager(true) },
         ],
       },
