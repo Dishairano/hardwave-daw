@@ -1089,6 +1089,21 @@ export function App() {
         return
       }
 
+      // Hard close shortcut — Cmd+Q (mac) / Ctrl+Q (win/linux).
+      // Routes through `destroy()` instead of `close()` so any stuck
+      // CloseRequested handler can't block it. Provides a reliable
+      // panic-quit when the X button has gone unresponsive.
+      if (e.code === 'KeyQ' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        void (async () => {
+          try {
+            const { getCurrentWindow } = await import('@tauri-apps/api/window')
+            await getCurrentWindow().destroy()
+          } catch {}
+        })()
+        return
+      }
+
       // Multimedia keyboard keys (FL Studio convention). These come
       // through e.code as MediaPlayPause / MediaStop / MediaTrackNext /
       // MediaTrackPrevious. Mapped to transport so the user's playback

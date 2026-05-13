@@ -195,9 +195,26 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
     } catch {}
   }, [])
   const onWindowClose = useCallback(async () => {
+    // Defensive close path. Tauri's `close()` fires CloseRequested,
+    // which goes through the App.tsx handler. If a stale Promise from
+    // a previous `ask()` dialog left the close pipeline locked, the
+    // window stays open silently — common after a hot-swap reload
+    // re-registers the listener without the old preventDefault'd
+    // event ever resolving. We race close() against an 800ms timer;
+    // when the timer wins we call `destroy()` which bypasses the
+    // CloseRequested event entirely and tears the window down hard.
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window')
-      await getCurrentWindow().close()
+      const win = getCurrentWindow()
+      const closed = win.close().catch(() => false).then(() => true)
+      const timeout = new Promise<boolean>(resolve => setTimeout(() => resolve(false), 800))
+      const ok = await Promise.race([closed, timeout])
+      if (!ok) {
+        // close() hung past the timeout — assume the JS-side handler
+        // is wedged and force the window down. destroy() is not
+        // interceptable by user-land code.
+        await win.destroy()
+      }
     } catch {}
   }, [])
 

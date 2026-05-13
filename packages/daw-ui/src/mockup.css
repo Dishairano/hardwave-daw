@@ -602,13 +602,22 @@
 }
 .fl-meter-mini i { height: 2px; background: linear-gradient(90deg, var(--green) 0, var(--green) 50%, var(--amber) 75%, var(--red-bright) 100%); display: block; }
 
-.fl-win-ctl { display: flex; gap: 0; margin-left: 6px; align-items: center; -webkit-app-region: no-drag; }
+.fl-win-ctl {
+  display: flex; gap: 0; margin-left: 6px; align-items: center;
+  -webkit-app-region: no-drag;
+}
 .fl-win-ctl i {
   width: 26px; height: 26px;
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--text-dim);
   cursor: pointer;
   font-style: normal;
+  /* Belt-and-braces: parent has no-drag but some WebView builds skip
+     property inheritance for -webkit-app-region, so the child <i>
+     ends up inside the parent fl-topbar drag region and swallows
+     onClick. Declaring no-drag here too guarantees the click reaches
+     the handler. */
+  -webkit-app-region: no-drag;
 }
 .fl-win-ctl i:hover { background: #1a1a22; color: #fff; }
 .fl-win-ctl i.x:hover { background: var(--red); color: #fff; }
