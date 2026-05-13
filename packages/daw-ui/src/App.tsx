@@ -44,6 +44,9 @@ import { Oscilloscope } from './components/Oscilloscope'
 import { SpectrumAnalyzer } from './components/SpectrumAnalyzer'
 import { VirtualKeyboard } from './components/transport/VirtualKeyboard'
 import './components/transport/VirtualKeyboard.css'
+import { SetupWizard } from './components/SetupWizard'
+import './components/SetupWizard.css'
+import { maybeAutoOpenSetupWizard, useSetupWizardStore } from './stores/setupWizardStore'
 import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappingsPanel'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
@@ -317,6 +320,11 @@ export function App() {
     if (initRan.current) return
     initRan.current = true
     startListening()
+    // Auto-open the MIDI Setup Wizard once on first boot. The store
+    // tracks completedFirstRun + skippedAt so this is a no-op after
+    // the user has finished or skipped. The Help menu has a manual
+    // "Re-run setup wizard" entry to reopen it on demand.
+    maybeAutoOpenSetupWizard()
 
     // Cancellation flag matches the pattern used at :397-402 below — if
     // the splash is dismissed (or the effect tears down) before the
@@ -1379,6 +1387,7 @@ export function App() {
           { label: 'Help topics', shortcut: 'F1', action: () => setShowHelp(v => !v) },
           { label: 'Keyboard shortcuts', shortcut: 'Shift+F1', action: () => setShowShortcuts(v => !v) },
           { label: 'Roadmap', action: () => setShowRoadmap(v => !v) },
+          { label: 'Re-run MIDI setup wizard…', action: () => useSetupWizardStore.getState().open() },
           { separator: true, label: '' },
           { label: 'Online user manual', action: () => window.open('https://github.com/Dishairano/hardwave-daw/wiki', '_blank', 'noopener,noreferrer') },
           { label: 'Release notes', action: () => window.open('https://github.com/Dishairano/hardwave-daw/releases', '_blank', 'noopener,noreferrer') },
@@ -1488,6 +1497,7 @@ export function App() {
       {showOscilloscope && <Oscilloscope onClose={() => setShowOscilloscope(false)} />}
       {showSpectrum && <SpectrumAnalyzer onClose={() => setShowSpectrum(false)} />}
       <VirtualKeyboard visible={touchControllerVisible} onClose={() => setTouchControllerVisible(false)} />
+      <SetupWizard />
       {showMidiMappings && (
         <MidiMappingsPanel
           onClose={() => { setShowMidiMappings(false); setMidiLearnPreset(undefined) }}
