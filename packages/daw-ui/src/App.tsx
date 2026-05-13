@@ -537,6 +537,20 @@ export function App() {
   }, [])
 
   // Warn before closing the window if there are unsaved changes.
+  //
+  // Two distinct close paths and both must prompt:
+  //
+  //  1. `beforeunload` — fires when the WebView navigates away or the
+  //     dev-server reloads. Tauri exposes the standard browser event.
+  //  2. `onCloseRequested` — fires when the user hits the native window
+  //     close button (X) or the platform OS sends close. The browser
+  //     `beforeunload` never runs for native close because Tauri owns
+  //     the chrome, so this listener is the only safety net there.
+  //
+  // For the native path we use Tauri's confirm dialog (modal native
+  // popup) so the user gets a Save / Discard / Cancel choice; the
+  // beforeunload version is intentionally lighter — the browser's
+  // built-in unload prompt is the best we can do there.
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (useProjectStore.getState().dirty) {
@@ -545,7 +559,47 @@ export function App() {
       }
     }
     window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
+
+    // Wire Tauri close-requested. Dynamic import keeps the bundle
+    // resilient when the app runs in a plain browser context (dev
+    // mode, Storybook, etc.) — those builds simply don't get the
+    // listener, which is fine because beforeunload covers them.
+    let cleanupTauri: (() => void) | undefined
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window')
+        const { ask } = await import('@tauri-apps/plugin-dialog')
+        const win = getCurrentWindow()
+        const unlisten = await win.onCloseRequested(async (event) => {
+          if (!useProjectStore.getState().dirty) return
+          // Pause the native close until the user picks an action.
+          event.preventDefault()
+          const shouldClose = await ask(
+            'Your project has unsaved changes. Close without saving?',
+            {
+              title: 'Unsaved changes',
+              kind: 'warning',
+              okLabel: 'Discard and close',
+              cancelLabel: 'Keep editing',
+            },
+          )
+          if (shouldClose) {
+            // Drop the dirty flag so the next close-requested round
+            // doesn't re-prompt, then close explicitly.
+            useProjectStore.setState({ dirty: false })
+            await win.close()
+          }
+        })
+        cleanupTauri = unlisten
+      } catch {
+        // Not running under Tauri (browser preview) — silently skip.
+      }
+    })()
+
+    return () => {
+      window.removeEventListener('beforeunload', handler)
+      cleanupTauri?.()
+    }
   }, [])
 
   const checkForUpdates = async () => {
