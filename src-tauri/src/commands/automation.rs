@@ -272,3 +272,63 @@ pub fn set_automation_lane_visible(
     state.engine.lock().rebuild_graph();
     Ok(())
 }
+
+/// Bake an LFO shape into a lane as automation points spanning
+/// `[start_tick, start_tick + length_ticks]`, replacing any existing
+/// points inside that window (points outside it are kept). The cycle
+/// length is derived from the project's current BPM so tempo-synced
+/// rates line up with the grid. The audio thread picks up the new points
+/// on the next rebuild — see `track_node.rs`.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub fn apply_lfo_to_lane(
+    state: State<'_, AppState>,
+    track_id: String,
+    lane_id: String,
+    shape: hardwave_project::lfo::LfoShape,
+    rate: hardwave_project::lfo::LfoRate,
+    depth: f64,
+    center: f64,
+    phase: f64,
+    samples_per_cycle: u32,
+    start_tick: u64,
+    length_ticks: u64,
+) -> Result<usize, String> {
+    use std::sync::atomic::Ordering;
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let bpm = engine.transport.bpm.load(Ordering::Relaxed);
+    let count = {
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let lane = track
+            .automation_lanes
+            .iter_mut()
+            .find(|l| l.id == lane_id)
+            .ok_or_else(|| format!("Lane not found: {lane_id}"))?;
+        let generated = hardwave_project::lfo::bake_to_points(
+            shape,
+            rate,
+            bpm,
+            hardwave_midi::PPQ,
+            start_tick,
+            length_ticks,
+            depth,
+            center,
+            phase,
+            samples_per_cycle.max(1),
+        );
+        // Replace points inside the baked window; keep everything outside.
+        let end_tick = start_tick + length_ticks;
+        lane.points
+            .retain(|p| p.tick < start_tick || p.tick > end_tick);
+        let count = generated.len();
+        lane.points.extend(generated);
+        lane.points.sort_by_key(|p| p.tick);
+        count
+    };
+    engine.rebuild_graph();
+    Ok(count)
+}

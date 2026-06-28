@@ -131,6 +131,7 @@ pub fn run() {
             commands::automation::delete_automation_point,
             commands::automation::set_automation_point_curve,
             commands::automation::set_automation_lane_visible,
+            commands::automation::apply_lfo_to_lane,
             // Tracks
             commands::tracks::get_tracks,
             commands::tracks::get_tracks_with_clips,

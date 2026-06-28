@@ -92,6 +92,35 @@ export function AutomationLane({ trackId, lane }: Props) {
     return () => window.removeEventListener('mousedown', onAnyClick)
   }, [ctx])
 
+  // LFO tool — bake a shape into this lane over the first N bars.
+  const [lfoOpen, setLfoOpen] = useState(false)
+  const [lfoShape, setLfoShape] = useState<
+    'Sine' | 'Triangle' | 'Square' | 'SawtoothUp' | 'SawtoothDown' | 'RandomSampleAndHold'
+  >('Sine')
+  const [lfoDen, setLfoDen] = useState(4) // tempo-sync rate = 1/lfoDen
+  const [lfoDepth, setLfoDepth] = useState(100) // percent
+  const [lfoBars, setLfoBars] = useState(4)
+  const applyLfo = useCallback(async () => {
+    try {
+      await invoke('apply_lfo_to_lane', {
+        trackId,
+        laneId: lane.id,
+        shape: lfoShape,
+        rate: { TempoSync: { num: 1, den: lfoDen } },
+        depth: lfoDepth / 100,
+        center: 0.5,
+        phase: 0,
+        samplesPerCycle: 32,
+        startTick: 0,
+        lengthTicks: lfoBars * 4 * 960, // bars × 4 beats × PPQ
+      })
+      await useTrackStore.getState().fetchTracks()
+    } catch (e) {
+      console.warn('apply_lfo_to_lane failed', e)
+    }
+    setLfoOpen(false)
+  }, [trackId, lane.id, lfoShape, lfoDen, lfoDepth, lfoBars])
+
   const setCurve = useCallback(
     async (pointIndex: number, mode: CurveMode) => {
       // Use invoke directly — the store's helper would refetch tracks
@@ -229,6 +258,66 @@ export function AutomationLane({ trackId, lane }: Props) {
         >
           {lane.visible ? '◉' : '◌'}
         </button>
+        <span style={{ position: 'relative' }}>
+          <button
+            type="button"
+            className="vis"
+            title="LFO tool — bake a shape into this lane"
+            onClick={() => setLfoOpen(v => !v)}
+            style={{ fontSize: 9, fontWeight: 700 }}
+          >
+            ∿
+          </button>
+          {lfoOpen && (
+            <div
+              onMouseDown={e => e.stopPropagation()}
+              onClick={e => e.stopPropagation()}
+              style={{
+                position: 'absolute', top: 18, left: 0, zIndex: 600,
+                width: 188, padding: 9, display: 'flex', flexDirection: 'column', gap: 7,
+                background: 'rgba(12,12,18,0.97)', border: '1px solid #2a2a36',
+                borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+              }}
+            >
+              <div style={{ fontSize: 8, letterSpacing: 0.5, textTransform: 'uppercase', color: '#7a7a88' }}>LFO tool</div>
+              <select value={lfoShape} onChange={e => setLfoShape(e.target.value as typeof lfoShape)}
+                style={{ fontSize: 10, background: 'rgba(255,255,255,0.05)', color: '#e8e8ef', border: '1px solid #2a2a36', borderRadius: 5, padding: '3px 4px' }}>
+                <option value="Sine">Sine</option>
+                <option value="Triangle">Triangle</option>
+                <option value="Square">Square</option>
+                <option value="SawtoothUp">Saw ↑</option>
+                <option value="SawtoothDown">Saw ↓</option>
+                <option value="RandomSampleAndHold">Random S&amp;H</option>
+              </select>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <label style={{ flex: 1, fontSize: 9, color: '#9a9aa8' }}>
+                  Rate 1/
+                  <select value={lfoDen} onChange={e => setLfoDen(Number(e.target.value))}
+                    style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: '#e8e8ef', border: '1px solid #2a2a36', borderRadius: 5, padding: '2px 3px' }}>
+                    {[1, 2, 4, 8, 16].map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </label>
+                <label style={{ flex: 1, fontSize: 9, color: '#9a9aa8' }}>
+                  Bars
+                  <input type="number" min={1} max={64} value={lfoBars}
+                    onChange={e => setLfoBars(Math.max(1, Math.min(64, Number(e.target.value))))}
+                    style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: '#e8e8ef', border: '1px solid #2a2a36', borderRadius: 5, padding: '2px 3px' }} />
+                </label>
+              </div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#9a9aa8' }}>
+                  <span>Depth</span><span style={{ color: '#e8e8ef', fontWeight: 600 }}>{lfoDepth}%</span>
+                </div>
+                <input type="range" min={0} max={100} value={lfoDepth}
+                  onChange={e => setLfoDepth(Number(e.target.value))} style={{ width: '100%' }} />
+              </div>
+              <button type="button" onClick={applyLfo}
+                style={{ padding: '5px', fontSize: 10, fontWeight: 700, color: '#fff', background: '#dc2626', border: 'none', borderRadius: 5, cursor: 'pointer' }}>
+                Apply LFO
+              </button>
+            </div>
+          )}
+        </span>
         <button
           type="button"
           className="del"
