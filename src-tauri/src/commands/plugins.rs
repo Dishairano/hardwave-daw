@@ -260,7 +260,12 @@ pub fn open_plugin_editor(
             Box::new(inst.map_err(|e| e.to_string())?)
         }
         PluginFormat::Clap => {
-            Box::new(ClapPluginInstance::load(descriptor.clone()).map_err(|e| e.to_string())?)
+            let inst = if let Some(queue) = shared_queue {
+                ClapPluginInstance::load_with_shared_pending(descriptor.clone(), queue)
+            } else {
+                ClapPluginInstance::load(descriptor.clone())
+            };
+            Box::new(inst.map_err(|e| e.to_string())?)
         }
     };
 
@@ -360,11 +365,11 @@ pub fn add_plugin_to_track(
     // enough to do under a Mutex.
     let plugin = instantiate_plugin(&descriptor)?;
 
-    // Phase 2b: capture the slot's parameter queue (VST3 only) BEFORE
+    // Phase 2b: capture the slot's parameter queue (VST3 + CLAP) BEFORE
     // shipping the plug-in to the audio thread. This lets the editor
     // path wire a fresh editor instance to the same queue so GUI knob
     // movements reach the audio chain.
-    if let Some(queue) = plugin.vst3_pending_params() {
+    if let Some(queue) = plugin.pending_params() {
         state
             .slot_param_queues
             .lock()

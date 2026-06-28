@@ -215,8 +215,27 @@ pub const CLAP_PROCESS_SLEEP: i32 = 4;
 pub const CLAP_EVENT_NOTE_ON: u16 = 0;
 pub const CLAP_EVENT_NOTE_OFF: u16 = 1;
 pub const CLAP_EVENT_NOTE_CHOKE: u16 = 2;
+pub const CLAP_EVENT_PARAM_VALUE: u16 = 5;
 pub const CLAP_EVENT_MIDI: u16 = 6;
 pub const CLAP_CORE_EVENT_SPACE_ID: u16 = 0;
+
+/// `clap_event_param_value_t` — carries a single parameter change into
+/// (or out of) the plugin. We send these into `process`'s input event
+/// queue to drive params from the host (automation, generic knob UI,
+/// the `set_plugin_parameter` IPC) and read them out of `params.flush`
+/// to capture edits the plugin's own GUI made. `note_id`/`port_index`/
+/// `channel`/`key` are all `-1` for a global (non per-voice) change.
+#[repr(C)]
+pub struct ClapEventParamValue {
+    pub header: ClapEventHeader,
+    pub param_id: u32,
+    pub cookie: *mut c_void,
+    pub note_id: i32,
+    pub port_index: i16,
+    pub channel: i16,
+    pub key: i16,
+    pub value: f64,
+}
 
 #[repr(C)]
 pub struct ClapEventNote {
@@ -309,6 +328,96 @@ pub struct ClapOstream {
 pub struct ClapPluginState {
     pub save: unsafe extern "C" fn(plugin: *const ClapPlugin, stream: *const ClapOstream) -> bool,
     pub load: unsafe extern "C" fn(plugin: *const ClapPlugin, stream: *const ClapIstream) -> bool,
+}
+
+// ---------------------------------------------------------------------------
+// gui extension (`clap.gui`) — embed the plugin's native editor in a
+// host-provided parent window.
+// ---------------------------------------------------------------------------
+
+pub const CLAP_EXT_GUI: &[u8] = b"clap.gui\0";
+pub const CLAP_WINDOW_API_WIN32: &[u8] = b"win32\0";
+pub const CLAP_WINDOW_API_COCOA: &[u8] = b"cocoa\0";
+pub const CLAP_WINDOW_API_X11: &[u8] = b"x11\0";
+
+/// Platform-native window handle union (`clap_window.h`). `x11` is an
+/// X11 `Window` id (`unsigned long`, pointer-sized on the 64-bit targets
+/// we ship); `cocoa`/`win32` are `NSView*` / `HWND` respectively.
+#[repr(C)]
+pub union ClapWindowHandle {
+    pub cocoa: *mut c_void,
+    pub x11: u64,
+    pub win32: *mut c_void,
+    pub ptr: *mut c_void,
+}
+
+#[repr(C)]
+pub struct ClapWindow {
+    pub api: *const c_char,
+    pub handle: ClapWindowHandle,
+}
+
+/// `clap_plugin_gui_t`. We only call a subset (`is_api_supported`,
+/// `create`, `destroy`, `get_size`, `set_size`, `set_parent`, `show`,
+/// `hide`) but the full vtable layout must match so the offsets line up.
+/// `get_resize_hints`/`adjust_size` take a hints struct we don't model —
+/// typed as `*mut c_void` since we never invoke them.
+#[repr(C)]
+pub struct ClapPluginGui {
+    pub is_api_supported: unsafe extern "C" fn(
+        plugin: *const ClapPlugin,
+        api: *const c_char,
+        is_floating: bool,
+    ) -> bool,
+    pub get_preferred_api: unsafe extern "C" fn(
+        plugin: *const ClapPlugin,
+        api: *mut *const c_char,
+        is_floating: *mut bool,
+    ) -> bool,
+    pub create: unsafe extern "C" fn(
+        plugin: *const ClapPlugin,
+        api: *const c_char,
+        is_floating: bool,
+    ) -> bool,
+    pub destroy: unsafe extern "C" fn(plugin: *const ClapPlugin),
+    pub set_scale: unsafe extern "C" fn(plugin: *const ClapPlugin, scale: f64) -> bool,
+    pub get_size: unsafe extern "C" fn(
+        plugin: *const ClapPlugin,
+        width: *mut u32,
+        height: *mut u32,
+    ) -> bool,
+    pub can_resize: unsafe extern "C" fn(plugin: *const ClapPlugin) -> bool,
+    pub get_resize_hints:
+        unsafe extern "C" fn(plugin: *const ClapPlugin, hints: *mut c_void) -> bool,
+    pub adjust_size: unsafe extern "C" fn(
+        plugin: *const ClapPlugin,
+        width: *mut u32,
+        height: *mut u32,
+    ) -> bool,
+    pub set_size:
+        unsafe extern "C" fn(plugin: *const ClapPlugin, width: u32, height: u32) -> bool,
+    pub set_parent:
+        unsafe extern "C" fn(plugin: *const ClapPlugin, window: *const ClapWindow) -> bool,
+    pub set_transient:
+        unsafe extern "C" fn(plugin: *const ClapPlugin, window: *const ClapWindow) -> bool,
+    pub suggest_title: unsafe extern "C" fn(plugin: *const ClapPlugin, title: *const c_char),
+    pub show: unsafe extern "C" fn(plugin: *const ClapPlugin) -> bool,
+    pub hide: unsafe extern "C" fn(plugin: *const ClapPlugin) -> bool,
+}
+
+// ---------------------------------------------------------------------------
+// host params extension (`clap.host-params`) — lets the plugin tell the
+// host its params changed (e.g. the user moved a knob in the GUI) so the
+// host pulls the new values via `params.flush`.
+// ---------------------------------------------------------------------------
+
+pub const CLAP_EXT_HOST_PARAMS: &[u8] = b"clap.host-params\0";
+
+#[repr(C)]
+pub struct ClapHostParams {
+    pub rescan: unsafe extern "C" fn(host: *const ClapHost, flags: u32),
+    pub clear: unsafe extern "C" fn(host: *const ClapHost, param_id: u32, flags: u32),
+    pub request_flush: unsafe extern "C" fn(host: *const ClapHost),
 }
 
 // ---------------------------------------------------------------------------

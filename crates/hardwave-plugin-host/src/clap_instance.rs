@@ -12,13 +12,17 @@
 
 use crate::clap_ffi::{
     build_static_host, ClapAudioBuffer, ClapEventHeader, ClapEventMidi, ClapEventNote,
-    ClapInputEvents, ClapIstream, ClapOstream, ClapOutputEvents, ClapParamInfo, ClapPlugin,
-    ClapPluginEntry, ClapPluginFactory, ClapPluginParams, ClapPluginState, ClapProcess,
+    ClapEventParamValue, ClapHost, ClapHostParams, ClapInputEvents, ClapIstream, ClapOstream,
+    ClapOutputEvents, ClapParamInfo, ClapPlugin, ClapPluginEntry, ClapPluginFactory,
+    ClapPluginGui, ClapPluginParams, ClapPluginState, ClapProcess, ClapWindow, ClapWindowHandle,
     CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
-    CLAP_EXT_PARAMS, CLAP_EXT_STATE, CLAP_PROCESS_ERROR,
+    CLAP_EVENT_PARAM_VALUE, CLAP_EXT_GUI, CLAP_EXT_HOST_PARAMS, CLAP_EXT_PARAMS, CLAP_EXT_STATE,
+    CLAP_PROCESS_ERROR,
 };
 use crate::types::*;
-use std::ffi::{c_void, CString};
+use parking_lot::Mutex;
+use std::ffi::{c_char, c_void, CStr, CString};
+use std::sync::Arc;
 
 pub struct ClapPluginInstance {
     descriptor: PluginDescriptor,
@@ -32,19 +36,61 @@ pub struct ClapPluginInstance {
     // Host context must outlive the plugin; keep owned even though the
     // field isn't read directly after create_plugin returns.
     #[allow(dead_code)]
-    host: Box<crate::clap_ffi::ClapHost>,
+    host: Box<ClapHost>,
+    // Boxed host-side context hung off `host.host_data`. The
+    // `clap.host-params` callbacks read it back to reach the plugin +
+    // the shared param queue. Heap-stable for the instance's lifetime.
+    #[allow(dead_code)]
+    host_ctx: Box<ClapHostContext>,
     cached_params: Vec<ParameterInfo>,
     initialized: bool,
+    /// GUI→audio parameter queue. `set_parameter_value` (host-driven:
+    /// automation, generic knob UI, IPC) and the editor's GUI edits
+    /// (captured via `request_flush`) push here; `process` drains it and
+    /// injects `CLAP_EVENT_PARAM_VALUE` events into the plugin each block.
+    /// Shared with a separate editor instance via `load_with_shared_pending`.
+    pending_params: SharedParamQueue,
+    /// True between a successful `open_editor` and `close_editor` so we
+    /// don't double-create / leak the plugin's GUI.
+    gui_open: bool,
+}
+
+/// Host-side context reachable from the C callbacks via
+/// `ClapHost::host_data`. Not `repr(C)` — C only ever holds it as an
+/// opaque `*mut c_void` and hands it straight back to us.
+struct ClapHostContext {
+    plugin: *const ClapPlugin,
+    pending: SharedParamQueue,
 }
 
 // SAFETY: all pointers point into the plugin binary (lifetime bound
-// by `library`) or into host-owned boxes (`host`, `Box<ClapPlugin>`).
+// by `library`) or into host-owned boxes (`host`, `host_ctx`).
 // The CLAP contract allows the host to call the plugin's function
 // table from a single audio thread; we uphold that at the call sites.
 unsafe impl Send for ClapPluginInstance {}
 
 impl ClapPluginInstance {
     pub fn load(descriptor: PluginDescriptor) -> Result<Self, String> {
+        Self::load_inner(descriptor, None)
+    }
+
+    /// Load the plug-in but reuse the supplied parameter queue instead of
+    /// creating a fresh one. Used by the floating-editor path so the
+    /// editor instance and the chain instance share one queue: the
+    /// editor's GUI edits (captured via `request_flush` → `params.flush`)
+    /// land in the same queue the chain instance drains in `process`,
+    /// so knob movements in the editor reach the live audio.
+    pub fn load_with_shared_pending(
+        descriptor: PluginDescriptor,
+        shared: SharedParamQueue,
+    ) -> Result<Self, String> {
+        Self::load_inner(descriptor, Some(shared))
+    }
+
+    fn load_inner(
+        descriptor: PluginDescriptor,
+        shared_pending: Option<SharedParamQueue>,
+    ) -> Result<Self, String> {
         let path = descriptor.path.clone();
         if !path.exists() {
             return Err(format!("CLAP binary not found: {}", path.display()));
@@ -76,7 +122,23 @@ impl ClapPluginInstance {
             return Err(format!("{}: no plugin factory", path.display()));
         }
         let factory = factory_ptr as *const ClapPluginFactory;
-        let host = Box::new(build_static_host());
+
+        // Shared GUI→audio param queue (fresh, or the chain's queue when
+        // this is an editor instance). The host context carries it so the
+        // `clap.host-params.request_flush` callback can push captured GUI
+        // edits into it. Both the Box<ClapHostContext> and Box<ClapHost>
+        // are heap-stable, so the raw pointers we hand the plugin stay
+        // valid even after the boxes move into `Self`.
+        let pending_params: SharedParamQueue =
+            shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
+        let mut host_ctx = Box::new(ClapHostContext {
+            plugin: std::ptr::null(),
+            pending: Arc::clone(&pending_params),
+        });
+        let mut host = Box::new(build_static_host());
+        host.host_data = &*host_ctx as *const ClapHostContext as *mut c_void;
+        host.get_extension = clap_host_get_extension;
+
         let plugin_id_c = CString::new(descriptor.id.as_bytes())
             .map_err(|_| "plugin id contains interior NUL".to_string())?;
         let plugin = unsafe {
@@ -90,6 +152,9 @@ impl ClapPluginInstance {
                 descriptor.id
             ));
         }
+        // Now that the plugin exists, point the host context at it so
+        // `request_flush` can call `params.flush` on it.
+        host_ctx.plugin = plugin;
         // Initialize the plugin.
         let init_ok = unsafe { ((*plugin).init)(plugin) };
         if !init_ok {
@@ -113,11 +178,29 @@ impl ClapPluginInstance {
             entry,
             plugin,
             host,
+            host_ctx,
             cached_params: Vec::new(),
             initialized: true,
+            pending_params,
+            gui_open: false,
         };
         me.refresh_params();
         Ok(me)
+    }
+
+    /// Resolve the `clap.gui` extension, or `None` if the plugin has no
+    /// embeddable editor.
+    fn gui_ext(&self) -> Option<*const ClapPluginGui> {
+        if self.plugin.is_null() {
+            return None;
+        }
+        let id = CString::new(&CLAP_EXT_GUI[..CLAP_EXT_GUI.len() - 1]).ok()?;
+        let ptr = unsafe { ((*self.plugin).get_extension)(self.plugin, id.as_ptr()) };
+        if ptr.is_null() {
+            None
+        } else {
+            Some(ptr as *const ClapPluginGui)
+        }
     }
 
     fn params_ext(&self) -> Option<*const ClapPluginParams> {
@@ -179,6 +262,17 @@ fn clap_fixed_string_to_rust(buf: &[u8]) -> String {
 
 impl Drop for ClapPluginInstance {
     fn drop(&mut self) {
+        // Tear the editor GUI down first — its lifetime is nested inside
+        // the plugin's, so it must be destroyed before `plugin.destroy`.
+        if self.gui_open {
+            if let Some(gui) = self.gui_ext() {
+                unsafe {
+                    ((*gui).hide)(self.plugin);
+                    ((*gui).destroy)(self.plugin);
+                }
+            }
+            self.gui_open = false;
+        }
         if self.processing && !self.plugin.is_null() {
             unsafe { ((*self.plugin).stop_processing)(self.plugin) };
         }
@@ -277,7 +371,33 @@ impl HostedPlugin for ClapPluginInstance {
             constant_mask: 0,
         };
 
-        let events = encode_midi_events(midi_in);
+        let mut events = encode_midi_events(midi_in);
+        // Inject host-side parameter changes (automation, generic knob
+        // UI, the set_plugin_parameter IPC, and editor GUI edits captured
+        // via request_flush) as CLAP_EVENT_PARAM_VALUE events at the head
+        // of the block. Draining empties the shared queue for next time.
+        let drained: Vec<(u32, f64)> = {
+            let mut q = self.pending_params.lock();
+            std::mem::take(&mut *q)
+        };
+        for (param_id, value) in drained {
+            events.events.push(EncodedEvent::ParamValue(ClapEventParamValue {
+                header: ClapEventHeader {
+                    size: std::mem::size_of::<ClapEventParamValue>() as u32,
+                    time: 0,
+                    space_id: CLAP_CORE_EVENT_SPACE_ID,
+                    event_type: CLAP_EVENT_PARAM_VALUE,
+                    flags: 0,
+                },
+                param_id,
+                cookie: std::ptr::null_mut(),
+                note_id: -1,
+                port_index: -1,
+                channel: -1,
+                key: -1,
+                value,
+            }));
+        }
         let events_ctx = Box::into_raw(Box::new(events));
 
         let input_events = ClapInputEvents {
@@ -343,12 +463,21 @@ impl HostedPlugin for ClapPluginInstance {
         }
     }
 
-    fn set_parameter_value(&mut self, _id: u32, _value: f64) {
-        // CLAP sets parameters via events in `process` or `params.flush`
-        // — the audio-graph event path submits a param-value event on
-        // the next block, not through this synchronous host call. We
-        // leave this as a no-op rather than synthesize a fake event
-        // that would bypass the plugin's own synchronization.
+    fn set_parameter_value(&mut self, id: u32, value: f64) {
+        // CLAP takes parameter changes as events, not synchronous setters.
+        // Queue the change; `process` drains the queue and submits a
+        // CLAP_EVENT_PARAM_VALUE at the start of the next block, which is
+        // the plugin's own synchronization path. De-dupe consecutive
+        // edits to the same param so a fast automation ramp or knob spin
+        // doesn't pile up redundant entries between blocks.
+        let mut q = self.pending_params.lock();
+        if let Some(last) = q.last_mut() {
+            if last.0 == id {
+                last.1 = value;
+                return;
+            }
+        }
+        q.push((id, value));
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -396,12 +525,101 @@ impl HostedPlugin for ClapPluginInstance {
         0
     }
 
-    fn open_editor(&mut self, _parent: raw_window_handle::RawWindowHandle) -> bool {
-        false
+    fn open_editor(&mut self, parent: raw_window_handle::RawWindowHandle) -> bool {
+        if self.gui_open {
+            return true;
+        }
+        let Some(gui) = self.gui_ext() else {
+            return false;
+        };
+
+        // Map the host window handle to the matching CLAP window API +
+        // native pointer. Only the embedding APIs CLAP defines are
+        // supported; anything else (e.g. Wayland) is declined.
+        use raw_window_handle::RawWindowHandle as Rwh;
+        let (api, handle): (&[u8], ClapWindowHandle) = match parent {
+            #[cfg(target_os = "windows")]
+            Rwh::Win32(h) => (
+                crate::clap_ffi::CLAP_WINDOW_API_WIN32,
+                ClapWindowHandle {
+                    win32: h.hwnd.get() as *mut c_void,
+                },
+            ),
+            #[cfg(target_os = "macos")]
+            Rwh::AppKit(h) => (
+                crate::clap_ffi::CLAP_WINDOW_API_COCOA,
+                ClapWindowHandle {
+                    cocoa: h.ns_view.as_ptr(),
+                },
+            ),
+            #[cfg(target_os = "linux")]
+            Rwh::Xlib(h) => (
+                crate::clap_ffi::CLAP_WINDOW_API_X11,
+                ClapWindowHandle {
+                    // `XlibWindowHandle.window` is an X11 `Window`
+                    // (`c_ulong` = u64 on the 64-bit Linux we ship).
+                    x11: h.window,
+                },
+            ),
+            #[cfg(target_os = "linux")]
+            Rwh::Xcb(h) => (
+                crate::clap_ffi::CLAP_WINDOW_API_X11,
+                ClapWindowHandle {
+                    x11: u64::from(h.window.get()),
+                },
+            ),
+            _ => return false,
+        };
+        let api_ptr = api.as_ptr() as *const c_char;
+
+        unsafe {
+            // Embedded (non-floating) view in the host's window.
+            if !((*gui).is_api_supported)(self.plugin, api_ptr, false) {
+                return false;
+            }
+            if !((*gui).create)(self.plugin, api_ptr, false) {
+                return false;
+            }
+            let window = ClapWindow { api: api_ptr, handle };
+            if !((*gui).set_parent)(self.plugin, &window) {
+                ((*gui).destroy)(self.plugin);
+                return false;
+            }
+            // Size the host window to the plugin's preferred size when it
+            // reports one; ignore failures (the window stays default-sized).
+            let mut w: u32 = 0;
+            let mut h: u32 = 0;
+            if ((*gui).get_size)(self.plugin, &mut w, &mut h) && w > 0 && h > 0 {
+                let _ = ((*gui).set_size)(self.plugin, w, h);
+            }
+            if !((*gui).show)(self.plugin) {
+                ((*gui).destroy)(self.plugin);
+                return false;
+            }
+        }
+        self.gui_open = true;
+        true
     }
-    fn close_editor(&mut self) {}
+
+    fn close_editor(&mut self) {
+        if !self.gui_open {
+            return;
+        }
+        if let Some(gui) = self.gui_ext() {
+            unsafe {
+                ((*gui).hide)(self.plugin);
+                ((*gui).destroy)(self.plugin);
+            }
+        }
+        self.gui_open = false;
+    }
+
     fn has_editor(&self) -> bool {
         self.descriptor.has_editor
+    }
+
+    fn pending_params(&self) -> Option<SharedParamQueue> {
+        Some(Arc::clone(&self.pending_params))
     }
 }
 
@@ -413,6 +631,7 @@ enum EncodedEvent {
     NoteOn(ClapEventNote),
     NoteOff(ClapEventNote),
     Midi(ClapEventMidi),
+    ParamValue(ClapEventParamValue),
 }
 
 struct EncodedEventQueue {
@@ -505,6 +724,7 @@ unsafe extern "C" fn event_queue_get(
             &ev.header as *const ClapEventHeader
         }
         Some(EncodedEvent::Midi(ev)) => &ev.header as *const ClapEventHeader,
+        Some(EncodedEvent::ParamValue(ev)) => &ev.header as *const ClapEventHeader,
         None => std::ptr::null(),
     }
 }
@@ -514,6 +734,109 @@ unsafe extern "C" fn event_queue_push_noop(
     _event: *const ClapEventHeader,
 ) -> bool {
     true
+}
+
+// ---------------------------------------------------------------------------
+// Host params extension — capture the plugin GUI's parameter edits.
+//
+// When the user moves a knob in the plugin's own editor, the plugin calls
+// `clap_host_params.request_flush`. An editor instance is never activated
+// for audio, so we satisfy the flush synchronously on the calling (main)
+// thread: invoke the plugin's `params.flush` with an empty input list and
+// an output list that records every CLAP_EVENT_PARAM_VALUE into the shared
+// queue. The chain instance (sharing that queue) drains it in `process`
+// and re-emits the change to its own audio-side plugin, so editor knob
+// moves are heard live.
+// ---------------------------------------------------------------------------
+
+static HOST_PARAMS: ClapHostParams = ClapHostParams {
+    rescan: host_params_rescan_noop,
+    clear: host_params_clear_noop,
+    request_flush: host_params_request_flush,
+};
+
+unsafe extern "C" fn host_params_rescan_noop(_host: *const ClapHost, _flags: u32) {}
+unsafe extern "C" fn host_params_clear_noop(_host: *const ClapHost, _param_id: u32, _flags: u32) {}
+
+/// `clap_host.get_extension` — we expose only `clap.host-params`.
+unsafe extern "C" fn clap_host_get_extension(
+    _host: *const ClapHost,
+    id: *const c_char,
+) -> *const c_void {
+    if id.is_null() {
+        return std::ptr::null();
+    }
+    if CStr::from_ptr(id).to_bytes_with_nul() == CLAP_EXT_HOST_PARAMS {
+        return &HOST_PARAMS as *const ClapHostParams as *const c_void;
+    }
+    std::ptr::null()
+}
+
+struct ParamCapture {
+    out: SharedParamQueue,
+}
+
+/// Output-event sink passed to `params.flush`: records param-value
+/// events into the shared queue, de-duping consecutive edits per param.
+unsafe extern "C" fn param_capture_push(
+    list: *const ClapOutputEvents,
+    event: *const ClapEventHeader,
+) -> bool {
+    if list.is_null() || event.is_null() {
+        return false;
+    }
+    let cap = &*((*list).ctx as *const ParamCapture);
+    let header = &*event;
+    if header.space_id == CLAP_CORE_EVENT_SPACE_ID && header.event_type == CLAP_EVENT_PARAM_VALUE {
+        let pv = &*(event as *const ClapEventParamValue);
+        let mut q = cap.out.lock();
+        if let Some(last) = q.last_mut() {
+            if last.0 == pv.param_id {
+                last.1 = pv.value;
+                return true;
+            }
+        }
+        q.push((pv.param_id, pv.value));
+    }
+    true
+}
+
+unsafe extern "C" fn host_params_request_flush(host: *const ClapHost) {
+    if host.is_null() {
+        return;
+    }
+    let ctx_ptr = (*host).host_data as *const ClapHostContext;
+    if ctx_ptr.is_null() {
+        return;
+    }
+    let ctx = &*ctx_ptr;
+    if ctx.plugin.is_null() {
+        return;
+    }
+    let Ok(id) = CString::new("clap.params") else {
+        return;
+    };
+    let pext = ((*ctx.plugin).get_extension)(ctx.plugin, id.as_ptr()) as *const ClapPluginParams;
+    if pext.is_null() {
+        return;
+    }
+    // Empty input list + capturing output list, both released after flush.
+    let in_q = Box::into_raw(Box::new(EncodedEventQueue { events: Vec::new() }));
+    let in_events = ClapInputEvents {
+        ctx: in_q as *mut c_void,
+        size: event_queue_size,
+        get: event_queue_get,
+    };
+    let cap = Box::into_raw(Box::new(ParamCapture {
+        out: Arc::clone(&ctx.pending),
+    }));
+    let out_events = ClapOutputEvents {
+        ctx: cap as *mut c_void,
+        try_push: param_capture_push,
+    };
+    ((*pext).flush)(ctx.plugin, &in_events, &out_events);
+    drop(Box::from_raw(in_q));
+    drop(Box::from_raw(cap));
 }
 
 // ---------------------------------------------------------------------------

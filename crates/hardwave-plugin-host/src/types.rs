@@ -94,22 +94,24 @@ pub trait HostedPlugin: Send {
     /// Returns the shared parameter queue used by the plug-in's GUI to
     /// emit knob movements.
     ///
-    /// VST3 plug-ins return `Some` so a separate editor instance and the
-    /// chain instance can be wired to the same queue: the editor's
-    /// `IComponentHandler::performEdit` pushes into the queue and the
-    /// chain's audio thread drains it via `setParamNormalized`. Without
-    /// this shared queue, GUI knob movements in the floating editor are
-    /// silent because the audio chain holds a different `pending_params`
-    /// allocation.
+    /// VST3 and CLAP plug-ins return `Some` so a separate editor instance
+    /// and the chain instance can be wired to the same queue: the editor
+    /// captures GUI edits (VST3 via `IComponentHandler::performEdit`, CLAP
+    /// via the `clap.host-params` `request_flush` → `params.flush` path)
+    /// and pushes them into the queue; the chain's audio thread drains it
+    /// at the start of each block and applies the change. Without this
+    /// shared queue, GUI knob movements in the floating editor are silent
+    /// because the audio chain holds a different queue allocation.
     ///
-    /// CLAP and native plug-ins use direct parameter setters and have no
+    /// Native plug-ins use direct parameter setters and have no
     /// asynchronous GUI→audio queue, so they return `None`.
-    fn vst3_pending_params(&self) -> Option<Vst3PendingParams> {
+    fn pending_params(&self) -> Option<SharedParamQueue> {
         None
     }
 }
 
-/// Shared queue for VST3 GUI → audio parameter edits. Editor pushes
-/// `(param_id, normalized_value)` entries via `performEdit`; the audio
-/// thread drains them under `try_lock` at the start of each block.
-pub type Vst3PendingParams = std::sync::Arc<parking_lot::Mutex<Vec<(u32, f64)>>>;
+/// Shared queue for GUI → audio parameter edits, used by both VST3 and
+/// CLAP hosts. The editor pushes `(param_id, normalized_value)` entries;
+/// the audio thread drains them under `try_lock`/`lock` at the start of
+/// each `process` block and applies them to the chain instance.
+pub type SharedParamQueue = std::sync::Arc<parking_lot::Mutex<Vec<(u32, f64)>>>;
