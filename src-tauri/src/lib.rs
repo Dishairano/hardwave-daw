@@ -270,6 +270,9 @@ pub fn run() {
             commands::midi::add_midi_note,
             commands::midi::update_midi_note,
             commands::midi::delete_midi_note,
+            commands::midi::arpeggiate_clip_notes,
+            commands::midi::strum_clip_notes,
+            commands::midi::snap_clip_notes_to_scale,
             // MIDI input (live)
             commands::midi_input::list_midi_inputs,
             commands::midi_input::open_midi_input,

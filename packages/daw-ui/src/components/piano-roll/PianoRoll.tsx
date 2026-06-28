@@ -966,6 +966,15 @@ export function PianoRoll() {
   const [qMode, setQMode] = useState<'start' | 'end' | 'both'>('start')
   const [swingPct, setSwingPct] = useState(0)
 
+  // Generators flyout (arpeggiator / strum / scale-snap)
+  const [genOpen, setGenOpen] = useState(false)
+  const [arpDir, setArpDir] = useState<'up' | 'down' | 'up_down' | 'down_up' | 'as_played'>('up')
+  const [arpRate, setArpRate] = useState<'Quarter' | 'Eighth' | 'Sixteenth' | 'ThirtySecond' | 'TripletEighth' | 'TripletSixteenth'>('Sixteenth')
+  const [arpOctaves, setArpOctaves] = useState(1)
+  const [arpGate, setArpGate] = useState(90) // percent
+  const [strumDir, setStrumDir] = useState<'up' | 'down'>('up')
+  const [strumAmt, setStrumAmt] = useState(30) // ticks between notes
+
   const runTransform = useCallback(async (
     kind: 'legato' | 'staccato' | 'humanizeTime' | 'humanizeVel' | 'humanizeLen' | 'flip' | 'reverse' | 'crescendo' | 'decrescendo' | 'velFull' | 'velDouble' | 'velHalf' | 'velReset' | 'grooveMpc60' | 'grooveSp1200' | 'grooveLogic' | 'grooveStraight',
   ) => {
@@ -1121,6 +1130,64 @@ export function PianoRoll() {
       await refreshNotes()
     } catch (err) { console.warn('quantize failed', err) }
   }, [activeTrackId, activeClipId, notes, selectedNotes, snap, qStrength, qMode, swingPct, refreshNotes])
+
+  // Map the piano-roll's scale keys to the backend `Scale` enum (snake_case).
+  const GEN_SCALE_MAP: Record<string, string> = {
+    chromatic: 'chromatic', major: 'major', minor: 'natural_minor',
+    harmonic: 'harmonic_minor', melodic: 'melodic_minor', dorian: 'dorian',
+    phrygian: 'phrygian', lydian: 'lydian', mixolydian: 'mixolydian',
+    locrian: 'locrian', pentMajor: 'pentatonic_major', pentMinor: 'pentatonic_minor',
+    blues: 'blues', wholeTone: 'whole_tone', hungarian: 'hungarian_minor',
+  }
+
+  const selectedIndices = useCallback(
+    () => (selectedNotes.size > 0 ? Array.from(selectedNotes) : []),
+    [selectedNotes],
+  )
+
+  const runArpeggiate = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    if (selectedNotes.size === 0) return // arp needs a chord selected
+    setGenOpen(false)
+    try {
+      await invoke('arpeggiate_clip_notes', {
+        trackId: activeTrackId, clipId: activeClipId,
+        noteIndices: Array.from(selectedNotes),
+        settings: { direction: arpDir, rate: arpRate, octaves: arpOctaves, gate: arpGate / 100 },
+      })
+      useProjectStore.getState().markDirty()
+      setSelectedNotes(new Set())
+      await refreshNotes()
+    } catch (err) { console.warn('arpeggiate failed', err) }
+  }, [activeTrackId, activeClipId, selectedNotes, arpDir, arpRate, arpOctaves, arpGate, refreshNotes])
+
+  const runStrum = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setGenOpen(false)
+    try {
+      await invoke('strum_clip_notes', {
+        trackId: activeTrackId, clipId: activeClipId,
+        noteIndices: selectedIndices(), spreadTicks: strumAmt, direction: strumDir,
+      })
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+    } catch (err) { console.warn('strum failed', err) }
+  }, [activeTrackId, activeClipId, selectedIndices, strumAmt, strumDir, refreshNotes])
+
+  const runScaleSnap = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setGenOpen(false)
+    try {
+      await invoke('snap_clip_notes_to_scale', {
+        trackId: activeTrackId, clipId: activeClipId,
+        noteIndices: selectedIndices(), root: scaleRoot,
+        scale: GEN_SCALE_MAP[scaleType] ?? 'major',
+      })
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+    } catch (err) { console.warn('scale snap failed', err) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTrackId, activeClipId, selectedIndices, scaleRoot, scaleType, refreshNotes])
 
   useEffect(() => {
     if (!qOpen) return
@@ -1884,6 +1951,137 @@ export function PianoRoll() {
               >
                 Apply quantize
               </button>
+            </div>
+          )}
+        </div>
+
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); setGenOpen(v => !v) }}
+            title="Generators — arpeggiate, strum, snap to scale"
+            style={{
+              padding: '1px 8px', fontSize: 9, fontWeight: 600,
+              color: genOpen ? hw.accent : hw.textMuted,
+              background: genOpen ? hw.accentDim : 'rgba(255,255,255,0.04)',
+              border: `1px solid ${genOpen ? hw.accentGlow : hw.border}`,
+              borderRadius: hw.radius.sm, textTransform: 'uppercase',
+            }}
+          >
+            Gen ▾
+          </button>
+          {genOpen && (
+            <div
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute', top: 22, right: 0, zIndex: 500,
+                minWidth: 230, padding: 10,
+                background: 'rgba(12,12,18,0.96)',
+                border: `1px solid ${hw.borderLight}`,
+                borderRadius: hw.radius.md,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+                backdropFilter: hw.blur.md,
+                display: 'flex', flexDirection: 'column', gap: 10,
+              }}
+            >
+              {/* Arpeggiator */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Arpeggiator</div>
+                <div style={{ display: 'flex', gap: 2 }}>
+                  {([['up','↑'],['down','↓'],['up_down','↑↓'],['down_up','↓↑'],['as_played','⟳']] as const).map(([v, lbl]) => (
+                    <button key={v} onClick={() => setArpDir(v)} style={{
+                      flex: 1, padding: '3px 0', fontSize: 10, fontWeight: 600,
+                      color: arpDir === v ? hw.accent : hw.textFaint,
+                      background: arpDir === v ? hw.accentDim : 'transparent',
+                      border: `1px solid ${arpDir === v ? hw.accentGlow : hw.border}`,
+                      borderRadius: hw.radius.sm,
+                    }}>{lbl}</button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <select value={arpRate} onChange={e => setArpRate(e.target.value as typeof arpRate)}
+                    style={{ flex: 1, fontSize: 9, background: 'rgba(255,255,255,0.04)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
+                    <option value="Quarter">1/4</option>
+                    <option value="Eighth">1/8</option>
+                    <option value="Sixteenth">1/16</option>
+                    <option value="ThirtySecond">1/32</option>
+                    <option value="TripletEighth">1/8T</option>
+                    <option value="TripletSixteenth">1/16T</option>
+                  </select>
+                  <label style={{ fontSize: 9, color: hw.textMuted, display: 'flex', alignItems: 'center', gap: 3 }}>
+                    Oct
+                    <input type="number" min={1} max={6} value={arpOctaves}
+                      onChange={e => setArpOctaves(Math.max(1, Math.min(6, Number(e.target.value))))}
+                      style={{ width: 36, fontSize: 9, background: 'rgba(255,255,255,0.04)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }} />
+                  </label>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
+                    <span>Gate</span><span style={{ color: hw.textPrimary, fontWeight: 600 }}>{arpGate}%</span>
+                  </div>
+                  <input type="range" min={5} max={100} step={1} value={arpGate}
+                    onChange={e => setArpGate(Number(e.target.value))} style={{ width: '100%', accentColor: hw.accent }} />
+                </div>
+                <button onClick={runArpeggiate} disabled={selectedNotes.size === 0}
+                  title={selectedNotes.size === 0 ? 'Select a chord first' : 'Arpeggiate selection'}
+                  style={{
+                    padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
+                    background: selectedNotes.size === 0 ? hw.border : hw.accent,
+                    border: 'none', borderRadius: hw.radius.sm,
+                    cursor: selectedNotes.size === 0 ? 'not-allowed' : 'pointer',
+                  }}>
+                  Arpeggiate selection
+                </button>
+              </div>
+
+              <div style={{ height: 1, background: hw.border }} />
+
+              {/* Strum */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Strum</div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 2, flex: 1 }}>
+                    {(['up','down'] as const).map(v => (
+                      <button key={v} onClick={() => setStrumDir(v)} style={{
+                        flex: 1, padding: '3px 0', fontSize: 9, fontWeight: 600,
+                        color: strumDir === v ? hw.accent : hw.textFaint,
+                        background: strumDir === v ? hw.accentDim : 'transparent',
+                        border: `1px solid ${strumDir === v ? hw.accentGlow : hw.border}`,
+                        borderRadius: hw.radius.sm, textTransform: 'uppercase',
+                      }}>{v}</button>
+                    ))}
+                  </div>
+                  <label style={{ fontSize: 9, color: hw.textMuted, display: 'flex', alignItems: 'center', gap: 3 }}>
+                    Ticks
+                    <input type="number" min={1} max={480} value={strumAmt}
+                      onChange={e => setStrumAmt(Math.max(1, Number(e.target.value)))}
+                      style={{ width: 44, fontSize: 9, background: 'rgba(255,255,255,0.04)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }} />
+                  </label>
+                </div>
+                <button onClick={runStrum} style={{
+                  padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
+                  background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
+                }}>
+                  Strum {selectedNotes.size > 0 ? 'selection' : 'all'}
+                </button>
+              </div>
+
+              <div style={{ height: 1, background: hw.border }} />
+
+              {/* Scale snap (uses the toolbar's root + scale) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Snap to scale</div>
+                <button onClick={runScaleSnap} disabled={scaleType === 'chromatic'}
+                  title={scaleType === 'chromatic' ? 'Pick a non-chromatic scale in the toolbar' : 'Snap pitches to scale'}
+                  style={{
+                    padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
+                    background: scaleType === 'chromatic' ? hw.border : hw.accent,
+                    border: 'none', borderRadius: hw.radius.sm,
+                    cursor: scaleType === 'chromatic' ? 'not-allowed' : 'pointer',
+                  }}>
+                  Snap {selectedNotes.size > 0 ? 'selection' : 'all'} → {SCALE_TYPES[scaleType].name}
+                </button>
+              </div>
             </div>
           )}
         </div>

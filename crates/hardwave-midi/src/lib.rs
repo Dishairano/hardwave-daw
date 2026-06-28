@@ -1,10 +1,14 @@
 //! Hardwave MIDI — MIDI I/O, event types, and quantization.
 
+pub mod generators;
 pub mod input;
 pub mod osc;
 pub mod output;
 pub mod recording;
 pub mod theory;
+pub use generators::{
+    arpeggiate, snap_to_scale, strum, ArpDirection, ArpSettings, Scale, StrumDirection,
+};
 pub use input::{ClockSyncSnapshot, MidiInputManager, ReconcileReport};
 pub use osc::{OscArg, OscError, OscMessage};
 pub use output::{MidiOutputManager, MIDI_CLOCK_TICK, MIDI_CONTINUE, MIDI_START, MIDI_STOP};

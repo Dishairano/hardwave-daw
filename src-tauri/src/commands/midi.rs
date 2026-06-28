@@ -1,6 +1,56 @@
 use crate::AppState;
+use hardwave_midi::{arpeggiate, snap_to_scale, strum, ArpSettings, MidiNote, Scale, StrumDirection};
 use serde::Serialize;
 use tauri::State;
+
+/// Resolve the selected notes of a MIDI clip into owned copies plus the
+/// indices they came from. An empty `indices` selects every note.
+fn collect_selected(notes: &[MidiNote], indices: &[usize]) -> (Vec<MidiNote>, Vec<usize>) {
+    if indices.is_empty() {
+        return (notes.to_vec(), (0..notes.len()).collect());
+    }
+    let mut sel = Vec::new();
+    let mut idx = Vec::new();
+    for &i in indices {
+        if let Some(n) = notes.get(i) {
+            sel.push(n.clone());
+            idx.push(i);
+        }
+    }
+    (sel, idx)
+}
+
+/// Run `f` against the notes of clip `clip_id` on track `track_id` with
+/// the standard snapshot → mutate → rebuild discipline. `f` returns the
+/// command's success value.
+fn with_clip_notes<T>(
+    state: &State<AppState>,
+    track_id: &str,
+    clip_id: &str,
+    f: impl FnOnce(&mut Vec<MidiNote>) -> T,
+) -> Result<T, String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let result = {
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(track_id)
+            .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        let notes = track
+            .clips
+            .iter_mut()
+            .find_map(|clip| match &mut clip.content {
+                hardwave_project::clip::ClipContent::Midi(mc) if mc.id == clip_id => {
+                    Some(&mut mc.clip.notes)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| format!("MIDI clip not found: {}", clip_id))?;
+        f(notes)
+    };
+    engine.rebuild_graph();
+    Ok(result)
+}
 
 #[derive(Serialize)]
 pub struct MidiNoteInfo {
@@ -215,4 +265,76 @@ pub fn delete_midi_note(
     }
 
     Err(format!("MIDI clip not found: {}", clip_id))
+}
+
+/// Replace the selected notes (a chord) with an arpeggio generated from
+/// them. An empty `note_indices` arpeggiates the whole clip. Returns the
+/// number of notes produced.
+#[tauri::command]
+pub fn arpeggiate_clip_notes(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    note_indices: Vec<usize>,
+    settings: ArpSettings,
+) -> Result<usize, String> {
+    with_clip_notes(&state, &track_id, &clip_id, |notes| {
+        let (selected, mut indices) = collect_selected(notes, &note_indices);
+        let generated = arpeggiate(&selected, &settings);
+        // Remove the source notes (descending so indices stay valid), then
+        // append the freshly generated arp.
+        indices.sort_unstable();
+        for i in indices.into_iter().rev() {
+            if i < notes.len() {
+                notes.remove(i);
+            }
+        }
+        let count = generated.len();
+        notes.extend(generated);
+        count
+    })
+}
+
+/// Spread the selected chord's onsets in time (guitar-style strum).
+#[tauri::command]
+pub fn strum_clip_notes(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    note_indices: Vec<usize>,
+    spread_ticks: u64,
+    direction: StrumDirection,
+) -> Result<(), String> {
+    with_clip_notes(&state, &track_id, &clip_id, |notes| {
+        let (mut selected, indices) = collect_selected(notes, &note_indices);
+        strum(&mut selected, spread_ticks, direction);
+        // Write the shifted onsets back to their source notes.
+        for (sel, &i) in selected.iter().zip(indices.iter()) {
+            if let Some(n) = notes.get_mut(i) {
+                n.start_tick = sel.start_tick;
+            }
+        }
+    })
+}
+
+/// Snap the selected notes' pitches to the nearest pitch in `scale`
+/// rooted at `root` (0 = C … 11 = B).
+#[tauri::command]
+pub fn snap_clip_notes_to_scale(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    note_indices: Vec<usize>,
+    root: u8,
+    scale: Scale,
+) -> Result<(), String> {
+    with_clip_notes(&state, &track_id, &clip_id, |notes| {
+        let (mut selected, indices) = collect_selected(notes, &note_indices);
+        snap_to_scale(&mut selected, root, scale);
+        for (sel, &i) in selected.iter().zip(indices.iter()) {
+            if let Some(n) = notes.get_mut(i) {
+                n.pitch = sel.pitch;
+            }
+        }
+    })
 }
