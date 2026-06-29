@@ -215,13 +215,7 @@ impl HostedPlugin for NativeEq {
         if id < bands * PARAMS_PER_BAND {
             let band = &self.bands[(id / PARAMS_PER_BAND) as usize];
             match id % PARAMS_PER_BAND {
-                0 => {
-                    if band.enabled {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }
+                0 if band.enabled => 1.0,
                 1 => band.frequency_hz,
                 2 => band.gain_db,
                 3 => band.q,

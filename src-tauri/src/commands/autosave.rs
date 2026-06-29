@@ -67,7 +67,7 @@ pub fn autosave_save(app: AppHandle, state: State<AppState>) -> Result<String, S
             Some((p, mtime))
         })
         .collect();
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.1));
     for (old_path, _) in entries.into_iter().skip(MAX_AUTOSAVES) {
         let _ = std::fs::remove_file(old_path);
     }

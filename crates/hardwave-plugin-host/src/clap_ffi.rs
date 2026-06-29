@@ -381,21 +381,14 @@ pub struct ClapPluginGui {
     ) -> bool,
     pub destroy: unsafe extern "C" fn(plugin: *const ClapPlugin),
     pub set_scale: unsafe extern "C" fn(plugin: *const ClapPlugin, scale: f64) -> bool,
-    pub get_size: unsafe extern "C" fn(
-        plugin: *const ClapPlugin,
-        width: *mut u32,
-        height: *mut u32,
-    ) -> bool,
+    pub get_size:
+        unsafe extern "C" fn(plugin: *const ClapPlugin, width: *mut u32, height: *mut u32) -> bool,
     pub can_resize: unsafe extern "C" fn(plugin: *const ClapPlugin) -> bool,
     pub get_resize_hints:
         unsafe extern "C" fn(plugin: *const ClapPlugin, hints: *mut c_void) -> bool,
-    pub adjust_size: unsafe extern "C" fn(
-        plugin: *const ClapPlugin,
-        width: *mut u32,
-        height: *mut u32,
-    ) -> bool,
-    pub set_size:
-        unsafe extern "C" fn(plugin: *const ClapPlugin, width: u32, height: u32) -> bool,
+    pub adjust_size:
+        unsafe extern "C" fn(plugin: *const ClapPlugin, width: *mut u32, height: *mut u32) -> bool,
+    pub set_size: unsafe extern "C" fn(plugin: *const ClapPlugin, width: u32, height: u32) -> bool,
     pub set_parent:
         unsafe extern "C" fn(plugin: *const ClapPlugin, window: *const ClapWindow) -> bool,
     pub set_transient:

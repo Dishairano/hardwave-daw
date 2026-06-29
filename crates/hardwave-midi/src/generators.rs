@@ -145,14 +145,23 @@ fn build_arp_sequence(live: &[&MidiNote], settings: &ArpSettings) -> Vec<(u8, f3
         ArpDirection::UpDown => {
             // Up then back down, without repeating the top/bottom note.
             let mut seq = expanded.clone();
-            for item in expanded.iter().rev().skip(1).take(expanded.len().saturating_sub(2)) {
+            for item in expanded
+                .iter()
+                .rev()
+                .skip(1)
+                .take(expanded.len().saturating_sub(2))
+            {
                 seq.push(*item);
             }
             seq
         }
         ArpDirection::DownUp => {
             let mut seq: Vec<(u8, f32)> = expanded.iter().rev().copied().collect();
-            for item in expanded.iter().skip(1).take(expanded.len().saturating_sub(2)) {
+            for item in expanded
+                .iter()
+                .skip(1)
+                .take(expanded.len().saturating_sub(2))
+            {
                 seq.push(*item);
             }
             seq
@@ -277,7 +286,7 @@ fn nearest_in_scale(pitch: u8, root: i32, degrees: &[u8]) -> u8 {
         let deg = deg as i32;
         let down = (rel - deg).rem_euclid(12); // semitones to move DOWN
         let up = (deg - rel).rem_euclid(12); // semitones to move UP
-        // Candidate moves: -down and +up.
+                                             // Candidate moves: -down and +up.
         for cand in [-down, up] {
             if cand.abs() < best_delta.abs()
                 || (cand.abs() == best_delta.abs() && cand < best_delta)
@@ -354,7 +363,10 @@ mod tests {
         // Span is 480 ticks → exactly one step, but the sequence must hold
         // both octaves so a longer span would alternate 60, 72.
         let seq = build_arp_sequence(&chord.iter().collect::<Vec<_>>(), &s);
-        assert_eq!(seq.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![60, 72]);
+        assert_eq!(
+            seq.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+            vec![60, 72]
+        );
         let _ = arpeggiate(&chord, &s);
     }
 

@@ -358,6 +358,7 @@ pub fn remove_track(state: State<AppState>, track_id: String) {
 /// we replace `track.kick_patch.layers[idx]` and trigger a rebuild
 /// so the audio thread picks up the new params on the next block.
 /// Indices: 0=Transient, 1=Punch, 2=Bass, 3=Tail.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn set_kick_layer(
     state: State<AppState>,
@@ -510,7 +511,8 @@ pub fn set_track_instrument(
             .ok_or_else(|| format!("Track not found: {track_id}"))?;
         track.instrument = match kind.as_str() {
             "kick_synth" | "kicksynth" => hardwave_project::track::NativeInstrument::KickSynth,
-            "builtin_sine" | "sine" | _ => hardwave_project::track::NativeInstrument::BuiltinSine,
+            // Anything else (incl. "builtin_sine" / "sine") → the sine default.
+            _ => hardwave_project::track::NativeInstrument::BuiltinSine,
         };
     }
     state.engine.lock().rebuild_graph();

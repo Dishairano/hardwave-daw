@@ -2,6 +2,17 @@
 //! primitives in the `HostedPlugin` trait so the audio engine can host
 //! them alongside VST3 / CLAP plugins without an FFI roundtrip.
 
+// Two clippy lints introduced by newer stable toolchains fire across the
+// per-sample DSP process loops here. Both are style-only and the code is
+// shipped + working, so we suppress them crate-wide rather than rewrite
+// hot audio loops blind:
+//   * needless_range_loop — the `for i in 0..n` loops index parallel
+//     input/output buffers by the same sample index on purpose.
+//   * approx_constant — `0.707` is the conventional, readable Butterworth
+//     filter Q; spelling it `FRAC_1_SQRT_2` reads worse in a Q field.
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::approx_constant)]
+
 pub mod auto_filter;
 pub mod auto_pan;
 pub mod bitcrush;

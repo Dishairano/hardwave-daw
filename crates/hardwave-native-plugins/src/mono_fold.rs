@@ -123,9 +123,8 @@ impl HostedPlugin for NativeMonoFold {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        match id {
-            PARAM_AMOUNT => self.amount = value.clamp(0.0, 1.0) as f32,
-            _ => {}
+        if id == PARAM_AMOUNT {
+            self.amount = value.clamp(0.0, 1.0) as f32
         }
     }
 
@@ -139,9 +138,7 @@ impl HostedPlugin for NativeMonoFold {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest
-                .find(|c: char| c == ',' || c == '}')
-                .unwrap_or(rest.len());
+            let end = rest.find([',', '}']).unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
         if let Some(v) = read("amt") {

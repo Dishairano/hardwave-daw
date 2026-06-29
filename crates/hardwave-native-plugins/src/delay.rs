@@ -178,13 +178,7 @@ impl HostedPlugin for NativeDelay {
             PARAM_TIME_MS => (self.time_ms / MAX_DELAY_MS).clamp(0.0, 1.0) as f64,
             PARAM_FEEDBACK => self.feedback.clamp(0.0, 1.0) as f64,
             PARAM_MIX => self.mix as f64,
-            PARAM_PING_PONG => {
-                if self.ping_pong {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
+            PARAM_PING_PONG if self.ping_pong => 1.0,
             _ => 0.0,
         }
     }
@@ -226,9 +220,7 @@ impl HostedPlugin for NativeDelay {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest
-                .find(|c: char| c == ',' || c == '}')
-                .unwrap_or(rest.len());
+            let end = rest.find([',', '}']).unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
         if let Some(v) = read("time") {

@@ -73,7 +73,7 @@ impl NativeMultiband {
         ];
         let mut mb = MultibandCompressor3::new(48_000.0, lo_mid, mid_hi);
         for (i, b) in bands.iter().enumerate() {
-            mb.set_band_params(i, b.clone());
+            mb.set_band_params(i, *b);
         }
         Self {
             descriptor: Self::descriptor(),
@@ -348,9 +348,7 @@ impl HostedPlugin for NativeMultiband {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest
-                .find(|c: char| c == ',' || c == '}')
-                .unwrap_or(rest.len());
+            let end = rest.find([',', '}']).unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
         if let Some(v) = read("lm") {

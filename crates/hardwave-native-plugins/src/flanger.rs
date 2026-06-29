@@ -178,13 +178,7 @@ impl HostedPlugin for NativeFlanger {
             PARAM_DEPTH => (self.depth_ms / 5.0).clamp(0.0, 1.0) as f64,
             PARAM_FEEDBACK => self.feedback as f64,
             PARAM_MIX => self.mix as f64,
-            PARAM_INVERT => {
-                if self.invert {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
+            PARAM_INVERT if self.invert => 1.0,
             _ => 0.0,
         }
     }
@@ -220,9 +214,7 @@ impl HostedPlugin for NativeFlanger {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest
-                .find(|c: char| c == ',' || c == '}')
-                .unwrap_or(rest.len());
+            let end = rest.find([',', '}']).unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
         if let Some(v) = read("rate") {

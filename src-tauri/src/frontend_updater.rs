@@ -73,6 +73,7 @@ pub enum UpdateStatus {
     /// No newer bundle available, or running version is already latest.
     UpToDate,
     /// Update was found but the running Rust binary is too old/new.
+    #[allow(dead_code)]
     Incompatible {
         manifest_requires: String,
         running: String,
@@ -106,15 +107,11 @@ pub enum UpdateStatus {
 /// fresh stable installer; `Stable` is the default for everyone else.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum InstallerTrack {
+    #[default]
     Stable,
     Beta,
-}
-
-impl Default for InstallerTrack {
-    fn default() -> Self {
-        InstallerTrack::Stable
-    }
 }
 
 /// Optional hint payload the modal uses for human-facing copy. Never
@@ -969,7 +966,7 @@ pub async fn version_contract_state(
         let guard = state.frontend_launch_plan.lock();
         let decision = select_cache_or_refresh(guard.as_ref(), force_refresh, now);
         let snapshot = if matches!(decision, CacheDecision::UseCache) {
-            guard.as_ref().map(|e| cached_entry_to_state(e))
+            guard.as_ref().map(cached_entry_to_state)
         } else {
             None
         };
@@ -1313,11 +1310,13 @@ fn quarantine_cache_version(cache: &Path, version: &str) {
 /// `lib.rs`. Returns `true` when navigation happened.
 ///
 /// Validation order:
-///   1. cache root readable, active.txt present
-///   2. bundle structurally valid (index.html + every referenced asset
-///      present and non-empty) — catches the grey-screen-of-death from
-///      half-downloaded or partially-deleted bundles
-///   3. main webview window is mounted
+///
+/// 1. cache root readable, active.txt present
+/// 2. bundle structurally valid (index.html + every referenced asset
+///    present and non-empty) — catches the grey-screen-of-death from
+///    half-downloaded or partially-deleted bundles
+/// 3. main webview window is mounted
+///
 /// On any failure we quarantine the broken version and return `false`,
 /// letting Tauri's bundled UI load.
 pub fn maybe_activate_cache(app: &AppHandle) -> bool {

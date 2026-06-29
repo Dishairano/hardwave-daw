@@ -173,13 +173,7 @@ impl HostedPlugin for NativeStereo {
             PARAM_WIDTH => (self.width / 2.0).clamp(0.0, 1.0) as f64,
             // balance -1..=1 mapped to 0..=1: 0.5 = centre
             PARAM_BALANCE => ((self.balance + 1.0) * 0.5).clamp(0.0, 1.0) as f64,
-            PARAM_BASS_MONO => {
-                if self.bass_mono_on {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
+            PARAM_BASS_MONO if self.bass_mono_on => 1.0,
             // crossover 20..=500 Hz log
             PARAM_CROSSOVER => {
                 let v = (self.crossover_hz.log10() - 20.0_f32.log10())
@@ -224,9 +218,7 @@ impl HostedPlugin for NativeStereo {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest
-                .find(|c: char| c == ',' || c == '}')
-                .unwrap_or(rest.len());
+            let end = rest.find([',', '}']).unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
         if let Some(v) = read("width") {

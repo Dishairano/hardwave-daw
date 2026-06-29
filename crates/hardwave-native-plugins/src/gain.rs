@@ -140,27 +140,9 @@ impl HostedPlugin for NativeGain {
             // -36..=+12 dB linear mapping, 0.5 = unity (0 dB)
             PARAM_GAIN => ((self.gain_db + 36.0) / 48.0).clamp(0.0, 1.0) as f64,
             PARAM_PAN => ((self.pan + 1.0) * 0.5).clamp(0.0, 1.0) as f64,
-            PARAM_INVERT_L => {
-                if self.invert_l {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            PARAM_INVERT_R => {
-                if self.invert_r {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            PARAM_MUTE => {
-                if self.muted {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
+            PARAM_INVERT_L if self.invert_l => 1.0,
+            PARAM_INVERT_R if self.invert_r => 1.0,
+            PARAM_MUTE if self.muted => 1.0,
             _ => 0.0,
         }
     }
@@ -195,9 +177,7 @@ impl HostedPlugin for NativeGain {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest
-                .find(|c: char| c == ',' || c == '}')
-                .unwrap_or(rest.len());
+            let end = rest.find([',', '}']).unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
         if let Some(v) = read("gain") {

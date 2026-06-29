@@ -190,13 +190,7 @@ impl HostedPlugin for NativeCompressor {
             PARAM_RELEASE => self.release_ms as f64,
             PARAM_KNEE => self.knee_db as f64,
             PARAM_MAKEUP => self.makeup_db as f64,
-            PARAM_AUTO_MAKEUP => {
-                if self.auto_makeup {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
+            PARAM_AUTO_MAKEUP if self.auto_makeup => 1.0,
             PARAM_MODE => match self.mode {
                 DetectMode::Peak => 0.0,
                 DetectMode::Rms => 1.0,

@@ -557,6 +557,7 @@ pub fn set_plugin_parameter(
 /// ship an Add command. Plug-ins missing from the scanner cache are
 /// skipped with a warning so the project still opens — the user gets a
 /// "missing plug-ins" notice via `find_missing_plugins`.
+#[allow(clippy::type_complexity)]
 pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
     // Snapshot what we need under the locks, then drop them before we
     // start instantiating plug-ins (slow VST3 / CLAP loads). We also

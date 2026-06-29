@@ -1,5 +1,7 @@
 use crate::AppState;
-use hardwave_midi::{arpeggiate, snap_to_scale, strum, ArpSettings, MidiNote, Scale, StrumDirection};
+use hardwave_midi::{
+    arpeggiate, snap_to_scale, strum, ArpSettings, MidiNote, Scale, StrumDirection,
+};
 use serde::Serialize;
 use tauri::State;
 

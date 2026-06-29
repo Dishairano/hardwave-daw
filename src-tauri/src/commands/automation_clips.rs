@@ -71,10 +71,7 @@ pub fn delete_automation_clip(
 /// Every automation clip on a track, serialized for the playlist to
 /// render (the `AutomationClip` struct is `Serialize`).
 #[tauri::command]
-pub fn list_automation_clips(
-    state: State<AppState>,
-    track_id: String,
-) -> Vec<AutomationClip> {
+pub fn list_automation_clips(state: State<AppState>, track_id: String) -> Vec<AutomationClip> {
     let engine = state.engine.lock();
     let project = engine.project.lock();
     project

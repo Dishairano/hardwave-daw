@@ -13,8 +13,8 @@
 use crate::clap_ffi::{
     build_static_host, ClapAudioBuffer, ClapEventHeader, ClapEventMidi, ClapEventNote,
     ClapEventParamValue, ClapHost, ClapHostParams, ClapInputEvents, ClapIstream, ClapOstream,
-    ClapOutputEvents, ClapParamInfo, ClapPlugin, ClapPluginEntry, ClapPluginFactory,
-    ClapPluginGui, ClapPluginParams, ClapPluginState, ClapProcess, ClapWindow, ClapWindowHandle,
+    ClapOutputEvents, ClapParamInfo, ClapPlugin, ClapPluginEntry, ClapPluginFactory, ClapPluginGui,
+    ClapPluginParams, ClapPluginState, ClapProcess, ClapWindow, ClapWindowHandle,
     CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
     CLAP_EVENT_PARAM_VALUE, CLAP_EXT_GUI, CLAP_EXT_HOST_PARAMS, CLAP_EXT_PARAMS, CLAP_EXT_STATE,
     CLAP_PROCESS_ERROR,
@@ -381,22 +381,24 @@ impl HostedPlugin for ClapPluginInstance {
             std::mem::take(&mut *q)
         };
         for (param_id, value) in drained {
-            events.events.push(EncodedEvent::ParamValue(ClapEventParamValue {
-                header: ClapEventHeader {
-                    size: std::mem::size_of::<ClapEventParamValue>() as u32,
-                    time: 0,
-                    space_id: CLAP_CORE_EVENT_SPACE_ID,
-                    event_type: CLAP_EVENT_PARAM_VALUE,
-                    flags: 0,
-                },
-                param_id,
-                cookie: std::ptr::null_mut(),
-                note_id: -1,
-                port_index: -1,
-                channel: -1,
-                key: -1,
-                value,
-            }));
+            events
+                .events
+                .push(EncodedEvent::ParamValue(ClapEventParamValue {
+                    header: ClapEventHeader {
+                        size: std::mem::size_of::<ClapEventParamValue>() as u32,
+                        time: 0,
+                        space_id: CLAP_CORE_EVENT_SPACE_ID,
+                        event_type: CLAP_EVENT_PARAM_VALUE,
+                        flags: 0,
+                    },
+                    param_id,
+                    cookie: std::ptr::null_mut(),
+                    note_id: -1,
+                    port_index: -1,
+                    channel: -1,
+                    key: -1,
+                    value,
+                }));
         }
         let events_ctx = Box::into_raw(Box::new(events));
 
@@ -580,7 +582,10 @@ impl HostedPlugin for ClapPluginInstance {
             if !((*gui).create)(self.plugin, api_ptr, false) {
                 return false;
             }
-            let window = ClapWindow { api: api_ptr, handle };
+            let window = ClapWindow {
+                api: api_ptr,
+                handle,
+            };
             if !((*gui).set_parent)(self.plugin, &window) {
                 ((*gui).destroy)(self.plugin);
                 return false;

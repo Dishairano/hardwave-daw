@@ -139,7 +139,7 @@ impl HostedPlugin for NativeAutoFilter {
             let env_r = self.env_r.process(in_r);
             let env_avg = (env_l + env_r) * 0.5;
             self.block_counter = self.block_counter.wrapping_add(1);
-            if self.block_counter % 16 == 0 {
+            if self.block_counter.is_multiple_of(16) {
                 let octave_offset = env_avg.clamp(0.0, 1.0) * self.sensitivity * self.range_octaves;
                 let cutoff = (self.base_hz * 2.0_f32.powf(octave_offset)).clamp(20.0, 18_000.0);
                 self.biquad_l.set(
@@ -283,9 +283,7 @@ impl HostedPlugin for NativeAutoFilter {
             let needle = format!("\"{key}\":");
             let i = s.find(&needle)?;
             let rest = &s[i + needle.len()..];
-            let end = rest
-                .find(|c: char| c == ',' || c == '}')
-                .unwrap_or(rest.len());
+            let end = rest.find([',', '}']).unwrap_or(rest.len());
             rest[..end].trim().parse::<f32>().ok()
         };
         if let Some(v) = read("base") {
