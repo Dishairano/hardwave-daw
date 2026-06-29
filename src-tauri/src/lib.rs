@@ -141,6 +141,11 @@ pub fn run() {
             commands::automation_clips::add_automation_clip_point,
             commands::automation_clips::move_automation_clip_point,
             commands::automation_clips::remove_automation_clip_point,
+            commands::arrangements::list_arrangements,
+            commands::arrangements::create_arrangement,
+            commands::arrangements::switch_arrangement,
+            commands::arrangements::rename_arrangement,
+            commands::arrangements::delete_arrangement,
             // Tracks
             commands::tracks::get_tracks,
             commands::tracks::get_tracks_with_clips,

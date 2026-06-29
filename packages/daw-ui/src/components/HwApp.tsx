@@ -21,6 +21,7 @@ import { MixerPanel } from './mixer/MixerPanel'
 import { HwTopMenu, type MenuDef } from './HwTopMenu'
 import { AutomationLane } from './AutomationLane'
 import { AutomationClipLane } from './AutomationClipLane'
+import { ArrangementSwitcher } from './ArrangementSwitcher'
 import { KickSynthEditor } from './KickSynthEditor'
 import type { AutomationTargetInfo } from '../stores/trackStore'
 import { useTransportStore, SNAP_VALUES } from '../stores/transportStore'
@@ -500,6 +501,8 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
         ))}
       </div>
 
+      <span className="fl-toolsep" />
+      <ArrangementSwitcher />
       <span className="fl-toolsep" />
 
       {/* Action icon row — Save / Save-as / Render / Cut / Copy / Paste / Duplicate.

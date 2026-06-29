@@ -1,3 +1,4 @@
+pub mod arrangements;
 pub mod audio;
 pub mod automation;
 pub mod automation_clips;

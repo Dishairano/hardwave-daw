@@ -63,6 +63,9 @@ pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> 
     };
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
+    // Flush the live timeline into the active arrangement so the saved
+    // file reflects exactly what's on screen.
+    project.capture_active_arrangement();
     project.midi_mappings = mapping_blob;
 
     // Write the harvested plug-in states into the project before we

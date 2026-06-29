@@ -1,5 +1,6 @@
 //! Hardwave Project — project model, track system, serialization.
 
+pub mod arrangement;
 pub mod automation;
 pub mod automation_clip;
 pub mod automation_recording;
@@ -18,6 +19,7 @@ pub mod tempo;
 pub mod track;
 pub mod track_freeze;
 
+pub use arrangement::{Arrangement, TrackTimeline};
 pub use automation::{AutomationLane, AutomationPoint, AutomationTarget};
 pub use automation_recording::{AutomationRecorder, WriteMode};
 pub use clip::{AudioClip, ClipId, ClipPlacement};

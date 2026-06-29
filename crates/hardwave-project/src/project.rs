@@ -61,6 +61,15 @@ pub struct Project {
     /// host can call `set_state(blob)` after instantiation.
     #[serde(default)]
     pub plugin_states: Vec<PluginStateEntry>,
+    /// Switchable arrangements (FL Studio-style). Empty on legacy
+    /// projects; `ensure_arrangements()` lazily seeds "Arrangement 1".
+    /// Only the active arrangement's timeline is live on the tracks at
+    /// any moment — see `arrangement.rs`.
+    #[serde(default)]
+    pub arrangements: Vec<crate::arrangement::Arrangement>,
+    /// Id of the arrangement currently applied to the live tracks.
+    #[serde(default)]
+    pub active_arrangement: String,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a
@@ -113,6 +122,8 @@ impl Default for Project {
             channel_rack_state: None,
             midi_mappings: None,
             plugin_states: Vec::new(),
+            arrangements: Vec::new(),
+            active_arrangement: String::new(),
         }
     }
 }
