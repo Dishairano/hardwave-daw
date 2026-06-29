@@ -49,6 +49,8 @@ pub mod triple_osc;
 pub mod vibrato;
 pub mod wavetable;
 
+pub mod vocoder;
+
 pub use auto_filter::NativeAutoFilter;
 pub use auto_pan::NativeAutoPan;
 pub use bitcrush::NativeBitcrush;
@@ -83,6 +85,7 @@ pub use transient::NativeTransient;
 pub use tremolo::NativeTremolo;
 pub use triple_osc::NativeTripleOsc;
 pub use vibrato::NativeVibrato;
+pub use vocoder::NativeVocoder;
 pub use wavetable::NativeWavetable;
 
 use hardwave_plugin_host::types::PluginDescriptor;
@@ -124,6 +127,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeRingMod::descriptor(),
         NativeAutoFilter::descriptor(),
         NativeStereoDouble::descriptor(),
+        NativeVocoder::descriptor(),
     ]
 }
 
@@ -164,6 +168,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeRingMod::ID,
         NativeAutoFilter::ID,
         NativeStereoDouble::ID,
+        NativeVocoder::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
