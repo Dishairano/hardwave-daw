@@ -212,6 +212,13 @@ pub struct Track {
 
     // Automation
     pub automation_lanes: Vec<AutomationLane>,
+
+    /// Arrangement-level automation clips placed on this track. Each
+    /// carries its own lane targeting a parameter, with a start/length on
+    /// the timeline. `default` keeps older projects (saved before clips
+    /// existed) loadable.
+    #[serde(default)]
+    pub automation_clips: Vec<crate::automation_clip::AutomationClip>,
 }
 
 impl Track {
@@ -244,6 +251,7 @@ impl Track {
             sends: Vec::new(),
             clips: Vec::new(),
             automation_lanes: Vec::new(),
+            automation_clips: Vec::new(),
         }
     }
 

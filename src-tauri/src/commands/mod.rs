@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod automation;
+pub mod automation_clips;
 pub mod autosave;
 pub mod dev;
 pub mod engine;

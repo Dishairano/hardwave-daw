@@ -235,6 +235,12 @@ pub struct TrackNode {
     /// targets them. The Vec is replaced wholesale on `rebuild_graph`,
     /// so the audio thread never allocates here in steady state.
     automation_lanes: Vec<hardwave_project::automation::AutomationLane>,
+
+    /// Arrangement-level automation clips evaluated alongside lanes. A
+    /// clip only contributes while the playhead is inside its
+    /// `[start, start+length]` window; outside it, it's silent and the
+    /// lane / static value stands.
+    automation_clips: Vec<hardwave_project::automation_clip::AutomationClip>,
     /// Cached static fader value so we can restore it when an
     /// automation lane is removed mid-session. We store the linear
     /// gain so the runtime path stays branch-light.
@@ -280,6 +286,7 @@ impl TrackNode {
             chain: crate::insert_chain::InsertChain::new(),
             chain_scratch: crate::insert_chain::Scratch::default(),
             automation_lanes: Vec::new(),
+            automation_clips: Vec::new(),
             static_volume: 1.0,
             static_pan: 0.0,
         }
@@ -340,6 +347,14 @@ impl TrackNode {
         lanes: Vec<hardwave_project::automation::AutomationLane>,
     ) {
         self.automation_lanes = lanes;
+    }
+
+    /// Replace the automation-clip snapshot the audio thread evaluates.
+    pub fn set_automation_clips(
+        &mut self,
+        clips: Vec<hardwave_project::automation_clip::AutomationClip>,
+    ) {
+        self.automation_clips = clips;
     }
 
     pub fn set_volume_db(&mut self, db: f64) {
@@ -509,7 +524,10 @@ impl AudioNode for TrackNode {
         // parameters or sends are forwarded in a follow-up pass —
         // volume + pan are the highest-impact targets and fully wire
         // up the automation pipeline end-to-end.
-        if !self.automation_lanes.is_empty() && ctx.sample_rate > 0.0 && ctx.tempo > 0.0 {
+        if (!self.automation_lanes.is_empty() || !self.automation_clips.is_empty())
+            && ctx.sample_rate > 0.0
+            && ctx.tempo > 0.0
+        {
             let secs = ctx.position_samples as f64 / ctx.sample_rate;
             let beats = secs * ctx.tempo / 60.0;
             // 960 ticks per quarter (PPQ) matches the project default.
@@ -554,6 +572,31 @@ impl AudioNode for TrackNode {
                         // TrackNode (in the engine's send pass) and
                         // needs its own value-cache plumbing.
                     }
+                }
+            }
+            // Automation clips evaluate after lanes, so where both target
+            // the same parameter the clip (the FL-canonical, movable
+            // object) wins. A clip outside its window returns `None` and
+            // contributes nothing.
+            use hardwave_project::automation::{AutomationLane, AutomationTarget as AT};
+            for clip in &self.automation_clips {
+                let Some(v_norm) = clip.value_at_timeline(tick) else {
+                    continue;
+                };
+                match &clip.target {
+                    AT::TrackVolume => {
+                        volume = db_to_linear(AutomationLane::denormalize(v_norm, -60.0, 6.0));
+                    }
+                    AT::TrackPan => {
+                        pan = AutomationLane::denormalize(v_norm, -1.0, 1.0) as f32;
+                    }
+                    AT::TrackMute => {
+                        mute_override = Some(v_norm > 0.5);
+                    }
+                    AT::PluginParam { slot_id, param_id } => {
+                        self.chain.set_parameter(slot_id, *param_id, v_norm);
+                    }
+                    AT::SendLevel { .. } => {}
                 }
             }
             self.volume = volume;
