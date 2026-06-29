@@ -49,6 +49,7 @@ pub mod triple_osc;
 pub mod vibrato;
 pub mod wavetable;
 
+pub mod stutter;
 pub mod vocoder;
 
 pub use auto_filter::NativeAutoFilter;
@@ -79,6 +80,7 @@ pub use saturator::NativeSaturator;
 pub use soundgoodizer::NativeSoundgoodizer;
 pub use stereo::NativeStereo;
 pub use stereo_double::NativeStereoDouble;
+pub use stutter::NativeStutter;
 pub use sub_bass::NativeSubBass;
 pub use tape::NativeTape;
 pub use transient::NativeTransient;
@@ -128,6 +130,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeAutoFilter::descriptor(),
         NativeStereoDouble::descriptor(),
         NativeVocoder::descriptor(),
+        NativeStutter::descriptor(),
     ]
 }
 
@@ -169,6 +172,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeAutoFilter::ID,
         NativeStereoDouble::ID,
         NativeVocoder::ID,
+        NativeStutter::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
