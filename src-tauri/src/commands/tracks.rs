@@ -56,6 +56,9 @@ pub struct TrackInfo {
     /// track row. Lanes may be empty; an empty list means no automation.
     #[serde(rename = "automationLanes")]
     automation_lanes: Vec<AutomationLaneInfo>,
+    /// Arrangement-level automation clips placed on this track.
+    #[serde(rename = "automationClips")]
+    automation_clips: Vec<AutomationClipInfo>,
     /// Native instrument voicing for MIDI tracks. Snake-case to match
     /// the project's `NativeInstrument` discriminator.
     instrument: String,
@@ -117,6 +120,37 @@ pub struct AutomationPointInfo {
     pub value: f64,
     pub curve: String,
     pub tension: f64,
+}
+
+/// Arrangement-level automation clip, flattened for the playlist UI.
+#[derive(Serialize)]
+pub struct AutomationClipInfo {
+    pub id: String,
+    pub target: AutomationTargetInfo,
+    #[serde(rename = "startTick")]
+    pub start_tick: u64,
+    #[serde(rename = "lengthTicks")]
+    pub length_ticks: u64,
+    #[serde(rename = "colorArgb")]
+    pub color_argb: u32,
+    pub points: Vec<AutomationPointInfo>,
+}
+
+/// Map a project automation target to its UI DTO (shared by lanes + clips).
+fn target_to_info(target: &hardwave_project::automation::AutomationTarget) -> AutomationTargetInfo {
+    use hardwave_project::automation::AutomationTarget as AT;
+    match target {
+        AT::TrackVolume => AutomationTargetInfo::TrackVolume,
+        AT::TrackPan => AutomationTargetInfo::TrackPan,
+        AT::TrackMute => AutomationTargetInfo::TrackMute,
+        AT::PluginParam { slot_id, param_id } => AutomationTargetInfo::PluginParam {
+            slot_id: slot_id.clone(),
+            param_id: *param_id,
+        },
+        AT::SendLevel { send_index } => AutomationTargetInfo::SendLevel {
+            send_index: *send_index,
+        },
+    }
 }
 
 pub(crate) fn track_to_info(
@@ -198,6 +232,28 @@ pub(crate) fn track_to_info(
                     })
                     .collect(),
                 visible: l.visible,
+            })
+            .collect(),
+        automation_clips: t
+            .automation_clips
+            .iter()
+            .map(|c| AutomationClipInfo {
+                id: c.id.clone(),
+                target: target_to_info(&c.target),
+                start_tick: c.start_tick,
+                length_ticks: c.length_ticks,
+                color_argb: c.color_argb,
+                points: c
+                    .lane
+                    .points
+                    .iter()
+                    .map(|p| AutomationPointInfo {
+                        tick: p.tick,
+                        value: p.value,
+                        curve: format!("{:?}", p.curve),
+                        tension: p.tension,
+                    })
+                    .collect(),
             })
             .collect(),
         instrument: match t.instrument {

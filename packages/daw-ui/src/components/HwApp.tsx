@@ -20,6 +20,7 @@ import { PianoRoll } from './piano-roll/PianoRoll'
 import { MixerPanel } from './mixer/MixerPanel'
 import { HwTopMenu, type MenuDef } from './HwTopMenu'
 import { AutomationLane } from './AutomationLane'
+import { AutomationClipLane } from './AutomationClipLane'
 import { KickSynthEditor } from './KickSynthEditor'
 import type { AutomationTargetInfo } from '../stores/trackStore'
 import { useTransportStore, SNAP_VALUES } from '../stores/transportStore'
@@ -1476,6 +1477,7 @@ function HwPlaylistTracks() {
   const tracks = allTracks.filter(t => t.kind !== 'Master' && t.id.startsWith('insert-'))
   const toggleArm = useTrackStore(s => s.toggleArm)
   const addAutomationLane = useTrackStore(s => s.addAutomationLane)
+  const createAutomationClip = useTrackStore(s => s.createAutomationClip)
   const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
   const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
   // Which track currently has its KickSynth editor open, if any.
@@ -1519,6 +1521,23 @@ function HwPlaylistTracks() {
                 R
               </button>
               <HwAddLaneButton trackId={t.id} onAdd={addAutomationLane} />
+              <button
+                type="button"
+                title="Add automation clip (Volume, 4 bars — edit target/length after)"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  // Default: a 4-bar volume automation clip at the start
+                  // (4 bars × 4 beats × 960 PPQ = 15360 ticks).
+                  createAutomationClip(t.id, { kind: 'track_volume' }, 0, 15360)
+                }}
+                style={{
+                  fontSize: 9, fontWeight: 700, padding: '0 4px', marginLeft: 2,
+                  background: 'rgba(255,255,255,0.06)', color: '#bdbdc8',
+                  border: '1px solid #2a2a36', borderRadius: 4, cursor: 'pointer',
+                }}
+              >
+                +A
+              </button>
             </div>
           )
           // Render the track's automation lanes directly under it. The
@@ -1530,7 +1549,10 @@ function HwPlaylistTracks() {
           const laneRows = t.automationLanes.map(lane => (
             <AutomationLane key={lane.id} trackId={t.id} lane={lane} />
           ))
-          return [row, ...laneRows]
+          const clipRows = (t.automationClips ?? []).map(clip => (
+            <AutomationClipLane key={clip.id} trackId={t.id} clip={clip} />
+          ))
+          return [row, ...laneRows, ...clipRows]
         })}
         {Array.from({ length: placeholderCount }, (_, i) => {
           const slotNum = tracks.length + i + 1

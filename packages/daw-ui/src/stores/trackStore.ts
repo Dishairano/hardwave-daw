@@ -78,6 +78,7 @@ export interface TrackInfo {
   insert_count: number
   inserts: InsertInfo[]
   automationLanes: AutomationLaneInfo[]
+  automationClips: AutomationClipInfo[]
   /** Native voicing for MIDI tracks. `'sine'` is the default
    *  monosynth, `'kick_synth'` swaps in Hardwave's 4-layer kick. */
   instrument?: NativeInstrumentId
@@ -118,6 +119,15 @@ export interface AutomationLaneInfo {
   target: AutomationTargetInfo
   points: AutomationPointInfo[]
   visible: boolean
+}
+
+export interface AutomationClipInfo {
+  id: string
+  target: AutomationTargetInfo
+  startTick: number
+  lengthTicks: number
+  colorArgb: number
+  points: AutomationPointInfo[]
 }
 
 export interface TrackWithClips extends TrackInfo {
@@ -210,6 +220,14 @@ interface TrackState {
   moveAutomationPoint: (trackId: string, laneId: string, pointIndex: number, tick: number, value: number) => Promise<number>
   deleteAutomationPoint: (trackId: string, laneId: string, pointIndex: number) => Promise<void>
   setAutomationLaneVisible: (trackId: string, laneId: string, visible: boolean) => Promise<void>
+  // Automation clips (arrangement-level)
+  createAutomationClip: (trackId: string, target: AutomationTargetInfo, startTick: number, lengthTicks: number) => Promise<string>
+  deleteAutomationClip: (trackId: string, clipId: string) => Promise<void>
+  moveAutomationClip: (trackId: string, clipId: string, startTick: number) => Promise<void>
+  resizeAutomationClip: (trackId: string, clipId: string, lengthTicks: number) => Promise<void>
+  addAutomationClipPoint: (trackId: string, clipId: string, tick: number, value: number) => Promise<void>
+  moveAutomationClipPoint: (trackId: string, clipId: string, pointIndex: number, tick: number, value: number) => Promise<void>
+  removeAutomationClipPoint: (trackId: string, clipId: string, pointIndex: number) => Promise<void>
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
   moveClip: (trackId: string, clipId: string, newPositionTicks: number) => Promise<void>
   /// Optimistic local-only update — mutates the clip's position in the
@@ -610,6 +628,36 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   },
   setAutomationLaneVisible: async (trackId, laneId, visible) => {
     await invoke('set_automation_lane_visible', { trackId, laneId, visible })
+    await get().fetchTracks()
+  },
+
+  createAutomationClip: async (trackId, target, startTick, lengthTicks) => {
+    const id = await invoke<string>('create_automation_clip', { trackId, target, startTick, lengthTicks })
+    await get().fetchTracks()
+    return id
+  },
+  deleteAutomationClip: async (trackId, clipId) => {
+    await invoke('delete_automation_clip', { trackId, clipId })
+    await get().fetchTracks()
+  },
+  moveAutomationClip: async (trackId, clipId, startTick) => {
+    await invoke('move_automation_clip', { trackId, clipId, startTick })
+    await get().fetchTracks()
+  },
+  resizeAutomationClip: async (trackId, clipId, lengthTicks) => {
+    await invoke('resize_automation_clip', { trackId, clipId, lengthTicks })
+    await get().fetchTracks()
+  },
+  addAutomationClipPoint: async (trackId, clipId, tick, value) => {
+    await invoke('add_automation_clip_point', { trackId, clipId, tick, value })
+    await get().fetchTracks()
+  },
+  moveAutomationClipPoint: async (trackId, clipId, pointIndex, tick, value) => {
+    await invoke('move_automation_clip_point', { trackId, clipId, pointIndex, tick, value })
+    await get().fetchTracks()
+  },
+  removeAutomationClipPoint: async (trackId, clipId, pointIndex) => {
+    await invoke('remove_automation_clip_point', { trackId, clipId, pointIndex })
     await get().fetchTracks()
   },
 
