@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { usePatternStore, STEPS_PER_PATTERN, PATTERN_COLORS, STEP_GRAPH_RANGES, STEP_GRAPH_DEFAULTS, STEP_GRAPH_LABELS, type StepGraphKind } from '../../stores/patternStore'
@@ -6,6 +6,10 @@ import { useTrackFolderStore, type TrackFolder } from '../../stores/trackFolderS
 import { useChannelRackPrefsStore, type LoopMode } from '../../stores/channelRackPrefsStore'
 import { DetachButton } from '../FloatingWindow'
 import { ParameterContextMenu } from '../ParameterContextMenu'
+import { invoke } from '@tauri-apps/api/core'
+import { usePluginCatalogStore } from '../../stores/pluginCatalogStore'
+import { usePluginStore } from '../../stores/pluginStore'
+import type { TrackInfo } from '../../stores/trackStore'
 
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
@@ -43,6 +47,40 @@ export function ChannelRack() {
   const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan, setTrackPitchSemitones, setTrackFineTuneCents, setTrackFilterType, setTrackFilterCutoffHz, setTrackFilterResonance, setTrackOutputBus } = useTrackStore()
   const folders = useTrackFolderStore(s => s.folders)
   const toggleFolderCollapsed = useTrackFolderStore(s => s.toggleCollapsed)
+
+  // Instrument hosting in the channel rack: pick an instrument plug-in
+  // (native synth or a VST/CLAP instrument) to spawn a new channel, and
+  // click a channel's instrument button to open that plug-in's editor.
+  const allPlugins = usePluginCatalogStore(s => s.plugins)
+  const catalogById = usePluginCatalogStore(s => s.byId)
+  const addPluginToTrack = usePluginStore(s => s.addToTrack)
+  const instrumentPlugins = useMemo(
+    () => allPlugins.filter(p => p.category === 'Instrument'),
+    [allPlugins],
+  )
+  const [instPickerOpen, setInstPickerOpen] = useState(false)
+
+  const addInstrumentChannel = useCallback(async (pluginId: string, pluginName: string) => {
+    setInstPickerOpen(false)
+    try {
+      const trackId = await invoke<string>('add_midi_track', { name: pluginName })
+      await addPluginToTrack(trackId, pluginId)
+      await fetchTracks()
+      selectTrack(trackId)
+    } catch (e) { console.error('add instrument channel failed', e) }
+  }, [addPluginToTrack, fetchTracks, selectTrack])
+
+  const channelInstrumentSlot = useCallback(
+    (ch: TrackInfo) => ch.inserts?.find(s => catalogById(s.pluginId)?.category === 'Instrument'),
+    [catalogById],
+  )
+
+  const openChannelInstrument = useCallback((ch: TrackInfo) => {
+    const inst = channelInstrumentSlot(ch)
+    if (!inst) return
+    invoke('open_plugin_editor', { trackId: ch.id, slotId: inst.id })
+      .catch(e => console.error('open_plugin_editor failed', e))
+  }, [channelInstrumentSlot])
   // Channels are decoupled from playlist inserts. The 500 pre-allocated
   // `insert-NNN` tracks are mixer/playlist slots, not channels — they
   // don't belong in the Channel Rack. Channels start empty; the user
@@ -257,6 +295,53 @@ export function ChannelRack() {
         >
           <svg width="8" height="8" viewBox="0 0 8 8"><path d="M1 2h6M1 4h6M1 6h6" stroke={hw.textMuted} strokeWidth="1"/></svg>
         </button>
+
+        {/* Add an instrument channel — native synths + VST/CLAP instruments. */}
+        <div style={{ position: 'relative' }}>
+          <button
+            style={{ ...topBtn, width: 'auto', padding: '0 8px', fontSize: 9, fontWeight: 700, color: hw.accent }}
+            title="Add an instrument channel (native synth or VST/CLAP instrument)"
+            data-hint="Add an instrument channel — native synth or VST/CLAP instrument"
+            onClick={() => setInstPickerOpen(v => !v)}
+          >+ Inst</button>
+          {instPickerOpen && (
+            <>
+              <div
+                onClick={() => setInstPickerOpen(false)}
+                style={{ position: 'fixed', inset: 0, zIndex: 49 }}
+              />
+              <div style={{
+                position: 'absolute', top: 26, left: 0, zIndex: 50,
+                background: '#16161b', border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+                minWidth: 210, maxHeight: 340, overflowY: 'auto',
+                boxShadow: '0 10px 28px rgba(0,0,0,0.55)', padding: 4,
+              }}>
+                {instrumentPlugins.length === 0 ? (
+                  <div style={{ padding: 10, fontSize: 10, color: hw.textFaint }}>
+                    No instruments found — scan plug-ins in Settings, or check that native synths loaded.
+                  </div>
+                ) : instrumentPlugins.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => addInstrumentChannel(p.id, p.name)}
+                    title={`Add ${p.name} as a new channel`}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+                      width: '100%', textAlign: 'left', padding: '5px 8px', fontSize: 10,
+                      color: hw.textPrimary, background: 'transparent', border: 'none',
+                      borderRadius: hw.radius.sm, cursor: 'pointer',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = hw.accentDim)}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+                    <span style={{ color: hw.textFaint, fontSize: 8, flexShrink: 0 }}>{p.vendor || p.format}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
 
         <div style={{ display: 'flex', gap: 1 }}>
           {['All', 'Audio', 'MIDI'].map(g => (
@@ -684,6 +769,23 @@ export function ChannelRack() {
                   width: 3, height: 18, borderRadius: 1,
                   background: ch.color, flexShrink: 0,
                 }} />
+                {channelInstrumentSlot(ch) && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); openChannelInstrument(ch) }}
+                    title="Open instrument editor"
+                    data-hint={`Open the instrument editor for ${ch.name}`}
+                    style={{
+                      flexShrink: 0, width: 16, height: 16, display: 'flex',
+                      alignItems: 'center', justifyContent: 'center', padding: 0,
+                      background: 'transparent', border: 'none', cursor: 'pointer', color: hw.accent,
+                    }}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1">
+                      <rect x="1" y="3" width="10" height="6" rx="1"/>
+                      <path d="M3 5v2M5 5v2M7 5v2M9 5v2"/>
+                    </svg>
+                  </button>
+                )}
                 {renamingId === ch.id ? (
                   <input
                     ref={renameInputRef}
