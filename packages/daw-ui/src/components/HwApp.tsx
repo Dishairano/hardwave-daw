@@ -304,6 +304,11 @@ function HwTopbar({
         >Mixer</button>
       </div>
       <div className="fl-topbar-spacer" />
+      {/* Perf meters (CPU/MEM) + MIDI activity — Option B top-right cluster. */}
+      <div className="fl-topbar-perf">
+        <HwPerfCluster />
+        <HwMidiActivityLed />
+      </div>
       <div className="fl-win-ctl">
         <i onClick={onWindowMin} title="Minimize">
           <svg className="ic" width="12" height="12" viewBox="0 0 16 16" fill="none">
@@ -650,12 +655,8 @@ function HwTopbar({
 
       <span className="fl-toolsep" />
 
-      {/* Ship 3b — live perf meter cluster (CPU + MEM) and the MIDI
-          activity LED. Polyphony is intentionally omitted until the
-          engine surfaces a voice-count event; we'd rather show two
-          honest readouts than three with one fake. */}
-      <HwPerfCluster />
-      <HwMidiActivityLed />
+      {/* Mini scope stays in the toolrow; the CPU/MEM perf cluster + MIDI
+          LED moved up to the top bar's right side (Option B layout). */}
       <HwMiniScope />
 
       <div className="fl-master-vol">

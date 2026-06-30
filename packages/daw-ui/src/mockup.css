@@ -128,6 +128,14 @@
   box-shadow: 0 0 8px rgba(220,38,38,0.35);
 }
 
+/* Top-bar perf cluster (CPU/MEM + MIDI) — relocated to row 1 right. */
+.fl-topbar-perf {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 8px; height: 100%;
+  border-left: 1px solid var(--border);
+  -webkit-app-region: no-drag;
+}
+
 /* ─── Top-menu dropdowns (HwTopMenu) ─────────────────────────── */
 .fl-menu-dropdown {
   position: absolute;
