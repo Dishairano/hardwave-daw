@@ -485,12 +485,60 @@ impl AudioNode for MidiTrackNode {
             }
         }
 
+        // Route this block's notes (clip schedule + live input) to the
+        // insert chain so a hosted instrument plug-in (VST3 / CLAP synth
+        // or sampler) can generate audio from them. Timing is block-local.
+        let mut block_midi: Vec<hardwave_midi::MidiEvent> = midi_in.to_vec();
+        if ctx.playing {
+            let block_end = block_start.saturating_add(block_size as u64);
+            for n in &self.notes {
+                if n.muted {
+                    continue;
+                }
+                if n.note_on_sample >= block_start && n.note_on_sample < block_end {
+                    block_midi.push(hardwave_midi::MidiEvent::NoteOn {
+                        timing: (n.note_on_sample - block_start) as u32,
+                        channel: 0,
+                        note: n.pitch,
+                        velocity: n.velocity,
+                    });
+                }
+                if n.note_off_sample >= block_start && n.note_off_sample < block_end {
+                    block_midi.push(hardwave_midi::MidiEvent::NoteOff {
+                        timing: (n.note_off_sample - block_start) as u32,
+                        channel: 0,
+                        note: n.pitch,
+                        velocity: 0.0,
+                    });
+                }
+            }
+        }
+
+        // If the chain hosts an instrument plug-in, it is the sound source:
+        // discard the built-in synth's dry signal so the two don't double.
+        let has_instrument = self.chain.slots.iter().any(|s| {
+            s.plugin.descriptor().category
+                == hardwave_plugin_host::types::PluginCategory::Instrument
+        });
+        if has_instrument {
+            for buf in outputs.iter_mut() {
+                for s in buf.iter_mut() {
+                    *s = 0.0;
+                }
+            }
+        }
+
         // Pre-fader insert FX: synth → inserts → fader → pan. Empty chain
         // is a no-op, so tracks without FX pay nothing.
         if !self.chain.slots.is_empty() {
             if let [left, right, ..] = outputs {
-                self.chain
-                    .process(left, right, block_size, &mut self.chain_scratch, &[]);
+                self.chain.process(
+                    left,
+                    right,
+                    block_size,
+                    &mut self.chain_scratch,
+                    &block_midi,
+                );
             }
         }
 
@@ -771,6 +819,128 @@ mod tests {
         assert!(
             peak < 1e-6,
             "silencer insert must zero the instrument output, got peak={peak}"
+        );
+    }
+
+    /// A hosted instrument plug-in in the chain must generate audio from
+    /// the track's MIDI, and the built-in synth must be bypassed (so the
+    /// VST is the sound source). The instrument outputs a DC level while a
+    /// note is held — distinguishable from the built-in sine's oscillation.
+    #[test]
+    fn instrument_plugin_in_chain_is_the_sound_source() {
+        use hardwave_plugin_host::types::{
+            HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+        };
+        struct ToneGen {
+            desc: PluginDescriptor,
+            active: bool,
+        }
+        impl HostedPlugin for ToneGen {
+            fn descriptor(&self) -> &PluginDescriptor {
+                &self.desc
+            }
+            fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+                Ok(())
+            }
+            fn deactivate(&mut self) {}
+            fn process(
+                &mut self,
+                _i: &[&[f32]],
+                outputs: &mut [Vec<f32>],
+                midi_in: &[MidiEvent],
+                _mo: &mut Vec<MidiEvent>,
+                n: usize,
+            ) {
+                for ev in midi_in {
+                    match ev {
+                        MidiEvent::NoteOn { .. } => self.active = true,
+                        MidiEvent::NoteOff { .. } => self.active = false,
+                        _ => {}
+                    }
+                }
+                let v = if self.active { 0.5 } else { 0.0 };
+                for o in outputs.iter_mut() {
+                    o.clear();
+                    o.resize(n, v);
+                }
+            }
+            fn get_parameter_count(&self) -> u32 {
+                0
+            }
+            fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+                None
+            }
+            fn get_parameter_value(&self, _i: u32) -> f64 {
+                0.0
+            }
+            fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+            fn get_state(&self) -> Vec<u8> {
+                Vec::new()
+            }
+            fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+                Ok(())
+            }
+            fn latency_samples(&self) -> u32 {
+                0
+            }
+            fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+                false
+            }
+            fn close_editor(&mut self) {}
+            fn has_editor(&self) -> bool {
+                false
+            }
+        }
+        let desc = PluginDescriptor {
+            id: "test.tonegen".into(),
+            name: "ToneGen".into(),
+            vendor: "t".into(),
+            version: "1".into(),
+            format: PluginFormat::Clap,
+            path: std::path::PathBuf::from("<native>"),
+            category: PluginCategory::Instrument,
+            num_inputs: 0,
+            num_outputs: 2,
+            has_midi_input: true,
+            has_editor: false,
+        };
+
+        let mut node = make_node();
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                slot_id: "inst".into(),
+                plugin: Box::new(ToneGen {
+                    desc,
+                    active: false,
+                }),
+                enabled: true,
+                wet: 1.0,
+            },
+            48_000.0,
+            256,
+        );
+        let mut out = block_outputs(256);
+        let ctx = ctx_at(48_000.0, 256, 0, true);
+        let inputs: [&[f32]; 0] = [];
+        let events = vec![MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 1.0,
+        }];
+        node.process(&inputs, &mut out, &events, &mut Vec::new(), &ctx);
+
+        // Output should be the ToneGen's DC level through fader+pan
+        // (0.5 * unity * cos(pi/4) ≈ 0.3536), not an oscillating sine.
+        let peak = out[0].iter().fold(0.0_f32, |a, &b| a.max(b.abs()));
+        assert!(
+            peak > 0.3,
+            "instrument plug-in must produce audio from MIDI, got peak={peak}"
+        );
+        let flat = (out[0][32] - out[0][200]).abs();
+        assert!(
+            flat < 1e-4,
+            "instrument (DC) should replace the built-in sine, got delta={flat}"
         );
     }
 
