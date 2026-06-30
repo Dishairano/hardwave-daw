@@ -10,6 +10,14 @@ use hardwave_metering::{ChannelMeter, MeterSnapshot};
 use hardwave_midi::{MidiCaptureRing, MidiInputManager};
 use hardwave_plugin_host::PluginScanner;
 use hardwave_project::Project;
+
+/// Factory that instantiates a plug-in by its scanner id, used to
+/// hydrate insert chains for offline render (so exports apply the same FX
+/// as live playback). The closure returning `None` skips that insert.
+/// Implemented by the command layer, which owns the native/VST3/CLAP
+/// factory + scanner.
+pub type OfflineInsertFactory<'a> =
+    &'a dyn Fn(&str) -> Option<Box<dyn hardwave_plugin_host::types::HostedPlugin>>;
 use rtrb::RingBuffer;
 
 use std::collections::HashMap;
@@ -730,7 +738,7 @@ impl DawEngine {
         total_samples: u64,
         on_block: impl FnMut(&[f32]) -> bool,
     ) -> Result<(), String> {
-        self.render_offline_with(sample_rate, total_samples, 0, |_| {}, on_block)
+        self.render_offline_with(sample_rate, total_samples, 0, None, |_| {}, on_block)
     }
 
     /// Like [`Self::render_offline`] but allows the caller to mutate the
@@ -742,6 +750,7 @@ impl DawEngine {
         sample_rate: u32,
         total_samples: u64,
         start_samples: u64,
+        instantiate: Option<OfflineInsertFactory<'_>>,
         prepare: impl FnOnce(&mut Project),
         mut on_block: impl FnMut(&[f32]) -> bool,
     ) -> Result<(), String> {
@@ -820,6 +829,13 @@ impl DawEngine {
             sample_rate,
             buffer_size as u32,
         );
+
+        // Populate insert chains from the project metadata so the export
+        // applies the same FX as live playback. No-op when no factory is
+        // supplied (e.g. engine unit tests that don't host plug-ins).
+        if let Some(inst) = instantiate {
+            callback.hydrate_offline_inserts(inst);
+        }
 
         let mut buf = vec![0.0_f32; buffer_size * 2];
         let mut remaining = total_samples;
@@ -1035,6 +1051,59 @@ impl EngineCallback {
                     sample_rate,
                     buffer_size,
                 );
+            }
+        }
+    }
+
+    /// Populate every track's insert chain from the project's saved
+    /// `inserts` metadata, for offline render. The live path builds chains
+    /// via the `InsertCommand` queue / `hydrate_chains_from_project`, but a
+    /// fresh offline callback fires no commands — without this, exports
+    /// would render dry (no EQ/comp/reverb/synth FX). `instantiate` is the
+    /// command layer's native/VST3/CLAP factory keyed by plugin id; saved
+    /// plug-in state is replayed so the bounce matches the mix.
+    fn hydrate_offline_inserts(&mut self, instantiate: OfflineInsertFactory<'_>) {
+        let buffer_size = self.graph.buffer_size_hint();
+        let sr = self.sample_rate as f64;
+        // Snapshot the insert plan under the project lock, then instantiate
+        // outside it (plug-in loads can be slow and must not hold the lock).
+        // (track_id, slot_id, plugin_id, enabled, wet, saved_state)
+        let plan = {
+            let project = self.project.lock();
+            let mut acc = Vec::new();
+            for t in &project.tracks {
+                for s in &t.inserts {
+                    let state = project.plugin_state(&s.id).map(|e| e.chunk.clone());
+                    acc.push((
+                        t.id.clone(),
+                        s.id.clone(),
+                        s.plugin_id.clone(),
+                        s.enabled,
+                        s.wet,
+                        state,
+                    ));
+                }
+            }
+            acc
+        };
+        for (track_id, slot_id, plugin_id, enabled, wet, state) in plan {
+            let Some(node_id) = self.track_id_to_node.get(&track_id).copied() else {
+                continue;
+            };
+            let Some(mut plugin) = instantiate(&plugin_id) else {
+                continue;
+            };
+            if let Some(bytes) = state {
+                let _ = plugin.set_state(&bytes);
+            }
+            if let Some(node) = self.graph.node_mut(node_id) {
+                let slot = crate::insert_chain::LiveSlot {
+                    slot_id,
+                    plugin,
+                    enabled,
+                    wet,
+                };
+                node.push_offline_slot(slot, sr, buffer_size);
             }
         }
     }
@@ -1698,5 +1767,197 @@ impl AudioCallback for EngineCallback {
         if playing {
             self.transport.advance(num_frames as u64);
         }
+    }
+}
+
+#[cfg(test)]
+mod offline_insert_tests {
+    //! Proves the export path applies a track's insert FX. Before the
+    //! offline-chain-hydration fix, `render_offline_with` rendered dry
+    //! (no inserts). The A/B here: a track that makes sound (KickSynth)
+    //! plus a "silencer" insert renders SILENT when a plugin factory is
+    //! supplied, and AUDIBLE when it isn't.
+    use super::*;
+    use hardwave_midi::MidiEvent;
+    use hardwave_plugin_host::types::{
+        HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    };
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve};
+    use hardwave_project::track::PluginSlot;
+
+    /// Minimal insert that zeroes its output.
+    struct Silencer {
+        desc: PluginDescriptor,
+    }
+    impl HostedPlugin for Silencer {
+        fn descriptor(&self) -> &PluginDescriptor {
+            &self.desc
+        }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            _inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            num_samples: usize,
+        ) {
+            for o in outputs.iter_mut() {
+                o.clear();
+                o.resize(num_samples, 0.0);
+            }
+        }
+        fn get_parameter_count(&self) -> u32 {
+            0
+        }
+        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _i: u32) -> f64 {
+            0.0
+        }
+        fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+    }
+
+    fn silencer_desc() -> PluginDescriptor {
+        PluginDescriptor {
+            id: "test.silencer".into(),
+            name: "Silencer".into(),
+            vendor: "t".into(),
+            version: "1".into(),
+            format: PluginFormat::Clap,
+            path: std::path::PathBuf::from("<native>"),
+            category: PluginCategory::Effect,
+            num_inputs: 2,
+            num_outputs: 2,
+            has_midi_input: false,
+            has_editor: false,
+        }
+    }
+
+    fn build_engine_with_silenced_sine() -> DawEngine {
+        let engine = DawEngine::new();
+        let sr = 48_000u32;
+        // A 1s stereo sine in the audio pool.
+        let frames = sr as usize;
+        let mut ch = Vec::with_capacity(frames);
+        for n in 0..frames {
+            let t = n as f32 / sr as f32;
+            ch.push((std::f32::consts::TAU * 220.0 * t).sin() * 0.5);
+        }
+        let buffer = crate::AudioBuffer {
+            channels: vec![ch.clone(), ch],
+            sample_rate: sr,
+            num_frames: frames,
+        };
+        engine.audio_pool.insert("sine".to_string(), buffer);
+
+        let mut project = engine.project.lock();
+        let id = project.add_audio_track("Sine".into());
+        if let Some(t) = project.track_mut(&id) {
+            t.clips.push(ClipPlacement {
+                content: ClipContent::Audio(AudioClip {
+                    id: "clip-sine".into(),
+                    name: "sine".into(),
+                    source_path: "sine".into(),
+                    source_hash: String::new(),
+                    source_start: 0,
+                    source_end: frames as u64,
+                    gain_db: 0.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
+                    muted: false,
+                    reversed: false,
+                    pitch_semitones: 0.0,
+                    stretch_ratio: 1.0,
+                    fade_in_curve: FadeCurve::Linear,
+                    fade_out_curve: FadeCurve::Linear,
+                }),
+                track_id: id.clone(),
+                position_ticks: 0,
+                length_ticks: 1920,
+                lane: 0,
+            });
+            t.inserts.push(PluginSlot {
+                id: "slot1".into(),
+                plugin_id: "test.silencer".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 1.0,
+            });
+        }
+        drop(project);
+        engine
+    }
+
+    fn render_peak(
+        engine: &DawEngine,
+        factory: Option<&dyn Fn(&str) -> Option<Box<dyn HostedPlugin>>>,
+    ) -> f32 {
+        let sr = 48_000u32;
+        let mut peak = 0.0f32;
+        engine
+            .render_offline_with(
+                sr,
+                sr as u64,
+                0,
+                factory,
+                |_| {},
+                |block| {
+                    for &s in block {
+                        peak = peak.max(s.abs());
+                    }
+                    true
+                },
+            )
+            .unwrap();
+        peak
+    }
+
+    #[test]
+    fn offline_render_applies_track_inserts() {
+        let engine = build_engine_with_silenced_sine();
+        let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
+            if id == "test.silencer" {
+                Some(Box::new(Silencer {
+                    desc: silencer_desc(),
+                }))
+            } else {
+                None
+            }
+        };
+        // With the factory, the silencer insert zeroes the kick.
+        let peak_with = render_peak(&engine, Some(&factory));
+        assert!(
+            peak_with < 1e-6,
+            "insert chain must apply offline; silencer should zero output, got peak={peak_with}"
+        );
+        // Without a factory (old behavior), the insert is skipped and the
+        // kick is audible — confirming the difference is the hydration.
+        let peak_without = render_peak(&engine, None);
+        assert!(
+            peak_without > 1e-3,
+            "without the factory the source should still sound, got peak={peak_without}"
+        );
     }
 }

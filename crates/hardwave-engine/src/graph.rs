@@ -76,6 +76,19 @@ pub trait AudioNode: Send {
     fn restore_chain(&mut self, chain: crate::insert_chain::InsertChain) {
         let _ = chain;
     }
+
+    /// Build-time insert population for offline render: push a pre-built
+    /// `LiveSlot` onto this node's chain. Default no-op for non-track
+    /// nodes; TrackNode overrides to append to its insert chain so an
+    /// export applies the same FX as live playback.
+    fn push_offline_slot(
+        &mut self,
+        slot: crate::insert_chain::LiveSlot,
+        sample_rate: f64,
+        max_block_size: u32,
+    ) {
+        let _ = (slot, sample_rate, max_block_size);
+    }
 }
 
 /// Number of output channels every node gets. Tracks use 0/1 for post-fader

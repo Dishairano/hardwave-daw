@@ -30,7 +30,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// `load_project`) and the editor path (`open_plugin_editor`). The
 /// editor path may want a *separate* instance from the chain so the
 /// returned Box is intentionally not tied to chain lifecycle.
-fn instantiate_plugin(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlugin>, String> {
+pub(crate) fn instantiate_plugin(
+    descriptor: &PluginDescriptor,
+) -> Result<Box<dyn HostedPlugin>, String> {
     let native_path = PathBuf::from("<native>");
     if descriptor.path == native_path {
         return match descriptor.id.as_str() {

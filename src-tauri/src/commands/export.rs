@@ -9,6 +9,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+/// Build the offline-render insert factory: snapshot the scanner's
+/// descriptors and return a closure that instantiates a fresh plug-in by
+/// id (native / VST3 / CLAP). Passed to `render_offline_with` so exports
+/// apply the same insert FX (EQ / comp / reverb / synth) as live playback
+/// — without it, bounces render dry.
+fn build_offline_insert_factory(
+    engine: &DawEngine,
+) -> impl Fn(&str) -> Option<Box<dyn hardwave_plugin_host::types::HostedPlugin>> {
+    let descriptors: std::collections::HashMap<String, hardwave_plugin_host::PluginDescriptor> =
+        engine
+            .plugin_scanner
+            .lock()
+            .plugins()
+            .iter()
+            .map(|d| (d.id.clone(), d.clone()))
+            .collect();
+    move |plugin_id: &str| {
+        descriptors
+            .get(plugin_id)
+            .and_then(|d| super::plugins::instantiate_plugin(d).ok())
+    }
+}
+
 #[derive(serde::Serialize, Clone)]
 pub struct ExportProgress {
     pub percent: f32,
@@ -406,6 +429,7 @@ where
         fmt.sample_rate,
         total_samples,
         start_samples,
+        Some(&build_offline_insert_factory(engine)),
         prepare,
         |block| {
             if cancel.load(Ordering::Relaxed) {
@@ -648,6 +672,7 @@ where
         fmt.sample_rate,
         total_samples,
         start_samples,
+        Some(&build_offline_insert_factory(engine)),
         prepare,
         |block| {
             if cancel.load(Ordering::Relaxed) {
@@ -803,6 +828,7 @@ where
         fmt.sample_rate,
         total_samples,
         start_samples,
+        Some(&build_offline_insert_factory(engine)),
         prepare,
         |block| {
             if cancel.load(Ordering::Relaxed) {
@@ -936,6 +962,7 @@ where
                 fmt.sample_rate,
                 total_samples,
                 start_samples,
+                Some(&build_offline_insert_factory(engine)),
                 prepare,
                 |block| {
                     if wav_err.is_some() || cancel.load(Ordering::Relaxed) {
@@ -977,6 +1004,7 @@ where
                 fmt.sample_rate,
                 total_samples,
                 start_samples,
+                Some(&build_offline_insert_factory(engine)),
                 prepare,
                 |block| {
                     if cancel.load(Ordering::Relaxed) {
@@ -1043,6 +1071,7 @@ where
                 fmt.sample_rate,
                 total_samples,
                 start_samples,
+                Some(&build_offline_insert_factory(engine)),
                 prepare,
                 |block| {
                     if cancel.load(Ordering::Relaxed) {

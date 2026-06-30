@@ -444,6 +444,21 @@ impl AudioNode for TrackNode {
         }
     }
 
+    /// Build-time insert population for offline render: push a pre-built
+    /// `LiveSlot` straight onto the chain (no command queue, no
+    /// graveyard). Used by the offline render's chain hydration so an
+    /// export applies the same insert FX as live playback.
+    fn push_offline_slot(
+        &mut self,
+        slot: crate::insert_chain::LiveSlot,
+        sample_rate: f64,
+        max_block_size: u32,
+    ) {
+        if let Err(e) = self.chain.push_slot(slot, sample_rate, max_block_size) {
+            log::warn!("track {} offline insert add failed: {e}", self.track_id);
+        }
+    }
+
     fn take_chain(&mut self) -> Option<crate::insert_chain::InsertChain> {
         // Swap in an empty chain so this TrackNode keeps its other state
         // intact while the rebuild path moves the live plug-in instances
