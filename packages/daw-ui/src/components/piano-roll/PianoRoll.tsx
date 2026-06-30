@@ -963,6 +963,8 @@ export function PianoRoll() {
   const [strumAmt, setStrumAmt] = useState(30) // ticks between notes
   const [chopRepeats, setChopRepeats] = useState(4)
   const [chordQuality, setChordQuality] = useState('major')
+  const [progKey, setProgKey] = useState(0)
+  const [progBars, setProgBars] = useState(4)
 
   const runTransform = useCallback(async (
     kind: 'legato' | 'staccato' | 'humanizeTime' | 'humanizeVel' | 'humanizeLen' | 'flip' | 'reverse' | 'crescendo' | 'decrescendo' | 'velFull' | 'velDouble' | 'velHalf' | 'velReset' | 'grooveMpc60' | 'grooveSp1200' | 'grooveLogic' | 'grooveStraight',
@@ -1223,6 +1225,19 @@ export function PianoRoll() {
     } catch (err) { console.warn('chordify failed', err) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTrackId, activeClipId, selectedIndices, chordQuality, refreshNotes])
+
+  const runProgression = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setGenOpen(false)
+    try {
+      await invoke('generate_progression_in_clip', {
+        trackId: activeTrackId, clipId: activeClipId,
+        keyRoot: progKey, quality: chordQuality, bars: progBars,
+      })
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+    } catch (err) { console.warn('progression failed', err) }
+  }, [activeTrackId, activeClipId, progKey, chordQuality, progBars, refreshNotes])
 
   useEffect(() => {
     if (!qOpen) return
@@ -2177,6 +2192,32 @@ export function PianoRoll() {
                     Chord {selectedNotes.size > 0 ? 'selection' : 'all'}
                   </button>
                 </div>
+              </div>
+
+              {/* Chord progression */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Progression</div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <label style={{ fontSize: 9, color: hw.textMuted, flex: 1 }}>
+                    Key
+                    <select value={progKey} onChange={e => setProgKey(Number(e.target.value))}
+                      style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
+                      {['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].map((n, i) => <option key={n} value={i}>{n}</option>)}
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 9, color: hw.textMuted, flex: 1 }}>
+                    Bars
+                    <select value={progBars} onChange={e => setProgBars(Number(e.target.value))}
+                      style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
+                      {[2, 4, 8, 16].map(b => <option key={b} value={b}>{b}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <button onClick={runProgression}
+                  title="Generate a diatonic chord progression (uses the Chord type above as the starting chord)"
+                  style={{ padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff', background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer' }}>
+                  Generate progression
+                </button>
               </div>
             </div>
           )}

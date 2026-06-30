@@ -7,7 +7,7 @@
 //! current selection; the result replaces (arp) or mutates (strum,
 //! scale-snap) the selected notes.
 
-use crate::theory::ChordQuality;
+use crate::theory::{suggest_next_chord, Chord, ChordQuality};
 use crate::{GridDivision, MidiNote};
 use serde::{Deserialize, Serialize};
 
@@ -375,6 +375,43 @@ pub fn chordify(notes: &[MidiNote], quality: ChordQuality) -> Vec<MidiNote> {
 }
 
 // ---------------------------------------------------------------------------
+// Chord progression
+// ---------------------------------------------------------------------------
+
+/// Generate a diatonic chord progression as notes. Starting from `start`
+/// in key `key_root`, walk `bars` chords via the common-practice
+/// `suggest_next_chord` rules (V→I, IV→I, ii→V, …), sustaining each chord
+/// for `bar_ticks`. Voices are stacked from `octave_base`; any voice that
+/// would exceed MIDI note 127 is dropped.
+pub fn generate_progression(
+    key_root: u8,
+    start: Chord,
+    bars: usize,
+    octave_base: u8,
+    bar_ticks: u64,
+) -> Vec<MidiNote> {
+    let mut out = Vec::with_capacity(bars * 4);
+    let mut chord = start;
+    for bar in 0..bars {
+        let at = bar as u64 * bar_ticks;
+        for pitch in chord.notes(octave_base) {
+            if pitch <= 127 {
+                out.push(MidiNote {
+                    start_tick: at,
+                    duration_ticks: bar_ticks,
+                    pitch,
+                    velocity: 0.8,
+                    channel: 0,
+                    muted: false,
+                });
+            }
+        }
+        chord = suggest_next_chord(chord, key_root);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Humanize
 // ---------------------------------------------------------------------------
 
@@ -482,6 +519,39 @@ mod tests {
         let out = chordify(&[n], ChordQuality::Major);
         assert_eq!(out.len(), 1);
         assert!(out[0].muted);
+    }
+
+    #[test]
+    fn progression_has_one_triad_per_bar() {
+        let start = Chord::new(0, ChordQuality::Major);
+        let notes = generate_progression(0, start, 4, 60, 3840);
+        // 4 bars × 3 voices (all in range).
+        assert_eq!(notes.len(), 12);
+    }
+
+    #[test]
+    fn progression_first_bar_is_the_start_chord_at_tick_zero() {
+        let start = Chord::new(0, ChordQuality::Major); // C major
+        let notes = generate_progression(0, start, 2, 60, 3840);
+        let bar0: Vec<u8> = notes
+            .iter()
+            .filter(|n| n.start_tick == 0)
+            .map(|n| n.pitch)
+            .collect();
+        assert_eq!(bar0, vec![60, 64, 67]);
+    }
+
+    #[test]
+    fn progression_walks_to_the_suggested_next_chord() {
+        // C major (I) → IV (F major) per suggest_next_chord.
+        let start = Chord::new(0, ChordQuality::Major);
+        let notes = generate_progression(0, start, 2, 60, 3840);
+        let bar1_root = notes
+            .iter()
+            .find(|n| n.start_tick == 3840)
+            .map(|n| n.pitch % 12)
+            .unwrap();
+        assert_eq!(bar1_root, 5); // F
     }
 
     #[test]

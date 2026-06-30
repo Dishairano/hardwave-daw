@@ -1,8 +1,8 @@
 use crate::AppState;
-use hardwave_midi::theory::ChordQuality;
+use hardwave_midi::theory::{Chord, ChordQuality};
 use hardwave_midi::{
-    arpeggiate, chordify, humanize, note_repeat, snap_to_scale, strum, ArpSettings,
-    HumanizeSettings, MidiNote, Scale, StrumDirection,
+    arpeggiate, chordify, generate_progression, humanize, note_repeat, snap_to_scale, strum,
+    ArpSettings, HumanizeSettings, MidiNote, Scale, StrumDirection,
 };
 use serde::Serialize;
 use tauri::State;
@@ -445,6 +445,34 @@ fn parse_chord_quality(name: &str) -> Result<ChordQuality, String> {
         "min7" | "minor7" => Ok(ChordQuality::Minor7),
         other => Err(format!("Unknown chord quality: {other}")),
     }
+}
+
+/// Generate a diatonic chord progression into a clip, appended after any
+/// existing notes. `bars` chords are walked from the start chord (root
+/// pitch-class + quality) using common-practice harmony rules.
+#[tauri::command]
+pub fn generate_progression_in_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    key_root: u8,
+    quality: String,
+    bars: usize,
+) -> Result<usize, String> {
+    let quality = parse_chord_quality(&quality)?;
+    let start = Chord::new(key_root, quality);
+    with_clip_notes(&state, &track_id, &clip_id, |notes| {
+        let generated = generate_progression(
+            key_root,
+            start,
+            bars.clamp(1, 64),
+            60,
+            hardwave_midi::PPQ * 4,
+        );
+        let count = generated.len();
+        notes.extend(generated);
+        count
+    })
 }
 
 /// Stack a chord under each selected note (FL-style chord stamp). The
