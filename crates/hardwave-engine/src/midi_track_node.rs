@@ -109,6 +109,11 @@ pub struct MidiTrackNode {
     /// bypassed and each note-on retriggers the kick synth instead.
     instrument: Instrument,
     kick: hardwave_dsp::kick_synth::KickSynth,
+    /// Pre-fader insert chain so effects (filter, reverb, distortion,
+    /// the vocoder, VST3/CLAP…) can be placed directly on an instrument
+    /// track — synth → inserts → fader → pan, the standard channel strip.
+    chain: crate::insert_chain::InsertChain,
+    chain_scratch: crate::insert_chain::Scratch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +142,8 @@ impl MidiTrackNode {
             rms_smooth: 0.0,
             instrument: Instrument::BuiltinSine,
             kick: hardwave_dsp::kick_synth::KickSynth::new(48_000.0),
+            chain: crate::insert_chain::InsertChain::new(),
+            chain_scratch: crate::insert_chain::Scratch::default(),
         }
     }
 
@@ -468,16 +475,37 @@ impl AudioNode for MidiTrackNode {
                 }
             };
 
-            let l = sample_l_raw * self.volume * pan_l;
-            let r = sample_r_raw * self.volume * pan_r;
+            // Write the DRY synth signal (pre-fader, pre-pan). Inserts
+            // run on this below; the fader + pan are applied afterward.
+            if let Some(buf) = outputs.get_mut(0) {
+                buf[i] = sample_l_raw;
+            }
+            if let Some(buf) = outputs.get_mut(1) {
+                buf[i] = sample_r_raw;
+            }
+        }
 
+        // Pre-fader insert FX: synth → inserts → fader → pan. Empty chain
+        // is a no-op, so tracks without FX pay nothing.
+        if !self.chain.slots.is_empty() {
+            if let [left, right, ..] = outputs {
+                self.chain
+                    .process(left, right, block_size, &mut self.chain_scratch, &[]);
+            }
+        }
+
+        // Apply fader + pan and compute meters on the post-FX signal.
+        for i in 0..block_size {
+            let dry_l = outputs.first().map(|b| b[i]).unwrap_or(0.0);
+            let dry_r = outputs.get(1).map(|b| b[i]).unwrap_or(dry_l);
+            let l = dry_l * self.volume * pan_l;
+            let r = dry_r * self.volume * pan_r;
             if let Some(buf) = outputs.get_mut(0) {
                 buf[i] = l;
             }
             if let Some(buf) = outputs.get_mut(1) {
                 buf[i] = r;
             }
-
             peak_l = peak_l.max(l.abs());
             peak_r = peak_r.max(r.abs());
             energy_acc += (l * l + r * r) * 0.5;
@@ -509,6 +537,83 @@ impl AudioNode for MidiTrackNode {
         self.voice = None;
         self.next_note_idx = 0;
         self.rms_smooth = 0.0;
+    }
+
+    fn snapshot_plugin_states(&self) -> Vec<(String, Vec<u8>)> {
+        self.chain
+            .slots
+            .iter()
+            .map(|slot| (slot.slot_id.clone(), slot.plugin.get_state()))
+            .collect()
+    }
+
+    fn apply_insert_command(
+        &mut self,
+        cmd: crate::insert_chain::InsertCommand,
+        graveyard: &mut crate::insert_chain::PluginGraveyardSender,
+        sample_rate: f64,
+        max_block_size: u32,
+    ) {
+        use crate::insert_chain::InsertCommand;
+        match cmd {
+            InsertCommand::Add { slot, .. } => {
+                if let Err(e) = self.chain.push_slot(slot, sample_rate, max_block_size) {
+                    log::warn!("midi track {} insert add failed: {e}", self.track_id);
+                }
+            }
+            InsertCommand::Remove { slot_id, .. } => {
+                if let Some(slot) = self.chain.take_slot(&slot_id) {
+                    let _ = graveyard.try_bury(slot);
+                }
+            }
+            InsertCommand::Reorder { from, to, .. } => self.chain.reorder(from, to),
+            InsertCommand::SetEnabled {
+                slot_id, enabled, ..
+            } => {
+                self.chain.set_enabled(&slot_id, enabled);
+            }
+            InsertCommand::SetWet { slot_id, wet, .. } => {
+                self.chain.set_wet(&slot_id, wet);
+            }
+            InsertCommand::SetParameter {
+                slot_id,
+                param_id,
+                value,
+                ..
+            } => {
+                self.chain.set_parameter(&slot_id, param_id, value);
+            }
+            InsertCommand::SetState { slot_id, bytes, .. } => {
+                self.chain.set_state(&slot_id, &bytes);
+            }
+        }
+    }
+
+    fn take_chain(&mut self) -> Option<crate::insert_chain::InsertChain> {
+        let taken = std::mem::take(&mut self.chain);
+        if taken.slots.is_empty() {
+            None
+        } else {
+            Some(taken)
+        }
+    }
+
+    fn restore_chain(&mut self, chain: crate::insert_chain::InsertChain) {
+        self.chain = chain;
+    }
+
+    fn push_offline_slot(
+        &mut self,
+        slot: crate::insert_chain::LiveSlot,
+        sample_rate: f64,
+        max_block_size: u32,
+    ) {
+        if let Err(e) = self.chain.push_slot(slot, sample_rate, max_block_size) {
+            log::warn!(
+                "midi track {} offline insert add failed: {e}",
+                self.track_id
+            );
+        }
     }
 }
 
@@ -564,6 +669,108 @@ mod tests {
         assert!(
             peak > 0.0,
             "live NoteOn should produce audible output, got peak={peak}"
+        );
+    }
+
+    /// An insert effect placed on an instrument track must process its
+    /// audio (pre-fix, MidiTrackNode had no chain so FX were dropped).
+    /// A "silencer" insert should zero the synth output.
+    #[test]
+    fn insert_chain_applies_to_instrument_output() {
+        use hardwave_plugin_host::types::{
+            HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+        };
+        struct Silencer(PluginDescriptor);
+        impl HostedPlugin for Silencer {
+            fn descriptor(&self) -> &PluginDescriptor {
+                &self.0
+            }
+            fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+                Ok(())
+            }
+            fn deactivate(&mut self) {}
+            fn process(
+                &mut self,
+                _i: &[&[f32]],
+                outputs: &mut [Vec<f32>],
+                _mi: &[MidiEvent],
+                _mo: &mut Vec<MidiEvent>,
+                n: usize,
+            ) {
+                for o in outputs.iter_mut() {
+                    o.clear();
+                    o.resize(n, 0.0);
+                }
+            }
+            fn get_parameter_count(&self) -> u32 {
+                0
+            }
+            fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+                None
+            }
+            fn get_parameter_value(&self, _i: u32) -> f64 {
+                0.0
+            }
+            fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+            fn get_state(&self) -> Vec<u8> {
+                Vec::new()
+            }
+            fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+                Ok(())
+            }
+            fn latency_samples(&self) -> u32 {
+                0
+            }
+            fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+                false
+            }
+            fn close_editor(&mut self) {}
+            fn has_editor(&self) -> bool {
+                false
+            }
+        }
+        let desc = PluginDescriptor {
+            id: "test.silencer".into(),
+            name: "Silencer".into(),
+            vendor: "t".into(),
+            version: "1".into(),
+            format: PluginFormat::Clap,
+            path: std::path::PathBuf::from("<native>"),
+            category: PluginCategory::Effect,
+            num_inputs: 2,
+            num_outputs: 2,
+            has_midi_input: false,
+            has_editor: false,
+        };
+
+        let mut node = make_node();
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                slot_id: "s".into(),
+                plugin: Box::new(Silencer(desc)),
+                enabled: true,
+                wet: 1.0,
+            },
+            48_000.0,
+            256,
+        );
+        let mut out = block_outputs(256);
+        let ctx = ctx_at(48_000.0, 256, 0, false);
+        let inputs: [&[f32]; 0] = [];
+        let events = vec![MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 69,
+            velocity: 0.9,
+        }];
+        node.process(&inputs, &mut out, &events, &mut Vec::new(), &ctx);
+        let peak = out[0]
+            .iter()
+            .chain(out[1].iter())
+            .fold(0.0_f32, |a, b| a.max(b.abs()));
+        assert!(
+            peak < 1e-6,
+            "silencer insert must zero the instrument output, got peak={peak}"
         );
     }
 
