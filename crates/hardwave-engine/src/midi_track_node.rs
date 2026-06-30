@@ -1,8 +1,8 @@
 //! MIDI track audio node — turns scheduled MIDI notes into audio.
 //!
-//! Minimal monophonic synthesizer that consumes pre-resolved [`MidiNoteRegion`]s
+//! Polyphonic built-in synthesizer that consumes pre-resolved [`MidiNoteRegion`]s
 //! (notes already mapped to absolute sample positions) and writes a mono-summed
-//! sine wave with a linear ADSR envelope into both stereo output channels.
+//! sine wave with a linear ADSR envelope per voice into both stereo channels.
 //!
 //! Scope: this is the first audible MIDI path. It is intentionally a built-in
 //! sine-osc monosynth so that a freshly-recorded or freshly-drawn piano-roll
@@ -48,12 +48,13 @@ enum EnvStage {
     Idle,
 }
 
-/// One playing note. The synth currently only keeps a single Voice (mono),
-/// so a new note-on while one is held replaces the active voice rather than
-/// stacking. That mirrors the behaviour of FL Studio's default "mono" voice
-/// mode and keeps CPU bounded for the first audible release.
+/// One playing note. The synth keeps a pool of up to [`MAX_VOICES`] of
+/// these, so chords and overlapping notes sound together; the pool prunes
+/// finished voices each block and steals the oldest when full.
 #[derive(Debug, Clone)]
 struct Voice {
+    /// MIDI pitch this voice is playing — used to match note-offs (poly).
+    pitch: u8,
     /// Hz, derived once from MIDI pitch.
     freq: f32,
     /// 0..=1, used as a multiplier on the envelope output.
@@ -64,7 +65,14 @@ struct Voice {
     stage: EnvStage,
     /// Linear gain produced by the envelope this sample (smoothed across stages).
     env_value: f32,
+    /// For clip-scheduled notes, the absolute sample at which to release.
+    /// `None` for live/held notes (released by an explicit NoteOff).
+    off_sample: Option<u64>,
 }
+
+/// Max simultaneous built-in-synth voices. Beyond this, the oldest voice
+/// is stolen — bounds CPU while comfortably covering chords.
+const MAX_VOICES: usize = 16;
 
 const TWO_PI: f32 = std::f32::consts::TAU;
 
@@ -87,13 +95,10 @@ pub struct MidiTrackNode {
     /// `notes` linearly each block; because `notes` is kept sorted by
     /// `note_on_sample`, the audio thread does no per-sample scanning.
     next_note_idx: usize,
-    /// Pitch currently held by an external/live MIDI NoteOn — distinct
-    /// from clip-driven notes so a live release doesn't kill a clip
-    /// note that happens to be playing the same pitch. When `Some(p)`,
-    /// a matching NoteOff transitions `voice` into the Release stage.
-    live_held_pitch: Option<u8>,
-    /// Single playing voice. None when nothing is held.
-    voice: Option<Voice>,
+    /// Active built-in-synth voices (polyphonic — a chord plays as many
+    /// voices). Live notes carry `off_sample = None` (released by an
+    /// explicit NoteOff); clip notes carry their scheduled release sample.
+    voices: Vec<Voice>,
     /// Linear post-fader gain. Mirrors TrackNode's volume/pan model so
     /// the mixer panel can drive the same atomics.
     volume: f32,
@@ -132,8 +137,7 @@ impl MidiTrackNode {
             name,
             notes: Vec::new(),
             next_note_idx: 0,
-            live_held_pitch: None,
-            voice: None,
+            voices: Vec::new(),
             volume: 1.0,
             pan: 0.0,
             muted: false,
@@ -154,12 +158,35 @@ impl MidiTrackNode {
         self.instrument = kind;
         match kind {
             Instrument::BuiltinSine => {
-                self.voice = None;
+                self.voices.clear();
             }
             Instrument::KickSynth => {
                 self.kick = hardwave_dsp::kick_synth::KickSynth::new(sample_rate.max(1.0));
             }
         }
+    }
+
+    /// Start a built-in-synth voice. Steals a voice (preferring an
+    /// already-releasing/idle one, else the oldest) when at the polyphony
+    /// cap so a fresh chord never silently drops notes.
+    fn start_voice(&mut self, pitch: u8, velocity: f32, off_sample: Option<u64>) {
+        if self.voices.len() >= MAX_VOICES {
+            let steal = self
+                .voices
+                .iter()
+                .position(|v| matches!(v.stage, EnvStage::Idle | EnvStage::Release))
+                .unwrap_or(0);
+            self.voices.remove(steal);
+        }
+        self.voices.push(Voice {
+            pitch,
+            freq: pitch_to_freq(pitch),
+            velocity,
+            phase: 0.0,
+            stage: EnvStage::Attack,
+            env_value: 0.0,
+            off_sample,
+        });
     }
 
     /// Push a per-track KickSynth patch onto the synth. Layers with
@@ -311,30 +338,26 @@ impl AudioNode for MidiTrackNode {
             match *ev {
                 hardwave_midi::MidiEvent::NoteOn { note, velocity, .. } => match self.instrument {
                     Instrument::BuiltinSine => {
-                        let carry_gain = self.voice.as_ref().map(|v| v.env_value).unwrap_or(0.0);
-                        self.voice = Some(Voice {
-                            freq: pitch_to_freq(note),
-                            velocity: velocity.clamp(0.0, 1.0),
-                            phase: 0.0,
-                            stage: EnvStage::Attack,
-                            env_value: carry_gain,
-                        });
-                        self.live_held_pitch = Some(note);
+                        // Live note → a held voice (off_sample None).
+                        self.start_voice(note, velocity.clamp(0.0, 1.0), None);
                     }
                     Instrument::KickSynth => {
                         self.kick.note_on(note, velocity);
-                        self.live_held_pitch = Some(note);
                     }
                 },
-                hardwave_midi::MidiEvent::NoteOff { note, .. }
-                    if self.live_held_pitch == Some(note) =>
-                {
-                    if let Some(v) = self.voice.as_mut() {
-                        if v.stage != EnvStage::Idle {
+                hardwave_midi::MidiEvent::NoteOff { note, .. } => {
+                    // Release held (live) voices of this pitch. Clip-driven
+                    // voices (off_sample Some) release on their own schedule
+                    // so a live release can't cut a playing clip note.
+                    for v in self.voices.iter_mut() {
+                        if v.pitch == note
+                            && v.off_sample.is_none()
+                            && v.stage != EnvStage::Idle
+                            && v.stage != EnvStage::Release
+                        {
                             v.stage = EnvStage::Release;
                         }
                     }
-                    self.live_held_pitch = None;
                 }
                 _ => {}
             }
@@ -343,7 +366,7 @@ impl AudioNode for MidiTrackNode {
         // When transport is stopped, render the live-MIDI voice tail
         // (envelope release) but skip the clip-schedule path so we
         // don't fire stale clip notes from a paused playhead.
-        if !ctx.playing && self.voice.is_none() {
+        if !ctx.playing && self.voices.is_empty() {
             return;
         }
 
@@ -399,49 +422,38 @@ impl AudioNode for MidiTrackNode {
                 while self.next_note_idx < self.notes.len()
                     && self.notes[self.next_note_idx].note_on_sample <= global_sample
                 {
-                    let note = &self.notes[self.next_note_idx];
-                    if !note.muted {
+                    // Clone the note's fields so the borrow on `self.notes`
+                    // ends before `start_voice` borrows `self` mutably.
+                    let n = self.notes[self.next_note_idx].clone();
+                    if !n.muted {
                         match self.instrument {
                             Instrument::BuiltinSine => {
-                                // Carry the previous voice's envelope
-                                // forward so legato re-triggers don't click.
-                                let carry_gain =
-                                    self.voice.as_ref().map(|v| v.env_value).unwrap_or(0.0);
-                                self.voice = Some(Voice {
-                                    freq: pitch_to_freq(note.pitch),
-                                    velocity: note.velocity.clamp(0.0, 1.0),
-                                    phase: 0.0,
-                                    stage: EnvStage::Attack,
-                                    env_value: carry_gain,
-                                });
-                                // A clip note-on takes over from any live
-                                // hold so the live release path doesn't
-                                // unexpectedly cut the clip note short.
-                                self.live_held_pitch = None;
+                                // Polyphonic: each clip note adds a voice
+                                // that releases on its own note-off sample.
+                                self.start_voice(
+                                    n.pitch,
+                                    n.velocity.clamp(0.0, 1.0),
+                                    Some(n.note_off_sample),
+                                );
                             }
                             Instrument::KickSynth => {
-                                self.kick.note_on(note.pitch, note.velocity);
-                                self.live_held_pitch = None;
+                                self.kick.note_on(n.pitch, n.velocity);
                             }
                         }
                     }
                     self.next_note_idx += 1;
                 }
 
-                // Trigger release when the active clip note's note-off
-                // sample is reached. Skipped while a live note is held
-                // so the live voice isn't killed by a stale clip end.
-                if self.live_held_pitch.is_none() {
-                    if let Some(v) = self.voice.as_mut() {
-                        if v.stage != EnvStage::Release && v.stage != EnvStage::Idle {
-                            let off_sample = self
-                                .notes
-                                .get(self.next_note_idx.saturating_sub(1))
-                                .map(|n| n.note_off_sample)
-                                .unwrap_or(global_sample);
-                            if off_sample <= global_sample {
-                                v.stage = EnvStage::Release;
-                            }
+                // Release clip-scheduled voices whose note-off sample has
+                // arrived. Each voice tracks its own off_sample, so
+                // overlapping/chord notes release independently.
+                for v in self.voices.iter_mut() {
+                    if let Some(off) = v.off_sample {
+                        if off <= global_sample
+                            && v.stage != EnvStage::Release
+                            && v.stage != EnvStage::Idle
+                        {
+                            v.stage = EnvStage::Release;
                         }
                     }
                 }
@@ -450,22 +462,21 @@ impl AudioNode for MidiTrackNode {
             // Sample the synth.
             let (sample_l_raw, sample_r_raw) = match self.instrument {
                 Instrument::BuiltinSine => {
-                    let s = if let Some(v) = self.voice.as_mut() {
+                    // Sum every active voice (polyphony). Idle voices are
+                    // pruned after the block.
+                    let mut s = 0.0_f32;
+                    for v in self.voices.iter_mut() {
+                        if matches!(v.stage, EnvStage::Idle) {
+                            continue;
+                        }
                         let env = Self::step_envelope(v, sr);
                         let osc = v.phase.sin();
                         v.phase += TWO_PI * v.freq / sr;
                         if v.phase >= TWO_PI {
                             v.phase -= TWO_PI;
                         }
-                        if matches!(v.stage, EnvStage::Idle) {
-                            self.voice = None;
-                            0.0
-                        } else {
-                            osc * env * v.velocity
-                        }
-                    } else {
-                        0.0
-                    };
+                        s += osc * env * v.velocity;
+                    }
                     (s, s)
                 }
                 Instrument::KickSynth => {
@@ -484,6 +495,9 @@ impl AudioNode for MidiTrackNode {
                 buf[i] = sample_r_raw;
             }
         }
+
+        // Prune voices whose envelope finished this block.
+        self.voices.retain(|v| !matches!(v.stage, EnvStage::Idle));
 
         // Route this block's notes (clip schedule + live input) to the
         // insert chain so a hosted instrument plug-in (VST3 / CLAP synth
@@ -582,7 +596,7 @@ impl AudioNode for MidiTrackNode {
     }
 
     fn reset(&mut self) {
-        self.voice = None;
+        self.voices.clear();
         self.next_note_idx = 0;
         self.rms_smooth = 0.0;
     }
@@ -970,12 +984,49 @@ mod tests {
         }];
         node.process(&inputs, &mut out, &off, &mut midi_out, &ctx);
 
-        let stage = node.voice.as_ref().map(|v| v.stage);
+        let stage = node.voices.first().map(|v| v.stage);
         assert_eq!(
             stage,
             Some(EnvStage::Release),
             "matching NoteOff should trigger release"
         );
+    }
+
+    /// The built-in synth must be polyphonic — a chord plays every note,
+    /// not just the last one (pre-fix it kept a single mono voice).
+    #[test]
+    fn builtin_synth_is_polyphonic() {
+        let mut node = make_node();
+        let mut out = block_outputs(256);
+        let ctx = ctx_at(48_000.0, 256, 0, false);
+        let inputs: [&[f32]; 0] = [];
+        let chord = vec![
+            MidiEvent::NoteOn {
+                timing: 0,
+                channel: 0,
+                note: 60,
+                velocity: 0.8,
+            },
+            MidiEvent::NoteOn {
+                timing: 0,
+                channel: 0,
+                note: 64,
+                velocity: 0.8,
+            },
+            MidiEvent::NoteOn {
+                timing: 0,
+                channel: 0,
+                note: 67,
+                velocity: 0.8,
+            },
+        ];
+        node.process(&inputs, &mut out, &chord, &mut Vec::new(), &ctx);
+        assert_eq!(node.voices.len(), 3, "a 3-note chord must hold 3 voices");
+        let peak = out[0]
+            .iter()
+            .chain(out[1].iter())
+            .fold(0.0_f32, |a, b| a.max(b.abs()));
+        assert!(peak > 0.0, "chord should be audible");
     }
 
     /// While the transport is stopped, clip-scheduled notes must NOT
