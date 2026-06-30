@@ -12,6 +12,93 @@ import { MixerPanelV2 } from './v2/MixerPanel'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 
+interface PluginParamInfo {
+  id: number
+  name: string
+  defaultValue: number
+  value: number
+  min: number
+  max: number
+  unit: string
+  automatable: boolean
+}
+
+function formatParamValue(v: number, unit: string): string {
+  const n = Number.isInteger(v) ? String(v) : v.toFixed(2)
+  return unit ? `${n} ${unit}` : n
+}
+
+/**
+ * Generic parameter sheet — the fallback editor for plug-ins without a
+ * custom GUI (and a handy automatable-param list even for those that do).
+ * Fetches the slot's parameters via `get_plugin_parameters` and renders
+ * each as a labelled slider that pushes edits through `set_plugin_parameter`.
+ */
+function PluginParamSheet({ trackId, slotId }: { trackId: string; slotId: string }) {
+  const [params, setParams] = useState<PluginParamInfo[]>([])
+  const [values, setValues] = useState<Record<number, number>>({})
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    invoke<PluginParamInfo[]>('get_plugin_parameters', { trackId, slotId })
+      .then((p) => {
+        if (cancelled) return
+        setParams(p)
+        const init: Record<number, number> = {}
+        p.forEach((x) => { init[x.id] = x.value })
+        setValues(init)
+      })
+      .catch((e) => console.error('get_plugin_parameters failed', e))
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [trackId, slotId])
+
+  const setParam = (id: number, v: number) => {
+    setValues((prev) => ({ ...prev, [id]: v }))
+    invoke('set_plugin_parameter', { trackId, slotId, paramId: id, value: v })
+      .catch((e) => console.error('set_plugin_parameter failed', e))
+  }
+
+  if (loading) return <div style={{ fontSize: 10, color: hw.textFaint }}>Loading parameters…</div>
+  if (params.length === 0) {
+    return <div style={{ fontSize: 10, color: hw.textFaint }}>This plug-in exposes no adjustable parameters.</div>
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 7, maxHeight: 280, overflowY: 'auto', paddingRight: 2 }}>
+      {params.map((p) => {
+        const val = values[p.id] ?? p.value
+        const span = p.max - p.min || 1
+        return (
+          <label
+            key={p.id}
+            data-hint={`${p.name}: ${formatParamValue(val, p.unit)}  (${p.min}–${p.max}${p.unit ? ' ' + p.unit : ''}) · double-click to reset`}
+            style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: hw.textMuted, gap: 8 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+              <span style={{ fontFamily: 'var(--mono)', color: hw.textPrimary, flexShrink: 0 }}>{formatParamValue(val, p.unit)}</span>
+            </div>
+            <input
+              type="range"
+              min={p.min}
+              max={p.max}
+              step={span / 1000}
+              value={val}
+              onChange={(e) => setParam(p.id, Number(e.target.value))}
+              onDoubleClick={() => setParam(p.id, p.defaultValue)}
+              title={`${p.name} · double-click resets to default`}
+              style={{ width: '100%', cursor: 'pointer' }}
+            />
+          </label>
+        )
+      })}
+    </div>
+  )
+}
+
 export function MixerPanel() {
   // Phase 1 feature flag — route to the new FL Wide 2 mixer when the user
   // opts in via Settings. The legacy mixer below stays untouched until
@@ -1226,7 +1313,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
 
               <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', color: hw.textFaint }}>
-                  {descriptor?.has_editor ? 'Parameters' : 'Generic parameters (no GUI)'}
+                  {descriptor?.has_editor ? 'Parameters' : 'Parameters (generic)'}
                 </div>
                 {descriptor?.has_editor && (
                   <button
@@ -1288,6 +1375,9 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     title="Drag to blend dry/wet · double-click to reset"
                   />
                 </label>
+
+                <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
+                <PluginParamSheet trackId={trackId} slotId={slot.id} />
 
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: hw.textMuted }}>
