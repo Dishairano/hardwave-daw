@@ -7,6 +7,7 @@
 //! current selection; the result replaces (arp) or mutates (strum,
 //! scale-snap) the selected notes.
 
+use crate::theory::ChordQuality;
 use crate::{GridDivision, MidiNote};
 use serde::{Deserialize, Serialize};
 
@@ -340,6 +341,40 @@ pub fn note_repeat(notes: &[MidiNote], repeats: u32, gate: f32, decay: f32) -> V
 }
 
 // ---------------------------------------------------------------------------
+// Chordify
+// ---------------------------------------------------------------------------
+
+/// Stack a chord under each note: for every note, add the intervals of
+/// `quality` above its pitch, turning a single-note line into chords. The
+/// original note is the chord root (interval 0 is part of every quality),
+/// and each added voice inherits its timing, duration, velocity, and
+/// channel. Voices that would exceed MIDI note 127 are dropped; muted
+/// notes pass through untouched.
+pub fn chordify(notes: &[MidiNote], quality: ChordQuality) -> Vec<MidiNote> {
+    let mut out = Vec::with_capacity(notes.len() * 3);
+    for n in notes {
+        if n.muted {
+            out.push(n.clone());
+            continue;
+        }
+        for &iv in quality.intervals() {
+            match n.pitch.checked_add(iv) {
+                Some(pitch) if pitch <= 127 => out.push(MidiNote {
+                    start_tick: n.start_tick,
+                    duration_ticks: n.duration_ticks,
+                    pitch,
+                    velocity: n.velocity,
+                    channel: n.channel,
+                    muted: false,
+                }),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Humanize
 // ---------------------------------------------------------------------------
 
@@ -405,6 +440,48 @@ mod tests {
             channel: 0,
             muted: false,
         }
+    }
+
+    #[test]
+    fn chordify_major_stacks_a_triad() {
+        let out = chordify(&[note(0, 960, 60)], ChordQuality::Major);
+        let pitches: Vec<u8> = out.iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, vec![60, 64, 67]);
+    }
+
+    #[test]
+    fn chordify_minor_uses_flat_third() {
+        let out = chordify(&[note(0, 960, 60)], ChordQuality::Minor);
+        let pitches: Vec<u8> = out.iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, vec![60, 63, 67]);
+    }
+
+    #[test]
+    fn chordify_preserves_timing_and_velocity() {
+        let out = chordify(&[note(480, 240, 50)], ChordQuality::Major7);
+        assert_eq!(out.len(), 4); // 0,4,7,11
+        for n in &out {
+            assert_eq!(n.start_tick, 480);
+            assert_eq!(n.duration_ticks, 240);
+            assert!((n.velocity - 0.8).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn chordify_drops_voices_above_127() {
+        // Root at 126: 126(+0) ok, 130/133 out of range → only the root.
+        let out = chordify(&[note(0, 960, 126)], ChordQuality::Major);
+        let pitches: Vec<u8> = out.iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, vec![126]);
+    }
+
+    #[test]
+    fn chordify_passes_muted_notes_through_unchanged() {
+        let mut n = note(0, 960, 60);
+        n.muted = true;
+        let out = chordify(&[n], ChordQuality::Major);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].muted);
     }
 
     #[test]

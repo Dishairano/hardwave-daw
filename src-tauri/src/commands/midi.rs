@@ -1,7 +1,8 @@
 use crate::AppState;
+use hardwave_midi::theory::ChordQuality;
 use hardwave_midi::{
-    arpeggiate, humanize, note_repeat, snap_to_scale, strum, ArpSettings, HumanizeSettings,
-    MidiNote, Scale, StrumDirection,
+    arpeggiate, chordify, humanize, note_repeat, snap_to_scale, strum, ArpSettings,
+    HumanizeSettings, MidiNote, Scale, StrumDirection,
 };
 use serde::Serialize;
 use tauri::State;
@@ -429,5 +430,45 @@ pub fn humanize_clip_notes(
                 n.velocity = sel.velocity;
             }
         }
+    })
+}
+
+/// Map a UI chord-quality string onto the engine's [`ChordQuality`].
+fn parse_chord_quality(name: &str) -> Result<ChordQuality, String> {
+    match name {
+        "major" => Ok(ChordQuality::Major),
+        "minor" => Ok(ChordQuality::Minor),
+        "dim" | "diminished" => Ok(ChordQuality::Diminished),
+        "aug" | "augmented" => Ok(ChordQuality::Augmented),
+        "dom7" | "dominant7" => Ok(ChordQuality::Dominant7),
+        "maj7" | "major7" => Ok(ChordQuality::Major7),
+        "min7" | "minor7" => Ok(ChordQuality::Minor7),
+        other => Err(format!("Unknown chord quality: {other}")),
+    }
+}
+
+/// Stack a chord under each selected note (FL-style chord stamp). The
+/// selected notes are replaced by the generated chord voices.
+#[tauri::command]
+pub fn chordify_clip_notes(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    note_indices: Vec<usize>,
+    quality: String,
+) -> Result<usize, String> {
+    let quality = parse_chord_quality(&quality)?;
+    with_clip_notes(&state, &track_id, &clip_id, |notes| {
+        let (selected, mut indices) = collect_selected(notes, &note_indices);
+        let generated = chordify(&selected, quality);
+        indices.sort_unstable();
+        for i in indices.into_iter().rev() {
+            if i < notes.len() {
+                notes.remove(i);
+            }
+        }
+        let count = generated.len();
+        notes.extend(generated);
+        count
     })
 }

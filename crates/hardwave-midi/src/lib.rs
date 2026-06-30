@@ -8,7 +8,7 @@ pub mod recording;
 pub mod smf;
 pub mod theory;
 pub use generators::{
-    arpeggiate, humanize, note_repeat, snap_to_scale, strum, ArpDirection, ArpSettings,
+    arpeggiate, chordify, humanize, note_repeat, snap_to_scale, strum, ArpDirection, ArpSettings,
     HumanizeSettings, Scale, StrumDirection,
 };
 pub use input::{ClockSyncSnapshot, MidiInputManager, ReconcileReport};

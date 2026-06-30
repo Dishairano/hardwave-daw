@@ -962,6 +962,7 @@ export function PianoRoll() {
   const [strumDir, setStrumDir] = useState<'up' | 'down'>('up')
   const [strumAmt, setStrumAmt] = useState(30) // ticks between notes
   const [chopRepeats, setChopRepeats] = useState(4)
+  const [chordQuality, setChordQuality] = useState('major')
 
   const runTransform = useCallback(async (
     kind: 'legato' | 'staccato' | 'humanizeTime' | 'humanizeVel' | 'humanizeLen' | 'flip' | 'reverse' | 'crescendo' | 'decrescendo' | 'velFull' | 'velDouble' | 'velHalf' | 'velReset' | 'grooveMpc60' | 'grooveSp1200' | 'grooveLogic' | 'grooveStraight',
@@ -1207,6 +1208,21 @@ export function PianoRoll() {
     } catch (err) { console.warn('note repeat failed', err) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTrackId, activeClipId, selectedIndices, chopRepeats, refreshNotes])
+
+  const runChordify = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setGenOpen(false)
+    try {
+      await invoke('chordify_clip_notes', {
+        trackId: activeTrackId, clipId: activeClipId,
+        noteIndices: selectedIndices(), quality: chordQuality,
+      })
+      useProjectStore.getState().markDirty()
+      setSelectedNotes(new Set())
+      await refreshNotes()
+    } catch (err) { console.warn('chordify failed', err) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTrackId, activeClipId, selectedIndices, chordQuality, refreshNotes])
 
   useEffect(() => {
     if (!qOpen) return
@@ -2134,6 +2150,31 @@ export function PianoRoll() {
                     title="Split each note into an even roll"
                     style={{ flex: 1, padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff', background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer', alignSelf: 'flex-end' }}>
                     Chop {selectedNotes.size > 0 ? 'selection' : 'all'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Chordify */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Chord</div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <label style={{ fontSize: 9, color: hw.textMuted, flex: 1 }}>
+                    Type
+                    <select value={chordQuality} onChange={e => setChordQuality(e.target.value)}
+                      style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
+                      <option value="major">Major</option>
+                      <option value="minor">Minor</option>
+                      <option value="dim">Diminished</option>
+                      <option value="aug">Augmented</option>
+                      <option value="dom7">Dominant 7</option>
+                      <option value="maj7">Major 7</option>
+                      <option value="min7">Minor 7</option>
+                    </select>
+                  </label>
+                  <button onClick={runChordify}
+                    title="Stack a chord under each note (the note is the root)"
+                    style={{ flex: 1, padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff', background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer', alignSelf: 'flex-end' }}>
+                    Chord {selectedNotes.size > 0 ? 'selection' : 'all'}
                   </button>
                 </div>
               </div>

@@ -292,6 +292,7 @@ pub fn run() {
             commands::midi::snap_clip_notes_to_scale,
             commands::midi::humanize_clip_notes,
             commands::midi::note_repeat_clip_notes,
+            commands::midi::chordify_clip_notes,
             // MIDI input (live)
             commands::midi_input::list_midi_inputs,
             commands::midi_input::open_midi_input,
