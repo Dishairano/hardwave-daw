@@ -111,6 +111,38 @@ pub fn create_midi_clip(
     Ok(clip_id)
 }
 
+/// Export a MIDI clip to a Standard MIDI File (.mid) at `path`, so the
+/// idea can be carried into another DAW or plug-in. Tempo is taken from
+/// the transport and embedded in the file.
+#[tauri::command]
+pub fn export_clip_midi(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    path: String,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    let bpm = engine.transport.bpm.load(Ordering::Relaxed);
+    let bytes = {
+        let project = engine.project.lock();
+        let track = project
+            .track(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let mc = track
+            .clips
+            .iter()
+            .find_map(|c| match &c.content {
+                hardwave_project::clip::ClipContent::Midi(mc) if mc.id == clip_id => Some(mc),
+                _ => None,
+            })
+            .ok_or_else(|| format!("MIDI clip not found: {clip_id}"))?;
+        hardwave_midi::write_smf(&mc.clip, bpm)
+    };
+    std::fs::write(&path, bytes).map_err(|e| format!("write {path}: {e}"))?;
+    Ok(())
+}
+
 /// Get all notes in a MIDI clip.
 #[tauri::command]
 pub fn get_midi_notes(

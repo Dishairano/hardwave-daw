@@ -282,6 +282,7 @@ pub fn run() {
             commands::audio::set_clip_stretch,
             // MIDI
             commands::midi::create_midi_clip,
+            commands::midi::export_clip_midi,
             commands::midi::get_midi_notes,
             commands::midi::add_midi_note,
             commands::midi::update_midi_note,

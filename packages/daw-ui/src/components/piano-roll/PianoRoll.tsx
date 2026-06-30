@@ -15,7 +15,7 @@ import { DetachButton } from '../FloatingWindow'
 import { useTrackStore } from '../../stores/trackStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { useTransportStore } from '../../stores/transportStore'
-import { encodeSingleTrackMidi, decodeMidi, rescaleNotes } from '../../utils/midi'
+import { decodeMidi, rescaleNotes } from '../../utils/midi'
 import { useNotificationStore } from '../../stores/notificationStore'
 
 const PPQ = 960
@@ -897,33 +897,20 @@ export function PianoRoll() {
       return
     }
     try {
-      const data = await invoke<MidiNoteInfo[]>('get_midi_notes', {
-        trackId: activeTrackId, clipId: activeClipId,
+      // Native save-location picker, then write the .mid via the engine's
+      // tested SMF writer (single source of truth, real file path).
+      const { save } = await import('@tauri-apps/plugin-dialog')
+      const path = await save({
+        defaultPath: `clip-${activeClipId.slice(0, 8)}.mid`,
+        filters: [{ name: 'MIDI', extensions: ['mid'] }],
       })
-      if (data.length === 0) {
-        useNotificationStore.getState().push('info', 'Clip is empty — nothing to export')
-        return
-      }
-      const bpm = useTransportStore.getState().bpm
-      const blob = encodeSingleTrackMidi(
-        data.map(n => ({
-          pitch: n.pitch,
-          velocity: Math.max(1, Math.round(n.velocity * 127)),
-          startTicks: n.start_tick,
-          durationTicks: n.duration_ticks,
-        })),
-        PPQ,
-        bpm,
-      )
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `clip-${activeClipId.slice(0, 8)}.mid`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
-      useNotificationStore.getState().push('info', `Exported ${data.length} notes`)
+      if (!path) return
+      await invoke('export_clip_midi', {
+        trackId: activeTrackId,
+        clipId: activeClipId,
+        path,
+      })
+      useNotificationStore.getState().push('info', 'MIDI exported')
     } catch (e) {
       useNotificationStore.getState().push('error', 'MIDI export failed', { detail: String(e) })
     }
