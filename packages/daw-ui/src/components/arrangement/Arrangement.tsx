@@ -177,7 +177,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     for (const track of audioTracks) {
       for (const clip of track.clips) {
         if (!clip.source_id) continue
-        const desired = Math.max(100, Math.ceil(clip.length_ticks * pixelsPerTick / 2))
+        const desired = Math.max(100, Math.ceil(clip.length_ticks * pixelsPerTick))
         const tier = bucketTier(desired)
         const key = `${clip.source_id}:${tier}`
         if (!waveformData.has(key)) {
@@ -626,7 +626,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     // Waveform — pick the best available tier: prefer the current one, else fallback
     // to any other tier we've already fetched so we render something during refetch.
-    const desired = Math.max(100, Math.ceil(clip.length_ticks * pxPerTick / 2))
+    const desired = Math.max(100, Math.ceil(clip.length_ticks * pxPerTick))
     const tier = bucketTier(desired)
     let peaks = waveformData.get(`${clip.source_id}:${tier}`)
     if (!peaks) {
@@ -642,19 +642,59 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
       const waveArea = h - headerH - 2
       const midY = y + headerH + waveArea * 0.5
-      const ampScale = waveArea * 0.45
-      ctx.fillStyle = lightenColor(color, 0.4)
-      ctx.globalAlpha = 0.6
+      const ampScale = waveArea * 0.46
+      const n = peaks.length
+      const pxPerBucket = w / n
 
-      const pxPerBucket = w / peaks.length
-      for (let j = 0; j < peaks.length; j++) {
-        const bx = x + j * pxPerBucket
-        if (bx + pxPerBucket < 0 || bx > viewWidth) continue
-        const [minVal, maxVal] = peaks[j]
-        const top = midY - maxVal * ampScale
-        const bottom = midY - minVal * ampScale
-        const barH = Math.max(0.5, bottom - top)
-        ctx.fillRect(bx, top, Math.max(0.5, pxPerBucket - 0.3), barH)
+      // Only walk the buckets that fall inside the viewport.
+      const startJ = Math.max(0, Math.floor((0 - x) / pxPerBucket) - 1)
+      const endJ = Math.min(n, Math.ceil((viewWidth - x) / pxPerBucket) + 1)
+
+      if (endJ > startJ) {
+        // Outer peak envelope (min/max) — one continuous filled shape, the
+        // translucent transient "hair". Top edge L→R, bottom edge R→L.
+        ctx.beginPath()
+        for (let j = startJ; j < endJ; j++) {
+          const bx = x + j * pxPerBucket
+          const yTop = midY - peaks[j][1] * ampScale
+          if (j === startJ) ctx.moveTo(bx, yTop)
+          else ctx.lineTo(bx, yTop)
+        }
+        for (let j = endJ - 1; j >= startJ; j--) {
+          const bx = x + j * pxPerBucket
+          ctx.lineTo(bx, midY - peaks[j][0] * ampScale)
+        }
+        ctx.closePath()
+        ctx.fillStyle = lightenColor(color, 0.55)
+        ctx.globalAlpha = 0.4
+        ctx.fill()
+
+        // Inner RMS body — brighter and near-opaque, drawn symmetric around
+        // the centre line so the loud "body" of the sound reads clearly.
+        ctx.beginPath()
+        for (let j = startJ; j < endJ; j++) {
+          const bx = x + j * pxPerBucket
+          const yTop = midY - peaks[j][2] * ampScale
+          if (j === startJ) ctx.moveTo(bx, yTop)
+          else ctx.lineTo(bx, yTop)
+        }
+        for (let j = endJ - 1; j >= startJ; j--) {
+          const bx = x + j * pxPerBucket
+          ctx.lineTo(bx, midY + peaks[j][2] * ampScale)
+        }
+        ctx.closePath()
+        ctx.fillStyle = lightenColor(color, 0.8)
+        ctx.globalAlpha = 0.9
+        ctx.fill()
+
+        // Faint centre baseline.
+        ctx.globalAlpha = 0.22
+        ctx.strokeStyle = lightenColor(color, 0.6)
+        ctx.lineWidth = 0.5
+        ctx.beginPath()
+        ctx.moveTo(x + 1, midY)
+        ctx.lineTo(x + w - 1, midY)
+        ctx.stroke()
       }
 
       ctx.globalAlpha = 1.0

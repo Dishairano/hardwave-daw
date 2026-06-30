@@ -213,6 +213,7 @@ pub fn run() {
             commands::plugins::set_fx_chain_bypassed,
             commands::plugins::set_insert_wet,
             commands::plugins::set_plugin_parameter,
+            commands::plugins::get_plugin_parameters,
             commands::plugins::load_sampler,
             commands::plugins::set_plugin_sidechain_source,
             commands::plugins::find_missing_plugins,

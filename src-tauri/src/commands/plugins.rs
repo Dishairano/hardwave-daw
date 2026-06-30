@@ -560,6 +560,74 @@ pub fn set_plugin_parameter(
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct PluginParamInfo {
+    pub id: u32,
+    pub name: String,
+    #[serde(rename = "defaultValue")]
+    pub default_value: f64,
+    pub value: f64,
+    pub min: f64,
+    pub max: f64,
+    pub unit: String,
+    pub automatable: bool,
+}
+
+/// Enumerate a plug-in slot's parameters for the generic parameter sheet
+/// (the fallback UI for plug-ins without their own editor). Resolves the
+/// slot's descriptor and instantiates a throwaway instance to read the
+/// static parameter metadata — names, ranges, defaults — without touching
+/// the audio thread. Returned `value` is the parameter default; the UI
+/// tracks live edits it pushes via `set_plugin_parameter`.
+#[tauri::command]
+pub fn get_plugin_parameters(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+) -> Result<Vec<PluginParamInfo>, String> {
+    let engine = state.engine.lock();
+    let plugin_id = {
+        let project = engine.project.lock();
+        let track = project
+            .track(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        track
+            .inserts
+            .iter()
+            .find(|s| s.id == slot_id)
+            .map(|s| s.plugin_id.clone())
+            .ok_or_else(|| format!("Insert not found: {slot_id}"))?
+    };
+    let descriptor = {
+        let scanner = engine.plugin_scanner.lock();
+        scanner
+            .find(&plugin_id)
+            .cloned()
+            .ok_or_else(|| format!("Plugin descriptor not found: {plugin_id}"))?
+    };
+    drop(engine);
+
+    let plugin = instantiate_plugin(&descriptor)?;
+    let count = plugin.get_parameter_count();
+    let mut out = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        if let Some(info) = plugin.get_parameter_info(i) {
+            let value = plugin.get_parameter_value(info.id);
+            out.push(PluginParamInfo {
+                id: info.id,
+                name: info.name,
+                default_value: info.default_value,
+                value,
+                min: info.min,
+                max: info.max,
+                unit: info.unit,
+                automatable: info.automatable,
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Hydrate every persisted PluginSlot in the current project into the
 /// audio thread's chains. Called from `load_project` after the project
 /// state has been replaced. For each insert: instantiate the plug-in,
@@ -614,7 +682,15 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
     // them onto the fresh instance below — without this step every
     // load() round-trip silently reset plug-in knobs to defaults
     // (`PluginSlot.state` was being serialized but never replayed).
-    let plan: Vec<(String, String, PluginDescriptor, bool, f32, Option<Vec<u8>>, bool)> = {
+    let plan: Vec<(
+        String,
+        String,
+        PluginDescriptor,
+        bool,
+        f32,
+        Option<Vec<u8>>,
+        bool,
+    )> = {
         let engine = state.engine.lock();
         let project = engine.project.lock();
         let scanner = engine.plugin_scanner.lock();

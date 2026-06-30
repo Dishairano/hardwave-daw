@@ -679,7 +679,6 @@ function drawWaveform(canvas: HTMLCanvasElement, sample: Sample, view: Selection
   const viewSpan = Math.max(1, endIdx - startIdx)
   const samplesPerPx = viewSpan / w
 
-  ctx.fillStyle = hw.accent
   for (let c = 0; c < sample.channels.length; c++) {
     const ch = sample.channels[c]
     const yMid = perChannelH * (c + 0.5)
@@ -687,21 +686,53 @@ function drawWaveform(canvas: HTMLCanvasElement, sample: Sample, view: Selection
     // Zero line
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
     ctx.fillRect(0, yMid, w, 1)
-    // Samples
-    ctx.fillStyle = hw.accentLight
+
+    // Per-column min / max / rms.
+    const tops = new Float32Array(w)
+    const bots = new Float32Array(w)
+    const rmss = new Float32Array(w)
     for (let x = 0; x < w; x++) {
       const s = startIdx + Math.floor(x * samplesPerPx)
       const e = Math.min(ch.length, startIdx + Math.floor((x + 1) * samplesPerPx))
-      let min = 0, max = 0
+      let min = 0, max = 0, sq = 0, cnt = 0
       for (let i = s; i < e; i++) {
         const v = ch[i]
         if (v < min) min = v
         if (v > max) max = v
+        sq += v * v
+        cnt++
       }
-      const y1 = yMid - max * ampScale
-      const y2 = yMid - min * ampScale
-      ctx.fillRect(x, y1, 1, Math.max(1, y2 - y1))
+      tops[x] = max
+      bots[x] = min
+      rmss[x] = cnt > 0 ? Math.sqrt(sq / cnt) : 0
     }
+
+    // Outer peak envelope — translucent transient "hair".
+    ctx.beginPath()
+    for (let x = 0; x < w; x++) {
+      const yT = yMid - tops[x] * ampScale
+      if (x === 0) ctx.moveTo(x, yT)
+      else ctx.lineTo(x, yT)
+    }
+    for (let x = w - 1; x >= 0; x--) ctx.lineTo(x, yMid - bots[x] * ampScale)
+    ctx.closePath()
+    ctx.fillStyle = hw.accentLight
+    ctx.globalAlpha = 0.4
+    ctx.fill()
+
+    // Inner RMS body — brighter, symmetric around the centre.
+    ctx.beginPath()
+    for (let x = 0; x < w; x++) {
+      const yT = yMid - rmss[x] * ampScale
+      if (x === 0) ctx.moveTo(x, yT)
+      else ctx.lineTo(x, yT)
+    }
+    for (let x = w - 1; x >= 0; x--) ctx.lineTo(x, yMid + rmss[x] * ampScale)
+    ctx.closePath()
+    ctx.fillStyle = hw.accent
+    ctx.globalAlpha = 0.95
+    ctx.fill()
+    ctx.globalAlpha = 1.0
   }
 
   // Selection overlay

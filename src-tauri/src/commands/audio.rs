@@ -415,7 +415,7 @@ pub fn get_waveform_peaks(
     state: State<AppState>,
     source_id: String,
     num_buckets: usize,
-) -> Result<Vec<[f32; 2]>, String> {
+) -> Result<Vec<[f32; 3]>, String> {
     let engine = state.engine.lock();
     let buffer = engine
         .audio_pool
@@ -430,19 +430,23 @@ pub fn get_waveform_peaks(
     let bucket_size = (num_frames as f64 / num_buckets as f64).ceil() as usize;
     let mut peaks = Vec::with_capacity(num_buckets);
 
+    // Each bucket is [min, max, rms]: min/max form the outer peak envelope
+    // (the transient "hair"), rms forms the brighter inner body — the
+    // two-layer waveform DAWs like FL Studio / rekordbox draw.
+    let num_ch = buffer.channels.len();
     for i in 0..num_buckets {
         let start = i * bucket_size;
         let end = ((i + 1) * bucket_size).min(num_frames);
         if start >= num_frames {
-            peaks.push([0.0, 0.0]);
+            peaks.push([0.0, 0.0, 0.0]);
             continue;
         }
 
         let mut min_val: f32 = 0.0;
         let mut max_val: f32 = 0.0;
+        let mut sum_sq: f64 = 0.0;
 
         // Mix all channels for the peak display
-        let num_ch = buffer.channels.len();
         for frame in start..end {
             let mut sample = 0.0_f32;
             for ch in 0..num_ch {
@@ -451,9 +455,12 @@ pub fn get_waveform_peaks(
             sample /= num_ch as f32;
             min_val = min_val.min(sample);
             max_val = max_val.max(sample);
+            sum_sq += (sample as f64) * (sample as f64);
         }
 
-        peaks.push([min_val, max_val]);
+        let count = (end - start).max(1) as f64;
+        let rms = (sum_sq / count).sqrt() as f32;
+        peaks.push([min_val, max_val, rms]);
     }
 
     Ok(peaks)
