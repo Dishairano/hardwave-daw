@@ -257,4 +257,69 @@ mod tests {
         assert!(!p.remove_plugin_state("p1"));
         assert!(p.plugin_state("p1").is_none());
     }
+
+    /// A full track (insert + automation clip + plugin state) plus an
+    /// arrangement must survive a real `.hwp` save → load (rmp + zstd).
+    /// Guards the serialization of everything added this run.
+    #[test]
+    fn full_track_round_trips_through_hwp() {
+        use crate::arrangement::{Arrangement, TrackTimeline};
+        use crate::automation::AutomationTarget;
+        use crate::automation_clip::AutomationClip;
+        use crate::track::PluginSlot;
+        use std::collections::HashMap;
+
+        let mut p = Project::default();
+        let tid = p.tracks[1].id.clone();
+        if let Some(t) = p.track_mut(&tid) {
+            t.inserts.push(PluginSlot {
+                id: "s1".into(),
+                plugin_id: "hardwave.native.reverb".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 0.8,
+            });
+            t.automation_clips.push(AutomationClip::new(
+                "ac1",
+                AutomationTarget::TrackVolume,
+                0,
+                1920,
+            ));
+        }
+        p.set_plugin_state("s1", "native", vec![1, 2, 3]);
+        // Push an arrangement directly (create_arrangement would swap the
+        // live timeline; here we only want to exercise serialization).
+        let mut timelines = HashMap::new();
+        timelines.insert(tid.clone(), TrackTimeline::default());
+        p.arrangements.push(Arrangement {
+            id: "arr1".into(),
+            name: "A1".into(),
+            timelines,
+        });
+        p.active_arrangement = "arr1".into();
+
+        let path = std::env::temp_dir().join(format!("hw-rt-{}.hwp", uuid::Uuid::new_v4()));
+        p.save(&path).expect("save");
+        let loaded = Project::load(&path).expect("load");
+        std::fs::remove_file(&path).ok();
+
+        let lt = loaded.track(&tid).expect("track survives");
+        assert_eq!(lt.inserts.len(), 1, "insert survives");
+        assert!(
+            (lt.inserts[0].wet - 0.8).abs() < 1e-6,
+            "insert wet survives"
+        );
+        assert_eq!(lt.automation_clips.len(), 1, "automation clip survives");
+        assert_eq!(
+            loaded.plugin_state("s1").map(|e| e.chunk.clone()),
+            Some(vec![1, 2, 3]),
+            "plugin state survives"
+        );
+        assert_eq!(loaded.arrangements.len(), 1, "arrangement survives");
+        assert_eq!(
+            loaded.active_arrangement, "arr1",
+            "active arrangement survives"
+        );
+    }
 }
