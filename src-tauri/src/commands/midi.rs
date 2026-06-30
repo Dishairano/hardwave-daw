@@ -1,8 +1,8 @@
 use crate::AppState;
 use hardwave_midi::theory::{Chord, ChordQuality};
 use hardwave_midi::{
-    arpeggiate, chordify, generate_progression, humanize, note_repeat, snap_to_scale, strum,
-    ArpSettings, HumanizeSettings, MidiNote, Scale, StrumDirection,
+    arpeggiate, chordify, generate_progression, humanize, legato, note_repeat, snap_to_scale,
+    strum, ArpSettings, HumanizeSettings, MidiNote, Scale, StrumDirection,
 };
 use serde::Serialize;
 use tauri::State;
@@ -472,6 +472,27 @@ pub fn generate_progression_in_clip(
         let count = generated.len();
         notes.extend(generated);
         count
+    })
+}
+
+/// Apply legato to the selected notes (or the whole clip): stretch each
+/// note so it lasts until the next one begins. Returns notes affected.
+#[tauri::command]
+pub fn legato_clip_notes(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    note_indices: Vec<usize>,
+) -> Result<usize, String> {
+    with_clip_notes(&state, &track_id, &clip_id, |notes| {
+        let (mut selected, indices) = collect_selected(notes, &note_indices);
+        legato(&mut selected);
+        for (sel, &i) in selected.iter().zip(indices.iter()) {
+            if let Some(n) = notes.get_mut(i) {
+                n.duration_ticks = sel.duration_ticks;
+            }
+        }
+        indices.len()
     })
 }
 

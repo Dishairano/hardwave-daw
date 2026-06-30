@@ -375,6 +375,30 @@ pub fn chordify(notes: &[MidiNote], quality: ChordQuality) -> Vec<MidiNote> {
 }
 
 // ---------------------------------------------------------------------------
+// Legato
+// ---------------------------------------------------------------------------
+
+/// Stretch each note so it lasts exactly until the next note begins
+/// (FL-style legato), closing every gap. Notes sharing a start tick (a
+/// chord) all extend to the next *distinct* start, so chords stay intact.
+/// The final note(s) keep their original length. Operates in place.
+pub fn legato(notes: &mut [MidiNote]) {
+    let mut order: Vec<usize> = (0..notes.len()).collect();
+    order.sort_by_key(|&i| notes[i].start_tick);
+    for k in 0..order.len() {
+        let i = order[k];
+        let start = notes[i].start_tick;
+        if let Some(next_start) = order[k + 1..]
+            .iter()
+            .map(|&j| notes[j].start_tick)
+            .find(|&s| s > start)
+        {
+            notes[i].duration_ticks = (next_start - start).max(1);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Chord progression
 // ---------------------------------------------------------------------------
 
@@ -519,6 +543,26 @@ mod tests {
         let out = chordify(&[n], ChordQuality::Major);
         assert_eq!(out.len(), 1);
         assert!(out[0].muted);
+    }
+
+    #[test]
+    fn legato_extends_each_note_to_the_next() {
+        let mut notes = vec![note(0, 100, 60), note(480, 100, 62), note(960, 100, 64)];
+        legato(&mut notes);
+        assert_eq!(notes[0].duration_ticks, 480);
+        assert_eq!(notes[1].duration_ticks, 480);
+        // Last note keeps its original duration.
+        assert_eq!(notes[2].duration_ticks, 100);
+    }
+
+    #[test]
+    fn legato_keeps_chords_intact() {
+        // Two notes at tick 0, one at 960: both at-0 notes extend to 960.
+        let mut notes = vec![note(0, 100, 60), note(0, 100, 64), note(960, 100, 67)];
+        legato(&mut notes);
+        assert_eq!(notes[0].duration_ticks, 960);
+        assert_eq!(notes[1].duration_ticks, 960);
+        assert_eq!(notes[2].duration_ticks, 100);
     }
 
     #[test]

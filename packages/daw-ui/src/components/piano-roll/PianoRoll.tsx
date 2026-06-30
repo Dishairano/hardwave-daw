@@ -1226,6 +1226,19 @@ export function PianoRoll() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTrackId, activeClipId, selectedIndices, chordQuality, refreshNotes])
 
+  const runLegato = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setGenOpen(false)
+    try {
+      await invoke('legato_clip_notes', {
+        trackId: activeTrackId, clipId: activeClipId,
+        noteIndices: selectedIndices(),
+      })
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+    } catch (err) { console.warn('legato failed', err) }
+  }, [activeTrackId, activeClipId, selectedIndices, refreshNotes])
+
   const runProgression = useCallback(async () => {
     if (!activeTrackId || !activeClipId) return
     setGenOpen(false)
@@ -2145,6 +2158,21 @@ export function PianoRoll() {
                     background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
                   }}>
                   Humanize {selectedNotes.size > 0 ? 'selection' : 'all'}
+                </button>
+              </div>
+
+              <div style={{ height: 1, background: hw.border }} />
+
+              {/* Legato */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Legato</div>
+                <button onClick={runLegato}
+                  title="Stretch each note to meet the next (close all gaps)"
+                  style={{
+                    padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
+                    background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
+                  }}>
+                  Legato {selectedNotes.size > 0 ? 'selection' : 'all'}
                 </button>
               </div>
 
