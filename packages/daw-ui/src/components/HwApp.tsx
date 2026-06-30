@@ -29,6 +29,7 @@ import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
 import { usePanelLayoutStore } from '../stores/panelLayoutStore'
+import { useHoverInfoStore } from '../stores/hoverInfoStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useMetronomeStore } from '../stores/metronomeStore'
 import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
@@ -114,10 +115,20 @@ function useTransportClock() {
 // keyboard / multilink / master pitch knob / CPU+MEM+POLY meters +
 // graph / MIDI activity LED / mini scope / hint-bar icon-types.
 
-function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTapper, onAction, onOpenExport }: {
+function HwTopbar({
+  menus, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
+  showPlaylist, showChannelRack, showPianoRoll, showMixer,
+  onOpenTempoTapper, onAction, onOpenExport,
+}: {
   menus?: MenuDef[]
   onTogglePlaylist?: () => void
   onToggleChannelRack?: () => void
+  onTogglePianoRoll?: () => void
+  onToggleMixer?: () => void
+  showPlaylist?: boolean
+  showChannelRack?: boolean
+  showPianoRoll?: boolean
+  showMixer?: boolean
   onOpenTempoTapper?: () => void
   onAction?: (id: ActionId) => void
   onOpenExport?: () => void
@@ -265,6 +276,33 @@ function HwTopbar({ menus, onTogglePlaylist, onToggleChannelRack, onOpenTempoTap
           <span>Help</span>
         </div>
       )}
+      {/* Panel access — FL-style F5/F6/F7/F9 toggles. Active = panel open. */}
+      <div className="fl-panel-btns" role="toolbar" aria-label="Panels">
+        <button
+          className={`fl-panel-btn${showPlaylist ? ' on' : ''}`}
+          onClick={() => onTogglePlaylist?.()}
+          data-hint="Playlist (F5) — arrange clips on the timeline"
+          title="Playlist (F5)"
+        >Playlist</button>
+        <button
+          className={`fl-panel-btn${showChannelRack ? ' on' : ''}`}
+          onClick={() => onToggleChannelRack?.()}
+          data-hint="Channel Rack (F6) — step sequencer + instrument channels"
+          title="Channel Rack (F6)"
+        >Channels</button>
+        <button
+          className={`fl-panel-btn${showPianoRoll ? ' on' : ''}`}
+          onClick={() => onTogglePianoRoll?.()}
+          data-hint="Piano Roll (F7) — draw and edit notes for the selected channel"
+          title="Piano Roll (F7)"
+        >Piano Roll</button>
+        <button
+          className={`fl-panel-btn${showMixer ? ' on' : ''}`}
+          onClick={() => onToggleMixer?.()}
+          data-hint="Mixer (F9) — track levels, inserts, sends, routing"
+          title="Mixer (F9)"
+        >Mixer</button>
+      </div>
       <div className="fl-topbar-spacer" />
       <div className="fl-win-ctl">
         <i onClick={onWindowMin} title="Minimize">
@@ -1155,7 +1193,9 @@ function SaveAsButton({ onClick }: { onClick: () => void }) {
 
 // ─── Second row: hint + status pills ─────────────────────────────────────────
 
-function HwSecondRow({ hint, projectName }: { hint: string; projectName: string }) {
+function HwSecondRow({ projectName }: { projectName: string }) {
+  // Live hover info, fed by the delegated listener in HwApp.
+  const hint = useHoverInfoStore(s => s.info)
   // Ship 3c — Hint Bar redesign. The legacy fl-tag-pill / fl-step-pill
   // row duplicated controls now living on the toolbar (snap pill,
   // time-sig, recording state). The new row mirrors FL's hint bar:
@@ -1829,7 +1869,22 @@ export function HwApp({
   onAction,
   onOpenExport,
 }: HwAppProps) {
-  const [hint, setHint] = useState('')
+  // "Hover anything for live info": a delegated mouseover listener reads
+  // the nearest element's data-hint (preferred) or title and feeds the
+  // global hover-info store, which the status strip renders. Every control
+  // that already has a `title` lights up the info bar for free.
+  useEffect(() => {
+    const onOver = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null
+      const el = target?.closest('[data-hint],[title]') as HTMLElement | null
+      const info = el
+        ? el.getAttribute('data-hint') || el.getAttribute('title') || ''
+        : ''
+      useHoverInfoStore.getState().setInfo(info)
+    }
+    document.addEventListener('mouseover', onOver)
+    return () => document.removeEventListener('mouseover', onOver)
+  }, [])
   // Read the live project name from the store so save/load actually
   // affects what's shown in the hint bar. Falls back to the friendly
   // default when nothing has been opened yet.
@@ -1873,11 +1928,17 @@ export function HwApp({
         menus={menus}
         onTogglePlaylist={onTogglePlaylist}
         onToggleChannelRack={onToggleChannelRack}
+        onTogglePianoRoll={onTogglePianoRoll}
+        onToggleMixer={onToggleMixer}
+        showPlaylist={showPlaylist}
+        showChannelRack={showChannelRack}
+        showPianoRoll={showPianoRoll}
+        showMixer={showMixer}
         onOpenTempoTapper={onOpenTempoTapper}
         onAction={onAction}
         onOpenExport={onOpenExport}
       />
-      <HwSecondRow hint={hint} projectName={projectName} />
+      <HwSecondRow projectName={projectName} />
 
       <div className="fl-body">
         {showBrowser && !layout.browser.floating && (
@@ -1941,14 +2002,14 @@ export function HwApp({
               <HwPlaylistTools />
               <div
                 className="fl-pl-body"
-                onMouseLeave={() => setHint('')}
+                onMouseLeave={() => useHoverInfoStore.getState().clearInfo()}
                 style={{ ['--row-h' as any]: `${trackHeight}px` }}
               >
                 <HwPlaylistTracks />
                 <div className="fl-pl-grid">
                   <HwPlaylistRuler />
                   <div className="fl-pl-canvas">
-                    <Arrangement onSetHint={setHint} />
+                    <Arrangement onSetHint={(s) => useHoverInfoStore.getState().setInfo(s)} />
                   </div>
                 </div>
               </div>

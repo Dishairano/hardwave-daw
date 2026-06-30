@@ -101,6 +101,33 @@
 .fl-menu span:hover { color: var(--red); }
 .fl-menu span.open { color: var(--red); background: rgba(220,38,38,.06); }
 
+/* Panel-access buttons (FL F5/F6/F7/F9) — live in the top bar. Active =
+   that panel is open. */
+.fl-panel-btns {
+  display: flex; gap: 3px; align-items: center;
+  padding: 0 8px; margin-left: 4px;
+  border-left: 1px solid var(--border);
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+.fl-panel-btn {
+  height: 20px; padding: 0 9px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+  letter-spacing: 0.4px; cursor: pointer; white-space: nowrap;
+  display: flex; align-items: center;
+  transition: background .12s, color .12s, border-color .12s, box-shadow .12s;
+}
+.fl-panel-btn:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+.fl-panel-btn.on {
+  color: #fff; background: var(--red);
+  border-color: var(--red-bright);
+  box-shadow: 0 0 8px rgba(220,38,38,0.35);
+}
+
 /* ─── Top-menu dropdowns (HwTopMenu) ─────────────────────────── */
 .fl-menu-dropdown {
   position: absolute;
