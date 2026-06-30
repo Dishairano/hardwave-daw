@@ -45,6 +45,11 @@ pub struct LiveSlot {
     /// (equivalent to `enabled = false` for audible output, but the
     /// plug-in still runs so its meters/sidechains keep updating).
     pub wet: f32,
+    /// True when this slot has a sidechain source routed to it. The
+    /// chain then feeds the track's sidechain bus (input ports 2/3) to
+    /// this plug-in as extra input channels [2,3]; a sidechain-aware
+    /// plug-in (e.g. the compressor) keys its detector off them.
+    pub sidechain_active: bool,
 }
 
 /// Ordered list of live insert slots for one track.
@@ -76,11 +81,16 @@ impl InsertChain {
         num_samples: usize,
         scratch: &mut Scratch,
         midi_in: &[MidiEvent],
+        sidechain: Option<(&[f32], &[f32])>,
     ) {
         let n = num_samples.min(left.len()).min(right.len());
         if n == 0 {
             return;
         }
+        // A sidechain bus is only usable if both channels cover the full
+        // block; otherwise plug-ins indexing [2]/[3] up to `n` would read
+        // out of range, so fall back to no sidechain.
+        let sidechain = sidechain.filter(|(l, r)| l.len() >= n && r.len() >= n);
         scratch.prepare(n);
         // All plug-ins in the chain see the same incoming MIDI buffer.
         // A real DAW would route midi_out of slot N into midi_in of
@@ -92,20 +102,37 @@ impl InsertChain {
             if !slot.enabled || slot.wet <= 0.0 {
                 continue;
             }
-            let inputs: [&[f32]; 2] = [&left[..n], &right[..n]];
             // Reuse the pre-allocated channel vecs; clear() preserves
             // capacity so the plug-in's `extend_from_slice` / `push`
             // calls land back into the same heap allocation.
             scratch.channels[0].clear();
             scratch.channels[1].clear();
             scratch.midi_out.clear();
-            slot.plugin.process(
-                &inputs,
-                &mut scratch.channels,
-                midi_in,
-                &mut scratch.midi_out,
-                n,
-            );
+            // A slot with a routed sidechain gets a 4-channel input:
+            // [main L, main R, sidechain L, sidechain R]. Everything else
+            // gets plain stereo, so non-sidechain plug-ins are unaffected.
+            match (slot.sidechain_active, sidechain) {
+                (true, Some((sc_l, sc_r))) => {
+                    let inputs: [&[f32]; 4] = [&left[..n], &right[..n], &sc_l[..n], &sc_r[..n]];
+                    slot.plugin.process(
+                        &inputs,
+                        &mut scratch.channels,
+                        midi_in,
+                        &mut scratch.midi_out,
+                        n,
+                    );
+                }
+                _ => {
+                    let inputs: [&[f32]; 2] = [&left[..n], &right[..n]];
+                    slot.plugin.process(
+                        &inputs,
+                        &mut scratch.channels,
+                        midi_in,
+                        &mut scratch.midi_out,
+                        n,
+                    );
+                }
+            }
             let wet = slot.wet.clamp(0.0, 1.0);
             let dry = 1.0 - wet;
             // Plug-ins are allowed to under-fill their output buffer
@@ -180,6 +207,18 @@ impl InsertChain {
     pub fn set_wet(&mut self, slot_id: &str, wet: f32) -> bool {
         if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
             s.wet = wet.clamp(0.0, 1.0);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Mark whether a slot has a sidechain source routed to it, so the
+    /// chain feeds it the track sidechain bus. Synced from the project's
+    /// `PluginSlot::sidechain_source` on every graph rebuild.
+    pub fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) -> bool {
+        if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
+            s.sidechain_active = active;
             true
         } else {
             false
@@ -629,6 +668,89 @@ mod tests {
         }
     }
 
+    /// Records how many input channels it last received, so a test can
+    /// assert the chain delivers the 4-channel sidechain bus only to
+    /// slots that have a sidechain routed.
+    struct ChannelSpyPlugin {
+        descriptor: PluginDescriptor,
+        last_input_channels: Arc<AtomicU32>,
+    }
+
+    impl ChannelSpyPlugin {
+        fn new(seen: Arc<AtomicU32>) -> Self {
+            Self {
+                descriptor: PluginDescriptor {
+                    id: "test.spy".into(),
+                    name: "Channel Spy".into(),
+                    vendor: "Hardwave Tests".into(),
+                    version: "0.0.1".into(),
+                    format: PluginFormat::Clap,
+                    path: PathBuf::from("<test>"),
+                    category: PluginCategory::Effect,
+                    num_inputs: 4,
+                    num_outputs: 2,
+                    has_midi_input: false,
+                    has_editor: false,
+                },
+                last_input_channels: seen,
+            }
+        }
+    }
+
+    impl HostedPlugin for ChannelSpyPlugin {
+        fn descriptor(&self) -> &PluginDescriptor {
+            &self.descriptor
+        }
+        fn activate(&mut self, _sr: f64, _max: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            num_samples: usize,
+        ) {
+            self.last_input_channels
+                .store(inputs.len() as u32, Ordering::Relaxed);
+            if outputs.len() < 2 || inputs.len() < 2 {
+                return;
+            }
+            outputs[0].clear();
+            outputs[1].clear();
+            outputs[0].extend_from_slice(&inputs[0][..num_samples.min(inputs[0].len())]);
+            outputs[1].extend_from_slice(&inputs[1][..num_samples.min(inputs[1].len())]);
+        }
+        fn get_parameter_count(&self) -> u32 {
+            0
+        }
+        fn get_parameter_info(&self, _id: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _id: u32) -> f64 {
+            0.0
+        }
+        fn set_parameter_value(&mut self, _id: u32, _value: f64) {}
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&mut self, _bytes: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _parent: RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+    }
+
     fn make_gain_slot(id: &str, gain: f32, enabled: bool) -> (LiveSlot, Arc<AtomicU32>) {
         let counter = Arc::new(AtomicU32::new(0));
         let slot = LiveSlot {
@@ -636,6 +758,7 @@ mod tests {
             plugin: Box::new(GainPlugin::new(gain, counter.clone())),
             enabled,
             wet: 1.0,
+            sidechain_active: false,
         };
         (slot, counter)
     }
@@ -727,6 +850,65 @@ mod tests {
     }
 
     #[test]
+    fn sidechain_bus_reaches_only_active_slots() {
+        let active_seen = Arc::new(AtomicU32::new(0));
+        let plain_seen = Arc::new(AtomicU32::new(0));
+        let mut chain = InsertChain::new();
+        // Slot 0 has a sidechain routed → should see 4 input channels.
+        chain
+            .push_slot(
+                LiveSlot {
+                    slot_id: "sc".into(),
+                    plugin: Box::new(ChannelSpyPlugin::new(active_seen.clone())),
+                    enabled: true,
+                    wet: 1.0,
+                    sidechain_active: true,
+                },
+                48_000.0,
+                256,
+            )
+            .unwrap();
+        // Slot 1 has none → should see plain stereo (2 channels).
+        chain
+            .push_slot(
+                LiveSlot {
+                    slot_id: "plain".into(),
+                    plugin: Box::new(ChannelSpyPlugin::new(plain_seen.clone())),
+                    enabled: true,
+                    wet: 1.0,
+                    sidechain_active: false,
+                },
+                48_000.0,
+                256,
+            )
+            .unwrap();
+
+        let mut left = vec![0.5_f32; 256];
+        let mut right = vec![0.5_f32; 256];
+        let sc_l = vec![0.2_f32; 256];
+        let sc_r = vec![0.2_f32; 256];
+        let mut scratch = Scratch::default();
+        chain.process(
+            &mut left,
+            &mut right,
+            256,
+            &mut scratch,
+            &[],
+            Some((&sc_l, &sc_r)),
+        );
+        assert_eq!(
+            active_seen.load(Ordering::Relaxed),
+            4,
+            "sidechain-active slot should receive the 4-channel bus"
+        );
+        assert_eq!(
+            plain_seen.load(Ordering::Relaxed),
+            2,
+            "non-sidechain slot should receive plain stereo"
+        );
+    }
+
+    #[test]
     fn process_forwards_midi_in_to_enabled_slots() {
         // Regression test for beta blocker #5: InsertChain::process used
         // to hard-code `&[]` for midi_in. Verify the slice actually
@@ -740,6 +922,7 @@ mod tests {
                     plugin: Box::new(MidiSinkPlugin::new(seen.clone())),
                     enabled: true,
                     wet: 1.0,
+                    sidechain_active: false,
                 },
                 48_000.0,
                 256,
@@ -763,7 +946,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.0);
         let mut right = block(256, 0.0);
-        chain.process(&mut left, &mut right, 256, &mut scratch, &events);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &events, None);
 
         let captured = seen.lock().clone();
         assert_eq!(
@@ -791,6 +974,7 @@ mod tests {
                     plugin: Box::new(MidiSinkPlugin::new(seen.clone())),
                     enabled: false,
                     wet: 1.0,
+                    sidechain_active: false,
                 },
                 48_000.0,
                 256,
@@ -806,7 +990,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.0);
         let mut right = block(256, 0.0);
-        chain.process(&mut left, &mut right, 256, &mut scratch, &events);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &events, None);
 
         assert!(
             seen.lock().is_empty(),
@@ -824,7 +1008,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[], None);
         assert!(left.iter().all(|&v| (v - 0.5).abs() < 1e-6));
         assert!(right.iter().all(|&v| (v - 0.5).abs() < 1e-6));
     }
@@ -837,7 +1021,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[], None);
         assert!(left.iter().all(|&v| (v - 1.0).abs() < 1e-6));
         assert!(right.iter().all(|&v| (v - 1.0).abs() < 1e-6));
         assert_eq!(counter.load(Ordering::Relaxed), 1);
@@ -851,7 +1035,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[], None);
         assert!(left.iter().all(|&v| (v - 0.5).abs() < 1e-6));
         assert_eq!(counter.load(Ordering::Relaxed), 0);
     }
@@ -865,7 +1049,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[], None);
         assert!(left.iter().all(|&v| (v - 0.5).abs() < 1e-6));
     }
 
@@ -878,7 +1062,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[], None);
         // 0.5 * 0.5 (dry) + 0.5 * 1.0 (wet) = 0.75
         assert!(left.iter().all(|&v| (v - 0.75).abs() < 1e-6));
     }
@@ -893,7 +1077,7 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        chain.process(&mut left, &mut right, 256, &mut scratch, &[]);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[], None);
         // 0.5 → ×2 = 1.0 → ×3 = 3.0
         assert!(left.iter().all(|&v| (v - 3.0).abs() < 1e-5));
     }
@@ -914,11 +1098,14 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        router
-            .chains
-            .get_mut("t")
-            .unwrap()
-            .process(&mut left, &mut right, 256, &mut scratch, &[]);
+        router.chains.get_mut("t").unwrap().process(
+            &mut left,
+            &mut right,
+            256,
+            &mut scratch,
+            &[],
+            None,
+        );
         assert!(left.iter().all(|&v| (v - 1.0).abs() < 1e-6));
         assert_eq!(counter.load(Ordering::Relaxed), 1);
         assert_eq!(graveyard.drain_and_drop(), 0);
@@ -1002,11 +1189,14 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        router
-            .chains
-            .get_mut("t")
-            .unwrap()
-            .process(&mut left, &mut right, 256, &mut scratch, &[]);
+        router.chains.get_mut("t").unwrap().process(
+            &mut left,
+            &mut right,
+            256,
+            &mut scratch,
+            &[],
+            None,
+        );
         // 0.5 × gain(4.0) = 2.0
         assert!(left.iter().all(|&v| (v - 2.0).abs() < 1e-6));
     }
@@ -1036,11 +1226,14 @@ mod tests {
         let mut scratch = Scratch::default();
         let mut left = block(256, 0.5);
         let mut right = block(256, 0.5);
-        router
-            .chains
-            .get_mut("t")
-            .unwrap()
-            .process(&mut left, &mut right, 256, &mut scratch, &[]);
+        router.chains.get_mut("t").unwrap().process(
+            &mut left,
+            &mut right,
+            256,
+            &mut scratch,
+            &[],
+            None,
+        );
         assert!(left.iter().all(|&v| (v - 0.5).abs() < 1e-6));
         assert_eq!(
             counter.load(Ordering::Relaxed),

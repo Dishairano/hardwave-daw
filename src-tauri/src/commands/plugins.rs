@@ -392,6 +392,9 @@ pub fn add_plugin_to_track(
             plugin,
             enabled: true,
             wet: 1.0,
+            // Synced to the project's sidechain_source on the next
+            // graph rebuild; new inserts start with none.
+            sidechain_active: false,
         },
     };
     state
@@ -611,7 +614,7 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
     // them onto the fresh instance below — without this step every
     // load() round-trip silently reset plug-in knobs to defaults
     // (`PluginSlot.state` was being serialized but never replayed).
-    let plan: Vec<(String, String, PluginDescriptor, bool, f32, Option<Vec<u8>>)> = {
+    let plan: Vec<(String, String, PluginDescriptor, bool, f32, Option<Vec<u8>>, bool)> = {
         let engine = state.engine.lock();
         let project = engine.project.lock();
         let scanner = engine.plugin_scanner.lock();
@@ -629,6 +632,7 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
                         slot.enabled,
                         slot.wet,
                         saved_state,
+                        slot.sidechain_source.is_some(),
                     ));
                 } else {
                     log::warn!(
@@ -642,7 +646,7 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
         acc
     };
 
-    for (track_id, slot_id, descriptor, enabled, wet, saved_state) in plan {
+    for (track_id, slot_id, descriptor, enabled, wet, saved_state, sidechain_active) in plan {
         match instantiate_plugin(&descriptor) {
             Ok(mut plugin) => {
                 // Restore the persisted state BEFORE the plug-in joins
@@ -664,6 +668,7 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
                         plugin,
                         enabled,
                         wet,
+                        sidechain_active,
                     },
                 };
                 if state.engine.lock().try_send_insert_command(cmd).is_err() {

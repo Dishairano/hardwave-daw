@@ -89,6 +89,15 @@ pub trait AudioNode: Send {
     ) {
         let _ = (slot, sample_rate, max_block_size);
     }
+
+    /// Mark whether the insert slot `slot_id` has a sidechain source
+    /// routed to it, so the chain feeds it the track sidechain bus
+    /// (this node's input ports 2/3). Default no-op for non-track nodes;
+    /// track nodes forward to their insert chain. Synced on every graph
+    /// rebuild from the project's `PluginSlot::sidechain_source`.
+    fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
+        let _ = (slot_id, active);
+    }
 }
 
 /// Number of output channels every node gets. Tracks use 0/1 for post-fader

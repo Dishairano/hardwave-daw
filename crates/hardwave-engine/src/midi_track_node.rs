@@ -349,7 +349,7 @@ impl AudioNode for MidiTrackNode {
 
     fn process(
         &mut self,
-        _inputs: &[&[f32]],
+        inputs: &[&[f32]],
         outputs: &mut [Vec<f32>],
         midi_in: &[hardwave_midi::MidiEvent],
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
@@ -583,6 +583,13 @@ impl AudioNode for MidiTrackNode {
         // Pre-fader insert FX: synth → inserts → fader → pan. Empty chain
         // is a no-op, so tracks without FX pay nothing.
         if !self.chain.slots.is_empty() {
+            // Sidechain bus on input ports 2/3 (routed from other tracks
+            // by the engine rebuild); fed to slots keyed to a source.
+            let sidechain: Option<(&[f32], &[f32])> = if inputs.len() >= 4 {
+                Some((inputs[2], inputs[3]))
+            } else {
+                None
+            };
             if let [left, right, ..] = outputs {
                 self.chain.process(
                     left,
@@ -590,6 +597,7 @@ impl AudioNode for MidiTrackNode {
                     block_size,
                     &mut self.chain_scratch,
                     &block_midi,
+                    sidechain,
                 );
             }
         }
@@ -700,6 +708,10 @@ impl AudioNode for MidiTrackNode {
 
     fn restore_chain(&mut self, chain: crate::insert_chain::InsertChain) {
         self.chain = chain;
+    }
+
+    fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
+        self.chain.set_slot_sidechain(slot_id, active);
     }
 
     fn push_offline_slot(
@@ -850,6 +862,7 @@ mod tests {
                 plugin: Box::new(Silencer(desc)),
                 enabled: true,
                 wet: 1.0,
+                sidechain_active: false,
             },
             48_000.0,
             256,
@@ -967,6 +980,7 @@ mod tests {
                 }),
                 enabled: true,
                 wet: 1.0,
+                sidechain_active: false,
             },
             48_000.0,
             256,

@@ -1102,6 +1102,9 @@ impl EngineCallback {
                     plugin,
                     enabled,
                     wet,
+                    // Offline render does not yet wire the sidechain bus
+                    // (export ducking is a follow-up); live playback does.
+                    sidechain_active: false,
                 };
                 node.push_offline_slot(slot, sr, buffer_size);
             }
@@ -1591,6 +1594,39 @@ impl EngineCallback {
                     .connect_with_gain(src_node, src_l, dst_node, 0, gain);
                 self.graph
                     .connect_with_gain(src_node, src_r, dst_node, 1, gain);
+            }
+        }
+
+        // Sidechain routing. A plug-in slot with a `sidechain_source` set
+        // gets that source track's post-fader output mixed into THIS
+        // track node's input ports 2/3 — the sidechain bus, kept separate
+        // from the main 0/1 signal. The node's insert chain forwards
+        // those channels to the keyed slot so e.g. a compressor ducks the
+        // bass against the kick. The per-slot flag is always synced (so
+        // clearing a source disables it); multiple slots on one track
+        // share the single bus, and distinct sources sum into it.
+        for track in &project.tracks {
+            let dst_node = match track_id_to_node.get(&track.id) {
+                Some(&id) => id,
+                None => continue,
+            };
+            let mut sources = Vec::new();
+            for slot in &track.inserts {
+                let active = slot.sidechain_source.is_some();
+                if let Some(node) = self.graph.node_mut(dst_node) {
+                    node.set_slot_sidechain(&slot.id, active);
+                }
+                if let Some(src_id) = &slot.sidechain_source {
+                    if let Some(&src_node) = track_id_to_node.get(src_id) {
+                        if src_node != dst_node && !sources.contains(&src_node) {
+                            sources.push(src_node);
+                        }
+                    }
+                }
+            }
+            for src_node in sources {
+                self.graph.connect_with_gain(src_node, 0, dst_node, 2, 1.0);
+                self.graph.connect_with_gain(src_node, 1, dst_node, 3, 1.0);
             }
         }
 

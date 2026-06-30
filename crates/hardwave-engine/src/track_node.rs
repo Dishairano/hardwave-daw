@@ -475,6 +475,10 @@ impl AudioNode for TrackNode {
         self.chain = chain;
     }
 
+    fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
+        self.chain.set_slot_sidechain(slot_id, active);
+    }
+
     fn process(
         &mut self,
         inputs: &[&[f32]],
@@ -816,11 +820,26 @@ impl AudioNode for TrackNode {
         // DAW signal flow. No-op when the chain has zero enabled slots,
         // and no allocations once `chain_scratch` is sized to buf_size.
         {
+            // Sidechain bus: input ports 2/3 carry any audio routed here
+            // from other tracks' sidechain sends (see engine rebuild).
+            // Slots with a sidechain source keyed to them receive it as
+            // extra input channels; other slots ignore it.
+            let sidechain: Option<(&[f32], &[f32])> = if inputs.len() >= 4 {
+                Some((inputs[2], inputs[3]))
+            } else {
+                None
+            };
             let (out_left, out_rest) = outputs.split_at_mut(1);
             let out_l = &mut out_left[0];
             let out_r = &mut out_rest[0];
-            self.chain
-                .process(out_l, out_r, buf_size, &mut self.chain_scratch, midi_in);
+            self.chain.process(
+                out_l,
+                out_r,
+                buf_size,
+                &mut self.chain_scratch,
+                midi_in,
+                sidechain,
+            );
         }
 
         // Measure pre-fader peak and publish the pre-fader tap so pre-fader

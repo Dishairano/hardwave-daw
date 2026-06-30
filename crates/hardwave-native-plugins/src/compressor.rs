@@ -93,10 +93,17 @@ impl NativeCompressor {
     }
 
     fn process_sample(&mut self, ch: usize, sample: f32) -> f32 {
+        self.process_sample_keyed(ch, sample, sample)
+    }
+
+    /// Compress `sample` but key the envelope detector off `key` — the
+    /// sidechain signal when one is routed, otherwise the sample itself.
+    /// Gain reduction is derived from `key` and applied to `sample`.
+    fn process_sample_keyed(&mut self, ch: usize, sample: f32, key: f32) -> f32 {
         let env = if ch == 0 {
-            self.env_l.process(sample)
+            self.env_l.process(key)
         } else {
-            self.env_r.process(sample)
+            self.env_r.process(key)
         };
         let env_db = linear_to_db(env);
         // `compressor_gain_reduction_db` returns a non-positive dB
@@ -149,9 +156,28 @@ impl HostedPlugin for NativeCompressor {
         outputs[1].reserve(n);
         let left_in = &inputs[0][..n];
         let right_in = &inputs[1][..n];
-        for (l, r) in left_in.iter().zip(right_in.iter()) {
-            outputs[0].push(self.process_sample(0, *l));
-            outputs[1].push(self.process_sample(1, *r));
+        // A 4-channel input means a sidechain bus is present on channels
+        // [2,3]: detect the envelope from it, delivering ducking driven
+        // by another track (kick-ducks-bass). With plain stereo, the key
+        // is the input itself (normal compression).
+        let sidechain = if inputs.len() >= 4 && inputs[2].len() >= n && inputs[3].len() >= n {
+            Some((&inputs[2][..n], &inputs[3][..n]))
+        } else {
+            None
+        };
+        match sidechain {
+            Some((key_l, key_r)) => {
+                for i in 0..n {
+                    outputs[0].push(self.process_sample_keyed(0, left_in[i], key_l[i]));
+                    outputs[1].push(self.process_sample_keyed(1, right_in[i], key_r[i]));
+                }
+            }
+            None => {
+                for (l, r) in left_in.iter().zip(right_in.iter()) {
+                    outputs[0].push(self.process_sample(0, *l));
+                    outputs[1].push(self.process_sample(1, *r));
+                }
+            }
         }
     }
 
@@ -328,6 +354,61 @@ mod tests {
         assert!(
             peak_tail < 0.75,
             "compression should pull peak well below 1.0, got {peak_tail}"
+        );
+    }
+
+    #[test]
+    fn sidechain_key_ducks_a_quiet_main_signal() {
+        let mut c = NativeCompressor::new();
+        c.set_parameter_value(PARAM_THRESHOLD, -18.0);
+        c.set_parameter_value(PARAM_RATIO, 8.0);
+        c.set_parameter_value(PARAM_ATTACK, 1.0);
+        c.activate(48_000.0, 512).unwrap();
+        // Quiet main (0.3) that would normally pass untouched, but a loud
+        // sidechain key (1.0) on channels [2,3] should duck it hard.
+        let main = vec![0.3_f32; 2048];
+        let key = vec![1.0_f32; 2048];
+        let mut outputs = vec![Vec::new(), Vec::new()];
+        let mut midi_out = Vec::new();
+        c.process(
+            &[&main, &main, &key, &key],
+            &mut outputs,
+            &[],
+            &mut midi_out,
+            2048,
+        );
+        let tail = &outputs[0][1024..];
+        let peak = tail.iter().fold(0.0_f32, |m, &v| m.max(v.abs()));
+        assert!(
+            peak < 0.2,
+            "loud sidechain key should duck the quiet main, got {peak}"
+        );
+    }
+
+    #[test]
+    fn silent_sidechain_leaves_the_main_signal_alone() {
+        let mut c = NativeCompressor::new();
+        c.set_parameter_value(PARAM_THRESHOLD, -18.0);
+        c.set_parameter_value(PARAM_RATIO, 8.0);
+        c.set_parameter_value(PARAM_ATTACK, 1.0);
+        c.activate(48_000.0, 512).unwrap();
+        // Same quiet main, but a silent key → no ducking, output ≈ input.
+        let main = vec![0.3_f32; 2048];
+        let key = vec![0.0_f32; 2048];
+        let mut outputs = vec![Vec::new(), Vec::new()];
+        let mut midi_out = Vec::new();
+        c.process(
+            &[&main, &main, &key, &key],
+            &mut outputs,
+            &[],
+            &mut midi_out,
+            2048,
+        );
+        let tail = &outputs[0][1024..];
+        let peak = tail.iter().fold(0.0_f32, |m, &v| m.max(v.abs()));
+        assert!(
+            peak > 0.29,
+            "silent sidechain must not duck the main, got {peak}"
         );
     }
 
