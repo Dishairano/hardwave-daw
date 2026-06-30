@@ -58,6 +58,11 @@ interface DragState {
   originalFadeInTicks: number
   originalFadeOutTicks: number
   groupMoveOriginals?: { clipId: string; trackId: string; origPos: number }[]
+  // Scroll offset frozen at scrub start. The auto-follow scroll offset is
+  // derived from the live playhead, so recomputing it mid-scrub while
+  // playing makes a stationary cursor map to an ever-advancing tick (the
+  // playhead chases itself). Freezing it keeps screen-X → tick stable.
+  scrubScrollOffset?: number
 }
 
 interface ContextMenuState {
@@ -69,7 +74,7 @@ interface ContextMenuState {
 
 // Cache keyed by `${sourceId}:${bucketTier}` so zooming in fetches a higher-resolution
 // peak set instead of upscaling the existing one.
-const waveformData = new Map<string, [number, number][]>()
+const waveformData = new Map<string, [number, number, number][]>()
 const FADE_HANDLE_PX = 10
 const HEADER_H = 14
 
@@ -865,6 +870,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         startMouseX: mouseX, startMouseY: mouseY, currentMouseX: mouseX, currentMouseY: mouseY,
         originalPositionTicks: 0, originalLengthTicks: 0,
         originalFadeInTicks: 0, originalFadeOutTicks: 0,
+        // Freeze the offset for the whole gesture — see DragState doc.
+        scrubScrollOffset: scrollOffset,
       }
       return
     }
@@ -1121,7 +1128,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       return
     }
     if (drag.mode === 'scrub') {
-      const scrollOffset = getScrollOffset()
+      // Use the offset frozen at scrub start, NOT the live auto-follow
+      // offset — otherwise playback advancing the playhead would make the
+      // mapped tick run away forward under a near-stationary cursor.
+      const scrollOffset = drag.scrubScrollOffset ?? getScrollOffset()
       const seconds = Math.max(0, (mouseX + scrollOffset) / PIXELS_PER_SECOND)
       setPosition(Math.round(seconds * (sampleRate || 48000)))
       return
