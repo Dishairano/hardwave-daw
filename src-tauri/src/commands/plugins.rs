@@ -5,9 +5,9 @@ use hardwave_native_plugins::{
     NativeConvReverb, NativeDelay, NativeDistortion, NativeEq, NativeExciter, NativeFilter,
     NativeFlanger, NativeFmSynth, NativeGain, NativeGate, NativeLimiter, NativeMidSide,
     NativeMonoFold, NativeMultiband, NativeNoise, NativePhaser, NativeReverb, NativeRingMod,
-    NativeSaturator, NativeSoundgoodizer, NativeStereo, NativeStereoDouble, NativeStutter,
-    NativeSubBass, NativeTape, NativeTransient, NativeTremolo, NativeTripleOsc, NativeVibrato,
-    NativeVocoder, NativeWavetable,
+    NativeSampler, NativeSaturator, NativeSoundgoodizer, NativeStereo, NativeStereoDouble,
+    NativeStutter, NativeSubBass, NativeTape, NativeTransient, NativeTremolo, NativeTripleOsc,
+    NativeVibrato, NativeVocoder, NativeWavetable,
 };
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
@@ -73,6 +73,7 @@ pub(crate) fn instantiate_plugin(
             id if id == NativeStereoDouble::ID => Ok(Box::new(NativeStereoDouble::new())),
             id if id == NativeVocoder::ID => Ok(Box::new(NativeVocoder::new())),
             id if id == NativeStutter::ID => Ok(Box::new(NativeStutter::new())),
+            id if id == NativeSampler::ID => Ok(Box::new(NativeSampler::new())),
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }
@@ -562,6 +563,46 @@ pub fn set_plugin_parameter(
 /// ship an Add command. Plug-ins missing from the scanner cache are
 /// skipped with a warning so the project still opens — the user gets a
 /// "missing plug-ins" notice via `find_missing_plugins`.
+/// Load an audio file into a NativeSampler slot on a track. Decodes the
+/// file here (off the audio thread), then ships the decoded PCM to the
+/// plug-in as its state via the existing SetState path — and stores the
+/// same bytes in the project so the sample persists across save/reload
+/// and is applied on export (offline hydrate). The track must already
+/// hold the sampler insert (added via `add_plugin_to_track`).
+#[tauri::command]
+pub fn load_sampler(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    path: String,
+    base_note: Option<u8>,
+) -> Result<(), String> {
+    let (info, channels) =
+        hardwave_dsp::audio_file::AudioFileReader::read(std::path::Path::new(&path))
+            .map_err(|e| format!("decode {path}: {e:?}"))?;
+    let base = base_note.unwrap_or(60);
+    let bytes =
+        hardwave_native_plugins::sampler::encode_sample_state(info.sample_rate, base, channels);
+    // Persist in the project (survives rebuild/reload + offline export).
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        project.set_plugin_state(slot_id.clone(), "native-sampler", bytes.clone());
+    }
+    // Ship to the live chain instance.
+    let cmd = InsertCommand::SetState {
+        track_id,
+        slot_id,
+        bytes,
+    };
+    state
+        .engine
+        .lock()
+        .try_send_insert_command(cmd)
+        .map_err(|_| "insert command queue full or engine not started".to_string())?;
+    Ok(())
+}
+
 #[allow(clippy::type_complexity)]
 pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
     // Snapshot what we need under the locks, then drop them before we

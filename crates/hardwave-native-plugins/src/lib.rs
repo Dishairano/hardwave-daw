@@ -49,6 +49,7 @@ pub mod triple_osc;
 pub mod vibrato;
 pub mod wavetable;
 
+pub mod sampler;
 pub mod stutter;
 pub mod vocoder;
 
@@ -76,6 +77,7 @@ pub use noise::NativeNoise;
 pub use phaser::NativePhaser;
 pub use reverb::NativeReverb;
 pub use ring_mod::NativeRingMod;
+pub use sampler::NativeSampler;
 pub use saturator::NativeSaturator;
 pub use soundgoodizer::NativeSoundgoodizer;
 pub use stereo::NativeStereo;
@@ -131,6 +133,7 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
         NativeStereoDouble::descriptor(),
         NativeVocoder::descriptor(),
         NativeStutter::descriptor(),
+        NativeSampler::descriptor(),
     ]
 }
 
@@ -173,6 +176,7 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         NativeStereoDouble::ID,
         NativeVocoder::ID,
         NativeStutter::ID,
+        NativeSampler::ID,
         "hardwave.analyser",
         "hardwave.loudlab",
         "hardwave.wettboi",
