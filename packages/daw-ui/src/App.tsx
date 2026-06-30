@@ -387,6 +387,38 @@ export function App() {
     }).catch(() => {})
   }, [showPianoRoll])
 
+  // Punch in/out recording. When punch is enabled and the transport is
+  // playing, auto-engage recording as the playhead crosses the punch-in
+  // boundary and stop it at punch-out — reusing the normal record path so
+  // the take is placed and saved like any other. Frontend-driven off the
+  // playhead event (frame-accurate), so it needs no engine/RT changes.
+  useEffect(() => {
+    const PPQ = 960
+    let lastPos = useTransportStore.getState().positionSamples
+    const unsub = useTransportStore.subscribe((s) => {
+      const prev = lastPos
+      lastPos = s.positionSamples
+      if (!s.punchEnabled || !s.playing) return
+      if (s.punchInTicks == null || s.punchOutTicks == null) return
+      if (s.bpm <= 0 || s.sampleRate <= 0) return
+      const toSamples = (ticks: number) => Math.round((ticks / PPQ) * (60 / s.bpm) * s.sampleRate)
+      const inS = toSamples(s.punchInTicks)
+      const outS = toSamples(s.punchOutTicks)
+      if (outS <= inS) return
+      // Rising cross of punch-in → start (only if a track is armed).
+      if (!s.recording && prev < inS && s.positionSamples >= inS && s.positionSamples < outS) {
+        if (useTrackStore.getState().tracks.some(t => t.armed)) {
+          useTransportStore.getState().toggleRecording()
+        }
+      }
+      // Cross of punch-out → stop the punch take.
+      if (s.recording && prev < outS && s.positionSamples >= outS) {
+        useTransportStore.getState().toggleRecording()
+      }
+    })
+    return unsub
+  }, [])
+
   // Hint bar text
   const [hintText, setHintText] = useState('')
 
