@@ -301,6 +301,59 @@ fn nearest_in_scale(pitch: u8, root: i32, degrees: &[u8]) -> u8 {
     (p + best_delta).clamp(0, 127) as u8
 }
 
+// ---------------------------------------------------------------------------
+// Humanize
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct HumanizeSettings {
+    /// Max random start-tick offset (± this many ticks).
+    pub timing_ticks: u64,
+    /// Max random velocity deviation as a fraction (0.0..=1.0).
+    pub velocity_amount: f32,
+    /// Seed for reproducibility (same seed → same humanization).
+    pub seed: u64,
+}
+
+impl Default for HumanizeSettings {
+    fn default() -> Self {
+        Self {
+            timing_ticks: 20,
+            velocity_amount: 0.15,
+            seed: 0x5DEE_CE66,
+        }
+    }
+}
+
+/// Nudge each selected note's start and velocity by a small random amount
+/// so a programmed part feels less mechanical. Deterministic for a given
+/// seed. Start ticks never go negative; velocities stay in `[0, 1]`.
+pub fn humanize(notes: &mut [MidiNote], settings: &HumanizeSettings) {
+    let mut state = settings.seed | 1;
+    // xorshift64* → bipolar [-1, 1).
+    let mut bipolar = || {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        let u = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64;
+        u * 2.0 - 1.0
+    };
+    let vamt = settings.velocity_amount.clamp(0.0, 1.0);
+    for n in notes.iter_mut() {
+        if n.muted {
+            continue;
+        }
+        if settings.timing_ticks > 0 {
+            let off = (bipolar() * settings.timing_ticks as f64).round() as i64;
+            n.start_tick = (n.start_tick as i64 + off).max(0) as u64;
+        }
+        if vamt > 0.0 {
+            let dev = bipolar() as f32 * vamt;
+            n.velocity = (n.velocity * (1.0 + dev)).clamp(0.0, 1.0);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,5 +493,49 @@ mod tests {
         snap_to_scale(&mut notes, 0, Scale::Chromatic);
         assert_eq!(notes[0].pitch, 61);
         assert_eq!(notes[1].pitch, 66);
+    }
+
+    #[test]
+    fn humanize_is_deterministic_and_bounded() {
+        let base = vec![
+            note(1000, 100, 60),
+            note(2000, 100, 64),
+            note(3000, 100, 67),
+        ];
+        let s = HumanizeSettings {
+            timing_ticks: 30,
+            velocity_amount: 0.2,
+            seed: 7,
+        };
+        let mut a = base.clone();
+        let mut b = base.clone();
+        humanize(&mut a, &s);
+        humanize(&mut b, &s);
+        // Same seed → identical result.
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.start_tick, y.start_tick);
+            assert!((x.velocity - y.velocity).abs() < 1e-9);
+        }
+        // Within bounds: timing within ±30, velocity in [0,1].
+        for (orig, h) in base.iter().zip(a.iter()) {
+            let delta = h.start_tick as i64 - orig.start_tick as i64;
+            assert!(delta.abs() <= 30, "timing offset {delta} exceeds ±30");
+            assert!((0.0..=1.0).contains(&h.velocity));
+        }
+    }
+
+    #[test]
+    fn humanize_zero_settings_is_noop() {
+        let mut notes = vec![note(500, 100, 60)];
+        humanize(
+            &mut notes,
+            &HumanizeSettings {
+                timing_ticks: 0,
+                velocity_amount: 0.0,
+                seed: 1,
+            },
+        );
+        assert_eq!(notes[0].start_tick, 500);
+        assert!((notes[0].velocity - 0.8).abs() < 1e-9);
     }
 }

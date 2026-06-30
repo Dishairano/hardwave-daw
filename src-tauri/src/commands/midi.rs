@@ -1,6 +1,7 @@
 use crate::AppState;
 use hardwave_midi::{
-    arpeggiate, snap_to_scale, strum, ArpSettings, MidiNote, Scale, StrumDirection,
+    arpeggiate, humanize, snap_to_scale, strum, ArpSettings, HumanizeSettings, MidiNote, Scale,
+    StrumDirection,
 };
 use serde::Serialize;
 use tauri::State;
@@ -336,6 +337,37 @@ pub fn snap_clip_notes_to_scale(
         for (sel, &i) in selected.iter().zip(indices.iter()) {
             if let Some(n) = notes.get_mut(i) {
                 n.pitch = sel.pitch;
+            }
+        }
+    })
+}
+
+/// Humanize the selected notes — subtle random start/velocity deviation
+/// so a programmed part feels less mechanical. Deterministic per `seed`.
+#[tauri::command]
+pub fn humanize_clip_notes(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    note_indices: Vec<usize>,
+    timing_ticks: u64,
+    velocity_amount: f32,
+    seed: u64,
+) -> Result<(), String> {
+    with_clip_notes(&state, &track_id, &clip_id, |notes| {
+        let (mut selected, indices) = collect_selected(notes, &note_indices);
+        humanize(
+            &mut selected,
+            &HumanizeSettings {
+                timing_ticks,
+                velocity_amount,
+                seed,
+            },
+        );
+        for (sel, &i) in selected.iter().zip(indices.iter()) {
+            if let Some(n) = notes.get_mut(i) {
+                n.start_tick = sel.start_tick;
+                n.velocity = sel.velocity;
             }
         }
     })

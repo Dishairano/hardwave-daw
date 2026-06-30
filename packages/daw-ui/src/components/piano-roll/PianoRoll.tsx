@@ -1189,6 +1189,21 @@ export function PianoRoll() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTrackId, activeClipId, selectedIndices, scaleRoot, scaleType, refreshNotes])
 
+  const runHumanize = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setGenOpen(false)
+    try {
+      await invoke('humanize_clip_notes', {
+        trackId: activeTrackId, clipId: activeClipId,
+        noteIndices: selectedIndices(),
+        timingTicks: 20, velocityAmount: 0.15,
+        seed: (Date.now() & 0xffffffff) >>> 0,
+      })
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+    } catch (err) { console.warn('humanize failed', err) }
+  }, [activeTrackId, activeClipId, selectedIndices, refreshNotes])
+
   useEffect(() => {
     if (!qOpen) return
     const close = (e: MouseEvent) => {
@@ -2080,6 +2095,21 @@ export function PianoRoll() {
                     cursor: scaleType === 'chromatic' ? 'not-allowed' : 'pointer',
                   }}>
                   Snap {selectedNotes.size > 0 ? 'selection' : 'all'} → {SCALE_TYPES[scaleType].name}
+                </button>
+              </div>
+
+              <div style={{ height: 1, background: hw.border }} />
+
+              {/* Humanize */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Humanize</div>
+                <button onClick={runHumanize}
+                  title="Add subtle random timing + velocity variation"
+                  style={{
+                    padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
+                    background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
+                  }}>
+                  Humanize {selectedNotes.size > 0 ? 'selection' : 'all'}
                 </button>
               </div>
             </div>
