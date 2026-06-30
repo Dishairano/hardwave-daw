@@ -98,7 +98,12 @@ export interface KickLayerPatch {
   waveform: 'sine' | 'saw' | 'square' | 'triangle'
 }
 
-export type NativeInstrumentId = 'builtin_sine' | 'kick_synth'
+export type NativeInstrumentId =
+  | 'builtin_sine'
+  | 'builtin_saw'
+  | 'builtin_square'
+  | 'builtin_triangle'
+  | 'kick_synth'
 
 export type AutomationTargetInfo =
   | { kind: 'track_volume' }

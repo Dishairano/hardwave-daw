@@ -1662,8 +1662,11 @@ function HwAddLaneButton({
 // as we ship them.
 
 const NATIVE_INSTRUMENTS: { id: import('../stores/trackStore').NativeInstrumentId; label: string; abbr: string }[] = [
-  { id: 'builtin_sine', label: 'Sine (default)', abbr: 'SIN' },
-  { id: 'kick_synth',   label: 'KickSynth',      abbr: 'KIK' },
+  { id: 'builtin_sine',     label: 'Sine (default)', abbr: 'SIN' },
+  { id: 'builtin_saw',      label: 'Saw',            abbr: 'SAW' },
+  { id: 'builtin_square',   label: 'Square',         abbr: 'SQR' },
+  { id: 'builtin_triangle', label: 'Triangle',       abbr: 'TRI' },
+  { id: 'kick_synth',       label: 'KickSynth',      abbr: 'KIK' },
 ]
 
 function HwInstrumentPicker({

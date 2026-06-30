@@ -81,6 +81,9 @@ fn default_filter_resonance() -> f32 {
 pub enum NativeInstrument {
     #[default]
     BuiltinSine,
+    BuiltinSaw,
+    BuiltinSquare,
+    BuiltinTriangle,
     KickSynth,
 }
 

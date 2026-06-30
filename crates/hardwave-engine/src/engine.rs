@@ -1279,14 +1279,17 @@ impl EngineCallback {
                 // engine's Instrument enum (they're separate so the
                 // engine doesn't take a project-crate dep cycle).
                 use crate::midi_track_node::Instrument as EngInstr;
+                use crate::midi_track_node::Waveform;
                 use hardwave_project::track::NativeInstrument as ProjInstr;
-                midi_node.set_instrument(
-                    match track.instrument {
-                        ProjInstr::BuiltinSine => EngInstr::BuiltinSine,
-                        ProjInstr::KickSynth => EngInstr::KickSynth,
-                    },
-                    self.sample_rate as f32,
-                );
+                let (eng_instr, waveform) = match track.instrument {
+                    ProjInstr::BuiltinSine => (EngInstr::BuiltinSine, Waveform::Sine),
+                    ProjInstr::BuiltinSaw => (EngInstr::BuiltinSine, Waveform::Saw),
+                    ProjInstr::BuiltinSquare => (EngInstr::BuiltinSine, Waveform::Square),
+                    ProjInstr::BuiltinTriangle => (EngInstr::BuiltinSine, Waveform::Triangle),
+                    ProjInstr::KickSynth => (EngInstr::KickSynth, Waveform::Sine),
+                };
+                midi_node.set_instrument(eng_instr, self.sample_rate as f32);
+                midi_node.set_waveform(waveform);
                 if matches!(track.instrument, ProjInstr::KickSynth)
                     && track.kick_patch.has_overrides()
                 {

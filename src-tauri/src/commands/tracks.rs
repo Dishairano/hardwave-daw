@@ -258,6 +258,13 @@ pub(crate) fn track_to_info(
             .collect(),
         instrument: match t.instrument {
             hardwave_project::track::NativeInstrument::BuiltinSine => "builtin_sine".to_string(),
+            hardwave_project::track::NativeInstrument::BuiltinSaw => "builtin_saw".to_string(),
+            hardwave_project::track::NativeInstrument::BuiltinSquare => {
+                "builtin_square".to_string()
+            }
+            hardwave_project::track::NativeInstrument::BuiltinTriangle => {
+                "builtin_triangle".to_string()
+            }
             hardwave_project::track::NativeInstrument::KickSynth => "kick_synth".to_string(),
         },
         kick_patch: KickPatchInfo {
@@ -565,10 +572,14 @@ pub fn set_track_instrument(
         let track = project
             .track_mut(&track_id)
             .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        use hardwave_project::track::NativeInstrument;
         track.instrument = match kind.as_str() {
-            "kick_synth" | "kicksynth" => hardwave_project::track::NativeInstrument::KickSynth,
+            "kick_synth" | "kicksynth" => NativeInstrument::KickSynth,
+            "builtin_saw" | "saw" => NativeInstrument::BuiltinSaw,
+            "builtin_square" | "square" => NativeInstrument::BuiltinSquare,
+            "builtin_triangle" | "triangle" => NativeInstrument::BuiltinTriangle,
             // Anything else (incl. "builtin_sine" / "sine") → the sine default.
-            _ => hardwave_project::track::NativeInstrument::BuiltinSine,
+            _ => NativeInstrument::BuiltinSine,
         };
     }
     state.engine.lock().rebuild_graph();

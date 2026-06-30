@@ -113,6 +113,8 @@ pub struct MidiTrackNode {
     /// [`Instrument::KickSynth`] the built-in sine voicing below is
     /// bypassed and each note-on retriggers the kick synth instead.
     instrument: Instrument,
+    /// Oscillator shape for the built-in synth (ignored by KickSynth).
+    waveform: Waveform,
     kick: hardwave_dsp::kick_synth::KickSynth,
     /// Pre-fader insert chain so effects (filter, reverb, distortion,
     /// the vocoder, VST3/CLAP…) can be placed directly on an instrument
@@ -123,11 +125,40 @@ pub struct MidiTrackNode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Instrument {
-    /// Default — monosynth with sine osc + ADSR. Pitch-aware.
+    /// Default — built-in synth (waveform chosen via [`Waveform`]) + ADSR.
     BuiltinSine,
     /// Native KickSynth — every note-on retriggers the kick voice
     /// regardless of MIDI pitch. Velocity scales the layer mix.
     KickSynth,
+}
+
+/// Oscillator shape for the built-in synth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Waveform {
+    #[default]
+    Sine,
+    Saw,
+    Square,
+    Triangle,
+}
+
+impl Waveform {
+    /// One sample for an oscillator `phase` in `[0, TAU)`.
+    fn sample(self, phase: f32) -> f32 {
+        let p = (phase / TWO_PI).rem_euclid(1.0); // 0..1
+        match self {
+            Waveform::Sine => phase.sin(),
+            Waveform::Saw => 2.0 * p - 1.0,
+            Waveform::Square => {
+                if p < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            Waveform::Triangle => 1.0 - 4.0 * (p - 0.5).abs(),
+        }
+    }
 }
 
 impl MidiTrackNode {
@@ -145,6 +176,7 @@ impl MidiTrackNode {
             meter,
             rms_smooth: 0.0,
             instrument: Instrument::BuiltinSine,
+            waveform: Waveform::Sine,
             kick: hardwave_dsp::kick_synth::KickSynth::new(48_000.0),
             chain: crate::insert_chain::InsertChain::new(),
             chain_scratch: crate::insert_chain::Scratch::default(),
@@ -164,6 +196,12 @@ impl MidiTrackNode {
                 self.kick = hardwave_dsp::kick_synth::KickSynth::new(sample_rate.max(1.0));
             }
         }
+    }
+
+    /// Set the built-in synth's oscillator shape. Audio thread picks it
+    /// up on the next block (existing voices switch shape immediately).
+    pub fn set_waveform(&mut self, waveform: Waveform) {
+        self.waveform = waveform;
     }
 
     /// Start a built-in-synth voice. Steals a voice (preferring an
@@ -470,7 +508,7 @@ impl AudioNode for MidiTrackNode {
                             continue;
                         }
                         let env = Self::step_envelope(v, sr);
-                        let osc = v.phase.sin();
+                        let osc = self.waveform.sample(v.phase);
                         v.phase += TWO_PI * v.freq / sr;
                         if v.phase >= TWO_PI {
                             v.phase -= TWO_PI;
@@ -1027,6 +1065,36 @@ mod tests {
             .chain(out[1].iter())
             .fold(0.0_f32, |a, b| a.max(b.abs()));
         assert!(peak > 0.0, "chord should be audible");
+    }
+
+    #[test]
+    fn waveform_shapes_are_correct() {
+        use std::f32::consts::PI;
+        // Sine ≈ 0 at phase 0; saw = -1 at phase 0; square = +1 in first
+        // half; triangle peaks at the midpoint (phase = PI).
+        assert!(Waveform::Sine.sample(0.0).abs() < 1e-6);
+        assert!((Waveform::Saw.sample(0.0) + 1.0).abs() < 1e-6);
+        assert!((Waveform::Square.sample(0.1) - 1.0).abs() < 1e-6);
+        assert!(Waveform::Square.sample(PI + 0.1) < 0.0);
+        assert!((Waveform::Triangle.sample(PI) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn non_sine_waveform_produces_output() {
+        let mut node = make_node();
+        node.set_waveform(Waveform::Saw);
+        let mut out = block_outputs(256);
+        let ctx = ctx_at(48_000.0, 256, 0, false);
+        let inputs: [&[f32]; 0] = [];
+        let on = vec![MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 57,
+            velocity: 0.9,
+        }];
+        node.process(&inputs, &mut out, &on, &mut Vec::new(), &ctx);
+        let peak = out[0].iter().fold(0.0_f32, |a, &b| a.max(b.abs()));
+        assert!(peak > 0.0, "saw waveform should be audible");
     }
 
     /// While the transport is stopped, clip-scheduled notes must NOT
