@@ -974,6 +974,7 @@ export function PianoRoll() {
   const [arpGate, setArpGate] = useState(90) // percent
   const [strumDir, setStrumDir] = useState<'up' | 'down'>('up')
   const [strumAmt, setStrumAmt] = useState(30) // ticks between notes
+  const [chopRepeats, setChopRepeats] = useState(4)
 
   const runTransform = useCallback(async (
     kind: 'legato' | 'staccato' | 'humanizeTime' | 'humanizeVel' | 'humanizeLen' | 'flip' | 'reverse' | 'crescendo' | 'decrescendo' | 'velFull' | 'velDouble' | 'velHalf' | 'velReset' | 'grooveMpc60' | 'grooveSp1200' | 'grooveLogic' | 'grooveStraight',
@@ -1203,6 +1204,22 @@ export function PianoRoll() {
       await refreshNotes()
     } catch (err) { console.warn('humanize failed', err) }
   }, [activeTrackId, activeClipId, selectedIndices, refreshNotes])
+
+  const runNoteRepeat = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setGenOpen(false)
+    try {
+      await invoke('note_repeat_clip_notes', {
+        trackId: activeTrackId, clipId: activeClipId,
+        noteIndices: selectedIndices(),
+        repeats: chopRepeats, gate: 0.9, decay: 0.0,
+      })
+      useProjectStore.getState().markDirty()
+      setSelectedNotes(new Set())
+      await refreshNotes()
+    } catch (err) { console.warn('note repeat failed', err) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTrackId, activeClipId, selectedIndices, chopRepeats, refreshNotes])
 
   useEffect(() => {
     if (!qOpen) return
@@ -2111,6 +2128,27 @@ export function PianoRoll() {
                   }}>
                   Humanize {selectedNotes.size > 0 ? 'selection' : 'all'}
                 </button>
+              </div>
+
+              <div style={{ height: 1, background: hw.border }} />
+
+              {/* Note repeat / chop */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Chop / roll</div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <label style={{ fontSize: 9, color: hw.textMuted, flex: 1 }}>
+                    Repeats
+                    <select value={chopRepeats} onChange={e => setChopRepeats(Number(e.target.value))}
+                      style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
+                      {[2, 3, 4, 6, 8, 16].map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </label>
+                  <button onClick={runNoteRepeat}
+                    title="Split each note into an even roll"
+                    style={{ flex: 1, padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff', background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer', alignSelf: 'flex-end' }}>
+                    Chop {selectedNotes.size > 0 ? 'selection' : 'all'}
+                  </button>
+                </div>
               </div>
             </div>
           )}

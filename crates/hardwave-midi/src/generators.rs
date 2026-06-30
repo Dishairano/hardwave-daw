@@ -302,6 +302,44 @@ fn nearest_in_scale(pitch: u8, root: i32, degrees: &[u8]) -> u8 {
 }
 
 // ---------------------------------------------------------------------------
+// Note repeat / chop
+// ---------------------------------------------------------------------------
+
+/// Replace each note with `repeats` evenly-spaced retriggers of the same
+/// pitch across its original duration (hi-hat rolls, stutters, snare
+/// rushes). `gate` (0.05..=1.0) sets how much of each slice sounds.
+/// `repeats <= 1` returns the notes unchanged. Velocity + pitch carry; a
+/// `decay` of `d` scales each successive hit by `(1-d)` for natural rolls.
+pub fn note_repeat(notes: &[MidiNote], repeats: u32, gate: f32, decay: f32) -> Vec<MidiNote> {
+    if repeats <= 1 {
+        return notes.to_vec();
+    }
+    let gate = gate.clamp(0.05, 1.0);
+    let decay = decay.clamp(0.0, 1.0);
+    let mut out = Vec::with_capacity(notes.len() * repeats as usize);
+    for n in notes {
+        if n.muted || n.duration_ticks == 0 {
+            out.push(n.clone());
+            continue;
+        }
+        let slice = (n.duration_ticks / repeats as u64).max(1);
+        let hit_len = ((slice as f64 * gate as f64).round() as u64).max(1);
+        for r in 0..repeats {
+            let vel = (n.velocity * (1.0 - decay).powi(r as i32)).clamp(0.0, 1.0);
+            out.push(MidiNote {
+                start_tick: n.start_tick + r as u64 * slice,
+                duration_ticks: hit_len,
+                pitch: n.pitch,
+                velocity: vel,
+                channel: n.channel,
+                muted: false,
+            });
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Humanize
 // ---------------------------------------------------------------------------
 
@@ -537,5 +575,33 @@ mod tests {
         );
         assert_eq!(notes[0].start_tick, 500);
         assert!((notes[0].velocity - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn note_repeat_splits_into_even_hits() {
+        // One 400-tick note → 4 hits of 100 ticks, full gate.
+        let src = vec![note(0, 400, 42)];
+        let out = note_repeat(&src, 4, 1.0, 0.0);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0].start_tick, 0);
+        assert_eq!(out[1].start_tick, 100);
+        assert_eq!(out[3].start_tick, 300);
+        assert!(out.iter().all(|n| n.pitch == 42 && n.duration_ticks == 100));
+    }
+
+    #[test]
+    fn note_repeat_gate_and_decay() {
+        let src = vec![note(0, 400, 42)];
+        let out = note_repeat(&src, 4, 0.5, 0.5);
+        assert!(out.iter().all(|n| n.duration_ticks == 50)); // 100 * 0.5 gate
+                                                             // Decay: each hit quieter than the last.
+        assert!(out[1].velocity < out[0].velocity);
+        assert!(out[3].velocity < out[1].velocity);
+    }
+
+    #[test]
+    fn note_repeat_one_is_noop() {
+        let src = vec![note(0, 400, 42)];
+        assert_eq!(note_repeat(&src, 1, 1.0, 0.0).len(), 1);
     }
 }

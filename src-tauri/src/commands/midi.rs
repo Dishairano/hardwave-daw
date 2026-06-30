@@ -1,7 +1,7 @@
 use crate::AppState;
 use hardwave_midi::{
-    arpeggiate, humanize, snap_to_scale, strum, ArpSettings, HumanizeSettings, MidiNote, Scale,
-    StrumDirection,
+    arpeggiate, humanize, note_repeat, snap_to_scale, strum, ArpSettings, HumanizeSettings,
+    MidiNote, Scale, StrumDirection,
 };
 use serde::Serialize;
 use tauri::State;
@@ -339,6 +339,33 @@ pub fn snap_clip_notes_to_scale(
                 n.pitch = sel.pitch;
             }
         }
+    })
+}
+
+/// Replace the selected notes with evenly-spaced retriggers (note repeat
+/// / chop — hi-hat rolls, stutters). An empty selection processes all.
+#[tauri::command]
+pub fn note_repeat_clip_notes(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    note_indices: Vec<usize>,
+    repeats: u32,
+    gate: f32,
+    decay: f32,
+) -> Result<usize, String> {
+    with_clip_notes(&state, &track_id, &clip_id, |notes| {
+        let (selected, mut indices) = collect_selected(notes, &note_indices);
+        let generated = note_repeat(&selected, repeats, gate, decay);
+        indices.sort_unstable();
+        for i in indices.into_iter().rev() {
+            if i < notes.len() {
+                notes.remove(i);
+            }
+        }
+        let count = generated.len();
+        notes.extend(generated);
+        count
     })
 }
 

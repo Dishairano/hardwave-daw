@@ -7,8 +7,8 @@ pub mod output;
 pub mod recording;
 pub mod theory;
 pub use generators::{
-    arpeggiate, humanize, snap_to_scale, strum, ArpDirection, ArpSettings, HumanizeSettings, Scale,
-    StrumDirection,
+    arpeggiate, humanize, note_repeat, snap_to_scale, strum, ArpDirection, ArpSettings,
+    HumanizeSettings, Scale, StrumDirection,
 };
 pub use input::{ClockSyncSnapshot, MidiInputManager, ReconcileReport};
 pub use osc::{OscArg, OscError, OscMessage};
