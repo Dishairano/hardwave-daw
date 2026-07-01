@@ -886,6 +886,10 @@ struct EngineCallback {
     master_tap: SharedMasterTap,
     graph: AudioGraph,
     meter: ChannelMeter,
+    /// Pre-sized deinterleave scratch for the meter path. Reused every
+    /// block so the audio thread never allocates to feed the meter.
+    meter_left: Vec<f32>,
+    meter_right: Vec<f32>,
     sample_rate: u32,
     needs_rebuild: bool,
     /// Explicit id of the master node so we don't depend on its position in
@@ -963,6 +967,8 @@ impl EngineCallback {
             master_tap,
             graph: AudioGraph::new(buffer_size as usize),
             meter: ChannelMeter::new(sample_rate as f64),
+            meter_left: Vec::with_capacity(buffer_size as usize),
+            meter_right: Vec::with_capacity(buffer_size as usize),
             sample_rate,
             needs_rebuild: true,
             master_id: None,
@@ -1774,10 +1780,16 @@ impl AudioCallback for EngineCallback {
                     output[frame * 2 + 1] = r;
                 }
 
-                // Update meters
-                let left: Vec<f32> = (0..num_frames).map(|i| output[i * 2]).collect();
-                let right: Vec<f32> = (0..num_frames).map(|i| output[i * 2 + 1]).collect();
-                self.meter.process_block(&left, &right);
+                // Update meters. Deinterleave into pre-sized scratch —
+                // clear() keeps capacity, so no allocation after block 1.
+                self.meter_left.clear();
+                self.meter_right.clear();
+                for i in 0..num_frames {
+                    self.meter_left.push(output[i * 2]);
+                    self.meter_right.push(output[i * 2 + 1]);
+                }
+                self.meter
+                    .process_block(&self.meter_left, &self.meter_right);
 
                 let snapshot = MeterSnapshot {
                     peak_db: self.meter.peak_db(),

@@ -392,10 +392,10 @@ impl AudioGraph {
     ///
     /// **No-alloc on the hot path.** All per-node temporaries live in
     /// `self.scratch[node_id]` (see [`NodeScratch`]) and are reused
-    /// across blocks. The per-edge `src_vec` clone at line ~360 is the
-    /// only remaining allocation — it survives this refactor because
-    /// removing it requires extracting `edge_delays` out of `self` for
-    /// split-borrow reasons (planned follow-up).
+    /// across blocks. The per-edge source read is now a borrow (disjoint
+    /// field borrows of `buffers` / `scratch` / `edge_delays`), so the
+    /// old per-block `src_vec` clone is gone — the audio thread does zero
+    /// heap allocation in steady state.
     pub fn process(&mut self, ctx: &ProcessContext, midi_in: &[hardwave_midi::MidiEvent]) {
         // Iterate by index — `processing_order` mutates inside the loop
         // body via no path, so a snapshot clone is unnecessary. (The
@@ -411,41 +411,43 @@ impl AudioGraph {
                 ch.fill(0.0);
             }
 
-            // Gather inputs from edges that target this node.
-            for edge_idx in 0..self.edges.len() {
-                let (edge_source, edge_source_port, edge_dest, edge_dest_port, edge_gain) = {
-                    let e = &self.edges[edge_idx];
-                    (e.source, e.source_port, e.dest, e.dest_port, e.gain)
-                };
-                if edge_dest != node_id {
-                    continue;
-                }
-                // Snapshot the source channel so we can release the
-                // immutable borrow on `self.buffers` and then access
-                // `self.edge_delays` + `self.scratch` mutably. The
-                // clone here is the last per-block alloc; see process
-                // doc comment.
-                let src_vec: Vec<f32> = match self
-                    .buffers
-                    .get(edge_source)
-                    .and_then(|b| b.get(edge_source_port))
-                {
-                    Some(ch) => ch.clone(),
-                    None => continue,
-                };
-                let n = src_vec.len().min(self.buffer_size);
+            // Gather inputs from edges that target this node. Disjoint
+            // field borrows (buffers read-only; scratch + edge_delays
+            // mutable — all separate fields of `self`) let us read the
+            // source channel by reference instead of cloning it. This
+            // removes the last per-block heap allocation from the audio
+            // thread (was `ch.clone()` per edge per block → allocator
+            // jitter risk). The source is another, already-processed
+            // node's output buffer, so it never aliases this node's
+            // scratch.
+            {
+                let buffers = &self.buffers;
+                let edges = &self.edges;
+                let edge_delays = &mut self.edge_delays;
                 let scratch = &mut self.scratch[node_id];
-                let src_slice: &[f32] = if let Some(Some(dl)) = self.edge_delays.get_mut(edge_idx) {
-                    dl.process(&src_vec[..n], &mut scratch.delay_scratch[..n]);
-                    &scratch.delay_scratch[..n]
-                } else {
-                    &src_vec[..n]
-                };
-                if edge_dest_port < scratch.ch_bufs.len() {
-                    let dest = &mut scratch.ch_bufs[edge_dest_port];
-                    for (i, s) in src_slice.iter().enumerate() {
-                        if i < dest.len() {
-                            dest[i] += s * edge_gain;
+                let buffer_size = self.buffer_size;
+                for (edge_idx, e) in edges.iter().enumerate() {
+                    if e.dest != node_id {
+                        continue;
+                    }
+                    let src: &[f32] = match buffers.get(e.source).and_then(|b| b.get(e.source_port))
+                    {
+                        Some(ch) => ch.as_slice(),
+                        None => continue,
+                    };
+                    let n = src.len().min(buffer_size);
+                    let src_slice: &[f32] = if let Some(Some(dl)) = edge_delays.get_mut(edge_idx) {
+                        dl.process(&src[..n], &mut scratch.delay_scratch[..n]);
+                        &scratch.delay_scratch[..n]
+                    } else {
+                        &src[..n]
+                    };
+                    if e.dest_port < scratch.ch_bufs.len() {
+                        let dest = &mut scratch.ch_bufs[e.dest_port];
+                        for (i, s) in src_slice.iter().enumerate() {
+                            if i < dest.len() {
+                                dest[i] += s * e.gain;
+                            }
                         }
                     }
                 }
