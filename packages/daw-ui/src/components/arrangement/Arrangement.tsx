@@ -74,7 +74,7 @@ interface ContextMenuState {
 
 // Cache keyed by `${sourceId}:${bucketTier}` so zooming in fetches a higher-resolution
 // peak set instead of upscaling the existing one.
-const waveformData = new Map<string, [number, number, number][]>()
+const waveformData = new Map<string, [number, number, number, number][]>()
 const FADE_HANDLE_PX = 10
 const HEADER_H = 14
 
@@ -609,8 +609,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     ctx.fill()
     ctx.globalAlpha = 1.0
 
-    // Clip header bar — full-color stripe
-    ctx.fillStyle = clip.muted ? '#161620' : color
+    // Clip header bar — full-color stripe. Turns red while the clip is
+    // selected (the sole selection affordance now that clips are
+    // borderless) and reverts to the clip's own colour when deselected.
+    ctx.fillStyle = clip.muted ? '#161620' : isSelected ? '#EF4444' : color
     ctx.globalAlpha = clip.muted ? 0.5 : 1.0
     ctx.beginPath()
     ctx.roundRect(x, y, w, headerH, [radius, radius, 0, 0])
@@ -656,45 +658,30 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const endJ = Math.min(n, Math.ceil((viewWidth - x) / pxPerBucket) + 1)
 
       if (endJ > startJ) {
-        // Outer peak envelope (min/max) — one continuous filled shape, the
-        // translucent transient "hair". Top edge L→R, bottom edge R→L.
-        ctx.beginPath()
+        // Frequency-coloured waveform. Each slice is tinted by its spectral
+        // brightness (peaks[j][3], 0..1): low/bass reads red, treble reads
+        // blue (see spectralColor). Drawn as per-column bars rather than a
+        // single filled path so the colour can vary along the clip — a kick
+        // body glows red, a cymbal's transient tips run blue.
+        const colW = Math.max(1, pxPerBucket + 0.6)
         for (let j = startJ; j < endJ; j++) {
           const bx = x + j * pxPerBucket
-          const yTop = midY - peaks[j][1] * ampScale
-          if (j === startJ) ctx.moveTo(bx, yTop)
-          else ctx.lineTo(bx, yTop)
+          ctx.fillStyle = spectralColor(peaks[j][3])
+          // Outer min/max envelope — the translucent transient "hair".
+          const top = midY - peaks[j][1] * ampScale
+          const bot = midY - peaks[j][0] * ampScale
+          ctx.globalAlpha = 0.5
+          ctx.fillRect(bx, top, colW, Math.max(0.75, bot - top))
+          // Inner RMS body — brighter, symmetric around the centre line so
+          // the loud part of the sound reads clearly.
+          const rms = peaks[j][2] * ampScale
+          ctx.globalAlpha = 0.95
+          ctx.fillRect(bx, midY - rms, colW, Math.max(0.75, rms * 2))
         }
-        for (let j = endJ - 1; j >= startJ; j--) {
-          const bx = x + j * pxPerBucket
-          ctx.lineTo(bx, midY - peaks[j][0] * ampScale)
-        }
-        ctx.closePath()
-        ctx.fillStyle = lightenColor(color, 0.55)
-        ctx.globalAlpha = 0.4
-        ctx.fill()
-
-        // Inner RMS body — brighter and near-opaque, drawn symmetric around
-        // the centre line so the loud "body" of the sound reads clearly.
-        ctx.beginPath()
-        for (let j = startJ; j < endJ; j++) {
-          const bx = x + j * pxPerBucket
-          const yTop = midY - peaks[j][2] * ampScale
-          if (j === startJ) ctx.moveTo(bx, yTop)
-          else ctx.lineTo(bx, yTop)
-        }
-        for (let j = endJ - 1; j >= startJ; j--) {
-          const bx = x + j * pxPerBucket
-          ctx.lineTo(bx, midY + peaks[j][2] * ampScale)
-        }
-        ctx.closePath()
-        ctx.fillStyle = lightenColor(color, 0.8)
-        ctx.globalAlpha = 0.9
-        ctx.fill()
 
         // Faint centre baseline.
-        ctx.globalAlpha = 0.22
-        ctx.strokeStyle = lightenColor(color, 0.6)
+        ctx.globalAlpha = 0.18
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'
         ctx.lineWidth = 0.5
         ctx.beginPath()
         ctx.moveTo(x + 1, midY)
@@ -741,21 +728,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.fillText('◄', x + w - 10, y + 10)
     }
 
-    // Border
-    if (isSelected) {
-      ctx.strokeStyle = '#EF4444'
-      ctx.lineWidth = 2
-      ctx.shadowColor = 'rgba(220,38,38,0.4)'
-      ctx.shadowBlur = 8
-    } else {
-      ctx.strokeStyle = clip.muted ? '#2a2a38' : `${color}88`
-      ctx.lineWidth = 1
-      ctx.shadowBlur = 0
-    }
-    ctx.beginPath()
-    ctx.roundRect(x, y, w, h, 6)
-    ctx.stroke()
-    ctx.shadowBlur = 0
+    // No border — clips are borderless by design. Selection is shown by the
+    // red header stripe above, not an outline.
 
     // Group indicator — tinted tab on top-left corner
     const gid = clipToGroup[clip.id]
@@ -2094,9 +2068,24 @@ function darkenColor(hex: string, amount: number): string {
   return `rgb(${r},${g},${b})`
 }
 
-function lightenColor(hex: string, amount: number): string {
-  const r = Math.min(255, Math.round(parseInt(hex.slice(1, 3), 16) * (1 + amount)))
-  const g = Math.min(255, Math.round(parseInt(hex.slice(3, 5), 16) * (1 + amount)))
-  const b = Math.min(255, Math.round(parseInt(hex.slice(5, 7), 16) * (1 + amount)))
-  return `rgb(${r},${g},${b})`
+// Maps a spectral-brightness value (0..1, from the waveform peak data) to a
+// frequency colour: low/bass → red, mids → green, treble → blue. A 3-stop
+// lerp (red → green → blue) so a kick body reads red and cymbal/hat
+// transients run blue, matching the reference look.
+function spectralColor(b: number): string {
+  const t = b < 0 ? 0 : b > 1 ? 1 : b
+  const lerp = (a: number, z: number, k: number) => a + (z - a) * k
+  let r: number, g: number, bl: number
+  if (t < 0.5) {
+    const k = t / 0.5
+    r = lerp(235, 74, k)
+    g = lerp(64, 200, k)
+    bl = lerp(52, 120, k)
+  } else {
+    const k = (t - 0.5) / 0.5
+    r = lerp(74, 66, k)
+    g = lerp(200, 135, k)
+    bl = lerp(120, 245, k)
+  }
+  return `rgb(${r | 0},${g | 0},${bl | 0})`
 }

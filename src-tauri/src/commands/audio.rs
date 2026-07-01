@@ -415,7 +415,7 @@ pub fn get_waveform_peaks(
     state: State<AppState>,
     source_id: String,
     num_buckets: usize,
-) -> Result<Vec<[f32; 3]>, String> {
+) -> Result<Vec<[f32; 4]>, String> {
     let engine = state.engine.lock();
     let buffer = engine
         .audio_pool
@@ -430,37 +430,65 @@ pub fn get_waveform_peaks(
     let bucket_size = (num_frames as f64 / num_buckets as f64).ceil() as usize;
     let mut peaks = Vec::with_capacity(num_buckets);
 
-    // Each bucket is [min, max, rms]: min/max form the outer peak envelope
-    // (the transient "hair"), rms forms the brighter inner body — the
-    // two-layer waveform DAWs like FL Studio / rekordbox draw.
+    // Each bucket is [min, max, rms, brightness]:
+    //   * min/max form the outer peak envelope (the transient "hair"),
+    //   * rms forms the brighter inner body — the two-layer waveform DAWs
+    //     like FL Studio / rekordbox draw,
+    //   * brightness (0..1) is a cheap spectral-tilt estimate driving the
+    //     frequency colour of the slice: 0 = low/bass (drawn red), 1 =
+    //     high/treble (drawn blue). We estimate it from the RMS of the
+    //     first difference (x[n]-x[n-1], a one-tap high-pass) relative to
+    //     the signal RMS — no FFT needed, and it tracks dominant frequency
+    //     well enough for a per-slice colour. Kick bodies read red, cymbal
+    //     / hat transients read blue.
     let num_ch = buffer.channels.len();
+    let inv_ch = 1.0 / num_ch as f32;
     for i in 0..num_buckets {
         let start = i * bucket_size;
         let end = ((i + 1) * bucket_size).min(num_frames);
         if start >= num_frames {
-            peaks.push([0.0, 0.0, 0.0]);
+            peaks.push([0.0, 0.0, 0.0, 0.0]);
             continue;
         }
 
         let mut min_val: f32 = 0.0;
         let mut max_val: f32 = 0.0;
         let mut sum_sq: f64 = 0.0;
+        let mut diff_sq: f64 = 0.0;
 
-        // Mix all channels for the peak display
-        for frame in start..end {
-            let mut sample = 0.0_f32;
+        let mixed = |frame: usize| -> f32 {
+            let mut s = 0.0_f32;
             for ch in 0..num_ch {
-                sample += buffer.sample(ch, frame);
+                s += buffer.sample(ch, frame);
             }
-            sample /= num_ch as f32;
+            s * inv_ch
+        };
+
+        // Seed prev with the frame before the bucket (or the first sample)
+        // so the difference is continuous across bucket boundaries.
+        let mut prev = mixed(start.saturating_sub(1));
+        for frame in start..end {
+            let sample = mixed(frame);
             min_val = min_val.min(sample);
             max_val = max_val.max(sample);
             sum_sq += (sample as f64) * (sample as f64);
+            let d = (sample - prev) as f64;
+            diff_sq += d * d;
+            prev = sample;
         }
 
         let count = (end - start).max(1) as f64;
-        let rms = (sum_sq / count).sqrt() as f32;
-        peaks.push([min_val, max_val, rms]);
+        let rms = (sum_sq / count).sqrt();
+        let diff_rms = (diff_sq / count).sqrt();
+        // diff_rms/rms → 0 for a DC/low tone, ~2 near Nyquist. Fold into a
+        // 0..1 brightness: diff/(rms+diff) sits in 0..~0.66, so scale by
+        // 1.5 and clamp. Silence stays at 0 (waveform height is ~0 anyway).
+        let brightness = if rms + diff_rms > 1e-9 {
+            ((diff_rms / (rms + diff_rms)) * 1.5).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        peaks.push([min_val, max_val, rms as f32, brightness]);
     }
 
     Ok(peaks)

@@ -8,7 +8,6 @@ import { useMetronomeStore } from '../../stores/metronomeStore'
 import { usePlaylistToolStore, type PlaylistTool } from '../../stores/playlistToolStore'
 import { useIsMobile } from '../../hooks/useIsMobile'
 
-type Tool = 'draw' | 'paint' | 'delete' | 'mute' | 'slip' | 'slice' | 'select' | 'zoom'
 
 interface ToolbarProps {
   showBrowser: boolean
@@ -42,7 +41,6 @@ export function Toolbar(props: ToolbarProps) {
   const prevPattern = usePatternStore(s => s.prevPattern)
   const nextPattern = usePatternStore(s => s.nextPattern)
   const activePattern = patterns.find(p => p.id === activePatternId) || patterns[0]
-  const [activeTool, setActiveTool] = useState<Tool>('draw')
   const isMobile = useIsMobile()
 
   const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
@@ -382,36 +380,6 @@ export function Toolbar(props: ToolbarProps) {
         <button onClick={() => setHorizontalZoom(horizontalZoom / 1.25)} style={zoomBtn} title="Zoom out">−</button>
         <button onClick={zoomToFit} data-testid="zoom-to-fit" style={{ ...zoomBtn, fontSize: 8, letterSpacing: 0.3 }} title="Zoom to fit">FIT</button>
         <button onClick={() => setHorizontalZoom(horizontalZoom * 1.25)} style={zoomBtn} title="Zoom in">+</button>
-      </div>
-
-      <Sep />
-
-      {/* 9. Tool buttons */}
-      <div style={{ display: 'flex', gap: 0 }}>
-        <ToolSelectBtn tool="draw" active={activeTool} onClick={setActiveTool} onEnter={hint('Draw (P)')} onLeave={clear}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 8.5L2 6L7 1L9 3L4 8Z" stroke="currentColor" strokeWidth="0.8" fill={activeTool === 'draw' ? 'currentColor' : 'none'} opacity={activeTool === 'draw' ? 0.3 : 1}/><path d="M7 1L9 3" stroke="currentColor" strokeWidth="1"/></svg>
-        </ToolSelectBtn>
-        <ToolSelectBtn tool="paint" active={activeTool} onClick={setActiveTool} onEnter={hint('Paint (B)')} onLeave={clear}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="6" width="3" height="3.5" rx="0.5" stroke="currentColor" strokeWidth="0.8" fill="none"/><path d="M2.5 6V2.5C2.5 1.5 3.5 0.5 5 0.5H8C8.5 0.5 9 1 9 1.5V3C9 3.5 8.5 4 8 4H5.5L4 5.5" stroke="currentColor" strokeWidth="0.8" fill="none"/></svg>
-        </ToolSelectBtn>
-        <ToolSelectBtn tool="delete" active={activeTool} onClick={setActiveTool} onEnter={hint('Delete (D)')} onLeave={clear}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><line x1="2" y1="2" x2="8" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/><line x1="8" y1="2" x2="2" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
-        </ToolSelectBtn>
-        <ToolSelectBtn tool="mute" active={activeTool} onClick={setActiveTool} onEnter={hint('Mute (T)')} onLeave={clear}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" stroke="currentColor" strokeWidth="0.8" fill="none"/><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" strokeWidth="0.8"/></svg>
-        </ToolSelectBtn>
-        <ToolSelectBtn tool="slip" active={activeTool} onClick={setActiveTool} onEnter={hint('Slip (S)')} onLeave={clear}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="3" width="8" height="4" rx="0.5" stroke="currentColor" strokeWidth="0.8" fill="none"/><path d="M4 3V7M6 3V7" stroke="currentColor" strokeWidth="0.6" strokeDasharray="1 1"/></svg>
-        </ToolSelectBtn>
-        <ToolSelectBtn tool="slice" active={activeTool} onClick={setActiveTool} onEnter={hint('Slice (C)')} onLeave={clear}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M3 1L7 9" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/><circle cx="3" cy="1.5" r="1" stroke="currentColor" strokeWidth="0.6" fill="none"/></svg>
-        </ToolSelectBtn>
-        <ToolSelectBtn tool="select" active={activeTool} onClick={setActiveTool} onEnter={hint('Select (E)')} onLeave={clear}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 1L2 9L5 6.5L7.5 9L8.5 8L6 5.5L9 5L2 1Z" stroke="currentColor" strokeWidth="0.7" fill={activeTool === 'select' ? 'currentColor' : 'none'} opacity={activeTool === 'select' ? 0.3 : 1}/></svg>
-        </ToolSelectBtn>
-        <ToolSelectBtn tool="zoom" active={activeTool} onClick={setActiveTool} onEnter={hint('Zoom (Z)')} onLeave={clear}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><circle cx="4.5" cy="4.5" r="3" stroke="currentColor" strokeWidth="0.9" fill="none"/><line x1="7" y1="7" x2="9.5" y2="9.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/><line x1="3" y1="4.5" x2="6" y2="4.5" stroke="currentColor" strokeWidth="0.7"/><line x1="4.5" y1="3" x2="4.5" y2="6" stroke="currentColor" strokeWidth="0.7"/></svg>
-        </ToolSelectBtn>
       </div>
 
       <Sep />
@@ -970,30 +938,6 @@ function ToolBtn({ children, onEnter, onLeave, onClick }: {
   )
 }
 
-function ToolSelectBtn({ tool, active, onClick, children, onEnter, onLeave }: {
-  tool: Tool; active: Tool; onClick: (t: Tool) => void
-  children: React.ReactNode; onEnter: () => void; onLeave: () => void
-}) {
-  const isActive = tool === active
-  return (
-    <button
-      onClick={() => onClick(tool)}
-      onMouseEnter={onEnter}
-      onMouseLeave={onLeave}
-      style={{
-        width: 22, height: 22,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: isActive ? hw.accent : hw.textMuted,
-        background: isActive ? hw.accentDim : 'transparent',
-        border: `1px solid ${isActive ? hw.accentGlow : 'transparent'}`,
-        borderRadius: hw.radius.sm,
-        transition: 'all 0.1s',
-      }}
-    >
-      {children}
-    </button>
-  )
-}
 
 // Panel icons rendered at 15px (up from the old 12px) — legible on the
 // dedicated tabs row. viewBox stays 0 0 12 12; only the render size grew.
