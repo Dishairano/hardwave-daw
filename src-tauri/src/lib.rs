@@ -352,12 +352,13 @@ pub fn run() {
         .setup(|app| {
             log::info!("Hardwave DAW starting");
 
-            // Frontend hot-swap: if the updater has previously staged a
-            // newer bundle (active.txt + <version>/index.html present),
-            // navigate the main window to the custom protocol so the
-            // user sees the cached UI on this launch. No-op when the
-            // cache is empty — the bundled UI keeps loading.
-            frontend_updater::maybe_activate_cache(&app.handle().clone());
+            // NOTE (2026-07-01): the custom-scheme frontend hot-swap was
+            // retired — serving a cached bundle over `hardwave-app://`
+            // rendered grey on WebView2. We now ALWAYS load the bundled
+            // frontend over `tauri://` (which renders correctly), and the
+            // launch splash drives the built-in Tauri installer updater
+            // instead (see frontend_updater::frontend_update_check_and_apply).
+            // So `maybe_activate_cache` is intentionally NOT called here.
 
             // Start meter broadcast thread
             let state = app.state::<AppState>();

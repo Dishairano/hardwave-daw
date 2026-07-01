@@ -11,6 +11,16 @@
 //! an error mid-launch. Errors are logged for triage.
 //!
 //! See proposal at suite.hardwavestudios.com/frontend-updater-mockup/
+//!
+//! 2026-07-01: the custom-scheme hot-swap (serve a downloaded bundle over
+//! `hardwave-app://`) was retired — it rendered grey on WebView2. The
+//! launch splash now drives the built-in Tauri updater instead
+//! (`frontend_update_check_and_apply`), which downloads + installs the
+//! signed installer and relaunches over `tauri://` (which renders fine).
+//! The hot-swap machinery below is kept but no longer invoked; hence the
+//! transitional dead-code allow. Slated for removal once the field has
+//! rolled onto the new updater.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -862,10 +872,101 @@ fn plan_label(plan: &LaunchPlan) -> &'static str {
 }
 
 /// Tauri command bridge — called by the splash screen JS at app launch.
-/// Always resolves so the splash never blocks on a runtime error.
+/// Drives the built-in Tauri updater (download the signed installer,
+/// install it, relaunch) while emitting the same `UpdateStatus` events the
+/// loading screen already renders — so the branded splash UX is unchanged,
+/// but the delivery mechanism is the reliable installer path over
+/// `tauri://` instead of the grey-screen custom-scheme hot-swap.
+///
+/// Always resolves (or diverges via `restart`) so the splash never blocks:
+/// every failure path emits `Skipped` and returns `Ok` so the app proceeds
+/// to load the bundled UI.
 #[tauri::command]
 pub async fn frontend_update_check_and_apply(app: AppHandle) -> Result<(), String> {
-    check_and_apply(app).await
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use tauri_plugin_updater::UpdaterExt;
+
+    emit(&app, UpdateStatus::Checking);
+
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            emit(
+                &app,
+                UpdateStatus::Skipped {
+                    reason: format!("updater unavailable: {e}"),
+                },
+            );
+            return Ok(());
+        }
+    };
+
+    // Bound the network check so a dead endpoint never stalls the splash.
+    let update = match tokio::time::timeout(Duration::from_secs(15), updater.check()).await {
+        Ok(Ok(Some(u))) => u,
+        Ok(Ok(None)) => {
+            emit(&app, UpdateStatus::UpToDate);
+            return Ok(());
+        }
+        Ok(Err(e)) => {
+            emit(
+                &app,
+                UpdateStatus::Skipped {
+                    reason: format!("update check failed: {e}"),
+                },
+            );
+            return Ok(());
+        }
+        Err(_) => {
+            emit(
+                &app,
+                UpdateStatus::Skipped {
+                    reason: "update check timed out".to_string(),
+                },
+            );
+            return Ok(());
+        }
+    };
+
+    let target = update.version.clone();
+    let downloaded = Arc::new(AtomicU64::new(0));
+    let dl = downloaded.clone();
+    let app_dl = app.clone();
+
+    let result = update
+        .download_and_install(
+            move |chunk_len, content_len| {
+                let d = dl.fetch_add(chunk_len as u64, Ordering::Relaxed) + chunk_len as u64;
+                emit(
+                    &app_dl,
+                    UpdateStatus::Downloading {
+                        downloaded: d,
+                        total: content_len.unwrap_or(0),
+                    },
+                );
+            },
+            || {},
+        )
+        .await;
+
+    match result {
+        Ok(()) => {
+            emit(&app, UpdateStatus::Restarting { version: target });
+            // Let the splash paint "Restarting..." before the process dies.
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            app.restart();
+        }
+        Err(e) => {
+            emit(
+                &app,
+                UpdateStatus::Skipped {
+                    reason: format!("update install failed: {e}"),
+                },
+            );
+            Ok(())
+        }
+    }
 }
 
 /// Returns the active frontend version (if any) plus the API version of
