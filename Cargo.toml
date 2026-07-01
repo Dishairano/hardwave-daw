@@ -20,7 +20,7 @@ members = [
 # `env!("CARGO_PKG_VERSION")` and reports it as `API_VERSION` to the
 # resolver — drift here disables hot-swap for every running binary on
 # the next manifest publish.
-version = "0.200.2"
+version = "0.200.3"
 edition = "2021"
 license = "MIT"
 authors = ["Hardwave Studios"]
@@ -83,7 +83,13 @@ dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Tauri
-tauri = { version = "2", features = [] }
+# `protocol-asset` compiles in the built-in `asset:`/`http://asset.localhost`
+# protocol handler that `convertFileSrc()` targets. Without it, every
+# `fetch(convertFileSrc(path))` in the UI (sample editor, beat slicer,
+# browser preview, project HEAD checks) fails with "Failed to fetch". The
+# config counterpart is `app.security.assetProtocol` in tauri.conf.json —
+# both the feature AND the scoped config are required.
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-build = "2"
 
 [profile.release]
