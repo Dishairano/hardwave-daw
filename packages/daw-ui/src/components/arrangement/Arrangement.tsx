@@ -601,11 +601,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const radius = 1
     const headerH = Math.min(9, Math.max(7, Math.round(h * 0.4)))
 
-    // Clip body — fuller saturation than before
-    ctx.fillStyle = color
-    ctx.globalAlpha = clip.muted ? 0.25 : 0.35
+    // Clip body — near-black base with only a faint colour tint, so the
+    // frequency-coloured waveform reads clearly on top. FL Studio / rekordbox
+    // keep the body dark and let the header carry the clip's colour identity.
     ctx.beginPath()
     ctx.roundRect(x, y, w, h, radius)
+    ctx.fillStyle = '#0b0910'
+    ctx.globalAlpha = clip.muted ? 0.72 : 0.9
+    ctx.fill()
+    ctx.fillStyle = color
+    ctx.globalAlpha = clip.muted ? 0.06 : 0.15
     ctx.fill()
     ctx.globalAlpha = 1.0
 
@@ -663,20 +668,23 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         // blue (see spectralColor). Drawn as per-column bars rather than a
         // single filled path so the colour can vary along the clip — a kick
         // body glows red, a cymbal's transient tips run blue.
-        const colW = Math.max(1, pxPerBucket + 0.6)
+        // Whole-pixel column width — no sub-pixel overlap so the waveform
+        // stays crisp (FL Studio / rekordbox draw hard vertical peak lines,
+        // not soft blended blobs).
+        const colW = Math.max(1, Math.ceil(pxPerBucket))
         for (let j = startJ; j < endJ; j++) {
-          const bx = x + j * pxPerBucket
+          const bx = Math.floor(x + j * pxPerBucket)
           ctx.fillStyle = spectralColor(peaks[j][3])
-          // Outer min/max envelope — the translucent transient "hair".
+          // Outer min/max envelope — the transient "hair".
           const top = midY - peaks[j][1] * ampScale
           const bot = midY - peaks[j][0] * ampScale
-          ctx.globalAlpha = 0.5
-          ctx.fillRect(bx, top, colW, Math.max(0.75, bot - top))
-          // Inner RMS body — brighter, symmetric around the centre line so
-          // the loud part of the sound reads clearly.
+          ctx.globalAlpha = 0.72
+          ctx.fillRect(bx, top, colW, Math.max(1, bot - top))
+          // Inner RMS body — full-opacity, symmetric around the centre line
+          // so the loud part of the sound reads as a bright solid core.
           const rms = peaks[j][2] * ampScale
-          ctx.globalAlpha = 0.95
-          ctx.fillRect(bx, midY - rms, colW, Math.max(0.75, rms * 2))
+          ctx.globalAlpha = 1.0
+          ctx.fillRect(bx, midY - rms, colW, Math.max(1, rms * 2))
         }
 
         // Faint centre baseline.
