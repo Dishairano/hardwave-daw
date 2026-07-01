@@ -196,8 +196,15 @@ if [ -n "$LAST_VTAG" ]; then
   SOFT_PENDING=$(soft_diff "HEAD")
 
   if [ -z "$HARD_COMMITTED" ] && [ -z "$HARD_PENDING" ] && [ -z "$SOFT_COMMITTED" ] && [ -z "$SOFT_PENDING" ]; then
-    FRONTEND_ONLY=1
-    echo "release.sh: only frontend files changed since $LAST_VTAG — will tag as fe-v$NEW_VERSION (hot-swap path, ~2min CI)"
+    # Hot-swap RETIRED in v0.200.0. The app now always serves the bundled
+    # UI over tauri:// and updates through the built-in Tauri updater
+    # (which ships a full bundle). A fe-v* tag only triggers
+    # frontend-publish.yml — a pipeline the running binary no longer
+    # consults — so a frontend-only release tagged fe-v* would never reach
+    # users. Keep FRONTEND_ONLY=0 so every release goes down the full v*
+    # build path and actually lands via the updater feed.
+    FRONTEND_ONLY=0
+    echo "release.sh: only frontend files changed since $LAST_VTAG — full v$NEW_VERSION build (fe-v hot-swap path disabled; retired in v0.200.0)"
   else
     echo "release.sh: backend changes detected since $LAST_VTAG — full v$NEW_VERSION build (all platforms, ~25min CI)"
     TRIGGER="${HARD_COMMITTED:-${HARD_PENDING:-${SOFT_COMMITTED:-$SOFT_PENDING}}}"

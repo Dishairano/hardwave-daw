@@ -62,30 +62,47 @@ export function Toolbar(props: ToolbarProps) {
   return (
     <div style={{
       display: 'flex',
-      alignItems: 'center',
-      height: 40,
+      flexDirection: 'column',
       flexShrink: 0,
       background: hw.bgToolbarGrad,
       backdropFilter: hw.blur.md,
       borderBottom: `1px solid ${hw.border}`,
-      padding: '0 6px',
-      gap: 2,
-      overflowX: isMobile ? 'auto' : 'visible',
-      overflowY: 'hidden',
-      WebkitOverflowScrolling: 'touch',
-      scrollbarWidth: 'thin',
     }}>
-      {/* 1. Panel toggle buttons */}
-      <div style={{ display: 'flex', gap: 2 }}>
-        <PanelBtn icon="playlist" label="Playlist" active={props.showPlaylist} onClick={props.onTogglePlaylist} onEnter={hint('Playlist (F5)')} onLeave={clear} />
-        <PanelBtn icon="channel" label="Channel" active={props.showChannelRack} onClick={props.onToggleChannelRack} onEnter={hint('Channel Rack (F6)')} onLeave={clear} />
-        <PanelBtn icon="pianoroll" label="Piano" active={props.showPianoRoll} onClick={props.onTogglePianoRoll} onEnter={hint('Piano Roll (F7)')} onLeave={clear} />
-        <PanelBtn icon="mixer" label="Mixer" active={props.showMixer} onClick={props.onToggleMixer} onEnter={hint('Mixer (F9)')} onLeave={clear} />
-        <PanelBtn icon="browser" label="Browser" active={props.showBrowser} onClick={props.onToggleBrowser} onEnter={hint('Browser')} onLeave={clear} />
+      {/* Row 1 — panel tabs. Split onto their own line so the transport /
+          editing controls below read as a distinct cluster. The old
+          single 40px row crammed tabs + transport + meters together and
+          felt "too active"; these are larger, labeled tabs. */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        height: 30,
+        padding: '0 6px',
+        gap: 4,
+        borderBottom: `1px solid ${hw.borderDark}`,
+        overflowX: isMobile ? 'auto' : 'visible',
+        overflowY: 'hidden',
+        WebkitOverflowScrolling: 'touch',
+        scrollbarWidth: 'thin',
+      }}>
+        <TabBtn icon="playlist" label="Playlist" active={props.showPlaylist} onClick={props.onTogglePlaylist} onEnter={hint('Playlist (F5)')} onLeave={clear} />
+        <TabBtn icon="channel" label="Channel" active={props.showChannelRack} onClick={props.onToggleChannelRack} onEnter={hint('Channel Rack (F6)')} onLeave={clear} />
+        <TabBtn icon="pianoroll" label="Piano" active={props.showPianoRoll} onClick={props.onTogglePianoRoll} onEnter={hint('Piano Roll (F7)')} onLeave={clear} />
+        <TabBtn icon="mixer" label="Mixer" active={props.showMixer} onClick={props.onToggleMixer} onEnter={hint('Mixer (F9)')} onLeave={clear} />
+        <TabBtn icon="browser" label="Browser" active={props.showBrowser} onClick={props.onToggleBrowser} onEnter={hint('Browser')} onLeave={clear} />
       </div>
 
-      <Sep />
-
+      {/* Row 2 — transport, tempo, editing tools + meters. */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        height: 40,
+        padding: '0 6px',
+        gap: 2,
+        overflowX: isMobile ? 'auto' : 'visible',
+        overflowY: 'hidden',
+        WebkitOverflowScrolling: 'touch',
+        scrollbarWidth: 'thin',
+      }}>
       {/* 1b. Undo / Redo */}
       <div style={{ display: 'flex', gap: 2 }}>
         <ToolBtn onEnter={hint('Undo (Ctrl+Z)')} onLeave={clear} onClick={() => undoTracks()}>
@@ -480,6 +497,7 @@ export function Toolbar(props: ToolbarProps) {
           <polyline points="0,6 5,6 8,3 12,9 16,4 20,8 24,5 28,7 32,6 36,6 40,6"
             fill="none" stroke={hw.accent} strokeWidth="1" opacity="0.5" />
         </svg>
+      </div>
       </div>
     </div>
   )
@@ -977,32 +995,40 @@ function ToolSelectBtn({ tool, active, onClick, children, onEnter, onLeave }: {
   )
 }
 
-function PanelBtn({ icon, active, onClick, onEnter, onLeave }: {
+// Panel icons rendered at 15px (up from the old 12px) — legible on the
+// dedicated tabs row. viewBox stays 0 0 12 12; only the render size grew.
+const PANEL_ICONS: Record<string, React.ReactNode> = {
+  playlist: <svg width="15" height="15" viewBox="0 0 12 12"><rect x="0.5" y="1" width="4.5" height="3.5" rx="0.5" fill="currentColor"/><rect x="6" y="1" width="5.5" height="3.5" rx="0.5" fill="currentColor" opacity="0.6"/><rect x="1.5" y="6.5" width="7" height="3.5" rx="0.5" fill="currentColor"/></svg>,
+  channel: <svg width="15" height="15" viewBox="0 0 12 12"><rect x="0.5" y="1.5" width="11" height="2.5" rx="0.5" fill="currentColor"/><rect x="0.5" y="5" width="11" height="2.5" rx="0.5" fill="currentColor"/><rect x="0.5" y="8.5" width="11" height="2.5" rx="0.5" fill="currentColor"/></svg>,
+  pianoroll: <svg width="15" height="15" viewBox="0 0 12 12"><rect x="0.5" y="0.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" strokeWidth="0.8"/><rect x="0.5" y="0.5" width="3.5" height="2.5" fill="currentColor"/><rect x="0.5" y="4.5" width="3.5" height="2.5" fill="currentColor"/><rect x="0.5" y="8.5" width="3.5" height="2.5" fill="currentColor"/><rect x="5.5" y="3.5" width="5" height="2" rx="0.5" fill="currentColor" opacity="0.7"/><rect x="4.5" y="7" width="4.5" height="2" rx="0.5" fill="currentColor" opacity="0.7"/></svg>,
+  mixer: <svg width="15" height="15" viewBox="0 0 12 12"><line x1="3" y1="1" x2="3" y2="11" stroke="currentColor" strokeWidth="1.5"/><line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.5"/><line x1="9" y1="1" x2="9" y2="11" stroke="currentColor" strokeWidth="1.5"/><circle cx="3" cy="4" r="1.5" fill="currentColor"/><circle cx="6" cy="7" r="1.5" fill="currentColor"/><circle cx="9" cy="5.5" r="1.5" fill="currentColor"/></svg>,
+  browser: <svg width="15" height="15" viewBox="0 0 12 12"><rect x="0.5" y="0.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" strokeWidth="1"/><line x1="4" y1="0.5" x2="4" y2="11.5" stroke="currentColor" strokeWidth="1"/></svg>,
+}
+
+// Labeled panel tab for the top row: bigger icon + text label, so the
+// five workspace toggles read as tabs rather than cryptic mini-icons.
+function TabBtn({ icon, label, active, onClick, onEnter, onLeave }: {
   icon: string; label: string; active: boolean; onClick: () => void; onEnter: () => void; onLeave: () => void
 }) {
-  const icons: Record<string, React.ReactNode> = {
-    playlist: <svg width="12" height="12" viewBox="0 0 12 12"><rect x="0.5" y="1" width="4.5" height="3.5" rx="0.5" fill="currentColor"/><rect x="6" y="1" width="5.5" height="3.5" rx="0.5" fill="currentColor" opacity="0.6"/><rect x="1.5" y="6.5" width="7" height="3.5" rx="0.5" fill="currentColor"/></svg>,
-    channel: <svg width="12" height="12" viewBox="0 0 12 12"><rect x="0.5" y="1.5" width="11" height="2.5" rx="0.5" fill="currentColor"/><rect x="0.5" y="5" width="11" height="2.5" rx="0.5" fill="currentColor"/><rect x="0.5" y="8.5" width="11" height="2.5" rx="0.5" fill="currentColor"/></svg>,
-    pianoroll: <svg width="12" height="12" viewBox="0 0 12 12"><rect x="0.5" y="0.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" strokeWidth="0.8"/><rect x="0.5" y="0.5" width="3.5" height="2.5" fill="currentColor"/><rect x="0.5" y="4.5" width="3.5" height="2.5" fill="currentColor"/><rect x="0.5" y="8.5" width="3.5" height="2.5" fill="currentColor"/><rect x="5.5" y="3.5" width="5" height="2" rx="0.5" fill="currentColor" opacity="0.7"/><rect x="4.5" y="7" width="4.5" height="2" rx="0.5" fill="currentColor" opacity="0.7"/></svg>,
-    mixer: <svg width="12" height="12" viewBox="0 0 12 12"><line x1="3" y1="1" x2="3" y2="11" stroke="currentColor" strokeWidth="1.5"/><line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.5"/><line x1="9" y1="1" x2="9" y2="11" stroke="currentColor" strokeWidth="1.5"/><circle cx="3" cy="4" r="1.5" fill="currentColor"/><circle cx="6" cy="7" r="1.5" fill="currentColor"/><circle cx="9" cy="5.5" r="1.5" fill="currentColor"/></svg>,
-    browser: <svg width="12" height="12" viewBox="0 0 12 12"><rect x="0.5" y="0.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" strokeWidth="1"/><line x1="4" y1="0.5" x2="4" y2="11.5" stroke="currentColor" strokeWidth="1"/></svg>,
-  }
   return (
     <button
       onClick={onClick}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       style={{
-        width: 26, height: 26,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: active ? hw.accent : hw.textFaint,
+        display: 'flex', alignItems: 'center', gap: 7,
+        height: 24, padding: '0 12px',
+        fontSize: 11, fontWeight: 600, letterSpacing: 0.2,
+        color: active ? hw.accent : hw.textMuted,
         background: active ? hw.accentDim : 'transparent',
         border: `1px solid ${active ? hw.accentGlow : 'transparent'}`,
         borderRadius: hw.radius.sm,
+        cursor: 'pointer',
         transition: 'all 0.1s',
       }}
     >
-      {icons[icon]}
+      <span style={{ display: 'flex', alignItems: 'center' }}>{PANEL_ICONS[icon]}</span>
+      {label}
     </button>
   )
 }
