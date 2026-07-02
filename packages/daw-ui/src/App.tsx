@@ -371,11 +371,10 @@ export function App() {
       browser: setShowBrowser, playlist: setShowPlaylist, channelRack: setShowChannelRack,
       pianoRoll: setShowPianoRoll, mixer: setShowMixer,
     }
-    const onPopout = (e: Event) => {
-      const id = (e as CustomEvent<string>).detail
-      setters[id]?.(false)
-    }
+    const onPopout = (e: Event) => setters[(e as CustomEvent<string>).detail]?.(false)
+    const onRedock = (e: Event) => setters[(e as CustomEvent<string>).detail]?.(true)
     window.addEventListener('daw:popoutPanel', onPopout)
+    window.addEventListener('daw:redockPanel', onRedock)
     let unlisten: (() => void) | undefined
     import('@tauri-apps/api/event').then(({ listen }) => {
       listen<{ panel: string }>('daw:dockPanel', (ev) => setters[ev.payload.panel]?.(true))
@@ -384,6 +383,7 @@ export function App() {
     }).catch(() => { /* noop */ })
     return () => {
       window.removeEventListener('daw:popoutPanel', onPopout)
+      window.removeEventListener('daw:redockPanel', onRedock)
       if (unlisten) unlisten()
     }
   }, [])

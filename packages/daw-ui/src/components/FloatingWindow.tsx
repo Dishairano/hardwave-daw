@@ -147,6 +147,8 @@ export function DetachButton({ panelId, title }: { panelId: PanelId; title?: str
   // the open_panel_window command, then hide the inline copy in this window so
   // it isn't shown twice. The piano roll carries its open clip as context.
   const onClick = async () => {
+    // Hide the inline copy right away — the panel is moving to its own window.
+    window.dispatchEvent(new CustomEvent('daw:popoutPanel', { detail: panelId }))
     try {
       const { invoke } = await import('@tauri-apps/api/core')
       let params: string | undefined
@@ -159,9 +161,10 @@ export function DetachButton({ panelId, title }: { panelId: PanelId; title?: str
         }
       }
       await invoke('open_panel_window', { panel: panelId, params })
-      window.dispatchEvent(new CustomEvent('daw:popoutPanel', { detail: panelId }))
     } catch (e) {
       console.warn('detach to window failed', e)
+      // Window failed to open — bring the inline copy back.
+      window.dispatchEvent(new CustomEvent('daw:redockPanel', { detail: panelId }))
     }
   }
   return (

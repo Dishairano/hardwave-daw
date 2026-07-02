@@ -51,7 +51,11 @@ pub fn open_panel_window(
         .filter(|p| !p.is_empty())
         .map(|p| format!("&{p}"))
         .unwrap_or_default();
-    let url = WebviewUrl::App(format!("index.html?window={slug}{extra}").into());
+    // Pass the panel in the URL HASH, not a query string. A query on the
+    // window URL (`index.html?window=..`) can break asset resolution so the
+    // page never loads (blank white window); a hash is client-side only, so
+    // index.html always loads and the frontend reads it from location.hash.
+    let url = WebviewUrl::App(format!("index.html#window={slug}{extra}").into());
 
     WebviewWindowBuilder::new(&app, &label, url)
         .title(format!("Hardwave DAW — {slug}"))
