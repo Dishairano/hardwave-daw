@@ -1,8 +1,9 @@
 use crate::AppState;
 use hardwave_midi::theory::{Chord, ChordQuality};
 use hardwave_midi::{
-    arpeggiate, chordify, generate_progression, humanize, legato, note_repeat, snap_to_scale,
-    strum, ArpSettings, HumanizeSettings, MidiNote, Scale, StrumDirection,
+    arpeggiate, chordify, generate_melody_line, generate_progression, humanize, legato,
+    note_repeat, snap_to_scale, strum, ArpSettings, HumanizeSettings, MidiNote, Scale,
+    StrumDirection,
 };
 use serde::Serialize;
 use tauri::State;
@@ -468,6 +469,36 @@ pub fn generate_progression_in_clip(
             bars.clamp(1, 64),
             60,
             hardwave_midi::PPQ * 4,
+        );
+        let count = generated.len();
+        notes.extend(generated);
+        count
+    })
+}
+
+/// Generate a diatonic MELODY line into a clip, appended after any existing
+/// notes. Builds a `bars`-long chord progression from the start chord (root
+/// pitch-class + quality) and lays `notes_per_bar` melody notes over each bar.
+#[tauri::command]
+pub fn generate_melody_in_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    key_root: u8,
+    quality: String,
+    bars: usize,
+    notes_per_bar: usize,
+) -> Result<usize, String> {
+    let quality = parse_chord_quality(&quality)?;
+    let start = Chord::new(key_root, quality);
+    with_clip_notes(&state, &track_id, &clip_id, |notes| {
+        let generated = generate_melody_line(
+            key_root,
+            start,
+            bars.clamp(1, 64),
+            60,
+            hardwave_midi::PPQ * 4,
+            notes_per_bar.clamp(1, 16),
         );
         let count = generated.len();
         notes.extend(generated);

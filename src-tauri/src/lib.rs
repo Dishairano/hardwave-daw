@@ -295,6 +295,7 @@ pub fn run() {
             commands::midi::note_repeat_clip_notes,
             commands::midi::chordify_clip_notes,
             commands::midi::generate_progression_in_clip,
+            commands::midi::generate_melody_in_clip,
             commands::midi::legato_clip_notes,
             // MIDI input (live)
             commands::midi_input::list_midi_inputs,

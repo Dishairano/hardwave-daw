@@ -7,7 +7,7 @@
 //! current selection; the result replaces (arp) or mutates (strum,
 //! scale-snap) the selected notes.
 
-use crate::theory::{suggest_next_chord, Chord, ChordQuality};
+use crate::theory::{generate_melody, suggest_next_chord, Chord, ChordQuality};
 use crate::{GridDivision, MidiNote};
 use serde::{Deserialize, Serialize};
 
@@ -435,6 +435,53 @@ pub fn generate_progression(
     out
 }
 
+/// Generate a diatonic MELODY line over an auto-built chord progression.
+/// Walks `suggest_next_chord` for `bars` chords (one per bar), asks
+/// `theory::generate_melody` for `notes_per_bar` pitches per chord, and lays
+/// them out as evenly-spaced notes across each bar. Returns the melody notes
+/// only (not the underlying chords), so the piano roll gets a single-line
+/// lead the user can edit — mirrors `generate_progression`'s shape.
+pub fn generate_melody_line(
+    key_root: u8,
+    start: Chord,
+    bars: usize,
+    octave_base: u8,
+    bar_ticks: u64,
+    notes_per_bar: usize,
+) -> Vec<MidiNote> {
+    if bars == 0 || notes_per_bar == 0 {
+        return Vec::new();
+    }
+    // Build the chord progression (one chord per bar).
+    let mut chords = Vec::with_capacity(bars);
+    let mut chord = start;
+    for _ in 0..bars {
+        chords.push(chord);
+        chord = suggest_next_chord(chord, key_root);
+    }
+    // Diatonic melody pitches over those chords, then space them out.
+    let pitches = generate_melody(&chords, key_root % 12, octave_base, notes_per_bar);
+    let step = (bar_ticks / notes_per_bar as u64).max(1);
+    let mut out = Vec::with_capacity(pitches.len());
+    for (i, &pitch) in pitches.iter().enumerate() {
+        if pitch > 127 {
+            continue;
+        }
+        let bar = i / notes_per_bar;
+        let idx_in_bar = i % notes_per_bar;
+        let at = bar as u64 * bar_ticks + idx_in_bar as u64 * step;
+        out.push(MidiNote {
+            start_tick: at,
+            duration_ticks: step,
+            pitch,
+            velocity: 0.75,
+            channel: 0,
+            muted: false,
+        });
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Humanize
 // ---------------------------------------------------------------------------
@@ -596,6 +643,19 @@ mod tests {
             .map(|n| n.pitch % 12)
             .unwrap();
         assert_eq!(bar1_root, 5); // F
+    }
+
+    #[test]
+    fn melody_line_lays_out_notes_per_bar_evenly() {
+        let start = Chord::new(0, ChordQuality::Major);
+        // 2 bars × 4 notes/bar = 8 melody notes; single line (no chords).
+        let notes = generate_melody_line(0, start, 2, 60, 3840, 4);
+        assert_eq!(notes.len(), 8);
+        // Evenly spaced: step = 3840/4 = 960; first bar starts at 0,960,1920,2880.
+        let starts: Vec<u64> = notes.iter().take(4).map(|n| n.start_tick).collect();
+        assert_eq!(starts, vec![0, 960, 1920, 2880]);
+        // Every pitch is in MIDI range.
+        assert!(notes.iter().all(|n| n.pitch <= 127));
     }
 
     #[test]

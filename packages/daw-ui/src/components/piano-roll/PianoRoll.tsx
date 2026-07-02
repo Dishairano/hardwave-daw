@@ -965,6 +965,7 @@ export function PianoRoll() {
   const [chordQuality, setChordQuality] = useState('major')
   const [progKey, setProgKey] = useState(0)
   const [progBars, setProgBars] = useState(4)
+  const [melodyNotesPerBar, setMelodyNotesPerBar] = useState(4)
 
   const runTransform = useCallback(async (
     kind: 'legato' | 'staccato' | 'humanizeTime' | 'humanizeVel' | 'humanizeLen' | 'flip' | 'reverse' | 'crescendo' | 'decrescendo' | 'velFull' | 'velDouble' | 'velHalf' | 'velReset' | 'grooveMpc60' | 'grooveSp1200' | 'grooveLogic' | 'grooveStraight',
@@ -1251,6 +1252,20 @@ export function PianoRoll() {
       await refreshNotes()
     } catch (err) { console.warn('progression failed', err) }
   }, [activeTrackId, activeClipId, progKey, chordQuality, progBars, refreshNotes])
+
+  const runMelody = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setGenOpen(false)
+    try {
+      await invoke('generate_melody_in_clip', {
+        trackId: activeTrackId, clipId: activeClipId,
+        keyRoot: progKey, quality: chordQuality, bars: progBars,
+        notesPerBar: melodyNotesPerBar,
+      })
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+    } catch (err) { console.warn('melody failed', err) }
+  }, [activeTrackId, activeClipId, progKey, chordQuality, progBars, melodyNotesPerBar, refreshNotes])
 
   useEffect(() => {
     if (!qOpen) return
@@ -2245,6 +2260,24 @@ export function PianoRoll() {
                   title="Generate a diatonic chord progression (uses the Chord type above as the starting chord)"
                   style={{ padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff', background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer' }}>
                   Generate progression
+                </button>
+              </div>
+
+              {/* Melody line — a diatonic lead over an auto-built progression.
+                  Reuses the Key / Chord-type / Bars controls above. */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Melody</div>
+                <label style={{ fontSize: 9, color: hw.textMuted }}>
+                  Notes / bar
+                  <select value={melodyNotesPerBar} onChange={e => setMelodyNotesPerBar(Number(e.target.value))}
+                    style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
+                    {[1, 2, 4, 8].map(b => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </label>
+                <button onClick={runMelody}
+                  title="Generate a diatonic melody line over an auto-built progression (uses the Key, Chord type and Bars above)"
+                  style={{ padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff', background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer' }}>
+                  Generate melody
                 </button>
               </div>
             </div>
