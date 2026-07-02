@@ -58,6 +58,7 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
   const inserts = useTrackStore((s) =>
     s.tracks.filter((t) => t.kind !== 'Master' && t.kind !== 'Automation'),
   )
+  const addAudioTrack = useTrackStore((s) => s.addAudioTrack)
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const innerRef = useRef<HTMLDivElement | null>(null)
@@ -208,7 +209,10 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
         className="mx-strips-inner"
         ref={innerRef}
         style={{
-          width: totalSize,
+          // Include the trailing "+" cell in the scroll width so the scroll
+          // stops right after it (no scrolling into empty space past the
+          // last strip) and the button is reachable.
+          width: totalSize + STRIP_W,
           height: '100%',
           position: 'relative',
           willChange: 'transform',
@@ -243,6 +247,21 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
             </div>
           )
         })}
+        {/* Add-channel button, pinned right after the last strip. */}
+        <button
+          className="mx-add-strip"
+          title="Add a mixer channel"
+          onClick={() => { void addAudioTrack() }}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: totalSize,
+            width: STRIP_W,
+            height: '100%',
+          }}
+        >
+          +
+        </button>
       </div>
     </div>
   )

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect } from 'react'
 import { MasterStrip } from './MasterStrip'
 import { StripsScroller } from './StripsScroller'
 import { FxRackPanel } from './FxRackPanel'
+import { DetachButton } from '../../FloatingWindow'
 import { useTrackStore } from '../../../stores/trackStore'
 import { useMeterStore } from '../../../stores/meterStore'
 import { useSendStore } from '../../../stores/sendStore'
@@ -61,7 +62,10 @@ export const MixerPanelV2 = memo(function MixerPanelV2() {
   const onSelect = useCallback((id: string) => selectTrack(id), [selectTrack])
 
   return (
-    <div className="mx-v2-root">
+    <div className="mx-v2-root" style={{ position: 'relative' }}>
+      <div className="mx-detach" title="Pop the mixer into its own window (drag to another monitor)">
+        <DetachButton panelId="mixer" />
+      </div>
       <div className="mx-v2-body">
         <MasterStrip selected={selectedId === masterId} onSelect={onSelect} />
         <StripsScroller selectedId={selectedId} onSelect={onSelect} />
