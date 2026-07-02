@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
-import { useTransportStore, SNAP_VALUES } from '../../stores/transportStore'
+import { useTransportStore } from '../../stores/transportStore'
 import { useTrackStore } from '../../stores/trackStore'
 import { usePatternStore } from '../../stores/patternStore'
 import { useMetronomeStore } from '../../stores/metronomeStore'
-import { usePlaylistToolStore, type PlaylistTool } from '../../stores/playlistToolStore'
 import { useIsMobile } from '../../hooks/useIsMobile'
 
 
@@ -25,16 +24,10 @@ interface ToolbarProps {
 
 export function Toolbar(props: ToolbarProps) {
   const {
-    playing, looping, bpm, positionSamples, sampleRate,
-    masterVolumeDb, timeSigNumerator, timeSigDenominator, patternMode,
-    togglePlayback, stop, setBpm, toggleLoop, tapTempo,
-    setMasterVolume, setTimeSignature, setPatternMode,
-    snapValue, snapEnabled, setSnapValue, toggleSnap,
-    horizontalZoom, setHorizontalZoom, zoomToFit,
+    playing, looping, bpm, positionSamples, sampleRate, patternMode,
+    togglePlayback, stop, setBpm, toggleLoop, tapTempo, setPatternMode,
     punchEnabled, togglePunch,
   } = useTransportStore()
-  const undoTracks = useTrackStore(s => s.undo)
-  const redoTracks = useTrackStore(s => s.redo)
   const patterns = usePatternStore(s => s.patterns)
   const activePatternId = usePatternStore(s => s.activeId)
   const setActivePattern = usePatternStore(s => s.setActive)
@@ -44,15 +37,8 @@ export function Toolbar(props: ToolbarProps) {
   const isMobile = useIsMobile()
 
   const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
-  const hrs = Math.floor(seconds / 3600)
   const mins = Math.floor((seconds % 3600) / 60)
   const secs = Math.floor(seconds % 60)
-  const ms = Math.floor((seconds % 1) * 1000)
-  const beats = bpm > 0 ? (seconds * bpm / 60) : 0
-  const beatsPerBar = timeSigNumerator > 0 ? timeSigNumerator : 4
-  const bar = Math.floor(beats / beatsPerBar) + 1
-  const beat = Math.floor(beats % beatsPerBar) + 1
-  const tick = Math.floor((beats % 1) * 960)
 
   const hint = (text: string) => () => props.onSetHint(text)
   const clear = () => props.onSetHint('')
@@ -106,31 +92,13 @@ export function Toolbar(props: ToolbarProps) {
         WebkitOverflowScrolling: 'touch',
         scrollbarWidth: 'thin',
       }}>
-      {/* 1b. Undo / Redo */}
-      <div style={{ display: 'flex', gap: 2 }}>
-        <ToolBtn onEnter={hint('Undo (Ctrl+Z)')} onLeave={clear} onClick={() => undoTracks()}>
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="3.5 4.5 1.5 4.5 1.5 2.5" />
-            <path d="M2 6.5a4 4 0 1 0 1.2-2.8L1.5 5.2" />
-          </svg>
-        </ToolBtn>
-        <ToolBtn onEnter={hint('Redo (Ctrl+Y)')} onLeave={clear} onClick={() => redoTracks()}>
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="8.5 4.5 10.5 4.5 10.5 2.5" />
-            <path d="M10 6.5a4 4 0 1 1-1.2-2.8L10.5 5.2" />
-          </svg>
-        </ToolBtn>
-      </div>
-
-      <Sep />
-
       {/* 2. Pattern selector */}
       <div style={{ display: 'flex', alignItems: 'center' }}>
         <button onClick={prevPattern} style={navBtn} onMouseEnter={hint('Previous pattern')} onMouseLeave={clear}>
-          <svg width="5" height="7" viewBox="0 0 5 7"><path d="M4 0.5L1 3.5L4 6.5" stroke={hw.textMuted} strokeWidth="1.2" fill="none"/></svg>
+          <svg width="7" height="9" viewBox="0 0 5 7"><path d="M4 0.5L1 3.5L4 6.5" stroke={hw.textMuted} strokeWidth="1.2" fill="none"/></svg>
         </button>
         <div style={{
-          ...lcd, padding: '0 4px', minWidth: 80,
+          ...lcd, padding: '0 6px', minWidth: 100,
         }} onMouseEnter={hint('Select pattern')} onMouseLeave={clear}>
           <select
             value={activePattern.id}
@@ -138,7 +106,7 @@ export function Toolbar(props: ToolbarProps) {
             data-testid="toolbar-pattern-select"
             style={{
               background: 'transparent', border: 'none', color: hw.textSecondary,
-              fontSize: 10, outline: 'none', appearance: 'none', cursor: 'pointer',
+              fontSize: 13, outline: 'none', appearance: 'none', cursor: 'pointer',
               width: '100%', fontFamily: hw.font.mono,
             }}
           >
@@ -148,7 +116,7 @@ export function Toolbar(props: ToolbarProps) {
           </select>
         </div>
         <button onClick={nextPattern} style={navBtn} onMouseEnter={hint('Next pattern')} onMouseLeave={clear}>
-          <svg width="5" height="7" viewBox="0 0 5 7"><path d="M1 0.5L4 3.5L1 6.5" stroke={hw.textMuted} strokeWidth="1.2" fill="none"/></svg>
+          <svg width="7" height="9" viewBox="0 0 5 7"><path d="M1 0.5L4 3.5L1 6.5" stroke={hw.textMuted} strokeWidth="1.2" fill="none"/></svg>
         </button>
       </div>
 
@@ -170,24 +138,24 @@ export function Toolbar(props: ToolbarProps) {
       {/* 4. Transport — Record, Stop, Play */}
       <div style={{ display: 'flex', gap: 2 }}>
         <button style={transportBtn} onMouseEnter={hint('Record (R)')} onMouseLeave={clear}>
-          <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill={hw.red} opacity="0.7" /></svg>
+          <svg width="13" height="13" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill={hw.red} opacity="0.7" /></svg>
         </button>
         <button onClick={stop} style={transportBtn} onMouseEnter={hint('Stop')} onMouseLeave={clear}>
-          <svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="1" fill={hw.textMuted} /></svg>
+          <svg width="13" height="13" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" fill={hw.textMuted} /></svg>
         </button>
         <button onClick={togglePlayback} style={{
           ...transportBtn,
           background: playing ? hw.accentDim : transportBtn.background,
           borderColor: playing ? hw.accentGlow : 'rgba(255,255,255,0.06)',
         }} onMouseEnter={hint('Play (Space)')} onMouseLeave={clear}>
-          <svg width="10" height="12"><polygon points="0,0 10,6 0,12" fill={playing ? hw.accent : hw.textMuted} /></svg>
+          <svg width="13" height="15" viewBox="0 0 10 12"><polygon points="0,0 10,6 0,12" fill={playing ? hw.accent : hw.textMuted} /></svg>
         </button>
         <button onClick={toggleLoop} style={{
           ...transportBtn,
           background: looping ? 'rgba(234,179,8,0.15)' : transportBtn.background,
           borderColor: looping ? 'rgba(234,179,8,0.3)' : 'rgba(255,255,255,0.06)',
         }} onMouseEnter={hint('Loop (L)')} onMouseLeave={clear}>
-          <svg width="12" height="10" viewBox="0 0 12 10">
+          <svg width="15" height="13" viewBox="0 0 12 10">
             <path d="M3 1h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2z" fill="none" stroke={looping ? '#eab308' : hw.textMuted} strokeWidth="1.2"/>
             <path d="M8 1l2 1.5L8 4" fill="none" stroke={looping ? '#eab308' : hw.textMuted} strokeWidth="1"/>
           </svg>
@@ -197,7 +165,7 @@ export function Toolbar(props: ToolbarProps) {
           background: punchEnabled ? 'rgba(20,184,166,0.15)' : transportBtn.background,
           borderColor: punchEnabled ? 'rgba(20,184,166,0.4)' : 'rgba(255,255,255,0.06)',
         }} onMouseEnter={hint(punchEnabled ? 'Punch range enabled' : 'Punch range (right-click ruler to set)')} onMouseLeave={clear}>
-          <svg width="12" height="10" viewBox="0 0 12 10" fill="none" stroke={punchEnabled ? '#14B8A6' : hw.textMuted} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="15" height="13" viewBox="0 0 12 10" fill="none" stroke={punchEnabled ? '#14B8A6' : hw.textMuted} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 1.5H1.5V8.5H3" />
             <path d="M9 1.5h1.5V8.5H9" />
           </svg>
@@ -213,7 +181,7 @@ export function Toolbar(props: ToolbarProps) {
               "set tempo" inline dialog. Ctrl+drag = fine (0.1 bpm). */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
         <div
-          style={{ ...lcd, width: 68, cursor: 'ns-resize' }}
+          style={{ ...lcd, width: 85, cursor: 'ns-resize' }}
           onMouseEnter={hint('Tempo · drag to adjust · Ctrl=fine')}
           onMouseLeave={clear}
           onPointerDown={(e) => {
@@ -242,156 +210,37 @@ export function Toolbar(props: ToolbarProps) {
             type="number" value={bpm}
             onChange={e => setBpm(parseFloat(e.target.value) || 140)}
             style={{
-              width: 50, background: 'transparent', border: 'none',
-              color: hw.textPrimary, fontSize: 14, fontWeight: 700,
+              width: 62, background: 'transparent', border: 'none',
+              color: hw.textPrimary, fontSize: 18, fontWeight: 700,
               fontFamily: hw.font.mono,
               textAlign: 'right', outline: 'none',
             }}
           />
         </div>
         <button onClick={tapTempo} style={{
-          ...transportBtn, width: 24, height: 24, fontSize: 8, fontWeight: 700,
+          ...transportBtn, width: 33, height: 33, fontSize: 10, fontWeight: 700,
           color: hw.textMuted, letterSpacing: 0.3,
         }} onMouseEnter={hint('Tap tempo')} onMouseLeave={clear}>
           TAP
         </button>
-        <div style={{ ...lcd, padding: '0 4px', gap: 1 }} onMouseEnter={hint('Time signature')} onMouseLeave={clear}>
-          <input
-            type="number" min={1} max={32} value={timeSigNumerator}
-            onChange={e => setTimeSignature(Math.max(1, parseInt(e.target.value) || 4), timeSigDenominator)}
-            style={{
-              width: 20, background: 'transparent', border: 'none',
-              color: hw.textPrimary, fontSize: 11, fontWeight: 700,
-              fontFamily: hw.font.mono,
-              textAlign: 'center', outline: 'none',
-            }}
-          />
-          <span style={{ color: hw.textFaint, fontSize: 11 }}>/</span>
-          <select
-            value={timeSigDenominator}
-            onChange={e => setTimeSignature(timeSigNumerator, parseInt(e.target.value))}
-            style={{
-              background: 'transparent', border: 'none',
-              color: hw.textPrimary, fontSize: 11, fontWeight: 700,
-              fontFamily: hw.font.mono,
-              outline: 'none', appearance: 'none', width: 20, textAlign: 'center',
-            }}
-          >
-            {[1, 2, 4, 8, 16, 32].map(d => <option key={d} value={d}>{d}</option>)}
-          </select>
-        </div>
       </div>
 
       <Sep />
 
-      {/* 6. Time display — Bar:Beat:Tick | Min:Sec.Cs */}
-      <div style={{ ...lcd, padding: '0 8px', gap: 8 }}>
+      {/* 6. Time display — Min:Sec only */}
+      <div style={{ ...lcd, padding: '0 10px' }}>
         <span style={lcdDigit}>
-          <span style={{ color: hw.textPrimary }}>{String(bar).padStart(3, ' ')}</span>
-          <span style={{ color: hw.textFaint }}>:</span>
-          <span style={{ color: hw.textPrimary }}>{beat}</span>
-          <span style={{ color: hw.textFaint }}>:</span>
-          <span style={{ color: hw.textPrimary }}>{String(tick).padStart(3, '0')}</span>
-        </span>
-        <div style={{ width: 1, height: 14, background: hw.border }} />
-        <span style={lcdDigit}>
-          <span style={{ color: hw.textPrimary }}>{hrs}</span>
-          <span style={{ color: hw.textFaint }}>:</span>
           <span style={{ color: hw.textPrimary }}>{String(mins).padStart(2, '0')}</span>
           <span style={{ color: hw.textFaint }}>:</span>
           <span style={{ color: hw.textPrimary }}>{String(secs).padStart(2, '0')}</span>
-          <span style={{ color: hw.textFaint }}>.</span>
-          <span style={{ color: hw.textPrimary }}>{String(ms).padStart(3, '0')}</span>
         </span>
-      </div>
-
-      <Sep />
-
-      {/* 7. Song position slider */}
-      <div style={{
-        width: 80, height: 8, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm,
-        border: `1px solid ${hw.borderDark}`, position: 'relative', cursor: 'pointer',
-      }} onMouseEnter={hint('Song position')} onMouseLeave={clear}>
-        <div style={{
-          position: 'absolute', left: 0, top: 0, width: '0%', height: '100%',
-          background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accent})`,
-          borderRadius: hw.radius.sm,
-          opacity: 0.5,
-        }} />
-      </div>
-
-      <Sep />
-
-      {/* 7b. Playlist tools — FL Studio set: draw / paint / slice / delete
-              / mute / slip / select / zoom. Click to activate; keybinds
-              (B paint, S slice, D delete, E select, etc) wire through
-              useShortcutsStore in App.tsx. Active tool is highlighted
-              with the accent rather than the dim background so the
-              user can read at a glance which mode they're in. */}
-      <PlaylistToolPicker />
-
-      <Sep />
-
-      {/* 8. Snap pill — Hardwave brand style */}
-      <div
-        onMouseEnter={hint(`Snap: ${snapEnabled ? snapValue : 'Off'} · alt-drag bypasses while moving clips`)}
-        onMouseLeave={clear}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          height: 22, padding: '0 9px',
-          background: snapEnabled ? hw.accentDim : 'rgba(255,255,255,0.03)',
-          border: `1px solid ${snapEnabled ? hw.accentGlow : hw.borderDark}`,
-          borderRadius: 11,
-          cursor: 'default',
-        }}
-      >
-        <button
-          onClick={toggleSnap}
-          title="Toggle snap"
-          style={{
-            width: 6, height: 6, padding: 0, border: 0,
-            borderRadius: 3,
-            background: snapEnabled ? hw.red : hw.textFaint,
-            boxShadow: snapEnabled ? `0 0 6px ${hw.red}` : 'none',
-            cursor: 'pointer',
-          }}
-        />
-        <span style={{
-          fontFamily: hw.font.mono, fontSize: 9, fontWeight: 600,
-          color: hw.textFaint, letterSpacing: hw.tracking.eyebrow,
-          textTransform: 'uppercase',
-        }}>Snap</span>
-        <select
-          value={snapValue}
-          onChange={e => setSnapValue(e.target.value as any)}
-          data-testid="snap-select"
-          style={{
-            background: 'transparent', border: 'none',
-            color: snapEnabled ? hw.accentLight : hw.textMuted,
-            fontFamily: hw.font.mono, fontSize: 10, fontWeight: 600,
-            letterSpacing: hw.tracking.wide, textTransform: 'uppercase',
-            outline: 'none', padding: 0, appearance: 'none', cursor: 'pointer',
-            minWidth: 32, textAlignLast: 'center' as any,
-          }}
-        >
-          {SNAP_VALUES.map(v => <option key={v} value={v}>{v}</option>)}
-        </select>
-      </div>
-
-      <Sep />
-
-      {/* 8b. Horizontal zoom */}
-      <div style={{ ...lcd, padding: '0 2px', gap: 1 }} onMouseEnter={hint(`Zoom: ${horizontalZoom.toFixed(2)}x`)} onMouseLeave={clear}>
-        <button onClick={() => setHorizontalZoom(horizontalZoom / 1.25)} style={zoomBtn} title="Zoom out">−</button>
-        <button onClick={zoomToFit} data-testid="zoom-to-fit" style={{ ...zoomBtn, fontSize: 8, letterSpacing: 0.3 }} title="Zoom to fit">FIT</button>
-        <button onClick={() => setHorizontalZoom(horizontalZoom * 1.25)} style={zoomBtn} title="Zoom in">+</button>
       </div>
 
       <Sep />
 
       {/* 10. Multilink */}
       <ToolBtn onEnter={hint('Multilink to controllers')} onLeave={clear}>
-        <svg width="11" height="11" viewBox="0 0 11 11">
+        <svg width="14" height="14" viewBox="0 0 11 11">
           <circle cx="3" cy="3" r="1.5" stroke="currentColor" strokeWidth="0.8" fill="none"/>
           <circle cx="8" cy="8" r="1.5" stroke="currentColor" strokeWidth="0.8" fill="none"/>
           <line x1="4.2" y1="4.2" x2="6.8" y2="6.8" stroke="currentColor" strokeWidth="0.8"/>
@@ -402,7 +251,7 @@ export function Toolbar(props: ToolbarProps) {
 
       {/* 11. Typing keyboard to piano */}
       <ToolBtn onEnter={hint('Typing keyboard to piano (Ctrl+T)')} onLeave={clear}>
-        <svg width="13" height="9" viewBox="0 0 13 9">
+        <svg width="16" height="11" viewBox="0 0 13 9">
           <rect x="0.5" y="0.5" width="12" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="0.8"/>
           <rect x="2" y="2" width="2" height="2" rx="0.3" fill="currentColor" opacity="0.5"/>
           <rect x="5.5" y="2" width="2" height="2" rx="0.3" fill="currentColor" opacity="0.5"/>
@@ -410,37 +259,6 @@ export function Toolbar(props: ToolbarProps) {
           <rect x="3" y="5.5" width="7" height="1.5" rx="0.3" fill="currentColor" opacity="0.4"/>
         </svg>
       </ToolBtn>
-
-      <Sep />
-
-      {/* 12. Master volume */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 3 }} onMouseEnter={hint(`Master volume: ${masterVolumeDb.toFixed(1)} dB`)} onMouseLeave={clear}>
-        <svg width="9" height="9" viewBox="0 0 9 9">
-          <polygon points="0,4 3,1 3,7" fill={hw.textMuted} />
-          <path d="M4.5 2.5 Q6 4.5 4.5 6.5" stroke={hw.textMuted} strokeWidth="0.8" fill="none"/>
-          <path d="M5.5 1.5 Q8 4.5 5.5 7.5" stroke={hw.textMuted} strokeWidth="0.8" fill="none"/>
-        </svg>
-        <MasterVolumeSlider valueDb={masterVolumeDb} onChange={setMasterVolume} />
-      </div>
-
-      <Sep />
-
-      {/* 13. Master pitch knob */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 2 }} onMouseEnter={hint('Master pitch')} onMouseLeave={clear}>
-        <span style={{ fontSize: 7, color: hw.textFaint }}>PIT</span>
-        <div style={{
-          width: 16, height: 16, borderRadius: '50%',
-          background: 'rgba(255,255,255,0.04)',
-          border: `1px solid ${hw.borderDark}`,
-          position: 'relative',
-        }}>
-          <div style={{
-            position: 'absolute', width: 1.5, height: 5, background: hw.accent,
-            top: 2, left: '50%', transform: 'translateX(-50%)',
-            borderRadius: 1,
-          }} />
-        </div>
-      </div>
 
       <Sep />
 
@@ -740,7 +558,7 @@ function MetronomeButton({ onEnter, onLeave }: {
           borderColor: enabled ? hw.accentGlow : 'rgba(255,255,255,0.06)',
         }}
       >
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke={enabled ? hw.accent : hw.textMuted} strokeWidth="1.1" strokeLinejoin="round">
+        <svg width="15" height="15" viewBox="0 0 12 12" fill="none" stroke={enabled ? hw.accent : hw.textMuted} strokeWidth="1.1" strokeLinejoin="round">
           <path d="M3.5 10.5L5 1.5h2l1.5 9z" />
           <line x1="2.5" y1="10.5" x2="9.5" y2="10.5" />
           <line x1="6" y1="6" x2="9.5" y2="3" />
@@ -914,7 +732,7 @@ function ToolBtn({ children, onEnter, onLeave, onClick }: {
       onMouseEnter={e => { onEnter(); e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
       onMouseLeave={e => { onLeave(); e.currentTarget.style.background = 'transparent' }}
       style={{
-        width: 24, height: 24,
+        width: 30, height: 30,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         color: hw.textMuted,
         background: 'transparent',
@@ -977,8 +795,8 @@ function ModeBtn({ label, active, onClick, onEnter, onLeave }: {
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       style={{
-        padding: '3px 8px',
-        fontSize: 10, fontWeight: 700,
+        padding: '6px 11px',
+        fontSize: 13, fontWeight: 700,
         color: active ? hw.textPrimary : hw.textFaint,
         background: active ? 'rgba(255,255,255,0.04)' : 'transparent',
         border: 'none',
@@ -991,58 +809,18 @@ function ModeBtn({ label, active, onClick, onEnter, onLeave }: {
   )
 }
 
-// Master volume slider: -60 dB .. +6 dB, drag-to-set, double-click to reset to 0 dB.
-const MASTER_MIN_DB = -60
-const MASTER_MAX_DB = 6
-function MasterVolumeSlider({ valueDb, onChange }: { valueDb: number; onChange: (db: number) => void }) {
-  const pct = Math.max(0, Math.min(1, (valueDb - MASTER_MIN_DB) / (MASTER_MAX_DB - MASTER_MIN_DB)))
-
-  const handleDrag = (e: React.MouseEvent<HTMLDivElement>) => {
-    const el = e.currentTarget
-    const rect = el.getBoundingClientRect()
-    const update = (clientX: number) => {
-      const p = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-      const db = MASTER_MIN_DB + p * (MASTER_MAX_DB - MASTER_MIN_DB)
-      onChange(db)
-    }
-    update(e.clientX)
-    const move = (ev: MouseEvent) => update(ev.clientX)
-    const up = () => {
-      window.removeEventListener('mousemove', move)
-      window.removeEventListener('mouseup', up)
-    }
-    window.addEventListener('mousemove', move)
-    window.addEventListener('mouseup', up)
-  }
-
-  return (
-    <div
-      onMouseDown={handleDrag}
-      onDoubleClick={() => onChange(0)}
-      style={{
-        width: 55, height: 6, background: 'rgba(255,255,255,0.04)', borderRadius: hw.radius.sm,
-        border: `1px solid ${hw.borderDark}`, position: 'relative', cursor: 'ew-resize',
-      }}
-    >
-      <div style={{
-        width: `${pct * 100}%`, height: '100%', borderRadius: hw.radius.sm,
-        background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accent})`,
-        opacity: 0.75,
-      }} />
-    </div>
-  )
-}
-
+// Sizes are ~125% of the original compact bar — the founder asked for the
+// surviving controls to be bigger after the top-bar declutter.
 const transportBtn: React.CSSProperties = {
-  width: 28, height: 26,
+  width: 35, height: 33,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   background: 'rgba(255,255,255,0.03)',
   border: `1px solid rgba(255,255,255,0.06)`,
-  borderRadius: 6,
+  borderRadius: 7,
 }
 
 const navBtn: React.CSSProperties = {
-  width: 16, height: 26,
+  width: 20, height: 33,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   background: 'transparent',
   border: 'none',
@@ -1053,21 +831,14 @@ const lcd: React.CSSProperties = {
   display: 'flex', alignItems: 'center',
   background: 'rgba(255,255,255,0.03)',
   border: `1px solid rgba(255,255,255,0.04)`,
-  borderRadius: 6,
-  height: 26,
-  padding: '0 4px',
-}
-
-const zoomBtn: React.CSSProperties = {
-  width: 18, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
-  background: 'transparent', border: 'none', color: '#a1a1aa',
-  fontSize: 11, fontWeight: 700, fontFamily: hw.font.mono,
-  cursor: 'pointer', padding: 0,
+  borderRadius: 7,
+  height: 33,
+  padding: '0 5px',
 }
 
 const lcdDigit: React.CSSProperties = {
   fontFamily: hw.font.mono,
-  fontSize: 13, fontWeight: 700,
+  fontSize: 16, fontWeight: 700,
   whiteSpace: 'pre',
   letterSpacing: 0,
 }
@@ -1076,146 +847,3 @@ const lcdDigit: React.CSSProperties = {
 // Eight tools rendered as a compact row of icon buttons. Active tool
 // reads accent-coloured + filled background. Tooltips show the keybind
 // hint for each tool so users learn the shortcuts incidentally.
-function PlaylistToolPicker() {
-  const tool = usePlaylistToolStore((s) => s.tool)
-  const setTool = usePlaylistToolStore((s) => s.setTool)
-  const tools: Array<{ id: PlaylistTool; label: string; keybind: string; icon: React.ReactNode }> = [
-    {
-      id: 'draw',
-      label: 'Draw',
-      keybind: 'P',
-      icon: (
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M8.5 1.5L10.5 3.5L4 10L1.5 10.5L2 8L8.5 1.5Z" />
-        </svg>
-      ),
-    },
-    {
-      id: 'paint',
-      label: 'Paint',
-      keybind: 'B',
-      icon: (
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="6" y="1.5" width="4.5" height="3" />
-          <path d="M6 3h-2.5L2.5 4v1l1 1H6" />
-          <path d="M3.5 7.5v3L5 11" />
-        </svg>
-      ),
-    },
-    {
-      id: 'slice',
-      label: 'Slice',
-      keybind: 'N',
-      icon: (
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 10L9 1.5" />
-          <path d="M3 10L2 11L4 11L5 8L3 10Z" fill="currentColor" />
-        </svg>
-      ),
-    },
-    {
-      id: 'delete',
-      label: 'Delete',
-      keybind: 'G',
-      icon: (
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="2.5" y="3.5" width="7" height="7" />
-          <path d="M4.5 3.5V2.5h3v1" />
-          <path d="M1.5 3.5h9" />
-          <path d="M5 5.5v3M7 5.5v3" />
-        </svg>
-      ),
-    },
-    {
-      id: 'mute',
-      label: 'Mute',
-      keybind: 'T',
-      icon: (
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M2 4.5h2L7 2v8L4 7.5H2z" />
-          <path d="M9 4.5l2 3M11 4.5l-2 3" />
-        </svg>
-      ),
-    },
-    {
-      id: 'slip',
-      label: 'Slip',
-      keybind: 'Y',
-      icon: (
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="1.5" y="3.5" width="9" height="5" />
-          <path d="M3.5 6h1M6 6h1M8 6h1" />
-        </svg>
-      ),
-    },
-    {
-      id: 'select',
-      label: 'Select',
-      keybind: 'E',
-      icon: (
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M2 2L5.5 10L6.5 6.5L10 5.5L2 2Z" />
-        </svg>
-      ),
-    },
-    {
-      id: 'zoom',
-      label: 'Zoom',
-      keybind: 'Z',
-      icon: (
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="5" cy="5" r="3" />
-          <path d="M7.5 7.5L10.5 10.5" />
-        </svg>
-      ),
-    },
-  ]
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 1,
-        background: 'rgba(255,255,255,0.02)',
-        border: `1px solid ${hw.borderDark}`,
-        borderRadius: 4,
-        padding: 2,
-      }}
-      data-testid="playlist-tools"
-    >
-      {tools.map((t) => {
-        const active = tool === t.id
-        return (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setTool(t.id)}
-            title={`${t.label} (${t.keybind})`}
-            data-tool={t.id}
-            style={{
-              width: 22,
-              height: 20,
-              padding: 0,
-              border: 'none',
-              borderRadius: 3,
-              background: active ? hw.accentDim : 'transparent',
-              color: active ? hw.accentLight : hw.textMuted,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'background 60ms, color 60ms',
-            }}
-            onMouseEnter={(e) => {
-              if (!active) (e.currentTarget as HTMLButtonElement).style.color = hw.textSecondary
-            }}
-            onMouseLeave={(e) => {
-              if (!active) (e.currentTarget as HTMLButtonElement).style.color = hw.textMuted
-            }}
-          >
-            {t.icon}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
