@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { hw } from '../theme'
 import { usePanelLayoutStore, type PanelId } from '../stores/panelLayoutStore'
+import { useTrackStore } from '../stores/trackStore'
 import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
@@ -142,11 +143,31 @@ export function FloatingWindow({ panelId, title, onClose, children }: Props) {
 }
 
 export function DetachButton({ panelId, title }: { panelId: PanelId; title?: string }) {
-  const setFloating = usePanelLayoutStore(s => s.setFloating)
+  // Pop the panel out into its OWN OS window (movable to another monitor) via
+  // the open_panel_window command, then hide the inline copy in this window so
+  // it isn't shown twice. The piano roll carries its open clip as context.
+  const onClick = async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      let params: string | undefined
+      if (panelId === 'pianoRoll') {
+        const s = useTrackStore.getState() as unknown as {
+          activeMidiTrackId?: string | null; activeMidiClipId?: string | null
+        }
+        if (s.activeMidiTrackId && s.activeMidiClipId) {
+          params = `trackId=${encodeURIComponent(s.activeMidiTrackId)}&clipId=${encodeURIComponent(s.activeMidiClipId)}`
+        }
+      }
+      await invoke('open_panel_window', { panel: panelId, params })
+      window.dispatchEvent(new CustomEvent('daw:popoutPanel', { detail: panelId }))
+    } catch (e) {
+      console.warn('detach to window failed', e)
+    }
+  }
   return (
     <button
-      onClick={() => setFloating(panelId, true)}
-      title={title || 'Detach to floating window'}
+      onClick={onClick}
+      title={title || 'Pop out into its own window (drag to another monitor)'}
       style={{
         width: 18, height: 18, padding: 0,
         background: 'transparent', border: 'none',

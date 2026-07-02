@@ -362,6 +362,32 @@ export function App() {
     return () => window.removeEventListener('daw:openPianoRoll', onOpen)
   }, [])
 
+  // Detachable panels: hide the inline copy when a panel is popped out into its
+  // own OS window, and re-show it when that window docks back (or is closed via
+  // the Dock button). `daw:popoutPanel` is a same-window DOM event from the ⧉
+  // button; `daw:dockPanel` is a Tauri event broadcast from the detached window.
+  useEffect(() => {
+    const setters: Record<string, (v: boolean) => void> = {
+      browser: setShowBrowser, playlist: setShowPlaylist, channelRack: setShowChannelRack,
+      pianoRoll: setShowPianoRoll, mixer: setShowMixer,
+    }
+    const onPopout = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail
+      setters[id]?.(false)
+    }
+    window.addEventListener('daw:popoutPanel', onPopout)
+    let unlisten: (() => void) | undefined
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<{ panel: string }>('daw:dockPanel', (ev) => setters[ev.payload.panel]?.(true))
+        .then((u) => { unlisten = u })
+        .catch(() => { /* not in Tauri */ })
+    }).catch(() => { /* noop */ })
+    return () => {
+      window.removeEventListener('daw:popoutPanel', onPopout)
+      if (unlisten) unlisten()
+    }
+  }, [])
+
   useEffect(() => {
     const onOpen = (e: Event) => {
       const target = (e as CustomEvent<MidiMapTarget>).detail
