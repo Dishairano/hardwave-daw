@@ -50,12 +50,34 @@ interface TauriInternals {
   invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
 }
 
+// A short melody so the piano roll renders with content.
+function synthNotes() {
+  const PPQ = 960
+  const pitches = [60, 62, 64, 65, 67, 64, 60, 67, 72, 71, 69, 67, 65, 64, 62, 60]
+  return pitches.map((pitch, i) => ({
+    index: i,
+    start_tick: Math.floor((i * PPQ) / 2),
+    duration_ticks: Math.floor(PPQ / 2) - 40,
+    pitch,
+    velocity: 80 + ((i * 9) % 40),
+    channel: 0,
+    muted: false,
+  }))
+}
+
 const mock: TauriInternals = {
   transformCallback: (cb) => cb,
   invoke: async (cmd, args) => {
     switch (cmd) {
       case 'get_waveform_peaks':
         return synthPeaks((args?.numBuckets as number) ?? 256)
+      case 'get_midi_notes':
+        return synthNotes()
+      // List-shaped commands must return arrays, not null (consumers iterate).
+      case 'list_sends':
+      case 'get_sends':
+      case 'list_arrangements':
+        return []
       case 'get_graph_latency':
         return { samples: 0, ms: 0, pdcEnabled: true }
       case 'get_midi_activity':

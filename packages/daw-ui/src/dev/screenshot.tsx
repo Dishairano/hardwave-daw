@@ -1,11 +1,12 @@
 /**
- * Headless screenshot harness (dev-only). Renders the real Toolbar +
- * Arrangement against a mocked Tauri backend and seeded stores so the UI can
- * be captured with Playwright (scripts/screenshot.mjs) — no Tauri runtime and
- * no Windows machine required. Lets visual changes be verified before a build.
+ * Headless screenshot harness (dev-only). Renders real DAW panels against a
+ * mocked Tauri backend + seeded stores so the UI can be captured with
+ * Playwright (scripts/screenshot.mjs) — no Tauri runtime, no Windows machine.
+ * Lets visual changes be verified before a build.
  *
- * Served only via screenshot.html on the vite dev server; the production
- * bundle (index.html → main.tsx) never imports this.
+ * Pick the panel with `?panel=` — playlist (default) | mixer | channelrack |
+ * pianoroll. Served only via screenshot.html on the vite dev server; the
+ * production bundle (index.html → main.tsx) never imports this.
  */
 import './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
 
@@ -13,19 +14,21 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { Toolbar } from '../components/transport/Toolbar'
 import { Arrangement } from '../components/arrangement/Arrangement'
+import { ChannelRack } from '../components/channelrack/ChannelRack'
+import { PianoRoll } from '../components/piano-roll/PianoRoll'
+import { MixerPanel } from '../components/mixer/MixerPanel'
 import { useTrackStore, type TrackWithClips, type ClipInfo } from '../stores/trackStore'
 import { useTransportStore } from '../stores/transportStore'
 
 // ---- seed sample data -----------------------------------------------------
 
 let clipSeq = 0
-function clip(name: string, sourceId: string, posBars: number, lenBars: number): ClipInfo {
-  const PPQ = 960
-  const bar = PPQ * 4
+function clip(name: string, sourceId: string, posBars: number, lenBars: number, kind = 'Audio'): ClipInfo {
+  const bar = 960 * 4
   return {
     id: `clip-${clipSeq++}`,
     name,
-    kind: 'Audio',
+    kind,
     source_id: sourceId,
     position_ticks: posBars * bar,
     length_ticks: lenBars * bar,
@@ -41,38 +44,24 @@ function clip(name: string, sourceId: string, posBars: number, lenBars: number):
   }
 }
 
-function track(id: string, name: string, color: string, clips: ClipInfo[]): TrackWithClips {
+function track(id: string, name: string, color: string, clips: ClipInfo[], kind = 'Audio'): TrackWithClips {
   return {
-    id,
-    name,
-    kind: 'Audio',
-    color,
-    volume_db: 0,
-    pan: 0,
-    muted: false,
-    soloed: false,
-    armed: false,
-    solo_safe: false,
-    monitorInput: false,
-    phaseInvert: false,
-    swapLr: false,
-    stereoSeparation: 0,
-    delaySamples: 0,
-    pitchSemitones: 0,
-    fineTuneCents: 0,
-    filterType: 'none',
-    filterCutoffHz: 20000,
-    filterResonance: 0,
-    outputBus: null,
-    insert_count: 0,
-    inserts: [],
-    automationLanes: [],
-    automationClips: [],
+    id, name, kind, color,
+    volume_db: kind === 'Master' ? 0 : -6 + Math.random() * 4,
+    pan: 0, muted: false, soloed: false, armed: false, solo_safe: false,
+    monitorInput: false, phaseInvert: false, swapLr: false, stereoSeparation: 0,
+    delaySamples: 0, pitchSemitones: 0, fineTuneCents: 0,
+    filterType: 'none', filterCutoffHz: 20000, filterResonance: 0,
+    outputBus: null, insert_count: 0, inserts: [], automationLanes: [], automationClips: [],
+    ...(kind === 'Midi' ? { instrument: 'builtin_sine' as never } : {}),
     clips,
   }
 }
 
+const midiTrack = track('t-lead', 'Lead', '#22c55e', [clip('Melody', 'src-lead', 0, 2, 'Midi')], 'Midi')
+
 const tracks: TrackWithClips[] = [
+  track('t-master', 'Master', '#a1a1aa', [], 'Master'),
   track('t-kick', 'Induskick4', '#c9a227', [
     clip('Induskick4 – Auto', 'src-kick', 0, 1),
     clip('Induskick4 – Auto', 'src-kick', 1, 1),
@@ -81,51 +70,59 @@ const tracks: TrackWithClips[] = [
   ]),
   track('t-crash', 'Crash #1', '#c026d3', [clip('Crash #1', 'src-crash', 0, 4)]),
   track('t-bass', 'Bass', '#2563eb', [clip('Reese', 'src-bass', 0, 2), clip('Reese', 'src-bass', 2, 2)]),
+  midiTrack,
 ]
 
-// Select a clip on the Crash (green) track so the red selection header is
-// visually distinct from the track's own colour.
-const selected = tracks[1].clips[0].id
+const selected = tracks[2].clips[0].id // Crash — red selection header stands out
 useTrackStore.setState({
   tracks,
+  // The store keeps a derived id→track index; components like the mixer's
+  // ChannelStrip read names via tracksById, so seed it too or strips show
+  // the "Track" fallback.
+  tracksById: Object.fromEntries(tracks.map((t) => [t.id, t])),
   selectedClipId: selected,
   selectedClipIds: new Set([selected]),
-})
+  // Open the MIDI clip so the piano roll renders with content.
+  activeMidiTrackId: midiTrack.id,
+  activeMidiClipId: midiTrack.clips[0].id,
+} as never)
 
 // ---- render ---------------------------------------------------------------
 
 const noop = () => {}
+const panel = new URLSearchParams(location.search).get('panel') || 'playlist'
+
+function Full({ children }: { children: React.ReactNode }) {
+  return <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>{children}</div>
+}
 
 function Harness() {
-  return (
-    <div style={{ width: 1400, height: 560, display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-      <Toolbar
-        showBrowser
-        showPlaylist
-        showChannelRack={false}
-        showPianoRoll={false}
-        showMixer={false}
-        onToggleBrowser={noop}
-        onTogglePlaylist={noop}
-        onToggleChannelRack={noop}
-        onTogglePianoRoll={noop}
-        onToggleMixer={noop}
-        onSetHint={noop}
-      />
-      {/* Arrangement's root is flex:1 — render it as a direct child of the
-          flex column so it fills the remaining height (a non-flex wrapper
-          would collapse it to 0 and the canvas would draw nothing). */}
-      <Arrangement onSetHint={noop} />
-    </div>
-  )
+  switch (panel) {
+    case 'mixer':
+      return <Full><MixerPanel /></Full>
+    case 'channelrack':
+      return <Full><ChannelRack /></Full>
+    case 'pianoroll':
+      return <Full><PianoRoll /></Full>
+    default:
+      return (
+        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <Toolbar
+            showBrowser showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false}
+            onToggleBrowser={noop} onTogglePlaylist={noop} onToggleChannelRack={noop}
+            onTogglePianoRoll={noop} onToggleMixer={noop} onSetHint={noop}
+          />
+          <Arrangement onSetHint={noop} />
+        </div>
+      )
+  }
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<Harness />)
 
-// Waveform peaks load asynchronously and the canvas draw effect keys off
-// horizontalZoom (not the internal load counter), so a static harness would
-// screenshot before the waveform paints. Nudge the zoom once peaks are in to
-// force one clean redraw with the spectral waveform present.
+// Async loads (waveform peaks, midi notes) resolve after mount and some draw
+// effects key off horizontalZoom, not the load counter — nudge it so the
+// static screenshot captures the loaded state.
 setTimeout(() => {
   const z = useTransportStore.getState().horizontalZoom
   useTransportStore.setState({ horizontalZoom: z * 1.05 })
