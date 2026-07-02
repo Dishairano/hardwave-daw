@@ -45,7 +45,10 @@ try {
   })
   for (const panel of panels) {
     const out = singleOut || `/tmp/daw-${panel}.png`
-    const page = await browser.newPage({ viewport: { width: 1440, height: 720, deviceScaleFactor: 2 } })
+    // Resolution via SHOT_SIZE=WxH (default 1440x720) so we can check the UI
+    // at the laptop resolutions people actually run — 1366x768, 1280x720, etc.
+    const [sw, sh] = (process.env.SHOT_SIZE || '1440x720').split('x').map(Number)
+    const page = await browser.newPage({ viewport: { width: sw || 1440, height: sh || 720, deviceScaleFactor: 1 } })
     const errors = []
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })
     page.on('pageerror', (e) => errors.push(String(e)))

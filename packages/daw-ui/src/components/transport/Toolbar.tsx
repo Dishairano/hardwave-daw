@@ -89,12 +89,17 @@ export function Toolbar(props: ToolbarProps) {
         <TabBtn icon="browser" label="Browser" active={props.showBrowser} onClick={props.onToggleBrowser} onEnter={hint('Browser')} onLeave={clear} />
       </div>
 
-      {/* Row 2 — transport, tempo, editing tools + meters. */}
+      {/* Row 2 — transport, tempo, editing tools + meters. Wraps instead of
+          clipping so nothing is lost at laptop resolutions (1366/1280 etc.):
+          the row grows to a second line rather than pushing the meters off
+          the right edge the way `overflow: visible` used to. */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
-        height: 40,
-        padding: '0 6px',
+        flexWrap: 'wrap',
+        rowGap: 3,
+        minHeight: 40,
+        padding: '3px 6px',
         gap: 2,
         overflowX: isMobile ? 'auto' : 'visible',
         overflowY: 'hidden',
@@ -393,7 +398,7 @@ export function Toolbar(props: ToolbarProps) {
         </svg>
       </ToolBtn>
 
-      <div style={{ flex: 1 }} />
+      <Sep />
 
       {/* 11. Typing keyboard to piano */}
       <ToolBtn onEnter={hint('Typing keyboard to piano (Ctrl+T)')} onLeave={clear}>
@@ -451,21 +456,6 @@ export function Toolbar(props: ToolbarProps) {
 
       {/* 14b. MIDI activity LED */}
       <MidiActivityLed onEnter={hint} onLeave={clear} />
-
-      <Sep />
-
-      {/* 15. Mini scope */}
-      <div style={{
-        width: 60, height: 24,
-        background: 'rgba(255,255,255,0.03)', border: `1px solid ${hw.borderDark}`,
-        borderRadius: hw.radius.sm,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <svg width="40" height="12" viewBox="0 0 40 12">
-          <polyline points="0,6 5,6 8,3 12,9 16,4 20,8 24,5 28,7 32,6 36,6 40,6"
-            fill="none" stroke={hw.accent} strokeWidth="1" opacity="0.5" />
-        </svg>
-      </div>
       </div>
     </div>
   )
