@@ -4,15 +4,17 @@ import { App } from './App'
 import { PanelWindow } from './PanelWindow'
 import './mockup.css'
 
-// A detached panel window is the same bundle opened with
-// `index.html#window=<panel>&trackId=..&clipId=..` (see the open_panel_window
-// command). We read the panel from the URL HASH (a query string on the window
-// URL can break asset loading → blank window). Fall back to ?query for safety.
-const raw = window.location.hash.startsWith('#')
+// A detached panel window (open_panel_window command) loads a plain
+// index.html and receives its panel + context via an injected global
+// (window.__HW_PANEL__), set by an initialization script BEFORE the page
+// loads. This avoids putting anything in the URL, which can break asset
+// resolution → blank white window. Fall back to hash/query for older builds.
+const injected = (window as unknown as { __HW_PANEL__?: { panel?: string; params?: string } }).__HW_PANEL__
+const rawFallback = window.location.hash.startsWith('#')
   ? window.location.hash.slice(1)
   : window.location.search.replace(/^\?/, '')
-const params = new URLSearchParams(raw)
-const panelWindow = params.get('window')
+const params = new URLSearchParams(injected?.params ?? rawFallback)
+const panelWindow = injected?.panel ?? params.get('window')
 
 // Error boundary so a crash in a detached panel shows a readable message
 // instead of a white screen (and tells us exactly what failed).
