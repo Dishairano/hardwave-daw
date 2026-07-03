@@ -115,7 +115,7 @@ function useTransportClock() {
 // keyboard / multilink / master pitch knob / CPU+MEM+POLY meters +
 // graph / MIDI activity LED / mini scope / hint-bar icon-types.
 
-function HwTopbar({
+export function HwTopbar({
   menus, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
   showPlaylist, showChannelRack, showPianoRoll, showMixer,
   onOpenTempoTapper, onAction, onOpenExport,
@@ -330,24 +330,6 @@ function HwTopbar({
 
     {/* Row 2 — Ship 1 toolbar layout per approved mockup */}
     <div className="fl-toolrow">
-      {/* Undo / Redo */}
-      <div style={{ display: 'flex', gap: 2 }}>
-        <button onClick={() => undo()} className="fl-mini-btn" title="Undo (Ctrl+Z)">
-          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="3.5 4.5 1.5 4.5 1.5 2.5"/>
-            <path d="M2 6.5a4 4 0 1 0 1.2-2.8L1.5 5.2"/>
-          </svg>
-        </button>
-        <button onClick={() => redo()} className="fl-mini-btn" title="Redo (Ctrl+Y)">
-          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="8.5 4.5 10.5 4.5 10.5 2.5"/>
-            <path d="M10 6.5a4 4 0 1 1-1.2-2.8L10.5 5.2"/>
-          </svg>
-        </button>
-      </div>
-
-      <span className="fl-toolsep" />
-
       {/* PAT / SONG mode toggle. Right-click on PAT toggles Channel
           Rack visibility; right-click on SONG toggles Playlist. */}
       <div className="fl-mode-toggle">
@@ -476,76 +458,20 @@ function HwTopbar({
         onClick={() => tapTempo()}
         onContextMenu={(e) => { e.preventDefault(); onOpenTempoTapper?.() }}
         className="fl-mini-btn"
-        style={{ height: 26, padding: '0 8px', fontSize: 8, fontWeight: 700, letterSpacing: 0.4, fontFamily: 'var(--mono)' }}
+        style={{ width: 'auto', height: 30, padding: '0 11px', fontSize: 10, fontWeight: 700, letterSpacing: 0.4, fontFamily: 'var(--mono)' }}
         title="Tap tempo · right-click opens Tempo Tapper modal"
       >TAP</button>
 
-      {/* Time signature inline editor */}
-      <div className="fl-tsig" title="Time signature">
-        <input
-          type="number" min={1} max={32} value={tsNum}
-          onChange={e => setTimeSignature(Math.max(1, parseInt(e.target.value) || 4), tsDen)}
-        />
-        <span className="sl">/</span>
-        <select value={tsDen} onChange={e => setTimeSignature(tsNum, parseInt(e.target.value))}>
-          {[1, 2, 4, 8, 16, 32].map(d => <option key={d} value={d}>{d}</option>)}
-        </select>
-      </div>
-
       <span className="fl-toolsep" />
 
+      {/* Clock — Min:Sec only */}
       <div className="fl-clock" title="Playhead position">
-        <div className="fl-clock-stack">
-          <small>BAR · BEAT · TICK</small>
-          <b>{barBeatTick}</b>
-        </div>
         <div className="fl-clock-stack red">
           <small>MIN : SEC</small>
           <b>{minSec}</b>
         </div>
       </div>
 
-      <span className="fl-toolsep" />
-
-      {/* Ship 2a — Snap pill (moved from HwSecondRow). Pill toggles
-          on/off via the leading dot; the value-select changes the
-          grid resolution and auto-enables snap when set to anything
-          other than 'Off' (per setSnapValue's existing semantics). */}
-      <div
-        className={`fl-snap${snapEnabled ? ' on' : ''}`}
-        title={`Snap: ${snapEnabled ? snapValue : 'Off'} · alt-drag bypasses while moving clips`}
-      >
-        <button onClick={() => toggleSnap()} className="dot" title="Toggle snap" />
-        <span className="label">Snap</span>
-        <select
-          value={snapValue}
-          onChange={e => setSnapValue(e.target.value as any)}
-          data-testid="hw-toolbar-snap-select"
-        >
-          {SNAP_VALUES.map(v => <option key={v} value={v}>{v}</option>)}
-        </select>
-      </div>
-
-      <span className="fl-toolsep" />
-
-      {/* Zoom trio — − / FIT / + */}
-      <div className="fl-zoom" title={`Zoom: ${horizontalZoom.toFixed(2)}×`}>
-        <button onClick={() => setHorizontalZoom(horizontalZoom / 1.25)} title="Zoom out">−</button>
-        <button onClick={() => zoomToFit()} className="fit" title="Zoom to fit">FIT</button>
-        <button onClick={() => setHorizontalZoom(horizontalZoom * 1.25)} title="Zoom in">+</button>
-      </div>
-
-      <span className="fl-toolsep" />
-
-      {/* 8-tool picker — draw / paint / slice / delete / mute / slip / select / zoom */}
-      <div className="fl-tools" role="toolbar" aria-label="Playlist tools">
-        {(['draw','paint','slice','delete','mute','slip','select','zoom'] as PlaylistTool[]).map(t => (
-          <ToolPickerBtn key={t} tool={t} active={activeTool === t} onClick={() => setTool(t)} />
-        ))}
-      </div>
-
-      <span className="fl-toolsep" />
-      <ArrangementSwitcher />
       <span className="fl-toolsep" />
 
       {/* Action icon row — Save / Save-as / Render / Cut / Copy / Paste / Duplicate.
@@ -653,24 +579,6 @@ function HwTopbar({
         </button>
       </div>
 
-      <span className="fl-toolsep" />
-
-      {/* Mini scope stays in the toolrow; the CPU/MEM perf cluster + MIDI
-          LED moved up to the top bar's right side (Option B layout). */}
-      <HwMiniScope />
-
-      <div className="fl-master-vol">
-        <span style={{ textTransform: 'uppercase', fontWeight: 600, fontSize: 7, color: 'var(--text-dim)', letterSpacing: 0.6 }}>VOL</span>
-        <HwMasterSlider valueDb={masterDb} onChange={setMasterVolume} />
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text)', minWidth: 36, textAlign: 'right' }}>
-          {masterDb >= 0 ? '+' : ''}{masterDb.toFixed(1)}dB
-        </span>
-        {/* Ship 3c — Master pitch knob (Tier A surface, Tier B engine
-            wiring). The knob spins visually + persists value via the
-            existing transport store; the engine doesn't yet pull the
-            value into a master-pitch ratio. Tooltip is explicit. */}
-        <HwMasterPitchKnob />
-      </div>
     </div>
     </>
   )
@@ -1194,7 +1102,7 @@ function SaveAsButton({ onClick }: { onClick: () => void }) {
 
 // ─── Second row: hint + status pills ─────────────────────────────────────────
 
-function HwSecondRow({ projectName }: { projectName: string }) {
+export function HwSecondRow({ projectName }: { projectName: string }) {
   // Live hover info, fed by the delegated listener in HwApp.
   const hint = useHoverInfoStore(s => s.info)
   // Ship 3c — Hint Bar redesign. The legacy fl-tag-pill / fl-step-pill

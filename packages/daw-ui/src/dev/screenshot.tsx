@@ -9,10 +9,11 @@
  * production bundle (index.html → main.tsx) never imports this.
  */
 import './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
+import '../mockup.css' // the real top bar uses the fl-* classes from here
 
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { Toolbar } from '../components/transport/Toolbar'
+import { HwTopbar, HwSecondRow } from '../components/HwApp'
 import { Arrangement } from '../components/arrangement/Arrangement'
 import { ChannelRack } from '../components/channelrack/ChannelRack'
 import { PianoRoll } from '../components/piano-roll/PianoRoll'
@@ -106,12 +107,11 @@ function Harness() {
       return <Full><PianoRoll /></Full>
     default:
       return (
-        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <Toolbar
-            showBrowser showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false}
-            onToggleBrowser={noop} onTogglePlaylist={noop} onToggleChannelRack={noop}
-            onTogglePianoRoll={noop} onToggleMixer={noop} onSetHint={noop}
-          />
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          {/* The REAL top bar (HwTopbar + HwSecondRow) — not the dead
+              transport/Toolbar component. */}
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Untitled" />
           <Arrangement onSetHint={noop} />
         </div>
       )
