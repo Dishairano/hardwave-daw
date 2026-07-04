@@ -56,8 +56,32 @@ pub fn open_panel_window(
         .unwrap_or_default()
         .replace('"', "")
         .replace('\\', "");
-    let init = format!("window.__HW_PANEL__ = {{ panel: \"{slug}\", params: \"{params_js}\" }};");
-    let url = WebviewUrl::App("index.html".into());
+    // Also plant a self-diagnostic: if index.html DID load but React never
+    // mounted (#root empty after 2.5s), replace the page with a readable
+    // message. This lets us tell apart "url never loaded" (still white) from
+    // "loaded but the app didn't render" (shows text) without devtools.
+    let init = format!(
+        "window.__HW_PANEL__ = {{ panel: \"{slug}\", params: \"{params_js}\" }};\
+         window.addEventListener('DOMContentLoaded', function() {{ setTimeout(function() {{ \
+           var r = document.getElementById('root'); \
+           if (r && r.childElementCount === 0) {{ \
+             document.body.style.background = '#1a0008'; \
+             document.body.innerHTML = '<pre style=\"color:#ff8a8a;padding:16px;font:12px monospace;white-space:pre-wrap\">Panel window: index.html loaded but the app did not mount.\\npanel=' + JSON.stringify(window.__HW_PANEL__ || null) + '</pre>'; \
+           }} \
+         }}, 2500); }});"
+    );
+
+    // Load the EXACT url the main window is showing rather than guessing
+    // `index.html`. On WebView2 the main window serves from a specific origin
+    // (http://tauri.localhost/), and a fresh `WebviewUrl::App("index.html")`
+    // second window was coming up blank white. Cloning the main window's live
+    // URL guarantees the panel window loads the same frontend that already
+    // renders in the main window.
+    let url = app
+        .get_webview_window("main")
+        .and_then(|w| w.url().ok())
+        .map(WebviewUrl::External)
+        .unwrap_or_else(|| WebviewUrl::App("index.html".into()));
 
     WebviewWindowBuilder::new(&app, &label, url)
         .title(format!("Hardwave DAW — {slug}"))
