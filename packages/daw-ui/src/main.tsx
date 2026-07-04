@@ -14,7 +14,22 @@ const rawFallback = window.location.hash.startsWith('#')
   ? window.location.hash.slice(1)
   : window.location.search.replace(/^\?/, '')
 const params = new URLSearchParams(injected?.params ?? rawFallback)
-const panelWindow = injected?.panel ?? params.get('window')
+// Detect the panel: injected global (primary) → hash/query → the OS window
+// label (`panel-<slug>`, always correct). The label fallback guarantees a
+// detached window never falls through to <App> (whose splash screen would
+// hang forever = white window) even if the injected global is missing.
+let panelWindow = injected?.panel ?? params.get('window') ?? null
+if (!panelWindow) {
+  try {
+    const meta = (window as unknown as {
+      __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string }; currentWebview?: { windowLabel?: string } } }
+    }).__TAURI_INTERNALS__?.metadata
+    const label = meta?.currentWindow?.label ?? meta?.currentWebview?.windowLabel
+    if (typeof label === 'string' && label.startsWith('panel-')) {
+      panelWindow = label.slice('panel-'.length)
+    }
+  } catch { /* not in Tauri */ }
+}
 
 // Error boundary so a crash in a detached panel shows a readable message
 // instead of a white screen (and tells us exactly what failed).

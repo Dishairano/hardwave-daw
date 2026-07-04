@@ -61,6 +61,9 @@ pub fn open_panel_window(
 
     WebviewWindowBuilder::new(&app, &label, url)
         .title(format!("Hardwave DAW — {slug}"))
+        // Frameless like the main DAW window (no OS "Hardwave DAW" title bar);
+        // the panel renders its own thin drag/close bar.
+        .decorations(false)
         .initialization_script(&init)
         .inner_size(1100.0, 720.0)
         .min_inner_size(480.0, 320.0)
