@@ -25,8 +25,17 @@ fn label_for(panel: &str) -> String {
 /// panel id (pianoRoll | mixer | channelRack | playlist | browser); `params`
 /// is an optional extra query string (e.g. "trackId=..&clipId=..") carrying
 /// the context the panel needs (the piano roll's open clip).
+// ASYNC IS LOAD-BEARING on Windows: synchronous commands run on the main
+// thread, and creating a WebView2 there deadlocks the new webview's
+// initialization (it needs the main thread to pump its creation messages) —
+// the window opens as an HWND but stays blank white forever and never loads
+// its URL (which is why not even the init-script beacons fired). An async
+// command runs on the async runtime instead, leaving the main thread free.
+// Same reason the docs say "you must use async commands when creating
+// windows on Windows". Plugin editors got away with a sync command only
+// because the native plugin GUI paints over their (equally dead) webview.
 #[tauri::command]
-pub fn open_panel_window(
+pub async fn open_panel_window(
     app: AppHandle,
     panel: String,
     params: Option<String>,
@@ -105,7 +114,7 @@ pub fn open_panel_window(
 
 /// Close a detached panel window (used when a panel is re-docked).
 #[tauri::command]
-pub fn close_panel_window(app: AppHandle, panel: String) -> Result<(), String> {
+pub async fn close_panel_window(app: AppHandle, panel: String) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(&label_for(&panel)) {
         let _ = w.close();
     }
