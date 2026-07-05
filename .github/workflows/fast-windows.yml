@@ -1,0 +1,132 @@
+# Fast Windows-only build for debug iterations.
+#
+# The full Release pipeline gates on lint+test, then builds Linux + Windows +
+# macOS (~25 min tag-to-installer). When we're iterating on a Windows-specific
+# bug (e.g. the detached-window white screen) we only need the Windows .exe —
+# this lane skips the gate (we run fmt/clippy/tests locally before pushing),
+# builds one platform, and publishes to a ROLLING prerelease with a stable
+# download URL:
+#
+#   https://github.com/Dishairano/hardwave-daw/releases/download/fast-build/Hardwave.DAW_fast_x64-setup.exe
+#
+# Trigger:  gh workflow run fast-windows.yml --ref <branch>
+# The `fast-build` release is marked prerelease so it can never become
+# `releases/latest` — the auto-updater feed (latest.json) is untouched.
+name: Fast Windows Build
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: fast-windows
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  fast-windows:
+    runs-on: windows-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+      RUST_BACKTRACE: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build frontend
+        shell: bash
+        run: |
+          cd packages/daw-ui
+          npm ci || npm install
+          npm run build
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # Same shared-key as the release matrix so this lane REUSES the release
+      # build's warm cache instead of compiling cold.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: x86_64-pc-windows-msvc
+          cache-on-failure: true
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+        continue-on-error: true
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          if sccache --start-server 2>/dev/null; then
+            echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "sccache available"
+          else
+            echo "sccache unavailable, building without cache"
+          fi
+
+      - name: Fetch ASIO SDK
+        shell: pwsh
+        run: |
+          $url = 'https://www.steinberg.net/asiosdk'
+          $dest = "$env:RUNNER_TEMP\asiosdk.zip"
+          $out  = "$env:RUNNER_TEMP\asiosdk"
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          Expand-Archive -Path $dest -DestinationPath $out -Force
+          $sdkRoot = Get-ChildItem -Path $out -Directory | Select-Object -First 1
+          echo "CPAL_ASIO_DIR=$($sdkRoot.FullName)" >> $env:GITHUB_ENV
+
+      - name: Install LLVM (bindgen + lld-link)
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvmBin\libclang.dll")) {
+            choco install llvm -y --no-progress --force
+          }
+          echo "LIBCLANG_PATH=$llvmBin" >> $env:GITHUB_ENV
+          echo "$llvmBin" >> $env:GITHUB_PATH
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=lld-link.exe" >> $env:GITHUB_ENV
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@latest
+
+      - name: Build Windows installer (nsis only)
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: tauri build --target x86_64-pc-windows-msvc --features asio --bundles nsis
+
+      - name: Publish to rolling fast-build prerelease (stable URL)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          exe=$(ls src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe | head -1)
+          cp "$exe" "Hardwave.DAW_fast_x64-setup.exe"
+          ver=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          gh release create fast-build --prerelease \
+            --title "Fast Windows build (rolling)" \
+            --notes "Rolling debug build — do not use as a normal release." \
+            2>/dev/null || true
+          gh release upload fast-build "Hardwave.DAW_fast_x64-setup.exe" --clobber
+          gh release edit fast-build --notes "Rolling debug build from \`$GITHUB_REF_NAME\` @ \`${GITHUB_SHA::8}\` (v$ver, $(date -u +%Y-%m-%dT%H:%MZ)). Do not use as a normal release."
+          echo "Published: https://github.com/$GITHUB_REPOSITORY/releases/download/fast-build/Hardwave.DAW_fast_x64-setup.exe"
+
+      # Belt-and-braces: also attach as a workflow artifact.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hardwave.DAW_fast_x64-setup
+          path: Hardwave.DAW_fast_x64-setup.exe
