@@ -10,7 +10,7 @@
  * persist through the shared backend; instant cross-window refresh of *other*
  * windows is a follow-up.
  */
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { emit } from '@tauri-apps/api/event'
 import { useTrackStore } from './stores/trackStore'
@@ -69,10 +69,11 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
 
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: '#08080c', overflow: 'hidden' }}>
-      {/* Thin frameless-window chrome: the whole bar drags the window
-          (data-tauri-drag-region), with dock + close on the right. The window
-          has no OS title bar (decorations:false), so this is the only chrome —
-          kept minimal so it feels like the DAW, not a separate app. */}
+      {/* Thin frameless-window chrome. Draggable via -webkit-app-region —
+          the SAME mechanism the main DAW window's top bar uses (mockup.css
+          marks its controls no-drag), so it's proven on WebView2 here.
+          data-tauri-drag-region kept as belt-and-braces. Buttons are
+          explicitly no-drag so clicks don't start a window move. */}
       <div
         data-tauri-drag-region
         style={{
@@ -80,16 +81,17 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
           padding: '0 8px', background: '#0c0c10',
           borderBottom: `1px solid ${hw.border}`, fontSize: 9, fontWeight: 600,
           letterSpacing: 0.4, textTransform: 'uppercase', color: hw.textFaint,
-          userSelect: 'none',
-        }}
+          userSelect: 'none', cursor: 'move',
+          WebkitAppRegion: 'drag',
+        } as React.CSSProperties}
       >
-        <span data-tauri-drag-region style={{ flex: 1 }}>{TITLES[panel] ?? panel}</span>
+        <span data-tauri-drag-region style={{ flex: 1, pointerEvents: 'none' }}>{TITLES[panel] ?? panel}</span>
         <button onClick={dock} title="Dock back into the main window"
-          style={{ height: 16, padding: '0 6px', fontSize: 9, color: hw.textMuted, background: 'transparent', border: `1px solid ${hw.border}`, borderRadius: 3, cursor: 'pointer' }}>
+          style={{ height: 16, padding: '0 6px', fontSize: 9, color: hw.textMuted, background: 'transparent', border: `1px solid ${hw.border}`, borderRadius: 3, cursor: 'pointer', WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           ⧉ Dock
         </button>
         <button onClick={() => { void getCurrentWindow().close() }} title="Close"
-          style={{ height: 16, width: 18, fontSize: 12, lineHeight: 1, color: hw.textMuted, background: 'transparent', border: `1px solid ${hw.border}`, borderRadius: 3, cursor: 'pointer' }}>
+          style={{ height: 16, width: 18, fontSize: 12, lineHeight: 1, color: hw.textMuted, background: 'transparent', border: `1px solid ${hw.border}`, borderRadius: 3, cursor: 'pointer', WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           ×
         </button>
       </div>
