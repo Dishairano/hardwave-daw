@@ -122,7 +122,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          exe=$(ls src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe | head -1)
+          # Cargo workspace → target/ lives at the repo root (not src-tauri/).
+          # find covers both layouts so a tauri-cli change can't break this.
+          exe=$(find . -path '*/release/bundle/nsis/*.exe' -not -path './node_modules/*' | head -1)
+          echo "installer: $exe"
           cp "$exe" "Hardwave.DAW_fast_x64-setup.exe"
           ver=$(node -p "require('./src-tauri/tauri.conf.json').version")
           gh release create fast-build --prerelease \
