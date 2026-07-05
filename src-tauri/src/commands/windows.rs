@@ -56,19 +56,24 @@ pub fn open_panel_window(
         .unwrap_or_default()
         .replace('"', "")
         .replace('\\', "");
-    // Also plant a self-diagnostic: if index.html DID load but React never
-    // mounted (#root empty after 2.5s), replace the page with a readable
-    // message. This lets us tell apart "url never loaded" (still white) from
-    // "loaded but the app didn't render" (shows text) without devtools.
+    // Comprehensive REMOTE-LOG diagnostic (init script runs before the bundle,
+    // so it reports even if the frontend never loads). Beacons the window's
+    // real URL, JS errors, DOMContentLoaded, and whether React mounted to our
+    // collector (suite.hardwavestudios.com/daw-log) so we can diagnose the
+    // blank-white detach without devtools. Temporary — remove when solved.
+    let log_url = "https://suite.hardwavestudios.com/daw-log";
     let init = format!(
-        "window.__HW_PANEL__ = {{ panel: \"{slug}\", params: \"{params_js}\" }};\
-         window.addEventListener('DOMContentLoaded', function() {{ setTimeout(function() {{ \
-           var r = document.getElementById('root'); \
-           if (r && r.childElementCount === 0) {{ \
-             document.body.style.background = '#1a0008'; \
-             document.body.innerHTML = '<pre style=\"color:#ff8a8a;padding:16px;font:12px monospace;white-space:pre-wrap\">Panel window: index.html loaded but the app did not mount.\\npanel=' + JSON.stringify(window.__HW_PANEL__ || null) + '</pre>'; \
-           }} \
-         }}, 2500); }});"
+        "(function(){{var P=\"{slug}\";var U=\"{log_url}\";\
+         window.__HW_PANEL__={{panel:P,params:\"{params_js}\"}};\
+         function S(t,d){{try{{fetch(U,{{method:'POST',mode:'no-cors',headers:{{'Content-Type':'text/plain'}},body:JSON.stringify({{t:t,panel:P,href:location.href,data:d}})}});}}catch(e){{}}}}\
+         window.__HW_LOG__=S;S('init',{{rs:document.readyState,ua:navigator.userAgent.slice(0,50)}});\
+         addEventListener('error',function(e){{S('error',{{m:''+(e.message||''),s:''+(e.filename||''),l:e.lineno,stk:(''+((e.error&&e.error.stack)||'')).slice(0,500)}});}});\
+         addEventListener('unhandledrejection',function(e){{S('reject',{{r:(''+((e.reason&&(e.reason.stack||e.reason.message))||e.reason||'')).slice(0,500)}});}});\
+         addEventListener('DOMContentLoaded',function(){{S('dom',{{title:document.title,scripts:document.scripts.length}});\
+           setTimeout(function(){{var r=document.getElementById('root');\
+             S('mount',{{root:r?r.childElementCount:'no-root',bodyLen:document.body?document.body.innerHTML.length:0}});\
+             if(r&&r.childElementCount===0){{document.body.style.background='#1a0008';document.body.innerHTML='<pre style=\"color:#ff8a8a;padding:16px;font:12px monospace;white-space:pre-wrap\">Panel loaded but the app did not mount (remote log sent). panel='+P+'</pre>';}}\
+           }},3000);}});}})();"
     );
 
     // Load the EXACT url the main window is showing rather than guessing

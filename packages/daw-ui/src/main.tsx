@@ -53,6 +53,17 @@ class PanelErrorBoundary extends React.Component<
   }
 }
 
+// Report the routing decision to the remote diagnostic log (set by the panel
+// window's init script) — tells us whether a detached window correctly picked
+// PanelWindow or fell through to <App> (whose splash would hang white).
+try {
+  ;(window as unknown as { __HW_LOG__?: (t: string, d: unknown) => void }).__HW_LOG__?.('route', {
+    panel: panelWindow,
+    injected: !!injected,
+    hasGlobal: !!(window as unknown as { __HW_PANEL__?: unknown }).__HW_PANEL__,
+  })
+} catch { /* not a panel window */ }
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     {panelWindow ? (
