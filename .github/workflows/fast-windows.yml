@@ -9,13 +9,22 @@
 #
 #   https://github.com/Dishairano/hardwave-daw/releases/download/fast-build/Hardwave.DAW_fast_x64-setup.exe
 #
-# Trigger:  gh workflow run fast-windows.yml --ref <branch>
-# The `fast-build` release is marked prerelease so it can never become
-# `releases/latest` — the auto-updater feed (latest.json) is untouched.
+# Trigger:  push a `fast-v*` tag (works from any branch — tag-push workflows
+# run from the tag's commit, no default-branch registration needed):
+#
+#   git tag fast-v1 && git push origin fast-v1
+#
+# (`fast-v*` does not match release.yml's `v*` glob, so the full release
+# pipeline does not fire.) The `fast-build` release is marked prerelease so
+# it can never become `releases/latest` — the auto-updater feed (latest.json)
+# is untouched.
 name: Fast Windows Build
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'fast-v*'
 
 concurrency:
   group: fast-windows
