@@ -59,18 +59,23 @@ function track(id: string, name: string, color: string, clips: ClipInfo[], kind 
   }
 }
 
-const midiTrack = track('t-lead', 'Lead', '#22c55e', [clip('Melody', 'src-lead', 0, 2, 'Midi')], 'Midi')
+const midiTrack = track(
+  't-lead', 'Lead', '#22c55e',
+  [clip('Melody', 'src-lead', 0, 4, 'Midi'), clip('Melody', 'src-lead', 4, 4, 'Midi')],
+  'Midi',
+)
 
+// An 8-bar "real session" — dense enough that marketing/gallery shots read
+// like actual work, not an empty project.
 const tracks: TrackWithClips[] = [
   track('t-master', 'Master', '#a1a1aa', [], 'Master'),
-  track('t-kick', 'Induskick4', '#c9a227', [
-    clip('Induskick4 – Auto', 'src-kick', 0, 1),
-    clip('Induskick4 – Auto', 'src-kick', 1, 1),
-    clip('Induskick4 – Auto', 'src-kick', 2, 1),
-    clip('Induskick4 – Auto', 'src-kick', 3, 1),
-  ]),
-  track('t-crash', 'Crash #1', '#c026d3', [clip('Crash #1', 'src-crash', 0, 4)]),
-  track('t-bass', 'Bass', '#2563eb', [clip('Reese', 'src-bass', 0, 2), clip('Reese', 'src-bass', 2, 2)]),
+  track('t-kick', 'Induskick4', '#c9a227',
+    Array.from({length: 8}, (_, i) => clip('Induskick4 – Auto', 'src-kick', i, 1))),
+  track('t-crash', 'Crash #1', '#c026d3', [clip('Crash #1', 'src-crash', 0, 4), clip('Crash #1', 'src-crash', 4, 4)]),
+  track('t-bass', 'Bass', '#2563eb',
+    Array.from({length: 4}, (_, i) => clip('Reese', 'src-bass', i * 2, 2))),
+  track('t-screech', 'Screech', '#ef4444', [clip('Screech', 'src-crash', 2, 2), clip('Screech', 'src-crash', 6, 2)]),
+  track('t-fx', 'FX', '#14b8a6', [clip('Riser', 'src-crash', 3, 1), clip('Impact', 'src-kick', 4, 1), clip('Riser', 'src-crash', 7, 1)]),
   midiTrack,
 ]
 
@@ -125,5 +130,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(<Harness />)
 // static screenshot captures the loaded state.
 setTimeout(() => {
   const z = useTransportStore.getState().horizontalZoom
-  useTransportStore.setState({ horizontalZoom: z * 1.05 })
+  // SHOT_ZOOM (via ?zoom= in the harness URL) scales the playlist zoom so
+  // marketing shots can fill the frame; default keeps the old 1.05 nudge.
+  const mult = Number(new URLSearchParams(location.search).get('zoom')) || 1.05
+  useTransportStore.setState({ horizontalZoom: z * mult })
 }, 1200)

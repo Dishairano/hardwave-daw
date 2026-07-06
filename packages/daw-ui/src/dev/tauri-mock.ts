@@ -50,19 +50,41 @@ interface TauriInternals {
   invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
 }
 
-// A short melody so the piano roll renders with content.
+// A dense 8-bar lead so the piano roll reads like a real session (arp line
+// spanning ~3 octaves + sustained chord stabs) — matters for marketing shots.
 function synthNotes() {
   const PPQ = 960
-  const pitches = [60, 62, 64, 65, 67, 64, 60, 67, 72, 71, 69, 67, 65, 64, 62, 60]
-  return pitches.map((pitch, i) => ({
-    index: i,
-    start_tick: Math.floor((i * PPQ) / 2),
-    duration_ticks: Math.floor(PPQ / 2) - 40,
-    pitch,
-    velocity: 80 + ((i * 9) % 40),
-    channel: 0,
-    muted: false,
-  }))
+  const notes: Array<Record<string, number | boolean>> = []
+  const scale = [48, 51, 55, 58, 60, 63, 67, 70, 72, 75, 79, 82, 84] // C minor-ish
+  let idx = 0
+  // 16th-note arp over 8 bars, rising/falling
+  for (let step = 0; step < 128; step++) {
+    const wave = Math.round((scale.length - 1) * Math.abs(Math.sin(step / 9)))
+    notes.push({
+      index: idx++,
+      start_tick: Math.floor((step * PPQ) / 4),
+      duration_ticks: Math.floor(PPQ / 4) - 30,
+      pitch: scale[wave],
+      velocity: 74 + ((step * 13) % 48),
+      channel: 0,
+      muted: false,
+    })
+  }
+  // chord stabs every bar (triads, held half a bar)
+  for (let bar = 0; bar < 8; bar++) {
+    for (const p of [36, 43, 48]) {
+      notes.push({
+        index: idx++,
+        start_tick: bar * PPQ * 4,
+        duration_ticks: PPQ * 2,
+        pitch: p + (bar % 2 === 0 ? 0 : 3),
+        velocity: 96,
+        channel: 0,
+        muted: false,
+      })
+    }
+  }
+  return notes
 }
 
 const mock: TauriInternals = {
