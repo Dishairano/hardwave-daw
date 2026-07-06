@@ -109,110 +109,10 @@ esac
 echo "Bump type: $BUMP_TYPE"
 echo "Version: $CURRENT -> $NEW_VERSION"
 
-# Detect if any backend (Rust) files changed since the last release tag.
-# If only frontend / TS / CSS changed, we can publish via the much faster
-# `fe-v*` tag pipeline (frontend-publish.yml) which skips the Windows /
-# Mac / Linux Tauri rebuild and only ships a frontend bundle for the
-# hot-swap updater. Saves ~25 minutes of CI per release.
-#
-# Detection looks at actual SOURCE files only — `src-tauri/src/**`,
-# `crates/*/src/**`, build.rs files, and the release.yml workflow itself.
-# We deliberately EXCLUDE `Cargo.toml`, `Cargo.lock`, and `tauri.conf.json`
-# from the scan because every release tag bump touches all three with a
-# pure version field change — which used to flag every minor release as
-# "backend" and trigger a needless 30-minute build. A real backend change
-# always lands a source file too.
-LAST_VTAG=$(git tag --list 'v*' --sort=-v:refname | head -1 || echo "")
-FRONTEND_ONLY=0
-if [ -n "$LAST_VTAG" ]; then
-  # Cover both already-committed diffs since the last v* tag AND any
-  # pending working-tree edits about to be committed by release.sh.
-  # Backend trigger set: every file that affects the compiled Rust
-  # binary or Tauri runtime config. Cargo.toml + Cargo.lock changes
-  # add/remove crates so the binary needs a rebuild to pick them up
-  # (regression fe-v0.171.1 chrono dep + fe-v0.171.2 capability
-  # change were both shipped as fe-v* and silently never reached
-  # users on their installed binary). Capabilities live under
-  # src-tauri/capabilities/ and are compiled into the binary at
-  # tauri-build time. tauri.conf.json carries product-level config
-  # that the Rust shell reads on launch.
-  # Two-stage detection.
-  #
-  # Stage 1 — unambiguous backend files (any change recompiles). Source
-  # files under src-tauri/src/ + crates/*/src/, build.rs files, the
-  # capabilities directory, the release workflow itself.
-  HARD_BACKEND_GLOBS=(
-      'src-tauri/src/**' 'src-tauri/build.rs'
-      'src-tauri/capabilities/**'
-      'crates/*/src/**' 'crates/*/build.rs'
-      '.github/workflows/release.yml'
-  )
-  # Stage 2 — files we touch on every release for pure version bumps
-  # (Cargo.toml + Cargo.lock + tauri.conf.json) but that ALSO matter
-  # when the diff includes non-version content (dep add/remove, config
-  # change, etc.). For these we look at the diff content, not just
-  # presence. If the only changed lines are `version = "..."` or the
-  # corresponding Cargo.lock package version refresh, treat as
-  # frontend-only.
-  SOFT_BACKEND_GLOBS=(
-      'src-tauri/Cargo.toml' 'src-tauri/tauri.conf.json'
-      'crates/*/Cargo.toml'
-      'Cargo.toml' 'Cargo.lock'
-  )
-
-  hard_diff() {
-    git diff --name-only "$1" -- "${HARD_BACKEND_GLOBS[@]}" 2>/dev/null | head -1
-  }
-  # Returns the first SOFT_BACKEND file that has non-version-bump
-  # content changes since $1. We strip out lines that only touch the
-  # `version = "..."` field and bump markers; if anything remains, the
-  # file genuinely changed.
-  soft_diff() {
-    local range="$1"
-    for glob in "${SOFT_BACKEND_GLOBS[@]}"; do
-      while IFS= read -r f; do
-        [ -z "$f" ] && continue
-        # Filter out the version field and Cargo.lock's name+version
-        # pair (the only thing release.sh edits on a bump). Everything
-        # else surviving the grep means a real dep/config change.
-        local hunk
-        hunk=$(git diff "$range" -- "$f" 2>/dev/null | \
-               grep -E '^[+-][^+-]' | \
-               grep -vE '^[+-]version *= *"[0-9]+\.[0-9]+\.[0-9]+"' | \
-               grep -vE '^[+-]name *= *"' | \
-               grep -vE '^[+-]"version": *"[0-9]+\.[0-9]+\.[0-9]+"' || true)
-        if [ -n "$hunk" ]; then
-          echo "$f"
-          return 0
-        fi
-      done < <(git diff --name-only "$range" -- "$glob" 2>/dev/null)
-    done
-    return 0
-  }
-
-  HARD_COMMITTED=$(hard_diff "${LAST_VTAG}..HEAD")
-  HARD_PENDING=$(hard_diff "HEAD")
-  SOFT_COMMITTED=$(soft_diff "${LAST_VTAG}..HEAD")
-  SOFT_PENDING=$(soft_diff "HEAD")
-
-  if [ -z "$HARD_COMMITTED" ] && [ -z "$HARD_PENDING" ] && [ -z "$SOFT_COMMITTED" ] && [ -z "$SOFT_PENDING" ]; then
-    # Hot-swap RETIRED in v0.200.0. The app now always serves the bundled
-    # UI over tauri:// and updates through the built-in Tauri updater
-    # (which ships a full bundle). A fe-v* tag only triggers
-    # frontend-publish.yml — a pipeline the running binary no longer
-    # consults — so a frontend-only release tagged fe-v* would never reach
-    # users. Keep FRONTEND_ONLY=0 so every release goes down the full v*
-    # build path and actually lands via the updater feed.
-    FRONTEND_ONLY=0
-    echo "release.sh: only frontend files changed since $LAST_VTAG — full v$NEW_VERSION build (fe-v hot-swap path disabled; retired in v0.200.0)"
-  else
-    echo "release.sh: backend changes detected since $LAST_VTAG — full v$NEW_VERSION build (all platforms, ~25min CI)"
-    TRIGGER="${HARD_COMMITTED:-${HARD_PENDING:-${SOFT_COMMITTED:-$SOFT_PENDING}}}"
-    echo "release.sh: backend trigger = $TRIGGER"
-  fi
-else
-  echo "release.sh: no prior v* tag found — defaulting to full release"
-fi
+# NOTE: the fe-v* 'frontend-only fast lane' was REMOVED (2026-07-06).
+# The hot-swap updater it fed was retired in v0.200.0 (the app always
+# loads the bundled UI and updates via the built-in Tauri updater), so
+# every release is a full v* build. frontend-publish.yml is deleted.
 
 # Generate changelog from commits since last tag, categorized into 3 sections.
 # Bullet convention in commit bodies:
@@ -307,10 +207,8 @@ CHANGELOG_FILE="RELEASE_CHANGELOG.md"
 } > "$CHANGELOG_FILE"
 
 # Bump version in BOTH tauri.conf.json AND the workspace Cargo.toml so the
-# Rust binary's `env!("CARGO_PKG_VERSION")` (read by frontend_updater.rs as
-# API_VERSION) stays in lockstep with the bundle version. Drift here would
-# disable hot-swap for every running binary the moment a fresh manifest is
-# published — see frontend-publish.yml's `assert workspace version` step.
+# Rust binary's `env!("CARGO_PKG_VERSION")` stays in lockstep with the
+# bundle version reported to the Tauri updater feed.
 sed -i "s/\"version\": \"$CURRENT\"/\"version\": \"$NEW_VERSION\"/" "$CONF"
 
 CARGO_TOML="Cargo.toml"
@@ -380,28 +278,14 @@ git add -A
 git commit -m "$MSG"
 git push origin "$CURRENT_BRANCH"
 
-# Pick the tag prefix based on whether this release touched any backend
-# code. fe-v* triggers frontend-publish.yml only (~2min); v* triggers
-# the full release.yml across Windows / Mac / Linux (~30min).
-# Always also push a v* tag for full builds so the auto-updater feed
-# advances and users get a fresh installer eventually — but only when
-# backend actually changed, so we are not wasting Windows minutes on
-# pure-CSS days.
-if [ "$FRONTEND_ONLY" = "1" ]; then
-  TAG_NAME="fe-v$NEW_VERSION"
-else
-  TAG_NAME="v$NEW_VERSION"
-fi
+# Tag the release — every release is a full v* build (fires release.yml
+# across Windows / Mac / Linux and advances the auto-updater feed).
+TAG_NAME="v$NEW_VERSION"
 git tag -a "$TAG_NAME" -m "$(cat "$CHANGELOG_FILE")"
 git push origin "$TAG_NAME"
 
 # Clean up changelog file
 rm -f "$CHANGELOG_FILE"
 
-if [ "$FRONTEND_ONLY" = "1" ]; then
-  echo "Released $TAG_NAME ($BUMP_TYPE, frontend-only) — fast CI at https://github.com/Dishairano/hardwave-daw/actions"
-  echo "Existing installed apps will hot-swap to this frontend on next launch."
-else
-  echo "Released $TAG_NAME ($BUMP_TYPE, full build) — CI at https://github.com/Dishairano/hardwave-daw/actions"
-  echo "Users update via Help → Check for updates… once Windows / Mac / Linux artifacts are ready."
-fi
+echo "Released $TAG_NAME ($BUMP_TYPE, full build) — CI at https://github.com/Dishairano/hardwave-daw/actions"
+echo "Users update via Help → Check for updates… once Windows / Mac / Linux artifacts are ready."

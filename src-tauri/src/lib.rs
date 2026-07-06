@@ -102,13 +102,6 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
-        // Custom protocol that serves the frontend bundle from the local
-        // cache when the updater has staged a newer version, falling back
-        // to the bundled assets when there's no cache yet. Default
-        // tauri://localhost still works so this is purely additive.
-        .register_uri_scheme_protocol(frontend_updater::PROTOCOL_SCHEME, |ctx, request| {
-            frontend_updater::handle_request(ctx.app_handle(), &request)
-        })
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             // Transport

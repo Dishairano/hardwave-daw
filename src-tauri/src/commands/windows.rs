@@ -61,10 +61,7 @@ pub async fn open_panel_window(
     // index.html never loads (blank white window — the bug the founder hit).
     // An init script runs before the page loads and sets a global the frontend
     // reads (main.tsx). The URL stays a plain `index.html` that always loads.
-    let params_js = params
-        .unwrap_or_default()
-        .replace('"', "")
-        .replace('\\', "");
+    let params_js = params.unwrap_or_default().replace(['"', '\\'], "");
     // Comprehensive REMOTE-LOG diagnostic (init script runs before the bundle,
     // so it reports even if the frontend never loads). Beacons the window's
     // real URL, JS errors, DOMContentLoaded, and whether React mounted to our

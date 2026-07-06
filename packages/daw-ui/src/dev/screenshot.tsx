@@ -113,8 +113,7 @@ function Harness() {
     default:
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          {/* The REAL top bar (HwTopbar + HwSecondRow) — not the dead
-              transport/Toolbar component. */}
+          {/* The REAL top bar (HwTopbar + HwSecondRow). */}
           <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
           <HwSecondRow projectName="Untitled" />
           <Arrangement onSetHint={noop} />

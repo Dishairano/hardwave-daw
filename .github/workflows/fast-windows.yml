@@ -142,3 +142,12 @@ jobs:
         with:
           name: Hardwave.DAW_fast_x64-setup
           path: Hardwave.DAW_fast_x64-setup.exe
+
+      # Tag hygiene: fast-v* tags are one-shot triggers, not history. Delete
+      # the trigger tag after a successful publish so they don't pile up.
+      - name: Delete trigger tag
+        if: startsWith(github.ref, 'refs/tags/fast-v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: git push origin ":${GITHUB_REF}" || true

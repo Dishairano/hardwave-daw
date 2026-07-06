@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { SplashScreen } from './components/SplashScreen'
 import { TitleBar } from './components/transport/TitleBar'
-import { Toolbar } from './components/transport/Toolbar'
 import { HwApp } from './components/HwApp'
 import type { MenuDef, MenuItem } from './components/HwTopMenu'
 import { usePatternStore } from './stores/patternStore'

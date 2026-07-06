@@ -20,16 +20,12 @@
 //! The hot-swap machinery below is kept but no longer invoked; hence the
 //! transitional dead-code allow. Slated for removal once the field has
 //! rolled onto the new updater.
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::AsyncWriteExt;
 
 use crate::AppState;
 
@@ -38,15 +34,9 @@ use crate::AppState;
 /// can publish without touching the marketing-site infra.
 const DEFAULT_MANIFEST_URL: &str = "https://suite.hardwavestudios.com/daw/frontend/manifest.json";
 
-/// Total budget the splash will wait. Past this we abort and use the bundled
-/// frontend; the next launch tries again. Keep tight so cold-start UX
-/// stays snappy on weak connections.
-const TOTAL_BUDGET_SECS: u64 = 5;
-
 /// Per-request budget — the manifest fetch alone is small enough that 2 s
 /// is generous. Download has its own bigger budget below.
 const MANIFEST_TIMEOUT_SECS: u64 = 2;
-const DOWNLOAD_TIMEOUT_SECS: u64 = 4;
 
 /// Rust core's API contract version. Bumped whenever Tauri commands or
 /// event payloads change in a way that would break older frontends. The
@@ -74,12 +64,6 @@ pub enum UpdateStatus {
     Checking,
     /// Bundle download in progress. `downloaded` and `total` are bytes.
     Downloading { downloaded: u64, total: u64 },
-    /// SHA-256 verification step.
-    Verifying,
-    /// Extracting the verified zip to the cache dir.
-    Applying,
-    /// New bundle written to cache. Active on next launch.
-    Ready { version: String },
     /// No newer bundle available, or running version is already latest.
     UpToDate,
     /// Update was found but the running Rust binary is too old/new.
@@ -92,20 +76,6 @@ pub enum UpdateStatus {
     /// the user. The frontend may show this briefly or swallow it; the
     /// app continues with the bundled fallback either way.
     Skipped { reason: String },
-    /// Resolver decided the running binary is too old to host the
-    /// advertised bundle safely. The splash should swap copy to "installer
-    /// upgrade required"; the Tauri auto-updater (Path A) takes over.
-    InstallerRequired {
-        target_version: Option<String>,
-        track: InstallerTrack,
-        reason: String,
-        release_url: Option<String>,
-    },
-    /// Bundle is staged in cache (or will be on next apply). Equivalent to
-    /// `Ready` for backwards-compat, but emitted from the version-contract
-    /// resolver path so the frontend can recognise the explicit hot-swap
-    /// outcome and suppress its own auto-updater check for this session.
-    HotSwapReady { version: String },
     /// Update applied; the app is about to restart to activate it. The
     /// splash should swap to "Restarting..." for the brief window before
     /// the process actually relaunches.
@@ -367,163 +337,6 @@ fn api_compatible(required: &str, running: &str) -> bool {
     req.matches(&run)
 }
 
-/// Main entry point — called once at app start, race-conditioned against
-/// the splash screen's animation budget. Always returns `Ok(())`; failures
-/// are logged and surfaced as `UpdateStatus::Skipped` events so the splash
-/// can advance.
-pub async fn check_and_apply(app: AppHandle) -> Result<(), String> {
-    let result = tokio::time::timeout(
-        Duration::from_secs(TOTAL_BUDGET_SECS),
-        check_and_apply_inner(app.clone()),
-    )
-    .await;
-
-    match result {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => {
-            log::warn!("frontend update skipped: {e}");
-            emit(&app, UpdateStatus::Skipped { reason: e });
-            Ok(())
-        }
-        Err(_) => {
-            log::warn!("frontend update timed out (budget {TOTAL_BUDGET_SECS}s)");
-            emit(
-                &app,
-                UpdateStatus::Skipped {
-                    reason: "timed out".to_string(),
-                },
-            );
-            Ok(())
-        }
-    }
-}
-
-async fn check_and_apply_inner(app: AppHandle) -> Result<(), String> {
-    emit(&app, UpdateStatus::Checking);
-
-    let cache = cache_root(&app)?;
-    let active = read_active_version(&cache);
-    let local_version = active.as_deref().unwrap_or(API_VERSION);
-
-    // Pure fetch — no side effects on the cache. The resolver decides
-    // whether the manifest's bundle is allowed to land before we touch disk.
-    let manifest_opt = match fetch_manifest_inner().await {
-        Ok(m) => Some(m),
-        Err(e) => {
-            log::warn!("frontend updater: manifest fetch failed: {e}");
-            None
-        }
-    };
-
-    let plan = resolve_launch_plan(API_VERSION, local_version, manifest_opt.as_ref());
-    log_launch_plan(&plan, manifest_opt.as_ref(), local_version);
-
-    // Cache the plan in AppState so the follow-up `version_contract_state`
-    // command (called by App.tsx right after this finishes) sees the same
-    // decision the splash already showed. Without this, a CDN replica
-    // flipping mid-launch could let `version_contract_state` re-fetch a
-    // different manifest and the user sees BOTH a HotSwapReady event and
-    // an InstallerRequired modal back-to-back. `source_version` is the
-    // manifest's advertised `latest_version` (or "-" when unreachable);
-    // `applied` flips to true once we successfully stage a bundle below.
-    let source_version = manifest_opt
-        .as_ref()
-        .map(|m| m.latest_version.clone())
-        .unwrap_or_else(|| "-".to_string());
-    if let Some(state) = app.try_state::<AppState>() {
-        *state.frontend_launch_plan.lock() =
-            Some(LaunchPlanCacheEntry::new(plan.clone(), source_version));
-    }
-
-    match plan {
-        LaunchPlan::HotSwap {
-            action: HotSwapAction::NoOp,
-        } => {
-            emit(&app, UpdateStatus::UpToDate);
-            Ok(())
-        }
-        LaunchPlan::HotSwap {
-            action:
-                HotSwapAction::ApplyBundle {
-                    version,
-                    bundle_url,
-                    size_bytes,
-                    sha256,
-                },
-        } => {
-            apply_bundle(&app, &cache, &version, &bundle_url, size_bytes, &sha256).await?;
-            emit(
-                &app,
-                UpdateStatus::HotSwapReady {
-                    version: version.clone(),
-                },
-            );
-            // Backwards-compat: legacy splash text mapping listens for
-            // `Ready`. Emitting both means an older bundle still in cache
-            // continues to render the right copy after this commit lands.
-            emit(
-                &app,
-                UpdateStatus::Ready {
-                    version: version.clone(),
-                },
-            );
-            if let Some(state) = app.try_state::<AppState>() {
-                if let Some(entry) = state.frontend_launch_plan.lock().as_mut() {
-                    entry.applied = true;
-                }
-            }
-            // Auto-restart so the staged bundle activates without the user
-            // having to click anything. The updater only ever runs during
-            // splash — no project is loaded yet, no unsaved-state risk.
-            // Hold the splash for ~700ms so the "Restarting..." copy
-            // actually paints before tauri kills the process.
-            emit(
-                &app,
-                UpdateStatus::Restarting {
-                    version: version.clone(),
-                },
-            );
-            let app_for_restart = app.clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(700)).await;
-                app_for_restart.restart();
-            });
-            Ok(())
-        }
-        LaunchPlan::InstallerModal {
-            target_version,
-            track,
-            reason,
-            release_url,
-        } => {
-            let reason_str = installer_reason_summary(&reason);
-            emit(
-                &app,
-                UpdateStatus::InstallerRequired {
-                    target_version,
-                    track,
-                    reason: reason_str,
-                    release_url,
-                },
-            );
-            // Note: we deliberately do NOT emit a follow-up legacy
-            // `Incompatible` event here. App.tsx maps `installer_required`
-            // to "Installer upgrade required" copy and `incompatible` to
-            // "Starting up..."; emitting both back-to-back made the second
-            // event win and erased the new mockup copy. The
-            // `log_launch_plan` telemetry above is the single triage
-            // surface — older bundles that only listen for the legacy
-            // event will still see `Skipped` if the manifest fetch fails,
-            // which is the correct fallback behaviour.
-            Ok(())
-        }
-        LaunchPlan::Fallback { reason } => {
-            emit(&app, UpdateStatus::Skipped { reason });
-            Ok(())
-        }
-    }
-}
-
 /// Pure manifest fetcher. No cache writes, no event emissions. The
 /// caller is expected to pass the result into `resolve_launch_plan`.
 pub async fn fetch_manifest_inner() -> Result<Manifest, String> {
@@ -543,96 +356,6 @@ pub async fn fetch_manifest_inner() -> Result<Manifest, String> {
         .await
         .map_err(|e| format!("manifest parse: {e}"))?;
     Ok(manifest)
-}
-
-/// Apply a verified bundle to the cache. Side-effecting — only call when
-/// `resolve_launch_plan` returned `HotSwap::ApplyBundle`. Splits the
-/// download/verify/extract/promote stages out of the launch decision so
-/// the resolver itself stays pure and testable.
-async fn apply_bundle(
-    app: &AppHandle,
-    cache: &Path,
-    version: &str,
-    bundle_url: &str,
-    size_bytes: u64,
-    expected_sha: &str,
-) -> Result<(), String> {
-    let download_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("build download client: {e}"))?;
-
-    let response = download_client
-        .get(bundle_url)
-        .send()
-        .await
-        .map_err(|e| format!("bundle download: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("bundle status: {e}"))?;
-
-    let total = size_bytes;
-    let mut downloaded: u64 = 0;
-    let mut hasher = Sha256::new();
-    let mut bytes = Vec::with_capacity(total as usize);
-
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("stream chunk: {e}"))?;
-        downloaded += chunk.len() as u64;
-        hasher.update(&chunk);
-        bytes.extend_from_slice(&chunk);
-        emit(app, UpdateStatus::Downloading { downloaded, total });
-    }
-
-    emit(app, UpdateStatus::Verifying);
-    let actual = hex::encode(hasher.finalize());
-    if !actual.eq_ignore_ascii_case(expected_sha) {
-        return Err(format!(
-            "sha256 mismatch (expected {expected_sha}, got {actual})"
-        ));
-    }
-
-    emit(app, UpdateStatus::Applying);
-    let staging = cache.join("staging");
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging).map_err(|e| format!("clean staging: {e}"))?;
-    }
-    std::fs::create_dir_all(&staging).map_err(|e| format!("create staging: {e}"))?;
-
-    {
-        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
-            .map_err(|e| format!("zip open: {e}"))?;
-        archive
-            .extract(&staging)
-            .map_err(|e| format!("zip extract: {e}"))?;
-    }
-
-    // Atomically promote staging -> versioned dir.
-    let versioned = cache.join(version);
-    if versioned.exists() {
-        std::fs::remove_dir_all(&versioned).map_err(|e| format!("clean old version dir: {e}"))?;
-    }
-    std::fs::rename(&staging, &versioned).map_err(|e| format!("promote staging: {e}"))?;
-
-    // Mark this version active. Custom protocol handler reads active.txt
-    // on next launch and serves files from <cache>/<version>/.
-    let active_marker = cache.join("active.txt");
-    let tmp = cache.join("active.txt.tmp");
-    {
-        let mut f = tokio::fs::File::create(&tmp)
-            .await
-            .map_err(|e| format!("create active.txt.tmp: {e}"))?;
-        f.write_all(version.as_bytes())
-            .await
-            .map_err(|e| format!("write active.txt.tmp: {e}"))?;
-        f.sync_all()
-            .await
-            .map_err(|e| format!("sync active.txt.tmp: {e}"))?;
-    }
-    std::fs::rename(&tmp, &active_marker).map_err(|e| format!("promote active.txt: {e}"))?;
-
-    log::info!("frontend updater: staged version {version} (active on next launch)");
-    Ok(())
 }
 
 /// Pure decision function. Given the installed binary version, the
@@ -835,39 +558,6 @@ fn installer_reason_summary(r: &InstallerReason) -> String {
         InstallerReason::ApiRangeBelow { range, have } => {
             format!("running {have} below manifest API range {range}")
         }
-    }
-}
-
-/// One-shot structured log line per launch — single observability surface
-/// for "why did this client take this path?". No PII; safe to forward to
-/// a log aggregator later.
-fn log_launch_plan(plan: &LaunchPlan, manifest: Option<&Manifest>, active: &str) {
-    let manifest_latest = manifest.map(|m| m.latest_version.as_str()).unwrap_or("-");
-    let manifest_floor = manifest
-        .and_then(|m| m.min_installer.as_deref())
-        .unwrap_or("-");
-    let manifest_range = manifest.map(|m| m.requires_api.as_str()).unwrap_or("-");
-    log::info!(
-        "version-contract decision installed={} active={} manifest_latest={} manifest_min_installer={} manifest_requires_api={} plan={}",
-        API_VERSION,
-        active,
-        manifest_latest,
-        manifest_floor,
-        manifest_range,
-        plan_label(plan),
-    );
-}
-
-fn plan_label(plan: &LaunchPlan) -> &'static str {
-    match plan {
-        LaunchPlan::HotSwap {
-            action: HotSwapAction::NoOp,
-        } => "hot_swap_noop",
-        LaunchPlan::HotSwap {
-            action: HotSwapAction::ApplyBundle { .. },
-        } => "hot_swap_apply",
-        LaunchPlan::InstallerModal { .. } => "installer_required",
-        LaunchPlan::Fallback { .. } => "fallback",
     }
 }
 
@@ -1201,267 +891,6 @@ fn launch_plan_to_state(plan: &LaunchPlan) -> VersionContractState {
 // ────────────────────────────────────────────────────────────────────────────
 // Custom URI scheme + activation (commit 2)
 // ────────────────────────────────────────────────────────────────────────────
-
-/// URI scheme name registered by `lib.rs`. Reserved purely for serving the
-/// frontend bundle from cache; everything else continues to flow through
-/// Tauri's default `tauri://localhost` handler.
-pub const PROTOCOL_SCHEME: &str = "hardwave-app";
-
-/// Build the URL we'd navigate to when the cache is active. Hostname is a
-/// fixed placeholder (`localhost`) that we never resolve — the protocol
-/// handler intercepts the request before any DNS happens.
-pub fn cache_navigation_url() -> String {
-    format!("{PROTOCOL_SCHEME}://localhost/")
-}
-
-/// Map a relative path to a Content-Type guess. The bundled asset
-/// resolver gives us a real MIME for fallback hits; this only fires for
-/// files we read out of the cache directory ourselves.
-fn mime_for(path: &str) -> &'static str {
-    let lower = path.to_ascii_lowercase();
-    let ext = lower.rsplit('.').next().unwrap_or("");
-    match ext {
-        "html" | "htm" => "text/html; charset=utf-8",
-        "js" | "mjs" => "application/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" => "application/json; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "ico" => "image/x-icon",
-        "woff" => "font/woff",
-        "woff2" => "font/woff2",
-        "ttf" => "font/ttf",
-        "otf" => "font/otf",
-        "wasm" => "application/wasm",
-        "txt" => "text/plain; charset=utf-8",
-        "map" => "application/json; charset=utf-8",
-        _ => "application/octet-stream",
-    }
-}
-
-/// Read a single asset from the active cache, if any. Returns the file
-/// bytes when the cache exists *and* contains the requested path.
-fn read_from_cache(app: &AppHandle, path: &str) -> Option<Vec<u8>> {
-    let cache = cache_root(app).ok()?;
-    let version = read_active_version(&cache)?;
-    let resolved = cache.join(version).join(path);
-    // Sanity: refuse paths that escape the cache root (e.g. via `..`).
-    let canonical = resolved.canonicalize().ok()?;
-    let cache_canon = cache.canonicalize().ok()?;
-    if !canonical.starts_with(&cache_canon) {
-        log::warn!("frontend updater: refusing path outside cache: {path}");
-        return None;
-    }
-    std::fs::read(&canonical).ok()
-}
-
-/// Protocol handler — first-line cache hit, then falls back to the bundled
-/// asset resolver. Used by `tauri::Builder::register_uri_scheme_protocol`
-/// in `lib.rs`. Synchronous because reading from disk for sub-megabyte
-/// files is cheap; the alternative async API costs Tauri an extra thread
-/// hop per request.
-pub fn handle_request(
-    app: &AppHandle,
-    request: &tauri::http::Request<Vec<u8>>,
-) -> tauri::http::Response<Vec<u8>> {
-    let raw_path = request.uri().path();
-    // Strip the leading slash and decode percent-encoded segments. The
-    // path "" is a navigation root → serve index.html.
-    let trimmed = raw_path.trim_start_matches('/');
-    let path = if trimmed.is_empty() {
-        "index.html"
-    } else {
-        trimmed
-    };
-
-    if let Some(bytes) = read_from_cache(app, path) {
-        return tauri::http::Response::builder()
-            .status(200)
-            .header("Content-Type", mime_for(path))
-            .header("Cache-Control", "no-cache")
-            .body(bytes)
-            .unwrap_or_else(|_| {
-                tauri::http::Response::builder()
-                    .status(500)
-                    .body(b"response build failed".to_vec())
-                    .unwrap()
-            });
-    }
-
-    if let Some(asset) = app.asset_resolver().get(path.to_string()) {
-        return tauri::http::Response::builder()
-            .status(200)
-            .header("Content-Type", asset.mime_type)
-            .body(asset.bytes)
-            .unwrap_or_else(|_| {
-                tauri::http::Response::builder()
-                    .status(500)
-                    .body(b"response build failed".to_vec())
-                    .unwrap()
-            });
-    }
-
-    tauri::http::Response::builder()
-        .status(404)
-        .header("Content-Type", "text/plain; charset=utf-8")
-        .body(format!("not found: {path}").into_bytes())
-        .unwrap()
-}
-
-/// Validate that the cached frontend bundle for `version` is structurally
-/// usable — index.html exists, parses, and references at least one
-/// non-empty JS asset that is also present and non-empty on disk. This
-/// catches half-downloaded bundles, partial deletions, and zero-byte
-/// stubs that would otherwise navigate the webview to a blank page with
-/// no fallback path.
-///
-/// Returns the index.html bytes when the bundle passes; `None` when it
-/// doesn't (caller should fall back to the bundled UI and quarantine the
-/// broken cache version).
-fn validate_cached_bundle(cache: &Path, version: &str) -> Option<Vec<u8>> {
-    let bundle_dir = cache.join(version);
-    let index_path = bundle_dir.join("index.html");
-    let index_bytes = std::fs::read(&index_path).ok()?;
-    if index_bytes.is_empty() {
-        log::warn!("frontend updater: cached index.html for {version} is empty");
-        return None;
-    }
-    let html = std::str::from_utf8(&index_bytes).ok()?;
-    // Pull every src="…" / href="…" referenced from index.html that points
-    // to a relative path inside the bundle. We don't parse HTML — a regex
-    // against quoted attributes is enough for Vite's emit format.
-    let re = regex::Regex::new(r#"(?:src|href)\s*=\s*["']([^"']+)["']"#).ok()?;
-    let mut checked = 0usize;
-    for cap in re.captures_iter(html) {
-        let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        // Only validate same-bundle assets. Skip absolute URLs, data:,
-        // and the custom protocol root.
-        if raw.is_empty()
-            || raw.starts_with("http")
-            || raw.starts_with("data:")
-            || raw.starts_with("hardwave-app://")
-            || raw.starts_with("//")
-        {
-            continue;
-        }
-        let stripped = raw.trim_start_matches('/').split('?').next().unwrap_or(raw);
-        if stripped.is_empty() {
-            continue;
-        }
-        let asset_path = bundle_dir.join(stripped);
-        match std::fs::metadata(&asset_path) {
-            Ok(m) if m.len() > 0 => {
-                checked += 1;
-            }
-            Ok(_) => {
-                log::warn!(
-                    "frontend updater: cached asset {stripped} is zero-length for {version}"
-                );
-                return None;
-            }
-            Err(e) => {
-                log::warn!("frontend updater: cached asset {stripped} missing for {version}: {e}");
-                return None;
-            }
-        }
-    }
-    if checked == 0 {
-        log::warn!("frontend updater: index.html for {version} has zero referenced assets — treating as corrupt");
-        return None;
-    }
-    Some(index_bytes)
-}
-
-/// Move a corrupt cache version into `<cache>/.quarantine/<version>/` so
-/// it stops being activated next launch but evidence survives for
-/// post-mortem. Best-effort: failure to quarantine is logged and ignored.
-fn quarantine_cache_version(cache: &Path, version: &str) {
-    let src = cache.join(version);
-    if !src.exists() {
-        return;
-    }
-    let qdir = cache.join(".quarantine");
-    if let Err(e) = std::fs::create_dir_all(&qdir) {
-        log::warn!("frontend updater: cannot create quarantine dir: {e}");
-        return;
-    }
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let dst = qdir.join(format!("{version}-{stamp}"));
-    if let Err(e) = std::fs::rename(&src, &dst) {
-        log::warn!("frontend updater: quarantine rename {version} → {dst:?} failed: {e}");
-        return;
-    }
-    // Drop active.txt so we don't re-attempt the same version next launch.
-    let active = cache.join("active.txt");
-    if let Err(e) = std::fs::remove_file(&active) {
-        log::warn!("frontend updater: could not clear active.txt after quarantine: {e}");
-    } else {
-        log::info!("frontend updater: quarantined corrupt cache {version} → {dst:?} and cleared active.txt");
-    }
-}
-
-/// Decide at startup whether the main window should load from cache or
-/// stay on the bundled default. Called from the `setup` closure in
-/// `lib.rs`. Returns `true` when navigation happened.
-///
-/// Validation order:
-///
-/// 1. cache root readable, active.txt present
-/// 2. bundle structurally valid (index.html + every referenced asset
-///    present and non-empty) — catches the grey-screen-of-death from
-///    half-downloaded or partially-deleted bundles
-/// 3. main webview window is mounted
-///
-/// On any failure we quarantine the broken version and return `false`,
-/// letting Tauri's bundled UI load.
-pub fn maybe_activate_cache(app: &AppHandle) -> bool {
-    let cache = match cache_root(app) {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("frontend updater: cannot read cache root: {e}");
-            return false;
-        }
-    };
-    let Some(version) = read_active_version(&cache) else {
-        return false;
-    };
-    if validate_cached_bundle(&cache, &version).is_none() {
-        log::warn!(
-            "frontend updater: cached bundle {version} failed validation — quarantining and falling back to bundled"
-        );
-        quarantine_cache_version(&cache, &version);
-        return false;
-    }
-    let url_str = cache_navigation_url();
-    let parsed: url::Url = match url_str.parse() {
-        Ok(u) => u,
-        Err(e) => {
-            log::warn!("frontend updater: bad nav url {url_str}: {e}");
-            return false;
-        }
-    };
-    if let Some(window) = app.get_webview_window("main") {
-        match window.navigate(parsed) {
-            Ok(()) => {
-                log::info!("frontend updater: activated cached version {version}");
-                true
-            }
-            Err(e) => {
-                log::warn!("frontend updater: navigate failed: {e}");
-                false
-            }
-        }
-    } else {
-        log::warn!("frontend updater: main webview window not found at activation time");
-        false
-    }
-}
 
 #[cfg(test)]
 mod tests {

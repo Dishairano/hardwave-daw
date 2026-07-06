@@ -18,15 +18,11 @@ run-name: Dev Build · ${{ github.ref_name }} · ${{ github.sha }}
 #   3. Scroll to the "Artifacts" section
 #   4. Download "windows-installer" / "macos-installer" / "linux-installer"
 
+# CI-minutes hygiene (2026-07-06): no longer fires on every push. We release
+# per feature (each v* tag runs the full 3-platform Release matrix minutes
+# later) and fast-windows.yml covers "quick Windows exe" — the per-push
+# 3-platform dev build was near-pure duplication. Manual trigger only.
 on:
-  push:
-    branches:
-      - master
-      - redesign-port-from-master
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
-      - '.github/workflows/functional-smoke.yml'
   workflow_dispatch:
     inputs:
       platforms:
