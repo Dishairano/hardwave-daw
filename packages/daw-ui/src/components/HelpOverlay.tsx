@@ -290,6 +290,33 @@ export function HelpOverlay({ open, onClose }: { open: boolean; onClose: () => v
             )}
           </div>
         </div>
+
+        {/* Exit links — Help used to dead-end here; users had to
+            remember the Discord/manual existed (deep-research P3). */}
+        <div style={{
+          display: 'flex', gap: 14, alignItems: 'center',
+          padding: '8px 14px', borderTop: `1px solid ${hw.border}`,
+          fontSize: 11, color: hw.textFaint, flexShrink: 0,
+        }}>
+          <span>Need more?</span>
+          {([
+            ['User manual', 'https://github.com/Dishairano/hardwave-daw/wiki'],
+            // TODO(founder): swap for the real Discord invite — no
+            // invite URL exists anywhere in the codebase to copy from.
+            ['Community', 'https://hardwavestudios.com'],
+            ['Report a bug', 'https://github.com/Dishairano/hardwave-daw/issues'],
+          ] as const).map(([label, url]) => (
+            <a
+              key={label}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: hw.accent, textDecoration: 'none' }}
+            >
+              {label} ↗
+            </a>
+          ))}
+        </div>
       </div>
     </div>
   )
