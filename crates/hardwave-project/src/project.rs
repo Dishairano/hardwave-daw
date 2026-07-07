@@ -128,13 +128,55 @@ impl Default for Project {
     }
 }
 
+/// Write `bytes` to `path` atomically: temp file in the same directory,
+/// fsync, then rename over the target. On Unix the parent directory is
+/// fsynced too so the rename itself survives power loss.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let file_name = path
+        .file_name()
+        .ok_or("save path has no file name")?
+        .to_string_lossy();
+    let tmp_name = format!(".{}.tmp-{}", file_name, std::process::id());
+    let tmp_path = match dir {
+        Some(d) => d.join(&tmp_name),
+        None => std::path::PathBuf::from(&tmp_name),
+    };
+
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let mut f = std::fs::File::create(&tmp_path)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp_path, path)?;
+        #[cfg(unix)]
+        if let Some(d) = dir {
+            if let Ok(dirf) = std::fs::File::open(d) {
+                let _ = dirf.sync_all();
+            }
+        }
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    result
+}
+
 impl Project {
     /// Save project to a .hwp file (MessagePack + zstd).
+    ///
+    /// The write is atomic: bytes land in a sibling temp file which is
+    /// fsynced and then renamed over the target, so a crash or power loss
+    /// mid-save can never leave a truncated .hwp behind — the previous
+    /// save (and the autosave, which uses this same path) stays intact.
     pub fn save(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let data = rmp_serde::to_vec(self)?;
         let compressed = zstd::encode_all(data.as_slice(), 3)?;
-        std::fs::write(path, compressed)?;
-        Ok(())
+        write_atomic(path, &compressed)
     }
 
     /// Load project from a .hwp file.
@@ -145,11 +187,10 @@ impl Project {
         Ok(project)
     }
 
-    /// Save as JSON (for debugging / interop).
+    /// Save as JSON (for debugging / interop). Atomic like `save`.
     pub fn save_json(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, json)?;
-        Ok(())
+        write_atomic(path, json.as_bytes())
     }
 
     pub fn add_audio_track(&mut self, name: String) -> String {
@@ -226,6 +267,63 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_round_trips_and_leaves_no_temp_files() {
+        let dir = std::env::temp_dir().join(format!("hwp-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.hwp");
+
+        let mut p = Project::default();
+        p.set_plugin_state("p1", "vst3", vec![1, 2, 3]);
+        p.save(&path).expect("save");
+
+        let back = Project::load(&path).expect("load");
+        assert_eq!(back.plugin_state("p1").unwrap().chunk, vec![1, 2, 3]);
+
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn save_overwrite_preserves_old_file_until_new_one_is_complete() {
+        // Overwriting an existing .hwp goes through rename, so at every
+        // instant the target path holds either the old or the new complete
+        // file — never a truncated hybrid. We can't crash mid-write in a
+        // unit test, but we verify the overwrite path works and the result
+        // is the new content.
+        let dir = std::env::temp_dir().join(format!("hwp-atomic-ow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.hwp");
+
+        let mut p1 = Project::default();
+        p1.set_plugin_state("old", "vst3", vec![1]);
+        p1.save(&path).expect("first save");
+
+        let mut p2 = Project::default();
+        p2.set_plugin_state("new", "clap", vec![2]);
+        p2.save(&path).expect("overwrite save");
+
+        let back = Project::load(&path).expect("load");
+        assert!(back.plugin_state("old").is_none());
+        assert_eq!(back.plugin_state("new").unwrap().chunk, vec![2]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn save_into_missing_directory_errors_cleanly() {
+        let path = std::env::temp_dir()
+            .join(format!("hwp-missing-{}", std::process::id()))
+            .join("nope")
+            .join("test.hwp");
+        let p = Project::default();
+        assert!(p.save(&path).is_err(), "save into missing dir must error, not panic");
+    }
 
     #[test]
     fn plugin_state_upsert_replaces_existing() {
