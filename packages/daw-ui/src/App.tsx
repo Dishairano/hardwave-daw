@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import React, { Suspense, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { SplashScreen } from './components/SplashScreen'
 import { HwApp } from './components/HwApp'
 import type { MenuDef, MenuItem } from './components/HwTopMenu'
@@ -58,7 +58,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { useIsMobile } from './hooks/useIsMobile'
 import { MobileTabBar, type MobilePanel } from './components/MobileTabBar'
-import { DevPanel } from './dev/DevPanel' // DEV ONLY — remove before merge to master
+// Lazy: the DevPanel drags the whole in-app test harness (~7k lines)
+// with it — as a static import it sat in the STARTUP bundle for every
+// user. Now it's a separate chunk fetched on first Ctrl+Shift+D.
+const DevPanel = React.lazy(() =>
+  import('./dev/DevPanel').then(m => ({ default: m.DevPanel })),
+)
 import { useTransportStore } from './stores/transportStore'
 import { useTrackStore } from './stores/trackStore'
 import { usePluginStore } from './stores/pluginStore'
@@ -1867,7 +1872,11 @@ export function App() {
       {showTempoMap && <TempoMapDialog onClose={() => setShowTempoMap(false)} />}
       {showHistory && <HistoryPanel onClose={() => setShowHistory(false)} />}
       <PrecountOverlay />
-      {showDevPanel && <DevPanel onClose={() => setShowDevPanel(false)} />}
+      {showDevPanel && (
+        <Suspense fallback={null}>
+          <DevPanel onClose={() => setShowDevPanel(false)} />
+        </Suspense>
+      )}
 
       {savePromptAction && (
         <SaveChangesDialog
