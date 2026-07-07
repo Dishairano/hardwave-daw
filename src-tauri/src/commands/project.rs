@@ -105,6 +105,17 @@ pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> 
     engine.transport.bpm.store(new_bpm, Ordering::Relaxed);
     engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
     engine.reset_history();
+    // Re-load every referenced audio source into the pool BEFORE the graph
+    // rebuild — the pool only fills at import time, so without this every
+    // project reopened after an app restart played silent audio clips.
+    let missing_audio = engine.rehydrate_audio_pool();
+    if !missing_audio.is_empty() {
+        log::warn!(
+            "load_project: {} audio source(s) missing on disk: {:?}",
+            missing_audio.len(),
+            missing_audio
+        );
+    }
     engine.rebuild_graph();
     drop(engine);
 

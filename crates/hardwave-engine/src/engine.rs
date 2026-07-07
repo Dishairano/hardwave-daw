@@ -438,7 +438,7 @@ impl DawEngine {
             .map_err(|e| e.to_string())?;
 
         let num_frames = channels.first().map(|c| c.len()).unwrap_or(0);
-        let source_id = format!("{:x}", md5_hash(path.to_string_lossy().as_bytes()));
+        let source_id = source_id_for_path(&path.to_string_lossy());
 
         let buffer = AudioBuffer {
             channels,
@@ -449,6 +449,52 @@ impl DawEngine {
         self.audio_pool.insert(source_id.clone(), buffer);
 
         Ok((source_id, info))
+    }
+
+    /// Re-load every audio source referenced by the current project into the
+    /// audio pool. The pool only ever fills at import time (`load_audio_file`),
+    /// so without this every project reopened after an app restart has SILENT
+    /// audio clips — the clips reference pool ids that no longer exist.
+    /// Covers the live tracks AND every stored arrangement timeline. Returns
+    /// the source paths that failed to load (missing/unreadable files) so the
+    /// UI can surface them like missing plugins; the project still opens.
+    pub fn rehydrate_audio_pool(&self) -> Vec<String> {
+        use hardwave_project::clip::ClipContent;
+        let paths: Vec<String> = {
+            let project = self.project.lock();
+            let mut set = std::collections::BTreeSet::new();
+            let mut collect = |content: &ClipContent| {
+                if let ClipContent::Audio(ac) = content {
+                    set.insert(ac.source_path.clone());
+                }
+            };
+            for track in &project.tracks {
+                for clip in &track.clips {
+                    collect(&clip.content);
+                }
+            }
+            for arrangement in &project.arrangements {
+                for timeline in arrangement.timelines.values() {
+                    for clip in &timeline.clips {
+                        collect(&clip.content);
+                    }
+                }
+            }
+            set.into_iter().collect()
+        };
+        let mut missing = Vec::new();
+        for p in paths {
+            // Skip sources already resident (e.g. loading a project into a
+            // session that imported the same file) — insert would clone-churn.
+            if self.audio_pool.get(&source_id_for_path(&p)).is_some() {
+                continue;
+            }
+            if let Err(e) = self.load_audio_file(std::path::Path::new(&p)) {
+                log::warn!("rehydrate_audio_pool: '{p}' failed to load: {e}");
+                missing.push(p);
+            }
+        }
+        missing
     }
 
     /// Ensure every non-master track in the project has an entry in the
@@ -869,6 +915,12 @@ fn md5_hash(data: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+/// The pool key `load_audio_file` derives for a path — kept in one place so
+/// `rehydrate_audio_pool`'s already-resident check can never drift from it.
+fn source_id_for_path(path: &str) -> String {
+    format!("{:x}", md5_hash(path.as_bytes()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1959,6 +2011,130 @@ mod offline_insert_tests {
         }
         drop(project);
         engine
+    }
+
+    /// Regression: `load_project` swaps the Project in but the audio pool
+    /// only fills at import time — before `rehydrate_audio_pool`, every
+    /// project reopened after an app restart had SILENT audio clips.
+    #[test]
+    fn rehydrate_audio_pool_reloads_project_sources() {
+        // A real WAV on disk, like a user's sample.
+        let dir = std::env::temp_dir().join(format!("hw-rehydrate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("kick.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        for i in 0..4_800 {
+            w.write_sample(((i as f32 / 10.0).sin() * 8_000.0) as i16)
+                .unwrap();
+        }
+        w.finalize().unwrap();
+        let path_str = wav.to_string_lossy().to_string();
+
+        // A project referencing that file — one clip on a live track, one in
+        // a stored arrangement timeline (both walks must find sources).
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            let id = project.add_audio_track("Kick".into());
+            let clip = |cid: &str| ClipPlacement {
+                content: ClipContent::Audio(AudioClip {
+                    id: cid.into(),
+                    name: "kick".into(),
+                    source_path: path_str.clone(),
+                    source_hash: String::new(),
+                    source_start: 0,
+                    source_end: 4_800,
+                    gain_db: 0.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
+                    muted: false,
+                    reversed: false,
+                    pitch_semitones: 0.0,
+                    stretch_ratio: 1.0,
+                    fade_in_curve: FadeCurve::Linear,
+                    fade_out_curve: FadeCurve::Linear,
+                }),
+                track_id: id.clone(),
+                position_ticks: 0,
+                length_ticks: 1920,
+                lane: 0,
+            };
+            if let Some(t) = project.track_mut(&id) {
+                t.clips.push(clip("clip-live"));
+            }
+            let mut arrangement = hardwave_project::arrangement::Arrangement {
+                id: "arr-b".into(),
+                name: "B".into(),
+                timelines: Default::default(),
+            };
+            arrangement.timelines.insert(
+                id.clone(),
+                hardwave_project::arrangement::TrackTimeline {
+                    clips: vec![clip("clip-arr")],
+                    automation_clips: vec![],
+                },
+            );
+            project.arrangements.push(arrangement);
+        }
+
+        // Pool is empty (fresh engine) — exactly the post-restart state.
+        let source_id = source_id_for_path(&path_str);
+        assert!(engine.audio_pool.get(&source_id).is_none());
+
+        let missing = engine.rehydrate_audio_pool();
+        assert!(
+            missing.is_empty(),
+            "unexpected missing sources: {missing:?}"
+        );
+        let buf = engine
+            .audio_pool
+            .get(&source_id)
+            .expect("source should be back in the pool after rehydrate");
+        assert!(buf.num_frames > 0);
+
+        // Missing files are reported, not fatal.
+        {
+            let mut project = engine.project.lock();
+            let id2 = project.add_audio_track("Ghost".into());
+            let mut ghost = ClipPlacement {
+                content: ClipContent::Audio(AudioClip {
+                    id: "clip-ghost".into(),
+                    name: "ghost".into(),
+                    source_path: dir.join("does-not-exist.wav").to_string_lossy().to_string(),
+                    source_hash: String::new(),
+                    source_start: 0,
+                    source_end: 1,
+                    gain_db: 0.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
+                    muted: false,
+                    reversed: false,
+                    pitch_semitones: 0.0,
+                    stretch_ratio: 1.0,
+                    fade_in_curve: FadeCurve::Linear,
+                    fade_out_curve: FadeCurve::Linear,
+                }),
+                track_id: id2.clone(),
+                position_ticks: 0,
+                length_ticks: 1920,
+                lane: 0,
+            };
+            ghost.track_id = id2.clone();
+            if let Some(t) = project.track_mut(&id2) {
+                t.clips.push(ghost);
+            }
+        }
+        let missing = engine.rehydrate_audio_pool();
+        assert_eq!(missing.len(), 1);
+        assert!(missing[0].contains("does-not-exist"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn render_peak(

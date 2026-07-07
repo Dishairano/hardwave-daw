@@ -31,3 +31,6 @@ uuid.workspace = true
 # mocks of the trait can name the type without the path leaking.
 raw-window-handle.workspace = true
 
+
+[dev-dependencies]
+hound.workspace = true
