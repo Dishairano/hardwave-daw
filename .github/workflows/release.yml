@@ -42,6 +42,37 @@ jobs:
           path: packages/daw-ui/dist
           retention-days: 1
 
+  # UI regression suite — the full app booted in a browser against the
+  # mocked Tauri backend (src/dev/tauri-mock.ts). Brought back to 60/60
+  # green on 2026-07-07 (deep-research DAW-19); it caught the lost
+  # window drag-region, so it gates releases like every other check.
+  ui-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/daw-ui/package-lock.json
+
+      - name: Run Playwright UI suite
+        run: |
+          cd packages/daw-ui
+          npm ci
+          npx playwright install chromium --with-deps
+          npx playwright test
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failures
+          path: packages/daw-ui/test-results
+          retention-days: 3
+
   changelog:
     runs-on: ubuntu-latest
     outputs:
@@ -128,7 +159,7 @@ jobs:
         run: cargo test --workspace
 
   build:
-    needs: [frontend, changelog, lint-and-test]
+    needs: [frontend, changelog, lint-and-test, ui-tests]
     strategy:
       fail-fast: false
       matrix:

@@ -13,26 +13,26 @@ test.describe('Keyboard shortcuts', () => {
     await page.waitForTimeout(200)
     await page.keyboard.press('Space')
     // Page still responsive — title bar menus should still be visible
-    await expect(page.getByText('FILE', { exact: true })).toBeVisible()
+    await expect(page.locator('.fl-menu').getByText('File', { exact: true })).toBeVisible()
   })
 
   test('Home key does not crash', async ({ page }) => {
     await page.keyboard.press('Home')
     await page.waitForTimeout(100)
-    await expect(page.getByText('FILE', { exact: true })).toBeVisible()
+    await expect(page.locator('.fl-menu').getByText('File', { exact: true })).toBeVisible()
   })
 
   test('End key does not crash', async ({ page }) => {
     await page.keyboard.press('End')
     await page.waitForTimeout(100)
-    await expect(page.getByText('FILE', { exact: true })).toBeVisible()
+    await expect(page.locator('.fl-menu').getByText('File', { exact: true })).toBeVisible()
   })
 
   test('L key does not crash (loop toggle)', async ({ page }) => {
     await page.keyboard.press('KeyL')
     await page.waitForTimeout(100)
     await page.keyboard.press('KeyL')
-    await expect(page.getByText('FILE', { exact: true })).toBeVisible()
+    await expect(page.locator('.fl-menu').getByText('File', { exact: true })).toBeVisible()
   })
 
   test('F5 through F9 function keys do not crash', async ({ page }) => {
@@ -40,7 +40,7 @@ test.describe('Keyboard shortcuts', () => {
       await page.keyboard.press(key)
       await page.waitForTimeout(80)
     }
-    await expect(page.getByText('FILE', { exact: true })).toBeVisible()
+    await expect(page.locator('.fl-menu').getByText('File', { exact: true })).toBeVisible()
   })
 
   test('Ctrl+Z and Ctrl+Shift+Z do not crash', async ({ page }) => {
@@ -48,7 +48,7 @@ test.describe('Keyboard shortcuts', () => {
     await page.waitForTimeout(80)
     await page.keyboard.press('Control+Shift+KeyZ')
     await page.waitForTimeout(80)
-    await expect(page.getByText('FILE', { exact: true })).toBeVisible()
+    await expect(page.locator('.fl-menu').getByText('File', { exact: true })).toBeVisible()
   })
 })
 

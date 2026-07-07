@@ -16,7 +16,9 @@ const ICONS: Record<NotificationLevel, string> = {
 export function NotificationHost() {
   const notifications = useNotificationStore(s => s.notifications)
   const dismiss = useNotificationStore(s => s.dismiss)
-  if (notifications.length === 0) return null
+  // Container stays mounted when empty (pointer-events: none, zero
+  // size) — keeps mounting cheap-and-stable and lets tests assert the
+  // host exists without forcing a toast.
   return (
     <div
       data-testid="notification-host"

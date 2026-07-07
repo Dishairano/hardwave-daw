@@ -47,7 +47,13 @@ function synthPeaks(n: number): [number, number, number, number][] {
 
 interface TauriInternals {
   transformCallback: (cb: unknown) => unknown
+  unregisterCallback: (id: unknown) => void
   invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
+}
+
+/** `@tauri-apps/api/event` bookkeeping the real webview injects. */
+interface TauriEventPluginInternals {
+  unregisterListener: (event: string, eventId: unknown) => void
 }
 
 // A dense 8-bar lead so the piano roll reads like a real session (arp line
@@ -89,6 +95,7 @@ function synthNotes() {
 
 const mock: TauriInternals = {
   transformCallback: (cb) => cb,
+  unregisterCallback: () => {},
   invoke: async (cmd, args) => {
     switch (cmd) {
       case 'get_waveform_peaks':
@@ -100,6 +107,28 @@ const mock: TauriInternals = {
       case 'get_sends':
       case 'list_arrangements':
         return []
+      // Boot path for the FULL app under Playwright (main.tsx loads this
+      // mock in browser/dev mode since 2026-07-07): every command the
+      // splash-to-idle sequence awaits must resolve with the right SHAPE
+      // or the app never leaves the splash and all UI specs fail.
+      case 'get_tracks':
+      case 'get_tracks_with_clips':
+      case 'find_missing_plugins':
+      case 'scan_plugins':
+      case 'get_plugins':
+        return []
+      case 'get_transport_state':
+        return {
+          playing: false, recording: false, looping: false,
+          position_samples: 0, bpm: 140, time_sig_numerator: 4,
+          time_sig_denominator: 4, master_volume_db: 0, pattern_mode: false,
+        }
+      case 'get_project_meta':
+        return { show_on_open: false }
+      case 'get_custom_scan_paths':
+        return [[], []]
+      case 'diagnostics_info':
+        return { logsDir: '/tmp/mock-logs', currentSessionLog: null }
       case 'get_graph_latency':
         return { samples: 0, ms: 0, pdcEnabled: true }
       // Setup-wizard audio step (screenshot harness renders it headless).
@@ -125,4 +154,17 @@ const mock: TauriInternals = {
   },
 }
 
-;(window as unknown as { __TAURI_INTERNALS__: TauriInternals }).__TAURI_INTERNALS__ = mock
+// Install ONLY when no real backend exists. Inside actual Tauri the
+// webview injects __TAURI_INTERNALS__ before any module runs, so this
+// import is a safe no-op there — which is what lets main.tsx import
+// the mock unconditionally for browser/Playwright boots.
+{
+  const w = window as unknown as {
+    __TAURI_INTERNALS__?: TauriInternals
+    __TAURI_EVENT_PLUGIN_INTERNALS__?: TauriEventPluginInternals
+  }
+  if (!w.__TAURI_INTERNALS__) {
+    w.__TAURI_INTERNALS__ = mock
+    w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
+  }
+}

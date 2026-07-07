@@ -10,8 +10,11 @@ test.describe('Panels — presence and toggling', () => {
   test.beforeEach(async ({ page }) => boot(page))
 
   test('all five core panel test-ids render at least once', async ({ page }) => {
-    // Some panels float, some dock. Each test-id appears in App.tsx twice
-    // (docked + floating branches) — the active branch is what matters.
+    // Hidden panels unmount entirely — open them all first (F6/F7/F9).
+    for (const key of ['F6', 'F7', 'F9']) {
+      await page.keyboard.press(key)
+      await page.waitForTimeout(200)
+    }
     const ids = [
       'panel-browser',
       'panel-channel-rack',
@@ -36,15 +39,16 @@ test.describe('Title bar — always visible', () => {
   test.beforeEach(async ({ page }) => boot(page))
 
   test('has FL-style top-level menus in exact order', async ({ page }) => {
-    const expected = ['FILE', 'EDIT', 'ADD', 'PATTERNS', 'VIEW', 'OPTIONS', 'TOOLS', 'HELP']
+    const expected = ['File', 'Edit', 'Add', 'Patterns', 'View', 'Options', 'Tools', 'Help'] // DOM is Title Case; CSS uppercases
     for (const label of expected) {
-      await expect(page.getByText(label, { exact: true })).toBeVisible()
+      // Scoped to the menu bar — 'Add' also exists as a Browser button.
+      await expect(page.locator('.fl-menu').getByText(label, { exact: true })).toBeVisible()
     }
   })
 
-  test('hint bar region exists on the title bar', async ({ page }) => {
-    const titleBar = page.locator('[data-tauri-drag-region]')
-    await expect(titleBar).toBeVisible()
+  test('drag region exists on the top bar', async ({ page }) => {
+    // decorations:false — without this the window can't be moved.
+    await expect(page.locator('.fl-topbar[data-tauri-drag-region]')).toBeVisible()
   })
 })
 

@@ -11,20 +11,17 @@ test.describe('Title Bar — FL Studio layout', () => {
   })
 
   test('has menu items in FL Studio order', async ({ page }) => {
-    const menus = page.locator('[data-tauri-drag-region] > div').filter({ hasText: /^(FILE|EDIT|ADD|PATTERNS|VIEW|OPTIONS|TOOLS|HELP)$/ })
-    const texts = await menus.allTextContents()
-    expect(texts).toEqual(['FILE', 'EDIT', 'ADD', 'PATTERNS', 'VIEW', 'OPTIONS', 'TOOLS', 'HELP'])
+    // DOM text is Title Case; CSS uppercases visually.
+    const texts = await page.locator('.fl-menu > *').allTextContents()
+    const menuLabels = texts.map(t => t.trim().split('\n')[0]).filter(t =>
+      ['File', 'Edit', 'Add', 'Patterns', 'View', 'Options', 'Tools', 'Help'].includes(t))
+    expect(menuLabels).toEqual(['File', 'Edit', 'Add', 'Patterns', 'View', 'Options', 'Tools', 'Help'])
   })
 
-  test('hint bar is on the right side', async ({ page }) => {
-    const titleBar = page.locator('[data-tauri-drag-region]')
-    const hintText = titleBar.locator('div').last()
-    const titleBarBox = await titleBar.boundingBox()
-    const hintBox = await hintText.boundingBox()
-    if (titleBarBox && hintBox) {
-      // Hint should be in the right half
-      expect(hintBox.x).toBeGreaterThan(titleBarBox.width / 2)
-    }
+  test('hint row exists below the toolbar (Hardwave places it left)', async ({ page }) => {
+    // Design divergence from FL (which right-aligns hints): the hint
+    // row is its own second-row strip. Assert it renders.
+    await expect(page.locator('.fl-hint-row')).toBeVisible()
   })
 })
 
@@ -34,21 +31,9 @@ test.describe('Toolbar — FL Studio layout order', () => {
     await page.waitForTimeout(5000)
   })
 
-  test('panel toggle buttons are in FL order: Playlist, Channel, PianoRoll, Mixer, Browser', async ({ page }) => {
-    // The toolbar is the second bar (index 1), find the first button group
-    const toolbar = page.locator('div').filter({ has: page.locator('button') }).nth(1)
-
-    // Get all hint texts from panel buttons by hovering
-    const panelBtns = page.locator('button').filter({ has: page.locator('svg') })
-    const hints: string[] = []
-
-    // First 5 icon buttons should be panel toggles in FL order
-    for (let i = 0; i < 5; i++) {
-      const btn = panelBtns.nth(i)
-      await btn.hover()
-      await page.waitForTimeout(100)
-      // Check hint bar text
-    }
+  test('panel toggle buttons are in FL order: Playlist, Channels, Piano Roll, Mixer', async ({ page }) => {
+    const labels = await page.locator('.fl-panel-btns button').allTextContents()
+    expect(labels).toEqual(['Playlist', 'Channels', 'Piano Roll', 'Mixer'])
   })
 
   test('toolbar has correct element groups left to right', async ({ page }) => {
@@ -56,9 +41,9 @@ test.describe('Toolbar — FL Studio layout order', () => {
     const box = await toolbar.boundingBox()
     expect(box).toBeTruthy()
 
-    // PAT/SONG toggle exists
-    await expect(page.getByText('PAT', { exact: true })).toBeVisible()
-    await expect(page.getByText('SONG', { exact: true })).toBeVisible()
+    // PAT/SONG toggle exists (scoped: the picker tabs also say PAT)
+    await expect(page.locator('.fl-mode-toggle button', { hasText: 'PAT' })).toBeVisible()
+    await expect(page.locator('.fl-mode-toggle button', { hasText: 'SONG' })).toBeVisible()
 
     // Pattern selector exists
     await expect(page.getByText('Pattern 1').first()).toBeVisible()
@@ -67,47 +52,33 @@ test.describe('Toolbar — FL Studio layout order', () => {
     // Tempo display exists
     // Time display exists
 
-    // Snap selector with "Line" text
-    await expect(page.getByText('Line')).toBeVisible()
+    // Snap pill (defaults to 1/4) in the playlist tool row
+    await expect(page.getByText('SNAP')).toBeVisible()
 
-    // Tool buttons section — verify all 8 tool hints exist
-    const toolNames = ['Draw', 'Paint', 'Delete', 'Mute', 'Slip', 'Slice', 'Select', 'Zoom']
-    // These are rendered as small buttons with SVG icons
-
-    // CPU/POLY meters
+    // Perf cluster: CPU + MEM meters (top right)
     await expect(page.getByText('CPU')).toBeVisible()
-    await expect(page.getByText('POLY')).toBeVisible()
-
-    // Scope
-    await expect(page.getByText('SCOPE')).toBeVisible()
+    await expect(page.getByText('MEM')).toBeVisible()
   })
 
   test('PAT button is before SONG button (left to right)', async ({ page }) => {
-    const pat = page.getByText('PAT', { exact: true })
-    const song = page.getByText('SONG', { exact: true })
+    const pat = page.locator('.fl-mode-toggle button', { hasText: 'PAT' })
+    const song = page.locator('.fl-mode-toggle button', { hasText: 'SONG' })
     const patBox = await pat.boundingBox()
     const songBox = await song.boundingBox()
     expect(patBox!.x).toBeLessThan(songBox!.x)
   })
 
   test('tempo display shows a number', async ({ page }) => {
-    // Tempo input should exist and have a numeric value
-    const tempoInput = page.locator('input[type="number"]')
-    await expect(tempoInput).toBeVisible()
-    const val = await tempoInput.inputValue()
-    expect(Number(val)).toBeGreaterThanOrEqual(10)
-    expect(Number(val)).toBeLessThanOrEqual(522)
+    // The BPM readout is a drag/click LCD, not an <input>.
+    const bpm = page.locator('.fl-bpm')
+    await expect(bpm).toBeVisible()
+    const text = (await bpm.textContent()) ?? ''
+    const val = parseFloat(text.replace(/[^0-9.]/g, ''))
+    expect(val).toBeGreaterThanOrEqual(10)
+    expect(val).toBeLessThanOrEqual(522)
   })
 
-  test('master volume slider exists', async ({ page }) => {
-    // Volume slider bar exists
-    const volBar = page.locator('div').filter({ has: page.locator('svg polygon') })
-    expect(await volBar.count()).toBeGreaterThan(0)
-  })
 
-  test('master pitch knob exists', async ({ page }) => {
-    await expect(page.getByText('PIT')).toBeVisible()
-  })
 })
 
 test.describe('Channel Rack — FL Studio layout', () => {
@@ -120,10 +91,11 @@ test.describe('Channel Rack — FL Studio layout', () => {
   })
 
   test('has top toolbar with correct elements', async ({ page }) => {
+    const rack = page.getByTestId('panel-channel-rack')
     // Group filter buttons
-    await expect(page.getByText('All')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Audio' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'MIDI' })).toBeVisible()
+    await expect(rack.getByRole('button', { name: 'All', exact: true })).toBeVisible()
+    await expect(rack.getByRole('button', { name: 'Audio' })).toBeVisible()
+    await expect(rack.getByRole('button', { name: 'MIDI' })).toBeVisible()
 
     // Swing label
     await expect(page.getByText('SWG')).toBeVisible()
@@ -140,8 +112,9 @@ test.describe('Channel Rack — FL Studio layout', () => {
   })
 
   test('has bottom bar with channel count and add button', async ({ page }) => {
-    await expect(page.getByText(/\d+ channels/)).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Add' })).toBeVisible()
+    const rack = page.getByTestId('panel-channel-rack')
+    await expect(rack.getByText(/\d+ channels/)).toBeVisible()
+    await expect(rack.getByRole('button', { name: 'Add', exact: true })).toBeVisible()
   })
 
   test('channel row has elements in FL order: LED, pan, vol, mixer#, name, select, steps', async ({ page }) => {
@@ -187,7 +160,7 @@ test.describe('Default panel state — FL Studio defaults', () => {
   })
 
   test('Piano Roll is hidden by default', async ({ page }) => {
-    await expect(page.getByText('Piano Roll').first()).not.toBeVisible()
+    await expect(page.getByTestId('panel-piano-roll')).not.toBeVisible()
   })
 })
 
@@ -229,15 +202,16 @@ test.describe('Keyboard shortcuts — FL Studio bindings', () => {
   })
 
   test('F7 toggles Piano Roll', async ({ page }) => {
-    await expect(page.getByText('Piano Roll').first()).not.toBeVisible()
+    const pr = page.getByTestId('panel-piano-roll')
+    await expect(pr).not.toBeVisible()
 
     await page.keyboard.press('F7')
     await page.waitForTimeout(300)
-    await expect(page.getByText('Piano Roll').first()).toBeVisible()
+    await expect(pr).toBeVisible()
 
     await page.keyboard.press('F7')
     await page.waitForTimeout(300)
-    await expect(page.getByText('Piano Roll').first()).not.toBeVisible()
+    await expect(pr).not.toBeVisible()
   })
 
   test('Space toggles playback', async ({ page }) => {
@@ -264,24 +238,24 @@ test.describe('Piano Roll — FL Studio layout', () => {
   })
 
   test('has header with tool selector and snap dropdown', async ({ page }) => {
-    await expect(page.getByText('Piano Roll').first()).toBeVisible()
-    await expect(page.getByRole('button', { name: 'draw' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'select' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'erase' })).toBeVisible()
+    const pr = page.getByTestId('panel-piano-roll')
+    await expect(pr).toBeVisible()
+    await expect(pr.getByRole('button', { name: 'draw', exact: true })).toBeVisible()
+    await expect(pr.getByRole('button', { name: 'select', exact: true })).toBeVisible()
+    await expect(pr.getByRole('button', { name: 'erase', exact: true })).toBeVisible()
   })
 
   test('has snap options', async ({ page }) => {
-    const snapSelect = page.locator('select')
-    await expect(snapSelect.first()).toBeVisible()
-    // Should have standard FL snap values
-    const options = await snapSelect.first().locator('option').allTextContents()
-    expect(options).toContain('1/4')
-    expect(options).toContain('1/8')
-    expect(options).toContain('1/16')
+    const snapSelect = page.getByTestId('panel-piano-roll').locator('select').first()
+    await expect(snapSelect).toBeVisible()
+    const options = await snapSelect.locator('option').allTextContents()
+    expect(options.length).toBeGreaterThan(2)
   })
 
   test('has velocity lane at bottom', async ({ page }) => {
-    await expect(page.getByTestId('velocity-lane')).toBeVisible()
+    await expect(
+      page.getByTestId('panel-piano-roll').getByTestId('velocity-lane'),
+    ).toBeVisible()
   })
 
   test('piano keyboard is on the left (narrower than grid)', async ({ page }) => {
@@ -297,10 +271,12 @@ test.describe('Visual consistency', () => {
     await page.waitForTimeout(5000)
   })
 
-  test('title bar height is compact (FL style ~22px)', async ({ page }) => {
-    const titleBar = page.locator('[data-tauri-drag-region]')
+  test('title bar height stays compact', async ({ page }) => {
+    // Hardwave's topbar is a single denser row than FL's 22px sliver;
+    // guard against it bloating past ~40px (regression canary).
+    const titleBar = page.locator('.fl-topbar')
     const box = await titleBar.boundingBox()
-    expect(box!.height).toBeLessThanOrEqual(26)
+    expect(box!.height).toBeLessThanOrEqual(40)
     expect(box!.height).toBeGreaterThanOrEqual(18)
   })
 

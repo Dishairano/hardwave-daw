@@ -232,8 +232,14 @@ export function HwTopbar({
 
   return (
     <>
-    <div className="fl-topbar">
-      <div className="fl-logo">HARD<span>WAVE</span></div>
+    {/* data-tauri-drag-region: the window ships decorations:false, so
+        WITHOUT this the main window cannot be moved at all — a real
+        regression the window-chrome Playwright spec caught (the old
+        TitleBar had it; the HwApp port lost it). Tauri only starts a
+        drag when the mousedown lands on the attributed element itself,
+        so the menus/buttons inside keep working. */}
+    <div className="fl-topbar" data-tauri-drag-region>
+      <div className="fl-logo" data-tauri-drag-region>HARD<span>WAVE</span></div>
       {menus && menus.length > 0 ? (
         <HwTopMenu menus={menus} />
       ) : (
@@ -1558,15 +1564,25 @@ export function HwApp({
   // in localStorage by panelLayoutStore so this flag survives restarts.
   const layout = usePanelLayoutStore(s => s.layout)
 
-  // Mobile: single panel, no chrome.
+  // Mobile: single panel, minimal chrome. The slim grab strip keeps the
+  // window movable — decorations are off, and a desktop window resized
+  // this narrow flips into this layout, so without a drag region it
+  // would become permanently unmovable.
   if (isMobile) {
     return (
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
-        {mobilePanel === 'browser' && <Browser />}
-        {mobilePanel === 'channelRack' && <ChannelRack />}
-        {mobilePanel === 'pianoRoll' && <PianoRoll />}
-        {mobilePanel === 'playlist' && <Arrangement />}
-        {mobilePanel === 'mixer' && <MixerPanel />}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+        <div
+          data-tauri-drag-region
+          style={{ height: 14, flexShrink: 0, background: 'rgba(255,255,255,0.03)', cursor: 'grab' }}
+          title="Drag to move window"
+        />
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+          {mobilePanel === 'browser' && <Browser />}
+          {mobilePanel === 'channelRack' && <ChannelRack />}
+          {mobilePanel === 'pianoRoll' && <PianoRoll />}
+          {mobilePanel === 'playlist' && <Arrangement />}
+          {mobilePanel === 'mixer' && <MixerPanel />}
+        </div>
       </div>
     )
   }

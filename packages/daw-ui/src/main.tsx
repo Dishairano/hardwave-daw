@@ -1,5 +1,13 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+
+// Browser/dev mode (Playwright specs, `npm run dev` outside Tauri):
+// install the mocked backend BEFORE anything imports @tauri-apps/api,
+// or the app hangs on the splash waiting for IPC that will never
+// answer. Real Tauri sets __TAURI_INTERNALS__ first, so this is a
+// no-op in production. Static import keeps ordering deterministic;
+// the module itself guards against overwriting a real backend.
+import './dev/tauri-mock'
 import { App } from './App'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { PanelWindow } from './PanelWindow'
