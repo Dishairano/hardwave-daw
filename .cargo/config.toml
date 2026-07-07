@@ -1,6 +1,8 @@
-# Incremental compilation artifacts grew multiple GB per day on the
-# 38GB dev host and repeatedly filled the disk mid-release-gate.
-# Disabled repo-wide: full-workspace gate builds are batch anyway, so
-# incremental buys little here and costs ~2GB per rebuild cycle.
+# Incremental is on for local iteration speed. Disk pressure is solved
+# host-side: ~/.cargo/config.toml (NOT committed — CI runners have no
+# such mount) points target-dir at the dedicated 100GB dev volume,
+# after the 12GB target dir filled the 38GB root disk three times on
+# 2026-07-07. CI is unaffected either way (runners set
+# CARGO_INCREMENTAL=0 via env, which overrides this).
 [build]
-incremental = false
+incremental = true
