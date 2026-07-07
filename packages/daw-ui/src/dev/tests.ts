@@ -9,7 +9,7 @@
 // MANUAL tests are where we actually trust ears and eyes. Be explicit about which.
 
 import { invoke } from '@tauri-apps/api/core'
-import { devDumpState, devForceDeviceError, devResolveTestAsset, queryTestId, getMeterDb, clickCanvas, simulateKey, type DevState } from './devApi'
+import { devDumpState, devForceDeviceError, devResolveTestAsset, queryTestId, getMeterDb, clickCanvas, simulateKey } from './devApi'
 import { useTransportStore, snapToTicks } from '../stores/transportStore'
 import { PHASE3_TESTS } from './testsPhase3'
 import { PHASE4_TESTS } from './testsPhase4'
@@ -1025,10 +1025,10 @@ export const TESTS: TestDef[] = [
     run: async ({ log }) => {
       // Setup: add a track and set BPM
       await invoke('set_bpm', { bpm: 175 })
-      const trackId = await invoke<string>('add_audio_track', { name: 'SaveTest' })
+      await invoke<string>('add_audio_track', { name: 'SaveTest' })
       await sleep(40)
 
-      const beforeInfo = await invoke<any>('get_project_info')
+      await invoke<any>('get_project_info')
       const beforeTracks = await invoke<any[]>('get_tracks')
       const beforeNonMaster = beforeTracks.filter((t: any) => t.kind !== 'Master').length
 
@@ -1039,7 +1039,7 @@ export const TESTS: TestDef[] = [
       // New project (resets everything)
       await invoke('new_project')
       await sleep(40)
-      const midInfo = await invoke<any>('get_project_info')
+      await invoke<any>('get_project_info')
       const midTracks = await invoke<any[]>('get_tracks')
       const midNonMaster = midTracks.filter((t: any) => t.kind !== 'Master').length
       if (midNonMaster !== 0) {
@@ -1294,7 +1294,7 @@ export const TESTS: TestDef[] = [
       try { await invoke('start_engine') } catch {}
       await invoke('play')
 
-      const { ok, value: _firstHit } = await poll(devDumpState, (s) => {
+      const { value: _firstHit } = await poll(devDumpState, (s) => {
         const t = s.tracks.find((t) => t.id === trackId)
         return !!t && t.preFaderPeakDb !== undefined && t.preFaderPeakDb > -30
       }, 2500)

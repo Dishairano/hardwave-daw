@@ -122,7 +122,7 @@ export function TrackList() {
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {rows.map((row, rowKey) => {
+        {rows.map((row) => {
           if (row.kind === 'folderHeader') {
             const f = row.folder
             return (

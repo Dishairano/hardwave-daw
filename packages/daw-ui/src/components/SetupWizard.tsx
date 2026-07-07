@@ -345,7 +345,6 @@ function AudioStep() {
 function WelcomeStep({
   ports,
   scanning,
-  rescan,
 }: {
   ports: string[]
   scanning: boolean

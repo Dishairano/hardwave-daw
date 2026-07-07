@@ -7,7 +7,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { devDumpState } from './devApi'
 import type { TestDef } from './tests'
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function cleanupExtraTracks(before: any[]): Promise<void> {
   const ids = new Set(before.map((t) => t.id))

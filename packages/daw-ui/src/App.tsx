@@ -1,6 +1,5 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { SplashScreen } from './components/SplashScreen'
-import { TitleBar } from './components/transport/TitleBar'
 import { HwApp } from './components/HwApp'
 import type { MenuDef, MenuItem } from './components/HwTopMenu'
 import { usePatternStore } from './stores/patternStore'
@@ -18,7 +17,6 @@ import { useMixerSettingsStore } from './stores/mixerSettingsStore'
 import { usePlaylistToolStore } from './stores/playlistToolStore'
 import { useMarkerStore } from './stores/markerStore'
 import { ColorPicker } from './components/primitives/ColorPicker'
-import { useColorPickerStore } from './stores/colorPickerStore'
 import { UpdateModal } from './components/UpdateModal'
 import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow } from './components/FloatingWindow'
@@ -26,7 +24,6 @@ import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChan
 import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
 import { ExportDialog } from './components/ExportDialog'
 import { useUserTemplateStore } from './stores/userTemplateStore'
-import { useTrackTemplateStore } from './stores/trackTemplateStore'
 import { TrackTemplateManager } from './components/TrackTemplateManager'
 import { WelcomeScreen, shouldSkipWelcome } from './components/WelcomeScreen'
 import { NotificationHost } from './components/NotificationHost'
@@ -49,7 +46,6 @@ import { ProjectInfoDialog } from './components/ProjectInfoDialog'
 import { TempoTapper } from './components/TempoTapper'
 import { maybeAutoOpenSetupWizard, useSetupWizardStore } from './stores/setupWizardStore'
 import {
-  AUTOSAVE_OPTIONS,
   frequencyIntervalMs,
   useAutosavePrefsStore,
 } from './stores/autosavePrefsStore'
@@ -491,8 +487,6 @@ export function App() {
     return unsub
   }, [])
 
-  // Hint bar text
-  const [hintText, setHintText] = useState('')
 
   // Update state — matches Suite pattern
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
@@ -1218,22 +1212,6 @@ export function App() {
 
   const handleAddAutomationTrack = useCallback(async () => {
     await useTrackStore.getState().addAutomationTrack()
-  }, [])
-
-  const applyTrackTemplate = useCallback(async (templateId: string) => {
-    const template = useTrackTemplateStore.getState().get(templateId)
-    if (!template) return
-    const tracks = useTrackStore.getState()
-    const before = new Set(tracks.tracks.map(t => t.id))
-    if (template.kind === 'Midi') await tracks.addMidiTrack(template.trackName)
-    else await tracks.addAudioTrack(template.trackName)
-    const after = useTrackStore.getState().tracks
-    const created = after.find(t => !before.has(t.id))
-    if (!created) return
-    await useTrackStore.getState().setTrackColor(created.id, template.color)
-    await useTrackStore.getState().setVolume(created.id, template.volumeDb)
-    await useTrackStore.getState().setPan(created.id, template.pan)
-    useNotificationStore.getState().push('info', `Added track from template "${template.name}"`)
   }, [])
 
   // Global keyboard shortcuts
@@ -1964,195 +1942,6 @@ export function App() {
   )
 }
 
-function MainLayout({
-  showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
-  isMobile, mobilePanel,
-}: {
-  showBrowser: boolean; showPlaylist: boolean;
-  showChannelRack: boolean; showPianoRoll: boolean; showMixer: boolean;
-  isMobile: boolean; mobilePanel: MobilePanel;
-}) {
-  const layout = usePanelLayoutStore(s => s.layout)
-  const [playlistHint, setPlaylistHint] = useState('')
-
-  // Phone mode: show exactly one panel, full-width, no side dock.
-  if (isMobile) {
-    return (
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
-        {mobilePanel === 'browser' && (
-          <div data-testid="panel-browser" style={{ flex: 1, display: 'flex', overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
-            <Browser />
-          </div>
-        )}
-        {mobilePanel === 'channelRack' && (
-          <div data-testid="panel-channel-rack" style={{ flex: 1, minHeight: 0, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
-            <ChannelRack />
-          </div>
-        )}
-        {mobilePanel === 'pianoRoll' && (
-          <div data-testid="panel-piano-roll" style={{ flex: 1, minHeight: 0, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
-            <PianoRoll />
-          </div>
-        )}
-        {mobilePanel === 'playlist' && (
-          <div data-testid="panel-playlist" style={{ flex: 1, display: 'flex', overflow: 'auto', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
-            <TrackList />
-            <Arrangement />
-          </div>
-        )}
-        {mobilePanel === 'mixer' && (
-          <div data-testid="panel-mixer" style={{ flex: 1, minHeight: 0, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
-            <MixerPanel />
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  const browserDocked = showBrowser && !layout.browser.floating
-  const channelRackDocked = showChannelRack && !layout.channelRack.floating
-  const pianoRollDocked = showPianoRoll && !layout.pianoRoll.floating
-  const mixerDocked = showMixer && !layout.mixer.floating
-  const playlistDocked = showPlaylist && !layout.playlist.floating
-  return (
-    <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-      {browserDocked && <div data-testid="panel-browser" style={{ width: 240, flexShrink: 0, display: 'flex' }}><Browser /></div>}
-
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {channelRackDocked && (
-          <div data-testid="panel-channel-rack" style={{
-            flex: playlistDocked ? undefined : 1,
-            height: playlistDocked ? '55%' : undefined,
-            minHeight: 120,
-            borderBottom: playlistDocked ? `1px solid ${hw.borderDark}` : undefined,
-          }}>
-            <ChannelRack />
-          </div>
-        )}
-
-        {pianoRollDocked && (
-          <div data-testid="panel-piano-roll" style={{
-            flex: 1, minHeight: 200,
-            borderBottom: playlistDocked ? `1px solid ${hw.borderDark}` : undefined,
-          }}>
-            <PianoRoll />
-          </div>
-        )}
-
-        {playlistDocked && (
-          <div data-testid="panel-playlist" style={{
-            flex: 1, display: 'flex', flexDirection: 'column',
-            overflow: 'hidden', minHeight: 80,
-            background: '#000',
-            borderTop: `1px solid ${hw.borderLight}`,
-            position: 'relative',
-          }}>
-            {/* Hardwave panel signature: 2 px red-gradient top stripe */}
-            <div style={{
-              position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-              background: `linear-gradient(90deg, ${hw.secondary}, ${hw.accentLight}, ${hw.secondary})`,
-              zIndex: 2, pointerEvents: 'none',
-            }} />
-            <PlaylistHeader />
-            <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
-              <TrackList />
-              <Arrangement onSetHint={setPlaylistHint} />
-            </div>
-            <PlaylistHintBar text={playlistHint} />
-          </div>
-        )}
-
-        {mixerDocked && (
-          <div data-testid="panel-mixer" style={{
-            height: (showPlaylist || channelRackDocked || pianoRollDocked) ? 220 : 'auto',
-            flex: (showPlaylist || channelRackDocked || pianoRollDocked) ? undefined : 1,
-            borderTop: `1px solid ${hw.borderDark}`,
-          }}>
-            <MixerPanel />
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// Mockup-style playlist panel header with red eyebrow title + live transport metadata.
-function PlaylistHeader() {
-  const { bpm, sampleRate, positionSamples, timeSigNumerator, timeSigDenominator } = useTransportStore()
-  const { tracks } = useTrackStore()
-  const audioCount = tracks.filter(t => t.kind !== 'Master').length
-  const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
-  const beatsPerBar = timeSigNumerator > 0 ? timeSigNumerator : 4
-  const beats = bpm > 0 ? (seconds * bpm / 60) : 0
-  const bar = Math.floor(beats / beatsPerBar) + 1
-  const beat = Math.floor(beats % beatsPerBar) + 1
-  const tick = Math.floor((beats % 1) * 960)
-  const pos = `${String(bar).padStart(3, ' ')}.${beat}.${String(tick).padStart(3, '0')}`
-
-  return (
-    <div style={{
-      height: 24, flexShrink: 0,
-      background: 'linear-gradient(180deg, #0a0a0d, #050507)',
-      borderBottom: `1px solid ${hw.border}`,
-      display: 'flex', alignItems: 'center', padding: '0 12px', gap: 12,
-    }}>
-      <span style={{
-        fontFamily: hw.font.mono, fontSize: 10, fontWeight: 600,
-        color: hw.red, letterSpacing: hw.tracking.eyebrow, textTransform: 'uppercase',
-      }}>Playlist</span>
-      <span style={{
-        fontFamily: hw.font.mono, fontSize: 9, color: hw.textFaint,
-        letterSpacing: hw.tracking.wide, textTransform: 'uppercase',
-      }}>{audioCount} tracks</span>
-      <span style={{ flex: 1 }} />
-      <span style={hwMetaCell}>
-        <span style={hwMetaLabel}>POS</span>
-        <span style={hwMetaValue}>{pos}</span>
-      </span>
-      <span style={hwMetaCell}>
-        <span style={hwMetaLabel}>BPM</span>
-        <span style={hwMetaValue}>{bpm.toFixed(0)}</span>
-      </span>
-      <span style={hwMetaCell}>
-        <span style={hwMetaLabel}>SIG</span>
-        <span style={hwMetaValue}>{timeSigNumerator}/{timeSigDenominator}</span>
-      </span>
-    </div>
-  )
-}
-
-const hwMetaCell: React.CSSProperties = {
-  display: 'flex', alignItems: 'baseline', gap: 5,
-  fontFamily: hw.font.mono, fontSize: 10,
-  fontVariantNumeric: 'tabular-nums',
-}
-const hwMetaLabel: React.CSSProperties = {
-  fontSize: 8, fontWeight: 600, color: hw.textFaint,
-  letterSpacing: hw.tracking.eyebrow, textTransform: 'uppercase',
-}
-const hwMetaValue: React.CSSProperties = {
-  color: hw.textPrimary, letterSpacing: hw.tracking.wide,
-}
-
-function PlaylistHintBar({ text }: { text: string }) {
-  return (
-    <div style={{
-      height: 22, flexShrink: 0,
-      background: '#040406',
-      borderTop: `1px solid ${hw.border}`,
-      display: 'flex', alignItems: 'center', padding: '0 12px', gap: 8,
-      fontFamily: hw.font.mono, fontSize: 10, fontWeight: 500,
-      color: hw.textMuted, letterSpacing: '0.02em',
-      overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
-    }}>
-      <span style={{
-        width: 4, height: 4, borderRadius: 2,
-        background: text ? hw.red : hw.textFaint, flexShrink: 0,
-      }} />
-      {text || 'Playlist · drop audio to import · ctrl-wheel zoom · alt-drag bypass snap'}
-    </div>
-  )
-}
 
 function FloatingPanels({
   showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,

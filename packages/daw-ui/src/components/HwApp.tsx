@@ -12,7 +12,7 @@
  * Replaces `MainLayout` from App.tsx. The CSS lives in `../mockup.css`.
  */
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Browser } from './browser/Browser'
 import { Arrangement } from './arrangement/Arrangement'
 import { ChannelRack } from './channelrack/ChannelRack'
@@ -21,10 +21,9 @@ import { MixerPanel } from './mixer/MixerPanel'
 import { HwTopMenu, type MenuDef } from './HwTopMenu'
 import { AutomationLane } from './AutomationLane'
 import { AutomationClipLane } from './AutomationClipLane'
-import { ArrangementSwitcher } from './ArrangementSwitcher'
 import { KickSynthEditor } from './KickSynthEditor'
 import type { AutomationTargetInfo } from '../stores/trackStore'
-import { useTransportStore, SNAP_VALUES } from '../stores/transportStore'
+import { useTransportStore } from '../stores/transportStore'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
@@ -32,7 +31,6 @@ import { usePanelLayoutStore } from '../stores/panelLayoutStore'
 import { useHoverInfoStore } from '../stores/hoverInfoStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useMetronomeStore } from '../stores/metronomeStore'
-import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
 import { useTypingKeyboardStore } from '../stores/typingKeyboardStore'
 import { usePerfMetersStore, startPerfMeters } from '../stores/perfMetersStore'
 import type { ActionId } from '../stores/shortcutsStore'
@@ -136,7 +134,6 @@ export function HwTopbar({
   const recording = useTransportStore(s => s.recording)
   const looping = useTransportStore(s => s.looping)
   const bpm = useTransportStore(s => s.bpm)
-  const masterDb = useTransportStore(s => s.masterVolumeDb)
   const togglePlayback = useTransportStore(s => s.togglePlayback)
   const stop = useTransportStore(s => s.stop)
   const setPosition = useTransportStore(s => s.setPosition)
@@ -148,26 +145,12 @@ export function HwTopbar({
   const setPatternMode = useTransportStore(s => s.setPatternMode)
   const punchEnabled = useTransportStore(s => s.punchEnabled)
   const togglePunch = useTransportStore(s => s.togglePunch)
-  const setMasterVolume = useTransportStore(s => s.setMasterVolume)
-  const tsNum = useTransportStore(s => s.timeSigNumerator)
-  const tsDen = useTransportStore(s => s.timeSigDenominator)
-  const setTimeSignature = useTransportStore(s => s.setTimeSignature)
-  // Ship 2a — snap pill / zoom / tool picker
-  const snapValue = useTransportStore(s => s.snapValue)
-  const snapEnabled = useTransportStore(s => s.snapEnabled)
-  const setSnapValue = useTransportStore(s => s.setSnapValue)
-  const toggleSnap = useTransportStore(s => s.toggleSnap)
-  const horizontalZoom = useTransportStore(s => s.horizontalZoom)
-  const setHorizontalZoom = useTransportStore(s => s.setHorizontalZoom)
-  const zoomToFit = useTransportStore(s => s.zoomToFit)
-  const activeTool = usePlaylistToolStore(s => s.tool)
-  const setTool = usePlaylistToolStore(s => s.setTool)
   const typingKbdEnabled = useTypingKeyboardStore(s => s.enabled)
   const toggleTypingKbd = useTypingKeyboardStore(s => s.toggle)
   const precountBars = useMetronomeStore(s => s.precountBars)
   const setPrecountBars = useMetronomeStore(s => s.setPrecountBars)
 
-  const { barBeatTick, minSec } = useTransportClock()
+  const { minSec } = useTransportClock()
 
   const patterns = usePatternStore(s => s.patterns)
   const activeId = usePatternStore(s => s.activeId)
@@ -178,8 +161,6 @@ export function HwTopbar({
   const metronomeEnabled = useMetronomeStore(s => s.enabled)
   const toggleMetronome = useMetronomeStore(s => s.toggleEnabled)
 
-  const undo = useTrackStore(s => s.undo)
-  const redo = useTrackStore(s => s.redo)
 
   const [editingBpm, setEditingBpm] = useState(false)
   const [bpmDraft, setBpmDraft] = useState('')
@@ -656,54 +637,6 @@ function HwBpmSplitDisplay({ bpm, setBpm }: { bpm: number; setBpm: (v: number) =
   )
 }
 
-// ─── Master volume slider (FL toolbar parity) ──────────────────────────────
-//
-// Drag horizontally to set master gain in dB. Range −60..+6 like FL.
-// Double-click to reset to 0 dB. The store is driven directly via
-// setMasterVolume which already clamps + persists.
-const MASTER_MIN_DB = -60
-const MASTER_MAX_DB = 6
-function HwMasterSlider({ valueDb, onChange }: { valueDb: number; onChange: (db: number) => void }) {
-  const pct = Math.max(0, Math.min(1, (valueDb - MASTER_MIN_DB) / (MASTER_MAX_DB - MASTER_MIN_DB)))
-  const handleDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    const el = e.currentTarget
-    const rect = el.getBoundingClientRect()
-    const apply = (clientX: number) => {
-      const p = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-      onChange(MASTER_MIN_DB + p * (MASTER_MAX_DB - MASTER_MIN_DB))
-    }
-    apply(e.clientX)
-    el.setPointerCapture(e.pointerId)
-    const onMove = (ev: PointerEvent) => apply(ev.clientX)
-    const onUp = (ev: PointerEvent) => {
-      el.releasePointerCapture(ev.pointerId)
-      el.removeEventListener('pointermove', onMove)
-      el.removeEventListener('pointerup', onUp)
-    }
-    el.addEventListener('pointermove', onMove)
-    el.addEventListener('pointerup', onUp)
-  }
-  return (
-    <div
-      onPointerDown={handleDrag}
-      onDoubleClick={() => onChange(0)}
-      style={{
-        position: 'relative', width: 80, height: 8,
-        background: 'rgba(255,255,255,0.04)',
-        border: '1px solid var(--border)',
-        borderRadius: 3, cursor: 'ew-resize',
-      }}
-    >
-      <div style={{
-        position: 'absolute', left: 0, top: 0, height: '100%',
-        width: `${pct * 100}%`,
-        background: 'linear-gradient(90deg,#2a2a30,var(--red-bright))',
-        borderRadius: 3,
-      }} />
-    </div>
-  )
-}
-
 // ─── Tempo right-click menu ────────────────────────────────────────────────
 //
 // FL's tempo RMB reference set: type-in-value (handled by the inline
@@ -787,85 +720,6 @@ function HwTempoContextMenu({
   )
 }
 
-// ─── 8-tool picker button ──────────────────────────────────────────────────
-//
-// Each toolbar slot renders the FL-style line icon. Active tool is
-// highlighted via the .on class; tooltips spell out the keybind so
-// the user can learn shortcuts without opening the help panel.
-
-const TOOL_LABEL: Record<PlaylistTool, string> = {
-  draw: 'Draw (P)',
-  paint: 'Paint (B)',
-  slice: 'Slice (C)',
-  delete: 'Delete (D)',
-  mute: 'Mute (T)',
-  slip: 'Slip (S)',
-  select: 'Select (E)',
-  zoom: 'Zoom (Z)',
-}
-
-function ToolPickerBtn({ tool, active, onClick }: { tool: PlaylistTool; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={active ? 'on' : ''}
-      title={TOOL_LABEL[tool]}
-      aria-pressed={active}
-    >
-      {tool === 'draw' && (
-        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
-          <path d="M1.5 8.5L2 6L7 1L9 3L4 8Z" stroke="currentColor" strokeWidth="0.8" fill={active ? 'currentColor' : 'none'} opacity={active ? 0.3 : 1} />
-          <path d="M7 1L9 3" stroke="currentColor" strokeWidth="1" />
-        </svg>
-      )}
-      {tool === 'paint' && (
-        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
-          <rect x="1" y="6" width="3" height="3.5" rx="0.5" stroke="currentColor" strokeWidth="0.8" />
-          <path d="M2.5 6V2.5C2.5 1.5 3.5 0.5 5 0.5H8C8.5 0.5 9 1 9 1.5V3C9 3.5 8.5 4 8 4H5.5L4 5.5" stroke="currentColor" strokeWidth="0.8" />
-        </svg>
-      )}
-      {tool === 'slice' && (
-        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
-          <path d="M3 1L7 9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-          <circle cx="3" cy="1.5" r="1" stroke="currentColor" strokeWidth="0.6" />
-        </svg>
-      )}
-      {tool === 'delete' && (
-        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
-          <line x1="2" y1="2" x2="8" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-          <line x1="8" y1="2" x2="2" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-        </svg>
-      )}
-      {tool === 'mute' && (
-        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
-          <rect x="1" y="1" width="8" height="8" rx="1" stroke="currentColor" strokeWidth="0.8" />
-          <line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" strokeWidth="0.8" />
-        </svg>
-      )}
-      {tool === 'slip' && (
-        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
-          <rect x="1" y="3" width="8" height="4" rx="0.5" stroke="currentColor" strokeWidth="0.8" />
-          <path d="M4 3V7M6 3V7" stroke="currentColor" strokeWidth="0.6" strokeDasharray="1 1" />
-        </svg>
-      )}
-      {tool === 'select' && (
-        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
-          <path d="M2 1L2 9L5 6.5L7.5 9L8.5 8L6 5.5L9 5L2 1Z" stroke="currentColor" strokeWidth="0.7" fill={active ? 'currentColor' : 'none'} opacity={active ? 0.3 : 1} />
-        </svg>
-      )}
-      {tool === 'zoom' && (
-        <svg className="ic" viewBox="0 0 10 10" width="11" height="11" fill="none">
-          <circle cx="4.5" cy="4.5" r="3" stroke="currentColor" strokeWidth="0.9" />
-          <line x1="7" y1="7" x2="9.5" y2="9.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-          <line x1="3" y1="4.5" x2="6" y2="4.5" stroke="currentColor" strokeWidth="0.7" />
-          <line x1="4.5" y1="3" x2="4.5" y2="6" stroke="currentColor" strokeWidth="0.7" />
-        </svg>
-      )}
-    </button>
-  )
-}
-
 // ─── Save-As flashing reminder button ──────────────────────────────────────
 //
 // FL Studio flashes the Save button every 5 minutes after the first
@@ -937,106 +791,6 @@ function HwMidiActivityLed() {
     <div className="fl-midi-led" title={tooltip}>
       <span className={`dot${active ? ' active' : ''}${hasPort ? '' : ' dark'}`} />
       <span className="label">MIDI</span>
-    </div>
-  )
-}
-
-// ─── Mini output scope ─────────────────────────────────────────────────────
-//
-// Placeholder rolling waveform. Real audio-tap wiring (sample buffer
-// from the engine's master bus) ships in a follow-up — for now we
-// draw a rAF-driven sine that responds to transport playback state
-// so the meter feels alive when the user hits Play.
-
-function HwMiniScope() {
-  const playing = useTransportStore(s => s.playing)
-  const svgRef = useRef<SVGPolylineElement | null>(null)
-  useEffect(() => {
-    let rafId = 0
-    let phase = 0
-    const W = 58
-    const H = 14
-    const tick = () => {
-      const el = svgRef.current
-      if (el) {
-        const pts: string[] = []
-        const amplitude = playing ? 5.5 : 1.2
-        for (let x = 0; x <= W; x += 2) {
-          const y = H / 2 + Math.sin((x / 8) + phase) * amplitude * (0.6 + 0.4 * Math.random())
-          pts.push(`${x},${y.toFixed(2)}`)
-        }
-        el.setAttribute('points', pts.join(' '))
-        phase += playing ? 0.3 : 0.06
-      }
-      rafId = requestAnimationFrame(tick)
-    }
-    rafId = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(rafId)
-  }, [playing])
-  return (
-    <div className="fl-mini-scope" title="Master output (placeholder — engine tap to follow)">
-      <svg width="58" height="14" viewBox="0 0 58 14" preserveAspectRatio="none">
-        <polyline ref={svgRef} points="" fill="none" stroke="var(--red-bright)" strokeWidth="0.9" opacity="0.75" />
-      </svg>
-    </div>
-  )
-}
-
-// ─── Master pitch knob (Ship 3c — UI surface only) ─────────────────────────
-//
-// Rotates 0..360° driven by a local `cents` state (-1200..+1200, FL
-// default range). Drag vertically to set; double-click resets to 0.
-// Value is persisted in a tiny local-storage flag so a returning user
-// finds their tuning intact. Engine wiring (modulate every sample-
-// rate-aware oscillator's read pointer) is Tier B per the mockup.
-
-const PITCH_MIN = -1200
-const PITCH_MAX = 1200
-const PITCH_LS = 'hardwave.daw.masterPitchCents'
-
-function HwMasterPitchKnob() {
-  const [cents, setCents] = useState<number>(() => {
-    try {
-      const raw = localStorage.getItem(PITCH_LS)
-      const n = raw != null ? Number(raw) : 0
-      return isFinite(n) ? Math.max(PITCH_MIN, Math.min(PITCH_MAX, n)) : 0
-    } catch { return 0 }
-  })
-  useEffect(() => {
-    try { localStorage.setItem(PITCH_LS, String(cents)) } catch {}
-  }, [cents])
-  // Map cents [-1200..+1200] to angle [-135..+135°] (FL knob arc).
-  const angle = (cents / PITCH_MAX) * 135
-  const handleDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    const startY = e.clientY
-    const startCents = cents
-    const el = e.currentTarget
-    el.setPointerCapture(e.pointerId)
-    const onMove = (ev: PointerEvent) => {
-      const dy = startY - ev.clientY
-      const fine = ev.ctrlKey || ev.metaKey ? 0.5 : 4
-      const next = Math.max(PITCH_MIN, Math.min(PITCH_MAX, Math.round(startCents + dy * fine)))
-      setCents(next)
-    }
-    const onUp = (ev: PointerEvent) => {
-      el.releasePointerCapture(ev.pointerId)
-      el.removeEventListener('pointermove', onMove)
-      el.removeEventListener('pointerup', onUp)
-    }
-    el.addEventListener('pointermove', onMove)
-    el.addEventListener('pointerup', onUp)
-  }
-  return (
-    <div
-      onPointerDown={handleDrag}
-      onDoubleClick={() => setCents(0)}
-      title={`Master pitch · ${cents >= 0 ? '+' : ''}${cents} cents · drag · Ctrl=fine · 2× click resets · engine wiring deferred (Tier B)`}
-      className="fl-pit-knob"
-    >
-      <span className="lbl">PIT</span>
-      <div className="knob">
-        <div className="tick" style={{ transform: `translateX(-50%) rotate(${angle}deg)`, transformOrigin: '50% 100%' }} />
-      </div>
     </div>
   )
 }
@@ -1406,7 +1160,7 @@ function HwPlaylistTracks() {
     <div className="fl-pl-tracks">
       <div className="fl-pl-tracks-head">TRACKS</div>
       <div className="fl-pl-tracks-list">
-        {tracks.flatMap((t, i) => {
+        {tracks.flatMap((t) => {
           const isMidi = (t.kind || '').toLowerCase() === 'midi'
           const row = (
             <div

@@ -589,7 +589,7 @@ export function ChannelRack() {
 
       {/* Channel rows */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {channelRows.map((row, rowKey) => {
+        {channelRows.map((row) => {
           if (row.kind === 'folderHeader') {
             const f = row.folder
             return (

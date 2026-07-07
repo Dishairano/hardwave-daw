@@ -67,7 +67,7 @@ function applyScale(scale: UiScale) {
   root.style.zoom = String(scale / 100)
 }
 
-function resolveScale(mode: UiScaleMode, fixed: UiScale): UiScale {
+function resolveScale(mode: UiScaleMode, _fixed: UiScale): UiScale {
   return mode === 'auto' ? deriveAutoScale() : mode
 }
 

@@ -9,7 +9,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { devDumpState } from './devApi'
 import type { TestDef } from './tests'
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function engineAlive(): Promise<boolean> {
   try { return Number.isFinite((await devDumpState()).bpm) } catch { return false }
@@ -198,7 +197,7 @@ PHASE10_TESTS.push(
     instructions: 'Engine stays alive and state survives every cycle.',
     run: async ({ log }) => {
       for (let i = 0; i < 5; i++) {
-        const id = await invoke<string>('add_audio_track', { name: `Cycle${i}` })
+        await invoke<string>('add_audio_track', { name: `Cycle${i}` })
         const path = `/tmp/daw_cycle_${Date.now()}_${i}.hwp`
         await invoke('save_project', { path })
         await invoke('new_project')

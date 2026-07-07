@@ -30,11 +30,6 @@ interface LearnStatus {
 
 type TargetKind = 'masterVolume' | 'trackVolume' | 'trackPan' | 'trackMute'
 
-function targetKey(t: MidiMapTarget): string {
-  if (t.kind === 'masterVolume') return 'master-volume'
-  if (t.kind === 'pluginParam') return `plugin-${t.trackId}-${t.slotId}-${t.paramId}`
-  return `${t.kind}-${t.trackId}`
-}
 
 function targetLabel(t: MidiMapTarget, tracks: TrackInfo[]): string {
   if (t.kind === 'masterVolume') return 'Master volume'

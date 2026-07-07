@@ -118,7 +118,6 @@ export function getMeterDb(testId: string): number | null {
 /** Capture a screenshot of the entire window as a base64 PNG data URL. */
 export async function captureScreenshot(): Promise<string> {
   const canvas = document.createElement('canvas')
-  const rect = document.documentElement.getBoundingClientRect()
   canvas.width = window.innerWidth
   canvas.height = window.innerHeight
   const ctx = canvas.getContext('2d')!

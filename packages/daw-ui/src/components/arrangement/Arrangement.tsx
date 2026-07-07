@@ -119,8 +119,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
   const {
     tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
-    moveClip, moveClipLocal, resizeClipLocal, commitClipDrag,
-    moveClipToTrack, resizeClip, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
+    moveClipLocal, resizeClipLocal, commitClipDrag,
+    moveClipToTrack, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
     setClipFadeCurves, toggleClipReverse, setClipGain, setClipPitch, setClipStretch,
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -921,7 +921,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         toggleClipSelection(hit.clip.id)
       } else if (!selectedClipIds.has(hit.clip.id)) {
         if (gid && groupMemberIds.length > 1) {
-          useTrackStore.setState(s => {
+          useTrackStore.setState(() => {
             const next = new Set<string>(groupMemberIds)
             return { selectedClipIds: next, selectedClipId: hit.clip.id, selectedTrackId: hit.trackId }
           })
@@ -2069,12 +2069,6 @@ function MenuItem({
   )
 }
 
-function darkenColor(hex: string, amount: number): string {
-  const r = Math.round(parseInt(hex.slice(1, 3), 16) * (1 - amount))
-  const g = Math.round(parseInt(hex.slice(3, 5), 16) * (1 - amount))
-  const b = Math.round(parseInt(hex.slice(5, 7), 16) * (1 - amount))
-  return `rgb(${r},${g},${b})`
-}
 
 // Maps a spectral-brightness value (0..1, from the waveform peak data) to a
 // frequency colour: low/bass → red, mids → green, treble → blue. A 3-stop
