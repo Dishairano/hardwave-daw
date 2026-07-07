@@ -86,6 +86,21 @@ cd "$(git rev-parse --show-toplevel)"
 echo "Building frontend..."
 cd packages/daw-ui && npm run build && cd ../..
 
+# Full test gate — the ENTIRE workspace, not a package subset. A partial
+# local gate once let a broken release out (v0.204.x audio-reload); this
+# check makes that structurally impossible: no green gate, no tag.
+# HW_SKIP_GATE=1 is the emergency hatch for hotfixing a broken CI-only
+# path; using it must be a deliberate, logged decision.
+if [ "${HW_SKIP_GATE:-0}" = "1" ]; then
+  echo "release.sh: WARNING — HW_SKIP_GATE=1, skipping cargo test --workspace" >&2
+else
+  echo "Running full workspace test gate (cargo test --workspace)..."
+  if ! cargo test --workspace; then
+    echo "release.sh: workspace tests FAILED — refusing to release." >&2
+    exit 1
+  fi
+fi
+
 # Get current version
 CURRENT=$(grep '"version"' "$CONF" | head -1 | sed 's/.*"\([0-9]*\.[0-9]*\.[0-9]*\)".*/\1/')
 MAJOR=$(echo "$CURRENT" | cut -d. -f1)
