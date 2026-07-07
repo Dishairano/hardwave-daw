@@ -301,9 +301,12 @@ export function HelpOverlay({ open, onClose }: { open: boolean; onClose: () => v
           <span>Need more?</span>
           {([
             ['User manual', 'https://github.com/Dishairano/hardwave-daw/wiki'],
-            // TODO(founder): swap for the real Discord invite — no
-            // invite URL exists anywhere in the codebase to copy from.
-            ['Community', 'https://hardwavestudios.com'],
+            // Permanent #welcome invite, read from the guild via the
+            // MATT bot on 2026-07-07 (the only non-expiring invite in
+            // circulation). NOTE: discord.gg/hardwave — which the
+            // marketing site links — is a DEAD invite (API: Unknown
+            // Invite); flagged to the founder separately.
+            ['Discord community', 'https://discord.gg/VtVsaJFB23'],
             ['Report a bug', 'https://github.com/Dishairano/hardwave-daw/issues'],
           ] as const).map(([label, url]) => (
             <a
