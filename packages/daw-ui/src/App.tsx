@@ -405,6 +405,34 @@ export function App() {
     return () => { if (unlisten) unlisten() }
   }, [])
 
+  // Audio-stream health banners (P1-9). The engine auto-falls-back to
+  // the system default output when the device dies (USB unplug, rate
+  // change); tell the user instead of letting audio silently "move".
+  // If recovery itself failed, audio is down — sticky banner + Retry.
+  useEffect(() => {
+    const unlistens: Array<() => void> = []
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<string>('audio-device-recovered', (ev) => {
+        useNotificationStore.getState().push('warning',
+          `Audio device lost — switched to ${ev.payload}`, {
+            detail: 'Pick your interface again under File → Audio settings once it\'s reconnected.',
+            sticky: true,
+          })
+      }).then(u => unlistens.push(u)).catch(() => { /* not in Tauri */ })
+      listen<string>('audio-device-error', (ev) => {
+        useNotificationStore.getState().push('error', 'Audio stopped — check your device connections', {
+          detail: ev.payload,
+          sticky: true,
+          actions: [{
+            label: 'Retry audio',
+            onClick: () => { void invoke('start_engine').catch(() => { /* banner returns on next failure */ }) },
+          }],
+        })
+      }).then(u => unlistens.push(u)).catch(() => { /* not in Tauri */ })
+    }).catch(() => { /* noop */ })
+    return () => { for (const u of unlistens) u() }
+  }, [])
+
   useEffect(() => {
     const onOpen = (e: Event) => {
       const target = (e as CustomEvent<MidiMapTarget>).detail

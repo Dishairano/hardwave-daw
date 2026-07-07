@@ -463,8 +463,24 @@ pub fn run() {
                     let (meters, track_payload, transport_payload) = {
                         use std::sync::atomic::Ordering;
                         let mut eng = engine.lock();
-                        if let Err(e) = eng.poll_audio_health() {
-                            log::error!("Audio health check failed: {e}");
+                        // Surface stream death to the user: recovery (device
+                        // unplugged → fell back to system default) gets a
+                        // warning toast; a failed recovery gets a sticky
+                        // error banner. Previously both were log-only and
+                        // audio just "moved" or died silently (P1-9).
+                        match eng.poll_audio_health() {
+                            Ok(true) => {
+                                let (device, _, _) = eng.audio_config();
+                                let _ = app_handle.emit(
+                                    "audio-device-recovered",
+                                    device.unwrap_or_else(|| "system default output".into()),
+                                );
+                            }
+                            Ok(false) => {}
+                            Err(e) => {
+                                log::error!("Audio health check failed: {e}");
+                                let _ = app_handle.emit("audio-device-error", e);
+                            }
                         }
                         let meters = eng.master_meter();
                         let track_payload: Vec<_> = eng
