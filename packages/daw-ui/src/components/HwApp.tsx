@@ -28,6 +28,7 @@ import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
 import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
+import { ArrangementSwitcher } from './ArrangementSwitcher'
 import { usePanelLayoutStore } from '../stores/panelLayoutStore'
 import { useHoverInfoStore } from '../stores/hoverInfoStore'
 import { useProjectStore } from '../stores/projectStore'
@@ -1444,7 +1445,11 @@ function HwPlaylistHead() {
         <svg className="ic" width="9" height="9" viewBox="0 0 16 16" fill="none">
           <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
-        Playlist · Arrangement
+        Playlist ·
+        {/* Switchable arrangements (FL 20+ parity). The component +
+            backend commands existed end-to-end but were surfaced
+            NOWHERE — this line is what actually ships the feature. */}
+        <ArrangementSwitcher />
         <span style={{ color: 'var(--text-dim)', margin: '0 4px' }}>›</span>
         <b>{activePattern?.name || 'Pattern 1'}</b>
       </span>
