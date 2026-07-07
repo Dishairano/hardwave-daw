@@ -56,6 +56,7 @@ import { HistoryPanel } from './components/HistoryPanel'
 import { PrecountOverlay } from './components/transport/PrecountOverlay'
 import { invoke } from '@tauri-apps/api/core'
 import { usePanelLayoutStore } from './stores/panelLayoutStore'
+import { useAppDialogs } from './hooks/useAppDialogs'
 import { useIsMobile } from './hooks/useIsMobile'
 import { MobileTabBar, type MobilePanel } from './components/MobileTabBar'
 // Lazy: the DevPanel drags the whole in-app test harness (~7k lines)
@@ -188,26 +189,30 @@ export function App() {
       .catch(() => {})
   })
 
-  // Panel visibility
-  const [showBrowser, setShowBrowser] = useState(true)
-  const [showMixer, setShowMixer] = useState(false)
-  const [showChannelRack, setShowChannelRack] = useState(false)
-  const [showPlaylist, setShowPlaylist] = useState(true)
-  const [showPianoRoll, setShowPianoRoll] = useState(false)
-  const [showRoadmap, setShowRoadmap] = useState(false)
-  const [showAudioSettings, setShowAudioSettings] = useState(false)
-  const [showThemePicker, setShowThemePicker] = useState(false)
-  const [showAbout, setShowAbout] = useState(false)
-  const [showShortcuts, setShowShortcuts] = useState(false)
-  const [showHelp, setShowHelp] = useState(false)
-  const [showTrackTemplateManager, setShowTrackTemplateManager] = useState(false)
-  const [showLoudness, setShowLoudness] = useState(false)
-  const [showOscilloscope, setShowOscilloscope] = useState(false)
-  const [showSpectrum, setShowSpectrum] = useState(false)
-  const [showProjectInfo, setShowProjectInfo] = useState(false)
-  const [showTempoTapper, setShowTempoTapper] = useState(false)
-  const [showMidiMappings, setShowMidiMappings] = useState(false)
-  const [showTempoMap, setShowTempoMap] = useState(false)
+  // Panel/dialog visibility — one hook, same names (see useAppDialogs).
+  const {
+    showBrowser, setShowBrowser,
+    showMixer, setShowMixer,
+    showChannelRack, setShowChannelRack,
+    showPlaylist, setShowPlaylist,
+    showPianoRoll, setShowPianoRoll,
+    showRoadmap, setShowRoadmap,
+    showAudioSettings, setShowAudioSettings,
+    showThemePicker, setShowThemePicker,
+    showAbout, setShowAbout,
+    showShortcuts, setShowShortcuts,
+    showHelp, setShowHelp,
+    showTrackTemplateManager, setShowTrackTemplateManager,
+    showLoudness, setShowLoudness,
+    showOscilloscope, setShowOscilloscope,
+    showSpectrum, setShowSpectrum,
+    showProjectInfo, setShowProjectInfo,
+    showTempoTapper, setShowTempoTapper,
+    showMidiMappings, setShowMidiMappings,
+    showTempoMap, setShowTempoMap,
+    showHistory, setShowHistory,
+    showDevPanel, setShowDevPanel,
+  } = useAppDialogs()
   // Touch Controllers visibility is store-backed so View menu, Alt+F7
   // shortcut, and the close button all share state and the panel
   // remembers its open/closed status across reloads.
@@ -218,12 +223,10 @@ export function App() {
   const useNewMixer = useMixerSettingsStore(s => s.useNewMixer)
   const setUseNewMixer = useMixerSettingsStore(s => s.setUseNewMixer)
   const [midiLearnPreset, setMidiLearnPreset] = useState<MidiMapTarget | undefined>(undefined)
-  const [showHistory, setShowHistory] = useState(false)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
   const closeSampleEditor = useSampleEditorStore(s => s.close)
   const beatSlicerPath = useBeatSlicerStore(s => s.openPath)
   const closeBeatSlicer = useBeatSlicerStore(s => s.close)
-  const [showDevPanel, setShowDevPanel] = useState(false) // DEV ONLY
 
   // Block browser-default chrome that leaks through Tauri's webview: the
   // right-click context menu (save / print / refresh) and the standard
