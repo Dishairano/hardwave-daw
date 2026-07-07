@@ -2202,10 +2202,9 @@ mod offline_insert_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    fn render_peak(
-        engine: &DawEngine,
-        factory: Option<&dyn Fn(&str) -> Option<Box<dyn HostedPlugin>>>,
-    ) -> f32 {
+    type TestPluginFactory<'a> = &'a dyn Fn(&str) -> Option<Box<dyn HostedPlugin>>;
+
+    fn render_peak(engine: &DawEngine, factory: Option<TestPluginFactory<'_>>) -> f32 {
         let sr = 48_000u32;
         let mut peak = 0.0f32;
         engine

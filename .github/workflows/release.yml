@@ -116,11 +116,12 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --check
 
-      # Clippy advisory — same as dev-build. The merge-to-master gate
-      # (ci.yml) still treats clippy as a hard error.
-      - name: Clippy (advisory)
-        continue-on-error: true
-        run: cargo clippy --workspace -- -D warnings
+      # Hard error since 2026-07-07: the workspace was brought fully
+      # clippy-clean (deep-research P2-11), so any new warning is a
+      # regression. --all-targets so test code is held to the same bar.
+      # Local pre-push equivalent: ./scripts/lint.sh
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test --workspace
         run: cargo test --workspace

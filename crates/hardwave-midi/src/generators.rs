@@ -714,7 +714,7 @@ mod tests {
 
     #[test]
     fn arp_updown_no_repeated_endpoints() {
-        let chord = vec![note(0, 480, 60), note(0, 480, 64), note(0, 480, 67)];
+        let chord = [note(0, 480, 60), note(0, 480, 64), note(0, 480, 67)];
         let s = ArpSettings {
             direction: ArpDirection::UpDown,
             rate: GridDivision::Quarter,

@@ -124,6 +124,9 @@ pub fn add_midi_track(engine: &DawEngine, name: &str) -> String {
 #[derive(Debug, Clone, Copy)]
 pub struct RenderStats {
     pub peak: f32,
+    // Computed and reported in Debug dumps; no assertion reads it yet
+    // (functional_smoke.rs:417 sketches the future A/B use).
+    #[allow(dead_code)]
     pub rms: f32,
     pub frames: usize,
     pub nan_count: usize,

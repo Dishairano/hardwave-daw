@@ -619,11 +619,8 @@ mod tests {
             }
             outputs[0].clear();
             outputs[1].clear();
-            for i in 0..num_samples.min(inputs[0].len()) {
-                outputs[0].push(inputs[0][i] * self.gain);
-            }
-            for i in 0..num_samples.min(inputs[1].len()) {
-                outputs[1].push(inputs[1][i] * self.gain);
+            for (out, input) in outputs.iter_mut().zip(inputs.iter()).take(2) {
+                out.extend(input.iter().take(num_samples).map(|s| s * self.gain));
             }
         }
         fn get_parameter_count(&self) -> u32 {
@@ -818,7 +815,7 @@ mod tests {
             // Emit silence so the chain's wet mix doesn't blow up.
             for out in outputs.iter_mut().take(2) {
                 out.clear();
-                out.extend(std::iter::repeat(0.0).take(num_samples));
+                out.extend(std::iter::repeat_n(0.0, num_samples));
             }
         }
         fn get_parameter_count(&self) -> u32 {
