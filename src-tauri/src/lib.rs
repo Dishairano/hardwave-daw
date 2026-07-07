@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 mod commands;
+mod diagnostics;
 mod frontend_updater;
 mod midi_clock;
 mod midi_map;
@@ -59,7 +60,9 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::init();
+    // Session log to ~/.hardwave-daw/logs/ + panic hook. Replaces the
+    // bare env_logger::init() — logging still reaches stderr too.
+    diagnostics::init(env!("CARGO_PKG_VERSION"));
 
     let mut engine = DawEngine::new();
     // Apply persisted audio preferences before the engine starts so the first
@@ -344,9 +347,14 @@ pub fn run() {
             // recheck timer passes `force_refresh: true` to bypass the
             // cache and recompute against a fresh manifest fetch.
             frontend_updater::version_contract_state,
+            // Diagnostics — session-log location for Help → Export diagnostics
+            diagnostics::diagnostics_info,
         ])
         .setup(|app| {
             log::info!("Hardwave DAW starting");
+
+            // Lets the panic hook raise a frontend crash banner.
+            diagnostics::set_app_handle(app.handle().clone());
 
             // NOTE (2026-07-01): the custom-scheme frontend hot-swap was
             // retired — serving a cached bundle over `hardwave-app://`

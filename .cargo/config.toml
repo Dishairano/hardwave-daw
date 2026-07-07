@@ -1,0 +1,6 @@
+# Incremental compilation artifacts grew multiple GB per day on the
+# 38GB dev host and repeatedly filled the disk mid-release-gate.
+# Disabled repo-wide: full-workspace gate builds are batch anyway, so
+# incremental buys little here and costs ~2GB per rebuild cycle.
+[build]
+incremental = false

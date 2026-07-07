@@ -387,6 +387,24 @@ export function App() {
     }
   }, [])
 
+  // Backend panic banner — the Rust panic hook emits this when a
+  // background thread (audio, worker) dies. Sticky error so the user
+  // knows to save + restart instead of staring at a frozen app.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<string>('backend-panic', (ev) => {
+        useNotificationStore.getState().push('error', 'Backend error — save your work', {
+          detail: ev.payload,
+          sticky: true,
+        })
+      })
+        .then((u) => { unlisten = u })
+        .catch(() => { /* not in Tauri */ })
+    }).catch(() => { /* noop */ })
+    return () => { if (unlisten) unlisten() }
+  }, [])
+
   useEffect(() => {
     const onOpen = (e: Event) => {
       const target = (e as CustomEvent<MidiMapTarget>).detail
@@ -1679,6 +1697,24 @@ export function App() {
           { label: 'Online user manual', action: () => window.open('https://github.com/Dishairano/hardwave-daw/wiki', '_blank', 'noopener,noreferrer') },
           { label: 'Release notes', action: () => window.open('https://github.com/Dishairano/hardwave-daw/releases', '_blank', 'noopener,noreferrer') },
           { label: 'Report an issue', action: () => window.open('https://github.com/Dishairano/hardwave-daw/issues', '_blank', 'noopener,noreferrer') },
+          {
+            label: 'Export diagnostics…',
+            action: async () => {
+              const push = useNotificationStore.getState().push
+              try {
+                const info = await invoke<{ logsDir: string; currentSessionLog: string | null }>('diagnostics_info')
+                const { revealItemInDir, openPath } = await import('@tauri-apps/plugin-opener')
+                if (info.currentSessionLog) {
+                  await revealItemInDir(info.currentSessionLog)
+                } else {
+                  await openPath(info.logsDir)
+                }
+                push('info', 'Session logs opened — attach the newest session-*.log to your bug report.')
+              } catch (e) {
+                push('error', 'Could not open the diagnostics folder', { detail: String(e) })
+              }
+            },
+          },
           { separator: true, label: '' },
           {
             label: 'Check for updates…',
