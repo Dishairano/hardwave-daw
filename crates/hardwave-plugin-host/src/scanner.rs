@@ -564,3 +564,184 @@ fn default_clap_paths() -> Vec<PathBuf> {
 fn default_clap_paths() -> Vec<PathBuf> {
     vec![]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("hw-scan-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A directory-style .vst3 bundle with a moduleinfo.json, like every
+    /// VST3-SDK-3.7+ plugin ships. No binary needed — the scanner reads
+    /// metadata only at discovery time.
+    fn write_fake_vst3(dir: &Path, bundle: &str, json: &str) -> PathBuf {
+        let b = dir.join(bundle);
+        std::fs::create_dir_all(b.join("Contents")).unwrap();
+        std::fs::write(b.join("Contents/moduleinfo.json"), json).unwrap();
+        b
+    }
+
+    const KICK_MODULEINFO: &str = r#"{
+      "Factory Info": { "Vendor": "Hardwave Test" },
+      "Classes": [
+        {
+          "Category": "Audio Module Class",
+          "Name": "Test Kick",
+          "Vendor": "",
+          "Version": "1.2.3",
+          "Sub Categories": ["Instrument", "Synth"]
+        },
+        { "Category": "Component Controller Class", "Name": "Ignored", "Vendor": "", "Version": "", "Sub Categories": [] }
+      ]
+    }"#;
+
+    fn scanner_over(dir: &Path) -> PluginScanner {
+        let mut s = PluginScanner::new();
+        // Isolate from the host machine: only the temp dir is scanned.
+        s.vst3_paths.clear();
+        s.clap_paths.clear();
+        s.custom_vst3_paths = vec![dir.to_path_buf()];
+        s
+    }
+
+    #[test]
+    fn scan_reads_moduleinfo_metadata() {
+        let dir = tmp("moduleinfo");
+        write_fake_vst3(&dir, "TestKick.vst3", KICK_MODULEINFO);
+
+        let mut s = scanner_over(&dir);
+        let found = s.scan().to_vec();
+        assert_eq!(found.len(), 1, "one Audio Module Class → one descriptor");
+        let p = &found[0];
+        assert_eq!(p.id, "vst3:test-kick");
+        assert_eq!(p.name, "Test Kick");
+        assert_eq!(p.vendor, "Hardwave Test", "falls back to Factory Info vendor");
+        assert_eq!(p.version, "1.2.3");
+        assert_eq!(p.format, PluginFormat::Vst3);
+        assert_eq!(p.category, PluginCategory::Instrument);
+        assert!(p.has_midi_input, "instruments consume notes");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scan_finds_bundles_in_vendor_subfolders_but_not_inside_bundles() {
+        let dir = tmp("nesting");
+        // Vendor subfolder → must recurse.
+        write_fake_vst3(&dir.join("SomeVendor"), "Nested.vst3", KICK_MODULEINFO);
+        // A resource *inside* a bundle that is itself named .vst3 —
+        // must NOT be scanned as a separate plugin.
+        let outer = write_fake_vst3(&dir, "Outer.vst3", KICK_MODULEINFO);
+        write_fake_vst3(&outer.join("Contents"), "inner-resource.vst3", KICK_MODULEINFO);
+
+        let mut s = scanner_over(&dir);
+        let names: Vec<String> = s.scan().iter().map(|p| p.path.display().to_string()).collect();
+        assert_eq!(names.len(), 2, "vendor-nested + outer, not the inner resource: {names:?}");
+        assert!(!names.iter().any(|n| n.contains("inner-resource")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn blocklist_removes_plugin_and_diff_tracks_changes() {
+        let dir = tmp("blocklist");
+        write_fake_vst3(&dir, "TestKick.vst3", KICK_MODULEINFO);
+
+        let mut s = scanner_over(&dir);
+        s.scan();
+        assert_eq!(s.plugins().len(), 1);
+        assert_eq!(s.last_diff().added.len(), 1, "first scan reports the add");
+
+        s.blocklist.insert("vst3:test-kick".into());
+        s.scan();
+        assert!(s.plugins().is_empty(), "blocklisted plugin is filtered");
+        assert_eq!(
+            s.last_diff().removed,
+            vec!["vst3:test-kick".to_string()],
+            "diff reports the disappearance"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cache_round_trips_through_disk() {
+        let dir = tmp("cache");
+        write_fake_vst3(&dir, "TestKick.vst3", KICK_MODULEINFO);
+        let cache_file = dir.join("scan-cache.json");
+
+        let mut s = scanner_over(&dir);
+        s.scan();
+        s.save_cache_to_disk(&cache_file).expect("save cache");
+
+        let mut fresh = PluginScanner::new();
+        let n = fresh.load_cache_from_disk(&cache_file).expect("load cache");
+        assert_eq!(n, 1);
+        let p = fresh.find("vst3:test-kick").expect("cached descriptor findable");
+        assert_eq!(p.name, "Test Kick");
+        assert_eq!(p.version, "1.2.3");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn register_native_upserts_by_id() {
+        let mut s = PluginScanner::new();
+        let mk = |version: &str| PluginDescriptor {
+            id: "native:kicksynth".into(),
+            name: "KickSynth".into(),
+            vendor: "Hardwave".into(),
+            version: version.into(),
+            // No dedicated Native variant — engine registers natives with
+            // an existing format tag; upsert semantics don't depend on it.
+            format: PluginFormat::Vst3,
+            path: PathBuf::new(),
+            category: PluginCategory::Instrument,
+            num_inputs: 0,
+            num_outputs: 2,
+            has_midi_input: true,
+            has_editor: true,
+        };
+        s.register_native(mk("1.0.0"));
+        s.register_native(mk("1.1.0"));
+        assert_eq!(s.plugins().len(), 1, "same id replaces, not duplicates");
+        assert_eq!(s.find("native:kicksynth").unwrap().version, "1.1.0");
+    }
+
+    #[test]
+    fn moduleinfo_with_bom_parses() {
+        let dir = tmp("bom");
+        let with_bom = format!("\u{feff}{KICK_MODULEINFO}");
+        write_fake_vst3(&dir, "Bommed.vst3", &with_bom);
+        let mut s = scanner_over(&dir);
+        assert_eq!(s.scan().len(), 1, "BOM-prefixed moduleinfo.json still parses");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn classify_clap_features() {
+        assert_eq!(
+            classify_clap(&["instrument".into()]),
+            (PluginCategory::Instrument, true)
+        );
+        assert_eq!(
+            classify_clap(&["analyzer".into()]),
+            (PluginCategory::Analyzer, false)
+        );
+        assert_eq!(
+            classify_clap(&["note-effect".into()]),
+            (PluginCategory::Effect, true),
+            "note effects take MIDI but stay effects"
+        );
+        assert_eq!(classify_clap(&[]), (PluginCategory::Effect, false));
+    }
+
+    #[test]
+    fn classify_vst3_subcategories() {
+        let v = |s: &str| vec![s.to_string()];
+        assert_eq!(classify_vst3(&v("Instrument|Synth")), (PluginCategory::Instrument, true));
+        assert_eq!(classify_vst3(&v("Fx|Analyzer")), (PluginCategory::Analyzer, false));
+        assert_eq!(classify_vst3(&v("Fx|Dynamics")), (PluginCategory::Effect, false));
+    }
+}
