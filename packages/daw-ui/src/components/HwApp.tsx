@@ -12,7 +12,7 @@
  * Replaces `MainLayout` from App.tsx. The CSS lives in `../mockup.css`.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import React, { useState, useCallback, useEffect, useMemo } from 'react'
 import { Browser } from './browser/Browser'
 import { Arrangement } from './arrangement/Arrangement'
 import { ChannelRack } from './channelrack/ChannelRack'
@@ -27,6 +27,7 @@ import { useTransportStore } from '../stores/transportStore'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
+import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
 import { usePanelLayoutStore } from '../stores/panelLayoutStore'
 import { useHoverInfoStore } from '../stores/hoverInfoStore'
 import { useProjectStore } from '../stores/projectStore'
@@ -1072,42 +1073,61 @@ function HwPlaylistTools() {
   const tsNum = useTransportStore(s => s.timeSigNumerator)
   const tsDen = useTransportStore(s => s.timeSigDenominator)
   const horizontalZoom = useTransportStore(s => s.horizontalZoom)
+  // Live tool binding — these buttons were decorative until 2026-07-07
+  // ("Select" hard-coded active, clicks did nothing) while only the
+  // keyboard shortcuts drove the real store Arrangement.tsx reads.
+  const activeTool = usePlaylistToolStore(s => s.tool)
+  const setTool = usePlaylistToolStore(s => s.setTool)
+
+  const tools: Array<{ id: PlaylistTool; title: string; icon: React.ReactNode }> = [
+    { id: 'select', title: 'Select tool (S)', icon: (
+      <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
+        <path d="M3 2.5l8.5 4.5-4.2 1.6L5.5 13z" fill="currentColor" stroke="currentColor" strokeWidth=".8" strokeLinejoin="round"/>
+      </svg>
+    )},
+    { id: 'draw', title: 'Draw tool (P)', icon: (
+      <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
+        <path d="M2 14l1-3 8-8 2 2-8 8z M10 4l2 2" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+      </svg>
+    )},
+    { id: 'paint', title: 'Paint tool (B)', icon: (
+      <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
+        <path d="M9 4l3 3-5 5c-1 1-3 1-3 0s1-1.5 1-3z M9 4l3-2 2 2-2 3z" fill="currentColor" stroke="currentColor" strokeWidth=".8" strokeLinejoin="round"/>
+      </svg>
+    )},
+    { id: 'slice', title: 'Slice tool (C)', icon: (
+      <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
+        <circle cx="4" cy="11" r="2" fill="none" stroke="currentColor" strokeWidth="1.2"/>
+        <circle cx="12" cy="11" r="2" fill="none" stroke="currentColor" strokeWidth="1.2"/>
+        <path d="M5.5 9.5L13 2.5M10.5 9.5L3 2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+      </svg>
+    )},
+    { id: 'mute', title: 'Mute tool (T)', icon: (
+      <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
+        <path d="M3 6.5h2l3-2.5v8L5 9.5H3z" fill="currentColor"/>
+        <path d="M11 5l4 6M15 5l-4 6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+      </svg>
+    )},
+    { id: 'delete', title: 'Delete tool (D)', icon: (
+      <svg className="ic" width="12" height="12" viewBox="0 0 16 16" fill="none">
+        <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    )},
+  ]
 
   return (
     <div className="fl-pl-tools">
-      <button type="button" className="fl-tool on" title="Select tool (S)">
-        <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <path d="M3 2.5l8.5 4.5-4.2 1.6L5.5 13z" fill="currentColor" stroke="currentColor" strokeWidth=".8" strokeLinejoin="round"/>
-        </svg>
-      </button>
-      <button type="button" className="fl-tool" title="Draw tool (P)">
-        <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <path d="M2 14l1-3 8-8 2 2-8 8z M10 4l2 2" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
-        </svg>
-      </button>
-      <button type="button" className="fl-tool" title="Paint tool (B)">
-        <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <path d="M9 4l3 3-5 5c-1 1-3 1-3 0s1-1.5 1-3z M9 4l3-2 2 2-2 3z" fill="currentColor" stroke="currentColor" strokeWidth=".8" strokeLinejoin="round"/>
-        </svg>
-      </button>
-      <button type="button" className="fl-tool" title="Slice tool (C)">
-        <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <circle cx="4" cy="11" r="2" fill="none" stroke="currentColor" strokeWidth="1.2"/>
-          <circle cx="12" cy="11" r="2" fill="none" stroke="currentColor" strokeWidth="1.2"/>
-          <path d="M5.5 9.5L13 2.5M10.5 9.5L3 2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-        </svg>
-      </button>
-      <button type="button" className="fl-tool" title="Mute tool (T)">
-        <svg className="ic" width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <path d="M3 6.5h2l3-2.5v8L5 9.5H3z" fill="currentColor"/>
-          <path d="M11 5l4 6M15 5l-4 6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-        </svg>
-      </button>
-      <button type="button" className="fl-tool" title="Delete tool (D)">
-        <svg className="ic" width="12" height="12" viewBox="0 0 16 16" fill="none">
-          <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-        </svg>
-      </button>
+      {tools.map(t => (
+        <button
+          key={t.id}
+          type="button"
+          className={`fl-tool${activeTool === t.id ? ' on' : ''}`}
+          onClick={() => setTool(t.id)}
+          title={t.title}
+        >
+          {t.icon}
+        </button>
+      ))}
       <div className="fl-tool-sep" />
       <button
         type="button"
