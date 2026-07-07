@@ -985,6 +985,13 @@ struct EngineCallback {
     /// Shared rolling capture for "dump last N seconds to pattern".
     /// Pushed-into per block on the audio thread.
     midi_capture_ring: Arc<Mutex<MidiCaptureRing>>,
+    /// Insert commands whose target TrackNode doesn't exist yet because
+    /// a graph rebuild was deferred by lock contention (see
+    /// `rebuild_graph`'s try_lock). Retried at the start of the next
+    /// dispatch pass instead of being dropped — otherwise a plug-in
+    /// added to a just-created track could silently vanish. Pre-sized
+    /// so pushes within capacity never allocate on the audio thread.
+    deferred_insert_commands: Vec<crate::insert_chain::InsertCommand>,
 }
 
 impl EngineCallback {
@@ -1038,6 +1045,10 @@ impl EngineCallback {
             // first busy block.
             midi_event_scratch: Vec::with_capacity(256),
             midi_capture_ring,
+            // 64 comfortably exceeds the commands one UI tick can emit
+            // for tracks that don't have nodes yet (a track add plus a
+            // handful of chain edits).
+            deferred_insert_commands: Vec::with_capacity(64),
         };
         cb.rebuild_graph();
         cb
@@ -1056,8 +1067,13 @@ impl EngineCallback {
     /// commit can move this to a worker thread if a third-party plug-in
     /// turns out to misbehave.
     fn service_snapshot_request(&mut self) {
+        // RT-safety: try_lock — if the UI thread is placing a request
+        // into the slot right now, we simply pick it up next block
+        // instead of blocking the audio callback on its mutex.
         let tx = {
-            let mut slot = self.pending_state_snapshot.lock();
+            let Some(mut slot) = self.pending_state_snapshot.try_lock() else {
+                return;
+            };
             slot.take()
         };
         let Some(tx) = tx else { return };
@@ -1088,28 +1104,61 @@ impl EngineCallback {
     /// at the start of every block, BEFORE the graph runs, so the
     /// chain reflects the latest UI state for this block.
     fn dispatch_insert_commands(&mut self) {
+        // Retry commands parked by an earlier block whose target node
+        // didn't exist yet (rebuild deferred by lock contention). Only
+        // replay once the rebuild has actually landed — while it is still
+        // pending the targets can't exist, and replaying would re-park
+        // into the freshly-taken (capacity-0) Vec, allocating on the
+        // audio thread. With the rebuild done nothing re-parks, so the
+        // original allocation is retained via the put-back below.
+        if !self.needs_rebuild && !self.deferred_insert_commands.is_empty() {
+            let mut parked = std::mem::take(&mut self.deferred_insert_commands);
+            for cmd in parked.drain(..) {
+                self.dispatch_one_insert_command(cmd);
+            }
+            // Put the (now empty) original allocation back if nothing
+            // re-parked in the meantime; otherwise keep the new pushes.
+            if self.deferred_insert_commands.is_empty() {
+                self.deferred_insert_commands = parked;
+            }
+        }
+        while let Some(cmd) = self.insert_command_rx.try_recv() {
+            self.dispatch_one_insert_command(cmd);
+        }
+    }
+
+    fn dispatch_one_insert_command(&mut self, cmd: crate::insert_chain::InsertCommand) {
         let sample_rate = self.sample_rate as f64;
         let buffer_size = self.graph.buffer_size_hint();
-        while let Some(cmd) = self.insert_command_rx.try_recv() {
-            // Borrow the target id just long enough to look it up; after
-            // `.copied()` the NodeId is owned and the borrow on `cmd`
-            // ends, freeing it to move into apply_insert_command below.
-            let node_id = self.track_id_to_node.get(cmd.target_track_id()).copied();
-            let Some(node_id) = node_id else {
+        // Borrow the target id just long enough to look it up; after
+        // `.copied()` the NodeId is owned and the borrow on `cmd`
+        // ends, freeing it to move into apply_insert_command below.
+        let node_id = self.track_id_to_node.get(cmd.target_track_id()).copied();
+        let Some(node_id) = node_id else {
+            // No node for this track yet. If a rebuild is still pending
+            // (deferred by try_lock contention) the node will appear in
+            // a few blocks — park the command instead of dropping it.
+            // Past capacity we fall back to the old drop-with-warning
+            // behaviour rather than allocating on the audio thread.
+            if self.needs_rebuild
+                && self.deferred_insert_commands.len() < self.deferred_insert_commands.capacity()
+            {
+                self.deferred_insert_commands.push(cmd);
+            } else {
                 log::warn!(
                     "insert chain: no TrackNode for track_id {}; dropping command",
                     cmd.target_track_id()
                 );
-                continue;
-            };
-            if let Some(node) = self.graph.node_mut(node_id) {
-                node.apply_insert_command(
-                    cmd,
-                    &mut self.insert_graveyard_tx,
-                    sample_rate,
-                    buffer_size,
-                );
             }
+            return;
+        };
+        if let Some(node) = self.graph.node_mut(node_id) {
+            node.apply_insert_command(
+                cmd,
+                &mut self.insert_graveyard_tx,
+                sample_rate,
+                buffer_size,
+            );
         }
     }
 
@@ -1266,6 +1315,23 @@ impl EngineCallback {
     /// Rebuild the audio graph from the project state.
     /// Creates one TrackNode per non-master track, a MasterNode, and wires them together.
     fn rebuild_graph(&mut self) {
+        // RT-safety: this runs on the audio thread. If the UI currently
+        // holds the project or meter-map lock we must NOT block — leave
+        // `needs_rebuild` set and retry on the next block. One extra
+        // block on the old graph (~5ms) is inaudible; blocking the audio
+        // callback behind a UI mutation (priority inversion) is an
+        // audible dropout. Locks are taken up-front, before the old
+        // graph is torn down, so a deferred rebuild leaves the current
+        // graph fully intact.
+        let Some(project) = self.project.try_lock() else {
+            self.needs_rebuild = true;
+            return;
+        };
+        let Some(mut meters) = self.track_meters.try_lock() else {
+            self.needs_rebuild = true;
+            return;
+        };
+
         // Step 1: extract plug-in chains from the *outgoing* TrackNodes
         // before the graph is cleared. Without this, every rebuild would
         // drop every Box<dyn HostedPlugin> on the audio thread (calls
@@ -1285,7 +1351,6 @@ impl EngineCallback {
 
         self.graph.clear();
 
-        let project = self.project.lock();
         let sample_rate = self.sample_rate as f64;
         let tempo_map = &project.tempo_map;
 
@@ -1301,7 +1366,7 @@ impl EngineCallback {
 
         // Reconcile the per-track meter map with the current tracks: reuse existing
         // Arcs where possible, create new ones, drop meters for removed tracks.
-        let mut meters = self.track_meters.lock();
+        // (`meters` guard acquired via try_lock at the top of this fn.)
         let live_ids: std::collections::HashSet<String> = project
             .tracks
             .iter()
@@ -2185,6 +2250,163 @@ mod offline_insert_tests {
         assert!(
             peak_without > 1e-3,
             "without the factory the source should still sound, got peak={peak_without}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rt_safety_tests {
+    //! Proves the audio callback never blocks on UI-held locks.
+    //!
+    //! Before the try_lock fix, `rebuild_graph()` took a blocking
+    //! `project.lock()` on the audio thread — any UI mutation holding
+    //! that mutex stalled the callback (audible dropout). Now a
+    //! contended rebuild defers to the next block, and insert commands
+    //! that target not-yet-built nodes are parked instead of dropped.
+    use super::*;
+
+    /// Build a minimal EngineCallback around the given shared project.
+    fn make_callback(
+        project_arc: Arc<Mutex<Project>>,
+    ) -> (EngineCallback, crate::insert_chain::InsertCommandSender) {
+        let transport = TransportState::default();
+        transport
+            .sample_rate
+            .store(48_000, std::sync::atomic::Ordering::Relaxed);
+        let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);
+        let (_command_tx, command_rx) = bounded::<EngineCommand>(4);
+        let track_meters: TrackMeterMap = Arc::new(Mutex::new(HashMap::new()));
+        let input_consumer: SharedInputConsumer = Arc::new(Mutex::new(None));
+        let (cmd_tx, cmd_rx) = crate::insert_chain::command_channel(8);
+        let (grave_tx, _grave_rx) = crate::insert_chain::graveyard_channel(8);
+        let cb = EngineCallback::new(
+            transport,
+            project_arc,
+            meter_producer,
+            command_rx,
+            AudioPool::new(),
+            track_meters,
+            input_consumer,
+            Arc::new(CaptureTap::default()),
+            master_tap::new_shared(),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            cmd_rx,
+            grave_tx,
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(MidiInputManager::new())),
+            Arc::new(Mutex::new(MidiCaptureRing::new(64))),
+            48_000,
+            256,
+        );
+        (cb, cmd_tx)
+    }
+
+    #[test]
+    fn contended_rebuild_defers_instead_of_blocking() {
+        let project_arc = Arc::new(Mutex::new(Project::default()));
+        let (mut cb, _cmd_tx) = make_callback(Arc::clone(&project_arc));
+        assert!(!cb.needs_rebuild, "constructor rebuild should have run");
+
+        // UI thread holds the project lock across a callback.
+        let guard = project_arc.lock();
+        cb.needs_rebuild = true;
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        assert!(
+            cb.needs_rebuild,
+            "rebuild must defer while the project lock is contended"
+        );
+        drop(guard);
+
+        // Lock released — next block completes the rebuild.
+        cb.process(&mut out, 256, 2);
+        assert!(!cb.needs_rebuild, "rebuild should run once the lock frees");
+    }
+
+    #[test]
+    fn contended_meter_map_also_defers() {
+        let project_arc = Arc::new(Mutex::new(Project::default()));
+        let (mut cb, _cmd_tx) = make_callback(Arc::clone(&project_arc));
+        let meters = Arc::clone(&cb.track_meters);
+        let guard = meters.lock();
+        cb.needs_rebuild = true;
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        assert!(cb.needs_rebuild, "meter-map contention must defer rebuild");
+        drop(guard);
+        cb.process(&mut out, 256, 2);
+        assert!(!cb.needs_rebuild);
+    }
+
+    #[test]
+    fn snapshot_request_survives_slot_contention() {
+        let project_arc = Arc::new(Mutex::new(Project::default()));
+        let (mut cb, _cmd_tx) = make_callback(Arc::clone(&project_arc));
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut out = vec![0.0f32; 512];
+
+        // Block 1: UI holds the slot mutex mid-placement — callback must
+        // skip, not block, and the request must NOT be consumed.
+        {
+            let slot = Arc::clone(&cb.pending_state_snapshot);
+            let guard = slot.lock();
+            cb.process(&mut out, 256, 2);
+            drop(guard);
+        }
+        *cb.pending_state_snapshot.lock() = Some(tx);
+        // Block 2: uncontended — request is serviced.
+        cb.process(&mut out, 256, 2);
+        assert!(
+            rx.try_recv().is_ok(),
+            "snapshot request must be serviced on the first uncontended block"
+        );
+    }
+
+    #[test]
+    fn insert_command_for_pending_track_is_parked_not_dropped() {
+        let mut project = Project::default();
+        let track_id = project.add_audio_track("new track".into());
+        let project_arc = Arc::new(Mutex::new(project));
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
+
+        // Simulate "track just added, rebuild deferred": wipe the node
+        // map the command would resolve against and mark rebuild pending
+        // while the UI holds the project lock.
+        cb.track_id_to_node.clear();
+        cb.needs_rebuild = true;
+
+        assert!(
+            cmd_tx
+                .try_send(crate::insert_chain::InsertCommand::SetWet {
+                    track_id: track_id.clone(),
+                    slot_id: "slot-x".into(),
+                    wet: 0.5,
+                })
+                .is_ok(),
+            "queue insert command"
+        );
+
+        let guard = project_arc.lock();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        drop(guard);
+        assert_eq!(
+            cb.deferred_insert_commands.len(),
+            1,
+            "command for a not-yet-built node must be parked while rebuild is pending"
+        );
+
+        // Rebuild completes on the next block; the parked command now
+        // resolves to the rebuilt TrackNode and the parking lot drains.
+        cb.process(&mut out, 256, 2);
+        assert!(!cb.needs_rebuild);
+        assert!(
+            cb.deferred_insert_commands.is_empty(),
+            "parked commands must be retried after the rebuild lands"
+        );
+        assert!(
+            cb.track_id_to_node.contains_key(&track_id),
+            "rebuilt graph must contain the new track's node"
         );
     }
 }
