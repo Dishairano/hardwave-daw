@@ -168,6 +168,93 @@ pub fn find_missing_plugins(state: State<AppState>) -> Vec<MissingPluginInfo> {
     missing
 }
 
+/// Rescan plugin folders and bring back any project slots whose plugin
+/// was missing but is now installed. Only PREVIOUSLY-missing slots are
+/// (re)instantiated — `InsertCommand::Add` appends without dedup, so a
+/// blanket re-hydrate would double every already-loaded plugin.
+/// Returns the slots that are STILL missing after the rescan, so the
+/// banner can update in place.
+#[tauri::command]
+pub fn rescan_and_restore_missing_plugins(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Vec<MissingPluginInfo>, String> {
+    // Snapshot which slots are missing BEFORE the rescan — these are
+    // exactly the ones safe to Add if the scan finds their plugin.
+    let missing_before = find_missing_plugins(state.clone());
+    if missing_before.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    scan_plugins(app, state.clone());
+
+    // Collect restore plan under the locks, instantiate outside them
+    // (same discipline as hydrate_chains_from_project).
+    // (track_id, slot_id, descriptor, enabled, wet, saved_state)
+    type RestorePlanEntry = (String, String, PluginDescriptor, bool, f32, Option<Vec<u8>>);
+    let plan: Vec<RestorePlanEntry> = {
+        let engine = state.engine.lock();
+        let scanner = engine.plugin_scanner.lock();
+        let project = engine.project.lock();
+        let mut acc = Vec::new();
+        for m in &missing_before {
+            let Some(descriptor) = scanner.find(&m.plugin_id) else {
+                continue; // still missing
+            };
+            let Some(track) = project.tracks.iter().find(|t| t.id == m.track_id) else {
+                continue;
+            };
+            let Some(slot) = track.inserts.iter().find(|s| s.id == m.slot_id) else {
+                continue;
+            };
+            let saved_state = project.plugin_state(&slot.id).map(|e| e.chunk.clone());
+            acc.push((
+                m.track_id.clone(),
+                slot.id.clone(),
+                descriptor.clone(),
+                slot.enabled,
+                slot.wet,
+                saved_state,
+            ));
+        }
+        acc
+    };
+
+    for (track_id, slot_id, descriptor, enabled, wet, saved_state) in plan {
+        match instantiate_plugin(&descriptor) {
+            Ok(mut plugin) => {
+                if let Some(bytes) = saved_state {
+                    if let Err(e) = plugin.set_state(&bytes) {
+                        log::warn!("rescan-restore: set_state failed for {slot_id}: {e}");
+                    }
+                }
+                if let Some(queue) = plugin.pending_params() {
+                    state
+                        .slot_param_queues
+                        .lock()
+                        .insert((track_id.clone(), slot_id.clone()), queue);
+                }
+                let cmd = InsertCommand::Add {
+                    track_id,
+                    slot: LiveSlot {
+                        slot_id,
+                        plugin,
+                        enabled,
+                        wet,
+                        sidechain_active: false,
+                    },
+                };
+                if state.engine.lock().try_send_insert_command(cmd).is_err() {
+                    return Err("insert command queue full — try again".into());
+                }
+            }
+            Err(e) => log::warn!("rescan-restore: failed to load {}: {e}", descriptor.id),
+        }
+    }
+
+    Ok(find_missing_plugins(state))
+}
+
 #[tauri::command]
 pub fn get_last_scan_diff(state: State<AppState>) -> ScanDiff {
     let engine = state.engine.lock();

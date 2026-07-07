@@ -213,6 +213,7 @@ pub fn run() {
             commands::plugins::load_sampler,
             commands::plugins::set_plugin_sidechain_source,
             commands::plugins::find_missing_plugins,
+            commands::plugins::rescan_and_restore_missing_plugins,
             commands::engine::get_graph_latency,
             commands::engine::get_pdc_enabled,
             commands::engine::set_pdc_enabled,

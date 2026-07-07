@@ -59,6 +59,8 @@ import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { useAppDialogs } from './hooks/useAppDialogs'
 import { useIsMobile } from './hooks/useIsMobile'
 import { MobileTabBar, type MobilePanel } from './components/MobileTabBar'
+import { MissingPluginsBanner } from './components/MissingPluginsBanner'
+import { useMissingPluginsStore, type MissingPluginInfo } from './stores/missingPluginsStore'
 // Lazy: the DevPanel drags the whole in-app test harness (~7k lines)
 // with it — as a static import it sat in the STARTUP bundle for every
 // user. Now it's a separate chunk fetched on first Ctrl+Shift+D.
@@ -1013,27 +1015,15 @@ export function App() {
     await fetchTracks()
   }, [newProject, fetchTracks, applyTemplate])
 
+  // Missing plugins surface as a PERSISTENT banner (MissingPluginsBanner)
+  // instead of the old one-shot dialog — the dialog was dismissed and
+  // forgotten while the mix silently played without those inserts.
   const warnIfMissingPlugins = useCallback(async () => {
     try {
-      const missing = await invoke<Array<{ pluginId: string; trackName: string; slotIndex: number }>>('find_missing_plugins')
-      if (missing.length === 0) return
-      const byPlugin = new Map<string, Array<{ trackName: string; slotIndex: number }>>()
-      for (const m of missing) {
-        const arr = byPlugin.get(m.pluginId) ?? []
-        arr.push({ trackName: m.trackName, slotIndex: m.slotIndex })
-        byPlugin.set(m.pluginId, arr)
-      }
-      const lines: string[] = []
-      for (const [pid, uses] of byPlugin) {
-        const where = uses.map(u => `${u.trackName} · slot #${u.slotIndex + 1}`).join(', ')
-        lines.push(`• ${pid}\n   ${where}`)
-      }
-      await showErrorDialog(
-        'Missing plugins',
-        `This project references ${missing.length} plugin instance${missing.length === 1 ? '' : 's'} that aren't installed or scanned. Their state is preserved — rescan or install the plugins to re-enable them.\n\n${lines.join('\n')}`,
-      )
+      const missing = await invoke<MissingPluginInfo[]>('find_missing_plugins')
+      useMissingPluginsStore.getState().set(missing)
     } catch {}
-  }, [showErrorDialog])
+  }, [])
 
   const handleOpenProject = useCallback(async () => {
     if (!(await confirmDiscardIfDirty('Save changes before opening another project'))) return
@@ -1791,6 +1781,8 @@ export function App() {
           onFinished={() => setShowSplash(false)}
         />
       )}
+
+      <MissingPluginsBanner />
 
       <HwApp
         showBrowser={showBrowser}
