@@ -33,7 +33,6 @@ import { useHoverInfoStore } from '../stores/hoverInfoStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useMetronomeStore } from '../stores/metronomeStore'
 import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
-import { useRecordingPrefsStore } from '../stores/recordingPrefsStore'
 import { useTypingKeyboardStore } from '../stores/typingKeyboardStore'
 import { usePerfMetersStore, startPerfMeters } from '../stores/perfMetersStore'
 import type { ActionId } from '../stores/shortcutsStore'
@@ -163,15 +162,6 @@ export function HwTopbar({
   const zoomToFit = useTransportStore(s => s.zoomToFit)
   const activeTool = usePlaylistToolStore(s => s.tool)
   const setTool = usePlaylistToolStore(s => s.setTool)
-  // Ship 3a — recording prefs toggles
-  const stepEditing = useRecordingPrefsStore(s => s.stepEditing)
-  const toggleStepEditing = useRecordingPrefsStore(s => s.toggleStepEditing)
-  const waitForInput = useRecordingPrefsStore(s => s.waitForInput)
-  const toggleWaitForInput = useRecordingPrefsStore(s => s.toggleWaitForInput)
-  const blendRecord = useRecordingPrefsStore(s => s.blendRecord)
-  const toggleBlendRecord = useRecordingPrefsStore(s => s.toggleBlendRecord)
-  const multilinkActive = useRecordingPrefsStore(s => s.multilinkActive)
-  const toggleMultilink = useRecordingPrefsStore(s => s.toggleMultilink)
   const typingKbdEnabled = useTypingKeyboardStore(s => s.enabled)
   const toggleTypingKbd = useTypingKeyboardStore(s => s.toggle)
   const precountBars = useMetronomeStore(s => s.precountBars)
@@ -518,25 +508,14 @@ export function HwTopbar({
 
       <span className="fl-toolsep" />
 
-      {/* Ship 3a — recording-prefs toggle cluster.
-          UI flips the flags and persists them; backend wiring for
-          each behaviour ships in follow-up batches (see store doc-
-          comment in `recordingPrefsStore.ts`). */}
+      {/* Recording toggle cluster. Step-editing / wait-for-input /
+          blend-record / multilink were removed from the UI 2026-07-07:
+          the buttons flipped persisted flags that NOTHING reads yet
+          (zero consumers in FE or backend — deep-research P1-6), so
+          they looked broken to users. recordingPrefsStore keeps the
+          flags + toggles; restore the buttons here when each behaviour
+          is actually wired (they're FL-parity items: Ctrl+E/I/B/J). */}
       <div className="fl-action-row">
-        <button onClick={() => toggleStepEditing()} className={`fl-mini-btn${stepEditing ? ' on' : ''}`} title="Step editing (Ctrl+E)">
-          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
-            <rect x="1" y="3" width="2" height="6" fill="currentColor"/>
-            <rect x="4" y="5" width="2" height="4"/>
-            <rect x="7" y="3" width="2" height="6" fill="currentColor"/>
-            <rect x="10" y="5" width="2" height="4"/>
-          </svg>
-        </button>
-        <button onClick={() => toggleWaitForInput()} className={`fl-mini-btn${waitForInput ? ' on' : ''}`} title="Wait for input (Ctrl+I)">
-          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
-            <circle cx="6" cy="6" r="4"/>
-            <path d="M6 4v2.5L8 8" strokeLinecap="round"/>
-          </svg>
-        </button>
         <button
           onClick={() => setPrecountBars(precountBars === 0 ? 2 : 0)}
           onContextMenu={(e) => {
@@ -555,12 +534,6 @@ export function HwTopbar({
             </text>
           </svg>
         </button>
-        <button onClick={() => toggleBlendRecord()} className={`fl-mini-btn${blendRecord ? ' on' : ''}`} title="Blend / overdub (Ctrl+B)">
-          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
-            <circle cx="5" cy="6" r="3"/>
-            <circle cx="8" cy="6" r="3"/>
-          </svg>
-        </button>
         <button onClick={() => toggleTypingKbd()} className={`fl-mini-btn${typingKbdEnabled ? ' on' : ''}`} title="Typing keyboard → piano (Ctrl+T)">
           <svg className="ic" width="13" height="9" viewBox="0 0 13 9" fill="none" stroke="currentColor" strokeWidth="0.8">
             <rect x="0.5" y="0.5" width="12" height="8" rx="1"/>
@@ -568,13 +541,6 @@ export function HwTopbar({
             <rect x="5.5" y="2" width="2" height="2" rx="0.3" fill="currentColor"/>
             <rect x="9" y="2" width="2" height="2" rx="0.3" fill="currentColor"/>
             <rect x="3" y="5.5" width="7" height="1.5" rx="0.3" fill="currentColor" opacity="0.6"/>
-          </svg>
-        </button>
-        <button onClick={() => toggleMultilink()} className={`fl-mini-btn${multilinkActive ? ' on' : ''}`} title="Multilink to controllers (Ctrl+J)">
-          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="0.9">
-            <circle cx="3" cy="3" r="1.5"/>
-            <circle cx="9" cy="9" r="1.5"/>
-            <line x1="4.2" y1="4.2" x2="7.8" y2="7.8"/>
           </svg>
         </button>
       </div>
