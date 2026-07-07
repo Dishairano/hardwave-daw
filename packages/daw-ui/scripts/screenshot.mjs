@@ -15,7 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard']
 const arg = process.argv[2]
 const single = arg && ALL.includes(arg)
 const panels = single ? [arg] : ALL

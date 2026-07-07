@@ -102,6 +102,16 @@ const mock: TauriInternals = {
         return []
       case 'get_graph_latency':
         return { samples: 0, ms: 0, pdcEnabled: true }
+      // Setup-wizard audio step (screenshot harness renders it headless).
+      case 'get_audio_devices':
+        return [
+          { name: 'Focusrite Scarlett 2i2', is_default: false, sample_rates: [44100, 48000, 96000], max_channels: 2 },
+          { name: 'Speakers (Realtek HD Audio)', is_default: true, sample_rates: [44100, 48000], max_channels: 2 },
+        ]
+      case 'get_audio_config':
+        return { device: 'Focusrite Scarlett 2i2', sample_rate: 48000, buffer_size: 512 }
+      case 'list_midi_inputs':
+        return []
       case 'get_midi_activity':
         return { open_ports: [], ms_since_last_event: null }
       // Event plugin — let listeners register harmlessly.

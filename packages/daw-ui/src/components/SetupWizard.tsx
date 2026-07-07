@@ -24,7 +24,8 @@ import {
 
 const STEPS: Array<{ id: WizardStep; label: string }> = [
   { id: 'welcome', label: 'Welcome' },
-  { id: 'devices', label: 'Devices' },
+  { id: 'audio', label: 'Audio' },
+  { id: 'devices', label: 'MIDI' },
   { id: 'velocity', label: 'Velocity' },
   { id: 'test', label: 'Test' },
   { id: 'done', label: 'Done' },
@@ -125,7 +126,7 @@ export function SetupWizard() {
     <div className="hw-setup-wizard-backdrop" role="dialog" aria-modal="true">
       <div className="hw-setup-wizard">
         <header className="hw-setup-wizard-head">
-          <h3>MIDI Setup Wizard</h3>
+          <h3>Setup Wizard</h3>
           <button type="button" className="hw-setup-wizard-skip" onClick={skipForever}>
             Skip — won't ask again
           </button>
@@ -151,6 +152,7 @@ export function SetupWizard() {
           {step === 'welcome' && (
             <WelcomeStep ports={ports} scanning={scanning} rescan={rescan} />
           )}
+          {step === 'audio' && <AudioStep />}
           {step === 'devices' && (
             <DevicesStep
               ports={ports}
@@ -221,6 +223,124 @@ export function SetupWizard() {
 }
 
 // ── Step bodies ────────────────────────────────────────────────────────────
+
+interface WizardAudioDevice {
+  name: string
+  is_default: boolean
+  sample_rates: number[]
+  max_channels: number
+}
+
+const BUFFER_CHOICES = [128, 256, 512, 1024]
+
+/** Audio output setup — the one choice that ruins a first session when
+ * wrong (system speakers instead of the interface). Reuses the same
+ * commands as File → Audio settings; applying here writes the same
+ * persisted prefs, so the two stay in sync. */
+function AudioStep() {
+  const [devices, setDevices] = useState<WizardAudioDevice[]>([])
+  const [device, setDevice] = useState<string | null>(null)
+  const [sampleRate, setSampleRate] = useState(48000)
+  const [bufferSize, setBufferSize] = useState(512)
+  const [applied, setApplied] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    Promise.all([
+      invoke<WizardAudioDevice[]>('get_audio_devices'),
+      invoke<{ device: string | null; sample_rate: number; buffer_size: number }>('get_audio_config'),
+    ])
+      .then(([devs, cfg]) => {
+        setDevices(devs)
+        setDevice(cfg.device ?? devs.find((d) => d.is_default)?.name ?? null)
+        setSampleRate(cfg.sample_rate)
+        setBufferSize(cfg.buffer_size)
+      })
+      .catch((e) => setError(String(e)))
+  }, [])
+
+  const latencyMs = ((bufferSize / sampleRate) * 1000).toFixed(1)
+  const selected = devices.find((d) => d.name === device)
+  const rates = selected?.sample_rates?.length ? selected.sample_rates : [44100, 48000]
+
+  const apply = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await invoke('set_audio_config', { device, sampleRate, bufferSize })
+      setApplied(`${device ?? 'Default device'} @ ${sampleRate} Hz / ${bufferSize} samples`)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <h4>Where should Hardwave play audio?</h4>
+      <p className="hw-setup-wizard-muted">
+        Pick your audio interface (not the system speakers, if you have one) and a buffer size.
+        You can change this any time under <strong>File → Audio settings</strong>.
+      </p>
+
+      <div className="hw-setup-wizard-audio-grid">
+        <label>
+          Output device
+          <select
+            value={device ?? ''}
+            onChange={(e) => setDevice(e.target.value || null)}
+          >
+            {devices.map((d) => (
+              <option key={d.name} value={d.name}>
+                {d.name}{d.is_default ? ' (system default)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Sample rate
+          <select value={sampleRate} onChange={(e) => setSampleRate(Number(e.target.value))}>
+            {rates.map((r) => (
+              <option key={r} value={r}>{r} Hz</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Buffer size
+          <select value={bufferSize} onChange={(e) => setBufferSize(Number(e.target.value))}>
+            {BUFFER_CHOICES.map((b) => (
+              <option key={b} value={b}>{b} samples</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <p className="hw-setup-wizard-muted">
+        <strong>Latency ≈ {latencyMs} ms.</strong>{' '}
+        512 samples is a safe default; drop to 256/128 for recording if your machine keeps up
+        (crackles mean the buffer is too small).
+      </p>
+
+      <div className="hw-setup-wizard-actions" style={{ justifyContent: 'flex-start' }}>
+        <button type="button" className="hw-btn hw-btn-primary" onClick={() => void apply()} disabled={busy || devices.length === 0}>
+          {busy ? 'Applying…' : 'Apply & test'}
+        </button>
+        {applied && !error && (
+          <span className="hw-setup-wizard-muted" style={{ alignSelf: 'center' }}>
+            ✓ Active: {applied}
+          </span>
+        )}
+      </div>
+      {error && (
+        <p className="hw-setup-wizard-muted" style={{ color: 'var(--brand, #e94560)' }}>
+          Could not apply: {error}
+        </p>
+      )}
+    </>
+  )
+}
 
 function WelcomeStep({
   ports,

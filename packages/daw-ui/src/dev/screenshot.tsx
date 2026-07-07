@@ -20,6 +20,17 @@ import { PianoRoll } from '../components/piano-roll/PianoRoll'
 import { MixerPanel } from '../components/mixer/MixerPanel'
 import { useTrackStore, type TrackWithClips, type ClipInfo } from '../stores/trackStore'
 import { useTransportStore } from '../stores/transportStore'
+import { SetupWizard } from '../components/SetupWizard'
+import '../components/SetupWizard.css'
+import { useSetupWizardStore } from '../stores/setupWizardStore'
+
+/** Renders the SetupWizard opened on the audio step for UI screenshots. */
+function WizardShot() {
+  React.useEffect(() => {
+    useSetupWizardStore.setState({ visible: true, step: 'audio' })
+  }, [])
+  return <SetupWizard />
+}
 
 // ---- seed sample data -----------------------------------------------------
 
@@ -110,6 +121,8 @@ function Harness() {
       return <Full><ChannelRack /></Full>
     case 'pianoroll':
       return <Full><PianoRoll /></Full>
+    case 'wizard':
+      return <Full><WizardShot /></Full>
     default:
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>

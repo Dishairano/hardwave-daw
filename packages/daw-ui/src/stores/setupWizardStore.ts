@@ -23,7 +23,7 @@ import { persist } from 'zustand/middleware'
 
 export type VelocityCurve = 'linear' | 'soft' | 'hard' | 's-curve' | 'custom'
 
-export type WizardStep = 'welcome' | 'devices' | 'velocity' | 'test' | 'done'
+export type WizardStep = 'welcome' | 'audio' | 'devices' | 'velocity' | 'test' | 'done'
 
 interface SetupWizardState {
   /** True when the wizard is open (modal visible). Not persisted — opening
@@ -57,7 +57,7 @@ interface SetupWizardState {
   setControllerType: (portName: string, type: string) => void
 }
 
-const STEP_ORDER: WizardStep[] = ['welcome', 'devices', 'velocity', 'test', 'done']
+const STEP_ORDER: WizardStep[] = ['welcome', 'audio', 'devices', 'velocity', 'test', 'done']
 
 export const useSetupWizardStore = create<SetupWizardState>()(
   persist(

@@ -1692,7 +1692,7 @@ export function App() {
           { label: 'Help topics', shortcut: 'F1', action: () => setShowHelp(v => !v) },
           { label: 'Keyboard shortcuts', shortcut: 'Shift+F1', action: () => setShowShortcuts(v => !v) },
           { label: 'Roadmap', action: () => setShowRoadmap(v => !v) },
-          { label: 'Re-run MIDI setup wizard…', action: () => useSetupWizardStore.getState().open() },
+          { label: 'Re-run setup wizard…', action: () => useSetupWizardStore.getState().open() },
           { separator: true, label: '' },
           { label: 'Online user manual', action: () => window.open('https://github.com/Dishairano/hardwave-daw/wiki', '_blank', 'noopener,noreferrer') },
           { label: 'Release notes', action: () => window.open('https://github.com/Dishairano/hardwave-daw/releases', '_blank', 'noopener,noreferrer') },
