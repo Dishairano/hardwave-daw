@@ -85,8 +85,8 @@ cd "$(git rev-parse --show-toplevel)"
 # Typecheck + build frontend first. The explicit typecheck matters:
 # Vite emits over TS errors, so `npm run build` alone can ship broken TS
 # (CI now gates on this too — fail here, before anything is committed).
-echo "Typechecking + building frontend..."
-cd packages/daw-ui && npm run typecheck && npm run build && cd ../..
+echo "Typechecking + unit-testing + building frontend..."
+cd packages/daw-ui && npm run typecheck && npm run test:unit && npm run build && cd ../..
 
 # Full test gate — the ENTIRE workspace, not a package subset. A partial
 # local gate once let a broken release out (v0.204.x audio-reload); this
