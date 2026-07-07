@@ -89,8 +89,16 @@ pub(crate) fn instantiate_plugin(
 
 #[tauri::command]
 pub fn scan_plugins(app: AppHandle, state: State<AppState>) -> Vec<PluginDescriptor> {
-    let engine = state.engine.lock();
-    let mut scanner = engine.plugin_scanner.lock();
+    // Hold the ENGINE lock only long enough to clone the scanner Arc.
+    // The old code kept it for the whole directory walk — a 30s scan of
+    // a big plugin folder stalled every engine command (transport,
+    // params) issued meanwhile. The scanner's own mutex still
+    // serializes concurrent scans, which is the intent.
+    let scanner_arc = {
+        let engine = state.engine.lock();
+        std::sync::Arc::clone(&engine.plugin_scanner)
+    };
+    let mut scanner = scanner_arc.lock();
     let emitter = app.clone();
     let progress: hardwave_plugin_host::scanner::ScanProgress = Box::new(move |count, label| {
         let _ = emitter.emit(

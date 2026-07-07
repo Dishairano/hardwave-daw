@@ -43,11 +43,26 @@ export const useMeterStore = create<MeterState>((set) => ({
     listen<Array<{ id: string; peakL: number; peakR: number; rms: number }>>(
       'daw:trackMeters',
       (event) => {
-        const next: Record<string, TrackMeter> = {}
-        for (const t of event.payload) {
-          next[t.id] = { peakL: t.peakL, peakR: t.peakR, rms: t.rms }
-        }
-        set({ tracks: next })
+        // Preserve object identity for unchanged tracks so the
+        // per-track selector hooks (Object.is compare) skip re-renders.
+        // With transport stopped every meter idles at the floor — this
+        // turns the whole meter tick into a no-op instead of
+        // re-rendering every subscribed strip N times a second.
+        set((state) => {
+          const prev = state.tracks
+          const next: Record<string, TrackMeter> = {}
+          let changed = event.payload.length !== Object.keys(prev).length
+          for (const t of event.payload) {
+            const p = prev[t.id]
+            if (p && p.peakL === t.peakL && p.peakR === t.peakR && p.rms === t.rms) {
+              next[t.id] = p
+            } else {
+              next[t.id] = { peakL: t.peakL, peakR: t.peakR, rms: t.rms }
+              changed = true
+            }
+          }
+          return changed ? { tracks: next } : state
+        })
       },
     )
   },
