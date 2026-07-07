@@ -1153,12 +1153,7 @@ impl EngineCallback {
             return;
         };
         if let Some(node) = self.graph.node_mut(node_id) {
-            node.apply_insert_command(
-                cmd,
-                &mut self.insert_graveyard_tx,
-                sample_rate,
-                buffer_size,
-            );
+            node.apply_insert_command(cmd, &mut self.insert_graveyard_tx, sample_rate, buffer_size);
         }
     }
 

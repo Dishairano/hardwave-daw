@@ -181,7 +181,11 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().starts_with("session-"))
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        assert_eq!(logs.len(), KEEP_SESSIONS - 1, "prune leaves room for the new session");
+        assert_eq!(
+            logs.len(),
+            KEEP_SESSIONS - 1,
+            "prune leaves room for the new session"
+        );
         assert!(
             logs.iter().all(|n| n.contains("2026010")),
             "kept files are session logs"
@@ -192,7 +196,10 @@ mod tests {
             sorted.last().unwrap().contains("20260107"),
             "newest session survives pruning"
         );
-        assert!(dir.join("unrelated.txt").exists(), "non-log files untouched");
+        assert!(
+            dir.join("unrelated.txt").exists(),
+            "non-log files untouched"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -286,7 +286,10 @@ mod tests {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
             .collect();
-        assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -322,7 +325,10 @@ mod tests {
             .join("nope")
             .join("test.hwp");
         let p = Project::default();
-        assert!(p.save(&path).is_err(), "save into missing dir must error, not panic");
+        assert!(
+            p.save(&path).is_err(),
+            "save into missing dir must error, not panic"
+        );
     }
 
     #[test]

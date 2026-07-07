@@ -620,7 +620,10 @@ mod tests {
         let p = &found[0];
         assert_eq!(p.id, "vst3:test-kick");
         assert_eq!(p.name, "Test Kick");
-        assert_eq!(p.vendor, "Hardwave Test", "falls back to Factory Info vendor");
+        assert_eq!(
+            p.vendor, "Hardwave Test",
+            "falls back to Factory Info vendor"
+        );
         assert_eq!(p.version, "1.2.3");
         assert_eq!(p.format, PluginFormat::Vst3);
         assert_eq!(p.category, PluginCategory::Instrument);
@@ -636,11 +639,23 @@ mod tests {
         // A resource *inside* a bundle that is itself named .vst3 —
         // must NOT be scanned as a separate plugin.
         let outer = write_fake_vst3(&dir, "Outer.vst3", KICK_MODULEINFO);
-        write_fake_vst3(&outer.join("Contents"), "inner-resource.vst3", KICK_MODULEINFO);
+        write_fake_vst3(
+            &outer.join("Contents"),
+            "inner-resource.vst3",
+            KICK_MODULEINFO,
+        );
 
         let mut s = scanner_over(&dir);
-        let names: Vec<String> = s.scan().iter().map(|p| p.path.display().to_string()).collect();
-        assert_eq!(names.len(), 2, "vendor-nested + outer, not the inner resource: {names:?}");
+        let names: Vec<String> = s
+            .scan()
+            .iter()
+            .map(|p| p.path.display().to_string())
+            .collect();
+        assert_eq!(
+            names.len(),
+            2,
+            "vendor-nested + outer, not the inner resource: {names:?}"
+        );
         assert!(!names.iter().any(|n| n.contains("inner-resource")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -679,7 +694,9 @@ mod tests {
         let mut fresh = PluginScanner::new();
         let n = fresh.load_cache_from_disk(&cache_file).expect("load cache");
         assert_eq!(n, 1);
-        let p = fresh.find("vst3:test-kick").expect("cached descriptor findable");
+        let p = fresh
+            .find("vst3:test-kick")
+            .expect("cached descriptor findable");
         assert_eq!(p.name, "Test Kick");
         assert_eq!(p.version, "1.2.3");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -715,7 +732,11 @@ mod tests {
         let with_bom = format!("\u{feff}{KICK_MODULEINFO}");
         write_fake_vst3(&dir, "Bommed.vst3", &with_bom);
         let mut s = scanner_over(&dir);
-        assert_eq!(s.scan().len(), 1, "BOM-prefixed moduleinfo.json still parses");
+        assert_eq!(
+            s.scan().len(),
+            1,
+            "BOM-prefixed moduleinfo.json still parses"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -740,8 +761,17 @@ mod tests {
     #[test]
     fn classify_vst3_subcategories() {
         let v = |s: &str| vec![s.to_string()];
-        assert_eq!(classify_vst3(&v("Instrument|Synth")), (PluginCategory::Instrument, true));
-        assert_eq!(classify_vst3(&v("Fx|Analyzer")), (PluginCategory::Analyzer, false));
-        assert_eq!(classify_vst3(&v("Fx|Dynamics")), (PluginCategory::Effect, false));
+        assert_eq!(
+            classify_vst3(&v("Instrument|Synth")),
+            (PluginCategory::Instrument, true)
+        );
+        assert_eq!(
+            classify_vst3(&v("Fx|Analyzer")),
+            (PluginCategory::Analyzer, false)
+        );
+        assert_eq!(
+            classify_vst3(&v("Fx|Dynamics")),
+            (PluginCategory::Effect, false)
+        );
     }
 }

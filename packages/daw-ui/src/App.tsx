@@ -75,6 +75,7 @@ import { useTouchControllerStore } from './stores/touchControllerStore'
 import { useNotificationStore } from './stores/notificationStore'
 import { applyCustomBg, useThemeStore } from './stores/themeStore'
 import { hw } from './theme'
+import { friendlyLoadError } from './utils/loadErrors'
 
 interface UpdateInfo {
   version: string
@@ -1048,7 +1049,11 @@ export function App() {
         await warnIfMissingPlugins()
       } catch (err) {
         useProjectStore.getState().removeRecent(path)
-        await showErrorDialog('Could not open project', `${path}\n\n${err}`)
+        const friendly = friendlyLoadError(err)
+        await showErrorDialog(
+          'Could not open project',
+          `${friendly.message}\n\n${friendly.hint}\n\nFile: ${path}\nDetails: ${err}`,
+        )
       }
     } catch {}
   }, [loadProject, fetchTracks, confirmDiscardIfDirty, showErrorDialog, warnIfMissingPlugins])
@@ -1180,7 +1185,11 @@ export function App() {
       await warnIfMissingPlugins()
     } catch (err) {
       useProjectStore.getState().removeRecent(path)
-      await showErrorDialog('Could not open project', `${path}\n\nRemoved from recent projects.\n\n${err}`)
+      const friendly = friendlyLoadError(err)
+      await showErrorDialog(
+        'Could not open project',
+        `${friendly.message}\n\n${friendly.hint}\n\nFile: ${path} (removed from recent projects)\nDetails: ${err}`,
+      )
     }
   }, [loadProject, fetchTracks, confirmDiscardIfDirty, showErrorDialog, warnIfMissingPlugins])
 

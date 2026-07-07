@@ -96,6 +96,21 @@ cd packages/daw-ui && npm run typecheck && npm run test:unit && npm run build &&
 if [ "${HW_SKIP_GATE:-0}" = "1" ]; then
   echo "release.sh: WARNING — HW_SKIP_GATE=1, skipping cargo test --workspace" >&2
 else
+  # fmt + clippy mirror CI's Lint & Test job EXACTLY. Lesson of
+  # v0.204.10–.17: unformatted test code passed the local test gate,
+  # then every tag died at CI's `cargo fmt --check` — eight releases
+  # never reached users. Anything CI gates on must fail HERE, before
+  # the tag exists.
+  echo "cargo fmt --check..."
+  if ! cargo fmt --all -- --check; then
+    echo "release.sh: rustfmt differences — run 'cargo fmt --all' and re-release." >&2
+    exit 1
+  fi
+  echo "cargo clippy (hard error, matching CI)..."
+  if ! cargo clippy --workspace --all-targets -- -D warnings; then
+    echo "release.sh: clippy warnings — fix them (see ./scripts/lint.sh) and re-release." >&2
+    exit 1
+  fi
   echo "Running full workspace test gate (cargo test --workspace)..."
   if ! cargo test --workspace; then
     echo "release.sh: workspace tests FAILED — refusing to release." >&2

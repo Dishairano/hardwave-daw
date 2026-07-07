@@ -46,8 +46,14 @@ export function CrashRecoveryDialog({ autosavePath, modifiedUnix, onChoice }: Pr
         <div style={{ fontSize: 13, color: hw.textSecondary, marginBottom: 6, lineHeight: 1.5 }}>
           It looks like the last session ended unexpectedly. An auto-save from {when} is available.
         </div>
-        <div style={{ fontSize: 11, color: hw.textFaint, marginBottom: 18, fontFamily: 'monospace' }}>
+        <div style={{ fontSize: 11, color: hw.textFaint, marginBottom: 6, fontFamily: 'monospace' }}>
           {name}
+        </div>
+        <div style={{ fontSize: 11.5, color: hw.textFaint, marginBottom: 18, lineHeight: 1.5 }}>
+          <b style={{ color: hw.textSecondary }}>Recover</b> loads that auto-save ·{' '}
+          <b style={{ color: hw.textSecondary }}>Open project…</b> ignores it and picks a file ·{' '}
+          <b style={{ color: hw.textSecondary }}>Discard</b> deletes it.
+          If recovery fails, File → Revert to last backup has older snapshots.
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button onClick={() => onChoice('discard')} style={btn(false)}>Discard</button>
