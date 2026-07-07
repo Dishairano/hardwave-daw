@@ -1,10 +1,16 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import { invokeOrNull, invokeOrToast } from '../api/invoke'
 import { useProjectStore } from './projectStore'
 import { useHistoryStore } from './historyStore'
 
 async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: string): Promise<T> {
-  const r = await invoke<T>(cmd, args)
+  // invokeOrToast: every track mutation that fails now surfaces a toast
+  // instead of dying in a caller's console.error (deep-research P1-8).
+  const r = await invokeOrToast<T>(cmd, args, {
+    message: label ? `${label} failed` : undefined,
+    retry: false,
+  })
   useProjectStore.getState().markDirty()
   if (label) useHistoryStore.getState().push(label)
   return r
@@ -669,24 +675,15 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   },
 
   importAudioFile: async (trackId, filePath, positionTicks) => {
-    try {
-      const name = filePath.split(/[\\/]/).pop() || filePath
-      const result = await mut<ImportedClip>('import_audio_file', {
-        trackId,
-        filePath,
-        positionTicks: positionTicks ?? null,
-      }, `Import "${name}"`)
-      await get().fetchTracks()
-      return result
-    } catch (err) {
-      const { useNotificationStore } = await import('./notificationStore')
-      const name = filePath.split(/[\\/]/).pop() || filePath
-      useNotificationStore.getState().push('warning',
-        `Could not import "${name}"`,
-        { detail: String(err), sticky: true },
-      )
-      throw err
-    }
+    // mut() toasts on failure with the label below — no second toast here.
+    const name = filePath.split(/[\\/]/).pop() || filePath
+    const result = await mut<ImportedClip>('import_audio_file', {
+      trackId,
+      filePath,
+      positionTicks: positionTicks ?? null,
+    }, `Import "${name}"`)
+    await get().fetchTracks()
+    return result
   },
 
   moveClip: async (trackId, clipId, newPositionTicks) => {
@@ -915,7 +912,9 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   },
 
   undo: async () => {
-    const ok = await invoke<boolean>('undo')
+    // invokeOrToast: a rejected undo used to fail silently, leaving the
+    // frontend history label desynced from the Rust history (P1-8).
+    const ok = (await invokeOrNull<boolean>('undo', undefined, { message: 'Undo failed', retry: false })) ?? false
     if (ok) {
       useProjectStore.getState().markDirty()
       useHistoryStore.getState().undoOne()
@@ -925,7 +924,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   },
 
   redo: async () => {
-    const ok = await invoke<boolean>('redo')
+    const ok = (await invokeOrNull<boolean>('redo', undefined, { message: 'Redo failed', retry: false })) ?? false
     if (ok) {
       useProjectStore.getState().markDirty()
       useHistoryStore.getState().redoOne()

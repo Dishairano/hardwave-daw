@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import { invokeOrToast } from '../api/invoke'
 import { usePatternStore } from './patternStore'
 
 interface ProjectInfo {
@@ -65,11 +66,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         defaultPath: `${get().projectName}.hwp`,
       })
       if (!selected) return
-      await invoke('save_project', { path: selected })
+      await invokeOrToast('save_project', { path: selected }, { message: 'Could not save the project' })
       set({ filePath: selected, dirty: false })
       get().pushRecent(selected)
     } else {
-      await invoke('save_project', { path: savePath })
+      await invokeOrToast('save_project', { path: savePath }, { message: 'Could not save the project' })
       set({ dirty: false })
       get().pushRecent(savePath)
     }

@@ -59,6 +59,24 @@ export function NotificationHost() {
                   {n.detail}
                 </div>
               )}
+              {n.actions && n.actions.length > 0 && (
+                <div style={{ marginTop: 6, display: 'flex', gap: 6 }}>
+                  {n.actions.map(a => (
+                    <button
+                      key={a.label}
+                      onClick={() => { a.onClick(); dismiss(n.id) }}
+                      style={{
+                        padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                        background: 'transparent', cursor: 'pointer',
+                        border: `1px solid ${c.border}`, borderRadius: hw.radius.sm,
+                        color: c.fg,
+                      }}
+                    >
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <button
               onClick={() => dismiss(n.id)}

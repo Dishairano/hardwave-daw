@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { App } from './App'
+import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { PanelWindow } from './PanelWindow'
 import './mockup.css'
 
@@ -71,7 +72,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <PanelWindow panel={panelWindow} params={params} />
       </PanelErrorBoundary>
     ) : (
-      <App />
+      <AppErrorBoundary>
+        <App />
+      </AppErrorBoundary>
     )}
   </React.StrictMode>,
 )

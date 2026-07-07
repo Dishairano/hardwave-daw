@@ -2,6 +2,12 @@ import { create } from 'zustand'
 
 export type NotificationLevel = 'info' | 'warning' | 'error'
 
+export interface NotificationAction {
+  label: string
+  /** Runs on click; NotificationHost dismisses the toast afterwards. */
+  onClick: () => void
+}
+
 export interface Notification {
   id: string
   level: NotificationLevel
@@ -9,11 +15,16 @@ export interface Notification {
   detail?: string
   createdAt: number
   sticky: boolean
+  actions?: NotificationAction[]
 }
 
 interface NotificationState {
   notifications: Notification[]
-  push: (level: NotificationLevel, message: string, opts?: { detail?: string; sticky?: boolean }) => string
+  push: (
+    level: NotificationLevel,
+    message: string,
+    opts?: { detail?: string; sticky?: boolean; actions?: NotificationAction[] },
+  ) => string
   dismiss: (id: string) => void
   clear: () => void
 }
@@ -36,6 +47,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       detail: opts?.detail,
       createdAt: Date.now(),
       sticky,
+      actions: opts?.actions,
     }
     set(s => ({ notifications: [...s.notifications, n] }))
     if (!sticky) {
