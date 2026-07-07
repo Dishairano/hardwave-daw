@@ -82,9 +82,11 @@ fi
 CONF="src-tauri/tauri.conf.json"
 cd "$(git rev-parse --show-toplevel)"
 
-# Build frontend first
-echo "Building frontend..."
-cd packages/daw-ui && npm run build && cd ../..
+# Typecheck + build frontend first. The explicit typecheck matters:
+# Vite emits over TS errors, so `npm run build` alone can ship broken TS
+# (CI now gates on this too — fail here, before anything is committed).
+echo "Typechecking + building frontend..."
+cd packages/daw-ui && npm run typecheck && npm run build && cd ../..
 
 # Full test gate — the ENTIRE workspace, not a package subset. A partial
 # local gate once let a broken release out (v0.204.x audio-reload); this

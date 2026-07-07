@@ -29,6 +29,9 @@ jobs:
         run: |
           cd packages/daw-ui
           npm ci
+          # Typecheck BEFORE build — Vite emits happily over TS errors,
+          # so without this gate broken TS ships to production.
+          npm run typecheck
           npm run build
 
       - name: Upload frontend artifact
