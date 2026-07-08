@@ -1225,13 +1225,27 @@ impl EngineCallback {
     }
 
     fn process_transport(&mut self, cmd: TransportCommand) {
+        use std::sync::atomic::Ordering::Relaxed;
         match cmd {
             TransportCommand::Play => {
-                self.transport
-                    .playing
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                if self.transport.wait_for_input.load(Relaxed)
+                    && !self.transport.playing.load(Relaxed)
+                {
+                    // Park: process() starts playback on the first MIDI event.
+                    self.transport.wait_pending.store(true, Relaxed);
+                } else {
+                    self.transport.playing.store(true, Relaxed);
+                }
+            }
+            TransportCommand::SetWaitForInput(on) => {
+                self.transport.wait_for_input.store(on, Relaxed);
+                // Disabling while parked honours the earlier Play press.
+                if !on && self.transport.wait_pending.swap(false, Relaxed) {
+                    self.transport.playing.store(true, Relaxed);
+                }
             }
             TransportCommand::Stop => {
+                self.transport.wait_pending.store(false, Relaxed);
                 let was_playing = self
                     .transport
                     .playing
@@ -1259,9 +1273,15 @@ impl EngineCallback {
                 self.transport
                     .recording
                     .store(true, std::sync::atomic::Ordering::Relaxed);
-                self.transport
-                    .playing
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                if self.transport.wait_for_input.load(Relaxed)
+                    && !self.transport.playing.load(Relaxed)
+                {
+                    // Armed-and-parked: recording light on, playhead waits
+                    // for the performer's first note.
+                    self.transport.wait_pending.store(true, Relaxed);
+                } else {
+                    self.transport.playing.store(true, Relaxed);
+                }
             }
             TransportCommand::SetMasterVolume(db) => {
                 self.transport
@@ -1800,6 +1820,32 @@ impl AudioCallback for EngineCallback {
         // a half-written block.
         self.service_snapshot_request();
 
+        // Wait-for-input: while parked we must still drain MIDI (the
+        // early-silence return below would otherwise starve the check
+        // forever). The first event un-parks, starts playback THIS block,
+        // and the drained events flow to the graph below so the note that
+        // started the transport is heard.
+        let parked = self
+            .transport
+            .wait_pending
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let mut drained_while_parked = false;
+        if parked {
+            self.midi_event_scratch.clear();
+            if let Some(mgr) = self.midi_input.try_lock() {
+                mgr.try_drain_events_into(&mut self.midi_event_scratch);
+            }
+            drained_while_parked = true;
+            if !self.midi_event_scratch.is_empty() {
+                self.transport
+                    .wait_pending
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                self.transport
+                    .playing
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
         let playing = self.transport.is_playing();
         // When transport is stopped AND nothing is monitoring live input,
         // the graph can only produce silence — skip processing to save CPU.
@@ -1849,9 +1895,13 @@ impl AudioCallback for EngineCallback {
         // below human perception). The graph then forwards this slice
         // only to nodes whose `accepts_live_midi` flag is set during
         // rebuild (armed+monitor_input tracks + MIDI tracks).
-        self.midi_event_scratch.clear();
-        if let Some(mgr) = self.midi_input.try_lock() {
-            mgr.try_drain_events_into(&mut self.midi_event_scratch);
+        // (Skipped when the wait-for-input check above already drained —
+        // clearing here would eat the very note that started playback.)
+        if !drained_while_parked {
+            self.midi_event_scratch.clear();
+            if let Some(mgr) = self.midi_input.try_lock() {
+                mgr.try_drain_events_into(&mut self.midi_event_scratch);
+            }
         }
 
         // Push drained events into the rolling capture ring. try_lock
@@ -2401,6 +2451,148 @@ mod rt_safety_tests {
         assert!(
             cb.track_id_to_node.contains_key(&track_id),
             "rebuilt graph must contain the new track's node"
+        );
+    }
+}
+
+#[cfg(test)]
+mod wait_for_input_tests {
+    //! FL-style "wait for input": Play/Record park the transport; the
+    //! first MIDI event starts playback and is NOT swallowed (it must
+    //! reach the graph in the same block so the triggering note sounds).
+    use super::*;
+    use std::sync::atomic::Ordering::Relaxed;
+
+    fn make_callback(
+        midi: Arc<Mutex<MidiInputManager>>,
+    ) -> (EngineCallback, crossbeam_channel::Sender<EngineCommand>) {
+        let transport = TransportState::default();
+        transport.sample_rate.store(48_000, Relaxed);
+        let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);
+        let (command_tx, command_rx) = bounded::<EngineCommand>(8);
+        let track_meters: TrackMeterMap = Arc::new(Mutex::new(HashMap::new()));
+        let input_consumer: SharedInputConsumer = Arc::new(Mutex::new(None));
+        let (_cmd_tx, cmd_rx) = crate::insert_chain::command_channel(8);
+        let (grave_tx, _grave_rx) = crate::insert_chain::graveyard_channel(8);
+        let cb = EngineCallback::new(
+            transport,
+            Arc::new(Mutex::new(Project::default())),
+            meter_producer,
+            command_rx,
+            AudioPool::new(),
+            track_meters,
+            input_consumer,
+            Arc::new(CaptureTap::default()),
+            master_tap::new_shared(),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            cmd_rx,
+            grave_tx,
+            Arc::new(Mutex::new(None)),
+            midi,
+            Arc::new(Mutex::new(MidiCaptureRing::new(64))),
+            48_000,
+            256,
+        );
+        (cb, command_tx)
+    }
+
+    #[test]
+    fn play_parks_until_first_midi_event() {
+        let midi = Arc::new(Mutex::new(MidiInputManager::new()));
+        let (mut cb, tx) = make_callback(Arc::clone(&midi));
+        let mut out = vec![0.0f32; 512];
+
+        cb.transport.wait_for_input.store(true, Relaxed);
+        tx.send(EngineCommand::Transport(TransportCommand::Play))
+            .unwrap();
+
+        // Blocks pass with no MIDI: parked, position frozen.
+        for _ in 0..3 {
+            cb.process(&mut out, 256, 2);
+        }
+        assert!(!cb.transport.is_playing(), "must stay parked with no input");
+        assert!(cb.transport.wait_pending.load(Relaxed));
+        assert_eq!(
+            cb.transport.position(),
+            0,
+            "playhead must not advance while parked"
+        );
+
+        // First MIDI event: playback starts, and the event stays in the
+        // scratch so the triggering note reaches the graph THIS block.
+        midi.lock().inject(hardwave_midi::MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.9,
+        });
+        cb.process(&mut out, 256, 2);
+        assert!(
+            cb.transport.is_playing(),
+            "first MIDI event starts playback"
+        );
+        assert!(!cb.transport.wait_pending.load(Relaxed));
+        assert!(
+            !cb.midi_event_scratch.is_empty(),
+            "the triggering event must not be swallowed"
+        );
+    }
+
+    #[test]
+    fn stop_cancels_a_parked_transport() {
+        let midi = Arc::new(Mutex::new(MidiInputManager::new()));
+        let (mut cb, tx) = make_callback(Arc::clone(&midi));
+        let mut out = vec![0.0f32; 512];
+
+        cb.transport.wait_for_input.store(true, Relaxed);
+        tx.send(EngineCommand::Transport(TransportCommand::Play))
+            .unwrap();
+        cb.process(&mut out, 256, 2);
+        assert!(cb.transport.wait_pending.load(Relaxed));
+
+        tx.send(EngineCommand::Transport(TransportCommand::Stop))
+            .unwrap();
+        cb.process(&mut out, 256, 2);
+        assert!(
+            !cb.transport.wait_pending.load(Relaxed),
+            "Stop clears the park"
+        );
+        assert!(!cb.transport.is_playing());
+
+        // Late MIDI after Stop must NOT start playback.
+        midi.lock().inject(hardwave_midi::MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.9,
+        });
+        cb.process(&mut out, 256, 2);
+        assert!(
+            !cb.transport.is_playing(),
+            "events after Stop must not un-park"
+        );
+    }
+
+    #[test]
+    fn disabling_wait_honours_pending_play() {
+        let midi = Arc::new(Mutex::new(MidiInputManager::new()));
+        let (mut cb, tx) = make_callback(Arc::clone(&midi));
+        let mut out = vec![0.0f32; 512];
+
+        cb.transport.wait_for_input.store(true, Relaxed);
+        tx.send(EngineCommand::Transport(TransportCommand::Play))
+            .unwrap();
+        cb.process(&mut out, 256, 2);
+        assert!(cb.transport.wait_pending.load(Relaxed));
+
+        tx.send(EngineCommand::Transport(TransportCommand::SetWaitForInput(
+            false,
+        )))
+        .unwrap();
+        cb.process(&mut out, 256, 2);
+        assert!(
+            cb.transport.is_playing(),
+            "turning the pref off honours the earlier Play press"
         );
     }
 }

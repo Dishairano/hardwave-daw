@@ -33,6 +33,7 @@ import { usePanelLayoutStore } from '../stores/panelLayoutStore'
 import { useHoverInfoStore } from '../stores/hoverInfoStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useMetronomeStore } from '../stores/metronomeStore'
+import { useRecordingPrefsStore } from '../stores/recordingPrefsStore'
 import { useTypingKeyboardStore } from '../stores/typingKeyboardStore'
 import { usePerfMetersStore, startPerfMeters } from '../stores/perfMetersStore'
 import type { ActionId } from '../stores/shortcutsStore'
@@ -147,6 +148,8 @@ export function HwTopbar({
   const setPatternMode = useTransportStore(s => s.setPatternMode)
   const punchEnabled = useTransportStore(s => s.punchEnabled)
   const togglePunch = useTransportStore(s => s.togglePunch)
+  const waitForInput = useRecordingPrefsStore(s => s.waitForInput)
+  const toggleWaitForInput = useRecordingPrefsStore(s => s.toggleWaitForInput)
   const typingKbdEnabled = useTypingKeyboardStore(s => s.enabled)
   const toggleTypingKbd = useTypingKeyboardStore(s => s.toggle)
   const precountBars = useMetronomeStore(s => s.precountBars)
@@ -497,14 +500,23 @@ export function HwTopbar({
 
       <span className="fl-toolsep" />
 
-      {/* Recording toggle cluster. Step-editing / wait-for-input /
-          blend-record / multilink were removed from the UI 2026-07-07:
-          the buttons flipped persisted flags that NOTHING reads yet
-          (zero consumers in FE or backend — deep-research P1-6), so
-          they looked broken to users. recordingPrefsStore keeps the
-          flags + toggles; restore the buttons here when each behaviour
-          is actually wired (they're FL-parity items: Ctrl+E/I/B/J). */}
+      {/* Recording toggle cluster. Step-editing / blend-record /
+          multilink stay hidden until their backends exist (removed
+          2026-07-07, deep-research P1-6 — buttons that do nothing
+          read as broken). Wait-for-input RETURNED 2026-07-08: it is
+          now fully wired (engine parks Play/Record until the first
+          MIDI event — see wait_for_input_tests in engine.rs). */}
       <div className="fl-action-row">
+        <button
+          onClick={() => toggleWaitForInput()}
+          className={`fl-mini-btn${waitForInput ? ' on' : ''}`}
+          title="Wait for input (Ctrl+I) — Play/Record start on your first MIDI note"
+        >
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
+            <circle cx="6" cy="6" r="4"/>
+            <path d="M6 4v2.5L8 8" strokeLinecap="round"/>
+          </svg>
+        </button>
         <button
           onClick={() => setPrecountBars(precountBars === 0 ? 2 : 0)}
           onContextMenu={(e) => {

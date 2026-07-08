@@ -119,6 +119,7 @@ pub fn run() {
             commands::transport::set_master_volume,
             commands::transport::set_time_signature,
             commands::transport::set_pattern_mode,
+            commands::transport::set_wait_for_input,
             commands::transport::get_transport_state,
             // Automation
             commands::automation::add_automation_lane,

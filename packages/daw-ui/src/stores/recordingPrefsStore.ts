@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { invoke } from '@tauri-apps/api/core'
 
 /**
  * FL-style recording-related toolbar toggles.
@@ -16,11 +17,11 @@ import { persist } from 'zustand/middleware'
  *  - stepEditing      : when ON, Piano-Roll note entry advances the
  *                       playhead by Snap and arms the next step (FL
  *                       Ctrl+E). Needs Piano-Roll insertion mode.
- *  - waitForInput     : when ON, pressing Play parks the transport
- *                       in a "WAIT" state until the first MIDI event
- *                       (or a recording filter-matching event) is
- *                       received, then begins playback (FL Ctrl+I).
- *                       Needs a one-shot MIDI hook in transportStore.
+ *  - waitForInput     : WIRED (2026-07-08, FL Ctrl+I) — Play/Record
+ *                       park the transport until the first MIDI
+ *                       event arrives (engine `wait_pending`; synced
+ *                       via `set_wait_for_input`, re-applied at boot
+ *                       by `syncWaitForInput`).
  *  - blendRecord      : when ON, recording overdubs notes onto the
  *                       existing clip instead of overwriting; for
  *                       audio it implements sound-on-sound layering
@@ -49,10 +50,22 @@ export const useRecordingPrefsStore = create<RecordingPrefsState>()(
       blendRecord: false,
       multilinkActive: false,
       toggleStepEditing:   () => set((s) => ({ stepEditing: !s.stepEditing })),
-      toggleWaitForInput:  () => set((s) => ({ waitForInput: !s.waitForInput })),
+      toggleWaitForInput:  () => set((s) => {
+        const next = !s.waitForInput
+        // Engine observes this via the command; failure is non-fatal
+        // (browser/mock mode) — the persisted flag re-syncs at boot.
+        invoke('set_wait_for_input', { enabled: next }).catch(() => {})
+        return { waitForInput: next }
+      }),
       toggleBlendRecord:   () => set((s) => ({ blendRecord: !s.blendRecord })),
       toggleMultilink:     () => set((s) => ({ multilinkActive: !s.multilinkActive })),
     }),
     { name: 'hw-recording-prefs' },
   ),
 )
+
+/** Re-apply the persisted wait-for-input flag to the engine at boot. */
+export function syncWaitForInput() {
+  const enabled = useRecordingPrefsStore.getState().waitForInput
+  if (enabled) invoke('set_wait_for_input', { enabled }).catch(() => {})
+}

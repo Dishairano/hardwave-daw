@@ -16,20 +16,54 @@ pub struct TransportInfo {
     time_sig_numerator: u32,
     time_sig_denominator: u32,
     pattern_mode: bool,
+    /// Armed-and-parked: Play/Record pressed with wait-for-input on,
+    /// playback starts on the first MIDI event.
+    waiting_for_input: bool,
 }
 
 #[tauri::command]
 pub fn play(state: State<AppState>) {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
-    engine.transport.playing.store(true, Ordering::Relaxed);
+    // Wait-for-input (FL Ctrl+I): park instead of starting — the audio
+    // thread flips `playing` on the first MIDI event. The engine-side
+    // TransportCommand handler applies the same rule, so both paths
+    // agree regardless of which runs first.
+    if engine.transport.wait_for_input.load(Ordering::Relaxed)
+        && !engine.transport.playing.load(Ordering::Relaxed)
+    {
+        engine.transport.wait_pending.store(true, Ordering::Relaxed);
+    } else {
+        engine.transport.playing.store(true, Ordering::Relaxed);
+    }
     engine.send_command(TransportCommand::Play);
+}
+
+/// Toggle FL-style "wait for input" — with it on, Play/Record park the
+/// transport until the first MIDI event arrives.
+#[tauri::command]
+pub fn set_wait_for_input(state: State<AppState>, enabled: bool) {
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    engine
+        .transport
+        .wait_for_input
+        .store(enabled, Ordering::Relaxed);
+    // Disabling while parked honours the earlier Play press.
+    if !enabled && engine.transport.wait_pending.swap(false, Ordering::Relaxed) {
+        engine.transport.playing.store(true, Ordering::Relaxed);
+    }
+    engine.send_command(TransportCommand::SetWaitForInput(enabled));
 }
 
 #[tauri::command]
 pub fn stop(state: State<AppState>) -> Result<Option<String>, String> {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
+    engine
+        .transport
+        .wait_pending
+        .store(false, Ordering::Relaxed);
     let was_playing = engine.transport.playing.swap(false, Ordering::Relaxed);
     if !was_playing {
         let loop_start = if engine.transport.looping.load(Ordering::Relaxed) {
@@ -247,5 +281,6 @@ pub fn get_transport_state(state: State<AppState>) -> TransportInfo {
         time_sig_numerator: num,
         time_sig_denominator: den,
         pattern_mode: t.pattern_mode.load(Ordering::Relaxed),
+        waiting_for_input: t.wait_pending.load(Ordering::Relaxed),
     }
 }

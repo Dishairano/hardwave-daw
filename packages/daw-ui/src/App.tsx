@@ -60,6 +60,7 @@ import { useAppDialogs } from './hooks/useAppDialogs'
 import { useIsMobile } from './hooks/useIsMobile'
 import { MobileTabBar, type MobilePanel } from './components/MobileTabBar'
 import { MissingPluginsBanner } from './components/MissingPluginsBanner'
+import { syncWaitForInput } from './stores/recordingPrefsStore'
 import { useMissingPluginsStore, type MissingPluginInfo } from './stores/missingPluginsStore'
 // Lazy: the DevPanel drags the whole in-app test harness (~7k lines)
 // with it — as a static import it sat in the STARTUP bundle for every
@@ -541,6 +542,8 @@ export function App() {
       console.error('start_engine failed at boot:', err)
       useNotificationStore.getState().push('error', 'Audio engine failed to start', { detail: String(err) })
     })
+    // Persisted recording prefs the engine observes (wait-for-input).
+    syncWaitForInput()
     fetchTracks().finally(() => setTracksReady(true))
 
     // Block WebView2's default file-drop behaviour at the document

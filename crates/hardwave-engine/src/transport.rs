@@ -45,6 +45,14 @@ pub struct TransportState {
     /// is skipped and the UI reports 0 latency — use for low-latency
     /// monitoring when absolute timing across tracks doesn't matter.
     pub pdc_enabled: Arc<AtomicBool>,
+
+    /// FL-style "wait for input" (Ctrl+I): when enabled, Play/Record arm
+    /// the transport but playback parks until the first MIDI event.
+    pub wait_for_input: Arc<AtomicBool>,
+    /// True while armed-and-parked (Play/Record pressed with
+    /// `wait_for_input` on, no MIDI seen yet). The audio thread flips it
+    /// off and starts playback on the first drained MIDI event.
+    pub wait_pending: Arc<AtomicBool>,
 }
 
 /// Pack a (numerator, denominator) time signature into a u64.
@@ -73,6 +81,8 @@ impl Default for TransportState {
             pattern_mode: Arc::new(AtomicBool::new(false)),
             direct_monitoring: Arc::new(AtomicBool::new(false)),
             pdc_enabled: Arc::new(AtomicBool::new(true)),
+            wait_for_input: Arc::new(AtomicBool::new(false)),
+            wait_pending: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -185,6 +195,8 @@ pub enum TransportCommand {
     Play,
     Stop,
     Record,
+    /// Enable/disable FL-style "wait for input" (park until first MIDI).
+    SetWaitForInput(bool),
     SetPosition(u64),
     SetBpm(f64),
     SetLoop(u64, u64),
