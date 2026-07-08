@@ -279,6 +279,8 @@ pub fn run() {
             commands::audio::toggle_clip_reverse,
             commands::audio::set_clip_pitch,
             commands::audio::set_clip_stretch,
+            commands::audio::set_clip_warp_markers,
+            commands::audio::detect_clip_transients,
             // MIDI
             commands::midi::create_midi_clip,
             commands::midi::export_clip_midi,

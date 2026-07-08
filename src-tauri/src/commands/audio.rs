@@ -345,6 +345,65 @@ pub fn set_clip_pitch(
     Ok(())
 }
 
+/// Detect transient positions in a source buffer — the "Detect" action
+/// in the warp editor. Returns onset positions as SOURCE samples,
+/// ascending; the UI turns them into warp-marker suggestions (mapping
+/// each onset to its current timeline tick so warping starts neutral).
+#[tauri::command]
+pub fn detect_clip_transients(
+    state: State<AppState>,
+    source_id: String,
+) -> Result<Vec<u64>, String> {
+    let engine = state.engine.lock();
+    let buffer = engine
+        .audio_pool
+        .get(&source_id)
+        .ok_or_else(|| format!("Source not found: {}", source_id))?;
+    // Mono mix for detection; onset positions are channel-agnostic.
+    let mono: Vec<f32> = (0..buffer.num_frames)
+        .map(|i| {
+            let l = buffer.sample(0, i);
+            let r = if buffer.channels.len() > 1 {
+                buffer.sample(1, i)
+            } else {
+                l
+            };
+            (l + r) * 0.5
+        })
+        .collect();
+    Ok(hardwave_dsp::onset::detect_onsets(
+        &mono,
+        buffer.sample_rate,
+    ))
+}
+
+/// Replace a clip's full warp-marker set in one call. The UI edits the
+/// whole list locally (drag/add/remove) and commits atomically — a
+/// single command avoids marker-index races between rapid drags, and
+/// undo snapshots one coherent mutation. Markers are normalized here
+/// (sorted by clip_tick, per-tick duplicates dropped) so the engine's
+/// segment builder always sees a canonical list. An empty list removes
+/// all warping (clip falls back to plain stretch_ratio).
+#[tauri::command]
+pub fn set_clip_warp_markers(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    markers: Vec<hardwave_project::clip::WarpMarker>,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
+        let mut m = markers;
+        m.sort_by_key(|w| w.clip_tick);
+        m.dedup_by_key(|w| w.clip_tick);
+        ac.warp_markers = m;
+    })?;
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
 /// Set clip time-stretch ratio (range 0.25..4.0). 1.0 = realtime.
 #[tauri::command]
 pub fn set_clip_stretch(
