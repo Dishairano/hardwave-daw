@@ -54,6 +54,84 @@ pub struct ClipRegion {
     /// Source-frames consumed per timeline sample. 1.0 = realtime, >1 = pitched up/faster.
     /// Combines pitch shift and time stretch via resampling.
     pub source_step: f64,
+    /// Warp segments (piecewise timeline→source map), precomputed at
+    /// graph rebuild from the clip's warp markers. Sorted by
+    /// `start_sample`. Empty = classic single-ratio path via
+    /// `source_step`. When present these DEFINE the read position:
+    /// timing anchors win over pitch/stretch knobs (resample warp
+    /// repitches per segment, varispeed-style — v1 semantics).
+    pub warp: Vec<WarpSegment>,
+}
+
+/// One precomputed warp segment. For into-clip timeline samples at or
+/// after `start_sample` (and before the next segment), the source read
+/// position is `source_start + (into_clip - start_sample) * step`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WarpSegment {
+    /// Into-clip timeline sample where this segment begins.
+    pub start_sample: u64,
+    /// Absolute source frame at the segment start.
+    pub source_start: f64,
+    /// Source frames per timeline sample within this segment.
+    pub step: f64,
+}
+
+/// Build warp segments from anchors of (into-clip timeline sample →
+/// absolute source frame). An implicit anchor at (0, `source_offset`)
+/// is prepended unless one exists at sample 0, so playback before the
+/// first user marker still maps sensibly. The final segment extends
+/// past the last anchor with the last inter-anchor step (keeps groove
+/// direction through the clip tail), or `default_step` when only one
+/// anchor exists. Zero-length spans are skipped.
+pub fn build_warp_segments(
+    anchors: &[(u64, f64)],
+    default_step: f64,
+    source_offset: f64,
+) -> Vec<WarpSegment> {
+    let mut pts: Vec<(u64, f64)> = Vec::with_capacity(anchors.len() + 1);
+    if anchors.first().map(|a| a.0) != Some(0) {
+        pts.push((0, source_offset));
+    }
+    pts.extend_from_slice(anchors);
+    pts.sort_by_key(|p| p.0);
+    pts.dedup_by_key(|p| p.0);
+
+    let mut segs: Vec<WarpSegment> = Vec::with_capacity(pts.len());
+    for w in pts.windows(2) {
+        let (t0, s0) = w[0];
+        let (t1, s1) = w[1];
+        let span = t1.saturating_sub(t0);
+        if span == 0 {
+            continue;
+        }
+        segs.push(WarpSegment {
+            start_sample: t0,
+            source_start: s0,
+            step: (s1 - s0) / span as f64,
+        });
+    }
+    // Tail: extend past the last anchor.
+    if let Some(&(t_last, s_last)) = pts.last() {
+        let tail_step = segs.last().map(|s| s.step).unwrap_or(default_step);
+        segs.push(WarpSegment {
+            start_sample: t_last,
+            source_start: s_last,
+            step: tail_step,
+        });
+    }
+    segs
+}
+
+/// Source read position for `into_clip` under the given segments.
+/// Segments are sorted by `start_sample`; partition_point keeps this
+/// alloc-free and O(log n) on the audio thread.
+#[inline]
+pub fn warp_source_pos(segs: &[WarpSegment], into_clip: u64) -> f64 {
+    let idx = segs.partition_point(|s| s.start_sample <= into_clip);
+    // idx is the first segment STARTING AFTER into_clip; the active one
+    // precedes it. build_warp_segments guarantees a segment at 0.
+    let seg = segs[idx.saturating_sub(1)];
+    seg.source_start + (into_clip - seg.start_sample) as f64 * seg.step
 }
 
 /// Map a normalized 0..=1 progress to a fade gain following the given curve.
@@ -690,16 +768,23 @@ impl AudioNode for TrackNode {
 
                 let into_clip = timeline_sample - clip.timeline_start;
 
-                // Fractional source position for pitch/stretch resampling.
-                let into_src = into_clip as f64 * clip.source_step;
-                let source_pos = if clip.reversed {
-                    let end_frame = clip.source_offset.saturating_add(clip_length);
-                    if end_frame == 0 {
-                        continue;
-                    }
-                    (end_frame as f64 - 1.0) - into_src
+                // Fractional source position. Warp segments (piecewise
+                // map) take precedence over the single-ratio path;
+                // reverse is not combined with warp (anchors define
+                // absolute positions).
+                let source_pos = if !clip.warp.is_empty() {
+                    warp_source_pos(&clip.warp, into_clip)
                 } else {
-                    clip.source_offset as f64 + into_src
+                    let into_src = into_clip as f64 * clip.source_step;
+                    if clip.reversed {
+                        let end_frame = clip.source_offset.saturating_add(clip_length);
+                        if end_frame == 0 {
+                            continue;
+                        }
+                        (end_frame as f64 - 1.0) - into_src
+                    } else {
+                        clip.source_offset as f64 + into_src
+                    }
                 };
 
                 if source_pos < 0.0 {
@@ -1016,5 +1101,51 @@ mod tests {
         let (l, r) = pan_law(-1.0);
         assert!(l > 0.9, "hard left should have l near 1.0, got {l}");
         assert!(r < 0.01, "hard left should have r near 0.0, got {r}");
+    }
+}
+
+#[cfg(test)]
+mod warp_tests {
+    use super::{build_warp_segments, warp_source_pos};
+
+    #[test]
+    fn piecewise_map_interpolates_between_anchors() {
+        // Anchor A: timeline 1000 ↔ source 4000; anchor B: 2000 ↔ 5000.
+        // Before A: implicit (0, source_offset=0) → step 4.0.
+        // Between A and B: step (5000-4000)/1000 = 1.0.
+        let segs = build_warp_segments(&[(1000, 4000.0), (2000, 5000.0)], 1.0, 0.0);
+        assert_eq!(warp_source_pos(&segs, 0), 0.0);
+        assert_eq!(
+            warp_source_pos(&segs, 500),
+            2000.0,
+            "first span squeezes 4x"
+        );
+        assert_eq!(warp_source_pos(&segs, 1000), 4000.0, "anchor A exact");
+        assert_eq!(warp_source_pos(&segs, 1500), 4500.0, "second span is 1:1");
+        assert_eq!(warp_source_pos(&segs, 2000), 5000.0, "anchor B exact");
+    }
+
+    #[test]
+    fn tail_continues_with_last_step() {
+        let segs = build_warp_segments(&[(1000, 500.0)], 1.0, 0.0);
+        // Only one user anchor: pre-anchor step (500-0)/1000 = 0.5; tail
+        // keeps that step past the anchor.
+        assert_eq!(warp_source_pos(&segs, 2000), 1000.0);
+    }
+
+    #[test]
+    fn single_anchor_at_zero_uses_default_step_for_tail() {
+        let segs = build_warp_segments(&[(0, 300.0)], 2.0, 0.0);
+        // Anchor replaces the implicit origin; no inter-anchor span →
+        // tail uses default_step.
+        assert_eq!(warp_source_pos(&segs, 0), 300.0);
+        assert_eq!(warp_source_pos(&segs, 100), 500.0);
+    }
+
+    #[test]
+    fn unsorted_and_duplicate_anchors_are_normalized() {
+        let segs = build_warp_segments(&[(2000, 5000.0), (1000, 4000.0), (1000, 9999.0)], 1.0, 0.0);
+        // Sorted, dupes on the same tick collapsed (first kept after sort).
+        assert_eq!(warp_source_pos(&segs, 1500), 4500.0);
     }
 }

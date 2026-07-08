@@ -46,6 +46,21 @@ pub struct AudioClip {
     pub fade_in_curve: FadeCurve,
     #[serde(default)]
     pub fade_out_curve: FadeCurve,
+    /// Transient-anchored warp markers: a piecewise-linear timeline→source
+    /// map. Each marker pins `clip_tick` (relative to the clip start, 960
+    /// PPQ) to `source_sample` in the audio file; playback interpolates
+    /// linearly between neighbouring markers. Kept sorted by `clip_tick`,
+    /// unique per tick. Empty = classic single-ratio stretch via
+    /// `stretch_ratio` (legacy projects deserialize to empty).
+    #[serde(default)]
+    pub warp_markers: Vec<WarpMarker>,
+}
+
+/// One warp anchor: timeline tick ↔ source sample.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WarpMarker {
+    pub clip_tick: u64,
+    pub source_sample: u64,
 }
 
 fn default_stretch_ratio() -> f64 {

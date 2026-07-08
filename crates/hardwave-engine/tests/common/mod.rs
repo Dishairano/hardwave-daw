@@ -51,6 +51,7 @@ pub fn make_audio_clip(source_id: impl Into<String>, num_frames: u64) -> AudioCl
         reversed: false,
         pitch_semitones: 0.0,
         stretch_ratio: 1.0,
+        warp_markers: Vec::new(),
         fade_in_curve: FadeCurve::Linear,
         fade_out_curve: FadeCurve::Linear,
     }

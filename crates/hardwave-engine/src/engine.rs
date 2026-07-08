@@ -1554,6 +1554,31 @@ impl EngineCallback {
                             audio_clip.stretch_ratio
                         };
                         let source_step = pitch_factor / stretch;
+                        // Warp markers → precomputed segments. Marker
+                        // ticks are clip-relative; going through the
+                        // tempo map (absolute tick → samples, minus the
+                        // clip start) keeps anchors honest under tempo
+                        // automation.
+                        let warp = if audio_clip.warp_markers.is_empty() {
+                            Vec::new()
+                        } else {
+                            let anchors: Vec<(u64, f64)> = audio_clip
+                                .warp_markers
+                                .iter()
+                                .map(|m| {
+                                    let abs = tempo_map.tick_to_samples(
+                                        clip.position_ticks + m.clip_tick,
+                                        sample_rate,
+                                    );
+                                    (abs.saturating_sub(timeline_start), m.source_sample as f64)
+                                })
+                                .collect();
+                            crate::track_node::build_warp_segments(
+                                &anchors,
+                                source_step,
+                                audio_clip.source_start as f64,
+                            )
+                        };
                         Some(ClipRegion {
                             source_id: audio_clip.source_path.clone(),
                             timeline_start,
@@ -1567,6 +1592,7 @@ impl EngineCallback {
                             fade_out_curve: audio_clip.fade_out_curve,
                             reversed: audio_clip.reversed,
                             source_step,
+                            warp,
                         })
                     }
                     _ => None,
@@ -2102,6 +2128,7 @@ mod offline_insert_tests {
                     reversed: false,
                     pitch_semitones: 0.0,
                     stretch_ratio: 1.0,
+                    warp_markers: Vec::new(),
                     fade_in_curve: FadeCurve::Linear,
                     fade_out_curve: FadeCurve::Linear,
                 }),
@@ -2167,6 +2194,7 @@ mod offline_insert_tests {
                     reversed: false,
                     pitch_semitones: 0.0,
                     stretch_ratio: 1.0,
+                    warp_markers: Vec::new(),
                     fade_in_curve: FadeCurve::Linear,
                     fade_out_curve: FadeCurve::Linear,
                 }),
@@ -2227,6 +2255,7 @@ mod offline_insert_tests {
                     reversed: false,
                     pitch_semitones: 0.0,
                     stretch_ratio: 1.0,
+                    warp_markers: Vec::new(),
                     fade_in_curve: FadeCurve::Linear,
                     fade_out_curve: FadeCurve::Linear,
                 }),
