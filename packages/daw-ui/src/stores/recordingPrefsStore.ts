@@ -22,11 +22,11 @@ import { invoke } from '@tauri-apps/api/core'
  *                       event arrives (engine `wait_pending`; synced
  *                       via `set_wait_for_input`, re-applied at boot
  *                       by `syncWaitForInput`).
- *  - blendRecord      : when ON, recording overdubs notes onto the
- *                       existing clip instead of overwriting; for
- *                       audio it implements sound-on-sound layering
- *                       (FL Ctrl+B). Needs MidiRecorder merge path
- *                       and an InputNode mix tap.
+ *  - blendRecord      : WIRED (2026-07-08, FL Ctrl+B) — recorded MIDI
+ *                       merges into the overlapping clip instead of
+ *                       stacking a new one (backend
+ *                       merge_notes_into_overlapping_clip; audio
+ *                       recording already layers takes).
  *  - multilinkActive  : when ON, the next N tweaked controls record
  *                       linkage sequence for batch hardware mapping
  *                       (FL Ctrl+J). Needs Multilink record buffer.

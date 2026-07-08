@@ -128,8 +128,50 @@ pub fn dump_midi_capture(state: State<AppState>) -> Vec<CapturedMidiEntry> {
         .collect()
 }
 
-/// Commit a slice of the rolling capture into a new MIDI clip placed
-/// on the target track at the given timeline position. Implements the
+/// Blend-record (FL Ctrl+B) merge target: the last MIDI clip on the
+/// track that overlaps the recorded window AND starts at-or-before it
+/// (merging into a later-starting clip would need negative note ticks /
+/// left-extension — those recordings fall through to a new clip).
+/// Returns the merged clip's id, or None when no suitable clip exists.
+fn merge_notes_into_overlapping_clip(
+    track: &mut hardwave_project::track::Track,
+    position_ticks: u64,
+    length_ticks: u64,
+    notes: &[hardwave_midi::MidiNote],
+) -> Option<String> {
+    use hardwave_project::clip::ClipContent;
+
+    let rec_end = position_ticks + length_ticks;
+    let target = track
+        .clips
+        .iter_mut()
+        .filter(|p| matches!(p.content, ClipContent::Midi(_)))
+        .filter(|p| p.position_ticks <= position_ticks)
+        .filter(|p| p.position_ticks + p.length_ticks > position_ticks)
+        .max_by_key(|p| p.position_ticks)?;
+
+    let ClipContent::Midi(ref mut midi_ref) = target.content else {
+        return None;
+    };
+    // Note ticks are clip-relative; shift by where the recording sits
+    // inside the existing clip.
+    let offset = position_ticks - target.position_ticks;
+    for n in notes {
+        let mut merged = n.clone();
+        merged.start_tick += offset;
+        midi_ref.clip.notes.push(merged);
+    }
+    // Recording may run past the clip's end — grow, never shrink.
+    let needed = rec_end.saturating_sub(target.position_ticks);
+    if needed > target.length_ticks {
+        target.length_ticks = needed;
+        midi_ref.clip.length_ticks = midi_ref.clip.length_ticks.max(needed);
+    }
+    Some(midi_ref.id.clone())
+}
+
+/// Commit a slice of the rolling capture into a MIDI clip placed on the
+/// target track at the given timeline position. Implements the
 /// "arm + record + play" flow on top of the always-on capture ring,
 /// reusing `hardwave_midi::MidiRecorder` to pair NoteOn / NoteOff
 /// events into `MidiNote`s.
@@ -139,8 +181,12 @@ pub fn dump_midi_capture(state: State<AppState>) -> Vec<CapturedMidiEntry> {
 /// `quantize_ticks` is optional input quantize (e.g. 240 = 1/16 note
 /// at 960 PPQ).
 ///
-/// Returns the new clip id on success, or an error string when no
-/// events fell in the recording window.
+/// `blend` (FL Ctrl+B): when true, recorded notes merge into the last
+/// suitable overlapping MIDI clip on the track instead of stacking a
+/// new clip; falls back to a new clip when nothing overlaps.
+///
+/// Returns the (new or merged) clip id on success, or an error string
+/// when no events fell in the recording window.
 #[tauri::command]
 pub fn commit_recording_to_midi_clip(
     state: State<AppState>,
@@ -148,6 +194,7 @@ pub fn commit_recording_to_midi_clip(
     start_sample: u64,
     end_sample: u64,
     quantize_ticks: Option<u64>,
+    blend: Option<bool>,
 ) -> Result<String, String> {
     use hardwave_midi::{MidiClip, MidiEvent, MidiRecorder};
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
@@ -209,6 +256,24 @@ pub fn commit_recording_to_midi_clip(
 
     let length_ticks = ((end_sample - start_sample) as f64 / samples_per_tick).ceil() as u64;
     let position_ticks = (start_sample as f64 / samples_per_tick).round() as u64;
+
+    // Blend-record: merge into an overlapping clip when one exists.
+    if blend.unwrap_or(false) {
+        let merged = {
+            let mut project = engine.project.lock();
+            let Some(track) = project.track_mut(&track_id) else {
+                return Err(format!("track {track_id} not found"));
+            };
+            merge_notes_into_overlapping_clip(track, position_ticks, length_ticks, &notes)
+        };
+        if let Some(clip_id) = merged {
+            drop(engine);
+            state.engine.lock().rebuild_graph();
+            return Ok(clip_id);
+        }
+        // No overlapping clip — fall through to the new-clip path.
+    }
+
     let clip_id = uuid::Uuid::new_v4().to_string();
     let mut clip = MidiClip::new(clip_id.clone(), "Recording".into(), length_ticks);
     clip.notes = notes;
@@ -253,5 +318,86 @@ pub fn clear_midi_capture(state: State<AppState>) {
     let opt = ring_arc.try_lock();
     if let Some(mut ring) = opt {
         ring.clear();
+    }
+}
+
+#[cfg(test)]
+mod blend_tests {
+    use super::merge_notes_into_overlapping_clip;
+    use hardwave_midi::{MidiClip, MidiNote};
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+    use hardwave_project::track::Track;
+
+    fn note(start_tick: u64) -> MidiNote {
+        MidiNote {
+            start_tick,
+            duration_ticks: 240,
+            pitch: 60,
+            velocity: 0.8,
+            channel: 0,
+            muted: false,
+        }
+    }
+
+    fn track_with_midi_clip(clip_pos: u64, clip_len: u64) -> Track {
+        let mut t = Track::new_midi("t1".into(), "MIDI".into());
+        let mut clip = MidiClip::new("existing".into(), "Take 1".into(), clip_len);
+        clip.notes.push(note(0));
+        t.clips.push(ClipPlacement {
+            content: ClipContent::Midi(MidiClipRef {
+                id: "existing".into(),
+                clip,
+            }),
+            track_id: "t1".into(),
+            position_ticks: clip_pos,
+            length_ticks: clip_len,
+            lane: 0,
+        });
+        t
+    }
+
+    #[test]
+    fn merges_into_overlapping_clip_with_tick_offset() {
+        // Existing clip at tick 1000, len 4000. Recording at 2000 → the
+        // merged note must land at clip-relative tick 1000 + its own 480.
+        let mut t = track_with_midi_clip(1000, 4000);
+        let merged = merge_notes_into_overlapping_clip(&mut t, 2000, 1000, &[note(480)]);
+        assert_eq!(merged.as_deref(), Some("existing"));
+        let ClipContent::Midi(ref m) = t.clips[0].content else {
+            panic!()
+        };
+        assert_eq!(m.clip.notes.len(), 2);
+        assert_eq!(
+            m.clip.notes[1].start_tick, 1480,
+            "offset by window - clip position"
+        );
+        assert_eq!(t.clips.len(), 1, "no new clip stacked");
+    }
+
+    #[test]
+    fn grows_clip_when_recording_runs_past_the_end() {
+        let mut t = track_with_midi_clip(0, 1000);
+        // Recording overlaps the tail and extends 2000 ticks beyond it.
+        let merged = merge_notes_into_overlapping_clip(&mut t, 500, 2500, &[note(0)]);
+        assert!(merged.is_some());
+        assert_eq!(
+            t.clips[0].length_ticks, 3000,
+            "placement grows to cover the take"
+        );
+        let ClipContent::Midi(ref m) = t.clips[0].content else {
+            panic!()
+        };
+        assert_eq!(m.clip.length_ticks, 3000, "clip length grows in lockstep");
+    }
+
+    #[test]
+    fn no_merge_when_nothing_overlaps_or_clip_starts_later() {
+        // Recording entirely AFTER the clip → no merge.
+        let mut t = track_with_midi_clip(0, 1000);
+        assert!(merge_notes_into_overlapping_clip(&mut t, 5000, 1000, &[note(0)]).is_none());
+        // Clip starts AFTER the recording window → no merge (would need
+        // negative note ticks).
+        let mut t2 = track_with_midi_clip(3000, 1000);
+        assert!(merge_notes_into_overlapping_clip(&mut t2, 2500, 400, &[note(0)]).is_none());
     }
 }

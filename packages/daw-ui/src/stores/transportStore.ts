@@ -296,11 +296,15 @@ export const useTransportStore = create<TransportState>((set, get) => ({
       const endSample = get().positionSamples
       if (armedTrack.kind === 'Midi') {
         try {
+          const { useRecordingPrefsStore } = await import('./recordingPrefsStore')
           await invoke('commit_recording_to_midi_clip', {
             trackId: armedTrack.id,
             startSample,
             endSample,
             quantizeTicks: null,
+            // Blend-record (Ctrl+B): merge into the overlapping clip
+            // instead of stacking a new one.
+            blend: useRecordingPrefsStore.getState().blendRecord,
           })
           await useTrackStore.getState().fetchTracks()
         } catch (err) {

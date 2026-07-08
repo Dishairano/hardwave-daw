@@ -150,6 +150,8 @@ export function HwTopbar({
   const togglePunch = useTransportStore(s => s.togglePunch)
   const waitForInput = useRecordingPrefsStore(s => s.waitForInput)
   const toggleWaitForInput = useRecordingPrefsStore(s => s.toggleWaitForInput)
+  const blendRecord = useRecordingPrefsStore(s => s.blendRecord)
+  const toggleBlendRecord = useRecordingPrefsStore(s => s.toggleBlendRecord)
   const typingKbdEnabled = useTypingKeyboardStore(s => s.enabled)
   const toggleTypingKbd = useTypingKeyboardStore(s => s.toggle)
   const precountBars = useMetronomeStore(s => s.precountBars)
@@ -500,13 +502,22 @@ export function HwTopbar({
 
       <span className="fl-toolsep" />
 
-      {/* Recording toggle cluster. Step-editing / blend-record /
-          multilink stay hidden until their backends exist (removed
-          2026-07-07, deep-research P1-6 — buttons that do nothing
-          read as broken). Wait-for-input RETURNED 2026-07-08: it is
-          now fully wired (engine parks Play/Record until the first
-          MIDI event — see wait_for_input_tests in engine.rs). */}
+      {/* Recording toggle cluster. Step-editing / multilink stay
+          hidden until their backends exist (removed 2026-07-07,
+          deep-research P1-6 — buttons that do nothing read as
+          broken). Wait-for-input + blend-record RETURNED 2026-07-08
+          fully wired (engine wait_for_input_tests + blend_tests). */}
       <div className="fl-action-row">
+        <button
+          onClick={() => toggleBlendRecord()}
+          className={`fl-mini-btn${blendRecord ? ' on' : ''}`}
+          title="Blend / overdub record (Ctrl+B) — new takes merge into the existing clip"
+        >
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
+            <circle cx="5" cy="6" r="3"/>
+            <circle cx="8" cy="6" r="3"/>
+          </svg>
+        </button>
         <button
           onClick={() => toggleWaitForInput()}
           className={`fl-mini-btn${waitForInput ? ' on' : ''}`}
