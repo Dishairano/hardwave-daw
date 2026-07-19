@@ -1951,6 +1951,8 @@ dependencies = [
  "hardwave-engine",
  "hardwave-midi",
  "hardwave-plugin-host",
+ "hardwave-project",
+ "hound",
  "log",
  "raw-window-handle",
  "serde",

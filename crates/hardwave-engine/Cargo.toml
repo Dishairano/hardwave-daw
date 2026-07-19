@@ -34,3 +34,7 @@ raw-window-handle.workspace = true
 
 [dev-dependencies]
 hound.workspace = true
+# Needed by functional_smoke's mock `HostedPlugin` — the trait's `open_editor`
+# names `raw_window_handle::RawWindowHandle`, a transitive dep not otherwise
+# nameable from the integration-test crate.
+raw-window-handle.workspace = true

@@ -7,17 +7,15 @@
 //! features" — code paths that compile and have unit tests but never
 //! get wired into the real audio graph.
 //!
-//! ## Status legend (as of 2026-05-04 audit)
+//! ## Status (re-verified 2026-07-19)
 //!
-//! * **PASS-required** — should always be green; a regression here
-//!   means we broke something that used to work.
-//! * **KILLER-watch** — currently failing because the underlying
-//!   feature is vapor (types and tests exist, no engine wiring). When
-//!   one of these flips green, the matching roadmap entry can be
-//!   moved from VAPOR / PARTIAL to WORKING.
+//! Every test here is PASS-required — a regression means we broke
+//! something that demonstrably works. There are no `#[ignore]`d tests
+//! left: the two former KILLER-watch panics (track FX inserts, and
+//! automation clips/LFO) were re-verified against the engine, found to
+//! be fully wired, and rewritten as real end-to-end coverage.
 //!
-//! The CI workflow runs these in two jobs: `smoke-required` blocks
-//! merges, `smoke-killer-watch` reports without blocking. See
+//! The whole file runs as one blocking job — see
 //! `.github/workflows/functional-smoke.yml`.
 
 use hardwave_engine::DawEngine;
@@ -316,12 +314,13 @@ fn two_tracks_mix_louder_than_one() {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// KILLER-watch tests — these CURRENTLY FAIL because the underlying
-// feature is vapor. When a fix lands, the test flips green and the
-// matching killer is genuinely resolved.
+// Former KILLER-watch tests — RESOLVED 2026-07-19.
 //
-// Marked `#[ignore]` so `cargo test` stays green by default; CI runs
-// them via `cargo test -- --ignored` in a separate non-blocking job.
+// Both used to be `#[ignore]`d panics asserting their features were
+// vapor. Re-verification showed the features were in fact fully wired
+// (the audit notes they were written against had gone stale), so the
+// panics were replaced with real end-to-end coverage and un-ignored.
+// They now run in the default `cargo test` pass like any other test.
 // ───────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -389,37 +388,164 @@ fn midi_clip_produces_sound() {
 }
 
 #[test]
-#[ignore = "killer-watch: track FX inserts (PluginSlot) are not processed by TrackNode; see audit-C"]
 fn killer_track_insert_modifies_audio() {
-    // KILLER-watch.
+    // Was a KILLER-watch panic ("TrackNode does not process track.inserts").
+    // FLIPPED GREEN 2026-07-19: the insert chain is fully wired. This now
+    // proves it end-to-end — attach an FX insert (a hard-clip mock) to a
+    // track and assert the offline render differs from the dry render.
     //
-    // Place a sine clip on a track, add a track-insert that should change the
-    // signal (gain, EQ, anything), render, and assert the output differs from
-    // a reference render without the insert. Today: TrackNode never iterates
-    // a track's `inserts` / `plugin_slots` — the FX chain is metadata only.
-    //
-    // This test deliberately does NOT depend on any specific native plugin —
-    // it only requires that *something* a plugin slot can express actually
-    // changes the audio. If you wire a no-op pass-through and the test still
-    // fails, the assertion can be loosened, but the wiring needs to land first.
+    // Uses `render_offline_with(.., Some(factory), ..)`, the same offline
+    // hydration path the export command drives via `build_offline_insert_factory`.
+    use hardwave_midi::MidiEvent;
+    use hardwave_plugin_host::types::{
+        HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    };
+    use hardwave_project::track::PluginSlot;
+
+    /// A hard clipper at ±`ceiling` — an unmistakable, audible effect that
+    /// reshapes the waveform and caps the peak. Mirrors the I/O contract
+    /// `InsertChain::process` expects (inputs[0]=L, inputs[1]=R; write the
+    /// processed block into outputs[0]/[1]).
+    struct HardClip {
+        desc: PluginDescriptor,
+        ceiling: f32,
+    }
+    impl HostedPlugin for HardClip {
+        fn descriptor(&self) -> &PluginDescriptor {
+            &self.desc
+        }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            num_samples: usize,
+        ) {
+            for ch in 0..2 {
+                let inp: &[f32] = inputs.get(ch).copied().unwrap_or(&[]);
+                if let Some(out) = outputs.get_mut(ch) {
+                    out.clear();
+                    for i in 0..num_samples {
+                        let s = inp.get(i).copied().unwrap_or(0.0);
+                        out.push(s.clamp(-self.ceiling, self.ceiling));
+                    }
+                }
+            }
+        }
+        fn get_parameter_count(&self) -> u32 {
+            0
+        }
+        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _i: u32) -> f64 {
+            0.0
+        }
+        fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+    }
+
+    fn hardclip_desc() -> PluginDescriptor {
+        PluginDescriptor {
+            id: "test.hardclip".into(),
+            name: "HardClip".into(),
+            vendor: "t".into(),
+            version: "1".into(),
+            format: PluginFormat::Clap,
+            path: std::path::PathBuf::from("<native>"),
+            category: PluginCategory::Effect,
+            num_inputs: 2,
+            num_outputs: 2,
+            has_midi_input: false,
+            has_editor: false,
+        }
+    }
+
     let engine = DawEngine::new();
     let track_id =
         add_audio_track_with_sine(&engine, "FX", "smoke-sine-fx", SAMPLE_RATE, 1.0, 440.0, 0.5);
 
-    let baseline = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 4);
-    assert!(baseline.peak > 0.05, "baseline render is silent");
+    // Small local render helper: render a quarter-second and return peak.
+    let render_peak =
+        |factory: Option<&dyn Fn(&str) -> Option<Box<dyn HostedPlugin>>>| -> f32 {
+            let mut peak = 0.0f32;
+            engine
+                .render_offline_with(
+                    SAMPLE_RATE,
+                    SAMPLE_RATE as u64 / 4,
+                    0,
+                    factory,
+                    |_| {},
+                    |block| {
+                        for &s in block {
+                            peak = peak.max(s.abs());
+                        }
+                        true
+                    },
+                )
+                .unwrap();
+            peak
+        };
 
-    // Today there is no public API to attach a track insert from outside the
-    // crate (PluginSlot construction depends on plugin-host internals not
-    // surfaced for tests). Even if we could attach one, TrackNode never
-    // iterates `track.inserts` per audit-C — so the audio would be unchanged.
-    // When the wiring lands, replace this body with: attach a known plugin,
-    // render, and assert `peak` or `rms` differs from `baseline` here.
-    let _baseline = baseline;
-    let _track_id = track_id;
-    panic!(
-        "killer-watch: no public Track API exposes FX insert wiring for end-to-end testing \
-         (see audit-C-p5p6.md § FX Insert Slots — TrackNode does not process track.inserts)"
+    // Dry render (no factory → insert skipped): the raw 0.5 sine, attenuated
+    // ~0.707 by equal-power pan-center → ~0.354 at the master.
+    let dry = render_peak(None);
+    assert!(dry > 0.3, "dry render should be the full sine, got peak={dry}");
+
+    // Attach the hard-clip insert, then render with a factory that builds it.
+    {
+        let mut project = engine.project.lock();
+        if let Some(t) = project.track_mut(&track_id) {
+            t.inserts.push(PluginSlot {
+                id: "slot-clip".into(),
+                plugin_id: "test.hardclip".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 1.0,
+            });
+        }
+    }
+    let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
+        if id == "test.hardclip" {
+            Some(Box::new(HardClip {
+                desc: hardclip_desc(),
+                ceiling: 0.25,
+            }))
+        } else {
+            None
+        }
+    };
+    let wet = render_peak(Some(&factory));
+    // Insert sits pre-fader, so the ±0.25 clip ceiling is also pan-attenuated
+    // ~0.707 → ~0.177 at the master.
+    assert!(
+        wet > 0.15 && wet < 0.21,
+        "hard-clip insert should cap the peak near its pan-scaled ±0.25 ceiling, got peak={wet}"
+    );
+    assert!(
+        wet < dry - 0.1,
+        "track FX insert must change the audio (wet {wet} vs dry {dry})"
     );
 }
 
@@ -698,27 +824,223 @@ fn automation_lane_silences_track_via_volume() {
 }
 
 #[test]
-#[ignore = "killer-watch: automation_clip.rs + automation_recording.rs + lfo.rs are still zero-caller (~1400 LOC)"]
 fn killer_automation_clips_and_lfo() {
-    // KILLER-watch — SCOPE NARROWED 2026-05-13.
+    // Was a KILLER-watch panic ("automation CLIPS + LFO have zero engine
+    // callers"). FLIPPED GREEN 2026-07-19: both are wired end-to-end.
+    // This proves it audibly:
+    //   (A) an LFO baked onto a TrackVolume lane produces amplitude tremolo,
+    //   (B) an AutomationClip pinning TrackVolume to 0 silences the track.
     //
-    // automation.rs ITSELF is now wired: TrackNode.process walks
-    // `track.automation_lanes` every block (track_node.rs:526) and
-    // overrides volume / pan / mute / plug-in param values.
-    // `automation_lane_silences_track_via_volume` (PASS-required, above)
-    // is the regression gate.
+    // (automation_recording.rs — touch/write/latch — remains the one genuinely
+    // unwired module; it's a live param-capture primitive, covered separately.)
+    use hardwave_project::automation::{AutomationLane, AutomationTarget, CurveMode};
+    use hardwave_project::automation_clip::AutomationClip;
+    use hardwave_project::lfo::{bake_to_points, LfoRate, LfoShape};
+
+    // ── (A) LFO → TrackVolume tremolo ──────────────────────────────────
+    let engine = DawEngine::new();
+    let track_id =
+        add_audio_track_with_sine(&engine, "Trem", "smoke-sine-lfo", SAMPLE_RATE, 1.0, 440.0, 0.5);
+    // Bake a full-depth sine LFO. The tick span (40k) comfortably covers a
+    // one-second render at any sane tempo; depth 1.0 / center 0.5 swings the
+    // volume value across the whole 0..1 range → near-silence to full.
+    let points = bake_to_points(
+        LfoShape::Sine,
+        LfoRate::Hz(8.0),
+        120.0, // bpm
+        960,   // ppq
+        0,     // start_tick
+        40_000, // length_ticks
+        1.0,   // depth
+        0.5,   // center
+        0.0,   // phase_offset
+        64,    // samples_per_cycle
+    );
+    assert!(
+        points.len() > 8,
+        "LFO should bake many control points, got {}",
+        points.len()
+    );
+    {
+        let mut project = engine.project.lock();
+        if let Some(t) = project.track_mut(&track_id) {
+            t.automation_lanes.push(AutomationLane {
+                id: "lane-trem".into(),
+                target: AutomationTarget::TrackVolume,
+                points,
+                visible: true,
+            });
+        }
+    }
+    // Render the master, tracking a per-window peak envelope (256 interleaved
+    // samples = 128 frames/window) to detect amplitude modulation.
+    let win = 256usize;
+    let mut env: Vec<f32> = Vec::new();
+    let (mut cur, mut count) = (0.0f32, 0usize);
+    engine
+        .render_offline(SAMPLE_RATE, SAMPLE_RATE as u64, |block| {
+            for &s in block {
+                cur = cur.max(s.abs());
+                count += 1;
+                if count >= win {
+                    env.push(cur);
+                    cur = 0.0;
+                    count = 0;
+                }
+            }
+            true
+        })
+        .unwrap();
+    if count > 0 {
+        env.push(cur);
+    }
+    let max_env = env.iter().copied().fold(0.0f32, f32::max);
+    let min_env = env.iter().copied().fold(f32::INFINITY, f32::min);
+    assert!(
+        max_env > 0.3,
+        "LFO tremolo crest should reach near full volume, got {max_env}"
+    );
+    assert!(
+        min_env < 0.1,
+        "LFO tremolo trough should dip toward silence, got {min_env}"
+    );
+    assert!(
+        max_env > min_env * 3.0,
+        "LFO must modulate amplitude (crest {max_env} vs trough {min_env})"
+    );
+
+    // ── (B) AutomationClip pins TrackVolume to 0 → silence ─────────────
+    let engine2 = DawEngine::new();
+    let track2 = add_audio_track_with_sine(
+        &engine2,
+        "ClipAuto",
+        "smoke-sine-clip",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
+    // Baseline: audible before any clip.
+    let mut base_peak = 0.0f32;
+    engine2
+        .render_offline(SAMPLE_RATE, SAMPLE_RATE as u64 / 4, |block| {
+            for &s in block {
+                base_peak = base_peak.max(s.abs());
+            }
+            true
+        })
+        .unwrap();
+    assert!(base_peak > 0.3, "baseline clip-auto render is silent");
+
+    // A clip whose single point pins volume to 0.0 (-60 dB) across a window
+    // large enough to blanket the whole render → the track goes silent. This
+    // exercises the clip-evaluation branch in TrackNode.process.
+    let mut clip = AutomationClip::new("auto-clip", AutomationTarget::TrackVolume, 0, 10_000_000);
+    clip.insert_point(0, 0.0, CurveMode::Linear);
+    {
+        let mut project = engine2.project.lock();
+        if let Some(t) = project.track_mut(&track2) {
+            t.automation_clips.push(clip);
+        }
+    }
+    let mut gated_peak = 0.0f32;
+    engine2
+        .render_offline(SAMPLE_RATE, SAMPLE_RATE as u64 / 4, |block| {
+            for &s in block {
+                gated_peak = gated_peak.max(s.abs());
+            }
+            true
+        })
+        .unwrap();
+    assert!(
+        gated_peak < 0.01,
+        "AutomationClip pinning TrackVolume to 0 should silence the track, got peak={gated_peak}"
+    );
+}
+
+#[test]
+fn automation_recording_round_trip_is_audible() {
+    // Proves the AutomationRecorder data path end-to-end: a simulated live
+    // knob sweep captured during "playback" bakes into automation points
+    // that, once attached to a track's volume lane, audibly shape the render.
     //
-    // What remains vapor:
-    //   - automation_clip.rs (per-clip automation tracks)
-    //   - automation_recording.rs (touch / write / latch record modes)
-    //   - lfo.rs (six built-in LFO shapes that nothing instantiates)
-    //
-    // When clip-based automation lands, replace this body with: create
-    // an automation CLIP (not lane), render, assert. Today: no public
-    // API to attach a clip-based automation track.
-    let _engine = DawEngine::new();
-    panic!(
-        "killer-watch: automation lanes work; automation CLIPS + LFO + \
-         touch/write/latch recording have zero engine callers"
+    // This is the offline-verifiable core of the touch/write/latch feature —
+    // the one automation module that had zero in-context coverage. (The live
+    // UI knob-touch feed that calls push_sample() during real playback is the
+    // remaining app-side integration, verified in-app.)
+    use hardwave_project::automation::{AutomationLane, AutomationTarget, CurveMode};
+    use hardwave_project::automation_recording::{AutomationRecorder, WriteMode};
+
+    // ── Simulate a Write-mode recording pass: a downward volume sweep ──
+    let mut rec = AutomationRecorder::default();
+    rec.set_mode(WriteMode::Write);
+    rec.on_transport_play();
+    assert!(rec.is_recording(), "Write mode should record once transport plays");
+    // 200 samples ramping value 1.0 → 0.0 across ticks 0..2000 (a fade-out
+    // the user "drew" by pulling the volume fader down while playing).
+    for i in 0..=200u64 {
+        let tick = i * 10;
+        let value = 1.0 - (i as f64 / 200.0);
+        rec.push_sample(tick, value);
+    }
+    rec.on_transport_stop();
+    assert!(!rec.is_recording(), "transport stop must halt recording");
+    assert_eq!(rec.sample_count(), 201);
+    // Thin the dense capture down to inflection points, then bake.
+    rec.thin(0.02);
+    assert!(rec.sample_count() < 201, "thin() should compress the capture");
+    let points = rec.into_points(CurveMode::Linear);
+    assert!(points.len() >= 2, "need at least the endpoints");
+    assert_eq!(points.first().unwrap().tick, 0);
+
+    // ── Attach the recorded lane and prove it's audible ──
+    let engine = DawEngine::new();
+    let track_id = add_audio_track_with_sine(
+        &engine,
+        "Rec",
+        "smoke-sine-rec",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
+    {
+        let mut project = engine.project.lock();
+        if let Some(t) = project.track_mut(&track_id) {
+            t.automation_lanes.push(AutomationLane {
+                id: "lane-rec".into(),
+                target: AutomationTarget::TrackVolume,
+                points,
+                visible: true,
+            });
+        }
+    }
+    // The recorded fade means the head is loud and the tail is near-silent.
+    let total = SAMPLE_RATE as u64;
+    let (mut head_sq, mut head_n) = (0.0f64, 0u64);
+    let (mut tail_sq, mut tail_n) = (0.0f64, 0u64);
+    let mut idx = 0u64;
+    engine
+        .render_offline(SAMPLE_RATE, total, |block| {
+            for &s in block {
+                let frame = idx / 2;
+                if frame < total / 8 {
+                    head_sq += (s as f64) * (s as f64);
+                    head_n += 1;
+                } else if frame >= total * 7 / 8 {
+                    tail_sq += (s as f64) * (s as f64);
+                    tail_n += 1;
+                }
+                idx += 1;
+            }
+            true
+        })
+        .unwrap();
+    let head_rms = (head_sq / head_n.max(1) as f64).sqrt();
+    let tail_rms = (tail_sq / tail_n.max(1) as f64).sqrt();
+    assert!(
+        head_rms > tail_rms * 4.0,
+        "recorded volume fade should make the head much louder than the tail \
+         (head {head_rms:.4} vs tail {tail_rms:.4})"
     );
 }

@@ -11,3 +11,9 @@ hardwave-midi = { path = "../hardwave-midi" }
 raw-window-handle.workspace = true
 serde.workspace = true
 log.workspace = true
+
+[dev-dependencies]
+# Render-to-WAV proof test needs project types (PluginSlot, clips) to build a
+# project with an insert, and hound to write the rendered master to disk.
+hardwave-project = { path = "../hardwave-project" }
+hound.workspace = true
