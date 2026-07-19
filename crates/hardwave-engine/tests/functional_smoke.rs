@@ -1044,3 +1044,151 @@ fn automation_recording_round_trip_is_audible() {
          (head {head_rms:.4} vs tail {tail_rms:.4})"
     );
 }
+
+#[test]
+fn sidechain_bus_reaches_inserts_in_offline_render() {
+    // Exports must sound like playback. A plug-in slot with a
+    // `sidechain_source` gets that track's output on input ports 2/3, and
+    // `hydrate_offline_inserts` used to hard-code `sidechain_active: false`
+    // ("export ducking is a follow-up"), so a mix that ducked correctly while
+    // playing bounced with no ducking at all.
+    //
+    // Setup: a 100 Hz key clip covering only the first half of the render, and
+    // a steady 1 kHz "bass" carrying a gate insert keyed to it. Measuring the
+    // 1 kHz bin per half isolates the bass from the key's own audio (both sum
+    // into the master, and the key must stay audible because the sidechain is
+    // taken post-fader).
+    use hardwave_midi::MidiEvent;
+    use hardwave_plugin_host::types::{
+        HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    };
+    use hardwave_project::track::PluginSlot;
+
+    /// Attenuates hard whenever the sidechain bus is live. Falls through to a
+    /// clean copy when it receives only 2 channels — which is exactly what a
+    /// broken sidechain looks like, so the assertion below catches it.
+    struct Ducker;
+    impl HostedPlugin for Ducker {
+        fn descriptor(&self) -> &PluginDescriptor {
+            // Not consulted by the chain once hosted.
+            unreachable!("descriptor not needed for this test double")
+        }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            num_samples: usize,
+        ) {
+            let keyed = inputs.len() >= 4
+                && inputs[2]
+                    .iter()
+                    .take(num_samples)
+                    .any(|s| s.abs() > 0.05);
+            let g = if keyed { 0.1 } else { 1.0 };
+            for ch in 0..2 {
+                let inp: &[f32] = inputs.get(ch).copied().unwrap_or(&[]);
+                if let Some(out) = outputs.get_mut(ch) {
+                    out.clear();
+                    for i in 0..num_samples {
+                        out.push(inp.get(i).copied().unwrap_or(0.0) * g);
+                    }
+                }
+            }
+        }
+        fn get_parameter_count(&self) -> u32 {
+            0
+        }
+        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _i: u32) -> f64 {
+            0.0
+        }
+        fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+    }
+
+    let _ = PluginCategory::Effect; // keep the import honest across refactors
+    let _ = PluginFormat::Clap;
+
+    let engine = DawEngine::new();
+    // Key: 100 Hz, first half of the render only.
+    let key_id =
+        add_audio_track_with_sine(&engine, "Key", "sc-key", SAMPLE_RATE, 0.5, 100.0, 0.8);
+    // Bass: steady 1 kHz for the whole render.
+    let bass_id =
+        add_audio_track_with_sine(&engine, "Bass", "sc-bass", SAMPLE_RATE, 1.0, 1000.0, 0.5);
+    {
+        let mut project = engine.project.lock();
+        if let Some(t) = project.track_mut(&bass_id) {
+            t.inserts.push(PluginSlot {
+                id: "slot-duck".into(),
+                plugin_id: "test.ducker".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: Some(key_id.clone()),
+                wet: 1.0,
+            });
+        }
+    }
+
+    let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
+        if id == "test.ducker" {
+            Some(Box::new(Ducker))
+        } else {
+            None
+        }
+    };
+    let total = SAMPLE_RATE as u64;
+    let mut out: Vec<f32> = Vec::with_capacity(total as usize * 2);
+    engine
+        .render_offline_with(SAMPLE_RATE, total, 0, Some(&factory), |_| {}, |block| {
+            out.extend_from_slice(block);
+            true
+        })
+        .unwrap();
+
+    // Goertzel on the 1 kHz bass bin, per half.
+    let bin = |mono: &[f32]| -> f64 {
+        let w = std::f64::consts::TAU * 1000.0 / SAMPLE_RATE as f64;
+        let coeff = 2.0 * w.cos();
+        let (mut s1, mut s2) = (0.0f64, 0.0f64);
+        for &x in mono {
+            let s0 = x as f64 + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        ((s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0)).sqrt() / mono.len().max(1) as f64
+    };
+    let left: Vec<f32> = out.chunks(2).map(|f| f[0]).collect();
+    let half = left.len() / 2;
+    let ducked = bin(&left[..half]);
+    let open = bin(&left[half..]);
+    eprintln!("sidechain offline: 1kHz ducked-half={ducked:.5} open-half={open:.5}");
+    assert!(
+        open > ducked * 3.0,
+        "offline render must carry the sidechain bus: the half where the key \
+         plays should be ducked (ducked={ducked:.5}, open={open:.5})"
+    );
+}

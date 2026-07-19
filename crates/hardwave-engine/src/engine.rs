@@ -18,6 +18,11 @@ use hardwave_project::Project;
 /// factory + scanner.
 pub type OfflineInsertFactory<'a> =
     &'a dyn Fn(&str) -> Option<Box<dyn hardwave_plugin_host::types::HostedPlugin>>;
+
+/// Separator that marks an audio-pool id as a derived (baked stretch /
+/// pitch) variant rather than a real imported source. Real source ids are
+/// file paths or import hashes and never contain it.
+const STRETCH_KEY_MARKER: &str = "#hw-stretch:";
 use rtrb::RingBuffer;
 
 use std::collections::HashMap;
@@ -1157,6 +1162,60 @@ impl EngineCallback {
         }
     }
 
+    /// Pool id for a baked stretch / pitch-shift variant of a source. The
+    /// original id stays untouched in the project, so `rehydrate_audio_pool`
+    /// (which walks clips' `source_path`) never sees these derived keys.
+    fn stretch_cache_key(source_id: &str, stretch: f64, semitones: f64) -> String {
+        format!("{source_id}{STRETCH_KEY_MARKER}{stretch:.6}:{semitones:.6}")
+    }
+
+    /// Pool id of a pitch-preserving stretched / pitch-shifted copy of
+    /// `source_id`, baking it on first use and caching it for reuse.
+    ///
+    /// This is what decouples the two clip params: `apply_stretch` changes
+    /// duration without touching pitch, and shifts pitch without touching
+    /// duration — where the plain `source_step` resample path can only
+    /// change both together (varispeed). Baking happens here, during
+    /// `rebuild_graph`, which is off the audio thread; playback then reads
+    /// the result at unity step.
+    ///
+    /// Returns `None` if the source isn't loaded (caller falls back to the
+    /// resample path) or the bake produced nothing.
+    fn stretched_source(&self, source_id: &str, stretch: f64, semitones: f64) -> Option<String> {
+        let key = Self::stretch_cache_key(source_id, stretch, semitones);
+        if self.audio_pool.contains(&key) {
+            return Some(key);
+        }
+        let src = self.audio_pool.get(source_id)?;
+        let req = hardwave_dsp::stretch_apply::StretchRequest {
+            // Phase vocoder: the codebase's own "higher quality for tonal
+            // sources" choice, and this bake is one-off + cached so the
+            // extra cost over OLA is paid once per (source, ratio, pitch).
+            algorithm: hardwave_dsp::stretch_apply::StretchAlgorithm::PhaseVocoder,
+            stretch_ratio: stretch as f32,
+            pitch_semitones: semitones as f32,
+            sample_rate: src.sample_rate as f32,
+        };
+        let channels: Vec<Vec<f32>> = src
+            .channels
+            .iter()
+            .map(|ch| hardwave_dsp::stretch_apply::apply_stretch(ch, req))
+            .collect();
+        let num_frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
+        if num_frames == 0 {
+            return None;
+        }
+        self.audio_pool.insert(
+            key.clone(),
+            AudioBuffer {
+                channels,
+                sample_rate: src.sample_rate,
+                num_frames,
+            },
+        );
+        Some(key)
+    }
+
     /// Populate every track's insert chain from the project's saved
     /// `inserts` metadata, for offline render. The live path builds chains
     /// via the `InsertCommand` queue / `hydrate_chains_from_project`, but a
@@ -1169,7 +1228,7 @@ impl EngineCallback {
         let sr = self.sample_rate as f64;
         // Snapshot the insert plan under the project lock, then instantiate
         // outside it (plug-in loads can be slow and must not hold the lock).
-        // (track_id, slot_id, plugin_id, enabled, wet, saved_state)
+        // (track_id, slot_id, plugin_id, enabled, wet, sidechained, saved_state)
         let plan = {
             let project = self.project.lock();
             let mut acc = Vec::new();
@@ -1182,13 +1241,14 @@ impl EngineCallback {
                         s.plugin_id.clone(),
                         s.enabled,
                         s.wet,
+                        s.sidechain_source.is_some(),
                         state,
                     ));
                 }
             }
             acc
         };
-        for (track_id, slot_id, plugin_id, enabled, wet, state) in plan {
+        for (track_id, slot_id, plugin_id, enabled, wet, sidechained, state) in plan {
             let Some(node_id) = self.track_id_to_node.get(&track_id).copied() else {
                 continue;
             };
@@ -1204,9 +1264,14 @@ impl EngineCallback {
                     plugin,
                     enabled,
                     wet,
-                    // Offline render does not yet wire the sidechain bus
-                    // (export ducking is a follow-up); live playback does.
-                    sidechain_active: false,
+                    // Honour the slot's sidechain routing offline too. The
+                    // graph edges that feed a source track into this node's
+                    // input ports 2/3 are built by `rebuild_graph` from the
+                    // same project metadata, so the bus is already present in
+                    // an offline graph — only this per-slot flag was missing,
+                    // which silently dropped ducking from every export while
+                    // playback ducked correctly.
+                    sidechain_active: sidechained,
                 };
                 node.push_offline_slot(slot, sr, buffer_size);
             }
@@ -1542,10 +1607,6 @@ impl EngineCallback {
                             tempo_map.tick_to_samples(audio_clip.fade_in_ticks, sample_rate);
                         let fade_out_samples =
                             tempo_map.tick_to_samples(audio_clip.fade_out_ticks, sample_rate);
-                        // source_step combines pitch and stretch via resampling.
-                        // pitch +12 semitones = 2x source step; stretch_ratio 2.0 = half step.
-                        // The track-level pitch/fine-tune offset is folded in as an
-                        // additional resample factor.
                         let clip_pitch_factor = 2.0_f64.powf(audio_clip.pitch_semitones / 12.0);
                         let pitch_factor = clip_pitch_factor * track_pitch_factor;
                         let stretch = if audio_clip.stretch_ratio <= 0.01 {
@@ -1553,7 +1614,44 @@ impl EngineCallback {
                         } else {
                             audio_clip.stretch_ratio
                         };
-                        let source_step = pitch_factor / stretch;
+                        // Pitch-preserving stretch. A plain `source_step` resample
+                        // can only change duration and pitch *together* (varispeed:
+                        // stretch_ratio 2.0 also dropped an octave), so when a clip
+                        // asks for either, bake a stretched / pitch-shifted copy of
+                        // the source once and play it back at unity step. That makes
+                        // stretch_ratio change duration only and pitch_semitones
+                        // change pitch only, as their names promise.
+                        //
+                        // Warped clips keep the resample path — warp markers define
+                        // their own piecewise source map and take precedence below.
+                        // The track-level pitch/fine-tune offset stays a resample, so
+                        // it remains a varispeed control.
+                        let needs_bake = audio_clip.warp_markers.is_empty()
+                            && ((stretch - 1.0).abs() > 1e-4
+                                || audio_clip.pitch_semitones.abs() > 1e-4);
+                        let baked = if needs_bake {
+                            self.stretched_source(
+                                &audio_clip.source_path,
+                                stretch,
+                                audio_clip.pitch_semitones,
+                            )
+                        } else {
+                            None
+                        };
+                        // Baking stretches the whole source, so an in-source start
+                        // offset scales with the same ratio.
+                        let (region_source_id, region_source_offset, source_step) = match baked {
+                            Some(key) => (
+                                key,
+                                (audio_clip.source_start as f64 * stretch) as u64,
+                                track_pitch_factor,
+                            ),
+                            None => (
+                                audio_clip.source_path.clone(),
+                                audio_clip.source_start,
+                                pitch_factor / stretch,
+                            ),
+                        };
                         // Warp markers → precomputed segments. Marker
                         // ticks are clip-relative; going through the
                         // tempo map (absolute tick → samples, minus the
@@ -1580,10 +1678,10 @@ impl EngineCallback {
                             )
                         };
                         Some(ClipRegion {
-                            source_id: audio_clip.source_path.clone(),
+                            source_id: region_source_id,
                             timeline_start,
                             timeline_end,
-                            source_offset: audio_clip.source_start,
+                            source_offset: region_source_offset,
                             gain,
                             muted: audio_clip.muted,
                             fade_in_samples,

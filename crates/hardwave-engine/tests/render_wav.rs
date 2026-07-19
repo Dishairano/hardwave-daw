@@ -30,12 +30,31 @@ fn write_stereo_wav(path: &str, sample_rate: u32, interleaved: &[f32]) {
     w.finalize().expect("finalize");
 }
 
-/// Diagnostic: render a 440 Hz clip at stretch_ratio=1.0 vs 2.0 to show the
-/// current time-stretch is varispeed (2× stretch drops the pitch an octave to
-/// 220 Hz). Writes both WAVs when HW_STRETCH_WAV_DIR is set. Not an assertion
-/// gate — it documents the coupling bug audibly.
+/// Single-bin Goertzel magnitude at `freq` — enough to tell whether a
+/// rendered tone still sits at its original pitch.
+fn goertzel_mag(mono: &[f32], sample_rate: u32, freq: f32) -> f64 {
+    let w = std::f64::consts::TAU * freq as f64 / sample_rate as f64;
+    let coeff = 2.0 * w.cos();
+    let (mut s1, mut s2) = (0.0f64, 0.0f64);
+    for &x in mono {
+        let s0 = x as f64 + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    (s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0).sqrt()
+}
+
+/// Regression gate for pitch-preserving time-stretch.
+///
+/// Before the bake path landed, `source_step = pitch_factor / stretch` meant a
+/// clip at `stretch_ratio = 2.0` played back an octave DOWN (measured 439.5 Hz
+/// → 219.7 Hz). Now the stretch is baked with `apply_stretch`, so duration and
+/// pitch are independent: a 440 Hz clip stays at 440 Hz however it's stretched.
+///
+/// Writes the rendered WAVs when HW_STRETCH_WAV_DIR is set, so the artefact
+/// quality can be judged by ear as well as by this assertion.
 #[test]
-fn render_stretch_diagnostic() {
+fn stretch_preserves_pitch() {
     let sample_rate = 48_000_u32;
     let render_clip = |stretch: f64| -> Vec<f32> {
         let engine = DawEngine::new();
@@ -85,14 +104,54 @@ fn render_stretch_diagnostic() {
 
     let normal = render_clip(1.0);
     let stretched = render_clip(2.0);
+    let half = render_clip(0.5);
     if let Ok(dir) = std::env::var("HW_STRETCH_WAV_DIR") {
         write_stereo_wav(&format!("{dir}/daw_stretch_normal.wav"), sample_rate, &normal);
         write_stereo_wav(&format!("{dir}/daw_stretch_2x.wav"), sample_rate, &stretched);
-        eprintln!("wrote {dir}/daw_stretch_normal.wav + daw_stretch_2x.wav");
+        write_stereo_wav(&format!("{dir}/daw_stretch_half.wav"), sample_rate, &half);
+        eprintln!("wrote {dir}/daw_stretch_{{normal,2x,half}}.wav");
     }
-    // Both audible.
-    assert!(normal.iter().fold(0.0f32, |m, &s| m.max(s.abs())) > 0.05);
-    assert!(stretched.iter().fold(0.0f32, |m, &s| m.max(s.abs())) > 0.05);
+
+    // Skip the clip onset, where the phase vocoder's first frames settle.
+    let mono = |v: &[f32]| -> Vec<f32> {
+        v.chunks(2)
+            .skip(sample_rate as usize / 4)
+            .map(|f| f[0])
+            .collect()
+    };
+    for (label, buf, ratio) in [
+        ("normal", &normal, 1.0f64),
+        ("2x", &stretched, 2.0),
+        ("half", &half, 0.5),
+    ] {
+        let m = mono(buf);
+        // Level is checked over the WHOLE render, not the pitch-analysis
+        // window: the normalisation spikes this guards against live at the
+        // head and tail, exactly where `mono()` skips.
+        let peak = buf.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+        assert!(peak > 0.05, "{label} render is silent (peak {peak})");
+        // Stretching must not change the level. The source is a 0.5 sine
+        // (~0.354 at the master after pan-centre), so anything near or past
+        // full scale means the stretch normalisation blew up.
+        assert!(
+            peak < 0.6,
+            "{label} render level exploded (peak {peak}) — stretch normalisation regression"
+        );
+        assert!(
+            buf.iter().all(|s| s.is_finite()),
+            "{label} render contains NaN/inf"
+        );
+        let f440 = goertzel_mag(&m, sample_rate, 440.0);
+        let f220 = goertzel_mag(&m, sample_rate, 220.0);
+        let f880 = goertzel_mag(&m, sample_rate, 880.0);
+        eprintln!("stretch {ratio}: 440Hz={f440:.0} 220Hz={f220:.0} 880Hz={f880:.0}");
+        // The fundamental must stay put: stretching changes duration, not pitch.
+        assert!(
+            f440 > f220 * 4.0 && f440 > f880 * 4.0,
+            "stretch_ratio={ratio} must preserve the 440 Hz fundamental \
+             (440={f440:.0}, 220={f220:.0}, 880={f880:.0}) — varispeed regression?"
+        );
+    }
 }
 
 /// Build a short, musical two-track project and render it to a stereo WAV.
