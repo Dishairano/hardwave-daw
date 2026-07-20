@@ -23,6 +23,32 @@ pub type OfflineInsertFactory<'a> =
 /// pitch) variant rather than a real imported source. Real source ids are
 /// file paths or import hashes and never contain it.
 const STRETCH_KEY_MARKER: &str = "#hw-stretch:";
+
+/// Pool id for a baked stretch / pitch-shift variant of a source. The
+/// original id stays untouched in the project, so `rehydrate_audio_pool`
+/// (which walks clips' `source_path`) never sees these derived keys.
+fn stretch_cache_key(source_id: &str, stretch: f64, semitones: f64) -> String {
+    format!("{source_id}{STRETCH_KEY_MARKER}{stretch:.6}:{semitones:.6}")
+}
+
+/// Does this clip want a pitch-preserving bake? Warped clips are excluded —
+/// warp markers define their own piecewise source map and take precedence.
+/// Returns the effective (stretch, semitones) when a bake applies.
+fn bake_params(audio_clip: &hardwave_project::clip::AudioClip) -> Option<(f64, f64)> {
+    if !audio_clip.warp_markers.is_empty() {
+        return None;
+    }
+    let stretch = if audio_clip.stretch_ratio <= 0.01 {
+        1.0
+    } else {
+        audio_clip.stretch_ratio
+    };
+    if (stretch - 1.0).abs() > 1e-4 || audio_clip.pitch_semitones.abs() > 1e-4 {
+        Some((stretch, audio_clip.pitch_semitones))
+    } else {
+        None
+    }
+}
 use rtrb::RingBuffer;
 
 use std::collections::HashMap;
@@ -430,7 +456,79 @@ impl DawEngine {
 
     /// Tell the audio thread to rebuild its graph from the current project state.
     pub fn rebuild_graph(&self) {
+        // Bake before signalling: the audio thread's rebuild only looks the
+        // result up, so anything not ready here plays varispeed until the
+        // next rebuild.
+        self.prebake_stretch_sources();
         let _ = self.command_tx.try_send(EngineCommand::RebuildGraph);
+    }
+
+    /// Bake the pitch-preserving stretch / pitch-shift variants the project's
+    /// clips need, into the audio pool, so the audio thread's `rebuild_graph`
+    /// only ever does a cache lookup.
+    ///
+    /// MUST stay off the audio thread — this runs an FFT over each whole
+    /// source and allocates the stretched result. Cheap on the common path:
+    /// clips at unity stretch/pitch are skipped, and anything already cached
+    /// is skipped. The expensive work happens outside the pool lock so the
+    /// audio thread's reads aren't blocked while a bake runs; only the final
+    /// insert takes the write lock.
+    pub fn prebake_stretch_sources(&self) {
+        use hardwave_project::clip::ClipContent;
+        // Snapshot what's needed under the project lock, compute outside it.
+        let needed: Vec<(String, f64, f64)> = {
+            let project = self.project.lock();
+            let mut acc: Vec<(String, f64, f64)> = Vec::new();
+            for track in &project.tracks {
+                for clip in &track.clips {
+                    if let ClipContent::Audio(audio_clip) = &clip.content {
+                        if let Some((stretch, semis)) = bake_params(audio_clip) {
+                            let entry = (audio_clip.source_path.clone(), stretch, semis);
+                            if !acc.contains(&entry) {
+                                acc.push(entry);
+                            }
+                        }
+                    }
+                }
+            }
+            acc
+        };
+
+        for (source_id, stretch, semitones) in needed {
+            let key = stretch_cache_key(&source_id, stretch, semitones);
+            if self.audio_pool.contains(&key) {
+                continue;
+            }
+            let Some(src) = self.audio_pool.get(&source_id) else {
+                continue;
+            };
+            let req = hardwave_dsp::stretch_apply::StretchRequest {
+                // Phase vocoder: the codebase's own "higher quality for tonal
+                // sources" choice. The cost is paid once per
+                // (source, ratio, pitch) and then cached.
+                algorithm: hardwave_dsp::stretch_apply::StretchAlgorithm::PhaseVocoder,
+                stretch_ratio: stretch as f32,
+                pitch_semitones: semitones as f32,
+                sample_rate: src.sample_rate as f32,
+            };
+            let channels: Vec<Vec<f32>> = src
+                .channels
+                .iter()
+                .map(|ch| hardwave_dsp::stretch_apply::apply_stretch(ch, req))
+                .collect();
+            let num_frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
+            if num_frames == 0 {
+                continue;
+            }
+            self.audio_pool.insert(
+                key,
+                AudioBuffer {
+                    channels,
+                    sample_rate: src.sample_rate,
+                    num_frames,
+                },
+            );
+        }
     }
 
     /// Load an audio file into the pool and return its source ID and info.
@@ -809,6 +907,12 @@ impl DawEngine {
             return Ok(());
         }
 
+        // Bake stretch variants before rendering. The offline callback's
+        // rebuild only looks them up, so without this an export would fall
+        // back to varispeed and not match playback. Safe here — an export
+        // runs on the caller's thread, not the audio callback.
+        self.prebake_stretch_sources();
+
         let mut project_snapshot = self.project.lock().clone();
         prepare(&mut project_snapshot);
         let initial_bpm = project_snapshot
@@ -1162,58 +1266,19 @@ impl EngineCallback {
         }
     }
 
-    /// Pool id for a baked stretch / pitch-shift variant of a source. The
-    /// original id stays untouched in the project, so `rehydrate_audio_pool`
-    /// (which walks clips' `source_path`) never sees these derived keys.
-    fn stretch_cache_key(source_id: &str, stretch: f64, semitones: f64) -> String {
-        format!("{source_id}{STRETCH_KEY_MARKER}{stretch:.6}:{semitones:.6}")
-    }
-
-    /// Pool id of a pitch-preserving stretched / pitch-shifted copy of
-    /// `source_id`, baking it on first use and caching it for reuse.
+    /// Pool id of an already-baked pitch-preserving variant of `source_id`,
+    /// or `None` if it hasn't been baked yet.
     ///
-    /// This is what decouples the two clip params: `apply_stretch` changes
-    /// duration without touching pitch, and shifts pitch without touching
-    /// duration — where the plain `source_step` resample path can only
-    /// change both together (varispeed). Baking happens here, during
-    /// `rebuild_graph`, which is off the audio thread; playback then reads
-    /// the result at unity step.
-    ///
-    /// Returns `None` if the source isn't loaded (caller falls back to the
-    /// resample path) or the bake produced nothing.
+    /// LOOKUP ONLY — deliberately never bakes. `rebuild_graph` runs on the
+    /// audio thread (see `AudioCallback::process`), and the bake is an FFT
+    /// over the whole source plus multi-megabyte allocations; doing it here
+    /// would stall the callback for as long as the file is big. Baking is
+    /// `DawEngine::prebake_stretch_sources`, driven from the UI thread before
+    /// the rebuild is signalled. A miss simply falls back to the varispeed
+    /// resample path for this rebuild, and the next one picks the bake up.
     fn stretched_source(&self, source_id: &str, stretch: f64, semitones: f64) -> Option<String> {
-        let key = Self::stretch_cache_key(source_id, stretch, semitones);
-        if self.audio_pool.contains(&key) {
-            return Some(key);
-        }
-        let src = self.audio_pool.get(source_id)?;
-        let req = hardwave_dsp::stretch_apply::StretchRequest {
-            // Phase vocoder: the codebase's own "higher quality for tonal
-            // sources" choice, and this bake is one-off + cached so the
-            // extra cost over OLA is paid once per (source, ratio, pitch).
-            algorithm: hardwave_dsp::stretch_apply::StretchAlgorithm::PhaseVocoder,
-            stretch_ratio: stretch as f32,
-            pitch_semitones: semitones as f32,
-            sample_rate: src.sample_rate as f32,
-        };
-        let channels: Vec<Vec<f32>> = src
-            .channels
-            .iter()
-            .map(|ch| hardwave_dsp::stretch_apply::apply_stretch(ch, req))
-            .collect();
-        let num_frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
-        if num_frames == 0 {
-            return None;
-        }
-        self.audio_pool.insert(
-            key.clone(),
-            AudioBuffer {
-                channels,
-                sample_rate: src.sample_rate,
-                num_frames,
-            },
-        );
-        Some(key)
+        let key = stretch_cache_key(source_id, stretch, semitones);
+        self.audio_pool.contains(&key).then_some(key)
     }
 
     /// Populate every track's insert chain from the project's saved

@@ -289,3 +289,73 @@ fn pitch_shift_preserves_duration() {
          (440={f440:.0}, 880={f880:.0})"
     );
 }
+
+/// The stretch bake must stay OFF the audio thread.
+///
+/// `rebuild_graph` runs inside `AudioCallback::process`, and baking is an FFT
+/// over the whole source plus multi-megabyte allocations — running it there
+/// would stall the callback for as long as the file is big. So the audio
+/// thread only ever looks a bake up, and `prebake_stretch_sources` (UI thread,
+/// also called by `rebuild_graph` and before an offline render) is what
+/// actually populates the pool.
+///
+/// This asserts that contract from the outside: a stretched clip adds nothing
+/// to the pool until the explicit prebake runs.
+#[test]
+fn stretch_bake_is_explicit_and_off_the_audio_thread() {
+    let sample_rate = 48_000_u32;
+    let engine = DawEngine::new();
+    let buf = make_sine_buffer(sample_rate, 1.0, 440.0, 0.5);
+    let frames = buf.num_frames as u64;
+    engine.audio_pool.insert("bake-src".to_string(), buf);
+    {
+        let mut project = engine.project.lock();
+        let track_id = project.add_audio_track("Bake".into());
+        if let Some(t) = project.track_mut(&track_id) {
+            t.clips.push(ClipPlacement {
+                content: ClipContent::Audio(AudioClip {
+                    id: "clip-bake".into(),
+                    name: "bake".into(),
+                    source_path: "bake-src".into(),
+                    source_hash: String::new(),
+                    source_start: 0,
+                    source_end: frames,
+                    gain_db: 0.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
+                    muted: false,
+                    reversed: false,
+                    pitch_semitones: 0.0,
+                    stretch_ratio: 2.0,
+                    warp_markers: Vec::new(),
+                    fade_in_curve: FadeCurve::Linear,
+                    fade_out_curve: FadeCurve::Linear,
+                }),
+                track_id: track_id.clone(),
+                position_ticks: 0,
+                length_ticks: 1_000_000,
+                lane: 0,
+            });
+        }
+    }
+
+    // Only the raw source is resident — nothing baked yet.
+    let before = engine.audio_pool.stats().entry_count;
+    assert_eq!(before, 1, "expected just the raw source, got {before} entries");
+
+    // The explicit off-thread bake is what materialises the variant.
+    engine.prebake_stretch_sources();
+    let after = engine.audio_pool.stats().entry_count;
+    assert_eq!(
+        after, 2,
+        "prebake_stretch_sources must add the baked variant (before={before}, after={after})"
+    );
+
+    // Idempotent: a second pass reuses the cache rather than re-baking.
+    engine.prebake_stretch_sources();
+    assert_eq!(
+        engine.audio_pool.stats().entry_count,
+        2,
+        "prebake must be idempotent — a cached variant should not be rebaked"
+    );
+}
