@@ -31,6 +31,22 @@ fn stretch_cache_key(source_id: &str, stretch: f64, semitones: f64) -> String {
     format!("{source_id}{STRETCH_KEY_MARKER}{stretch:.6}:{semitones:.6}")
 }
 
+/// Drops a set of stretch-bake keys out of the in-flight set when it goes out
+/// of scope, so a panicking bake can't leave them permanently claimed.
+struct InflightRelease<'a> {
+    set: &'a Arc<Mutex<std::collections::HashSet<String>>>,
+    keys: Vec<String>,
+}
+
+impl Drop for InflightRelease<'_> {
+    fn drop(&mut self) {
+        let mut guard = self.set.lock();
+        for key in &self.keys {
+            guard.remove(key);
+        }
+    }
+}
+
 /// Does this clip want a pitch-preserving bake? Warped clips are excluded —
 /// warp markers define their own piecewise source map and take precedence.
 /// Returns the effective (stretch, semitones) when a bake applies.
@@ -564,14 +580,19 @@ impl DawEngine {
         let tx = self.command_tx.clone();
         let inflight = Arc::clone(&self.stretch_inflight);
         std::thread::spawn(move || {
+            // Release the in-flight keys on the way out whatever happens. If a
+            // bake panicked and left them claimed, that source could never be
+            // retried and the clip would stay varispeed for the rest of the
+            // session with nothing to indicate why.
+            let _release = InflightRelease {
+                set: &inflight,
+                keys: todo
+                    .iter()
+                    .map(|(s, st, se)| stretch_cache_key(s, *st, *se))
+                    .collect(),
+            };
             for (source_id, stretch, semitones) in &todo {
                 Self::bake_stretch_variant(&pool, source_id, *stretch, *semitones);
-            }
-            {
-                let mut guard = inflight.lock();
-                for (source_id, stretch, semitones) in &todo {
-                    guard.remove(&stretch_cache_key(source_id, *stretch, *semitones));
-                }
             }
             // Ask the audio thread to rebuild so the fresh bakes are picked up.
             let _ = tx.try_send(EngineCommand::RebuildGraph);
