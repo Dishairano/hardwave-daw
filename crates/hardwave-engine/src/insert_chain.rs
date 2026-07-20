@@ -216,6 +216,23 @@ impl InsertChain {
     /// Mark whether a slot has a sidechain source routed to it, so the
     /// chain feeds it the track sidechain bus. Synced from the project's
     /// `PluginSlot::sidechain_source` on every graph rebuild.
+    /// Latency this chain introduces, in samples — the sum of each enabled
+    /// slot's reported plug-in latency, since slots process in series.
+    ///
+    /// This is what feeds plug-in delay compensation. The graph's PDC pass
+    /// (`AudioGraph::finalize_pdc`) computes per-edge padding from each node's
+    /// `latency_samples()`, but nothing ever reported a non-zero value, so it
+    /// was aligning a graph in which everything claimed to be instantaneous —
+    /// a lookahead limiter or linear-phase EQ pushed its track out of time
+    /// against the others with nothing to correct it.
+    pub fn latency_samples(&self) -> u32 {
+        self.slots
+            .iter()
+            .filter(|s| s.enabled)
+            .map(|s| s.plugin.latency_samples())
+            .fold(0u32, |acc, l| acc.saturating_add(l))
+    }
+
     pub fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) -> bool {
         if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
             s.sidechain_active = active;

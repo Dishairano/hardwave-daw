@@ -1380,6 +1380,7 @@ impl EngineCallback {
         // Snapshot the insert plan under the project lock, then instantiate
         // outside it (plug-in loads can be slow and must not hold the lock).
         // (track_id, slot_id, plugin_id, enabled, wet, sidechained, saved_state)
+        let mut hydrated_any = false;
         let plan = {
             let project = self.project.lock();
             let mut acc = Vec::new();
@@ -1409,6 +1410,7 @@ impl EngineCallback {
             if let Some(bytes) = state {
                 let _ = plugin.set_state(&bytes);
             }
+            hydrated_any = true;
             if let Some(node) = self.graph.node_mut(node_id) {
                 let slot = crate::insert_chain::LiveSlot {
                     slot_id,
@@ -1426,6 +1428,20 @@ impl EngineCallback {
                 };
                 node.push_offline_slot(slot, sr, buffer_size);
             }
+        }
+
+        // Recompute PDC now that plug-ins are on the graph. `rebuild_graph`
+        // already ran `finalize_pdc` from `EngineCallback::new`, but that was
+        // before any insert existed and `needs_rebuild` is already false, so
+        // `process()` never runs it again — an export would otherwise align a
+        // graph in which every node still claimed zero latency, while live
+        // playback re-runs the rebuild (and therefore PDC) on every mutation.
+        if hydrated_any {
+            self.graph.finalize_pdc();
+            self.graph_latency_samples.store(
+                self.graph.total_latency_samples(),
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
     }
 

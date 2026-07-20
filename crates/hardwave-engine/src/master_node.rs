@@ -48,6 +48,12 @@ impl AudioNode for MasterNode {
         self.track_id.as_deref()
     }
 
+    /// Report the master chain's latency. Nothing downstream needs aligning
+    /// against it, but it belongs in the graph's reported total latency.
+    fn latency_samples(&self) -> u32 {
+        self.chain.latency_samples()
+    }
+
     fn snapshot_plugin_states(&self) -> Vec<(String, Vec<u8>)> {
         self.chain
             .slots

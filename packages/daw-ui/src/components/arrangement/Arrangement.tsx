@@ -106,6 +106,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   /// All canvas draws and hit-tests subtract this from their logical
   /// Y so the visual band of tracks slides up under the ruler.
   const [verticalScroll, setVerticalScroll] = useState(0)
+  // Horizontal pan, in pixels. Until this existed the arrangement's scroll
+  // position was recomputed from the playhead on every draw, so
+  // follow-playhead wasn't a mode — it was the only behaviour, and the
+  // timeline could not be navigated by hand at all. Mirrors the piano
+  // roll's scrollX + followPlayhead pair.
+  const [scrollX, setScrollX] = useState(0)
+  const [followPlayhead, setFollowPlayhead] = useState(true)
   /// FL Studio convention: right-mouse-button + drag = 2D pan (vertical
   /// scroll + horizontal pan via setting the playhead-derived offset).
   /// We track that here so onContextMenu can suppress its menu when the
@@ -216,7 +223,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const h = rect.height
 
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
-    const scrollOffset = Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
+    const scrollOffset = followPlayhead
+      ? Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
+      : scrollX
 
     // Background — solid mockup-canvas color (#15091a). Replaces the earlier
     // pure-black fill so the playlist matches the mockup look. The .fl-pl-grid
@@ -575,7 +584,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -791,11 +800,12 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   }, [audioTracks, pixelsPerTick, trackHeight, verticalScroll])
 
   const getScrollOffset = useCallback(() => {
+    if (!followPlayhead) return scrollX
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const container = containerRef.current
     const w = container ? container.getBoundingClientRect().width : 800
     return Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
-  }, [positionSamples, sampleRate])
+  }, [positionSamples, sampleRate, followPlayhead, scrollX])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 2) {
@@ -1413,6 +1423,20 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     if (!container) return
     const viewportH = container.clientHeight - RULER_HEIGHT
     const contentH = audioTracks.length * trackHeight
+    // Shift+wheel, or a trackpad's horizontal axis, pans the timeline.
+    // Panning by hand takes over from follow-playhead, the same way dragging a
+    // scrollbar does in every other DAW; the toolbar toggle puts it back.
+    const horizontalIntent = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)
+    if (horizontalIntent) {
+      e.preventDefault()
+      let dx = e.shiftKey && e.deltaX === 0 ? e.deltaY : e.deltaX
+      if (e.deltaMode === 1) dx *= 16
+      else if (e.deltaMode === 2) dx *= 400
+      setScrollX((x) => Math.max(0, (followPlayhead ? getScrollOffset() : x) + dx))
+      setFollowPlayhead(false)
+      return
+    }
+
     const maxScroll = Math.max(0, contentH - viewportH)
     if (maxScroll <= 0) return
     // Normalize deltaY across mouse / trackpad / line-mode wheels —
@@ -1422,7 +1446,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     if (e.deltaMode === 1) dy *= 16
     else if (e.deltaMode === 2) dy *= viewportH
     setVerticalScroll((v) => Math.max(0, Math.min(maxScroll, v + dy)))
-  }, [trackHeight, setTrackHeight, horizontalZoom, setHorizontalZoom, audioTracks.length])
+  }, [trackHeight, setTrackHeight, horizontalZoom, setHorizontalZoom, audioTracks.length, followPlayhead, getScrollOffset])
 
   // Close marker context menu on outside mousedown
   useEffect(() => {

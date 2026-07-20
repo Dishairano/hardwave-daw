@@ -1465,3 +1465,116 @@ fn stem_render_keeps_its_sidechain_key() {
          keep feeding the sidechain (ducked={ducked:.5}, open={open:.5})"
     );
 }
+
+#[test]
+fn plugin_latency_is_compensated() {
+    // PDC had all its machinery — per-edge delay lines, a critical-path DP in
+    // `finalize_pdc` — but no production node ever returned a non-zero
+    // `latency_samples()`, so it aligned a graph in which everything claimed to
+    // be instantaneous. A lookahead limiter or linear-phase EQ pushed its track
+    // out of time against every other track, with nothing to correct it, and
+    // the UI's "PDC: n samples" readout was always zero.
+    //
+    // Two tracks carry the same tone. One has a plug-in that delays by N
+    // samples AND reports N. With compensation the clean track is padded by N
+    // so both arrive aligned and sum; without it they smear apart.
+    use hardwave_midi::MidiEvent;
+    use hardwave_plugin_host::types::{HostedPlugin, ParameterInfo, PluginDescriptor};
+    use hardwave_project::track::PluginSlot;
+
+    const LAT: usize = 512;
+
+    /// Delays by LAT samples and reports it honestly.
+    struct LatentDelay {
+        buf_l: Vec<f32>,
+        buf_r: Vec<f32>,
+    }
+    impl HostedPlugin for LatentDelay {
+        fn descriptor(&self) -> &PluginDescriptor {
+            unreachable!("descriptor not needed once hosted")
+        }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> { Ok(()) }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            num_samples: usize,
+        ) {
+            for ch in 0..2 {
+                let inp: &[f32] = inputs.get(ch).copied().unwrap_or(&[]);
+                let hist = if ch == 0 { &mut self.buf_l } else { &mut self.buf_r };
+                if let Some(out) = outputs.get_mut(ch) {
+                    out.clear();
+                    for i in 0..num_samples {
+                        hist.push(inp.get(i).copied().unwrap_or(0.0));
+                        // Emit the sample from LAT ago.
+                        let idx = hist.len().saturating_sub(LAT + 1);
+                        out.push(if hist.len() > LAT { hist[idx] } else { 0.0 });
+                    }
+                }
+            }
+        }
+        fn get_parameter_count(&self) -> u32 { 0 }
+        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> { None }
+        fn get_parameter_value(&self, _i: u32) -> f64 { 0.0 }
+        fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+        fn get_state(&self) -> Vec<u8> { Vec::new() }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> { Ok(()) }
+        fn latency_samples(&self) -> u32 { LAT as u32 }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool { false }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool { false }
+    }
+
+    let engine = DawEngine::new();
+    add_audio_track_with_sine(&engine, "Clean", "pdc-clean", SAMPLE_RATE, 1.0, 440.0, 0.5);
+    let latent = add_audio_track_with_sine(&engine, "Latent", "pdc-latent", SAMPLE_RATE, 1.0, 440.0, 0.5);
+    {
+        let mut project = engine.project.lock();
+        if let Some(t) = project.track_mut(&latent) {
+            t.inserts.push(PluginSlot {
+                id: "slot-latent".into(),
+                plugin_id: "test.latent".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 1.0,
+            });
+        }
+    }
+    let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
+        if id == "test.latent" {
+            Some(Box::new(LatentDelay { buf_l: Vec::new(), buf_r: Vec::new() }))
+        } else {
+            None
+        }
+    };
+
+    let mut out: Vec<f32> = Vec::new();
+    engine
+        .render_offline_with(
+            SAMPLE_RATE,
+            SAMPLE_RATE as u64 / 2,
+            0,
+            Some(&factory),
+            |_| {},
+            |block| { out.extend_from_slice(block); true },
+        )
+        .unwrap();
+
+    // Two aligned 440 Hz tones sum coherently; a 512-sample offset at 440 Hz is
+    // ~4.7 periods, so misalignment shows up as a very different summed level.
+    // Measure well past the delay so both tracks are flowing.
+    let left: Vec<f32> = out.chunks(2).skip(SAMPLE_RATE as usize / 8).map(|f| f[0]).collect();
+    let peak = left.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+    let single = 0.5f32 * std::f32::consts::FRAC_1_SQRT_2; // one sine at pan-centre
+    eprintln!("PDC: summed peak={peak:.4} (one track would be {single:.4}, two aligned ~{:.4})", single * 2.0);
+    assert!(
+        peak > single * 1.7,
+        "with PDC the two tracks must arrive aligned and sum to ~2x one track \
+         (peak={peak:.4}, one track={single:.4}) — plug-in latency not compensated?"
+    );
+}

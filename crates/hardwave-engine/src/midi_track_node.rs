@@ -347,6 +347,11 @@ impl AudioNode for MidiTrackNode {
         Some(&self.track_id)
     }
 
+    /// Report the insert chain's latency so the graph can compensate it.
+    fn latency_samples(&self) -> u32 {
+        self.chain.latency_samples()
+    }
+
     fn process(
         &mut self,
         inputs: &[&[f32]],

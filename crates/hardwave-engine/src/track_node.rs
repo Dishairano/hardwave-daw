@@ -467,6 +467,11 @@ impl AudioNode for TrackNode {
         Some(&self.track_id)
     }
 
+    /// Report the insert chain's latency so the graph can compensate it.
+    fn latency_samples(&self) -> u32 {
+        self.chain.latency_samples()
+    }
+
     fn snapshot_plugin_states(&self) -> Vec<(String, Vec<u8>)> {
         self.chain
             .slots
