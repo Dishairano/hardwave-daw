@@ -222,6 +222,23 @@ pub struct Track {
     /// existed) loadable.
     #[serde(default)]
     pub automation_clips: Vec<crate::automation_clip::AutomationClip>,
+
+    /// Render-time only: this track still processes, but contributes nothing
+    /// to the master/bus mix and its sends are dropped.
+    ///
+    /// Exists for stem rendering. Muting the other tracks looks equivalent but
+    /// isn't: a muted `TrackNode` returns before writing its output ports, so
+    /// it also stops feeding any sidechain keyed off it and any send that
+    /// originates from it. Rendering a bass stem by muting the kick therefore
+    /// produced a stem with no ducking, while the full mix ducked correctly —
+    /// and rendering a return's stem muted everything feeding it, giving
+    /// silence. Excluded tracks keep processing (so they can still key a
+    /// sidechain) but are cut off from master and from sends, so exactly one
+    /// track's contribution reaches the output.
+    ///
+    /// Never persisted — it only ever exists on a render snapshot.
+    #[serde(skip)]
+    pub stem_excluded: bool,
 }
 
 impl Track {
@@ -255,6 +272,7 @@ impl Track {
             clips: Vec::new(),
             automation_lanes: Vec::new(),
             automation_clips: Vec::new(),
+            stem_excluded: false,
         }
     }
 

@@ -1338,3 +1338,130 @@ fn master_bus_insert_processes_the_mix() {
         "a master-bus insert must process the summed mix (dry {dry}, wet {wet})"
     );
 }
+
+#[test]
+fn stem_render_keeps_its_sidechain_key() {
+    // Stems used to be rendered by muting every track but the target. A muted
+    // TrackNode returns before writing its output ports, so it also stopped
+    // feeding any sidechain keyed off it: rendering the bass stem muted the
+    // kick, and the stem came out with NO ducking while the full mix ducked
+    // correctly. `stem_excluded` keeps the key track processing while cutting
+    // it off from master, so the stem ducks exactly like the mix.
+    use hardwave_midi::MidiEvent;
+    use hardwave_plugin_host::types::{HostedPlugin, ParameterInfo, PluginDescriptor};
+    use hardwave_project::track::PluginSlot;
+
+    struct Ducker;
+    impl HostedPlugin for Ducker {
+        fn descriptor(&self) -> &PluginDescriptor {
+            unreachable!("descriptor not needed once hosted")
+        }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> { Ok(()) }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            num_samples: usize,
+        ) {
+            let keyed = inputs.len() >= 4
+                && inputs[2].iter().take(num_samples).any(|s| s.abs() > 0.05);
+            let g = if keyed { 0.1 } else { 1.0 };
+            for ch in 0..2 {
+                let inp: &[f32] = inputs.get(ch).copied().unwrap_or(&[]);
+                if let Some(out) = outputs.get_mut(ch) {
+                    out.clear();
+                    for i in 0..num_samples {
+                        out.push(inp.get(i).copied().unwrap_or(0.0) * g);
+                    }
+                }
+            }
+        }
+        fn get_parameter_count(&self) -> u32 { 0 }
+        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> { None }
+        fn get_parameter_value(&self, _i: u32) -> f64 { 0.0 }
+        fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+        fn get_state(&self) -> Vec<u8> { Vec::new() }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> { Ok(()) }
+        fn latency_samples(&self) -> u32 { 0 }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool { false }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool { false }
+    }
+
+    let engine = DawEngine::new();
+    let key_id = add_audio_track_with_sine(&engine, "Key", "stem-key", SAMPLE_RATE, 0.5, 100.0, 0.8);
+    let bass_id =
+        add_audio_track_with_sine(&engine, "Bass", "stem-bass", SAMPLE_RATE, 1.0, 1000.0, 0.5);
+    {
+        let mut project = engine.project.lock();
+        if let Some(t) = project.track_mut(&bass_id) {
+            t.inserts.push(PluginSlot {
+                id: "slot-duck".into(),
+                plugin_id: "test.ducker".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: Some(key_id.clone()),
+                wet: 1.0,
+            });
+        }
+    }
+    let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
+        if id == "test.ducker" { Some(Box::new(Ducker)) } else { None }
+    };
+
+    // Render the BASS STEM: everything but the bass is excluded from the mix.
+    let key_for_prepare = key_id.clone();
+    let bass_for_prepare = bass_id.clone();
+    let total = SAMPLE_RATE as u64;
+    let mut out: Vec<f32> = Vec::new();
+    engine
+        .render_offline_with(
+            SAMPLE_RATE,
+            total,
+            0,
+            Some(&factory),
+            |proj| {
+                for t in proj.tracks.iter_mut() {
+                    t.stem_excluded = t.id != bass_for_prepare;
+                }
+            },
+            |block| {
+                out.extend_from_slice(block);
+                true
+            },
+        )
+        .unwrap();
+    let _ = key_for_prepare;
+
+    // The key track must NOT be audible in the bass stem...
+    let left: Vec<f32> = out.chunks(2).map(|f| f[0]).collect();
+    let bin = |mono: &[f32], freq: f64| -> f64 {
+        let w = std::f64::consts::TAU * freq / SAMPLE_RATE as f64;
+        let coeff = 2.0 * w.cos();
+        let (mut s1, mut s2) = (0.0f64, 0.0f64);
+        for &x in mono {
+            let s0 = x as f64 + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        ((s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0)).sqrt() / mono.len().max(1) as f64
+    };
+    let half = left.len() / 2;
+    let key_leak = bin(&left, 100.0);
+    let ducked = bin(&left[..half], 1000.0);
+    let open = bin(&left[half..], 1000.0);
+    eprintln!("bass stem: key_leak(100Hz)={key_leak:.5} ducked={ducked:.5} open={open:.5}");
+    assert!(
+        key_leak < open * 0.25,
+        "the excluded key track must not bleed into the stem (100Hz={key_leak:.5}, bass={open:.5})"
+    );
+    // ...but it must still be KEYING the ducker.
+    assert!(
+        open > ducked * 3.0,
+        "a stem must duck exactly like the mix — the excluded key track has to \
+         keep feeding the sidechain (ducked={ducked:.5}, open={open:.5})"
+    );
+}

@@ -428,3 +428,76 @@ fn async_stretch_bake_lands_and_does_not_stampede() {
         "expected the raw source plus one baked variant, got {count} — bakes stampeded"
     );
 }
+
+/// Rendering at a rate other than the source's must not change its pitch.
+///
+/// Pool buffers are normalised to the *device* rate on import, but an export
+/// renders at whatever rate the user chose. `source_step` carried no
+/// pool-rate/render-rate term, so bouncing at 44.1 kHz from a 48 kHz device
+/// read every audio clip 8.8% too slow — flat and long — while MIDI/synth
+/// tracks, generated at the render rate, stayed in tune. Samples and synths
+/// came out of the same bounce in different keys.
+#[test]
+fn render_rate_does_not_detune_audio_clips() {
+    let source_rate = 48_000_u32;
+    // Build the source at 48k, then render it at several rates.
+    let render_at = |render_rate: u32| -> Vec<f32> {
+        let engine = DawEngine::new();
+        let buf = make_sine_buffer(source_rate, 2.0, 440.0, 0.5);
+        let frames = buf.num_frames as u64;
+        engine.audio_pool.insert("rate-src".to_string(), buf);
+        {
+            let mut project = engine.project.lock();
+            let track_id = project.add_audio_track("Rate".into());
+            if let Some(t) = project.track_mut(&track_id) {
+                t.clips.push(ClipPlacement {
+                    content: ClipContent::Audio(AudioClip {
+                        id: "clip-rate".into(),
+                        name: "rate".into(),
+                        source_path: "rate-src".into(),
+                        source_hash: String::new(),
+                        source_start: 0,
+                        source_end: frames,
+                        gain_db: 0.0,
+                        fade_in_ticks: 0,
+                        fade_out_ticks: 0,
+                        muted: false,
+                        reversed: false,
+                        pitch_semitones: 0.0,
+                        stretch_ratio: 1.0,
+                        warp_markers: Vec::new(),
+                        fade_in_curve: FadeCurve::Linear,
+                        fade_out_curve: FadeCurve::Linear,
+                    }),
+                    track_id: track_id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1_000_000,
+                    lane: 0,
+                });
+            }
+        }
+        let mut out = Vec::new();
+        engine
+            .render_offline(render_rate, render_rate as u64, |block| {
+                out.extend_from_slice(block);
+                true
+            })
+            .unwrap();
+        out
+    };
+
+    for rate in [48_000_u32, 44_100, 96_000] {
+        let buf = render_at(rate);
+        let mono: Vec<f32> = buf.chunks(2).skip(rate as usize / 8).map(|f| f[0]).collect();
+        let f440 = goertzel_mag(&mono, rate, 440.0);
+        // 44.1k from a 48k source detuned to ~404 Hz; 96k to ~880 Hz.
+        let f404 = goertzel_mag(&mono, rate, 404.0);
+        let f880 = goertzel_mag(&mono, rate, 880.0);
+        eprintln!("render @{rate}: 440Hz={f440:.0} 404Hz={f404:.0} 880Hz={f880:.0}");
+        assert!(
+            f440 > f404 * 3.0 && f440 > f880 * 3.0,
+            "rendering a 48 kHz source at {rate} Hz must keep it at 440 Hz \
+             (440={f440:.0}, 404={f404:.0}, 880={f880:.0})"
+        );
+    }
+}

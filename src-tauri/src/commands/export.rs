@@ -1380,13 +1380,25 @@ pub async fn export_project_stems(
                         }
                     },
                     |proj: &mut Project| {
+                        // Exclude rather than mute. A muted TrackNode returns
+                        // before writing its output ports, which also stops it
+                        // feeding any sidechain keyed off it and any send that
+                        // originates from it — so muting the kick to render the
+                        // bass stem produced a stem with NO ducking while the
+                        // full mix ducked, and rendering a return's stem muted
+                        // everything feeding it, giving silence. Excluded
+                        // tracks keep processing and can still key a sidechain;
+                        // they just don't reach master and their sends are
+                        // dropped. This also preserves the user's own mute
+                        // state instead of overwriting it.
                         for t in proj.tracks.iter_mut() {
-                            t.muted = t.id != target_id;
+                            t.stem_excluded = t.id != target_id;
                         }
                         if !respect_mute_solo {
                             for t in proj.tracks.iter_mut() {
                                 t.soloed = false;
                                 t.solo_safe = false;
+                                t.muted = false;
                             }
                         }
                     },

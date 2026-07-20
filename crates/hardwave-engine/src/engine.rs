@@ -1803,6 +1803,25 @@ impl EngineCallback {
                                 pitch_factor / stretch,
                             ),
                         };
+                        // Rate-match the source to the rate we're rendering at.
+                        // Pool buffers are normalised to the *device* rate on
+                        // import, but an export renders at whatever rate the
+                        // user picked — so bouncing at 44.1 k from a 48 k
+                        // device read every audio clip 8.8% too slow (flat and
+                        // long) while MIDI/synth tracks, which are generated at
+                        // the render rate, stayed in tune. A mix would come out
+                        // with its samples and its synths in different keys.
+                        // Ratio is 1.0 during playback, where the two agree.
+                        let source_step = match self.audio_pool.get(&region_source_id) {
+                            Some(buf)
+                                if buf.sample_rate != 0
+                                    && (buf.sample_rate as f64 - sample_rate).abs()
+                                        > f64::EPSILON =>
+                            {
+                                source_step * (buf.sample_rate as f64 / sample_rate)
+                            }
+                            _ => source_step,
+                        };
                         // Warp markers → precomputed segments. Marker
                         // ticks are clip-relative; going through the
                         // tempo map (absolute tick → samples, minus the
@@ -1925,6 +1944,12 @@ impl EngineCallback {
             if !track.kind.is_audio_bearing() {
                 continue;
             }
+            // Stem renders exclude every track but the target from the mix.
+            // The node still exists and still processes, so it can key a
+            // sidechain — it just doesn't reach the output.
+            if track.stem_excluded {
+                continue;
+            }
             let Some(&src_node) = track_id_to_node.get(&track.id) else {
                 continue;
             };
@@ -2008,6 +2033,11 @@ impl EngineCallback {
         // (ports 0/1) into the target track's input (ports 0/1), with the
         // send amount applied as per-edge gain.
         for track in &project.tracks {
+            // An excluded track's sends are dropped too, so a stem carries only
+            // the target's own send tail rather than everyone else's.
+            if track.stem_excluded {
+                continue;
+            }
             let src_node = match track_id_to_node.get(&track.id) {
                 Some(&id) => id,
                 None => continue,
