@@ -894,16 +894,35 @@ pub fn set_fx_chain_bypassed(
     bypassed: bool,
 ) -> Result<(), String> {
     state.engine.lock().snapshot_before_mutation();
-    let engine = state.engine.lock();
-    let mut project = engine.project.lock();
+    let slot_ids: Vec<String> = {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        for slot in &mut track.inserts {
+            slot.enabled = !bypassed;
+        }
+        track.inserts.iter().map(|s| s.id.clone()).collect()
+    };
 
-    let track = project
-        .track_mut(&track_id)
-        .ok_or_else(|| format!("Track not found: {}", track_id))?;
-    for slot in &mut track.inserts {
-        slot.enabled = !bypassed;
+    // Push the change to the audio thread explicitly, the way
+    // `set_insert_enabled` does. Mutating the project and rebuilding is not
+    // enough: `rebuild_graph` stashes and restores live insert chains verbatim
+    // and only re-syncs the sidechain flag, so `enabled` never reached the
+    // chain. The result was a bypass that did nothing during playback while
+    // the export — which reads `enabled` straight off the project — dropped
+    // all of that track's FX.
+    {
+        let engine = state.engine.lock();
+        for slot_id in slot_ids {
+            let _ = engine.try_send_insert_command(InsertCommand::SetEnabled {
+                track_id: track_id.clone(),
+                slot_id,
+                enabled: !bypassed,
+            });
+        }
     }
-    drop(project);
-    engine.rebuild_graph();
+    state.engine.lock().rebuild_graph();
     Ok(())
 }

@@ -981,7 +981,25 @@ impl DawEngine {
         // runs on the caller's thread, not the audio callback.
         self.prebake_stretch_sources();
 
+        // Harvest LIVE plug-in state so a bounce reflects the knobs the user
+        // is actually hearing. `hydrate_offline_inserts` replays whatever is
+        // stored on the project, and that is only ever written by
+        // `save_project` — so without this an unsaved tweak renders stale, and
+        // a slot added since the last save renders at plug-in DEFAULTS.
+        //
+        // Harvested before the project lock is taken: the audio thread has to
+        // service the request, and it can't while we hold that lock. Returns
+        // None when the engine isn't started (offline tests, headless renders),
+        // in which case the stored state is still the best available.
+        let live_plugin_states =
+            self.snapshot_plugin_states(std::time::Duration::from_millis(500));
+
         let mut project_snapshot = self.project.lock().clone();
+        if let Some(states) = live_plugin_states {
+            for ((_track_id, slot_id), bytes) in states {
+                project_snapshot.set_plugin_state(slot_id, "unknown", bytes);
+            }
+        }
         prepare(&mut project_snapshot);
         let initial_bpm = project_snapshot
             .tempo_map
@@ -1868,9 +1886,35 @@ impl EngineCallback {
         }
 
         // Add master node (reads volume from shared transport atomic — no rebuild on change)
-        let master_node = MasterNode::new(Arc::clone(&self.transport.master_volume_db));
+        let master_track_id = project
+            .tracks
+            .iter()
+            .find(|t| matches!(t.kind, hardwave_project::track::TrackKind::Master))
+            .map(|t| t.id.clone());
+        let master_node = MasterNode::new(
+            Arc::clone(&self.transport.master_volume_db),
+            master_track_id.clone(),
+        );
         let master_id = self.graph.add_node(Box::new(master_node));
         self.master_id = Some(master_id);
+
+        // Point the Master track's id at the master node so its insert chain is
+        // reachable, and carry the live chain across the rebuild the same way
+        // track chains are carried.
+        //
+        // Master isn't audio-bearing, so it gets no `TrackNode` and never
+        // landed in this map — every `InsertCommand` aimed at the master strip
+        // resolved to no node and was dropped, and `hydrate_offline_inserts`
+        // skipped it on export too. A plug-in added to the master was persisted
+        // in the project and then silently processed nothing, anywhere.
+        if let Some(mid) = &master_track_id {
+            track_id_to_node.insert(mid.clone(), master_id);
+            if let Some(chain) = stashed_chains.remove(mid) {
+                if let Some(node) = self.graph.node_mut(master_id) {
+                    node.restore_chain(chain);
+                }
+            }
+        }
 
         // Connect each track either to its configured output_bus (another
         // track) or to master. Invalid targets (self-routing, unknown id,

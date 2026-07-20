@@ -1192,3 +1192,149 @@ fn sidechain_bus_reaches_inserts_in_offline_render() {
          plays should be ducked (ducked={ducked:.5}, open={open:.5})"
     );
 }
+
+#[test]
+fn master_bus_insert_processes_the_mix() {
+    // The Master track is not audio-bearing, so it gets no TrackNode and never
+    // appeared in `track_id_to_node`. Every InsertCommand aimed at the master
+    // strip therefore resolved to no node and was dropped, and the offline
+    // hydration skipped it too — a plug-in added to the master was persisted
+    // in the project and then silently processed nothing, in playback OR
+    // export. The mixer still drew a full FX rack on the master strip.
+    //
+    // MasterNode now owns an insert chain (sum -> inserts -> fader) and the
+    // Master track's id maps to it.
+    use hardwave_midi::MidiEvent;
+    use hardwave_plugin_host::types::{
+        HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    };
+    use hardwave_project::track::{PluginSlot, TrackKind};
+
+    /// Halves whatever reaches it — an unmistakable master-bus effect.
+    struct HalfGain;
+    impl HostedPlugin for HalfGain {
+        fn descriptor(&self) -> &PluginDescriptor {
+            unreachable!("descriptor not needed once hosted")
+        }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            num_samples: usize,
+        ) {
+            for ch in 0..2 {
+                let inp: &[f32] = inputs.get(ch).copied().unwrap_or(&[]);
+                if let Some(out) = outputs.get_mut(ch) {
+                    out.clear();
+                    for i in 0..num_samples {
+                        out.push(inp.get(i).copied().unwrap_or(0.0) * 0.5);
+                    }
+                }
+            }
+        }
+        fn get_parameter_count(&self) -> u32 {
+            0
+        }
+        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _i: u32) -> f64 {
+            0.0
+        }
+        fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+    }
+    let _ = (PluginCategory::Effect, PluginFormat::Clap);
+
+    let engine = DawEngine::new();
+    add_audio_track_with_sine(&engine, "Src", "smoke-sine-master-fx", SAMPLE_RATE, 1.0, 440.0, 0.5);
+
+    // Find (or create) the Master track and put the insert on it.
+    let master_id = {
+        let mut project = engine.project.lock();
+        let existing = project
+            .tracks
+            .iter()
+            .find(|t| matches!(t.kind, TrackKind::Master))
+            .map(|t| t.id.clone());
+        let id = match existing {
+            Some(id) => id,
+            None => {
+                let id = project.add_audio_track("Master".into());
+                if let Some(t) = project.track_mut(&id) {
+                    t.kind = TrackKind::Master;
+                }
+                id
+            }
+        };
+        if let Some(t) = project.track_mut(&id) {
+            t.inserts.push(PluginSlot {
+                id: "slot-master".into(),
+                plugin_id: "test.halfgain".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 1.0,
+            });
+        }
+        id
+    };
+    assert!(!master_id.is_empty());
+
+    let render_peak = |factory: Option<&dyn Fn(&str) -> Option<Box<dyn HostedPlugin>>>| -> f32 {
+        let mut peak = 0.0f32;
+        engine
+            .render_offline_with(
+                SAMPLE_RATE,
+                SAMPLE_RATE as u64 / 4,
+                0,
+                factory,
+                |_| {},
+                |block| {
+                    for &s in block {
+                        peak = peak.max(s.abs());
+                    }
+                    true
+                },
+            )
+            .unwrap();
+        peak
+    };
+
+    let dry = render_peak(None);
+    assert!(dry > 0.3, "dry master render is silent (peak {dry})");
+
+    let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
+        if id == "test.halfgain" {
+            Some(Box::new(HalfGain))
+        } else {
+            None
+        }
+    };
+    let wet = render_peak(Some(&factory));
+    assert!(
+        wet < dry * 0.65 && wet > dry * 0.35,
+        "a master-bus insert must process the summed mix (dry {dry}, wet {wet})"
+    );
+}
