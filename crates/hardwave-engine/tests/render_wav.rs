@@ -359,3 +359,72 @@ fn stretch_bake_is_explicit_and_off_the_audio_thread() {
         "prebake must be idempotent — a cached variant should not be rebaked"
     );
 }
+
+/// The async bake must actually land, and must not stampede.
+///
+/// Baking a long stem takes seconds (~16 s for 30 s of stereo), so the UI path
+/// hands it to a background thread and lets the clip play varispeed until it
+/// lands. Dragging a stretch control fires a rebuild per frame, so repeated
+/// calls must coalesce rather than spawn a bake per frame.
+#[test]
+fn async_stretch_bake_lands_and_does_not_stampede() {
+    let sample_rate = 48_000_u32;
+    let engine = DawEngine::new();
+    let buf = make_sine_buffer(sample_rate, 1.0, 440.0, 0.5);
+    let frames = buf.num_frames as u64;
+    engine.audio_pool.insert("async-src".to_string(), buf);
+    {
+        let mut project = engine.project.lock();
+        let track_id = project.add_audio_track("Async".into());
+        if let Some(t) = project.track_mut(&track_id) {
+            t.clips.push(ClipPlacement {
+                content: ClipContent::Audio(AudioClip {
+                    id: "clip-async".into(),
+                    name: "async".into(),
+                    source_path: "async-src".into(),
+                    source_hash: String::new(),
+                    source_start: 0,
+                    source_end: frames,
+                    gain_db: 0.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
+                    muted: false,
+                    reversed: false,
+                    pitch_semitones: 0.0,
+                    stretch_ratio: 1.5,
+                    warp_markers: Vec::new(),
+                    fade_in_curve: FadeCurve::Linear,
+                    fade_out_curve: FadeCurve::Linear,
+                }),
+                track_id: track_id.clone(),
+                position_ticks: 0,
+                length_ticks: 1_000_000,
+                lane: 0,
+            });
+        }
+    }
+    assert_eq!(engine.audio_pool.stats().entry_count, 1);
+
+    // Simulate a control drag: many rebuilds in quick succession.
+    for _ in 0..8 {
+        engine.prebake_stretch_sources_async();
+    }
+
+    // The bake is off-thread, so poll for it rather than assuming timing.
+    let mut landed = false;
+    for _ in 0..100 {
+        if engine.audio_pool.stats().entry_count >= 2 {
+            landed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(landed, "async bake never landed in the pool");
+
+    // Exactly one variant — the 8 calls coalesced instead of stampeding.
+    let count = engine.audio_pool.stats().entry_count;
+    assert_eq!(
+        count, 2,
+        "expected the raw source plus one baked variant, got {count} — bakes stampeded"
+    );
+}
