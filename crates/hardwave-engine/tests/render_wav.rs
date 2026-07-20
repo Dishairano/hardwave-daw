@@ -203,3 +203,89 @@ fn render_demo_wav() {
         interleaved.len() / 2
     );
 }
+
+/// The other half of the decoupling promise: `pitch_semitones` must change
+/// pitch WITHOUT changing duration.
+///
+/// On the old resample path a +12 semitone clip played back at twice the
+/// source step, so it finished in half the time — pitch and length moved
+/// together. With the bake, the source is pitch-shifted in place, so the clip
+/// keeps sounding for its whole length at the new pitch.
+#[test]
+fn pitch_shift_preserves_duration() {
+    let sample_rate = 48_000_u32;
+    // Source is 2 s long; render 2 s. Under the old path a +12 clip would be
+    // silent through the second half (source exhausted at 2x read speed).
+    let render_clip = |semis: f64| -> Vec<f32> {
+        let engine = DawEngine::new();
+        let buf = make_sine_buffer(sample_rate, 2.0, 440.0, 0.5);
+        let frames = buf.num_frames as u64;
+        engine.audio_pool.insert("pitch-src".to_string(), buf);
+        {
+            let mut project = engine.project.lock();
+            let track_id = project.add_audio_track("Pitch".into());
+            if let Some(t) = project.track_mut(&track_id) {
+                t.clips.push(ClipPlacement {
+                    content: ClipContent::Audio(AudioClip {
+                        id: "clip-pitch".into(),
+                        name: "pitch".into(),
+                        source_path: "pitch-src".into(),
+                        source_hash: String::new(),
+                        source_start: 0,
+                        source_end: frames,
+                        gain_db: 0.0,
+                        fade_in_ticks: 0,
+                        fade_out_ticks: 0,
+                        muted: false,
+                        reversed: false,
+                        pitch_semitones: semis,
+                        stretch_ratio: 1.0,
+                        warp_markers: Vec::new(),
+                        fade_in_curve: FadeCurve::Linear,
+                        fade_out_curve: FadeCurve::Linear,
+                    }),
+                    track_id: track_id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1_000_000,
+                    lane: 0,
+                });
+            }
+        }
+        let mut out = Vec::new();
+        engine
+            .render_offline(sample_rate, sample_rate as u64 * 2, |block| {
+                out.extend_from_slice(block);
+                true
+            })
+            .unwrap();
+        out
+    };
+
+    let shifted = render_clip(12.0);
+    let left: Vec<f32> = shifted.chunks(2).map(|f| f[0]).collect();
+    let half = left.len() / 2;
+
+    // Duration preserved: the second half must still be sounding.
+    let rms = |v: &[f32]| -> f64 {
+        (v.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>() / v.len().max(1) as f64).sqrt()
+    };
+    let first = rms(&left[..half]);
+    let second = rms(&left[half..]);
+    eprintln!("pitch +12: first-half rms={first:.4} second-half rms={second:.4}");
+    assert!(
+        second > first * 0.5,
+        "a +12 semitone clip must still sound through its full length \
+         (first={first:.4}, second={second:.4}) — pitch is changing duration"
+    );
+
+    // Pitch actually moved up an octave: 880 Hz should now dominate 440 Hz.
+    let mid = &left[left.len() / 4..left.len() / 2];
+    let f440 = goertzel_mag(mid, sample_rate, 440.0);
+    let f880 = goertzel_mag(mid, sample_rate, 880.0);
+    eprintln!("pitch +12: 440Hz={f440:.0} 880Hz={f880:.0}");
+    assert!(
+        f880 > f440 * 2.0,
+        "+12 semitones should move the fundamental to 880 Hz \
+         (440={f440:.0}, 880={f880:.0})"
+    );
+}
