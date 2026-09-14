@@ -5,6 +5,11 @@
 //! reference the synthetic buffer by id. That keeps tests fast and
 //! hermetic — no temp files, no decode path, just engine graph behavior.
 
+// Each test binary that includes this module uses a different subset of the
+// helpers, so anything unused by one binary trips `dead_code` under CI's
+// `-D warnings`.
+#![allow(dead_code)]
+
 use hardwave_engine::AudioBuffer;
 use hardwave_engine::DawEngine;
 use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve};

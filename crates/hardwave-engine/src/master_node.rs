@@ -155,10 +155,18 @@ impl AudioNode for MasterNode {
 
         // 1. Sum the incoming mix.
         for (i, sample) in outputs[0].iter_mut().enumerate() {
-            *sample = inputs.first().and_then(|ch| ch.get(i)).copied().unwrap_or(0.0);
+            *sample = inputs
+                .first()
+                .and_then(|ch| ch.get(i))
+                .copied()
+                .unwrap_or(0.0);
         }
         for (i, sample) in outputs[1].iter_mut().enumerate() {
-            *sample = inputs.get(1).and_then(|ch| ch.get(i)).copied().unwrap_or(0.0);
+            *sample = inputs
+                .get(1)
+                .and_then(|ch| ch.get(i))
+                .copied()
+                .unwrap_or(0.0);
         }
 
         // 2. Master insert chain, pre-fader. Split the borrow so the chain can

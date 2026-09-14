@@ -106,8 +106,16 @@ fn stretch_preserves_pitch() {
     let stretched = render_clip(2.0);
     let half = render_clip(0.5);
     if let Ok(dir) = std::env::var("HW_STRETCH_WAV_DIR") {
-        write_stereo_wav(&format!("{dir}/daw_stretch_normal.wav"), sample_rate, &normal);
-        write_stereo_wav(&format!("{dir}/daw_stretch_2x.wav"), sample_rate, &stretched);
+        write_stereo_wav(
+            &format!("{dir}/daw_stretch_normal.wav"),
+            sample_rate,
+            &normal,
+        );
+        write_stereo_wav(
+            &format!("{dir}/daw_stretch_2x.wav"),
+            sample_rate,
+            &stretched,
+        );
         write_stereo_wav(&format!("{dir}/daw_stretch_half.wav"), sample_rate, &half);
         eprintln!("wrote {dir}/daw_stretch_{{normal,2x,half}}.wav");
     }
@@ -166,8 +174,24 @@ fn render_demo_wav() {
     let duration_seconds = 4.0_f32;
 
     let engine = DawEngine::new();
-    add_audio_track_with_sine(&engine, "Bass", "sine_bass", sample_rate, duration_seconds, 55.0, 0.45);
-    add_audio_track_with_sine(&engine, "Lead", "sine_lead", sample_rate, duration_seconds, 220.0, 0.22);
+    add_audio_track_with_sine(
+        &engine,
+        "Bass",
+        "sine_bass",
+        sample_rate,
+        duration_seconds,
+        55.0,
+        0.45,
+    );
+    add_audio_track_with_sine(
+        &engine,
+        "Lead",
+        "sine_lead",
+        sample_rate,
+        duration_seconds,
+        220.0,
+        0.22,
+    );
 
     let total_samples = (sample_rate as f32 * duration_seconds) as u64;
 
@@ -341,7 +365,10 @@ fn stretch_bake_is_explicit_and_off_the_audio_thread() {
 
     // Only the raw source is resident — nothing baked yet.
     let before = engine.audio_pool.stats().entry_count;
-    assert_eq!(before, 1, "expected just the raw source, got {before} entries");
+    assert_eq!(
+        before, 1,
+        "expected just the raw source, got {before} entries"
+    );
 
     // The explicit off-thread bake is what materialises the variant.
     engine.prebake_stretch_sources();
@@ -488,7 +515,11 @@ fn render_rate_does_not_detune_audio_clips() {
 
     for rate in [48_000_u32, 44_100, 96_000] {
         let buf = render_at(rate);
-        let mono: Vec<f32> = buf.chunks(2).skip(rate as usize / 8).map(|f| f[0]).collect();
+        let mono: Vec<f32> = buf
+            .chunks(2)
+            .skip(rate as usize / 8)
+            .map(|f| f[0])
+            .collect();
         let f440 = goertzel_mag(&mono, rate, 440.0);
         // 44.1k from a 48k source detuned to ~404 Hz; 96k to ~880 Hz.
         let f404 = goertzel_mag(&mono, rate, 404.0);

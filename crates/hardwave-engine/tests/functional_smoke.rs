@@ -18,6 +18,7 @@
 //! The whole file runs as one blocking job — see
 //! `.github/workflows/functional-smoke.yml`.
 
+use hardwave_engine::engine::OfflineInsertFactory;
 use hardwave_engine::DawEngine;
 use std::sync::atomic::Ordering;
 
@@ -486,31 +487,33 @@ fn killer_track_insert_modifies_audio() {
         add_audio_track_with_sine(&engine, "FX", "smoke-sine-fx", SAMPLE_RATE, 1.0, 440.0, 0.5);
 
     // Small local render helper: render a quarter-second and return peak.
-    let render_peak =
-        |factory: Option<&dyn Fn(&str) -> Option<Box<dyn HostedPlugin>>>| -> f32 {
-            let mut peak = 0.0f32;
-            engine
-                .render_offline_with(
-                    SAMPLE_RATE,
-                    SAMPLE_RATE as u64 / 4,
-                    0,
-                    factory,
-                    |_| {},
-                    |block| {
-                        for &s in block {
-                            peak = peak.max(s.abs());
-                        }
-                        true
-                    },
-                )
-                .unwrap();
-            peak
-        };
+    let render_peak = |factory: Option<OfflineInsertFactory<'_>>| -> f32 {
+        let mut peak = 0.0f32;
+        engine
+            .render_offline_with(
+                SAMPLE_RATE,
+                SAMPLE_RATE as u64 / 4,
+                0,
+                factory,
+                |_| {},
+                |block| {
+                    for &s in block {
+                        peak = peak.max(s.abs());
+                    }
+                    true
+                },
+            )
+            .unwrap();
+        peak
+    };
 
     // Dry render (no factory → insert skipped): the raw 0.5 sine, attenuated
     // ~0.707 by equal-power pan-center → ~0.354 at the master.
     let dry = render_peak(None);
-    assert!(dry > 0.3, "dry render should be the full sine, got peak={dry}");
+    assert!(
+        dry > 0.3,
+        "dry render should be the full sine, got peak={dry}"
+    );
 
     // Attach the hard-clip insert, then render with a factory that builds it.
     {
@@ -839,22 +842,29 @@ fn killer_automation_clips_and_lfo() {
 
     // ── (A) LFO → TrackVolume tremolo ──────────────────────────────────
     let engine = DawEngine::new();
-    let track_id =
-        add_audio_track_with_sine(&engine, "Trem", "smoke-sine-lfo", SAMPLE_RATE, 1.0, 440.0, 0.5);
+    let track_id = add_audio_track_with_sine(
+        &engine,
+        "Trem",
+        "smoke-sine-lfo",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
     // Bake a full-depth sine LFO. The tick span (40k) comfortably covers a
     // one-second render at any sane tempo; depth 1.0 / center 0.5 swings the
     // volume value across the whole 0..1 range → near-silence to full.
     let points = bake_to_points(
         LfoShape::Sine,
         LfoRate::Hz(8.0),
-        120.0, // bpm
-        960,   // ppq
-        0,     // start_tick
+        120.0,  // bpm
+        960,    // ppq
+        0,      // start_tick
         40_000, // length_ticks
-        1.0,   // depth
-        0.5,   // center
-        0.0,   // phase_offset
-        64,    // samples_per_cycle
+        1.0,    // depth
+        0.5,    // center
+        0.0,    // phase_offset
+        64,     // samples_per_cycle
     );
     assert!(
         points.len() > 8,
@@ -975,7 +985,10 @@ fn automation_recording_round_trip_is_audible() {
     let mut rec = AutomationRecorder::default();
     rec.set_mode(WriteMode::Write);
     rec.on_transport_play();
-    assert!(rec.is_recording(), "Write mode should record once transport plays");
+    assert!(
+        rec.is_recording(),
+        "Write mode should record once transport plays"
+    );
     // 200 samples ramping value 1.0 → 0.0 across ticks 0..2000 (a fade-out
     // the user "drew" by pulling the volume fader down while playing).
     for i in 0..=200u64 {
@@ -988,7 +1001,10 @@ fn automation_recording_round_trip_is_audible() {
     assert_eq!(rec.sample_count(), 201);
     // Thin the dense capture down to inflection points, then bake.
     rec.thin(0.02);
-    assert!(rec.sample_count() < 201, "thin() should compress the capture");
+    assert!(
+        rec.sample_count() < 201,
+        "thin() should compress the capture"
+    );
     let points = rec.into_points(CurveMode::Linear);
     assert!(points.len() >= 2, "need at least the endpoints");
     assert_eq!(points.first().unwrap().tick, 0);
@@ -1085,11 +1101,8 @@ fn sidechain_bus_reaches_inserts_in_offline_render() {
             _midi_out: &mut Vec<MidiEvent>,
             num_samples: usize,
         ) {
-            let keyed = inputs.len() >= 4
-                && inputs[2]
-                    .iter()
-                    .take(num_samples)
-                    .any(|s| s.abs() > 0.05);
+            let keyed =
+                inputs.len() >= 4 && inputs[2].iter().take(num_samples).any(|s| s.abs() > 0.05);
             let g = if keyed { 0.1 } else { 1.0 };
             for ch in 0..2 {
                 let inp: &[f32] = inputs.get(ch).copied().unwrap_or(&[]);
@@ -1134,8 +1147,7 @@ fn sidechain_bus_reaches_inserts_in_offline_render() {
 
     let engine = DawEngine::new();
     // Key: 100 Hz, first half of the render only.
-    let key_id =
-        add_audio_track_with_sine(&engine, "Key", "sc-key", SAMPLE_RATE, 0.5, 100.0, 0.8);
+    let key_id = add_audio_track_with_sine(&engine, "Key", "sc-key", SAMPLE_RATE, 0.5, 100.0, 0.8);
     // Bass: steady 1 kHz for the whole render.
     let bass_id =
         add_audio_track_with_sine(&engine, "Bass", "sc-bass", SAMPLE_RATE, 1.0, 1000.0, 0.5);
@@ -1163,10 +1175,17 @@ fn sidechain_bus_reaches_inserts_in_offline_render() {
     let total = SAMPLE_RATE as u64;
     let mut out: Vec<f32> = Vec::with_capacity(total as usize * 2);
     engine
-        .render_offline_with(SAMPLE_RATE, total, 0, Some(&factory), |_| {}, |block| {
-            out.extend_from_slice(block);
-            true
-        })
+        .render_offline_with(
+            SAMPLE_RATE,
+            total,
+            0,
+            Some(&factory),
+            |_| {},
+            |block| {
+                out.extend_from_slice(block);
+                true
+            },
+        )
         .unwrap();
 
     // Goertzel on the 1 kHz bass bin, per half.
@@ -1268,7 +1287,15 @@ fn master_bus_insert_processes_the_mix() {
     let _ = (PluginCategory::Effect, PluginFormat::Clap);
 
     let engine = DawEngine::new();
-    add_audio_track_with_sine(&engine, "Src", "smoke-sine-master-fx", SAMPLE_RATE, 1.0, 440.0, 0.5);
+    add_audio_track_with_sine(
+        &engine,
+        "Src",
+        "smoke-sine-master-fx",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
 
     // Find (or create) the Master track and put the insert on it.
     let master_id = {
@@ -1302,7 +1329,7 @@ fn master_bus_insert_processes_the_mix() {
     };
     assert!(!master_id.is_empty());
 
-    let render_peak = |factory: Option<&dyn Fn(&str) -> Option<Box<dyn HostedPlugin>>>| -> f32 {
+    let render_peak = |factory: Option<OfflineInsertFactory<'_>>| -> f32 {
         let mut peak = 0.0f32;
         engine
             .render_offline_with(
@@ -1356,7 +1383,9 @@ fn stem_render_keeps_its_sidechain_key() {
         fn descriptor(&self) -> &PluginDescriptor {
             unreachable!("descriptor not needed once hosted")
         }
-        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> { Ok(()) }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+            Ok(())
+        }
         fn deactivate(&mut self) {}
         fn process(
             &mut self,
@@ -1366,8 +1395,8 @@ fn stem_render_keeps_its_sidechain_key() {
             _midi_out: &mut Vec<MidiEvent>,
             num_samples: usize,
         ) {
-            let keyed = inputs.len() >= 4
-                && inputs[2].iter().take(num_samples).any(|s| s.abs() > 0.05);
+            let keyed =
+                inputs.len() >= 4 && inputs[2].iter().take(num_samples).any(|s| s.abs() > 0.05);
             let g = if keyed { 0.1 } else { 1.0 };
             for ch in 0..2 {
                 let inp: &[f32] = inputs.get(ch).copied().unwrap_or(&[]);
@@ -1379,20 +1408,37 @@ fn stem_render_keeps_its_sidechain_key() {
                 }
             }
         }
-        fn get_parameter_count(&self) -> u32 { 0 }
-        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> { None }
-        fn get_parameter_value(&self, _i: u32) -> f64 { 0.0 }
+        fn get_parameter_count(&self) -> u32 {
+            0
+        }
+        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _i: u32) -> f64 {
+            0.0
+        }
         fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
-        fn get_state(&self) -> Vec<u8> { Vec::new() }
-        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> { Ok(()) }
-        fn latency_samples(&self) -> u32 { 0 }
-        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool { false }
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
         fn close_editor(&mut self) {}
-        fn has_editor(&self) -> bool { false }
+        fn has_editor(&self) -> bool {
+            false
+        }
     }
 
     let engine = DawEngine::new();
-    let key_id = add_audio_track_with_sine(&engine, "Key", "stem-key", SAMPLE_RATE, 0.5, 100.0, 0.8);
+    let key_id =
+        add_audio_track_with_sine(&engine, "Key", "stem-key", SAMPLE_RATE, 0.5, 100.0, 0.8);
     let bass_id =
         add_audio_track_with_sine(&engine, "Bass", "stem-bass", SAMPLE_RATE, 1.0, 1000.0, 0.5);
     {
@@ -1409,7 +1455,11 @@ fn stem_render_keeps_its_sidechain_key() {
         }
     }
     let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
-        if id == "test.ducker" { Some(Box::new(Ducker)) } else { None }
+        if id == "test.ducker" {
+            Some(Box::new(Ducker))
+        } else {
+            None
+        }
     };
 
     // Render the BASS STEM: everything but the bass is excluded from the mix.
@@ -1493,7 +1543,9 @@ fn plugin_latency_is_compensated() {
         fn descriptor(&self) -> &PluginDescriptor {
             unreachable!("descriptor not needed once hosted")
         }
-        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> { Ok(()) }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+            Ok(())
+        }
         fn deactivate(&mut self) {}
         fn process(
             &mut self,
@@ -1505,7 +1557,11 @@ fn plugin_latency_is_compensated() {
         ) {
             for ch in 0..2 {
                 let inp: &[f32] = inputs.get(ch).copied().unwrap_or(&[]);
-                let hist = if ch == 0 { &mut self.buf_l } else { &mut self.buf_r };
+                let hist = if ch == 0 {
+                    &mut self.buf_l
+                } else {
+                    &mut self.buf_r
+                };
                 if let Some(out) = outputs.get_mut(ch) {
                     out.clear();
                     for i in 0..num_samples {
@@ -1517,21 +1573,45 @@ fn plugin_latency_is_compensated() {
                 }
             }
         }
-        fn get_parameter_count(&self) -> u32 { 0 }
-        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> { None }
-        fn get_parameter_value(&self, _i: u32) -> f64 { 0.0 }
+        fn get_parameter_count(&self) -> u32 {
+            0
+        }
+        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _i: u32) -> f64 {
+            0.0
+        }
         fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
-        fn get_state(&self) -> Vec<u8> { Vec::new() }
-        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> { Ok(()) }
-        fn latency_samples(&self) -> u32 { LAT as u32 }
-        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool { false }
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            LAT as u32
+        }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
         fn close_editor(&mut self) {}
-        fn has_editor(&self) -> bool { false }
+        fn has_editor(&self) -> bool {
+            false
+        }
     }
 
     let engine = DawEngine::new();
     add_audio_track_with_sine(&engine, "Clean", "pdc-clean", SAMPLE_RATE, 1.0, 440.0, 0.5);
-    let latent = add_audio_track_with_sine(&engine, "Latent", "pdc-latent", SAMPLE_RATE, 1.0, 440.0, 0.5);
+    let latent = add_audio_track_with_sine(
+        &engine,
+        "Latent",
+        "pdc-latent",
+        SAMPLE_RATE,
+        1.0,
+        440.0,
+        0.5,
+    );
     {
         let mut project = engine.project.lock();
         if let Some(t) = project.track_mut(&latent) {
@@ -1547,7 +1627,10 @@ fn plugin_latency_is_compensated() {
     }
     let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
         if id == "test.latent" {
-            Some(Box::new(LatentDelay { buf_l: Vec::new(), buf_r: Vec::new() }))
+            Some(Box::new(LatentDelay {
+                buf_l: Vec::new(),
+                buf_r: Vec::new(),
+            }))
         } else {
             None
         }
@@ -1561,17 +1644,27 @@ fn plugin_latency_is_compensated() {
             0,
             Some(&factory),
             |_| {},
-            |block| { out.extend_from_slice(block); true },
+            |block| {
+                out.extend_from_slice(block);
+                true
+            },
         )
         .unwrap();
 
     // Two aligned 440 Hz tones sum coherently; a 512-sample offset at 440 Hz is
     // ~4.7 periods, so misalignment shows up as a very different summed level.
     // Measure well past the delay so both tracks are flowing.
-    let left: Vec<f32> = out.chunks(2).skip(SAMPLE_RATE as usize / 8).map(|f| f[0]).collect();
+    let left: Vec<f32> = out
+        .chunks(2)
+        .skip(SAMPLE_RATE as usize / 8)
+        .map(|f| f[0])
+        .collect();
     let peak = left.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
     let single = 0.5f32 * std::f32::consts::FRAC_1_SQRT_2; // one sine at pan-centre
-    eprintln!("PDC: summed peak={peak:.4} (one track would be {single:.4}, two aligned ~{:.4})", single * 2.0);
+    eprintln!(
+        "PDC: summed peak={peak:.4} (one track would be {single:.4}, two aligned ~{:.4})",
+        single * 2.0
+    );
     assert!(
         peak > single * 1.7,
         "with PDC the two tracks must arrive aligned and sum to ~2x one track \

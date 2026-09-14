@@ -11,6 +11,7 @@
 //! Run:
 //!   HW_FX_WAV_DIR=/some/dir cargo test -p hardwave-native-plugins --test render_fx_wav -- --nocapture
 
+use hardwave_engine::engine::OfflineInsertFactory;
 use hardwave_engine::{AudioBuffer, DawEngine};
 use hardwave_native_plugins::distortion::NativeDistortion;
 use hardwave_plugin_host::types::HostedPlugin;
@@ -71,14 +72,21 @@ fn build_sine_engine() -> (DawEngine, String) {
 }
 
 /// Render the whole track to an interleaved stereo buffer.
-fn render(engine: &DawEngine, factory: Option<&dyn Fn(&str) -> Option<Box<dyn HostedPlugin>>>) -> Vec<f32> {
+fn render(engine: &DawEngine, factory: Option<OfflineInsertFactory<'_>>) -> Vec<f32> {
     let total = (SR as f32 * SECONDS) as u64;
     let mut out = Vec::with_capacity(total as usize * 2);
     engine
-        .render_offline_with(SR, total, 0, factory, |_| {}, |block| {
-            out.extend_from_slice(block);
-            true
-        })
+        .render_offline_with(
+            SR,
+            total,
+            0,
+            factory,
+            |_| {},
+            |block| {
+                out.extend_from_slice(block);
+                true
+            },
+        )
         .unwrap();
     out
 }

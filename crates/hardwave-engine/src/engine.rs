@@ -991,8 +991,7 @@ impl DawEngine {
         // service the request, and it can't while we hold that lock. Returns
         // None when the engine isn't started (offline tests, headless renders),
         // in which case the stored state is still the best available.
-        let live_plugin_states =
-            self.snapshot_plugin_states(std::time::Duration::from_millis(500));
+        let live_plugin_states = self.snapshot_plugin_states(std::time::Duration::from_millis(500));
 
         let mut project_snapshot = self.project.lock().clone();
         if let Some(states) = live_plugin_states {

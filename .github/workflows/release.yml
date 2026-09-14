@@ -164,19 +164,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            tauri-bundles: deb,appimage,updater
+          # Windows-only lane (2026-09-14, founder call): the Linux and macOS
+          # legs are parked so a tag reaches a testable installer as fast as
+          # the runners allow. Every gate still runs. Uncomment both legs to
+          # go back to a three-platform release; while they are off,
+          # latest.json carries no Linux or macOS entry, so users on those
+          # platforms stay on the version they have.
+          # - platform: ubuntu-22.04
+          #   target: x86_64-unknown-linux-gnu
+          #   tauri-bundles: deb,appimage,updater
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             # NSIS is what the updater + branded launcher consume. .msi is
             # a duplicate installer format end-users never asked for and
             # adds ~90s to Windows bundle.
             tauri-bundles: nsis,updater
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-            # Skip rpm-equivalent extras. .app is implicit inside the DMG.
-            tauri-bundles: app,dmg,updater
+          # - platform: macos-latest
+          #   target: aarch64-apple-darwin
+          #   # Skip rpm-equivalent extras. .app is implicit inside the DMG.
+          #   tauri-bundles: app,dmg,updater
 
     runs-on: ${{ matrix.platform }}
 
