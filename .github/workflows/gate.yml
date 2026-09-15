@@ -26,6 +26,13 @@ jobs:
   gate:
     runs-on: [self-hosted, Windows, hardwave-daw]
     timeout-minutes: 45
+    # The runner has no pwsh, which is what Actions picks by default on
+    # Windows. Every step below is one command on purpose: PowerShell 5.1
+    # only surfaces the last command's exit code, so a multi-line block would
+    # hide a failing npm ci behind a passing npm run build.
+    defaults:
+      run:
+        shell: powershell
     env:
       CARGO_NET_RETRY: 10
       CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
@@ -36,7 +43,6 @@ jobs:
       # First run doubles as a machine census: how much this box can take
       # (build jobs, whether it can host heavier work later).
       - name: Machine
-        shell: pwsh
         run: |
           Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | Format-List
           "{0:N1} GB RAM" -f ((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
@@ -61,11 +67,18 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
-      - name: Frontend
-        shell: bash
-        run: |
-          cd packages/daw-ui
-          npm ci
-          npm run typecheck
-          npm run test:unit
-          npm run build
+      - name: Frontend install
+        working-directory: packages/daw-ui
+        run: npm ci
+
+      - name: Frontend typecheck
+        working-directory: packages/daw-ui
+        run: npm run typecheck
+
+      - name: Frontend unit tests
+        working-directory: packages/daw-ui
+        run: npm run test:unit
+
+      - name: Frontend build
+        working-directory: packages/daw-ui
+        run: npm run build
