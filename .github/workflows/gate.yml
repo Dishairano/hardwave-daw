@@ -1,0 +1,71 @@
+# Fast gate on the founder's Windows PC.
+#
+# The release gate (fmt + clippy + cargo test --workspace) takes about 15
+# minutes on web01: 2 cores, 3.7 GB RAM shared with the production site, and
+# cold Rust builds must run single-job or the OOM killer takes them. The same
+# gate on a real desktop with a warm target directory is 2 to 3 minutes.
+#
+# This runs on every push to the working branch so a tag is only ever cut on
+# a tree that has already been proven green. It deliberately does NOT gate the
+# release: release.yml keeps its own Lint & Test job on a GitHub runner, so a
+# tag still works when the PC is off.
+name: Gate
+
+on:
+  push:
+    branches:
+      - redesign-port-from-master
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: [self-hosted, Windows, hardwave-daw]
+    timeout-minutes: 45
+    env:
+      CARGO_NET_RETRY: 10
+      CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      # First run doubles as a machine census: how much this box can take
+      # (build jobs, whether it can host heavier work later).
+      - name: Machine
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | Format-List
+          "{0:N1} GB RAM" -f ((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+          Get-PSDrive C | Select-Object @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}},@{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}} | Format-List
+          node --version; npm --version
+          (rustc -V) 2>&1 | Out-String
+
+      # rust-toolchain.toml pins the version, so this installs exactly what
+      # the release gate and CI use. No repeat of the 1.95 vs 1.98 drift that
+      # killed v0.208.0.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Frontend
+        shell: bash
+        run: |
+          cd packages/daw-ui
+          npm ci
+          npm run typecheck
+          npm run test:unit
+          npm run build

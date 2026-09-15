@@ -101,6 +101,19 @@ else
   # then every tag died at CI's `cargo fmt --check` — eight releases
   # never reached users. Anything CI gates on must fail HERE, before
   # the tag exists.
+  # ./scripts/gate.sh stamps the fingerprint of a tree it proved green,
+  # together with the rustc that proved it. When that stamp matches what we
+  # are about to release, running the identical 15-minute gate again can only
+  # repeat the same answer, so skip it. Any edited, added or deleted file
+  # changes the fingerprint, and a different toolchain changes the stamp
+  # name, so both fall through to the full gate below. The stamp lives in
+  # .git/ and is never shared between machines.
+  # A stamp we cannot compute (no rustc on PATH) means no skip, never a skip.
+  GATE_STAMP=$(./scripts/gate.sh --stamp-path 2>/dev/null || true)
+  if [ -n "$GATE_STAMP" ] && [ -f "$GATE_STAMP" ]; then
+    echo "release.sh: gate.sh already proved this exact tree green on this toolchain"
+    echo "release.sh: stamp $GATE_STAMP"
+  else
   echo "cargo fmt --check..."
   if ! cargo fmt --all -- --check; then
     echo "release.sh: rustfmt differences — run 'cargo fmt --all' and re-release." >&2
@@ -115,6 +128,7 @@ else
   if ! cargo test --workspace; then
     echo "release.sh: workspace tests FAILED — refusing to release." >&2
     exit 1
+  fi
   fi
 fi
 

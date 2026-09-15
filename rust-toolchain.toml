@@ -1,0 +1,11 @@
+# Pin the toolchain so every place that gates this repo uses the same rustc.
+#
+# CI installs `dtolnay/rust-toolchain@stable`, which tracks whatever Rust is
+# newest that day. On 2026-09-14 that was 1.98 while this dev box was on 1.95,
+# so a lint that did not exist locally (chunks_exact_to_as_chunks) failed CI
+# after a green local gate and v0.208.0 died without a build or a changelog.
+# With this file, local, the self-hosted runner and CI all resolve the same
+# version; bumping Rust becomes a deliberate commit.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
