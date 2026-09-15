@@ -5,7 +5,7 @@
  * Lets visual changes be verified before a build.
  *
  * Pick the panel with `?panel=` — playlist (default) | mixer | channelrack |
- * pianoroll. Served only via screenshot.html on the vite dev server; the
+ * pianoroll | wizard | browser. Served only via screenshot.html on the vite dev server; the
  * production bundle (index.html → main.tsx) never imports this.
  */
 import './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
@@ -23,6 +23,22 @@ import { useTransportStore } from '../stores/transportStore'
 import { SetupWizard } from '../components/SetupWizard'
 import '../components/SetupWizard.css'
 import { useSetupWizardStore } from '../stores/setupWizardStore'
+import { Browser } from '../components/browser/Browser'
+import { useBrowserStore } from '../stores/browserStore'
+
+/** Browser panel with a sample library added to Places and two folders open. */
+function BrowserShot() {
+  const [ready, setReady] = React.useState(false)
+  React.useEffect(() => {
+    const root = '/Users/producer/Samples'
+    useBrowserStore.setState({
+      diskRoots: [root],
+      expandedDiskPaths: new Set([root, `${root}/Kicks`]),
+    })
+    setReady(true)
+  }, [])
+  return ready ? <Browser /> : null
+}
 
 /** Renders the SetupWizard opened on the audio step for UI screenshots. */
 function WizardShot() {
@@ -123,6 +139,8 @@ function Harness() {
       return <Full><PianoRoll /></Full>
     case 'wizard':
       return <Full><WizardShot /></Full>
+    case 'browser':
+      return <Full><BrowserShot /></Full>
     default:
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>

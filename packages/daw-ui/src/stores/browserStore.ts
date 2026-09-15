@@ -7,6 +7,8 @@ const FOLDERS_KEY = 'hardwave.daw.fileFolders'
 const FILE_FOLDER_MAP_KEY = 'hardwave.daw.fileFolderMap'
 const EXPANDED_FOLDERS_KEY = 'hardwave.daw.expandedFolders'
 const FILE_TAGS_KEY = 'hardwave.daw.fileTags'
+const DISK_ROOTS_KEY = 'hardwave.daw.browserDiskRoots'
+const EXPANDED_DISK_PATHS_KEY = 'hardwave.daw.browserExpandedDiskPaths'
 const RECENT_MAX = 25
 
 function loadList(key: string): string[] {
@@ -57,6 +59,24 @@ function isDescendantOf(folders: FolderNode[], candidateId: string, possibleAnce
   return false
 }
 
+/**
+ * Canonical form for a folder added to Places: trimmed, no trailing
+ * separator, except a filesystem root (`/`, `C:\\`) which keeps its own.
+ */
+export function normalizeDiskPath(path: string): string {
+  const trimmed = path.trim()
+  if (/^[A-Za-z]:[\\/]?$/.test(trimmed)) return trimmed.slice(0, 2) + '\\'
+  if (/^[\\/]+$/.test(trimmed)) return trimmed.slice(0, 1)
+  return trimmed.replace(/[\\/]+$/, '')
+}
+
+/** True when `path` is `root` itself or anything below it. */
+export function isSameOrInsideDiskPath(path: string, root: string): boolean {
+  if (path === root) return true
+  const withSep = /[\\/]$/.test(root) ? root : root + (root.includes('\\') ? '\\' : '/')
+  return path.startsWith(withSep)
+}
+
 interface BrowserState {
   pluginFavorites: Set<string>
   fileFavorites: Set<string>
@@ -67,6 +87,11 @@ interface BrowserState {
   expandedFolders: Set<string>
 
   fileTags: Record<string, string[]>
+
+  /** Real folders on disk, shown in the browser's Places tree. */
+  diskRoots: string[]
+  /** Disk folders (roots or below) the user has opened in the tree. */
+  expandedDiskPaths: Set<string>
 
   togglePluginFavorite: (id: string) => void
   toggleFileFavorite: (path: string) => void
@@ -85,6 +110,10 @@ interface BrowserState {
   addFileTag: (path: string, tag: string) => void
   removeFileTag: (path: string, tag: string) => void
   clearFileTags: (path: string) => void
+
+  addDiskRoot: (path: string) => void
+  removeDiskRoot: (path: string) => void
+  toggleDiskPathExpanded: (path: string) => void
 }
 
 export const useBrowserStore = create<BrowserState>((set, get) => ({
@@ -97,6 +126,9 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
   expandedFolders: new Set(loadList(EXPANDED_FOLDERS_KEY)),
 
   fileTags: loadJson<Record<string, string[]>>(FILE_TAGS_KEY, {}),
+
+  diskRoots: loadList(DISK_ROOTS_KEY),
+  expandedDiskPaths: new Set(loadList(EXPANDED_DISK_PATHS_KEY)),
 
   togglePluginFavorite: (id) => {
     const next = new Set(get().pluginFavorites)
@@ -242,5 +274,39 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
     delete next[path]
     saveJson(FILE_TAGS_KEY, next)
     set({ fileTags: next })
+  },
+
+  addDiskRoot: (path) => {
+    const root = normalizeDiskPath(path)
+    if (!root || get().diskRoots.includes(root)) return
+    const next = [...get().diskRoots, root]
+    // A folder you just added is one you want to look inside.
+    const expanded = new Set(get().expandedDiskPaths)
+    expanded.add(root)
+    saveList(DISK_ROOTS_KEY, next)
+    saveList(EXPANDED_DISK_PATHS_KEY, Array.from(expanded))
+    set({ diskRoots: next, expandedDiskPaths: expanded })
+  },
+
+  removeDiskRoot: (path) => {
+    if (!get().diskRoots.includes(path)) return
+    const next = get().diskRoots.filter(p => p !== path)
+    // Drop the open-folder state under the removed root so it can't pile up.
+    // Another root that contains this one keeps its own entries.
+    const expanded = new Set(
+      Array.from(get().expandedDiskPaths).filter(p =>
+        !isSameOrInsideDiskPath(p, path) || next.some(r => isSameOrInsideDiskPath(p, r)),
+      ),
+    )
+    saveList(DISK_ROOTS_KEY, next)
+    saveList(EXPANDED_DISK_PATHS_KEY, Array.from(expanded))
+    set({ diskRoots: next, expandedDiskPaths: expanded })
+  },
+
+  toggleDiskPathExpanded: (path) => {
+    const next = new Set(get().expandedDiskPaths)
+    if (next.has(path)) next.delete(path); else next.add(path)
+    saveList(EXPANDED_DISK_PATHS_KEY, Array.from(next))
+    set({ expandedDiskPaths: next })
   },
 }))

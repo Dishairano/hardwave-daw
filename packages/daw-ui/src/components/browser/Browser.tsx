@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { usePluginStore } from '../../stores/pluginStore'
 import { useTrackStore } from '../../stores/trackStore'
-import { useBrowserStore, type FolderNode } from '../../stores/browserStore'
+import { useBrowserStore, isSameOrInsideDiskPath, type FolderNode } from '../../stores/browserStore'
 import { useSampleEditorStore } from '../../stores/sampleEditorStore'
 import { useBeatSlicerStore } from '../../stores/beatSlicerStore'
 import { DetachButton } from '../FloatingWindow'
@@ -389,6 +390,9 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
   const addFileTag = useBrowserStore(s => s.addFileTag)
   const removeFileTag = useBrowserStore(s => s.removeFileTag)
   const clearFileTags = useBrowserStore(s => s.clearFileTags)
+  const diskRoots = useBrowserStore(s => s.diskRoots)
+  const addDiskRoot = useBrowserStore(s => s.addDiskRoot)
+  const removeDiskRoot = useBrowserStore(s => s.removeDiskRoot)
   const { selectedTrackId, importAudioFile } = useTrackStore()
   const [query, setQuery] = useState('')
   const [previewing, setPreviewing] = useState<string | null>(null)
@@ -458,6 +462,31 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
       pushRecent(path)
     } catch {}
   }
+
+  const pickDiskRoot = async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({ directory: true, multiple: false, title: 'Add a folder to the browser' })
+      if (typeof selected === 'string') addDiskRoot(selected)
+    } catch {}
+  }
+
+  const renderDiskFile = (path: string, depth: number) => (
+    <FileItem
+      key={path} path={path} depth={depth}
+      showDir={false}
+      isFavorite={fileFavorites.has(path)}
+      isPreviewing={previewing === path}
+      autoPreview={autoPreview}
+      tags={fileTags[path] ?? []}
+      onAddTag={() => handleAddTag(path)}
+      onRemoveTag={(t) => removeFileTag(path, t)}
+      onClearTags={() => clearFileTags(path)}
+      onToggleFavorite={() => toggleFav(path)}
+      onPreview={() => preview(path)}
+      onImport={() => importOne(path)}
+    />
+  )
 
   const preview = async (path: string) => {
     if (currentAudioRef.current) {
@@ -640,6 +669,33 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         />
       )}
 
+      <div data-testid="browser-places">
+        <TreeGroup
+          label="Places"
+          count={diskRoots.length}
+          expanded
+          onToggle={() => {}}
+          actionLabel="Add folder"
+          onAction={pickDiskRoot}
+        >
+          {diskRoots.map(root => (
+            <DiskFolder
+              key={root}
+              path={root}
+              depth={0}
+              onRemoveRoot={() => removeDiskRoot(root)}
+              filter={filter}
+              renderFile={renderDiskFile}
+            />
+          ))}
+          {diskRoots.length === 0 && (
+            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 9 }}>
+              Add a folder on disk, like a sample pack, to browse it here.
+            </div>
+          )}
+        </TreeGroup>
+      </div>
+
       <div
         onDragOver={(e) => {
           const data = e.dataTransfer.types.includes('application/x-hw-browser')
@@ -710,6 +766,156 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         )}
       </TreeGroup>
     </>
+  )
+}
+
+interface DiskEntry {
+  name: string
+  path: string
+  isDir: boolean
+  sizeBytes: number
+}
+
+// Folder listings survive tab switches and panel re-mounts. A root's refresh
+// button drops everything cached under it.
+const diskListingCache = new Map<string, DiskEntry[]>()
+
+function dropCachedListingsUnder(root: string) {
+  for (const key of Array.from(diskListingCache.keys())) {
+    if (isSameOrInsideDiskPath(key, root)) diskListingCache.delete(key)
+  }
+}
+
+function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, renderFile }: {
+  path: string
+  name?: string
+  depth: number
+  /** Bumped by a root's refresh so every open subfolder lists itself again. */
+  generation?: number
+  /** Only set on a Places root: adds the refresh and remove buttons. */
+  onRemoveRoot?: () => void
+  filter: (path: string) => boolean
+  renderFile: (path: string, depth: number) => React.ReactNode
+}) {
+  const expanded = useBrowserStore(s => s.expandedDiskPaths.has(path))
+  const toggleExpanded = useBrowserStore(s => s.toggleDiskPathExpanded)
+  const [entries, setEntries] = useState<DiskEntry[] | null>(() => diskListingCache.get(path) ?? null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [reloadToken, setReloadToken] = useState(0)
+  const [hover, setHover] = useState(false)
+  const isRoot = onRemoveRoot !== undefined
+  const label = name ?? (path.split(/[\\/]/).filter(Boolean).pop() || path)
+  const childGeneration = isRoot ? reloadToken : generation
+
+  useEffect(() => {
+    if (!expanded) return
+    const cached = diskListingCache.get(path)
+    if (cached) { setEntries(cached); setError(null); return }
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    invoke<DiskEntry[]>('list_directory', { path })
+      .then(list => {
+        // Cache even if this row closed mid-request, so reopening is instant.
+        diskListingCache.set(path, list)
+        if (!cancelled) setEntries(list)
+      })
+      .catch(e => { if (!cancelled) { setEntries(null); setError(String(e)) } })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [expanded, path, reloadToken])
+
+  const refresh = () => {
+    dropCachedListingsUnder(path)
+    setReloadToken(t => t + 1)
+    if (!expanded) toggleExpanded(path)
+  }
+
+  const dirs = entries?.filter(e => e.isDir) ?? []
+  const files = entries?.filter(e => !e.isDir && filter(e.path)) ?? []
+  const hint: React.CSSProperties = {
+    padding: `3px 6px 3px ${22 + depth * 12}px`, color: hw.textFaint, fontSize: 9,
+  }
+  const iconButton: React.CSSProperties = {
+    width: 16, height: 16, padding: 0,
+    background: 'transparent', border: 'none',
+    color: hw.textFaint, fontSize: 10, cursor: 'pointer',
+  }
+
+  return (
+    <div>
+      <div
+        onClick={() => toggleExpanded(path)}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        title={path}
+        data-testid={isRoot ? 'browser-disk-root' : 'browser-disk-folder'}
+        style={{
+          padding: `3px 6px 3px ${8 + depth * 12}px`,
+          display: 'flex', alignItems: 'center', gap: 4,
+          fontSize: 10, cursor: 'pointer',
+          background: hover ? 'rgba(255,255,255,0.06)' : 'transparent',
+          transition: 'background 0.1s',
+        }}
+      >
+        <span style={{
+          fontSize: 8, color: hw.textMuted,
+          transform: expanded ? 'rotate(90deg)' : 'none',
+          display: 'inline-block', transition: 'transform 150ms',
+          width: 8,
+        }}>▶</span>
+        <span style={{
+          flex: 1, minWidth: 0, color: hw.textPrimary,
+          fontWeight: isRoot ? 600 : 400,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {label}
+        </span>
+        {expanded && entries && (
+          <span style={{ fontSize: 9, color: hw.textFaint }}>{dirs.length + files.length}</span>
+        )}
+        {isRoot && (
+          <>
+            <button
+              onClick={(e) => { e.stopPropagation(); refresh() }}
+              title="Refresh"
+              style={iconButton}
+            >
+              ⟳
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onRemoveRoot?.() }}
+              title="Remove from Places (nothing on disk is deleted)"
+              style={iconButton}
+            >
+              ×
+            </button>
+          </>
+        )}
+      </div>
+      {expanded && (
+        <div>
+          {loading && !entries && <div style={hint}>Loading…</div>}
+          {error && <div style={{ ...hint, color: hw.yellow }}>{error}</div>}
+          {dirs.map(d => (
+            <DiskFolder
+              key={`${d.path}#${childGeneration}`}
+              path={d.path}
+              name={d.name}
+              depth={depth + 1}
+              generation={childGeneration}
+              filter={filter}
+              renderFile={renderFile}
+            />
+          ))}
+          {files.map(f => renderFile(f.path, depth + 1))}
+          {entries && dirs.length === 0 && files.length === 0 && (
+            <div style={hint}>{entries.length === 0 ? 'No audio files here.' : 'No matches.'}</div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -881,7 +1087,7 @@ function PluginItem({ plugin, canAdd, isFavorite, onToggleFavorite }: {
   )
 }
 
-function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = false, tags = [], onAddTag, onRemoveTag, onClearTags, onToggleFavorite, onPreview, onImport, onRemove }: {
+function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = false, tags = [], onAddTag, onRemoveTag, onClearTags, onToggleFavorite, onPreview, onImport, onRemove, showDir = true }: {
   path: string; depth?: number; isFavorite: boolean; isPreviewing: boolean;
   autoPreview?: boolean;
   tags?: string[];
@@ -889,7 +1095,9 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
   onRemoveTag?: (tag: string) => void;
   onClearTags?: () => void;
   onToggleFavorite: () => void; onPreview: () => void;
-  onImport: () => void; onRemove: () => void;
+  onImport: () => void; onRemove?: () => void;
+  /** Hide the parent-folder subtitle where a tree already shows it. */
+  showDir?: boolean;
 }) {
   const name = path.split(/[\\/]/).pop() || path
   const dir = path.slice(0, path.length - name.length).replace(/[\\/]+$/, '')
@@ -952,7 +1160,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
         }}>
           {name}
         </div>
-        {dir && (
+        {showDir && dir && (
           <div style={{
             fontSize: 8, color: hw.textFaint,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -1008,17 +1216,19 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
       >
         {isFavorite ? '★' : '☆'}
       </button>
-      <button
-        onClick={(e) => { e.stopPropagation(); onRemove() }}
-        title="Remove"
-        style={{
-          width: 16, height: 16, padding: 0,
-          background: 'transparent', border: 'none',
-          color: hw.textFaint, fontSize: 10, cursor: 'pointer',
-        }}
-      >
-        ×
-      </button>
+      {onRemove && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onRemove() }}
+          title="Remove"
+          style={{
+            width: 16, height: 16, padding: 0,
+            background: 'transparent', border: 'none',
+            color: hw.textFaint, fontSize: 10, cursor: 'pointer',
+          }}
+        >
+          ×
+        </button>
+      )}
       {ctxMenu && (
         <div
           data-file-ctx-menu
@@ -1064,8 +1274,12 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
               )}
             </>
           )}
-          <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
-          <FileMenuItem label="Remove from list" danger onClick={() => { setCtxMenu(null); onRemove() }} />
+          {onRemove && (
+            <>
+              <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+              <FileMenuItem label="Remove from list" danger onClick={() => { setCtxMenu(null); onRemove() }} />
+            </>
+          )}
         </div>
       )}
     </div>

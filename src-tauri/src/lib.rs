@@ -263,6 +263,8 @@ pub fn run() {
             commands::engine::set_audio_host,
             commands::engine::get_wasapi_exclusive,
             commands::engine::set_wasapi_exclusive,
+            // Browser
+            commands::browser::list_directory,
             // Audio
             commands::audio::import_audio_file,
             commands::audio::get_track_clips,

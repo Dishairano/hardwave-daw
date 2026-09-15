@@ -93,6 +93,23 @@ function synthNotes() {
   return notes
 }
 
+// Browser Places tree: a small fake sample library for the screenshot
+// harness and Playwright. Shape matches the Rust `BrowserEntry`.
+function mockDirectory(path: string) {
+  const entry = (name: string, isDir: boolean, sizeBytes = 0) =>
+    ({ name, path: `${path}/${name}`, isDir, sizeBytes })
+  const leaf = path.split('/').pop() ?? ''
+  if (leaf === 'Kicks') {
+    return ['Kick Hard 01.wav', 'Kick Hard 02.wav', 'Kick Rawstyle 03.wav', 'Kick Tail 04.wav']
+      .map(n => entry(n, false, 412_000))
+  }
+  if (leaf === 'Snares') return ['Clap 01.wav', 'Snare Roll 140.wav'].map(n => entry(n, false, 236_000))
+  if (leaf === 'Samples') {
+    return [entry('Kicks', true), entry('Loops', true), entry('Snares', true), entry('Screech 150 F.wav', false, 1_840_000)]
+  }
+  return []
+}
+
 const mock: TauriInternals = {
   transformCallback: (cb) => cb,
   unregisterCallback: () => {},
@@ -102,6 +119,10 @@ const mock: TauriInternals = {
         return synthPeaks((args?.numBuckets as number) ?? 256)
       case 'get_midi_notes':
         return synthNotes()
+      case 'list_directory':
+        return mockDirectory(String(args?.path ?? ''))
+      case 'plugin:dialog|open':
+        return '/Users/producer/Samples'
       // List-shaped commands must return arrays, not null (consumers iterate).
       case 'list_sends':
       case 'get_sends':
