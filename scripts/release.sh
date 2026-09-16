@@ -227,7 +227,22 @@ FIXES=$(echo "$FIXES" | awk '!seen[$0]++' | sed '/^$/d')
 IMPROVEMENTS=$(echo "$IMPROVEMENTS" | awk '!seen[$0]++' | sed '/^$/d')
 
 CHANGELOG_FILE="RELEASE_CHANGELOG.md"
+
+# Plain-language release notes, written by hand in the commit message after a
+# line reading `--- release notes ---`. Everything after that marker, minus
+# the bullets, goes into the tag annotation and becomes the body of the
+# Discord announcement. Without it an announcement is a bare list of
+# one-liners with nothing explaining what changed or what you will notice.
+RELEASE_NOTES=$(printf '%s\n' "$MSG" \
+  | sed -n '/^--- release notes ---$/,$p' \
+  | tail -n +2 \
+  | grep -v '^\s*[-*] ' \
+  | sed '/^[[:space:]]*$/N;/^[[:space:]]*\n[[:space:]]*$/D')
+
 {
+  if [ -n "$RELEASE_NOTES" ]; then
+    printf '%s\n\n' "$RELEASE_NOTES"
+  fi
   HAS_ANY=0
   if [ -n "$FEATURES" ]; then
     echo "### New features"
