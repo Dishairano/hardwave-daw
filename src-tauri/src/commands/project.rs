@@ -161,6 +161,23 @@ pub fn set_channel_rack_state(state: State<AppState>, payload: Option<String>) {
     project.channel_rack_state = payload;
 }
 
+/// Markers and the punch range, as the UI serialises them. Opaque here on
+/// purpose: the shape belongs to the frontend, this only has to survive
+/// save and load with the project instead of in browser storage.
+#[tauri::command]
+pub fn get_timeline_state(state: State<AppState>) -> Option<String> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    project.timeline_state.clone()
+}
+
+#[tauri::command]
+pub fn set_timeline_state(state: State<AppState>, payload: Option<String>) {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    project.timeline_state = payload;
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TempoEntryInfo {
     pub tick: u64,

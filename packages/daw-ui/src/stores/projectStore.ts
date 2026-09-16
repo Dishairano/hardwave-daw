@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { invokeOrToast } from '../api/invoke'
 import { usePatternStore } from './patternStore'
+import { hydrateTimelineState, resetTimelineState, serializeTimelineState } from './timelineState'
 
 interface ProjectInfo {
   name: string
@@ -53,11 +54,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await invoke('new_project')
     usePatternStore.getState().hydrate(null)
     await invoke('set_channel_rack_state', { payload: null })
+    // A new song starts with no markers and no punch range.
+    resetTimelineState()
     set({ filePath: null, projectName: 'Untitled', dirty: false })
   },
 
   saveProject: async (path?: string) => {
     await invoke('set_channel_rack_state', { payload: usePatternStore.getState().serialize() })
+    await invoke('set_timeline_state', { payload: serializeTimelineState() })
     const savePath = path || get().filePath
     if (!savePath) {
       const { save } = await import('@tauri-apps/plugin-dialog')
@@ -80,6 +84,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await invoke('load_project', { path })
     const rackState = await invoke<string | null>('get_channel_rack_state')
     usePatternStore.getState().hydrate(rackState)
+    hydrateTimelineState(await invoke<string | null>('get_timeline_state'))
     const name = path.split(/[\\/]/).pop()?.replace('.hwp', '') || 'Untitled'
     set({ filePath: path, projectName: name, dirty: false })
     get().pushRecent(path)

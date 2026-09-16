@@ -69,6 +69,7 @@ const DevPanel = React.lazy(() =>
   import('./dev/DevPanel').then(m => ({ default: m.DevPanel })),
 )
 import { useTransportStore } from './stores/transportStore'
+import { startTimelineSync } from './stores/timelineState'
 import { useTrackStore } from './stores/trackStore'
 import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
@@ -162,6 +163,15 @@ export function App() {
     document.documentElement.classList.toggle('hw-no-animations', !animationsEnabled)
     document.documentElement.classList.toggle('hw-high-vis', highVisibility)
   }, [animationsEnabled, highVisibility])
+
+  // Markers and the punch range belong to the project, so edits have to reach
+  // it between explicit saves or an autosave writes a stale timeline. Started
+  // here, in the main window only: a detached panel window runs its own store
+  // instances, and letting those push would overwrite the real timeline with
+  // whatever that panel happens to hold.
+  useEffect(() => {
+    startTimelineSync()
+  }, [])
 
   // Project working-time counter: every 30 seconds while the window has
   // focus, bump the project metadata counter by 30 via tick_project_working_time.

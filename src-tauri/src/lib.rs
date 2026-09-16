@@ -231,6 +231,8 @@ pub fn run() {
             commands::project::tick_project_working_time,
             commands::project::get_channel_rack_state,
             commands::project::set_channel_rack_state,
+            commands::project::get_timeline_state,
+            commands::project::set_timeline_state,
             commands::project::get_tempo_entries,
             commands::project::add_tempo_entry,
             commands::project::remove_tempo_entry,

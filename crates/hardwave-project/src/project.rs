@@ -70,6 +70,19 @@ pub struct Project {
     /// Id of the arrangement currently applied to the live tracks.
     #[serde(default)]
     pub active_arrangement: String,
+    /// Opaque JSON for timeline state the UI owns: markers and the punch
+    /// range. Same ferry pattern as `channel_rack_state`. These lived in the
+    /// browser's localStorage, so they followed the machine instead of the
+    /// song: move or share a .hwp and the markers were gone, while the next
+    /// project you opened inherited them.
+    ///
+    /// MUST STAY LAST. `save` writes MessagePack through `rmp_serde::to_vec`,
+    /// which encodes a struct as a positional array, so a new field anywhere
+    /// but the end shifts every field after it and misreads every existing
+    /// project. Appending leaves older files simply shorter, and serde fills
+    /// the gap from `default`.
+    #[serde(default)]
+    pub timeline_state: Option<String>,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a
@@ -124,6 +137,7 @@ impl Default for Project {
             plugin_states: Vec::new(),
             arrangements: Vec::new(),
             active_arrangement: String::new(),
+            timeline_state: None,
         }
     }
 }
@@ -267,6 +281,61 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeline_state_round_trips_and_defaults_on_legacy_projects() {
+        let dir = std::env::temp_dir().join(format!("hwp-timeline-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("timeline.hwp");
+
+        let mut p = Project::default();
+        assert_eq!(p.timeline_state, None, "a new project has no timeline state");
+        p.timeline_state = Some(r#"{"markers":[{"id":"mk_1","tick":1920}]}"#.to_string());
+        p.save(&path).expect("save");
+
+        let back = Project::load(&path).expect("load");
+        assert_eq!(back.timeline_state.as_deref(), p.timeline_state.as_deref());
+
+        // A project written before this field existed must still load. The
+        // format is MessagePack via rmp_serde::to_vec, which writes a struct
+        // as a positional array, so this mirrors the exact field order of the
+        // previous layout: one element short, with no timeline_state.
+        #[derive(Serialize)]
+        struct LegacyProject<'a> {
+            version: u32,
+            metadata: &'a ProjectMetadata,
+            tempo_map: &'a TempoMap,
+            tracks: Vec<Track>,
+            channel_rack_state: Option<String>,
+            midi_mappings: Option<String>,
+            plugin_states: Vec<PluginStateEntry>,
+            arrangements: Vec<crate::arrangement::Arrangement>,
+            active_arrangement: String,
+        }
+        let legacy = LegacyProject {
+            version: 1,
+            metadata: &p.metadata,
+            tempo_map: &p.tempo_map,
+            tracks: Vec::new(),
+            channel_rack_state: Some("{}".into()),
+            midi_mappings: None,
+            plugin_states: Vec::new(),
+            arrangements: Vec::new(),
+            active_arrangement: "arr-1".into(),
+        };
+        let legacy_path = dir.join("legacy.hwp");
+        let packed = rmp_serde::to_vec(&legacy).unwrap();
+        std::fs::write(&legacy_path, zstd::encode_all(packed.as_slice(), 3).unwrap()).unwrap();
+
+        let loaded = Project::load(&legacy_path).expect("legacy load");
+        assert_eq!(loaded.timeline_state, None, "missing field defaults");
+        // Everything that came before it still lands in the right field,
+        // which is what a mid-struct insertion would have broken.
+        assert_eq!(loaded.channel_rack_state.as_deref(), Some("{}"));
+        assert_eq!(loaded.active_arrangement, "arr-1");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn save_round_trips_and_leaves_no_temp_files() {

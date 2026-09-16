@@ -144,6 +144,11 @@ const mock: TauriInternals = {
           position_samples: 0, bpm: 140, time_sig_numerator: 4,
           time_sig_denominator: 4, master_volume_db: 0, pattern_mode: false,
         }
+      // Markers + punch range now ride in the project, not localStorage.
+      case 'get_timeline_state':
+        return null
+      case 'set_timeline_state':
+        return null
       case 'get_project_meta':
         return { show_on_open: false }
       case 'get_custom_scan_paths':
