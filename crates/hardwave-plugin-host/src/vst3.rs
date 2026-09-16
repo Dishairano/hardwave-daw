@@ -18,6 +18,15 @@
 //! vtable with populated AudioBusBuffers. MIDI events are translated
 //! into the VST3 Event model through a host-owned IEventList stub.
 
+// The `vst3` crate generates its enum constants from the C++ SDK headers, and
+// their integer type follows the platform's C++ ABI: already i32 on Windows
+// MSVC, a different width elsewhere. So `Foo_::kBar as i32` is a real cast on
+// Linux and a no-op on Windows, where clippy then flags every one of them as
+// unnecessary. Dropping the casts breaks the Linux build, and cfg-ing 22 call
+// sites would be far worse than the lint. CI clippy only ran on Linux, so
+// these first showed up when the gate started running on Windows.
+#![allow(clippy::unnecessary_cast)]
+
 use crate::types::*;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
