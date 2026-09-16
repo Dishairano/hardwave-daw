@@ -436,19 +436,10 @@ jobs:
           # Read bullets from the annotated tag and group by prefix.
           RAW=$(printf '%s\n' "$TAG_BODY" | grep '^\s*[-*]' | sed 's/^\s*[-*]\s*//')
 
-          # Everything that is not a bullet or a heading is the release's own
-          # description: the part that explains, in plain language, what
-          # changed and what you will notice. Without it the post was a bare
-          # list of one-liners. Discord caps a description at 4096 characters.
-          # Blank lines are kept on purpose: the notes are written as short
-          # titled blocks, and dropping the spacing would run them together
-          # into one paragraph. cat -s collapses runs of blank lines to one.
-          SUMMARY=$(printf '%s\n' "$TAG_BODY" \
-            | grep -v '^\s*[-*] ' \
-            | grep -v '^\s*#' \
-            | cat -s \
-            | sed -e '/./,$!d' \
-            | head -c 3900)
+          # No prose block: the announcement is its bullets, the way
+          # v0.204.19 read. What makes it informative is each bullet being a
+          # full sentence that names the consequence, not a paragraph bolted
+          # on top of one-word summaries.
 
           FEATURES=""
           FIXES=""
@@ -508,7 +499,6 @@ jobs:
           PAYLOAD=$(jq -n \
             --arg title "Hardwave DAW ${VERSION}" \
             --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${VERSION}" \
-            --arg description "$SUMMARY" \
             --argjson fields "$FIELDS" \
             --arg footer "Release ${VERSION} · ${TOTAL} ${NOUN}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -517,7 +507,6 @@ jobs:
                 "title": $title,
                 "url": $url,
                 "color": 15228416,
-                "description": $description,
                 "fields": $fields,
                 "footer": {
                   "text": $footer

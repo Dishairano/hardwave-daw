@@ -243,6 +243,19 @@ done < <(
   fi
 )
 
+# The release commit's own bullets count too. It is written last, after the
+# loop above has already walked history, so without this the one place meant
+# for a summary contributed nothing: v0.204.19 carried its "fixes users have
+# not received yet" recap there. `- internal:` is dropped the same as
+# anywhere else.
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  case "$line" in
+    -\ internal:*) continue ;;
+  esac
+  classify "$line"
+done < <(printf '%s\n' "$MSG" | grep '^\s*[-*] ' | sed 's/^\s*//; s/^\*/-/' || true)
+
 # Deduplicate each section
 FEATURES=$(echo "$FEATURES" | awk '!seen[$0]++' | sed '/^$/d')
 FIXES=$(echo "$FIXES" | awk '!seen[$0]++' | sed '/^$/d')
@@ -250,21 +263,7 @@ IMPROVEMENTS=$(echo "$IMPROVEMENTS" | awk '!seen[$0]++' | sed '/^$/d')
 
 CHANGELOG_FILE="RELEASE_CHANGELOG.md"
 
-# Plain-language release notes, written by hand in the commit message after a
-# line reading `--- release notes ---`. Everything after that marker, minus
-# the bullets, goes into the tag annotation and becomes the body of the
-# Discord announcement. Without it an announcement is a bare list of
-# one-liners with nothing explaining what changed or what you will notice.
-RELEASE_NOTES=$(printf '%s\n' "$MSG" \
-  | sed -n '/^--- release notes ---$/,$p' \
-  | tail -n +2 \
-  | grep -v '^\s*[-*] ' \
-  | sed '/^[[:space:]]*$/N;/^[[:space:]]*\n[[:space:]]*$/D')
-
 {
-  if [ -n "$RELEASE_NOTES" ]; then
-    printf '%s\n\n' "$RELEASE_NOTES"
-  fi
   HAS_ANY=0
   if [ -n "$FEATURES" ]; then
     echo "### New features"
