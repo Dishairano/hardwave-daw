@@ -1,4 +1,20 @@
+/**
+ * Keeps the engine's click in step with the settings, and still plays custom
+ * click samples here.
+ *
+ * The click itself moved into the engine: this scheduler watched the playhead
+ * from React and fired a WebAudio oscillator, so it drifted against the audio
+ * the engine was playing and could never be part of anything the engine
+ * rendered. The engine now places each beat on its own sample.
+ *
+ * Custom samples are the exception, and still play from here. The engine's
+ * click is synthesised, and teaching it to load a user's own file is its own
+ * piece of work, so until then choosing a custom sound keeps the old
+ * behaviour, drift included, rather than losing the feature. Picking one
+ * switches the engine click off so they cannot double up.
+ */
 import { useEffect, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { useMetronomeStore } from '../../stores/metronomeStore'
 import { useTransportStore } from '../../stores/transportStore'
 
@@ -47,6 +63,21 @@ export function MetronomeScheduler() {
   const customDownbeat = useMetronomeStore(s => s.customDownbeat)
   const customAccent = useMetronomeStore(s => s.customAccent)
 
+  const usingCustomSound = !!(customDownbeat || customAccent)
+
+  // Push settings to the engine. It owns the default click, so these flags
+  // are what decide whether anything sounds and how loud.
+  useEffect(() => {
+    // A custom sample plays from here, so the engine must stay quiet or both
+    // would fire on every beat.
+    invoke('set_metronome_enabled', { enabled: enabled && !usingCustomSound }).catch(() => {})
+  }, [enabled, usingCustomSound])
+  useEffect(() => { invoke('set_metronome_volume', { volume }).catch(() => {}) }, [volume])
+  useEffect(() => { invoke('set_metronome_accent', { accent }).catch(() => {}) }, [accent])
+  useEffect(() => {
+    invoke('set_metronome_record_only', { recordOnly }).catch(() => {})
+  }, [recordOnly])
+
   const ctxRef = useRef<AudioContext | null>(null)
   const lastBeatRef = useRef<number>(-1)
   const lastPlayingRef = useRef<boolean>(false)
@@ -54,7 +85,8 @@ export function MetronomeScheduler() {
   const accentBufRef = useRef<AudioBuffer | null>(null)
 
   useEffect(() => {
-    if (!enabled) return
+    // Engine click: nothing to schedule here.
+    if (!enabled || !usingCustomSound) return
     const Ctor = (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }).AudioContext
       || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
     if (!Ctor) return
@@ -122,7 +154,7 @@ export function MetronomeScheduler() {
       try { ctx.close() } catch {}
       ctxRef.current = null
     }
-  }, [enabled, volume, accent, recordOnly, customDownbeat, customAccent])
+  }, [enabled, usingCustomSound, volume, accent, recordOnly, customDownbeat, customAccent])
 
   return null
 }

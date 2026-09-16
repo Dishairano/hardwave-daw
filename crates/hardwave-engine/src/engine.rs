@@ -186,6 +186,9 @@ pub struct DawEngine {
     /// comfortable.
     audio_xruns: Arc<std::sync::atomic::AtomicU32>,
 
+    /// Click settings, shared with the audio thread.
+    metronome: crate::metronome::MetronomeSettings,
+
     audio_device: AudioDeviceManager,
     command_tx: Sender<EngineCommand>,
     command_rx: Receiver<EngineCommand>,
@@ -284,6 +287,7 @@ impl DawEngine {
             project_dir: Arc::new(Mutex::new(None)),
             audio_load_permille: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             audio_xruns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            metronome: crate::metronome::MetronomeSettings::new(),
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
             pending_state_snapshot: Arc::new(Mutex::new(None)),
@@ -489,6 +493,7 @@ impl DawEngine {
                 load_permille: Arc::clone(&self.audio_load_permille),
                 xruns: Arc::clone(&self.audio_xruns),
             },
+            self.metronome.clone(),
         );
 
         self.audio_device.start(callback).map_err(|e| e.to_string())
@@ -664,6 +669,11 @@ impl DawEngine {
         self.audio_pool.insert(source_id.to_string(), buffer);
 
         Ok(info)
+    }
+
+    /// Click settings. The UI writes these; the audio thread reads them.
+    pub fn metronome(&self) -> &crate::metronome::MetronomeSettings {
+        &self.metronome
     }
 
     /// Audio-thread load: percentage of each block's time budget in use, and
@@ -1166,6 +1176,8 @@ impl DawEngine {
             sample_rate,
             buffer_size as u32,
             LoadCounters::new(),
+            // A bounce is the music, not the guide track.
+            crate::metronome::MetronomeSettings::silent(),
         );
 
         // Populate insert chains from the project metadata so the export
@@ -1288,6 +1300,9 @@ struct EngineCallback {
     /// only here, on the audio thread.
     audio_load_permille: Arc<std::sync::atomic::AtomicU32>,
     audio_xruns: Arc<std::sync::atomic::AtomicU32>,
+    /// Renders the click for this block. The offline renderer is built with
+    /// permanently silent settings, so a bounce cannot contain it.
+    metronome: crate::metronome::Metronome,
 }
 
 /// Audio-thread load counters shared with the UI: how much of each block's
@@ -1392,10 +1407,12 @@ impl EngineCallback {
         sample_rate: u32,
         buffer_size: u32,
         load: LoadCounters,
+        metronome: crate::metronome::MetronomeSettings,
     ) -> Self {
         let mut cb = Self {
             audio_load_permille: load.load_permille,
             audio_xruns: load.xruns,
+            metronome: crate::metronome::Metronome::new(metronome),
             transport,
             project,
             meter_producer,
@@ -2512,6 +2529,33 @@ impl AudioCallback for EngineCallback {
             }
         }
 
+        // The click, last of all.
+        //
+        // After the master tap and the capture path on purpose: the tap feeds
+        // the UI's meters and visualisations and the capture feeds recording,
+        // so mixing the click in before them would print the guide track into
+        // recordings and bounces. Placed from `position_samples`, the same
+        // clock the audio uses, so a beat lands on its own sample instead of
+        // whenever a UI tick noticed it.
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let position = self.transport.position_samples.load(Relaxed);
+            let bpm = self.transport.bpm.load(Relaxed);
+            let (beats_per_bar, _) =
+                crate::transport::unpack_time_sig(self.transport.time_sig.load(Relaxed));
+            let recording = self.transport.recording.load(Relaxed);
+            self.metronome.render(
+                output,
+                num_frames,
+                position,
+                bpm,
+                beats_per_bar,
+                self.sample_rate as f64,
+                playing,
+                recording,
+            );
+        }
+
         // Advance transport only when playing — input-monitoring alone must
         // not move the playhead.
         if playing {
@@ -3021,6 +3065,7 @@ mod rt_safety_tests {
             48_000,
             256,
             LoadCounters::new(),
+            crate::metronome::MetronomeSettings::silent(),
         );
         (cb, cmd_tx)
     }
@@ -3173,6 +3218,7 @@ mod wait_for_input_tests {
             48_000,
             256,
             LoadCounters::new(),
+            crate::metronome::MetronomeSettings::silent(),
         );
         (cb, command_tx)
     }

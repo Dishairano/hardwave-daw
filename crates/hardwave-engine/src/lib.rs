@@ -8,6 +8,7 @@ pub use input_node::CaptureTap;
 pub mod insert_chain;
 pub mod master_node;
 pub mod master_tap;
+pub mod metronome;
 pub mod midi_track_node;
 pub mod parallel_eval;
 pub mod track_node;
