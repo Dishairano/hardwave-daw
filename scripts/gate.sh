@@ -27,14 +27,22 @@ cd "$(git rev-parse --show-toplevel)"
 # rustup installs here and non-login shells do not always have it on PATH.
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# Fingerprint = staged/committed content + working-tree modifications +
-# untracked files + the porcelain status (which is what catches deletions).
+# Fingerprint = the exact content of the working tree, as a git tree hash.
+#
+# Built in a throwaway index so the real one is never touched. The first
+# version of this hashed `git status` output as well, which meant committing
+# the very content that had just passed the gate changed the fingerprint and
+# threw the stamp away: the gate then ran again on byte-identical files. A
+# tree hash only changes when content changes, which is the question being
+# asked.
 tree_fingerprint() {
-  {
-    git ls-files -s
-    git status --porcelain
-    git ls-files -m -o --exclude-standard -z | sort -z | xargs -0 -r sha1sum 2>/dev/null || true
-  } | sha1sum | cut -d' ' -f1
+  local index tree
+  index=$(mktemp)
+  GIT_INDEX_FILE="$index" git read-tree HEAD 2>/dev/null || true
+  GIT_INDEX_FILE="$index" git add -A 2>/dev/null
+  tree=$(GIT_INDEX_FILE="$index" git write-tree)
+  rm -f "$index"
+  echo "$tree"
 }
 
 stamp_path() {
