@@ -97,7 +97,9 @@ mod tests {
 
     #[test]
     fn a_trimmed_log_starts_at_a_line_not_mid_word() {
-        let log: String = (0..500).map(|i| format!("timestamp {i} something happened\n")).collect();
+        let log: String = (0..500)
+            .map(|i| format!("timestamp {i} something happened\n"))
+            .collect();
         let tail = tail_chars(&log, 100);
         let first_real_line = tail.lines().nth(1).unwrap_or("");
         assert!(
