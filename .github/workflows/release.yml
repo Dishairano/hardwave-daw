@@ -440,10 +440,14 @@ jobs:
           # description: the part that explains, in plain language, what
           # changed and what you will notice. Without it the post was a bare
           # list of one-liners. Discord caps a description at 4096 characters.
+          # Blank lines are kept on purpose: the notes are written as short
+          # titled blocks, and dropping the spacing would run them together
+          # into one paragraph. cat -s collapses runs of blank lines to one.
           SUMMARY=$(printf '%s\n' "$TAG_BODY" \
-            | grep -v '^\s*[-*]' \
+            | grep -v '^\s*[-*] ' \
             | grep -v '^\s*#' \
-            | sed '/^[[:space:]]*$/d' \
+            | cat -s \
+            | sed -e '/./,$!d' \
             | head -c 3900)
 
           FEATURES=""
@@ -495,6 +499,13 @@ jobs:
           if [ "$(echo "$FIELDS" | jq 'length')" = "0" ]; then
             FIELDS='[{"name": "Improvements", "value": "• Internal maintenance and stability updates", "inline": false}]'
             TOTAL=1
+          fi
+
+          # Hand-written notes say the same things as the bullets, only in
+          # plain language and with room to explain. Posting both put every
+          # item on screen twice, so when notes exist they are the post.
+          if [ -n "$SUMMARY" ]; then
+            FIELDS='[]'
           fi
 
           NOUN="changes"
