@@ -134,7 +134,16 @@ interface TransportState {
   setSnapValue: (v: SnapValue) => void
   toggleSnap: () => void
   setHorizontalZoom: (z: number) => void
+  /** Fit the whole song into the playlist's width. */
   zoomToFit: () => void
+  /**
+   * Playlist width in pixels and the tick the last clip ends on, both
+   * published by the arrangement. Held here so a fit can be asked for from a
+   * menu or a shortcut without the caller knowing either.
+   */
+  playlistViewportPx: number
+  songEndTicks: number
+  setPlaylistMetrics: (px: number, songEndTicks: number) => void
   setClipColor: (clipId: string, color: string | null) => void
   setEditCursor: (ticks: number | null) => void
   togglePunch: () => void
@@ -145,6 +154,9 @@ interface TransportState {
   tapTempo: () => void
   startListening: () => void
 }
+
+/** Pixels per second of song at zoom 1. The playlist scales from this. */
+export const PIXELS_PER_SECOND_BASE = 100
 
 const TAP_WINDOW_MS = 2000
 const tapTimes: number[] = []
@@ -302,7 +314,32 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   setSnapValue: (v) => set({ snapValue: v, snapEnabled: v !== 'Off' ? true : false }),
   toggleSnap: () => set(s => ({ snapEnabled: !s.snapEnabled })),
   setHorizontalZoom: (z) => set({ horizontalZoom: Math.max(0.1, Math.min(16, z)) }),
-  zoomToFit: () => set({ horizontalZoom: 1 }),
+  // Was `set({ horizontalZoom: 1 })`: a reset dressed as a fit, which is why
+  // nothing ever called it. Fitting needs two facts, the song's length and
+  // the width available, so the arrangement publishes its width and the song
+  // length comes from the clips.
+  zoomToFit: () => {
+    const { bpm, playlistViewportPx, songEndTicks: endTicks } = get()
+    const width = playlistViewportPx
+    if (width <= 0 || bpm <= 0) return
+    if (endTicks <= 0) {
+      // Nothing to fit: leave the zoom alone rather than snapping it.
+      return
+    }
+    const seconds = (endTicks / PPQ_TICKS) * (60 / bpm)
+    if (seconds <= 0) return
+    // A small margin so the last clip does not touch the right edge.
+    const target = (width * 0.97) / (seconds * PIXELS_PER_SECOND_BASE)
+    set({ horizontalZoom: Math.max(0.1, Math.min(16, target)) })
+  },
+  playlistViewportPx: 0,
+  songEndTicks: 0,
+  setPlaylistMetrics: (px, songEndTicks) => {
+    // Called from a render path, so do nothing when nothing changed.
+    const s = get()
+    if (s.playlistViewportPx === px && s.songEndTicks === songEndTicks) return
+    set({ playlistViewportPx: px, songEndTicks })
+  },
   setEditCursor: (ticks) => set({ editCursorTicks: ticks == null ? null : Math.max(0, Math.floor(ticks)) }),
   setClipColor: (clipId, color) => set(s => {
     const next = { ...s.clipColorOverrides }

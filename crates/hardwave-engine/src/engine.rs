@@ -1880,6 +1880,11 @@ impl EngineCallback {
                     let hardwave_project::clip::ClipContent::Midi(midi_ref) = &clip.content else {
                         continue;
                     };
+                    // A muted clip contributes nothing, the same way a muted
+                    // audio clip is skipped.
+                    if midi_ref.clip.muted {
+                        continue;
+                    }
                     for note in &midi_ref.clip.notes {
                         let on_tick = clip.position_ticks + note.start_tick;
                         let off_tick = on_tick + note.duration_ticks.max(1);

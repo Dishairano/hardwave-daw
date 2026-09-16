@@ -293,6 +293,8 @@ pub fn run() {
             commands::audio::delete_clip,
             commands::audio::duplicate_clip,
             commands::audio::split_clip,
+            commands::audio::set_clip_muted,
+            commands::audio::slip_clip,
             commands::audio::set_clip_gain,
             commands::audio::set_clip_fades,
             commands::audio::set_clip_fade_curves,

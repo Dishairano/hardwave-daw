@@ -99,6 +99,17 @@ pub struct MidiClip {
     pub name: String,
     pub notes: Vec<MidiNote>,
     pub length_ticks: u64,
+    /// Silence this clip without deleting it.
+    ///
+    /// The playlist's mute tool had nothing behind it for either kind of
+    /// clip; audio clips at least carried the flag, pattern clips did not.
+    ///
+    /// MUST STAY LAST: projects are MessagePack written by
+    /// `rmp_serde::to_vec`, which encodes a struct positionally, so a field
+    /// added anywhere else shifts every field after it and misreads every
+    /// existing project.
+    #[serde(default)]
+    pub muted: bool,
 }
 
 impl MidiClip {
@@ -108,6 +119,7 @@ impl MidiClip {
             name,
             notes: Vec::new(),
             length_ticks,
+            muted: false,
         }
     }
 }

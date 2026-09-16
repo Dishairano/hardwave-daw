@@ -32,6 +32,9 @@ type DragMode =
   | 'fade-out'
   | 'rubber'
   | 'scrub'
+  // Drag inside a clip with the slip tool: slides the audio within the clip
+  // while the clip keeps its position and length on the timeline.
+  | 'slip'
   | 'pending-empty'
   // Ctrl/⌘ + drag in the ruler band → define a loop region. The drag's
   // origin tick anchors one edge, the live cursor tick anchors the
@@ -226,6 +229,20 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     const w = rect.width
     const h = rect.height
+
+    // Publish what a fit needs: the width available and where the song ends.
+    // View > Fit song to window can then work from a menu without knowing
+    // either. zoomToFit used to just set the zoom to 1, which is a reset
+    // wearing a fit's name, and nothing ever called it.
+    {
+      let songEnd = 0
+      for (const t of audioTracks) {
+        for (const c of t.clips) {
+          songEnd = Math.max(songEnd, c.position_ticks + c.length_ticks)
+        }
+      }
+      useTransportStore.getState().setPlaylistMetrics(w, songEnd)
+    }
 
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const scrollOffset = followPlayhead
@@ -902,6 +919,35 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
       return
     }
+    if (currentTool === 'mute') {
+      // Was falling through to the default paste, so the tool silently did
+      // nothing. Pattern clips could not be muted at all until the flag was
+      // added to MidiClip.
+      const hit = hitTest(mouseX, mouseY, scrollOffset)
+      if (!hit) return
+      useTrackStore
+        .getState()
+        .setClipMuted(hit.trackId, hit.clip.id, !hit.clip.muted)
+        .catch((err) => console.error('setClipMuted failed', err))
+      return
+    }
+    if (currentTool === 'slip') {
+      // Drag inside a clip slides the audio within it while the clip stays
+      // where it is. Tracked as its own drag mode; the shift is applied on
+      // release so one gesture is one undo step.
+      const hit = hitTest(mouseX, mouseY, scrollOffset)
+      if (!hit) return
+      dragRef.current = {
+        mode: 'slip', clipId: hit.clip.id, trackId: hit.trackId,
+        startMouseX: mouseX, startMouseY: mouseY,
+        currentMouseX: mouseX, currentMouseY: mouseY,
+        originalPositionTicks: hit.clip.position_ticks,
+        originalLengthTicks: hit.clip.length_ticks,
+        originalFadeInTicks: 0, originalFadeOutTicks: 0,
+      }
+      forceRender(n => n + 1)
+      return
+    }
     if (currentTool === 'zoom') {
       // Click in the playlist body → zoom in (or out with Alt). The
       // zoom is centred on the wheel position so the bar under the
@@ -1136,6 +1182,21 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     if (drag.mode === 'rubber') {
       forceRender(n => n + 1)
+      return
+    }
+
+    if (drag.mode === 'slip') {
+      // Dragging right pulls later audio into the clip, so the source offset
+      // moves forward by the dragged distance. Converted to samples because
+      // the offset into a sample is in samples, not ticks.
+      const seconds = dTicks / PPQ * (60 / Math.max(1, bpm))
+      const deltaSamples = Math.round(seconds * (sampleRate || 48000))
+      if (deltaSamples !== 0) {
+        useTrackStore
+          .getState()
+          .slipClip(drag.trackId, drag.clipId, deltaSamples)
+          .catch((err) => console.error('slipClip failed', err))
+      }
       return
     }
 

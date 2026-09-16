@@ -2080,16 +2080,30 @@ export const TESTS: TestDef[] = [
     kind: 'AUTO',
     phase: 2,
     phase1Item: 'Zoom-to-fit button',
-    title: 'zoomToFit resets horizontalZoom to 1.0',
-    instructions: 'After zooming in, zoomToFit must return horizontalZoom to the default 1.0.',
+    title: 'zoomToFit fits the song to the window',
+    instructions: 'zoomToFit must scale the zoom so the whole song fits the playlist width, and leave it alone when there is nothing to fit.',
     run: async ({ log }) => {
+      // This test used to assert zoomToFit set the zoom to 1.0, which is what
+      // the placeholder did: it asserted the bug rather than the behaviour.
       const s = useTransportStore.getState()
       s.setHorizontalZoom(5)
+      // 8 bars at 140 bpm in a 1000 px window: about 13.7 seconds, so the
+      // fit lands near 1000 * 0.97 / (13.7 * 100).
+      s.setPlaylistMetrics(1000, 960 * 4 * 8)
+      useTransportStore.setState({ bpm: 140 })
       s.zoomToFit()
-      const z = useTransportStore.getState().horizontalZoom
-      const ok = z === 1
-      log(ok ? 'pass' : 'fail', 'zoom', { expected: 1, actual: z })
-      return { pass: ok, note: `zoom=${z}` }
+      const fitted = useTransportStore.getState().horizontalZoom
+      const fitsWindow = fitted > 0.5 && fitted < 1.0
+
+      // Nothing to fit: leave the zoom where the user put it.
+      useTransportStore.getState().setHorizontalZoom(3)
+      useTransportStore.getState().setPlaylistMetrics(1000, 0)
+      useTransportStore.getState().zoomToFit()
+      const untouched = useTransportStore.getState().horizontalZoom === 3
+
+      const ok = fitsWindow && untouched
+      log(ok ? 'pass' : 'fail', 'zoom', { expected: 'fits window, empty left alone', actual: `${fitted.toFixed(3)} / ${untouched}` })
+      return { pass: ok, note: `fitted=${fitted.toFixed(3)} emptyLeftAlone=${untouched}` }
     },
   },
   {

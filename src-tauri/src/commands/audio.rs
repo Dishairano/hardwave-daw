@@ -829,3 +829,96 @@ pub fn delete_clip(
     engine.rebuild_graph();
     Ok(())
 }
+
+/// Mute or unmute one clip.
+///
+/// The playlist's mute tool was keybound and documented but fell through to
+/// the default, so clicking a clip with it selected did nothing at all: there
+/// was no command behind it. The engine already skips muted clips, so this is
+/// the whole feature.
+#[tauri::command]
+pub fn set_clip_muted(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    muted: bool,
+) -> Result<bool, String> {
+    let engine = state.engine.lock();
+    engine.snapshot_before_mutation();
+    {
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|c| match &c.content {
+                hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+                hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
+            })
+            .ok_or_else(|| format!("Clip not found: {clip_id}"))?;
+        match &mut clip.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => ac.muted = muted,
+            hardwave_project::clip::ClipContent::Midi(mc) => mc.clip.muted = muted,
+        }
+    }
+    engine.rebuild_graph();
+    Ok(muted)
+}
+
+/// Slide the audio inside a clip while the clip itself stays put.
+///
+/// The slip tool was in the same state as mute: keybound, documented, and
+/// with nothing behind it. Slipping moves the window into the source, so the
+/// clip keeps its position and length on the timeline and plays a different
+/// part of the sample. A negative delta slips earlier.
+///
+/// Clamped at the start of the source, because slipping before sample zero
+/// would silently play nothing and look like a broken clip. Returns the new
+/// source offset so the UI can show where it landed.
+#[tauri::command]
+pub fn slip_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    delta_samples: i64,
+) -> Result<u64, String> {
+    let engine = state.engine.lock();
+    engine.snapshot_before_mutation();
+    let new_start;
+    {
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|c| match &c.content {
+                hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+                hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
+            })
+            .ok_or_else(|| format!("Clip not found: {clip_id}"))?;
+        match &mut clip.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => {
+                let window = ac.source_end.saturating_sub(ac.source_start);
+                let start = if delta_samples >= 0 {
+                    ac.source_start.saturating_add(delta_samples as u64)
+                } else {
+                    ac.source_start.saturating_sub(delta_samples.unsigned_abs())
+                };
+                ac.source_start = start;
+                // Keep the window the same length: slipping changes which
+                // part of the sample plays, not how long the clip is.
+                ac.source_end = start.saturating_add(window);
+                new_start = start;
+            }
+            hardwave_project::clip::ClipContent::Midi(_) => {
+                return Err("Slip applies to audio clips".to_string());
+            }
+        }
+    }
+    engine.rebuild_graph();
+    Ok(new_start)
+}

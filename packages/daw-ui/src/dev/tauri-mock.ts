@@ -172,6 +172,10 @@ const mock: TauriInternals = {
         return [[], []]
       case 'diagnostics_info':
         return { logsDir: '/tmp/mock-logs', currentSessionLog: null }
+      case 'set_clip_muted':
+        return true
+      case 'slip_clip':
+        return 0
       case 'get_count_in_state':
         return { active: false, beat: 0, totalBeats: 0 }
       case 'start_count_in':

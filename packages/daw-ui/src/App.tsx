@@ -1674,6 +1674,11 @@ export function App() {
           { label: `${showPianoRoll ? '✓ ' : '   '}Piano Roll`, shortcut: 'F7', action: () => setShowPianoRoll(v => !v) },
           { label: `${showMixer ? '✓ ' : '   '}Mixer`, shortcut: 'F9', action: () => setShowMixer(v => !v) },
           { separator: true, label: '' },
+          {
+            label: 'Fit song to window',
+            action: () => useTransportStore.getState().zoomToFit(),
+          },
+          { separator: true, label: '' },
           { label: 'Tempo tapper…', action: () => setShowTempoTapper(true) },
         ],
       },

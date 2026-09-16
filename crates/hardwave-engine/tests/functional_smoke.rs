@@ -388,6 +388,58 @@ fn midi_clip_produces_sound() {
     );
 }
 
+/// The playlist's mute tool had nothing behind it, and pattern clips could
+/// not be muted at all: MidiClip carried no flag. Muting one must silence it
+/// as completely as deleting it would, or the tool is decoration.
+#[test]
+fn a_muted_pattern_clip_is_silent() {
+    use hardwave_midi::{MidiClip, MidiNote};
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+
+    let render_peak = |muted: bool| -> f32 {
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            let id = project.add_midi_track("Synth".to_string());
+            let mut clip = MidiClip::new("mute-test".to_string(), "mute".to_string(), 1920);
+            clip.muted = muted;
+            clip.notes.push(MidiNote {
+                start_tick: 0,
+                duration_ticks: 480,
+                pitch: 60,
+                velocity: 1.0,
+                channel: 0,
+                muted: false,
+            });
+            if let Some(track) = project.track_mut(&id) {
+                track.clips.push(ClipPlacement {
+                    content: ClipContent::Midi(MidiClipRef {
+                        id: "mute-test".to_string(),
+                        clip,
+                    }),
+                    track_id: id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1920,
+                    lane: 0,
+                });
+            }
+        }
+        render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 2).peak
+    };
+
+    let audible = render_peak(false);
+    let muted = render_peak(true);
+
+    assert!(
+        audible > 0.001,
+        "the unmuted clip must sound, else this proves nothing: peak={audible:.6}"
+    );
+    assert!(
+        muted < 1e-6,
+        "a muted clip must be silent, got peak={muted:.6}"
+    );
+}
+
 #[test]
 fn killer_track_insert_modifies_audio() {
     // Was a KILLER-watch panic ("TrackNode does not process track.inserts").

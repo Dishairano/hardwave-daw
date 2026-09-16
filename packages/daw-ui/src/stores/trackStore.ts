@@ -282,6 +282,10 @@ interface TrackState {
     positionTicks: number,
   ) => Promise<string>
   splitClip: (trackId: string, clipId: string, atTicks: number) => Promise<string>
+  /** Silence one clip without deleting it (the playlist's mute tool). */
+  setClipMuted: (trackId: string, clipId: string, muted: boolean) => Promise<void>
+  /** Slide the audio inside a clip while the clip stays put (the slip tool). */
+  slipClip: (trackId: string, clipId: string, deltaSamples: number) => Promise<void>
   toggleClipSelection: (clipId: string) => void
   clearSelection: () => void
   selectAllClips: () => void
@@ -813,6 +817,16 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const newId = await mut<string>('split_clip', { trackId, clipId, atTicks }, 'Split clip')
     await get().fetchTracks()
     return newId
+  },
+
+  setClipMuted: async (trackId, clipId, muted) => {
+    await mut('set_clip_muted', { trackId, clipId, muted }, muted ? 'Mute clip' : 'Unmute clip')
+    await get().fetchTracks()
+  },
+
+  slipClip: async (trackId, clipId, deltaSamples) => {
+    await mut('slip_clip', { trackId, clipId, deltaSamples }, 'Slip clip')
+    await get().fetchTracks()
   },
 
   copySelectedClips: () => {
