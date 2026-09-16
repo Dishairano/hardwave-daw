@@ -151,6 +151,8 @@ const mock: TauriInternals = {
         return []
       case 'relink_source':
         return 0
+      case 'collect_project_samples':
+        return { copied: 0, alreadyThere: 0, missing: [], folder: 'Project Samples' }
       // Markers + punch range now ride in the project, not localStorage.
       case 'get_timeline_state':
         return null

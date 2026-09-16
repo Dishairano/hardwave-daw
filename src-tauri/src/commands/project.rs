@@ -81,16 +81,24 @@ pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> 
         }
     }
 
-    project
-        .save(&PathBuf::from(path))
-        .map_err(|e| e.to_string())
+    let target = PathBuf::from(&path);
+    let result = project.save(&target).map_err(|e| e.to_string());
+    drop(project);
+    // Save As moves the project to a new folder, and samples collected into
+    // the old one are stored relative to it, so the base has to follow.
+    engine.set_project_dir(target.parent().map(|p| p.to_path_buf()));
+    result
 }
 
 #[tauri::command]
 pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> {
     use std::sync::atomic::Ordering;
-    let loaded = Project::load(&PathBuf::from(path)).map_err(|e| e.to_string())?;
+    let project_file = PathBuf::from(&path);
+    let loaded = Project::load(&project_file).map_err(|e| e.to_string())?;
     let engine = state.engine.lock();
+    // Before rehydrating: a collected project stores its samples relative to
+    // this folder, so without it they cannot be found.
+    engine.set_project_dir(project_file.parent().map(|p| p.to_path_buf()));
     let new_bpm = loaded
         .tempo_map
         .entries

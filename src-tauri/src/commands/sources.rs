@@ -74,9 +74,13 @@ fn project_sources(state: &State<AppState>) -> BTreeMap<String, (String, String,
 /// Audio the project references that is not on disk where it expects it.
 #[tauri::command]
 pub fn list_missing_sources(state: State<AppState>) -> Vec<MissingSource> {
+    // Resolved, not raw: a collected project stores its samples relative to
+    // the .hwp, and checking those strings directly would report every one of
+    // them as missing.
+    let resolve = |file: &str| state.engine.lock().resolve_source_file(file);
     project_sources(&state)
         .into_iter()
-        .filter(|(_, (file, _, _))| !Path::new(file).is_file())
+        .filter(|(_, (file, _, _))| !resolve(file).is_file())
         .map(|(source_id, (file, hash, clip_count))| MissingSource {
             name: Path::new(&file)
                 .file_name()
@@ -236,6 +240,141 @@ fn hash_file(path: &Path) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectResult {
+    pub copied: usize,
+    pub already_there: usize,
+    pub missing: Vec<String>,
+    pub folder: String,
+}
+
+/// Copy every sample the project uses into a folder beside the project file,
+/// and point the project at those copies.
+///
+/// A project normally references samples wherever they happened to be when
+/// they were imported: a pack on another drive, a download folder, a path that
+/// only exists on one machine. Collecting makes the song self-contained, and
+/// the copies are stored as paths relative to the .hwp, so the folder can be
+/// moved, copied to another drive or zipped and still open.
+#[tauri::command]
+pub fn collect_project_samples(
+    state: State<AppState>,
+    project_path: String,
+) -> Result<CollectResult, String> {
+    let project_file = PathBuf::from(&project_path);
+    let dir = project_file
+        .parent()
+        .ok_or_else(|| format!("{project_path} has no folder"))?
+        .to_path_buf();
+    let stem = project_file
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Project".to_string());
+    let folder_name = format!("{stem} Samples");
+    let samples_dir = dir.join(&folder_name);
+    std::fs::create_dir_all(&samples_dir)
+        .map_err(|e| format!("Could not create {}: {e}", samples_dir.display()))?;
+
+    let sources = project_sources(&state);
+    let mut copied = 0usize;
+    let mut already_there = 0usize;
+    let mut missing = Vec::new();
+    let mut relink: Vec<(String, String)> = Vec::new();
+    let mut taken: Vec<String> = Vec::new();
+
+    for (source_id, (file, _hash, _count)) in sources {
+        let resolved = state.engine.lock().resolve_source_file(&file);
+        if !resolved.is_file() {
+            missing.push(
+                Path::new(&file)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or(file.clone()),
+            );
+            continue;
+        }
+        if resolved.starts_with(&samples_dir) {
+            already_there += 1;
+            // Still rewrite it: an older collect stored an absolute path,
+            // which stops the folder being movable.
+            if let Some(name) = resolved.file_name().and_then(|n| n.to_str()) {
+                relink.push((source_id, format!("{folder_name}/{name}")));
+            }
+            continue;
+        }
+        let name = unique_name_in(&samples_dir, &resolved, &taken);
+        std::fs::copy(&resolved, samples_dir.join(&name))
+            .map_err(|e| format!("Could not copy {}: {e}", resolved.display()))?;
+        taken.push(name.clone());
+        copied += 1;
+        relink.push((source_id, format!("{folder_name}/{name}")));
+    }
+
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let repoint = |content: &mut ClipContent| {
+            if let ClipContent::Audio(ac) = content {
+                if let Some((_, new_file)) = relink.iter().find(|(id, _)| *id == ac.source_path) {
+                    ac.source_file = new_file.clone();
+                }
+            }
+        };
+        for track in &mut project.tracks {
+            for clip in &mut track.clips {
+                repoint(&mut clip.content);
+            }
+        }
+        for arrangement in &mut project.arrangements {
+            for timeline in arrangement.timelines.values_mut() {
+                for clip in &mut timeline.clips {
+                    repoint(&mut clip.content);
+                }
+            }
+        }
+    }
+    state.engine.lock().set_project_dir(Some(dir));
+
+    Ok(CollectResult {
+        copied,
+        already_there,
+        missing,
+        folder: folder_name,
+    })
+}
+
+/// A name that does not collide with a file already in the folder or one
+/// copied earlier in this run. Two different samples can easily both be
+/// called kick.wav, and copying one over the other would silently replace
+/// audio in the song.
+fn unique_name_in(dir: &Path, source: &Path, taken: &[String]) -> String {
+    let name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "sample.wav".to_string());
+    let is_free =
+        |candidate: &str| !dir.join(candidate).exists() && !taken.iter().any(|t| t == candidate);
+    if is_free(&name) {
+        return name;
+    }
+    let stem = source
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "sample".to_string());
+    let ext = source
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    for n in 2..10_000 {
+        let candidate = format!("{stem} ({n}){ext}");
+        if is_free(&candidate) {
+            return candidate;
+        }
+    }
+    format!("{stem} ({}){ext}", uuid::Uuid::new_v4())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,6 +394,44 @@ mod tests {
             hash: hash.into(),
             clip_count: 1,
         }
+    }
+
+    #[test]
+    fn a_collected_name_never_overwrites_a_different_sample() {
+        let dir = tempfile::tempdir().unwrap();
+        let samples = dir.path().join("Song Samples");
+        std::fs::create_dir_all(&samples).unwrap();
+        write(&samples.join("kick.wav"), b"the one already collected");
+
+        // A second, different kick.wav from another pack.
+        let other = dir.path().join("packB/kick.wav");
+        write(&other, b"a different kick");
+
+        let name = unique_name_in(&samples, &other, &[]);
+
+        assert_eq!(name, "kick (2).wav");
+        assert_eq!(
+            std::fs::read(samples.join("kick.wav")).unwrap(),
+            b"the one already collected",
+            "the existing sample is untouched"
+        );
+    }
+
+    #[test]
+    fn two_same_named_samples_in_one_collect_get_separate_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let samples = dir.path().join("Song Samples");
+        std::fs::create_dir_all(&samples).unwrap();
+        let first = dir.path().join("packA/snare.wav");
+        let second = dir.path().join("packB/snare.wav");
+        write(&first, b"one");
+        write(&second, b"two");
+
+        let a = unique_name_in(&samples, &first, &[]);
+        let b = unique_name_in(&samples, &second, std::slice::from_ref(&a));
+
+        assert_eq!(a, "snare.wav");
+        assert_eq!(b, "snare (2).wav");
     }
 
     #[test]

@@ -73,6 +73,7 @@ import { startTimelineSync } from './stores/timelineState'
 import { useTrackStore } from './stores/trackStore'
 import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
+import { invokeOrToast } from './api/invoke'
 import { useShortcutsStore } from './stores/shortcutsStore'
 import { useComputerMidiKeyboard } from './hooks/useComputerMidiKeyboard'
 import { useTypingKeyboardStore } from './stores/typingKeyboardStore'
@@ -993,6 +994,42 @@ export function App() {
     }
   }, [])
 
+  /**
+   * Copy every sample the song uses into a folder next to the project file.
+   *
+   * A song normally points at samples wherever they were when you imported
+   * them: a pack on another drive, a downloads folder, somewhere that only
+   * exists on this machine. Collecting makes it self-contained, and the copies
+   * are stored relative to the project, so the folder can be moved, copied or
+   * zipped and still open.
+   */
+  const handleCollectSamples = useCallback(async () => {
+    const { filePath, saveProject } = useProjectStore.getState()
+    const { push } = useNotificationStore.getState()
+    if (!filePath) {
+      push('warning', 'Save the project first', {
+        detail: 'Samples are collected into a folder next to the project file, so the project needs a home before it can have one.',
+      })
+      return
+    }
+    try {
+      const result = await invokeOrToast<{ copied: number; alreadyThere: number; missing: string[]; folder: string }>(
+        'collect_project_samples',
+        { projectPath: filePath },
+        { message: 'Could not collect the samples' },
+      )
+      // The project now points at the copies, so it has to be written back.
+      await saveProject()
+      const parts = [`${result.copied} copied into ${result.folder}`]
+      if (result.alreadyThere > 0) parts.push(`${result.alreadyThere} already there`)
+      push(result.missing.length > 0 ? 'warning' : 'info', 'Samples collected', {
+        detail: result.missing.length > 0
+          ? `${parts.join(', ')}.\nCould not find: ${result.missing.slice(0, 5).join(', ')}`
+          : `${parts.join(', ')}.`,
+      })
+    } catch { /* invokeOrToast already told the user */ }
+  }, [])
+
   const handleSaveAsTemplate = useCallback(async () => {
     const name = window.prompt('Template name:')
     if (name === null) return
@@ -1491,6 +1528,7 @@ export function App() {
           { label: 'Save as…', shortcut: 'Ctrl+Shift+S', action: handleSaveProjectAs },
           { label: 'Save new version', action: handleSaveNewVersion },
           { label: 'Save as template…', action: handleSaveAsTemplate },
+          { label: 'Collect samples into project folder', action: handleCollectSamples },
           { separator: true, label: '' },
           { label: 'Revert to last backup', action: handleRevertToBackup },
           { separator: true, label: '' },

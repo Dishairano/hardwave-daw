@@ -271,6 +271,7 @@ pub fn run() {
             commands::sources::list_missing_sources,
             commands::sources::relink_source,
             commands::sources::auto_relink_sources,
+            commands::sources::collect_project_samples,
             // Audio
             commands::audio::import_audio_file,
             commands::audio::get_track_clips,

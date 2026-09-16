@@ -99,6 +99,15 @@ fi
 # path; using it must be a deliberate, logged decision.
 if [ "${HW_PREVIEW_CHANGELOG:-0}" = "1" ]; then
   : # preview only reads history; nothing to gate
+elif [ "${HW_GATE_ON_PC:-0}" = "1" ]; then
+  # The gate runs on the founder's PC instead of here. Not a way around the
+  # gate: gate.yml runs the same fmt, clippy, tests and frontend checks, on
+  # the toolchain rust-toolchain.toml pins, and the release refuses to tag
+  # until that run has passed on the commit being tagged (see below). It is
+  # stricter than the local stamp, which could only vouch for the tree before
+  # the version bump, and it keeps a 15-minute Rust build off a server with
+  # 2 cores and no disk left.
+  echo "release.sh: gating on the PC runner; the tag waits for it to pass"
 elif [ "${HW_SKIP_GATE:-0}" = "1" ]; then
   echo "release.sh: WARNING — HW_SKIP_GATE=1, skipping cargo test --workspace" >&2
 else
@@ -372,6 +381,40 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git add -A
 git commit -m "$MSG"
 git push origin "$CURRENT_BRANCH"
+
+if [ "${HW_GATE_ON_PC:-0}" = "1" ]; then
+  RELEASE_SHA=$(git rev-parse HEAD)
+  echo "release.sh: waiting for the Gate run on ${RELEASE_SHA:0:7} (the commit about to be tagged)..."
+  GATE_OK=0
+  # gate.yml starts from the push above; give the runner time to pick it up.
+  for _ in $(seq 1 80); do
+    sleep 20
+    STATUS=$(gh run list --workflow Gate --limit 10 \
+      --json headSha,status,conclusion \
+      --jq "[.[] | select(.headSha == \"$RELEASE_SHA\")] | first | \"\(.status) \(.conclusion // \"pending\")\"" 2>/dev/null || echo "")
+    case "$STATUS" in
+      "completed success")
+        GATE_OK=1
+        break
+        ;;
+      "completed "*)
+        echo "release.sh: the PC gate FAILED on this commit ($STATUS)." >&2
+        echo "release.sh: nothing was tagged. Fix it and release again." >&2
+        exit 1
+        ;;
+      *)
+        printf '.'
+        ;;
+    esac
+  done
+  echo
+  if [ "$GATE_OK" != "1" ]; then
+    echo "release.sh: the PC gate did not finish in time (is the PC on?)." >&2
+    echo "release.sh: nothing was tagged. Re-run, or gate locally without HW_GATE_ON_PC." >&2
+    exit 1
+  fi
+  echo "release.sh: PC gate green on ${RELEASE_SHA:0:7}"
+fi
 
 # Tag the release — every release is a full v* build (fires release.yml
 # across Windows / Mac / Linux and advances the auto-updater feed).

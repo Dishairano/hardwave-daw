@@ -165,6 +165,14 @@ pub struct DawEngine {
     /// full PDC lands.
     pub graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
 
+    /// Folder the current .hwp lives in, set on save and load.
+    ///
+    /// A clip's `source_file` may be relative to it, which is what lets a
+    /// project folder be moved, copied to another drive or zipped and still
+    /// open: an absolute path only describes where the audio was on the
+    /// machine that imported it.
+    project_dir: Arc<Mutex<Option<std::path::PathBuf>>>,
+
     audio_device: AudioDeviceManager,
     command_tx: Sender<EngineCommand>,
     command_rx: Receiver<EngineCommand>,
@@ -260,6 +268,7 @@ impl DawEngine {
             history: Arc::new(Mutex::new(History::new())),
             master_tap: master_tap::new_shared(),
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            project_dir: Arc::new(Mutex::new(None)),
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
             pending_state_snapshot: Arc::new(Mutex::new(None)),
@@ -638,6 +647,32 @@ impl DawEngine {
         Ok(info)
     }
 
+    /// Remember where the current project file lives, so sample paths stored
+    /// relative to it can be resolved. Set on save and on load.
+    pub fn set_project_dir(&self, dir: Option<std::path::PathBuf>) {
+        *self.project_dir.lock() = dir;
+    }
+
+    pub fn project_dir(&self) -> Option<std::path::PathBuf> {
+        self.project_dir.lock().clone()
+    }
+
+    /// Absolute location of a clip's audio.
+    ///
+    /// A collected project stores its samples relative to the .hwp, so the
+    /// whole folder can be moved or zipped and still open. An imported sample
+    /// that lives elsewhere on disk keeps its absolute path.
+    pub fn resolve_source_file(&self, file: &str) -> std::path::PathBuf {
+        let path = std::path::Path::new(file);
+        if path.is_absolute() {
+            return path.to_path_buf();
+        }
+        match self.project_dir() {
+            Some(dir) => dir.join(path),
+            None => path.to_path_buf(),
+        }
+    }
+
     /// Re-load every audio source referenced by the current project into the
     /// audio pool. The pool only ever fills at import time (`load_audio_file`),
     /// so without this every project reopened after an app restart has SILENT
@@ -689,7 +724,8 @@ impl DawEngine {
             if self.audio_pool.get(&source_id).is_some() {
                 continue;
             }
-            if let Err(e) = self.load_audio_file_as(std::path::Path::new(&file), &source_id) {
+            let resolved = self.resolve_source_file(&file);
+            if let Err(e) = self.load_audio_file_as(&resolved, &source_id) {
                 log::warn!("rehydrate_audio_pool: '{file}' failed to load: {e}");
                 missing.push(file);
             }
