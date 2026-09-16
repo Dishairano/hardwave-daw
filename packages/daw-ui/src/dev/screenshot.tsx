@@ -125,6 +125,16 @@ useTrackStore.setState({
 const noop = () => {}
 const panel = new URLSearchParams(location.search).get('panel') || 'playlist'
 
+// ?timesig=3 seeds a 3/4 project, so a grid change can be seen rather than
+// taken on trust.
+const timesigParam = Number(new URLSearchParams(location.search).get('timesig'))
+if (Number.isFinite(timesigParam) && timesigParam > 0) {
+  // Both: the store for the first paint, and the global the mocked backend
+  // reads, or the transport poll would put 4/4 back.
+  ;(window as unknown as { __HW_TIMESIG__?: number }).__HW_TIMESIG__ = timesigParam
+  useTransportStore.setState({ timeSigNumerator: timesigParam })
+}
+
 function Full({ children }: { children: React.ReactNode }) {
   return <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>{children}</div>
 }

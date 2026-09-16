@@ -362,12 +362,15 @@ export function PianoRoll() {
 
     const startTick = Math.max(0, Math.floor(scrollX / pixelsPerTick / PPQ) * PPQ)
     const endTick = (scrollX + w) / pixelsPerTick
+    const beatsPerBar = useTransportStore.getState().timeSigNumerator || 4
 
     for (let tick = startTick; tick <= endTick; tick += PPQ / 4) {
       const x = xFromTick(tick) - KEYBOARD_WIDTH
       if (x < 0 || x > w) continue
 
-      const isBar = tick % (PPQ * 4) === 0
+      // Bars follow the project's time signature; this was hardcoded to
+      // four, so the piano roll's bar lines disagreed with the song.
+      const isBar = tick % (PPQ * beatsPerBar) === 0
       const isBeat = tick % PPQ === 0
 
       if (isBar) {

@@ -53,7 +53,12 @@ try {
     const errors = []
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })
     page.on('pageerror', (e) => errors.push(String(e)))
-    await page.goto(`${BASE}?panel=${panel}${process.env.SHOT_ZOOM ? `&zoom=${process.env.SHOT_ZOOM}` : ''}`, { waitUntil: 'networkidle' })
+    // SHOT_TIMESIG=3 seeds a 3/4 project, so a grid change can be photographed
+    // instead of being taken on trust.
+    const query = `?panel=${panel}`
+      + (process.env.SHOT_ZOOM ? `&zoom=${process.env.SHOT_ZOOM}` : '')
+      + (process.env.SHOT_TIMESIG ? `&timesig=${process.env.SHOT_TIMESIG}` : '')
+    await page.goto(`${BASE}${query}`, { waitUntil: 'networkidle' })
     await sleep(2200) // let async loads + canvas redraw settle
     await page.screenshot({ path: out, scale: 'device' })
     console.log(`screenshot → ${out}${errors.length ? `  (${errors.length} page errors)` : ''}`)

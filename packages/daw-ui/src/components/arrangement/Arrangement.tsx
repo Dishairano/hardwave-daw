@@ -135,6 +135,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const [renamingMarker, setRenamingMarker] = useState<{ id: string; draft: string } | null>(null)
   const {
     positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
+    timeSigNumerator,
     setLoop, toggleLoop,
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
     clipColorOverrides, editCursorTicks, setEditCursor, setClipColor,
@@ -153,6 +154,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const PIXELS_PER_SECOND = PIXELS_PER_SECOND_BASE * horizontalZoom
   const beatsPerSecond = bpm / 60
   const pixelsPerBeat = PIXELS_PER_SECOND / beatsPerSecond
+  // The grid follows the project's time signature. It used to be hardcoded to
+  // four, so a song in 3/4 or 7/8 was drawn and counted in 4/4: the bar lines
+  // disagreed with the bar numbers, the metronome and the music.
+  const beatsPerBar = timeSigNumerator > 0 ? timeSigNumerator : 4
   const pixelsPerTick = pixelsPerBeat / PPQ
   const snapTicks = snapToTicks(snapValue, snapEnabled)
   const applySnap = (ticks: number): number => snapTicks > 0 ? Math.round(ticks / snapTicks) * snapTicks : ticks
@@ -276,14 +281,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
 
     // Beat grid — HQ pixel-snapped, mockup palette.
-    const pixelsPerBar = pixelsPerBeat * 4
+    const pixelsPerBar = pixelsPerBeat * beatsPerBar
     const startBeat = Math.floor(scrollOffset / pixelsPerBeat)
     for (let i = startBeat; i < startBeat + Math.ceil(w / pixelsPerBeat) + 2; i++) {
       const xRaw = i * pixelsPerBeat - scrollOffset
       const x = Math.floor(xRaw) + 0.5
       if (x < -1 || x > w + 1) continue
 
-      const isBar = i % 4 === 0
+      const isBar = i % beatsPerBar === 0
 
       ctx.strokeStyle = isBar ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.04)'
       ctx.lineWidth = 1

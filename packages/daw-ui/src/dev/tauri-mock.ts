@@ -141,7 +141,11 @@ const mock: TauriInternals = {
       case 'get_transport_state':
         return {
           playing: false, recording: false, looping: false,
-          position_samples: 0, bpm: 140, time_sig_numerator: 4,
+          position_samples: 0, bpm: 140,
+          // The screenshot harness can ask for another signature; without
+          // this the poll would overwrite whatever it seeded a moment later,
+          // and a grid change could never be photographed.
+          time_sig_numerator: (window as unknown as { __HW_TIMESIG__?: number }).__HW_TIMESIG__ ?? 4,
           time_sig_denominator: 4, master_volume_db: 0, pattern_mode: false,
         }
       case 'bug_report_env':
