@@ -267,6 +267,9 @@ pub fn run() {
             commands::engine::set_wasapi_exclusive,
             // Browser
             commands::browser::list_directory,
+            // Bug reports
+            commands::bugs::bug_report_env,
+            commands::bugs::session_log_tail,
             // Missing audio + relinking
             commands::sources::list_missing_sources,
             commands::sources::relink_source,

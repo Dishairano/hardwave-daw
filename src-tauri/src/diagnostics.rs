@@ -150,6 +150,11 @@ fn prune_old_sessions(dir: &std::path::Path) {
     }
 }
 
+/// Path of this session's log, if one was opened.
+pub fn current_session_log() -> Option<std::path::PathBuf> {
+    SESSION_LOG_PATH.get().cloned()
+}
+
 /// Path of the current session log (for "Export diagnostics").
 #[tauri::command]
 pub fn diagnostics_info() -> Result<serde_json::Value, String> {

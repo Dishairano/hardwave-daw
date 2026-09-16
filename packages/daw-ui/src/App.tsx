@@ -74,6 +74,7 @@ import { useTrackStore } from './stores/trackStore'
 import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
 import { invokeOrToast } from './api/invoke'
+import { BugReportDialog } from './components/BugReportDialog'
 import { useShortcutsStore } from './stores/shortcutsStore'
 import { useComputerMidiKeyboard } from './hooks/useComputerMidiKeyboard'
 import { useTypingKeyboardStore } from './stores/typingKeyboardStore'
@@ -227,6 +228,12 @@ export function App() {
     showHistory, setShowHistory,
     showDevPanel, setShowDevPanel,
   } = useAppDialogs()
+  // Local rather than in useAppDialogs: nothing else toggles it, and it has
+  // one extra piece of state (whether the report follows a crash).
+  const [bugReport, setBugReport] = useState<{ open: boolean; afterCrash: boolean }>({
+    open: false,
+    afterCrash: false,
+  })
   // Touch Controllers visibility is store-backed so View menu, Alt+F7
   // shortcut, and the close button all share state and the panel
   // remembers its open/closed status across reloads.
@@ -1760,7 +1767,8 @@ export function App() {
           { separator: true, label: '' },
           { label: 'Online user manual', action: () => window.open('https://github.com/Dishairano/hardwave-daw/wiki', '_blank', 'noopener,noreferrer') },
           { label: 'Release notes', action: () => window.open('https://github.com/Dishairano/hardwave-daw/releases', '_blank', 'noopener,noreferrer') },
-          { label: 'Report an issue', action: () => window.open('https://github.com/Dishairano/hardwave-daw/issues', '_blank', 'noopener,noreferrer') },
+          { label: 'Report a bug…', action: () => setBugReport({ open: true, afterCrash: false }) },
+          { label: 'Report an issue on GitHub', action: () => window.open('https://github.com/Dishairano/hardwave-daw/issues', '_blank', 'noopener,noreferrer') },
           {
             label: 'Export diagnostics…',
             action: async () => {
@@ -1907,6 +1915,11 @@ export function App() {
       <VirtualKeyboard visible={touchControllerVisible} onClose={() => setTouchControllerVisible(false)} />
       <SetupWizard />
       {showProjectInfo && <ProjectInfoDialog onClose={() => setShowProjectInfo(false)} />}
+      <BugReportDialog
+        open={bugReport.open}
+        afterCrash={bugReport.afterCrash}
+        onClose={() => setBugReport({ open: false, afterCrash: false })}
+      />
       {showTempoTapper && <TempoTapper onClose={() => setShowTempoTapper(false)} />}
       {showMidiMappings && (
         <MidiMappingsPanel

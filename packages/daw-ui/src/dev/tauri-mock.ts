@@ -144,6 +144,10 @@ const mock: TauriInternals = {
           position_samples: 0, bpm: 140, time_sig_numerator: 4,
           time_sig_denominator: 4, master_volume_db: 0, pattern_mode: false,
         }
+      case 'bug_report_env':
+        return { version: '0.0.0-dev', os: 'Linux', logAvailable: false }
+      case 'session_log_tail':
+        return ''
       // Nothing is missing in a mocked project.
       case 'list_missing_sources':
         return []

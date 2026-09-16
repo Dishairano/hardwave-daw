@@ -4,6 +4,7 @@ pub mod automation;
 pub mod automation_clips;
 pub mod autosave;
 pub mod browser;
+pub mod bugs;
 pub mod dev;
 pub mod engine;
 pub mod export;
