@@ -85,15 +85,21 @@ cd "$(git rev-parse --show-toplevel)"
 # Typecheck + build frontend first. The explicit typecheck matters:
 # Vite emits over TS errors, so `npm run build` alone can ship broken TS
 # (CI now gates on this too — fail here, before anything is committed).
+if [ "${HW_PREVIEW_CHANGELOG:-0}" = "1" ]; then
+  echo "preview: skipping the frontend build and the gate; reading commits only"
+else
 echo "Typechecking + unit-testing + building frontend..."
 cd packages/daw-ui && npm run typecheck && npm run test:unit && npm run build && cd ../..
+fi
 
 # Full test gate — the ENTIRE workspace, not a package subset. A partial
 # local gate once let a broken release out (v0.204.x audio-reload); this
 # check makes that structurally impossible: no green gate, no tag.
 # HW_SKIP_GATE=1 is the emergency hatch for hotfixing a broken CI-only
 # path; using it must be a deliberate, logged decision.
-if [ "${HW_SKIP_GATE:-0}" = "1" ]; then
+if [ "${HW_PREVIEW_CHANGELOG:-0}" = "1" ]; then
+  : # preview only reads history; nothing to gate
+elif [ "${HW_SKIP_GATE:-0}" = "1" ]; then
   echo "release.sh: WARNING — HW_SKIP_GATE=1, skipping cargo test --workspace" >&2
 else
   # fmt + clippy mirror CI's Lint & Test job EXACTLY. Lesson of
@@ -196,7 +202,23 @@ while IFS= read -r hash || [[ -n "$hash" ]]; do
   # Skip internal commits (version bumps, CI fixes, formatting, refactors)
   [[ "$SUBJECT" =~ ^(Release|v[0-9]|Fix\ rust|Fix\ clippy|Fix\ fmt|Merge) ]] && continue
 
+  # A commit that touched nothing but build plumbing is not a product change.
+  # The keyword blacklist below leaks, because it can only catch words someone
+  # thought of: v0.210.0 announced "the PC gate can download rustup", "the PC
+  # gate can install its Rust toolchain" and "formatting only" to users as bug
+  # fixes, burying the one change that mattered to them. What a commit TOUCHED
+  # is a fact rather than a guess, so infrastructure-only commits are dropped
+  # whatever their wording.
+  CHANGED=$(git show --pretty=format: --name-only "$hash" | sed '/^$/d')
+  if [ -n "$CHANGED" ] && ! printf '%s\n' "$CHANGED" | grep -qvE \
+      '^(\.github/|scripts/|docs/|README|\.gitignore|rust-toolchain|.*/tests/|.*/__tests__/|.*\.test\.[tj]sx?$|.*\.spec\.[tj]sx?$)'; then
+    continue
+  fi
+
   BULLETS=$(echo "$BODY" | grep '^\s*[-*]' | sed 's/^\s*//; s/^\*/-/' || true)
+  # `- internal:` is the explicit opt-out for a change inside a product commit
+  # that users have no way to observe.
+  BULLETS=$(printf '%s\n' "$BULLETS" | grep -v '^- internal:' || true)
   if [ -n "$BULLETS" ]; then
     BULLETS=$(echo "$BULLETS" | grep -iv \
       -e 'rustfmt\|clippy\|sccache\|RUSTC_WRAPPER\|tformat\|trailing newline' \
@@ -266,6 +288,19 @@ RELEASE_NOTES=$(printf '%s\n' "$MSG" \
     echo "- Internal maintenance and stability updates"
   fi
 } > "$CHANGELOG_FILE"
+
+# HW_PREVIEW_CHANGELOG=1 ./scripts/release.sh patch "msg" shows exactly what
+# the announcement will say, without touching the version, the tree or the
+# tag. Worth running before every release: a changelog is read by everyone
+# and fixed by nobody.
+if [ "${HW_PREVIEW_CHANGELOG:-0}" = "1" ]; then
+  echo
+  echo "===== changelog preview ($LAST_TAG..HEAD) ====="
+  cat "$CHANGELOG_FILE"
+  echo "===== end preview ====="
+  rm -f "$CHANGELOG_FILE"
+  exit 0
+fi
 
 # Bump version in BOTH tauri.conf.json AND the workspace Cargo.toml so the
 # Rust binary's `env!("CARGO_PKG_VERSION")` stays in lockstep with the

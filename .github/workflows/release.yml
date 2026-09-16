@@ -501,12 +501,6 @@ jobs:
             TOTAL=1
           fi
 
-          # Hand-written notes say the same things as the bullets, only in
-          # plain language and with room to explain. Posting both put every
-          # item on screen twice, so when notes exist they are the post.
-          if [ -n "$SUMMARY" ]; then
-            FIELDS='[]'
-          fi
 
           NOUN="changes"
           [ "$TOTAL" = "1" ] && NOUN="change"
