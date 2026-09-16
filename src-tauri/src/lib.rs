@@ -216,6 +216,7 @@ pub fn run() {
             commands::plugins::find_missing_plugins,
             commands::plugins::rescan_and_restore_missing_plugins,
             commands::engine::get_graph_latency,
+            commands::engine::get_audio_load,
             commands::engine::get_pdc_enabled,
             commands::engine::set_pdc_enabled,
             commands::engine::get_audio_cache_stats,

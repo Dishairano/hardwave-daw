@@ -168,6 +168,8 @@ const mock: TauriInternals = {
         return [[], []]
       case 'diagnostics_info':
         return { logsDir: '/tmp/mock-logs', currentSessionLog: null }
+      case 'get_audio_load':
+        return { loadPct: 12, xruns: 0 }
       case 'get_graph_latency':
         return { samples: 0, ms: 0, pdcEnabled: true }
       // Setup-wizard audio step (screenshot harness renders it headless).

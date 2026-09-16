@@ -173,6 +173,19 @@ pub struct DawEngine {
     /// machine that imported it.
     project_dir: Arc<Mutex<Option<std::path::PathBuf>>>,
 
+    /// How much of each audio block's time budget the engine actually spends,
+    /// in per mille, written by the audio thread after every block.
+    ///
+    /// This is the number a CPU meter should show. The toolbar meter used to
+    /// estimate load from WebView frame jitter, which measures how busy the
+    /// UI is: it moved when a window was dragged and sat still while the
+    /// audio thread was close to dropping out.
+    audio_load_permille: Arc<std::sync::atomic::AtomicU32>,
+    /// Blocks that overran their budget since the session started. One xrun
+    /// is an audible click, so the count matters even when the average looks
+    /// comfortable.
+    audio_xruns: Arc<std::sync::atomic::AtomicU32>,
+
     audio_device: AudioDeviceManager,
     command_tx: Sender<EngineCommand>,
     command_rx: Receiver<EngineCommand>,
@@ -269,6 +282,8 @@ impl DawEngine {
             master_tap: master_tap::new_shared(),
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             project_dir: Arc::new(Mutex::new(None)),
+            audio_load_permille: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            audio_xruns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
             pending_state_snapshot: Arc::new(Mutex::new(None)),
@@ -470,6 +485,10 @@ impl DawEngine {
             Arc::clone(&self.midi_capture_ring),
             sample_rate,
             buffer_size,
+            LoadCounters {
+                load_permille: Arc::clone(&self.audio_load_permille),
+                xruns: Arc::clone(&self.audio_xruns),
+            },
         );
 
         self.audio_device.start(callback).map_err(|e| e.to_string())
@@ -645,6 +664,19 @@ impl DawEngine {
         self.audio_pool.insert(source_id.to_string(), buffer);
 
         Ok(info)
+    }
+
+    /// Audio-thread load: percentage of each block's time budget in use, and
+    /// how many blocks have overrun it this session.
+    ///
+    /// Replaces a toolbar meter that estimated load from WebView frame
+    /// timing, which measured UI business rather than audio work.
+    pub fn audio_load(&self) -> (f32, u32) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            self.audio_load_permille.load(Relaxed) as f32 / 10.0,
+            self.audio_xruns.load(Relaxed),
+        )
     }
 
     /// Remember where the current project file lives, so sample paths stored
@@ -1133,6 +1165,7 @@ impl DawEngine {
             Arc::clone(&self.midi_capture_ring),
             sample_rate,
             buffer_size as u32,
+            LoadCounters::new(),
         );
 
         // Populate insert chains from the project metadata so the export
@@ -1251,9 +1284,94 @@ struct EngineCallback {
     /// added to a just-created track could silently vanish. Pre-sized
     /// so pushes within capacity never allocate on the audio thread.
     deferred_insert_commands: Vec<crate::insert_chain::InsertCommand>,
+    /// Shared with `DawEngine` so the UI can read real audio load. Written
+    /// only here, on the audio thread.
+    audio_load_permille: Arc<std::sync::atomic::AtomicU32>,
+    audio_xruns: Arc<std::sync::atomic::AtomicU32>,
+}
+
+/// Audio-thread load counters shared with the UI: how much of each block's
+/// budget was used, and how many blocks overran it.
+#[derive(Clone)]
+pub struct LoadCounters {
+    pub load_permille: Arc<std::sync::atomic::AtomicU32>,
+    pub xruns: Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl LoadCounters {
+    pub fn new() -> Self {
+        Self {
+            load_permille: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            xruns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        }
+    }
+}
+
+impl Default for LoadCounters {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Share of a block's deadline that was spent working, in per mille.
+///
+/// The deadline is wall-clock: a 256-frame block at 48 kHz must be finished
+/// within 5.33 ms or the device gets no audio and the user hears a click.
+/// Over 1000 means the block missed it.
+fn audio_load_reading(used_secs: f64, budget_secs: f64) -> u32 {
+    if budget_secs <= 0.0 {
+        return 0;
+    }
+    ((used_secs / budget_secs) * 1000.0)
+        .round()
+        .clamp(0.0, 10_000.0) as u32
+}
+
+/// Move the published value towards a new reading.
+///
+/// Rising fast and falling slowly on purpose: a climb towards the deadline is
+/// what a producer needs to see before it starts clicking, while a dip is not
+/// worth redrawing the bar for.
+fn smooth_load(previous: u32, reading: u32) -> u32 {
+    if reading > previous {
+        (previous + (reading - previous) / 2).min(reading)
+    } else {
+        previous - (previous - reading) / 8
+    }
 }
 
 impl EngineCallback {
+    /// Publish how much of this block's budget the engine used.
+    ///
+    /// The budget is the wall-clock time the block represents: at 48 kHz a
+    /// 256-frame block must be finished within 5.33 ms or the device gets no
+    /// audio and the user hears a click. Spending 2.6 ms of that is 50%.
+    ///
+    /// Smoothed towards the new value so the meter is readable, except
+    /// upwards past 100%, which is reported immediately: a spike that drops
+    /// audio matters more than a tidy average. Overruns are counted
+    /// separately because an average of 40% with regular xruns still
+    /// crackles, and only the count reveals it.
+    fn publish_audio_load(&self, started: std::time::Instant, num_frames: usize) {
+        if num_frames == 0 || self.sample_rate == 0 {
+            return;
+        }
+        let budget = num_frames as f64 / self.sample_rate as f64;
+        let reading = audio_load_reading(started.elapsed().as_secs_f64(), budget);
+
+        use std::sync::atomic::Ordering::Relaxed;
+        if reading > 1000 {
+            // Reported as-is, not smoothed: a spike that drops audio is
+            // exactly what must not be averaged into a calm-looking number.
+            self.audio_xruns.fetch_add(1, Relaxed);
+            self.audio_load_permille.store(reading, Relaxed);
+            return;
+        }
+        let previous = self.audio_load_permille.load(Relaxed);
+        self.audio_load_permille
+            .store(smooth_load(previous, reading), Relaxed);
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         transport: TransportState,
@@ -1273,8 +1391,11 @@ impl EngineCallback {
         midi_capture_ring: Arc<Mutex<MidiCaptureRing>>,
         sample_rate: u32,
         buffer_size: u32,
+        load: LoadCounters,
     ) -> Self {
         let mut cb = Self {
+            audio_load_permille: load.load_permille,
+            audio_xruns: load.xruns,
             transport,
             project,
             meter_producer,
@@ -2211,6 +2332,11 @@ impl EngineCallback {
 
 impl AudioCallback for EngineCallback {
     fn process(&mut self, output: &mut [f32], num_frames: usize, _num_channels: u16) {
+        // Real audio load starts here and is published at the end of the
+        // block. Instant::now does not allocate or lock, so it is safe on
+        // this thread.
+        let block_started = std::time::Instant::now();
+
         self.process_commands();
 
         if self.needs_rebuild {
@@ -2391,6 +2517,8 @@ impl AudioCallback for EngineCallback {
         if playing {
             self.transport.advance(num_frames as u64);
         }
+
+        self.publish_audio_load(block_started, num_frames);
     }
 }
 
@@ -2536,6 +2664,40 @@ mod offline_insert_tests {
         }
         drop(project);
         engine
+    }
+
+    /// The CPU meter is only worth having if the number is real, so these
+    /// pin the maths it reports.
+    #[test]
+    fn load_is_the_share_of_the_block_deadline_that_was_used() {
+        // 256 frames at 48 kHz is a 5.33 ms deadline.
+        let budget = 256.0 / 48_000.0;
+        assert_eq!(audio_load_reading(budget / 2.0, budget), 500, "half = 50%");
+        assert_eq!(audio_load_reading(budget, budget), 1000, "all of it = 100%");
+        assert_eq!(audio_load_reading(0.0, budget), 0);
+        // A bigger buffer is a longer deadline, so the same work reads lower:
+        // this is why raising the buffer size fixes crackle.
+        let roomier = 1024.0 / 48_000.0;
+        assert_eq!(audio_load_reading(budget / 2.0, roomier), 125);
+        // Never divide by a deadline that does not exist.
+        assert_eq!(audio_load_reading(0.01, 0.0), 0);
+    }
+
+    #[test]
+    fn an_overrun_reads_above_one_hundred_percent_so_it_can_be_counted() {
+        let budget = 256.0 / 48_000.0;
+        assert!(audio_load_reading(budget * 2.0, budget) > 1000);
+    }
+
+    #[test]
+    fn the_meter_climbs_quickly_and_settles_slowly() {
+        // Rising: within two samples it is most of the way to a spike.
+        let first = smooth_load(0, 800);
+        let second = smooth_load(first, 800);
+        assert!(second >= 600, "too slow to warn: {second}");
+        // Falling: it eases down instead of snapping to zero.
+        let after = smooth_load(800, 0);
+        assert!(after > 600 && after < 800, "got {after}");
     }
 
     /// Regression for the shape the APP writes, which the test below never
@@ -2858,6 +3020,7 @@ mod rt_safety_tests {
             Arc::new(Mutex::new(MidiCaptureRing::new(64))),
             48_000,
             256,
+            LoadCounters::new(),
         );
         (cb, cmd_tx)
     }
@@ -3009,6 +3172,7 @@ mod wait_for_input_tests {
             Arc::new(Mutex::new(MidiCaptureRing::new(64))),
             48_000,
             256,
+            LoadCounters::new(),
         );
         (cb, command_tx)
     }

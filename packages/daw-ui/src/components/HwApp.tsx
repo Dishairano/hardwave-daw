@@ -761,22 +761,31 @@ function HwTempoContextMenu({
 
 // ─── Live performance meter cluster ────────────────────────────────────────
 //
-// Subscribes to perfMetersStore (frame-time + heap), renders CPU + MEM
-// horizontal bars next to numeric readouts. The store is fed by the
-// rAF-driven sampler in `startPerfMeters` — bootstrapped from the
-// HwApp body so it lives exactly as long as the desktop app.
+// Subscribes to perfMetersStore, renders CPU + MEM bars. CPU is real
+// audio-thread load, polled from the engine by `startPerfMeters`: the share
+// of each audio block's deadline the engine spends working. Past 100% the
+// device goes unfed and the user hears it, so the bar saturates there and the
+// xrun count says how often it has happened.
 
 function HwPerfCluster() {
   const cpuPct = usePerfMetersStore(s => s.cpuPct)
+  const xruns = usePerfMetersStore(s => s.xruns)
   const memMb = usePerfMetersStore(s => s.memMb)
   const memRatio = usePerfMetersStore(s => s.memRatio)
-  const cpuColor = cpuPct > 80 ? 'var(--red-bright)' : cpuPct > 50 ? 'var(--amber)' : 'var(--green)'
+  // Amber from 70%: a producer needs warning before the clicks start, not
+  // after. Red once blocks have actually been dropped.
+  const cpuColor = cpuPct > 90 || xruns > 0
+    ? 'var(--red-bright)'
+    : cpuPct > 70 ? 'var(--amber)' : 'var(--green)'
   const memColor = (memRatio ?? 0) > 0.8 ? 'var(--red-bright)' : (memRatio ?? 0) > 0.5 ? 'var(--amber)' : 'var(--cyan)'
+  const cpuTitle = xruns > 0
+    ? `CPU ${cpuPct}% of the audio deadline · ${xruns} dropout${xruns === 1 ? '' : 's'} this session, raise the buffer size to stop the clicks`
+    : `CPU ${cpuPct}% of the audio deadline · no dropouts`
   return (
-    <div className="fl-perf" title={`CPU ${cpuPct}% (frame-time estimate) · MEM ${memMb ?? '—'} MB`}>
+    <div className="fl-perf" title={`${cpuTitle} · MEM ${memMb ?? '—'} MB`} data-testid="perf-cluster">
       <span className="fl-perf-stack">
         <small>CPU</small>
-        <span className="fl-perf-bar"><i style={{ width: `${cpuPct}%`, background: cpuColor }} /></span>
+        <span className="fl-perf-bar"><i style={{ width: `${Math.min(100, cpuPct)}%`, background: cpuColor }} /></span>
       </span>
       <span className="fl-perf-stack">
         <small>MEM</small>

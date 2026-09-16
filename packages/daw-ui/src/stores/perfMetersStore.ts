@@ -1,18 +1,23 @@
 import { create } from 'zustand'
+import { invoke } from '@tauri-apps/api/core'
 
 /**
- * Lightweight performance-meter source for the toolbar's RAM / CPU
- * cluster.
+ * Performance-meter source for the toolbar's CPU / RAM cluster.
  *
- *  - CPU: frame-time based estimate. We sample the gap between
- *         `requestAnimationFrame` callbacks and compare it to a
- *         16.67 ms target (60 fps). A slowdown below 60 fps signals
- *         that either the audio thread or main-thread work is
- *         spending budget. This is an *estimate* — not the kernel's
- *         CPU% — but it tracks user-perceived performance closely
- *         enough to drive a single-bar toolbar indicator. Smoothed
- *         over a 16-sample ring buffer so the value doesn't jitter
- *         every frame.
+ *  - CPU: real audio-thread load, read from the engine. It is the share of
+ *         each audio block's time budget the engine spends doing the work:
+ *         at 48 kHz with 256-frame blocks the budget is 5.33 ms, so 2.6 ms
+ *         of work reads 50%, and going past 100% means the device went
+ *         unfed and the user heard a click. Those overruns are counted, and
+ *         the count is what the tooltip warns about, because an average
+ *         that looks calm with a rising xrun count is still a broken
+ *         session.
+ *
+ *         This used to estimate load from the gap between animation frames,
+ *         which measures how busy the WebView is: it climbed while a window
+ *         was dragged and sat still while the audio thread was close to
+ *         dropping out. A producer deciding whether to add one more plug-in
+ *         was reading a number about the user interface.
  *
  *  - MEM: pulled from `performance.memory.usedJSHeapSize`, available
  *         on Chromium / Tauri's webview. Falls back to `null` on
@@ -25,17 +30,20 @@ import { create } from 'zustand'
  */
 
 interface PerfMetersState {
-  /** 0-100, smoothed frame-time deviation from the 60fps target. */
+  /** 0-100+, share of the audio block budget in use. Over 100 = dropouts. */
   cpuPct: number
+  /** Audio blocks that overran their budget this session. */
+  xruns: number
   /** Absolute MB used by the JS heap, or null when not available. */
   memMb: number | null
   /** 0-1 ratio of usedJSHeapSize / totalJSHeapSize, or null. */
   memRatio: number | null
-  set: (next: { cpuPct: number; memMb: number | null; memRatio: number | null }) => void
+  set: (next: { cpuPct: number; xruns: number; memMb: number | null; memRatio: number | null }) => void
 }
 
 export const usePerfMetersStore = create<PerfMetersState>((set) => ({
   cpuPct: 0,
+  xruns: 0,
   memMb: null,
   memRatio: null,
   set: (next) => set(next),
@@ -49,42 +57,30 @@ let cleanup: (() => void) | null = null
 export function startPerfMeters(): () => void {
   if (cleanup) cleanup()
 
-  const TARGET_FRAME_MS = 1000 / 60
-  const BUF = 16
-  const samples: number[] = []
-  let lastTs = performance.now()
-  let rafId = 0
-  const tick = (ts: number) => {
-    const dt = ts - lastTs
-    lastTs = ts
-    samples.push(dt)
-    if (samples.length > BUF) samples.shift()
-    rafId = requestAnimationFrame(tick)
-  }
-  rafId = requestAnimationFrame(tick)
-
   const intervalId = window.setInterval(() => {
-    const avg = samples.length > 0
-      ? samples.reduce((s, v) => s + v, 0) / samples.length
-      : TARGET_FRAME_MS
-    // Map a frame budget of TARGET → 0%, 2× TARGET → 50%, 4× TARGET → 100%.
-    const dev = Math.max(0, avg - TARGET_FRAME_MS) / TARGET_FRAME_MS
-    const cpuPct = Math.min(100, Math.round(dev * 50))
-
-    // performance.memory is Chrome / Chromium / Tauri-webview only.
-    let memMb: number | null = null
-    let memRatio: number | null = null
-    const pm = (performance as unknown as { memory?: { usedJSHeapSize: number; totalJSHeapSize: number } }).memory
-    if (pm && typeof pm.usedJSHeapSize === 'number' && typeof pm.totalJSHeapSize === 'number') {
-      memMb = Math.round(pm.usedJSHeapSize / (1024 * 1024))
-      memRatio = pm.totalJSHeapSize > 0 ? pm.usedJSHeapSize / pm.totalJSHeapSize : null
-    }
-
-    usePerfMetersStore.getState().set({ cpuPct, memMb, memRatio })
+    // The engine owns this number: it is measured on the audio thread, per
+    // block, against that block's real deadline.
+    invoke<{ loadPct: number; xruns: number }>('get_audio_load')
+      .then(({ loadPct, xruns }) => {
+        // performance.memory is Chrome / Chromium / Tauri-webview only.
+        let memMb: number | null = null
+        let memRatio: number | null = null
+        const pm = (performance as unknown as { memory?: { usedJSHeapSize: number; totalJSHeapSize: number } }).memory
+        if (pm && typeof pm.usedJSHeapSize === 'number' && typeof pm.totalJSHeapSize === 'number') {
+          memMb = Math.round(pm.usedJSHeapSize / (1024 * 1024))
+          memRatio = pm.totalJSHeapSize > 0 ? pm.usedJSHeapSize / pm.totalJSHeapSize : null
+        }
+        usePerfMetersStore.getState().set({
+          cpuPct: Math.round(loadPct),
+          xruns,
+          memMb,
+          memRatio,
+        })
+      })
+      .catch(() => { /* a missed poll is not worth a toast */ })
   }, 200)
 
   cleanup = () => {
-    cancelAnimationFrame(rafId)
     window.clearInterval(intervalId)
     cleanup = null
   }

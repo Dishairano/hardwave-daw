@@ -231,6 +231,27 @@ pub struct GraphLatency {
 }
 
 #[tauri::command]
+/// Real audio-thread load, for the toolbar's CPU meter.
+///
+/// `loadPct` is the share of each audio block's time budget the engine spends
+/// doing the work; at 48 kHz with 256-frame blocks the budget is 5.33 ms, so
+/// 2.6 ms of work is 50%. `xruns` counts blocks that ran over, which is what
+/// the user hears as a click. An average that looks calm with a rising xrun
+/// count is still a broken session, so both travel together.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioLoad {
+    pub load_pct: f32,
+    pub xruns: u32,
+}
+
+#[tauri::command]
+pub fn get_audio_load(state: State<AppState>) -> AudioLoad {
+    let (load_pct, xruns) = state.engine.lock().audio_load();
+    AudioLoad { load_pct, xruns }
+}
+
+#[tauri::command]
 pub fn get_graph_latency(state: State<AppState>) -> GraphLatency {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
