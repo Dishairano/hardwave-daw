@@ -272,7 +272,19 @@ IMPROVEMENTS=$(echo "$IMPROVEMENTS" | awk '!seen[$0]++' | sed '/^$/d')
 
 CHANGELOG_FILE="RELEASE_CHANGELOG.md"
 
+# An announcement is a deliberate message to everyone, written between
+# `--- announcement ---` and `--- end announcement ---` in the release commit.
+# It is carried through to the tag annotation with its markers intact, because
+# the Discord step looks for them: an announcement posts as its own embed
+# above the change list AND pings @everyone. Nothing generates one
+# automatically, so no ordinary release can ping a whole server by accident.
+ANNOUNCEMENT_BLOCK=$(printf '%s\n' "$MSG" \
+  | sed -n '/^--- announcement ---$/,/^--- end announcement ---$/p' || true)
+
 {
+  if [ -n "$ANNOUNCEMENT_BLOCK" ]; then
+    printf '%s\n\n' "$ANNOUNCEMENT_BLOCK"
+  fi
   HAS_ANY=0
   if [ -n "$FEATURES" ]; then
     echo "### New features"

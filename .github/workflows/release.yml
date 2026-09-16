@@ -436,10 +436,20 @@ jobs:
           # Read bullets from the annotated tag and group by prefix.
           RAW=$(printf '%s\n' "$TAG_BODY" | grep '^\s*[-*]' | sed 's/^\s*[-*]\s*//')
 
-          # No prose block: the announcement is its bullets, the way
-          # v0.204.19 read. What makes it informative is each bullet being a
-          # full sentence that names the consequence, not a paragraph bolted
-          # on top of one-word summaries.
+          # No prose block around the changes: the release post is its
+          # bullets, the way v0.204.19 read. What makes it informative is each
+          # bullet being a full sentence that names the consequence.
+          #
+          # An ANNOUNCEMENT is different: a deliberate message to everyone,
+          # written between `--- announcement ---` and `--- end announcement ---`
+          # in the release commit. It posts as its own embed above the change
+          # list and pings @everyone, so it is only ever there when someone
+          # wrote one on purpose.
+          ANNOUNCEMENT=$(printf '%s\n' "$TAG_BODY" \
+            | sed -n '/^--- announcement ---$/,/^--- end announcement ---$/p' \
+            | sed '1d;$d' \
+            | cat -s \
+            | head -c 3900)
 
           FEATURES=""
           FIXES=""
@@ -502,18 +512,31 @@ jobs:
             --argjson fields "$FIELDS" \
             --arg footer "Release ${VERSION} · ${TOTAL} ${NOUN}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg announcement "$ANNOUNCEMENT" \
             '{
-              "embeds": [{
-                "title": $title,
-                "url": $url,
-                "color": 15228416,
-                "fields": $fields,
-                "footer": {
-                  "text": $footer
-                },
-                "timestamp": $timestamp
-              }]
-            }')
+              "embeds": ([]
+                + (if $announcement != "" then [{
+                    "title": "Hardwave DAW is open for testing",
+                    "description": $announcement,
+                    "color": 16750848
+                  }] else [] end)
+                + [{
+                    "title": $title,
+                    "url": $url,
+                    "color": 15228416,
+                    "fields": $fields,
+                    "footer": {
+                      "text": $footer
+                    },
+                    "timestamp": $timestamp
+                  }])
+            }
+            + (if $announcement != "" then {
+                 "content": "@everyone",
+                 # An embed never pings on its own: the mention has to be in
+                 # content AND allowed by allowed_mentions.
+                 "allowed_mentions": { "parse": ["everyone"] }
+               } else {} end)')
 
           # --fail matters: Discord rejects an embed whose field runs past
           # 1024 characters, and without it curl stayed silent and the step
