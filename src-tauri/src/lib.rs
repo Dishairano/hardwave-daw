@@ -10,6 +10,7 @@ mod midi_clock;
 mod midi_map;
 mod midi_sync;
 mod midi_timecode;
+mod plugin_probe;
 mod prefs;
 
 use hardwave_engine::DawEngine;
@@ -60,6 +61,22 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Crash probe: this same binary, re-run with --probe-plugin, loads one
+    // plug-in and exits. Handled before anything else starts, so the process
+    // that a bad plug-in kills is one holding nothing: no window, no engine,
+    // no project. See plugin_probe.rs.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--probe-plugin") {
+        let code = match args.get(i + 1) {
+            Some(path) => plugin_probe::run_probe_child(path),
+            None => {
+                eprintln!("--probe-plugin needs a path");
+                2
+            }
+        };
+        std::process::exit(code);
+    }
+
     // Session log to ~/.hardwave-daw/logs/ + panic hook. Replaces the
     // bare env_logger::init() — logging still reaches stderr too.
     diagnostics::init(env!("CARGO_PKG_VERSION"));

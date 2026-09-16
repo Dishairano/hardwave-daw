@@ -276,6 +276,17 @@ impl PluginScanner {
 /// them to [`PluginDescriptor`]. Falls back to a filename-only stub if the
 /// library cannot be loaded or exposes no plugins — so broken CLAPs still
 /// appear in the browser (marked Unknown) where they can be blocklisted.
+/// Describe the plug-in classes in one bundle or library, without loading any
+/// of its code. Used by the crash probe, which needs a descriptor before it
+/// can try to instantiate.
+pub fn describe_vst3(bundle_path: &Path) -> Vec<PluginDescriptor> {
+    parse_vst3_bundle(bundle_path)
+}
+
+pub fn describe_clap(library_path: &Path) -> Vec<PluginDescriptor> {
+    parse_clap_library(library_path)
+}
+
 fn parse_clap_library(library_path: &Path) -> Vec<PluginDescriptor> {
     let fallback_name = library_path
         .file_stem()

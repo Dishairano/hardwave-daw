@@ -77,6 +77,17 @@ pub(crate) fn instantiate_plugin(
             other => Err(format!("Unknown native plug-in id: {other}")),
         };
     }
+    // Everything past here is someone else's C++ about to be loaded into this
+    // process. A plug-in that crashes on load takes the DAW with it, usually
+    // while a project is opening, which looks like the DAW losing the song.
+    // Try it in a throwaway process first; a plug-in that kills that one is
+    // refused by name instead of being loaded here.
+    let verdict = crate::plugin_probe::verdict_for(&descriptor.path);
+    if let Some(reason) = verdict.message(&descriptor.name) {
+        log::warn!("refusing to load {}: {reason}", descriptor.name);
+        return Err(reason);
+    }
+
     match descriptor.format {
         PluginFormat::Vst3 => Ok(Box::new(
             Vst3PluginInstance::load(descriptor.clone()).map_err(|e| e.to_string())?,
