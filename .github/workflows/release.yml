@@ -207,7 +207,11 @@ jobs:
       RUST_BACKTRACE: 1
 
     steps:
+      # Full history: the launcher step below compares this tag against the
+      # previous one to decide whether it has to be rebuilt at all.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download frontend artifact
         uses: actions/download-artifact@v4
@@ -377,8 +381,34 @@ jobs:
       # asset list reads cleanly. The launcher downloads the main DAW
       # NSIS .exe at install time and runs it silently — the user only
       # ever interacts with the branded GUI.
-      - name: Build Hardwave DAW launcher installer (Windows)
+      # The launcher is a SECOND Tauri app, so building it costs as much as
+      # the DAW itself, and it changes perhaps once a month. v0.218.0 spent
+      # 25 minutes on it because a toolchain pin invalidated its cache, for a
+      # binary identical to the one already published. Rebuild it only when
+      # its own files changed; otherwise carry the last published one across,
+      # so every release still offers the same downloads.
+      - name: Has the launcher changed?
         if: matrix.platform == 'windows-latest'
+        id: launcher
+        shell: bash
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
+          if [ -z "$PREV" ]; then
+            echo "no previous tag: building"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$PREV" "${GITHUB_REF_NAME}" -- installer/ | grep -q .; then
+            echo "installer/ changed since $PREV: building"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "installer/ untouched since $PREV: reusing the published launcher"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "prev=$PREV" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build Hardwave DAW launcher installer (Windows)
+        if: matrix.platform == 'windows-latest' && steps.launcher.outputs.changed == 'true'
         shell: bash
         working-directory: installer
         run: |
@@ -386,13 +416,39 @@ jobs:
           npm run tauri:build -- --no-bundle
 
       - name: Stage HardwaveDAW-Setup.exe
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && steps.launcher.outputs.changed == 'true'
         shell: pwsh
         run: |
           $installerExe = Get-ChildItem -Path installer/src-tauri/target/release -Filter "hardwave-daw-installer.exe" -File | Select-Object -First 1
           if (-not $installerExe) { throw "hardwave-daw-installer.exe not found" }
           Copy-Item $installerExe.FullName "HardwaveDAW-Setup.exe"
           Get-Item HardwaveDAW-Setup.exe | Select-Object Name,Length
+
+      # Unchanged: fetch the one already published so this release is not
+      # missing a download. A failure here is loud on purpose, because a
+      # release without the launcher breaks the website's download link.
+      - name: Reuse the published HardwaveDAW-Setup.exe
+        if: matrix.platform == 'windows-latest' && steps.launcher.outputs.changed == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Walk back through releases: the previous tag may itself have
+          # reused it, and a failed release may carry nothing at all.
+          found=""
+          for tag in $(gh release list --limit 15 --json tagName --jq '.[].tagName'); do
+            if gh release download "$tag" -p HardwaveDAW-Setup.exe -O HardwaveDAW-Setup.exe 2>/dev/null; then
+              found="$tag"
+              break
+            fi
+          done
+          if [ -z "$found" ]; then
+            echo "::error::no published HardwaveDAW-Setup.exe to reuse; run the release again after touching installer/"
+            exit 1
+          fi
+          echo "reused the launcher from $found"
+          ls -l HardwaveDAW-Setup.exe
 
       - name: Upload HardwaveDAW-Setup.exe to release
         if: matrix.platform == 'windows-latest'
