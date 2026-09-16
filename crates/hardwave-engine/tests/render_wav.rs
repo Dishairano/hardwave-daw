@@ -82,6 +82,9 @@ fn stretch_preserves_pitch() {
                     warp_markers: Vec::new(),
                     fade_in_curve: FadeCurve::Linear,
                     fade_out_curve: FadeCurve::Linear,
+                    // Legacy shape on purpose: empty means the engine falls back
+                    // to reading source_path as the file location.
+                    source_file: String::new(),
                 };
                 t.clips.push(ClipPlacement {
                     content: ClipContent::Audio(clip),
@@ -267,6 +270,9 @@ fn pitch_shift_preserves_duration() {
                         warp_markers: Vec::new(),
                         fade_in_curve: FadeCurve::Linear,
                         fade_out_curve: FadeCurve::Linear,
+                        // Legacy shape on purpose: empty means the engine falls back
+                        // to reading source_path as the file location.
+                        source_file: String::new(),
                     }),
                     track_id: track_id.clone(),
                     position_ticks: 0,
@@ -354,6 +360,9 @@ fn stretch_bake_is_explicit_and_off_the_audio_thread() {
                     warp_markers: Vec::new(),
                     fade_in_curve: FadeCurve::Linear,
                     fade_out_curve: FadeCurve::Linear,
+                    // Legacy shape on purpose: empty means the engine falls back
+                    // to reading source_path as the file location.
+                    source_file: String::new(),
                 }),
                 track_id: track_id.clone(),
                 position_ticks: 0,
@@ -422,6 +431,9 @@ fn async_stretch_bake_lands_and_does_not_stampede() {
                     warp_markers: Vec::new(),
                     fade_in_curve: FadeCurve::Linear,
                     fade_out_curve: FadeCurve::Linear,
+                    // Legacy shape on purpose: empty means the engine falls back
+                    // to reading source_path as the file location.
+                    source_file: String::new(),
                 }),
                 track_id: track_id.clone(),
                 position_ticks: 0,
@@ -495,6 +507,9 @@ fn render_rate_does_not_detune_audio_clips() {
                         warp_markers: Vec::new(),
                         fade_in_curve: FadeCurve::Linear,
                         fade_out_curve: FadeCurve::Linear,
+                        // Legacy shape on purpose: empty means the engine falls back
+                        // to reading source_path as the file location.
+                        source_file: String::new(),
                     }),
                     track_id: track_id.clone(),
                     position_ticks: 0,

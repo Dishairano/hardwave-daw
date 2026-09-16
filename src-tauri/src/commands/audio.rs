@@ -1,7 +1,23 @@
 use crate::AppState;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::State;
+
+/// SHA-256 of a file, streamed so a long sample does not land in memory
+/// twice. Returns an empty string when the file cannot be read: the hash is
+/// there to help find a file that moved later, and failing to compute it must
+/// never block the import itself.
+fn hash_source_file(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let mut hasher = Sha256::new();
+    if std::io::copy(&mut file, &mut hasher).is_err() {
+        return String::new();
+    }
+    format!("{:x}", hasher.finalize())
+}
 
 #[derive(Serialize)]
 pub struct ImportedClip {
@@ -51,7 +67,7 @@ pub fn import_audio_file(
         id: clip_id.clone(),
         name: file_name.clone(),
         source_path: source_id.clone(),
-        source_hash: String::new(),
+        source_hash: hash_source_file(&path),
         source_start: 0,
         source_end: info.total_frames,
         gain_db: 0.0,
@@ -64,6 +80,10 @@ pub fn import_audio_file(
         warp_markers: Vec::new(),
         fade_in_curve: Default::default(),
         fade_out_curve: Default::default(),
+        // Where the audio really is. `source_path` above is the pool id, so
+        // without this the project keeps no record of the file and every clip
+        // reloads silent.
+        source_file: path.to_string_lossy().into_owned(),
     };
 
     let placement = hardwave_project::clip::ClipPlacement {

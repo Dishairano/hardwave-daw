@@ -37,6 +37,14 @@ jobs:
       CARGO_NET_RETRY: 10
       CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
       RUST_BACKTRACE: 1
+      # This runs on the founder's own workstation while he is using it.
+      # Cargo defaults to one rustc per logical core, which pinned all 20
+      # threads of the i9 at 100% and made the machine unusable. Six leaves
+      # most of the CPU for the DAW and still finishes the gate in a few
+      # minutes, since the target directory stays warm between runs.
+      CARGO_BUILD_JOBS: 6
+      # Same reason: the test harness otherwise runs one thread per core.
+      RUST_TEST_THREADS: 4
     steps:
       - uses: actions/checkout@v4
 

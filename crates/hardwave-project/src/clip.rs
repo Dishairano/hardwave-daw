@@ -18,9 +18,14 @@ pub enum FadeCurve {
 pub struct AudioClip {
     pub id: ClipId,
     pub name: String,
-    /// Path to audio file (relative to project media/ dir).
+    /// Key into the engine's audio pool. Despite the name this is an
+    /// opaque id, not a location: `import_audio_file` stores what
+    /// `load_audio_file` returned, and playback looks the buffer up by it.
+    /// Keeping it stable is what lets a moved file be relinked without
+    /// touching any clip. The file it came from is `source_file`.
     pub source_path: String,
-    /// SHA-256 hash of source file for integrity.
+    /// SHA-256 of the source file at import, or empty for clips written
+    /// before it was recorded. Identifies a file that moved or was renamed.
     pub source_hash: String,
     /// Offset into source file in samples.
     pub source_start: u64,
@@ -54,6 +59,20 @@ pub struct AudioClip {
     /// `stretch_ratio` (legacy projects deserialize to empty).
     #[serde(default)]
     pub warp_markers: Vec<WarpMarker>,
+    /// Where the audio actually lives on disk.
+    ///
+    /// Without this a saved project had no record of its samples at all:
+    /// `source_path` holds a pool id, so reopening a project tried to open a
+    /// file named after a hash, every source failed to load, and every audio
+    /// clip came back silent. Empty on projects written before this field
+    /// existed, which the engine falls back to handling by treating
+    /// `source_path` as a path.
+    ///
+    /// MUST STAY LAST, like `Project::timeline_state`: .hwp is MessagePack
+    /// written by `rmp_serde::to_vec`, which encodes a struct positionally, so
+    /// a field inserted anywhere else shifts every field after it.
+    #[serde(default)]
+    pub source_file: String,
 }
 
 /// One warp anchor: timeline tick ↔ source sample.

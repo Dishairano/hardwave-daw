@@ -59,6 +59,9 @@ pub fn make_audio_clip(source_id: impl Into<String>, num_frames: u64) -> AudioCl
         warp_markers: Vec::new(),
         fade_in_curve: FadeCurve::Linear,
         fade_out_curve: FadeCurve::Linear,
+        // Legacy shape on purpose: empty means the engine falls back
+        // to reading source_path as the file location.
+        source_file: String::new(),
     }
 }
 

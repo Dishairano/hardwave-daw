@@ -604,12 +604,28 @@ impl DawEngine {
         &self,
         path: &std::path::Path,
     ) -> Result<(String, hardwave_dsp::AudioFileInfo), String> {
+        let source_id = source_id_for_path(&path.to_string_lossy());
+        let info = self.load_audio_file_as(path, &source_id)?;
+        Ok((source_id, info))
+    }
+
+    /// Load an audio file into the pool under an id the caller chooses.
+    ///
+    /// Reopening a project needs this: clips hold the pool id they were
+    /// imported with, so the file has to come back under that same id even
+    /// when it now lives somewhere else. Deriving the id from the path
+    /// instead would give a relinked file a new id that no clip references,
+    /// and the clip would stay silent.
+    pub fn load_audio_file_as(
+        &self,
+        path: &std::path::Path,
+        source_id: &str,
+    ) -> Result<hardwave_dsp::AudioFileInfo, String> {
         let target_sr = self.audio_device.sample_rate;
         let (info, channels) = hardwave_dsp::AudioFileReader::read_resampled(path, Some(target_sr))
             .map_err(|e| e.to_string())?;
 
         let num_frames = channels.first().map(|c| c.len()).unwrap_or(0);
-        let source_id = source_id_for_path(&path.to_string_lossy());
 
         let buffer = AudioBuffer {
             channels,
@@ -617,9 +633,9 @@ impl DawEngine {
             num_frames,
         };
 
-        self.audio_pool.insert(source_id.clone(), buffer);
+        self.audio_pool.insert(source_id.to_string(), buffer);
 
-        Ok((source_id, info))
+        Ok(info)
     }
 
     /// Re-load every audio source referenced by the current project into the
@@ -631,12 +647,25 @@ impl DawEngine {
     /// UI can surface them like missing plugins; the project still opens.
     pub fn rehydrate_audio_pool(&self) -> Vec<String> {
         use hardwave_project::clip::ClipContent;
-        let paths: Vec<String> = {
+        // (pool id, file on disk). The id is what clips play through; the
+        // file is where the audio has to be read from. They are different
+        // strings, which is exactly what this used to get wrong: it fed the
+        // pool id to the filesystem and tried to open a file named after a
+        // hash, so every source "went missing" on reload.
+        let paths: Vec<(String, String)> = {
             let project = self.project.lock();
             let mut set = std::collections::BTreeSet::new();
             let mut collect = |content: &ClipContent| {
                 if let ClipContent::Audio(ac) = content {
-                    set.insert(ac.source_path.clone());
+                    // Projects written before `source_file` existed carry the
+                    // path in `source_path` (the shape the engine's own tests
+                    // build), so fall back to it rather than dropping them.
+                    let file = if ac.source_file.is_empty() {
+                        ac.source_path.clone()
+                    } else {
+                        ac.source_file.clone()
+                    };
+                    set.insert((ac.source_path.clone(), file));
                 }
             };
             for track in &project.tracks {
@@ -654,15 +683,15 @@ impl DawEngine {
             set.into_iter().collect()
         };
         let mut missing = Vec::new();
-        for p in paths {
+        for (source_id, file) in paths {
             // Skip sources already resident (e.g. loading a project into a
             // session that imported the same file) — insert would clone-churn.
-            if self.audio_pool.get(&source_id_for_path(&p)).is_some() {
+            if self.audio_pool.get(&source_id).is_some() {
                 continue;
             }
-            if let Err(e) = self.load_audio_file(std::path::Path::new(&p)) {
-                log::warn!("rehydrate_audio_pool: '{p}' failed to load: {e}");
-                missing.push(p);
+            if let Err(e) = self.load_audio_file_as(std::path::Path::new(&file), &source_id) {
+                log::warn!("rehydrate_audio_pool: '{file}' failed to load: {e}");
+                missing.push(file);
             }
         }
         missing
@@ -2451,6 +2480,9 @@ mod offline_insert_tests {
                     warp_markers: Vec::new(),
                     fade_in_curve: FadeCurve::Linear,
                     fade_out_curve: FadeCurve::Linear,
+                    // Legacy shape on purpose: empty means the engine falls back
+                    // to reading source_path as the file location.
+                    source_file: String::new(),
                 }),
                 track_id: id.clone(),
                 position_ticks: 0,
@@ -2468,6 +2500,93 @@ mod offline_insert_tests {
         }
         drop(project);
         engine
+    }
+
+    /// Regression for the shape the APP writes, which the test below never
+    /// exercised: `import_audio_file` puts the pool id in `source_path` and
+    /// the file in `source_file`. Rehydrate used to feed `source_path` to the
+    /// filesystem, so it tried to open a file named after a hash and reported
+    /// every source missing, leaving reopened projects silent on the very
+    /// machine that made them.
+    #[test]
+    fn a_project_saved_the_way_the_app_writes_it_reloads_its_audio() {
+        let dir = std::env::temp_dir().join(format!("hw-import-shape-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("snare.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        for i in 0..4_800 {
+            w.write_sample(((i as f32 / 8.0).sin() * 6_000.0) as i16)
+                .unwrap();
+        }
+        w.finalize().unwrap();
+
+        // Exactly what import does: load the file, then store the returned
+        // pool id in source_path and the path in source_file.
+        let engine = DawEngine::new();
+        let (pool_id, _) = engine.load_audio_file(&wav).expect("import");
+        {
+            let mut project = engine.project.lock();
+            let track = project.add_audio_track("Snare".into());
+            if let Some(t) = project.track_mut(&track) {
+                t.clips.push(ClipPlacement {
+                    content: ClipContent::Audio(AudioClip {
+                        id: "clip-1".into(),
+                        name: "snare".into(),
+                        source_path: pool_id.clone(),
+                        source_hash: String::new(),
+                        source_start: 0,
+                        source_end: 4_800,
+                        gain_db: 0.0,
+                        fade_in_ticks: 0,
+                        fade_out_ticks: 0,
+                        muted: false,
+                        reversed: false,
+                        pitch_semitones: 0.0,
+                        stretch_ratio: 1.0,
+                        warp_markers: Vec::new(),
+                        fade_in_curve: FadeCurve::Linear,
+                        fade_out_curve: FadeCurve::Linear,
+                        source_file: wav.to_string_lossy().into_owned(),
+                    }),
+                    track_id: track.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1920,
+                    lane: 0,
+                });
+            }
+            let path = dir.join("song.hwp");
+            project.save(&path).expect("save");
+        }
+
+        // Reopen in a fresh engine, as a restart does.
+        let reopened = DawEngine::new();
+        {
+            let loaded = Project::load(&dir.join("song.hwp")).expect("load");
+            *reopened.project.lock() = loaded;
+        }
+        assert!(
+            reopened.audio_pool.get(&pool_id).is_none(),
+            "pool starts empty before rehydrate"
+        );
+
+        let missing = reopened.rehydrate_audio_pool();
+
+        assert!(missing.is_empty(), "nothing should be missing: {missing:?}");
+        // Under the clip's OWN id, which is what playback looks up. Loading it
+        // under an id derived from the path would leave the clip silent.
+        let buffer = reopened
+            .audio_pool
+            .get(&pool_id)
+            .expect("audio is back under the id the clip references");
+        assert_eq!(buffer.num_frames, 4_800);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// Regression: `load_project` swaps the Project in but the audio pool
@@ -2517,6 +2636,9 @@ mod offline_insert_tests {
                     warp_markers: Vec::new(),
                     fade_in_curve: FadeCurve::Linear,
                     fade_out_curve: FadeCurve::Linear,
+                    // Legacy shape on purpose: empty means the engine falls back
+                    // to reading source_path as the file location.
+                    source_file: String::new(),
                 }),
                 track_id: id.clone(),
                 position_ticks: 0,
@@ -2542,7 +2664,14 @@ mod offline_insert_tests {
         }
 
         // Pool is empty (fresh engine) — exactly the post-restart state.
-        let source_id = source_id_for_path(&path_str);
+        //
+        // These clips carry the path in `source_path`, the pre-`source_file`
+        // shape, and playback looks a buffer up by `source_path` verbatim. So
+        // the pool key that matters here is the path itself. This used to
+        // assert `source_id_for_path(path)` instead, a key playback never
+        // reads: the audio was loaded under a name no clip could find, so even
+        // this shape played silence.
+        let source_id = path_str.clone();
         assert!(engine.audio_pool.get(&source_id).is_none());
 
         let missing = engine.rehydrate_audio_pool();
@@ -2578,6 +2707,9 @@ mod offline_insert_tests {
                     warp_markers: Vec::new(),
                     fade_in_curve: FadeCurve::Linear,
                     fade_out_curve: FadeCurve::Linear,
+                    // Legacy shape on purpose: empty means the engine falls back
+                    // to reading source_path as the file location.
+                    source_file: String::new(),
                 }),
                 track_id: id2.clone(),
                 position_ticks: 0,
