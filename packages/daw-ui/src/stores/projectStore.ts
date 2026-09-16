@@ -115,44 +115,92 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 }))
 
-// Scan current project's audio clips and warn about sources that can't be read.
-// Runs HEAD fetches through convertFileSrc — no backend changes required.
+/**
+ * Tell the user which samples the project cannot find, and offer to find them.
+ *
+ * This used to HEAD-request `convertFileSrc(clip.source_id)`, but source_id is
+ * the audio pool's id, not a path, so the request could never succeed: every
+ * project load warned that its audio was missing and listed hashes where the
+ * file names should be. The backend knows the real answer, so it is asked.
+ */
 async function reportMissingAudioSources() {
-  const [{ useTrackStore }, { useNotificationStore }, { convertFileSrc }] = await Promise.all([
-    import('./trackStore'),
+  const [{ useNotificationStore }, { invoke }] = await Promise.all([
     import('./notificationStore'),
     import('@tauri-apps/api/core'),
   ])
-  await useTrackStore.getState().fetchTracks()
-  const tracks = useTrackStore.getState().tracks
-  const seen = new Set<string>()
-  const candidates: string[] = []
-  for (const t of tracks) {
-    if (t.kind !== 'Audio') continue
-    for (const c of t.clips) {
-      if (c.kind !== 'audio') continue
-      const p = c.source_id
-      if (!p || seen.has(p)) continue
-      seen.add(p)
-      candidates.push(p)
-    }
-  }
-  if (candidates.length === 0) return
-  const checks = await Promise.all(candidates.map(async (p) => {
-    try {
-      const resp = await fetch(convertFileSrc(p), { method: 'HEAD' })
-      return resp.ok ? null : p
-    } catch {
-      return p
-    }
-  }))
-  const missing = checks.filter((x): x is string => x !== null)
+
+  interface MissingSource { sourceId: string; file: string; name: string; hash: string; clipCount: number }
+  const missing = await invoke<MissingSource[]>('list_missing_sources').catch(() => [])
   if (missing.length === 0) return
+
   const { push } = useNotificationStore.getState()
-  const preview = missing.slice(0, 4).map(p => `• ${p.split(/[\\/]/).pop() || p}`).join('\n')
+  const preview = missing.slice(0, 4).map(m => `• ${m.name}`).join('\n')
   const more = missing.length > 4 ? `\n…and ${missing.length - 4} more` : ''
+
+  // Everywhere worth looking without asking: the folders already added to the
+  // browser, plus the folder the project itself lives in.
+  const searchDirs = async (): Promise<string[]> => {
+    const { useBrowserStore } = await import('./browserStore')
+    const dirs = [...useBrowserStore.getState().diskRoots]
+    const projectPath = useProjectStore.getState().filePath
+    if (projectPath) {
+      const dir = projectPath.slice(0, projectPath.lastIndexOf(projectPath.includes('\\') ? '\\' : '/'))
+      if (dir) dirs.push(dir)
+    }
+    return dirs
+  }
+
+  const search = async () => {
+    const dirs = await searchDirs()
+    if (dirs.length === 0) {
+      push('warning', 'Nowhere to search yet', {
+        detail: 'Add your sample folders to the browser under Places, then try again.',
+      })
+      return
+    }
+    const found = await invoke<string[]>('auto_relink_sources', { dirs }).catch(() => [])
+    if (found.length === 0) {
+      push('warning', 'Could not find those samples', {
+        detail: 'Nothing matching turned up in your sample folders. Use Locate to point at a file yourself.',
+      })
+      return
+    }
+    push('info', `Found ${found.length} of ${missing.length} missing sample${missing.length === 1 ? '' : 's'}`, {
+      detail: found.slice(0, 6).join('\n'),
+    })
+    await useTrackStoreRefresh()
+    void reportMissingAudioSources()
+  }
+
+  const locate = async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    for (const m of missing) {
+      const picked = await open({
+        title: `Locate ${m.name}`,
+        multiple: false,
+        filters: [{ name: 'Audio', extensions: ['wav', 'mp3', 'flac', 'aiff', 'aif', 'ogg', 'm4a'] }],
+      })
+      if (typeof picked !== 'string') break // cancelled: stop asking
+      await invoke('relink_source', { sourceId: m.sourceId, newPath: picked }).catch(() => {})
+    }
+    await useTrackStoreRefresh()
+    void reportMissingAudioSources()
+  }
+
   push('warning',
     `${missing.length} audio file${missing.length === 1 ? '' : 's'} missing`,
-    { detail: preview + more, sticky: true },
+    {
+      detail: preview + more,
+      sticky: true,
+      actions: [
+        { label: 'Search my folders', onClick: () => { void search() } },
+        { label: 'Locate…', onClick: () => { void locate() } },
+      ],
+    },
   )
+}
+
+async function useTrackStoreRefresh() {
+  const { useTrackStore } = await import('./trackStore')
+  await useTrackStore.getState().fetchTracks()
 }

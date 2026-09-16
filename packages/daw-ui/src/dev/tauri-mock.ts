@@ -144,6 +144,13 @@ const mock: TauriInternals = {
           position_samples: 0, bpm: 140, time_sig_numerator: 4,
           time_sig_denominator: 4, master_volume_db: 0, pattern_mode: false,
         }
+      // Nothing is missing in a mocked project.
+      case 'list_missing_sources':
+        return []
+      case 'auto_relink_sources':
+        return []
+      case 'relink_source':
+        return 0
       // Markers + punch range now ride in the project, not localStorage.
       case 'get_timeline_state':
         return null

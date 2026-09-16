@@ -267,6 +267,10 @@ pub fn run() {
             commands::engine::set_wasapi_exclusive,
             // Browser
             commands::browser::list_directory,
+            // Missing audio + relinking
+            commands::sources::list_missing_sources,
+            commands::sources::relink_source,
+            commands::sources::auto_relink_sources,
             // Audio
             commands::audio::import_audio_file,
             commands::audio::get_track_clips,

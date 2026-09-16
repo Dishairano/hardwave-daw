@@ -17,6 +17,7 @@ pub mod plugin_presets;
 pub mod plugins;
 pub mod project;
 pub mod sends;
+pub mod sources;
 pub mod tracks;
 pub mod transport;
 pub mod windows;
