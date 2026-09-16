@@ -2547,12 +2547,14 @@ impl AudioCallback for EngineCallback {
             self.metronome.render(
                 output,
                 num_frames,
-                position,
-                bpm,
-                beats_per_bar,
-                self.sample_rate as f64,
-                playing,
-                recording,
+                &crate::metronome::BlockClock {
+                    position,
+                    bpm,
+                    beats_per_bar,
+                    sample_rate: self.sample_rate as f64,
+                    playing,
+                    recording,
+                },
             );
         }
 

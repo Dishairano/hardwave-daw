@@ -110,6 +110,21 @@ impl ClickVoice {
     }
 }
 
+/// What the transport says about the block being rendered.
+///
+/// Grouped rather than passed as six arguments: they all come from the same
+/// place and are only meaningful together.
+#[derive(Debug, Clone, Copy)]
+pub struct BlockClock {
+    /// Playhead in samples at the START of the block.
+    pub position: u64,
+    pub bpm: f64,
+    pub beats_per_bar: u32,
+    pub sample_rate: f64,
+    pub playing: bool,
+    pub recording: bool,
+}
+
 /// Places clicks on beats and renders them.
 pub struct Metronome {
     settings: MetronomeSettings,
@@ -130,39 +145,29 @@ impl Metronome {
 
     /// Mix the click for one block into an interleaved stereo buffer.
     ///
-    /// `position` is the playhead in samples at the START of the block, which
-    /// is what makes the timing exact: every beat inside the block is placed
-    /// at its own sample offset rather than whenever a UI tick noticed it.
-    pub fn render(
-        &mut self,
-        output: &mut [f32],
-        num_frames: usize,
-        position: u64,
-        bpm: f64,
-        beats_per_bar: u32,
-        sample_rate: f64,
-        playing: bool,
-        recording: bool,
-    ) {
-        let audible = self.settings.is_audible(recording);
+    /// The clock's `position` is what makes the timing exact: every beat
+    /// inside the block is placed at its own sample offset rather than
+    /// whenever a UI tick noticed it.
+    pub fn render(&mut self, output: &mut [f32], num_frames: usize, clock: &BlockClock) {
+        let audible = self.settings.is_audible(clock.recording);
         if !audible && self.voice.remaining == 0 {
             return;
         }
-        if sample_rate <= 0.0 || bpm <= 0.0 {
+        if clock.sample_rate <= 0.0 || clock.bpm <= 0.0 {
             return;
         }
 
-        let samples_per_beat = 60.0 / bpm * sample_rate;
+        let samples_per_beat = 60.0 / clock.bpm * clock.sample_rate;
         if samples_per_beat < 1.0 {
             return;
         }
         let volume = self.settings.volume_linear();
         let accent = self.settings.accent.load(Ordering::Relaxed);
-        let bar = beats_per_bar.max(1) as u64;
+        let bar = clock.beats_per_bar.max(1) as u64;
 
         for frame in 0..num_frames {
-            if audible && playing {
-                let pos = position + frame as u64;
+            if audible && clock.playing {
+                let pos = clock.position + frame as u64;
                 // A beat starts in this sample when the sample index crosses
                 // a multiple of the beat length.
                 let beat_now = (pos as f64 / samples_per_beat).floor() as i64;
@@ -172,9 +177,10 @@ impl Metronome {
                     ((pos - 1) as f64 / samples_per_beat).floor() as i64
                 };
                 if beat_now != beat_prev && beat_now >= 0 {
-                    let downbeat = accent && (beat_now as u64) % bar == 0;
+                    let downbeat = accent && (beat_now as u64).is_multiple_of(bar);
                     let freq = if downbeat { DOWNBEAT_HZ } else { BEAT_HZ };
-                    self.voice.start(freq, volume * 0.6, sample_rate as f32);
+                    self.voice
+                        .start(freq, volume * 0.6, clock.sample_rate as f32);
                 }
             }
             let s = self.voice.next_sample();
@@ -195,9 +201,20 @@ mod tests {
 
     const SR: f64 = 48_000.0;
 
+    fn clock(position: u64, bpm: f64, recording: bool) -> BlockClock {
+        BlockClock {
+            position,
+            bpm,
+            beats_per_bar: 4,
+            sample_rate: SR,
+            playing: true,
+            recording,
+        }
+    }
+
     fn render_block(m: &mut Metronome, frames: usize, position: u64, bpm: f64) -> Vec<f32> {
         let mut out = vec![0.0f32; frames * 2];
-        m.render(&mut out, frames, position, bpm, 4, SR, true, false);
+        m.render(&mut out, frames, &clock(position, bpm, false));
         out
     }
 
@@ -247,14 +264,14 @@ mod tests {
         let mut m = Metronome::new(settings);
 
         let mut playback = vec![0.0f32; 512 * 2];
-        m.render(&mut playback, 512, 0, 120.0, 4, SR, true, false);
+        m.render(&mut playback, 512, &clock(0, 120.0, false));
         assert!(
             playback.iter().all(|s| *s == 0.0),
             "record-only must not click during plain playback"
         );
 
         let mut recording = vec![0.0f32; 512 * 2];
-        m.render(&mut recording, 512, 0, 120.0, 4, SR, true, true);
+        m.render(&mut recording, 512, &clock(0, 120.0, true));
         assert!(recording.iter().any(|s| s.abs() > 1e-6));
     }
 
