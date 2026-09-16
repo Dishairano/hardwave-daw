@@ -230,7 +230,6 @@ pub struct GraphLatency {
     pub pdc_enabled: bool,
 }
 
-#[tauri::command]
 /// Real audio-thread load, for the toolbar's CPU meter.
 ///
 /// `loadPct` is the share of each audio block's time budget the engine spends
