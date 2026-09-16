@@ -457,7 +457,6 @@ git tag -a "$TAG_NAME" --cleanup=verbatim -F "$CHANGELOG_FILE"
 git push origin "$TAG_NAME"
 
 # Clean up changelog file
-rm -f "$CHANGELOG_FILE"
 
 echo "Released $TAG_NAME ($BUMP_TYPE, full build) — CI at https://github.com/Dishairano/hardwave-daw/actions"
 echo "Users update via Help → Check for updates… once Windows / Mac / Linux artifacts are ready."

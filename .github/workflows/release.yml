@@ -85,8 +85,17 @@ jobs:
       - name: Generate changelog from tag annotation
         id: changelog
         run: |
-          # Get the annotated tag message (set by release.sh)
-          TAG_MSG=$(git tag -l --format='%(contents)' "${{ github.ref_name }}" 2>/dev/null || echo "")
+          # RELEASE_CHANGELOG.md is written by release.sh and committed with
+          # the release. Read it rather than the tag annotation: checkout
+          # lands the tag as a lightweight ref, and
+          # `git tag -l --format='%(contents)'` then silently falls back to
+          # the COMMIT message, which is how several releases announced
+          # nothing but "version bump for X".
+          if [ -f RELEASE_CHANGELOG.md ]; then
+            TAG_MSG=$(cat RELEASE_CHANGELOG.md)
+          else
+            TAG_MSG=$(git tag -l --format='%(contents)' "${{ github.ref_name }}" 2>/dev/null || echo "")
+          fi
           if [ -z "$TAG_MSG" ] || [ "$TAG_MSG" = "${{ github.ref_name }}" ]; then
             # Fallback: generate from commits since previous tag
             PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || echo "")
@@ -431,10 +440,22 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           VERSION: ${{ github.ref_name }}
         run: |
-          TAG_BODY=$(git tag -l --format='%(contents)' "$VERSION" 2>/dev/null)
+          # The committed changelog, not the tag annotation: checkout lands
+          # the tag as a lightweight ref, so `%(contents)` returns the commit
+          # message instead. That is why v0.212.0, v0.213.1 and v0.214.1
+          # announced only "version bump for X" while their real changelog sat
+          # in the tag, and why v0.212.1 published an `--- announcement ---`
+          # marker as a bullet.
+          if [ -f RELEASE_CHANGELOG.md ]; then
+            TAG_BODY=$(cat RELEASE_CHANGELOG.md)
+          else
+            TAG_BODY=$(git tag -l --format='%(contents)' "$VERSION" 2>/dev/null)
+          fi
 
-          # Read bullets from the annotated tag and group by prefix.
-          RAW=$(printf '%s\n' "$TAG_BODY" | grep '^\s*[-*]' | sed 's/^\s*[-*]\s*//')
+          # A bullet is "- " or "* ": a marker line like `--- announcement ---`
+          # and a bold line like `**Open for testing**` both start with those
+          # characters and were published as changelog items.
+          RAW=$(printf '%s\n' "$TAG_BODY" | grep -E '^[[:space:]]*[-*][[:space:]]' | sed 's/^[[:space:]]*[-*][[:space:]]*//')
 
           # No prose block around the changes: the release post is its
           # bullets, the way v0.204.19 read. What makes it informative is each

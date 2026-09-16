@@ -3,7 +3,10 @@ node_modules/
 dist/
 .env
 *.log
-RELEASE_CHANGELOG.md
+# RELEASE_CHANGELOG.md is committed with each release on purpose: CI reads
+# it to build the announcement. The tag annotation cannot be trusted for
+# that, because actions/checkout lands the tag as a lightweight ref and
+# `git tag -l --format=%(contents)` then falls back to the commit message.
 .DS_Store
 .tauri-updater-key
 packages/daw-ui/test-results/
