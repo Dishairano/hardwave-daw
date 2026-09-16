@@ -289,7 +289,10 @@ mod tests {
         let path = dir.join("timeline.hwp");
 
         let mut p = Project::default();
-        assert_eq!(p.timeline_state, None, "a new project has no timeline state");
+        assert_eq!(
+            p.timeline_state, None,
+            "a new project has no timeline state"
+        );
         p.timeline_state = Some(r#"{"markers":[{"id":"mk_1","tick":1920}]}"#.to_string());
         p.save(&path).expect("save");
 
@@ -325,7 +328,11 @@ mod tests {
         };
         let legacy_path = dir.join("legacy.hwp");
         let packed = rmp_serde::to_vec(&legacy).unwrap();
-        std::fs::write(&legacy_path, zstd::encode_all(packed.as_slice(), 3).unwrap()).unwrap();
+        std::fs::write(
+            &legacy_path,
+            zstd::encode_all(packed.as_slice(), 3).unwrap(),
+        )
+        .unwrap();
 
         let loaded = Project::load(&legacy_path).expect("legacy load");
         assert_eq!(loaded.timeline_state, None, "missing field defaults");
