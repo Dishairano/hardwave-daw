@@ -59,7 +59,11 @@ esac
 # auto-generated changelog degrades to a paragraph dump and Discord
 # falls back to "Bug fixes and improvements". This check refuses the
 # release before any tag lands.
-MSG_BULLETS=$(printf '%s\n' "$MSG" | grep -cE '^- (feat|feature|add|new|fix|bug|bugfix|improve|perf|refactor|ui|ux|chore):' || true)
+# `internal:` counts as discipline too: a release whose content comes from
+# the feature commits needs a bullet in its own message about as much as a
+# version bump needs announcing, and writing `chore:` there just to satisfy
+# this check is what published "version bump for X" to users.
+MSG_BULLETS=$(printf '%s\n' "$MSG" | grep -cE '^- (feat|feature|add|new|fix|bug|bugfix|improve|perf|refactor|ui|ux|chore|internal):' || true)
 if [ "$MSG_BULLETS" -lt 1 ]; then
   cat <<'BULLETERR' >&2
 release.sh: commit message has no `- prefix:` bullets. Required format:
