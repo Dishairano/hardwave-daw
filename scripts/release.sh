@@ -27,6 +27,10 @@ Pick honestly:
   - drag-drop fix / regression fix / polish  → patch
   - removed feature / changed API contract   → major
 
+Write the version-bump line as `- internal: ...`, never `- chore: ...`.
+"version bump for X" is not something anyone outside this repo can observe,
+and chore bullets are published to users under Improvements.
+
 Examples:
   ./scripts/release.sh patch "fix(daw): drag-drop on Windows"
   ./scripts/release.sh minor "feat(daw): KickSynth visual redesign"
@@ -186,18 +190,24 @@ FEATURES=""
 FIXES=""
 IMPROVEMENTS=""
 
+# Sort a bullet into a section, KEEPING its prefix.
+#
+# The prefix used to be stripped here, which quietly broke the Discord
+# announcement: that step groups bullets into New features / Bug fixes /
+# Improvements by reading the same `feat:` / `fix:` prefix, so prefix-less
+# bullets all fell into Improvements and every post became one flat list.
+# v0.204.19 read as three sections because its bullets still carried them.
+# The `### heading` lines below are for the GitHub release page; Discord
+# ignores them and classifies per bullet.
 classify() {
   local line="$1"
-  # Strip leading "- " and whitespace
-  local stripped="${line#- }"
-  stripped="${stripped#* }"
   case "$line" in
     -\ feat:*|-\ feature:*|-\ add:*|-\ new:*)
-      FEATURES="${FEATURES}- ${line#*: }"$'\n' ;;
+      FEATURES="${FEATURES}${line}"$'\n' ;;
     -\ fix:*|-\ bug:*|-\ bugfix:*)
-      FIXES="${FIXES}- ${line#*: }"$'\n' ;;
+      FIXES="${FIXES}${line}"$'\n' ;;
     -\ improve:*|-\ perf:*|-\ refactor:*|-\ ui:*|-\ ux:*|-\ chore:*)
-      IMPROVEMENTS="${IMPROVEMENTS}- ${line#*: }"$'\n' ;;
+      IMPROVEMENTS="${IMPROVEMENTS}${line}"$'\n' ;;
     *)
       IMPROVEMENTS="${IMPROVEMENTS}${line}"$'\n' ;;
   esac
@@ -225,9 +235,18 @@ while IFS= read -r hash || [[ -n "$hash" ]]; do
   fi
 
   BULLETS=$(echo "$BODY" | grep '^\s*[-*]' | sed 's/^\s*//; s/^\*/-/' || true)
+  HAD_BULLETS=0
+  [ -n "$BULLETS" ] && HAD_BULLETS=1
   # `- internal:` is the explicit opt-out for a change inside a product commit
   # that users have no way to observe.
   BULLETS=$(printf '%s\n' "$BULLETS" | grep -v '^- internal:' || true)
+  # A commit whose every bullet was internal has said its piece, so it must
+  # not fall through to the subject-line fallback below. v0.214.1 announced
+  # "fix(engine): the tauri::command attribute belonged to the function, not
+  # the struct" to users in exactly that way.
+  if [ "$HAD_BULLETS" = "1" ] && [ -z "$BULLETS" ]; then
+    continue
+  fi
   if [ -n "$BULLETS" ]; then
     BULLETS=$(echo "$BULLETS" | grep -iv \
       -e 'rustfmt\|clippy\|sccache\|RUSTC_WRAPPER\|tformat\|trailing newline' \
@@ -431,7 +450,10 @@ fi
 # Tag the release — every release is a full v* build (fires release.yml
 # across Windows / Mac / Linux and advances the auto-updater feed).
 TAG_NAME="v$NEW_VERSION"
-git tag -a "$TAG_NAME" -m "$(cat "$CHANGELOG_FILE")"
+# --cleanup=verbatim: git treats a line starting with '#' as a comment and
+# deletes it, which silently ate the "### New features" headings out of every
+# tag annotation and therefore out of the GitHub release body.
+git tag -a "$TAG_NAME" --cleanup=verbatim -F "$CHANGELOG_FILE"
 git push origin "$TAG_NAME"
 
 # Clean up changelog file
