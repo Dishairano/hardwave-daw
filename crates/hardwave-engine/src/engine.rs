@@ -2356,6 +2356,42 @@ impl AudioCallback for EngineCallback {
 
         self.process_commands();
 
+        // Count-in. While it runs the song is silent and the playhead does
+        // not move: the count happens before the take, not over it. Playback
+        // starts from here, on the sample the count ends, rather than from a
+        // timeout in the UI that guessed when the clicks had finished.
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let remaining = self.transport.count_in_remaining.load(Relaxed);
+            if remaining > 0 {
+                output[..num_frames * 2].fill(0.0);
+                let total = self.transport.count_in_total.load(Relaxed);
+                let elapsed = total.saturating_sub(remaining);
+                let bpm = self.transport.bpm.load(Relaxed);
+                let (beats_per_bar, _) =
+                    crate::transport::unpack_time_sig(self.transport.time_sig.load(Relaxed));
+                self.metronome.render_count_in(
+                    output,
+                    num_frames,
+                    elapsed,
+                    bpm,
+                    beats_per_bar,
+                    self.sample_rate as f64,
+                );
+
+                let left = remaining.saturating_sub(num_frames as u64);
+                self.transport.count_in_remaining.store(left, Relaxed);
+                if left == 0 {
+                    self.transport.count_in_total.store(0, Relaxed);
+                    if self.transport.count_in_then_play.swap(false, Relaxed) {
+                        self.transport.playing.store(true, Relaxed);
+                    }
+                }
+                self.publish_audio_load(block_started, num_frames);
+                return;
+            }
+        }
+
         if self.needs_rebuild {
             self.rebuild_graph();
         }

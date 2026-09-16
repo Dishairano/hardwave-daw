@@ -110,6 +110,8 @@ pub fn run() {
             // Transport
             commands::transport::play,
             commands::transport::stop,
+            commands::transport::start_count_in,
+            commands::transport::get_count_in_state,
             commands::transport::set_position,
             commands::transport::set_bpm,
             commands::transport::toggle_loop,

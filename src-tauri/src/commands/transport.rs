@@ -64,6 +64,17 @@ pub fn stop(state: State<AppState>) -> Result<Option<String>, String> {
         .transport
         .wait_pending
         .store(false, Ordering::Relaxed);
+    // Stop during a count-in cancels it. Without this the count would finish
+    // in the background and start playing after the user had already stopped.
+    engine
+        .transport
+        .count_in_then_play
+        .store(false, Ordering::Relaxed);
+    engine
+        .transport
+        .count_in_remaining
+        .store(0, Ordering::Relaxed);
+    engine.transport.count_in_total.store(0, Ordering::Relaxed);
     let was_playing = engine.transport.playing.swap(false, Ordering::Relaxed);
     if !was_playing {
         let loop_start = if engine.transport.looping.load(Ordering::Relaxed) {
@@ -282,5 +293,78 @@ pub fn get_transport_state(state: State<AppState>) -> TransportInfo {
         time_sig_denominator: den,
         pattern_mode: t.pattern_mode.load(Ordering::Relaxed),
         waiting_for_input: t.wait_pending.load(Ordering::Relaxed),
+    }
+}
+
+/// Count off `bars` before playback starts.
+///
+/// The count-in used to be a row of WebAudio oscillators in the WebView plus a
+/// `setTimeout` that called play when it thought they had finished, so the
+/// clicks a take was counted in against came from a different clock than the
+/// audio, and playback began wherever the timeout landed. The audio thread now
+/// owns both: it counts in samples and starts playback on the sample the count
+/// ends.
+#[tauri::command]
+pub fn start_count_in(state: State<AppState>, bars: u32) {
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    if bars == 0 {
+        engine.transport.playing.store(true, Ordering::Relaxed);
+        return;
+    }
+    let bpm = engine.transport.bpm.load(Ordering::Relaxed).max(1.0);
+    let sample_rate = engine.transport.sample_rate.load(Ordering::Relaxed).max(1) as f64;
+    let (beats_per_bar, _) = hardwave_engine::transport::unpack_time_sig(
+        engine.transport.time_sig.load(Ordering::Relaxed),
+    );
+    let beats = (bars * beats_per_bar.max(1)) as f64;
+    let samples = (beats * 60.0 / bpm * sample_rate).round() as u64;
+
+    engine.transport.playing.store(false, Ordering::Relaxed);
+    engine
+        .transport
+        .count_in_total
+        .store(samples, Ordering::Relaxed);
+    engine
+        .transport
+        .count_in_remaining
+        .store(samples, Ordering::Relaxed);
+    engine
+        .transport
+        .count_in_then_play
+        .store(true, Ordering::Relaxed);
+}
+
+/// How far a count-in has got, for the on-screen counter.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CountInState {
+    pub active: bool,
+    /// Beats already counted, and the total, so the UI can show "2 of 4".
+    pub beat: u32,
+    pub total_beats: u32,
+}
+
+#[tauri::command]
+pub fn get_count_in_state(state: State<AppState>) -> CountInState {
+    use std::sync::atomic::Ordering;
+    let engine = state.engine.lock();
+    let remaining = engine.transport.count_in_remaining.load(Ordering::Relaxed);
+    let total = engine.transport.count_in_total.load(Ordering::Relaxed);
+    if total == 0 {
+        return CountInState {
+            active: false,
+            beat: 0,
+            total_beats: 0,
+        };
+    }
+    let bpm = engine.transport.bpm.load(Ordering::Relaxed).max(1.0);
+    let sample_rate = engine.transport.sample_rate.load(Ordering::Relaxed).max(1) as f64;
+    let samples_per_beat = (60.0 / bpm * sample_rate).max(1.0);
+    let elapsed = total.saturating_sub(remaining) as f64;
+    CountInState {
+        active: remaining > 0,
+        beat: (elapsed / samples_per_beat).floor() as u32,
+        total_beats: (total as f64 / samples_per_beat).round() as u32,
     }
 }

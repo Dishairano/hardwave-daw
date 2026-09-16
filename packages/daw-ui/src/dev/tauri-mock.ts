@@ -168,6 +168,10 @@ const mock: TauriInternals = {
         return [[], []]
       case 'diagnostics_info':
         return { logsDir: '/tmp/mock-logs', currentSessionLog: null }
+      case 'get_count_in_state':
+        return { active: false, beat: 0, totalBeats: 0 }
+      case 'start_count_in':
+        return null
       case 'set_metronome_enabled':
       case 'set_metronome_volume':
       case 'set_metronome_accent':

@@ -53,6 +53,20 @@ pub struct TransportState {
     /// `wait_for_input` on, no MIDI seen yet). The audio thread flips it
     /// off and starts playback on the first drained MIDI event.
     pub wait_pending: Arc<AtomicBool>,
+
+    /// Samples left in a count-in before playback starts, and how long the
+    /// count-in is in total (the UI shows progress from the pair).
+    ///
+    /// The count-in used to be scheduled in the WebView: a row of WebAudio
+    /// oscillators and a `setTimeout` that called play when it thought they
+    /// had finished. The clicks a take was counted in against therefore came
+    /// from a different clock than the audio, and playback began wherever the
+    /// timeout happened to land. Both now come from the audio thread.
+    pub count_in_remaining: Arc<AtomicU64>,
+    pub count_in_total: Arc<AtomicU64>,
+    /// Set when the count-in should start playback as it ends. Cleared if the
+    /// user stops during the count.
+    pub count_in_then_play: Arc<AtomicBool>,
 }
 
 /// Pack a (numerator, denominator) time signature into a u64.
@@ -83,6 +97,9 @@ impl Default for TransportState {
             pdc_enabled: Arc::new(AtomicBool::new(true)),
             wait_for_input: Arc::new(AtomicBool::new(false)),
             wait_pending: Arc::new(AtomicBool::new(false)),
+            count_in_remaining: Arc::new(AtomicU64::new(0)),
+            count_in_total: Arc::new(AtomicU64::new(0)),
+            count_in_then_play: Arc::new(AtomicBool::new(false)),
         }
     }
 }

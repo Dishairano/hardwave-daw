@@ -195,6 +195,59 @@ impl Metronome {
     }
 }
 
+impl Metronome {
+    /// Render the count-in for one block.
+    ///
+    /// `elapsed` is how many samples of the count-in have already passed, so
+    /// the beats are placed from the same clock that decides when playback
+    /// starts. The count-in clicks even when the metronome is switched off
+    /// for playback: asking for a count-in IS asking to hear it, and a silent
+    /// count-in is just a delay.
+    pub fn render_count_in(
+        &mut self,
+        output: &mut [f32],
+        num_frames: usize,
+        elapsed: u64,
+        bpm: f64,
+        beats_per_bar: u32,
+        sample_rate: f64,
+    ) {
+        if sample_rate <= 0.0 || bpm <= 0.0 {
+            return;
+        }
+        let samples_per_beat = 60.0 / bpm * sample_rate;
+        if samples_per_beat < 1.0 {
+            return;
+        }
+        let volume = self.settings.volume_linear();
+        let accent = self.settings.accent.load(Ordering::Relaxed);
+        let bar = beats_per_bar.max(1) as u64;
+
+        for frame in 0..num_frames {
+            let pos = elapsed + frame as u64;
+            let beat_now = (pos as f64 / samples_per_beat).floor() as i64;
+            let beat_prev = if pos == 0 {
+                -1
+            } else {
+                ((pos - 1) as f64 / samples_per_beat).floor() as i64
+            };
+            if beat_now != beat_prev && beat_now >= 0 {
+                let downbeat = accent && (beat_now as u64).is_multiple_of(bar);
+                let freq = if downbeat { DOWNBEAT_HZ } else { BEAT_HZ };
+                self.voice.start(freq, volume * 0.6, sample_rate as f32);
+            }
+            let s = self.voice.next_sample();
+            if s != 0.0 {
+                let i = frame * 2;
+                if i + 1 < output.len() {
+                    output[i] += s;
+                    output[i + 1] += s;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +372,41 @@ mod tests {
         assert!(
             second.iter().take(64).any(|s| s.abs() > 1e-6),
             "the click must carry over the block boundary"
+        );
+    }
+
+    #[test]
+    fn the_count_in_clicks_from_its_own_start_not_the_song_position() {
+        // Switched OFF for playback on purpose: asking for a count-in is
+        // asking to hear it, whatever the click is set to afterwards.
+        let mut m = Metronome::new(MetronomeSettings::new());
+
+        let mut out = vec![0.0f32; 512 * 2];
+        m.render_count_in(&mut out, 512, 0, 120.0, 4, SR);
+
+        assert!(
+            out.iter().any(|s| s.abs() > 1e-6),
+            "the count-in must be audible even with the click switched off"
+        );
+        assert_eq!(
+            first_click_frame(&out),
+            Some(1),
+            "the first count-in beat belongs at the very start"
+        );
+    }
+
+    #[test]
+    fn count_in_beats_are_one_beat_apart() {
+        let mut m = Metronome::new(MetronomeSettings::new());
+
+        // Second beat of a 120 bpm count-in is 24000 samples in.
+        let mut out = vec![0.0f32; 512 * 2];
+        m.render_count_in(&mut out, 512, 24_000 - 50, 120.0, 4, SR);
+
+        let first = first_click_frame(&out).expect("beat two must click");
+        assert!(
+            (50..=51).contains(&first),
+            "count-in beat landed at {first}, not at 50"
         );
     }
 
