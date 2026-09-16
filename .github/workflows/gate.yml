@@ -56,7 +56,7 @@ jobs:
       # the version (with rustfmt and clippy) on the first cargo call, so
       # this runner cannot drift from CI either.
       - name: Install rustup if missing
-        run: where rustup || (curl -sSfLo "%RUNNER_TEMP%\rustup-init.exe" https://win.rustup.rs/x86_64-msvc && "%RUNNER_TEMP%\rustup-init.exe" -y --profile minimal --default-toolchain none --no-modify-path)
+        run: where rustup || (curl -sSfLo "%RUNNER_TEMP%\rustup-init.exe" https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe && "%RUNNER_TEMP%\rustup-init.exe" -y --profile minimal --default-toolchain none --no-modify-path)
 
       - name: Put cargo on PATH
         run: echo %USERPROFILE%\.cargo\bin>>%GITHUB_PATH%
