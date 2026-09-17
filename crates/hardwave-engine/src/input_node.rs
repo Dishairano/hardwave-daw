@@ -7,7 +7,7 @@
 //! tracks hear themselves through their FX chain.
 
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::graph::{AudioNode, ProcessContext};
@@ -38,6 +38,12 @@ pub struct CaptureTap {
     written: AtomicUsize,
     /// Set when the reservation ran out.
     overflowed: AtomicBool,
+    /// Punch window in samples. The playlist has let people set a punch
+    /// range, drawn it, and saved it with the project since it was written,
+    /// and nothing read it: recording ignored the range completely.
+    punch_enabled: AtomicBool,
+    punch_in: AtomicU64,
+    punch_out: AtomicU64,
 }
 
 impl Default for CaptureTap {
@@ -47,6 +53,9 @@ impl Default for CaptureTap {
             slots: Mutex::new(Vec::new()),
             written: AtomicUsize::new(0),
             overflowed: AtomicBool::new(false),
+            punch_enabled: AtomicBool::new(false),
+            punch_in: AtomicU64::new(0),
+            punch_out: AtomicU64::new(u64::MAX),
         }
     }
 }
@@ -73,6 +82,43 @@ impl CaptureTap {
         slots[..n].to_vec()
     }
 
+    /// Set the punch window, in samples on the project's timeline.
+    ///
+    /// With it enabled, only audio inside the window is captured, to the
+    /// sample: a block that straddles punch-in keeps its tail, and one that
+    /// straddles punch-out keeps its head.
+    pub fn set_punch(&self, enabled: bool, in_samples: u64, out_samples: u64) {
+        self.punch_enabled.store(enabled, Ordering::Relaxed);
+        self.punch_in.store(in_samples, Ordering::Relaxed);
+        self.punch_out
+            .store(out_samples.max(in_samples), Ordering::Relaxed);
+    }
+
+    pub fn punch(&self) -> (bool, u64, u64) {
+        (
+            self.punch_enabled.load(Ordering::Relaxed),
+            self.punch_in.load(Ordering::Relaxed),
+            self.punch_out.load(Ordering::Relaxed),
+        )
+    }
+
+    /// The part of a block that falls inside the punch window, as an offset
+    /// and a length in frames. Pure, so the window arithmetic is testable
+    /// without an audio device.
+    fn punched_span(&self, block_start: u64, frames: usize) -> (usize, usize) {
+        let (enabled, punch_in, punch_out) = self.punch();
+        if !enabled {
+            return (0, frames);
+        }
+        let block_end = block_start.saturating_add(frames as u64);
+        if block_end <= punch_in || block_start >= punch_out {
+            return (0, 0);
+        }
+        let start = punch_in.saturating_sub(block_start) as usize;
+        let end = (punch_out.min(block_end) - block_start) as usize;
+        (start.min(frames), end.min(frames).saturating_sub(start))
+    }
+
     /// Whether the last session ran out of reserved room.
     pub fn overflowed(&self) -> bool {
         self.overflowed.load(Ordering::Relaxed)
@@ -87,10 +133,21 @@ impl CaptureTap {
     }
 
     /// Same as the audio thread's write, exposed for tests that stand in for
-    /// `InputNode::process`.
+    /// `InputNode::process`. `block_start` is the playhead in samples.
+    #[doc(hidden)]
+    pub fn write_test_block_at(
+        &self,
+        left: &[f32],
+        right: &[f32],
+        frames: usize,
+        block_start: u64,
+    ) {
+        self.write_block(left, right, frames, block_start)
+    }
+
     #[doc(hidden)]
     pub fn write_test_block(&self, left: &[f32], right: &[f32], frames: usize) {
-        self.write_block(left, right, frames)
+        self.write_block(left, right, frames, 0)
     }
 
     /// Write one block of interleaved stereo. Audio thread only.
@@ -98,20 +155,24 @@ impl CaptureTap {
     /// `try_lock` here can only fail against `arm` or `take`, both of which
     /// run with recording off, so in a live session this never contends and
     /// never drops a block.
-    fn write_block(&self, left: &[f32], right: &[f32], frames: usize) {
+    fn write_block(&self, left: &[f32], right: &[f32], frames: usize, block_start: u64) {
+        let (offset, take) = self.punched_span(block_start, frames);
+        if take == 0 {
+            return;
+        }
         let Some(mut slots) = self.slots.try_lock() else {
             self.overflowed.store(true, Ordering::Relaxed);
             return;
         };
         let start = self.written.load(Ordering::Relaxed);
         let room = slots.len().saturating_sub(start) / 2;
-        let n = frames.min(room);
-        if n < frames {
+        let n = take.min(room);
+        if n < take {
             self.overflowed.store(true, Ordering::Relaxed);
         }
         for i in 0..n {
-            slots[start + i * 2] = left[i];
-            slots[start + i * 2 + 1] = right[i];
+            slots[start + i * 2] = left[offset + i];
+            slots[start + i * 2 + 1] = right[offset + i];
         }
         self.written.store(start + n * 2, Ordering::Relaxed);
     }
@@ -184,7 +245,7 @@ impl AudioNode for InputNode {
         // straight to disk on stop.
         if let Some(cap) = &self.capture {
             if cap.recording.load(Ordering::Relaxed) {
-                cap.write_block(&left[0], &right[0], buf_size);
+                cap.write_block(&left[0], &right[0], buf_size, ctx.position_samples);
             }
         }
     }
