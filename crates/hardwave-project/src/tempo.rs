@@ -76,27 +76,51 @@ impl TempoMap {
     }
 
     /// Convert an absolute sample position to ticks.
+    ///
+    /// The inverse of `tick_to_samples`, ramps included. It used to treat
+    /// every segment as a constant tempo, so across a ramp the two disagreed:
+    /// the playhead was drawn and the tempo was followed at a tick the audio
+    /// was not at, and the error grew with the length of the ramp.
     pub fn samples_to_tick(&self, target_samples: u64, sample_rate: f64) -> u64 {
         let mut samples_accum = 0.0_f64;
         let mut prev_tick = 0_u64;
         let mut prev_bpm = self.entries[0].bpm;
+        let mut prev_ramp = self.entries[0].ramp;
+        let mut next_bpm = prev_bpm;
+        let mut span_ticks = 0_u64;
 
         for entry in &self.entries[1..] {
             let dt = entry.tick - prev_tick;
-            let secs = ticks_to_secs(dt, prev_bpm);
+            let secs = if prev_ramp == TempoRamp::Linear {
+                ramp_secs(dt, prev_bpm, entry.bpm)
+            } else {
+                ticks_to_secs(dt, prev_bpm)
+            };
             let seg_samples = secs * sample_rate;
 
             if samples_accum + seg_samples > target_samples as f64 {
+                // The target is inside this segment, so remember where the
+                // ramp is heading and how long it has to get there.
+                next_bpm = entry.bpm;
+                span_ticks = dt;
                 break;
             }
             samples_accum += seg_samples;
             prev_tick = entry.tick;
             prev_bpm = entry.bpm;
+            prev_ramp = entry.ramp;
+            // Past the last entry the tempo holds, so there is no ramp left.
+            next_bpm = entry.bpm;
+            span_ticks = 0;
         }
 
         let remaining_samples = target_samples as f64 - samples_accum;
         let remaining_secs = remaining_samples / sample_rate;
-        let remaining_ticks = secs_to_ticks(remaining_secs, prev_bpm);
+        let remaining_ticks = if prev_ramp == TempoRamp::Linear && span_ticks > 0 {
+            ramp_ticks(remaining_secs, prev_bpm, next_bpm, span_ticks)
+        } else {
+            secs_to_ticks(remaining_secs, prev_bpm)
+        };
 
         prev_tick + remaining_ticks
     }
@@ -247,6 +271,39 @@ fn ramp_secs(ticks: u64, from_bpm: f64, to_bpm: f64) -> f64 {
     beats * 60.0 * (to_bpm / from_bpm).ln() / (to_bpm - from_bpm)
 }
 
+/// Ticks covered in `secs` while the tempo slides from `from_bpm` towards
+/// `to_bpm` over `span_ticks`.
+///
+/// The inverse of `ramp_secs` within one segment. With the tempo linear in
+/// ticks, b(x) = b0 + k x for x in beats, the elapsed time is
+///
+///   s(x) = (60 / k) * ln((b0 + k x) / b0)
+///
+/// so the position is
+///
+///   x = (b0 / k) * (exp(k s / 60) - 1)
+///
+/// Equal tempos, or a span of nothing, fall back to the plain division, since
+/// the formula divides by the tempo difference.
+fn ramp_ticks(secs: f64, from_bpm: f64, to_bpm: f64, span_ticks: u64) -> u64 {
+    if secs <= 0.0 {
+        return 0;
+    }
+    let span_beats = span_ticks as f64 / PPQ as f64;
+    if span_beats <= 0.0 || from_bpm <= 0.0 || to_bpm <= 0.0 {
+        return secs_to_ticks(secs, from_bpm.max(1.0));
+    }
+    let k = (to_bpm - from_bpm) / span_beats;
+    if k.abs() < 1e-9 {
+        return secs_to_ticks(secs, from_bpm);
+    }
+    let beats = (from_bpm / k) * ((k * secs / 60.0).exp() - 1.0);
+    // Clamped to the segment: a caller past the end of the ramp belongs to the
+    // next segment, not to an extrapolation of this one.
+    let beats = beats.clamp(0.0, span_beats);
+    (beats * PPQ as f64).round() as u64
+}
+
 fn secs_to_ticks(secs: f64, bpm: f64) -> u64 {
     let beats = secs * bpm / 60.0;
     (beats * PPQ as f64).round() as u64
@@ -330,6 +387,42 @@ mod tests {
         // case that would produce NaN if it were applied blindly.
         let secs = m.tick_to_samples(PPQ * 4, sr) as f64 / sr;
         assert!((secs - 4.0 * 60.0 / 140.0).abs() < 0.001, "got {secs}");
+    }
+
+    /// `samples_to_tick` ignored ramps, so it did not invert
+    /// `tick_to_samples`: the playhead's tick and the audio's tick drifted
+    /// apart across a ramp, and the drift grew with the ramp.
+    #[test]
+    fn a_position_in_samples_converts_back_to_the_tick_it_came_from() {
+        let sr = 48_000.0;
+        let m = map(vec![
+            entry(0, 120.0, TempoRamp::Linear),
+            entry(PPQ * 16, 240.0, TempoRamp::Instant),
+        ]);
+
+        for beats in [1, 4, 8, 12, 15, 16, 24] {
+            let tick = PPQ * beats;
+            let samples = m.tick_to_samples(tick, sr);
+            let back = m.samples_to_tick(samples, sr);
+            assert!(
+                back.abs_diff(tick) <= 2,
+                "beat {beats}: {tick} ticks became {back}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stepped_tempo_map_still_converts_both_ways() {
+        let sr = 48_000.0;
+        let m = map(vec![
+            entry(0, 140.0, TempoRamp::Instant),
+            entry(PPQ * 8, 90.0, TempoRamp::Instant),
+        ]);
+        for beats in [2, 8, 9, 20] {
+            let tick = PPQ * beats;
+            let back = m.samples_to_tick(m.tick_to_samples(tick, sr), sr);
+            assert!(back.abs_diff(tick) <= 2, "beat {beats} became {back}");
+        }
     }
 
     fn meter(tick: u64, num: u32, den: u32) -> TempoEntry {
