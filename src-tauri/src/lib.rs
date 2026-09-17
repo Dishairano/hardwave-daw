@@ -208,6 +208,7 @@ pub fn run() {
             commands::sends::create_return_with_send,
             // Plugins
             commands::plugins::scan_plugins,
+            commands::plugins::retry_blocked_plugin,
             commands::plugins::get_plugins,
             commands::plugins::get_last_scan_diff,
             commands::plugins::get_plugin_blocklist,

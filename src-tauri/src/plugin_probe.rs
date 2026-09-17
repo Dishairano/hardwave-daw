@@ -138,14 +138,6 @@ impl ProbeCache {
     pub fn forget(&mut self, path: &Path) {
         self.entries.remove(&Self::key_for(path));
     }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 /// Verdict for one plug-in, probing it the first time and remembering the
@@ -210,7 +202,7 @@ pub fn probe_plugin(path: &Path) -> ProbeOutcome {
 fn run_probe_command(exe: &Path, plugin: &Path, timeout: Duration) -> ProbeOutcome {
     use std::process::{Command, Stdio};
 
-    let mut child = match Command::new(exe)
+    let child = match Command::new(exe)
         .arg("--probe-plugin")
         .arg(plugin)
         .stdin(Stdio::null())

@@ -83,7 +83,10 @@ pub(crate) fn instantiate_plugin(
     // Try it in a throwaway process first; a plug-in that kills that one is
     // refused by name instead of being loaded here.
     let verdict = crate::plugin_probe::verdict_for(&descriptor.path);
-    if let Some(reason) = verdict.message(&descriptor.name) {
+    if !verdict.is_safe_to_load() {
+        let reason = verdict
+            .message(&descriptor.name)
+            .unwrap_or_else(|| format!("{} could not be loaded", descriptor.name));
         log::warn!("refusing to load {}: {reason}", descriptor.name);
         return Err(reason);
     }
@@ -936,4 +939,15 @@ pub fn set_fx_chain_bypassed(
     }
     state.engine.lock().rebuild_graph();
     Ok(())
+}
+
+/// Try a plug-in again after it was refused for crashing on load.
+///
+/// The verdict is remembered per plug-in version, so a reinstall or update is
+/// picked up on its own. This is for the case where someone fixed the
+/// installation without the file changing, and for a plug-in manager button
+/// that says so out loud rather than making the user restart the DAW.
+#[tauri::command]
+pub fn retry_blocked_plugin(path: String) {
+    crate::plugin_probe::retry(std::path::Path::new(&path));
 }
