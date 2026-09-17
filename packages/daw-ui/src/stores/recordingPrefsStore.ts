@@ -10,13 +10,15 @@ import { invoke } from '@tauri-apps/api/core'
  * through `zustand/middleware persist` so the user's recording
  * setup survives a relaunch, just like FL's per-project flags.
  *
- * Current state — FRONT-END UI ONLY: every flag is stored and the
- * matching toolbar button reflects + flips it, but the engine
- * doesn't yet observe these values. Wiring lives in follow-up ships:
+ * Three of the four are wired. `multilinkActive` is the exception and has
+ * no button in the toolbar for that reason:
  *
- *  - stepEditing      : when ON, Piano-Roll note entry advances the
- *                       playhead by Snap and arms the next step (FL
- *                       Ctrl+E). Needs Piano-Roll insertion mode.
+ *  - stepEditing      : WIRED (2026-09-17, FL Ctrl+E) — with it ON the
+ *                       typing keyboard writes each note into the open
+ *                       clip at the edit cursor and advances the cursor
+ *                       by Snap. With it OFF the keys only play, which
+ *                       is what the button always claimed: the piano
+ *                       roll used to write a note either way.
  *  - waitForInput     : WIRED (2026-07-08, FL Ctrl+I) — Play/Record
  *                       park the transport until the first MIDI
  *                       event arrives (engine `wait_pending`; synced

@@ -160,6 +160,8 @@ export function HwTopbar({
   const toggleWaitForInput = useRecordingPrefsStore(s => s.toggleWaitForInput)
   const blendRecord = useRecordingPrefsStore(s => s.blendRecord)
   const toggleBlendRecord = useRecordingPrefsStore(s => s.toggleBlendRecord)
+  const stepEditing = useRecordingPrefsStore(s => s.stepEditing)
+  const toggleStepEditing = useRecordingPrefsStore(s => s.toggleStepEditing)
   const typingKbdEnabled = useTypingKeyboardStore(s => s.enabled)
   const toggleTypingKbd = useTypingKeyboardStore(s => s.toggle)
   const precountBars = useMetronomeStore(s => s.precountBars)
@@ -510,11 +512,11 @@ export function HwTopbar({
 
       <span className="fl-toolsep" />
 
-      {/* Recording toggle cluster. Step-editing / multilink stay
-          hidden until their backends exist (removed 2026-07-07,
-          deep-research P1-6 — buttons that do nothing read as
-          broken). Wait-for-input + blend-record RETURNED 2026-07-08
-          fully wired (engine wait_for_input_tests + blend_tests). */}
+      {/* Recording toggle cluster. A button here only exists once the
+          behaviour behind it does: multilink is still absent for that
+          reason. Wait-for-input + blend-record returned 2026-07-08, and
+          step editing returned 2026-09-17, when the typing keyboard learned
+          to audition instead of always writing. */}
       <div className="fl-action-row">
         <button
           onClick={() => toggleBlendRecord()}
@@ -524,6 +526,15 @@ export function HwTopbar({
           <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
             <circle cx="5" cy="6" r="3"/>
             <circle cx="8" cy="6" r="3"/>
+          </svg>
+        </button>
+        <button
+          onClick={() => toggleStepEditing()}
+          className={`fl-mini-btn${stepEditing ? ' on' : ''}`}
+          title="Step editing — typing keyboard writes notes into the clip and moves on a step. Off: keys just play."
+        >
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
+            <path d="M1.5 9.5h3v-3h3v-3h3" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
         <button

@@ -15,6 +15,7 @@ import { DetachButton } from '../FloatingWindow'
 import { useTrackStore } from '../../stores/trackStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { useTransportStore } from '../../stores/transportStore'
+import { useRecordingPrefsStore } from '../../stores/recordingPrefsStore'
 import { useTempoMapStore } from '../../stores/tempoMapStore'
 import { segmentAt } from '../../utils/meter'
 import { decodeMidi, rescaleNotes } from '../../utils/midi'
@@ -205,6 +206,9 @@ export function PianoRoll() {
   const [qwertyEnabled, setQwertyEnabled] = useState<boolean>(() => {
     try { return localStorage.getItem('hardwave.daw.pianoRollQwerty') === '1' } catch { return false }
   })
+  // Pitches the typing keyboard is currently auditioning, so each one gets
+  // exactly one note-off when its key comes up.
+  const qwertyHeld = useRef<Set<number>>(new Set())
   const [qwertyOctave, setQwertyOctave] = useState<number>(() => {
     try {
       const v = parseInt(localStorage.getItem('hardwave.daw.pianoRollQwertyOctave') || '', 10)
@@ -1538,6 +1542,21 @@ export function PianoRoll() {
     e.preventDefault()
     e.stopImmediatePropagation()
 
+    // Step editing (FL's Ctrl+E). With it off the typing keyboard auditions
+    // the note and writes nothing, which is what the toolbar button claims;
+    // it used to write a note and advance the cursor whichever way the
+    // button was set, so the button was decoration and the "just play it"
+    // half did not exist.
+    if (!useRecordingPrefsStore.getState().stepEditing) {
+      if (!qwertyHeld.current.has(pitch)) {
+        qwertyHeld.current.add(pitch)
+        void invoke('inject_midi_event', {
+          event: { kind: 'note_on', channel: 0, note: pitch, velocity: qwertyVelocity / 127 },
+        })
+      }
+      return
+    }
+
     const ts = useTransportStore.getState()
     let originTick: number
     if (ts.editCursorTicks != null) {
@@ -1573,10 +1592,26 @@ export function PianoRoll() {
     } catch (err) { console.warn('qwerty add_midi_note failed', err) }
   }, [qwertyEnabled, qwertyOctave, qwertyVelocity, activeTrackId, activeClipId, snap, qwertyRest])
 
+  // Release an auditioned note when the key comes up, so a held key is a
+  // held note rather than one that never stops.
+  const handleQwertyKeyUp = useCallback((e: KeyboardEvent) => {
+    const offset = QWERTY_MAP[e.code]
+    if (offset === undefined) return
+    const pitch = qwertyOctave * 12 + offset
+    if (!qwertyHeld.current.delete(pitch)) return
+    void invoke('inject_midi_event', {
+      event: { kind: 'note_off', channel: 0, note: pitch },
+    })
+  }, [qwertyOctave])
+
   useEffect(() => {
     window.addEventListener('keydown', handleQwertyKeyDown, true)
-    return () => window.removeEventListener('keydown', handleQwertyKeyDown, true)
-  }, [handleQwertyKeyDown])
+    window.addEventListener('keyup', handleQwertyKeyUp, true)
+    return () => {
+      window.removeEventListener('keydown', handleQwertyKeyDown, true)
+      window.removeEventListener('keyup', handleQwertyKeyUp, true)
+    }
+  }, [handleQwertyKeyDown, handleQwertyKeyUp])
 
   useEffect(() => {
     if (!toolsOpen) return
