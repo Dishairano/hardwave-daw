@@ -1335,6 +1335,9 @@ struct EngineCallback {
     /// Plays browser auditions. Like the click, mixed in after the tap, so an
     /// audition cannot end up in a recording or a bounce.
     preview: crate::preview_player::PreviewPlayer,
+    /// This block's clicks. A fixed-size array rather than a Vec because it
+    /// is filled on the audio thread, which must not allocate.
+    click_events: [crate::metronome::ClickEvent; crate::metronome::MAX_CLICKS_PER_BLOCK],
 }
 
 /// Audio-thread load counters shared with the UI: how much of each block's
@@ -1444,6 +1447,10 @@ impl EngineCallback {
     ) -> Self {
         let mut cb = Self {
             preview: crate::preview_player::PreviewPlayer::new(preview),
+            click_events: [crate::metronome::ClickEvent {
+                frame_offset: 0,
+                downbeat: false,
+            }; crate::metronome::MAX_CLICKS_PER_BLOCK],
             audio_load_permille: load.load_permille,
             audio_xruns: load.xruns,
             metronome: crate::metronome::Metronome::new(metronome),
@@ -2384,6 +2391,32 @@ impl EngineCallback {
             std::sync::atomic::Ordering::Relaxed,
         );
     }
+    /// Work out which beats fall inside this block, and fill `click_events`.
+    ///
+    /// Returns how many events were filled. The scheduling itself lives in
+    /// `metronome::schedule_block_clicks`; this is the audio-thread wrapper
+    /// around it: it decides whether the click is audible at all and takes the
+    /// project without waiting for it.
+    fn schedule_clicks(&mut self, num_frames: usize) -> usize {
+        use std::sync::atomic::Ordering::Relaxed;
+        let recording = self.transport.recording.load(Relaxed);
+        if !self.metronome.settings().is_audible(recording) {
+            return 0;
+        }
+        // try_lock, never lock: the UI holds the project for a moment when it
+        // edits it, and waiting here would be a dropout. Losing a block's
+        // clicks costs at most one beat.
+        let Some(project) = self.project.try_lock() else {
+            return 0;
+        };
+        crate::metronome::schedule_block_clicks(
+            &project.tempo_map,
+            self.transport.position_samples.load(Relaxed),
+            num_frames,
+            self.sample_rate as f64,
+            &mut self.click_events,
+        )
+    }
 }
 
 impl AudioCallback for EngineCallback {
@@ -2406,14 +2439,18 @@ impl AudioCallback for EngineCallback {
                 output[..num_frames * 2].fill(0.0);
                 let total = self.transport.count_in_total.load(Relaxed);
                 let elapsed = total.saturating_sub(remaining);
-                let bpm = self.transport.bpm.load(Relaxed);
-                let (beats_per_bar, _) =
+                let bpm = self.transport.bpm.load(Relaxed).max(1.0);
+                let (beats_per_bar, den) =
                     crate::transport::unpack_time_sig(self.transport.time_sig.load(Relaxed));
+                // A beat is a note value, so the denominator sets its length:
+                // in 7/8 the count-in clicks eighths.
+                let samples_per_beat =
+                    60.0 / bpm * self.sample_rate as f64 * 4.0 / den.max(1) as f64;
                 self.metronome.render_count_in(
                     output,
                     num_frames,
                     elapsed,
-                    bpm,
+                    samples_per_beat,
                     beats_per_bar,
                     self.sample_rate as f64,
                 );
@@ -2619,27 +2656,25 @@ impl AudioCallback for EngineCallback {
         // After the master tap and the capture path on purpose: the tap feeds
         // the UI's meters and visualisations and the capture feeds recording,
         // so mixing the click in before them would print the guide track into
-        // recordings and bounces. Placed from `position_samples`, the same
-        // clock the audio uses, so a beat lands on its own sample instead of
-        // whenever a UI tick noticed it.
+        // recordings and bounces. Each beat is placed on its own sample, from
+        // the project's tempo map, so the click follows the song's tempo and
+        // signature rather than one number that was right at bar 1.
         {
             use std::sync::atomic::Ordering::Relaxed;
-            let position = self.transport.position_samples.load(Relaxed);
-            let bpm = self.transport.bpm.load(Relaxed);
-            let (beats_per_bar, _) =
-                crate::transport::unpack_time_sig(self.transport.time_sig.load(Relaxed));
             let recording = self.transport.recording.load(Relaxed);
-            self.metronome.render(
+            let events = if playing {
+                self.schedule_clicks(num_frames)
+            } else {
+                // Not playing: no new beats, but a click already sounding is
+                // allowed to finish rather than being cut off.
+                0
+            };
+            self.metronome.render_scheduled(
                 output,
                 num_frames,
-                &crate::metronome::BlockClock {
-                    position,
-                    bpm,
-                    beats_per_bar,
-                    sample_rate: self.sample_rate as f64,
-                    playing,
-                    recording,
-                },
+                &self.click_events[..events],
+                recording,
+                self.sample_rate as f64,
             );
         }
 

@@ -10,6 +10,7 @@
 //! Here the click is placed from the same sample position the audio uses, so
 //! a beat lands exactly on its sample.
 
+use hardwave_project::tempo::TempoMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -110,19 +111,65 @@ impl ClickVoice {
     }
 }
 
-/// What the transport says about the block being rendered.
-///
-/// Grouped rather than passed as six arguments: they all come from the same
-/// place and are only meaningful together.
+/// One click the engine has placed inside the block being rendered.
 #[derive(Debug, Clone, Copy)]
-pub struct BlockClock {
-    /// Playhead in samples at the START of the block.
-    pub position: u64,
-    pub bpm: f64,
-    pub beats_per_bar: u32,
-    pub sample_rate: f64,
-    pub playing: bool,
-    pub recording: bool,
+pub struct ClickEvent {
+    /// Frame inside this block where the click starts.
+    pub frame_offset: usize,
+    /// Accent it as a bar's first beat.
+    pub downbeat: bool,
+}
+
+/// How many clicks one block can hold.
+///
+/// Sixteenths at 300 bpm in a 1024-frame block at 48 kHz is four, so this is
+/// more than a musical tempo needs and keeps the schedule on the stack.
+pub const MAX_CLICKS_PER_BLOCK: usize = 16;
+
+/// Fill `out` with the beats that fall inside one block.
+///
+/// Returns how many entries were filled. The beats come from the project's
+/// tempo map, which is what makes the click follow a tempo change, a ramp, an
+/// eighth-note signature and a signature change part-way through the song.
+///
+/// Every beat belongs to exactly one block: a beat is placed when its sample
+/// is inside `[start, start + num_frames)`, so consecutive blocks neither
+/// repeat a beat nor drop one.
+pub fn schedule_block_clicks(
+    map: &TempoMap,
+    start: u64,
+    num_frames: usize,
+    sample_rate: f64,
+    out: &mut [ClickEvent],
+) -> usize {
+    if sample_rate <= 0.0 || num_frames == 0 || out.is_empty() {
+        return 0;
+    }
+    let end = start + num_frames as u64;
+    let start_tick = map.samples_to_tick(start, sample_rate);
+    // Search from a beat earlier: the tick for `start` is rounded, so a beat
+    // sitting exactly on the block boundary can land just behind it, and
+    // starting the walk at `start_tick` would step over that beat entirely.
+    let per_beat = map.beat_grid_at(start_tick).ticks_per_beat.max(1);
+    let mut tick = start_tick.saturating_sub(per_beat);
+
+    let mut count = 0;
+    while count < out.len() {
+        let (beat_tick, downbeat) = map.next_beat_at_or_after(tick);
+        let sample = map.tick_to_samples(beat_tick, sample_rate);
+        if sample >= end {
+            break;
+        }
+        if sample >= start {
+            out[count] = ClickEvent {
+                frame_offset: (sample - start) as usize,
+                downbeat,
+            };
+            count += 1;
+        }
+        tick = beat_tick + 1;
+    }
+    count
 }
 
 /// Places clicks on beats and renders them.
@@ -143,44 +190,43 @@ impl Metronome {
         &self.settings
     }
 
-    /// Mix the click for one block into an interleaved stereo buffer.
+    /// Mix the block's scheduled clicks into an interleaved stereo buffer.
     ///
-    /// The clock's `position` is what makes the timing exact: every beat
-    /// inside the block is placed at its own sample offset rather than
-    /// whenever a UI tick noticed it.
-    pub fn render(&mut self, output: &mut [f32], num_frames: usize, clock: &BlockClock) {
-        let audible = self.settings.is_audible(clock.recording);
+    /// The schedule comes from the engine, which reads the project's tempo
+    /// map. This used to work the beats out here from samples-per-beat and one
+    /// beats-per-bar number, which can only be right for a song at one tempo,
+    /// in one signature, counted in quarter notes: a 7/8 section clicked in
+    /// quarters, a signature change never moved the accent, and a tempo change
+    /// slid the whole click grid off the music.
+    pub fn render_scheduled(
+        &mut self,
+        output: &mut [f32],
+        num_frames: usize,
+        events: &[ClickEvent],
+        recording: bool,
+        sample_rate: f64,
+    ) {
+        let audible = self.settings.is_audible(recording);
         if !audible && self.voice.remaining == 0 {
             return;
         }
-        if clock.sample_rate <= 0.0 || clock.bpm <= 0.0 {
-            return;
-        }
-
-        let samples_per_beat = 60.0 / clock.bpm * clock.sample_rate;
-        if samples_per_beat < 1.0 {
+        if sample_rate <= 0.0 {
             return;
         }
         let volume = self.settings.volume_linear();
         let accent = self.settings.accent.load(Ordering::Relaxed);
-        let bar = clock.beats_per_bar.max(1) as u64;
 
+        let mut next = 0usize;
         for frame in 0..num_frames {
-            if audible && clock.playing {
-                let pos = clock.position + frame as u64;
-                // A beat starts in this sample when the sample index crosses
-                // a multiple of the beat length.
-                let beat_now = (pos as f64 / samples_per_beat).floor() as i64;
-                let beat_prev = if pos == 0 {
-                    -1
-                } else {
-                    ((pos - 1) as f64 / samples_per_beat).floor() as i64
-                };
-                if beat_now != beat_prev && beat_now >= 0 {
-                    let downbeat = accent && (beat_now as u64).is_multiple_of(bar);
-                    let freq = if downbeat { DOWNBEAT_HZ } else { BEAT_HZ };
-                    self.voice
-                        .start(freq, volume * 0.6, clock.sample_rate as f32);
+            if audible {
+                while next < events.len() && events[next].frame_offset == frame {
+                    let freq = if accent && events[next].downbeat {
+                        DOWNBEAT_HZ
+                    } else {
+                        BEAT_HZ
+                    };
+                    self.voice.start(freq, volume * 0.6, sample_rate as f32);
+                    next += 1;
                 }
             }
             let s = self.voice.next_sample();
@@ -203,20 +249,21 @@ impl Metronome {
     /// starts. The count-in clicks even when the metronome is switched off
     /// for playback: asking for a count-in IS asking to hear it, and a silent
     /// count-in is just a delay.
+    ///
+    /// `samples_per_beat` rather than a tempo, because a beat is a note value:
+    /// in 7/8 a beat is an eighth note, and deriving it from the tempo alone
+    /// counted the bar in quarters and made the count-in twice as long as the
+    /// bar it was counting in.
     pub fn render_count_in(
         &mut self,
         output: &mut [f32],
         num_frames: usize,
         elapsed: u64,
-        bpm: f64,
+        samples_per_beat: f64,
         beats_per_bar: u32,
         sample_rate: f64,
     ) {
-        if sample_rate <= 0.0 || bpm <= 0.0 {
-            return;
-        }
-        let samples_per_beat = 60.0 / bpm * sample_rate;
-        if samples_per_beat < 1.0 {
+        if sample_rate <= 0.0 || samples_per_beat < 1.0 {
             return;
         }
         let volume = self.settings.volume_linear();
@@ -254,20 +301,16 @@ mod tests {
 
     const SR: f64 = 48_000.0;
 
-    fn clock(position: u64, bpm: f64, recording: bool) -> BlockClock {
-        BlockClock {
-            position,
-            bpm,
-            beats_per_bar: 4,
-            sample_rate: SR,
-            playing: true,
-            recording,
+    fn beat_at(frame_offset: usize, downbeat: bool) -> ClickEvent {
+        ClickEvent {
+            frame_offset,
+            downbeat,
         }
     }
 
-    fn render_block(m: &mut Metronome, frames: usize, position: u64, bpm: f64) -> Vec<f32> {
+    fn render_block(m: &mut Metronome, frames: usize, events: &[ClickEvent]) -> Vec<f32> {
         let mut out = vec![0.0f32; frames * 2];
-        m.render(&mut out, frames, &clock(position, bpm, false));
+        m.render_scheduled(&mut out, frames, events, false, SR);
         out
     }
 
@@ -283,9 +326,8 @@ mod tests {
         settings.enabled.store(true, Ordering::Relaxed);
         let mut m = Metronome::new(settings);
 
-        // 120 bpm at 48 kHz is 24000 samples per beat. Render the block that
-        // contains beat 4 (sample 96000) starting 100 samples early.
-        let out = render_block(&mut m, 512, 96_000 - 100, 120.0);
+        // A beat the engine placed 100 frames into this block.
+        let out = render_block(&mut m, 512, &[beat_at(100, true)]);
 
         // The voice starts at frame 100, and a sine begins at zero, so the
         // first sample you can measure is 101. What matters is that it is
@@ -305,7 +347,7 @@ mod tests {
     #[test]
     fn the_click_is_silent_when_switched_off() {
         let mut m = Metronome::new(MetronomeSettings::new());
-        let out = render_block(&mut m, 512, 0, 120.0);
+        let out = render_block(&mut m, 512, &[beat_at(0, true)]);
         assert!(out.iter().all(|s| *s == 0.0));
     }
 
@@ -317,14 +359,14 @@ mod tests {
         let mut m = Metronome::new(settings);
 
         let mut playback = vec![0.0f32; 512 * 2];
-        m.render(&mut playback, 512, &clock(0, 120.0, false));
+        m.render_scheduled(&mut playback, 512, &[beat_at(0, true)], false, SR);
         assert!(
             playback.iter().all(|s| *s == 0.0),
             "record-only must not click during plain playback"
         );
 
         let mut recording = vec![0.0f32; 512 * 2];
-        m.render(&mut recording, 512, &clock(0, 120.0, true));
+        m.render_scheduled(&mut recording, 512, &[beat_at(0, true)], true, SR);
         assert!(recording.iter().any(|s| s.abs() > 1e-6));
     }
 
@@ -341,13 +383,13 @@ mod tests {
                 .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
                 .count()
         };
-        let down = render_block(&mut m, 512, 0, 120.0);
+        let down = render_block(&mut m, 512, &[beat_at(0, true)]);
         let mut m2 = Metronome::new({
             let s = MetronomeSettings::new();
             s.enabled.store(true, Ordering::Relaxed);
             s
         });
-        let other = render_block(&mut m2, 512, 24_000, 120.0);
+        let other = render_block(&mut m2, 512, &[beat_at(0, false)]);
 
         assert!(
             crossings(&down) > crossings(&other),
@@ -363,12 +405,12 @@ mod tests {
         settings.enabled.store(true, Ordering::Relaxed);
         let mut m = Metronome::new(settings);
 
-        // Beat at sample 24000, with only 4 frames left in this block.
-        let first = render_block(&mut m, 4, 24_000 - 2, 120.0);
+        // A beat two frames before the end of a four-frame block.
+        let first = render_block(&mut m, 4, &[beat_at(2, false)]);
         assert!(first.iter().any(|s| s.abs() > 1e-6));
 
         // The tail continues rather than being cut off mid-blip.
-        let second = render_block(&mut m, 512, 24_000 + 2, 120.0);
+        let second = render_block(&mut m, 512, &[]);
         assert!(
             second.iter().take(64).any(|s| s.abs() > 1e-6),
             "the click must carry over the block boundary"
@@ -382,7 +424,8 @@ mod tests {
         let mut m = Metronome::new(MetronomeSettings::new());
 
         let mut out = vec![0.0f32; 512 * 2];
-        m.render_count_in(&mut out, 512, 0, 120.0, 4, SR);
+        // 120 bpm at 48 kHz: 24000 samples per beat.
+        m.render_count_in(&mut out, 512, 0, 24_000.0, 4, SR);
 
         assert!(
             out.iter().any(|s| s.abs() > 1e-6),
@@ -401,13 +444,127 @@ mod tests {
 
         // Second beat of a 120 bpm count-in is 24000 samples in.
         let mut out = vec![0.0f32; 512 * 2];
-        m.render_count_in(&mut out, 512, 24_000 - 50, 120.0, 4, SR);
+        m.render_count_in(&mut out, 512, 24_000 - 50, 24_000.0, 4, SR);
 
         let first = first_click_frame(&out).expect("beat two must click");
         assert!(
             (50..=51).contains(&first),
             "count-in beat landed at {first}, not at 50"
         );
+    }
+
+    // ---- scheduling -------------------------------------------------------
+
+    use hardwave_project::tempo::{TempoEntry, TempoRamp};
+
+    const PPQ: u64 = 960;
+
+    fn map(entries: Vec<(u64, f64, u32, u32)>) -> TempoMap {
+        TempoMap {
+            entries: entries
+                .into_iter()
+                .map(|(tick, bpm, num, den)| TempoEntry {
+                    tick,
+                    bpm,
+                    time_sig_num: num,
+                    time_sig_den: den,
+                    ramp: TempoRamp::Instant,
+                })
+                .collect(),
+        }
+    }
+
+    fn schedule(map: &TempoMap, start: u64, frames: usize) -> Vec<ClickEvent> {
+        let mut out = [ClickEvent {
+            frame_offset: 0,
+            downbeat: false,
+        }; MAX_CLICKS_PER_BLOCK];
+        let n = schedule_block_clicks(map, start, frames, SR, &mut out);
+        out[..n].to_vec()
+    }
+
+    #[test]
+    fn the_first_beat_of_the_song_is_a_downbeat_at_frame_zero() {
+        let m = map(vec![(0, 120.0, 4, 4)]);
+        let events = schedule(&m, 0, 512);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].frame_offset, 0);
+        assert!(events[0].downbeat);
+    }
+
+    #[test]
+    fn a_beat_is_placed_at_its_own_sample_inside_the_block() {
+        // 120 bpm at 48 kHz: a beat every 24000 samples.
+        let m = map(vec![(0, 120.0, 4, 4)]);
+        let events = schedule(&m, 24_000 - 100, 512);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].frame_offset, 100);
+        assert!(!events[0].downbeat, "beat 2 is not a downbeat");
+    }
+
+    #[test]
+    fn every_beat_is_clicked_exactly_once_across_consecutive_blocks() {
+        let m = map(vec![(0, 120.0, 4, 4)]);
+        let frames = 512;
+        let mut clicks = 0;
+        let mut downbeats = 0;
+        // 8 beats at 120 bpm is 192000 samples, so walk a little past it.
+        for block in 0..400 {
+            for event in schedule(&m, block * frames as u64, frames) {
+                assert!(event.frame_offset < frames);
+                clicks += 1;
+                if event.downbeat {
+                    downbeats += 1;
+                }
+            }
+        }
+        // 400 blocks of 512 frames is 204800 samples: beats 0..8 land inside.
+        assert_eq!(clicks, 9, "a beat was dropped or clicked twice");
+        assert_eq!(downbeats, 3, "downbeats on beats 0, 4 and 8");
+    }
+
+    #[test]
+    fn an_eighth_note_signature_clicks_eighths() {
+        // 7/8 at 120 bpm: an eighth is 12000 samples, the bar is 84000.
+        let m = map(vec![(0, 120.0, 7, 8)]);
+        let events = schedule(&m, 0, 12_001);
+        let offsets: Vec<usize> = events.iter().map(|e| e.frame_offset).collect();
+        assert_eq!(offsets, vec![0, 12_000]);
+        assert!(events[0].downbeat);
+        assert!(!events[1].downbeat);
+    }
+
+    #[test]
+    fn a_signature_change_part_way_through_gets_its_own_downbeat() {
+        // 4/4 for 4 bars, then 7/8. At 120 bpm bar 5 starts at 16 beats,
+        // which is 384000 samples.
+        let m = map(vec![(0, 120.0, 4, 4), (PPQ * 16, 120.0, 7, 8)]);
+        let events = schedule(&m, 384_000, 256);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].frame_offset, 0);
+        assert!(events[0].downbeat, "the change starts a bar");
+
+        // The next click is an eighth later, not a quarter.
+        let next = schedule(&m, 384_000 + 256, 12_000);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].frame_offset, 12_000 - 256);
+    }
+
+    #[test]
+    fn the_click_follows_a_tempo_change() {
+        // 120 bpm for 4 beats, then 60 bpm: beats stop being 24000 apart.
+        let m = map(vec![(0, 120.0, 4, 4), (PPQ * 4, 60.0, 4, 4)]);
+        let after_change = 4 * 24_000;
+        let events = schedule(&m, after_change, 48_001);
+        let offsets: Vec<usize> = events.iter().map(|e| e.frame_offset).collect();
+        // At 60 bpm a beat is 48000 samples, so the next one is a beat later.
+        assert_eq!(offsets, vec![0, 48_000]);
+    }
+
+    #[test]
+    fn a_block_with_no_beat_in_it_schedules_nothing() {
+        let m = map(vec![(0, 120.0, 4, 4)]);
+        assert!(schedule(&m, 1_000, 512).is_empty());
     }
 
     #[test]

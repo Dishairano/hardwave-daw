@@ -15,6 +15,8 @@ import { DetachButton } from '../FloatingWindow'
 import { useTrackStore } from '../../stores/trackStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { useTransportStore } from '../../stores/transportStore'
+import { useTempoMapStore } from '../../stores/tempoMapStore'
+import { segmentAt } from '../../utils/meter'
 import { decodeMidi, rescaleNotes } from '../../utils/midi'
 import { useNotificationStore } from '../../stores/notificationStore'
 
@@ -264,6 +266,10 @@ export function PianoRoll() {
     setSelectedNotes(new Set())
   }, [refreshNotes])
 
+  // The grid needs the project's meter. The piano roll can be opened in its
+  // own window, where the playlist is not mounted to have read it.
+  useEffect(() => { useTempoMapStore.getState().refresh() }, [])
+
   useEffect(() => {
     let cancelled = false
     async function fetchGhosts() {
@@ -362,16 +368,19 @@ export function PianoRoll() {
 
     const startTick = Math.max(0, Math.floor(scrollX / pixelsPerTick / PPQ) * PPQ)
     const endTick = (scrollX + w) / pixelsPerTick
-    const beatsPerBar = useTransportStore.getState().timeSigNumerator || 4
+    // Bar and beat lengths from the project's meter, so the piano roll draws
+    // the same bars as the playlist through a signature change. It used to
+    // take one numerator for the whole song and always count in quarters.
+    const segments = useTempoMapStore.getState().segments
 
     for (let tick = startTick; tick <= endTick; tick += PPQ / 4) {
       const x = xFromTick(tick) - KEYBOARD_WIDTH
       if (x < 0 || x > w) continue
 
-      // Bars follow the project's time signature; this was hardcoded to
-      // four, so the piano roll's bar lines disagreed with the song.
-      const isBar = tick % (PPQ * beatsPerBar) === 0
-      const isBeat = tick % PPQ === 0
+      const segment = segmentAt(segments, tick)
+      const intoSegment = tick - segment.startTick
+      const isBar = intoSegment % segment.ticksPerBar === 0
+      const isBeat = intoSegment % segment.ticksPerBeat === 0
 
       if (isBar) {
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)'

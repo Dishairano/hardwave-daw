@@ -365,11 +365,14 @@ pub fn start_count_in(state: State<AppState>, bars: u32) {
     }
     let bpm = engine.transport.bpm.load(Ordering::Relaxed).max(1.0);
     let sample_rate = engine.transport.sample_rate.load(Ordering::Relaxed).max(1) as f64;
-    let (beats_per_bar, _) = hardwave_engine::transport::unpack_time_sig(
+    let (beats_per_bar, den) = hardwave_engine::transport::unpack_time_sig(
         engine.transport.time_sig.load(Ordering::Relaxed),
     );
     let beats = (bars * beats_per_bar.max(1)) as f64;
-    let samples = (beats * 60.0 / bpm * sample_rate).round() as u64;
+    // A beat is a note value, so the denominator sets its length. Counting a
+    // bar of 7/8 in quarter notes made the count-in twice as long as the bar
+    // it was counting in.
+    let samples = (beats * 60.0 / bpm * sample_rate * 4.0 / den.max(1) as f64).round() as u64;
 
     engine.transport.playing.store(false, Ordering::Relaxed);
     engine

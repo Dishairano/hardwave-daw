@@ -415,10 +415,15 @@ fi
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git add -A
 git commit -m "$MSG"
+# The commit this release is, captured now. The tag below names it by SHA
+# rather than following HEAD: with HW_GATE_ON_PC the gate wait is minutes
+# long, and anything committed in that window would otherwise ride into the
+# release without the gate ever having seen it.
+RELEASE_COMMIT=$(git rev-parse HEAD)
 git push origin "$CURRENT_BRANCH"
 
 if [ "${HW_GATE_ON_PC:-0}" = "1" ]; then
-  RELEASE_SHA=$(git rev-parse HEAD)
+  RELEASE_SHA="$RELEASE_COMMIT"
   echo "release.sh: waiting for the Gate run on ${RELEASE_SHA:0:7} (the commit about to be tagged)..."
   GATE_OK=0
   # gate.yml starts from the push above; give the runner time to pick it up.
@@ -457,7 +462,7 @@ TAG_NAME="v$NEW_VERSION"
 # --cleanup=verbatim: git treats a line starting with '#' as a comment and
 # deletes it, which silently ate the "### New features" headings out of every
 # tag annotation and therefore out of the GitHub release body.
-git tag -a "$TAG_NAME" --cleanup=verbatim -F "$CHANGELOG_FILE"
+git tag -a "$TAG_NAME" --cleanup=verbatim -F "$CHANGELOG_FILE" "$RELEASE_COMMIT"
 git push origin "$TAG_NAME"
 
 # Clean up changelog file

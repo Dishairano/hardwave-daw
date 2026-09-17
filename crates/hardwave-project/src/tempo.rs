@@ -17,6 +17,15 @@ pub struct TempoEntry {
     pub ramp: TempoRamp,
 }
 
+/// The beat and bar lengths in force over one stretch of the song.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BeatGrid {
+    /// Tick this grid starts counting bars from.
+    pub start_tick: u64,
+    pub ticks_per_beat: u64,
+    pub beats_per_bar: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TempoMap {
     pub entries: Vec<TempoEntry>,
@@ -188,6 +197,84 @@ impl TempoMap {
         // starting mid-bar, so the first segment always counts from zero.
         out[0].0 = 0;
         out
+    }
+
+    /// The beat grid in force at a tick, without allocating.
+    ///
+    /// The click runs on the audio thread, which must not allocate, so this
+    /// walks the entries rather than building the segment list.
+    pub fn beat_grid_at(&self, tick: u64) -> BeatGrid {
+        let mut grid = BeatGrid {
+            start_tick: 0,
+            ticks_per_beat: ticks_per_beat(4),
+            beats_per_bar: 4,
+        };
+        let mut current: Option<(u32, u32)> = None;
+        let mut first = true;
+        for entry in &self.entries {
+            let sig = (entry.time_sig_num.max(1), entry.time_sig_den.max(1));
+            let changed = current != Some(sig);
+            current = Some(sig);
+            if !changed {
+                continue;
+            }
+            // The song always starts on a bar line, so the first signature
+            // counts from zero however its entry is placed.
+            let start = if first { 0 } else { entry.tick };
+            first = false;
+            if start > tick {
+                break;
+            }
+            grid = BeatGrid {
+                start_tick: start,
+                ticks_per_beat: ticks_per_beat(sig.1),
+                beats_per_bar: sig.0.max(1),
+            };
+        }
+        grid
+    }
+
+    /// The tick of the next signature change strictly after `tick`, if any.
+    pub fn next_meter_change_after(&self, tick: u64) -> Option<u64> {
+        let mut current: Option<(u32, u32)> = None;
+        let mut first = true;
+        for entry in &self.entries {
+            let sig = (entry.time_sig_num.max(1), entry.time_sig_den.max(1));
+            let changed = current != Some(sig);
+            current = Some(sig);
+            if !changed {
+                continue;
+            }
+            let start = if first { 0 } else { entry.tick };
+            first = false;
+            if start > tick {
+                return Some(start);
+            }
+        }
+        None
+    }
+
+    /// The first beat at or after `tick`, and whether it is a downbeat.
+    ///
+    /// This is what the click is scheduled from. Working it out from the map
+    /// rather than from samples-per-beat is what makes the click land on the
+    /// song's beats through a signature change, an eighth-note signature and
+    /// a tempo change alike.
+    pub fn next_beat_at_or_after(&self, tick: u64) -> (u64, bool) {
+        let grid = self.beat_grid_at(tick);
+        let per_beat = grid.ticks_per_beat.max(1);
+        let into = tick.saturating_sub(grid.start_tick);
+        let index = into.div_ceil(per_beat);
+        let beat_tick = grid.start_tick + index * per_beat;
+
+        // A signature change starts a bar of its own, so it takes precedence
+        // over the beat the old grid would have put next.
+        if let Some(change) = self.next_meter_change_after(tick.saturating_sub(1)) {
+            if change >= tick && change <= beat_tick {
+                return (change, true);
+            }
+        }
+        (beat_tick, index.is_multiple_of(grid.beats_per_bar as u64))
     }
 
     /// Convert tick to (bar, beat), both 1-indexed.
@@ -433,6 +520,59 @@ mod tests {
             time_sig_den: den,
             ramp: TempoRamp::Instant,
         }
+    }
+
+    #[test]
+    fn the_beat_grid_matches_the_signature_in_force() {
+        let m = map(vec![meter(0, 4, 4), meter(PPQ * 16, 7, 8)]);
+
+        let start = m.beat_grid_at(0);
+        assert_eq!(start.ticks_per_beat, PPQ);
+        assert_eq!(start.beats_per_bar, 4);
+        assert_eq!(start.start_tick, 0);
+
+        let later = m.beat_grid_at(PPQ * 20);
+        assert_eq!(later.ticks_per_beat, PPQ / 2, "eighths, not quarters");
+        assert_eq!(later.beats_per_bar, 7);
+        assert_eq!(later.start_tick, PPQ * 16, "bars count from the change");
+    }
+
+    #[test]
+    fn the_next_beat_is_the_one_the_click_should_play() {
+        let m = map(vec![meter(0, 4, 4)]);
+        assert_eq!(m.next_beat_at_or_after(0), (0, true), "bar 1 is a downbeat");
+        assert_eq!(m.next_beat_at_or_after(1), (PPQ, false));
+        assert_eq!(m.next_beat_at_or_after(PPQ * 3 + 1), (PPQ * 4, true));
+    }
+
+    #[test]
+    fn a_signature_change_gets_its_own_downbeat() {
+        // The change lands mid-bar, so the click has to accent it rather than
+        // waiting for where the old grid's next bar would have been.
+        let m = map(vec![meter(0, 4, 4), meter(PPQ * 6, 3, 4)]);
+        assert_eq!(m.next_beat_at_or_after(PPQ * 5 + 1), (PPQ * 6, true));
+        assert_eq!(m.next_beat_at_or_after(PPQ * 6), (PPQ * 6, true));
+        assert_eq!(m.next_beat_at_or_after(PPQ * 6 + 1), (PPQ * 7, false));
+        assert_eq!(m.next_beat_at_or_after(PPQ * 8 + 1), (PPQ * 9, true));
+    }
+
+    #[test]
+    fn beats_in_an_eighth_note_signature_are_eighths() {
+        let m = map(vec![meter(0, 7, 8)]);
+        assert_eq!(m.next_beat_at_or_after(1), (PPQ / 2, false));
+        // Seven eighths later is the next downbeat.
+        assert_eq!(m.next_beat_at_or_after(PPQ * 7 / 2), (PPQ * 7 / 2, true));
+    }
+
+    #[test]
+    fn a_tempo_only_entry_does_not_disturb_the_click() {
+        let m = map(vec![
+            entry(0, 140.0, TempoRamp::Instant),
+            entry(PPQ * 9, 90.0, TempoRamp::Instant),
+        ]);
+        assert_eq!(m.next_meter_change_after(0), None);
+        assert_eq!(m.next_beat_at_or_after(PPQ * 9), (PPQ * 9, false));
+        assert_eq!(m.next_beat_at_or_after(PPQ * 11 + 1), (PPQ * 12, true));
     }
 
     #[test]

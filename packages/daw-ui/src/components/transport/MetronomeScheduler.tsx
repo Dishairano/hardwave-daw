@@ -17,6 +17,8 @@ import { useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useMetronomeStore } from '../../stores/metronomeStore'
 import { useTransportStore } from '../../stores/transportStore'
+import { useTempoMapStore } from '../../stores/tempoMapStore'
+import { PPQ, segmentAt } from '../../utils/meter'
 
 function playClick(ctx: AudioContext, freq: number, volume: number) {
   const t = ctx.currentTime
@@ -123,16 +125,20 @@ export function MetronomeScheduler() {
       if (recordOnly && !recording) return
 
       const sr = s.sampleRate || 48000
-      const beat = Math.floor((s.positionSamples / sr) * (s.bpm / 60))
+      // Beats through the project's meter, not one bar length: a custom click
+      // in 7/8 counts eighths, and a signature change moves its accent, the
+      // same as the engine's own click.
+      const tick = (s.positionSamples / sr) * (s.bpm / 60) * PPQ
+      const segment = segmentAt(useTempoMapStore.getState().segments, tick)
+      const beat = Math.floor((tick - segment.startTick) / segment.ticksPerBeat)
 
       if (!wasPlaying || lastBeatRef.current < 0) {
         lastBeatRef.current = beat - 1
       }
 
       if (beat !== lastBeatRef.current) {
-        const bpb = s.timeSigNumerator > 0 ? s.timeSigNumerator : 4
-        const beatInBar = ((beat % bpb) + bpb) % bpb
-        const isDownbeat = accent && beatInBar === 0
+        const beatsPerBar = Math.max(1, Math.round(segment.ticksPerBar / segment.ticksPerBeat))
+        const isDownbeat = accent && ((beat % beatsPerBar) + beatsPerBar) % beatsPerBar === 0
         if (ctx.state === 'suspended') ctx.resume().catch(() => {})
 
         const buf = isDownbeat
