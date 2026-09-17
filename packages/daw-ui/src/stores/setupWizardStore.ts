@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { invoke } from '@tauri-apps/api/core'
 
 /**
  * First-run Setup Wizard state. Tracks which steps the user has
@@ -21,7 +22,7 @@ import { persist } from 'zustand/middleware'
  * always starts from step 1.
  */
 
-export type VelocityCurve = 'linear' | 'soft' | 'hard' | 's-curve' | 'custom'
+export type VelocityCurve = 'linear' | 'soft' | 'hard' | 's-curve'
 
 export type WizardStep = 'welcome' | 'audio' | 'devices' | 'velocity' | 'test' | 'done'
 
@@ -36,13 +37,12 @@ interface SetupWizardState {
   completedFirstRun: boolean
   /** Persisted: epoch ms when the user clicked Skip — we don't re-prompt. */
   skippedAt: number | null
-  /** Master "Enable MIDI remote control" gate. When false, no MIDI input
-   * reaches the audio thread (planned wiring — currently UI-only). */
+  /** Master "Enable MIDI remote control" gate. When false the backend drops
+   * every incoming MIDI message, so nothing reaches the audio thread. */
   midiMasterEnabled: boolean
-  /** Per-input velocity curve preference, keyed by port name. */
+  /** Per-input velocity curve, keyed by port name. The backend applies it to
+   * incoming note-ons on that port. */
   velocityCurves: Record<string, VelocityCurve>
-  /** Per-input "controller type" preset (e.g. 'novation-launchkey', 'generic'). */
-  controllerTypes: Record<string, string>
 
   // ── actions ──
   open: () => void
@@ -54,7 +54,6 @@ interface SetupWizardState {
   markComplete: () => void
   setMidiMasterEnabled: (v: boolean) => void
   setVelocityCurve: (portName: string, curve: VelocityCurve) => void
-  setControllerType: (portName: string, type: string) => void
 }
 
 const STEP_ORDER: WizardStep[] = ['welcome', 'audio', 'devices', 'velocity', 'test', 'done']
@@ -68,7 +67,6 @@ export const useSetupWizardStore = create<SetupWizardState>()(
       skippedAt: null,
       midiMasterEnabled: true,
       velocityCurves: {},
-      controllerTypes: {},
 
       open: () => set({ visible: true, step: 'welcome' }),
       close: () => set({ visible: false }),
@@ -86,11 +84,14 @@ export const useSetupWizardStore = create<SetupWizardState>()(
       skipForever: () =>
         set({ visible: false, skippedAt: Date.now(), completedFirstRun: true }),
       markComplete: () => set({ visible: false, completedFirstRun: true }),
-      setMidiMasterEnabled: (midiMasterEnabled) => set({ midiMasterEnabled }),
-      setVelocityCurve: (portName, curve) =>
-        set((s) => ({ velocityCurves: { ...s.velocityCurves, [portName]: curve } })),
-      setControllerType: (portName, type) =>
-        set((s) => ({ controllerTypes: { ...s.controllerTypes, [portName]: type } })),
+      setMidiMasterEnabled: (midiMasterEnabled) => {
+        set({ midiMasterEnabled })
+        invoke('set_midi_master_enabled', { enabled: midiMasterEnabled }).catch(() => {})
+      },
+      setVelocityCurve: (portName, curve) => {
+        set((s) => ({ velocityCurves: { ...s.velocityCurves, [portName]: curve } }))
+        invoke('set_midi_velocity_curve', { portName, curve }).catch(() => {})
+      },
     }),
     {
       name: 'hw-setup-wizard',
@@ -100,7 +101,6 @@ export const useSetupWizardStore = create<SetupWizardState>()(
         skippedAt: s.skippedAt,
         midiMasterEnabled: s.midiMasterEnabled,
         velocityCurves: s.velocityCurves,
-        controllerTypes: s.controllerTypes,
       }),
     },
   ),
@@ -113,5 +113,21 @@ export function maybeAutoOpenSetupWizard(): void {
   const s = useSetupWizardStore.getState()
   if (!s.completedFirstRun && s.skippedAt == null) {
     s.open()
+  }
+}
+
+/**
+ * Push the saved MIDI input settings into the backend.
+ *
+ * They live in localStorage, so a restart has them while the engine does not:
+ * without this the master switch and every velocity curve silently went back
+ * to their defaults on every launch. Called once from `App.tsx` on boot, and
+ * safe to call again.
+ */
+export function applySavedMidiInputSettings(): void {
+  const { midiMasterEnabled, velocityCurves } = useSetupWizardStore.getState()
+  invoke('set_midi_master_enabled', { enabled: midiMasterEnabled }).catch(() => {})
+  for (const [portName, curve] of Object.entries(velocityCurves)) {
+    invoke('set_midi_velocity_curve', { portName, curve }).catch(() => {})
   }
 }

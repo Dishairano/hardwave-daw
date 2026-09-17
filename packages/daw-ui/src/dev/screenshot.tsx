@@ -24,7 +24,7 @@ import { useTempoMapStore } from '../stores/tempoMapStore'
 import { meterSegments } from '../utils/meter'
 import { SetupWizard } from '../components/SetupWizard'
 import '../components/SetupWizard.css'
-import { useSetupWizardStore } from '../stores/setupWizardStore'
+import { useSetupWizardStore, type WizardStep } from '../stores/setupWizardStore'
 import { Browser } from '../components/browser/Browser'
 import { useBrowserStore } from '../stores/browserStore'
 
@@ -45,7 +45,10 @@ function BrowserShot() {
 /** Renders the SetupWizard opened on the audio step for UI screenshots. */
 function WizardShot() {
   React.useEffect(() => {
-    useSetupWizardStore.setState({ visible: true, step: 'audio' })
+    // ?step=velocity photographs a later step than the default.
+    const step = (new URLSearchParams(location.search).get('step') ??
+      'audio') as WizardStep
+    useSetupWizardStore.setState({ visible: true, step })
   }, [])
   return <SetupWizard />
 }

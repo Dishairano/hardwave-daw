@@ -7,6 +7,7 @@ pub mod output;
 pub mod recording;
 pub mod smf;
 pub mod theory;
+pub mod velocity;
 pub use generators::{
     arpeggiate, chordify, generate_melody_line, generate_progression, humanize, legato,
     note_repeat, snap_to_scale, strum, ArpDirection, ArpSettings, HumanizeSettings, Scale,

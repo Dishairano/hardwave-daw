@@ -42,7 +42,6 @@ export function SetupWizard() {
     step,
     midiMasterEnabled,
     velocityCurves,
-    controllerTypes,
     close,
     next,
     back,
@@ -51,7 +50,6 @@ export function SetupWizard() {
     setStep,
     setMidiMasterEnabled,
     setVelocityCurve,
-    setControllerType,
   } = useSetupWizardStore()
 
   const [ports, setPorts] = useState<string[]>([])
@@ -160,8 +158,6 @@ export function SetupWizard() {
               onToggle={toggleDevice}
               masterEnabled={midiMasterEnabled}
               onMasterChange={setMidiMasterEnabled}
-              controllerTypes={controllerTypes}
-              onTypeChange={setControllerType}
               rescan={rescan}
               scanning={scanning}
             />
@@ -385,21 +381,12 @@ function WelcomeStep({
         </div>
       </div>
       <p className="hw-setup-wizard-muted">
-        Right after this step you'll be able to enable or disable each input individually and tag
-        which controller it is, so Hardwave can pre-map common controls.
+        Right after this step you can enable or disable each input individually, and set how hard
+        each one has to be hit.
       </p>
     </>
   )
 }
-
-const KNOWN_CONTROLLERS: Array<{ id: string; label: string }> = [
-  { id: 'generic', label: 'Generic controller' },
-  { id: 'novation-launchkey', label: 'Novation Launchkey' },
-  { id: 'akai-mpk', label: 'Akai MPK / MPC' },
-  { id: 'arturia-keylab', label: 'Arturia KeyLab' },
-  { id: 'native-instruments-komplete', label: 'NI Komplete Kontrol' },
-  { id: 'launchpad', label: 'Novation Launchpad' },
-]
 
 function DevicesStep({
   ports,
@@ -407,8 +394,6 @@ function DevicesStep({
   onToggle,
   masterEnabled,
   onMasterChange,
-  controllerTypes,
-  onTypeChange,
   rescan,
   scanning,
 }: {
@@ -417,14 +402,12 @@ function DevicesStep({
   onToggle: (port: string) => void
   masterEnabled: boolean
   onMasterChange: (v: boolean) => void
-  controllerTypes: Record<string, string>
-  onTypeChange: (port: string, type: string) => void
   rescan: () => void
   scanning: boolean
 }) {
   return (
     <>
-      <h4>Enable inputs &amp; tag controller type</h4>
+      <h4>Enable inputs</h4>
       <p className="hw-setup-wizard-muted">
         Each row maps to a connected MIDI device. Toggle off any port you don't want feeding
         Hardwave — useful for virtual loopback ports or noisy hardware.
@@ -452,7 +435,6 @@ function DevicesStep({
         )}
         {ports.map((port) => {
           const isOn = enabled.has(port)
-          const type = controllerTypes[port] ?? 'generic'
           return (
             <div key={port} className={`hw-setup-wizard-device${isOn ? '' : ' is-off'}`}>
               <span className="hw-setup-wizard-led" aria-hidden />
@@ -460,17 +442,6 @@ function DevicesStep({
                 <strong>{port}</strong>
                 <small>{isOn ? 'Listening' : 'Disabled'}</small>
               </div>
-              <select
-                value={type}
-                onChange={(e) => onTypeChange(port, e.target.value)}
-                disabled={!isOn}
-              >
-                {KNOWN_CONTROLLERS.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
               <button
                 type="button"
                 className={`hw-setup-wizard-toggle${isOn ? ' is-on' : ''}`}
@@ -487,10 +458,9 @@ function DevicesStep({
 
 const CURVES: Array<{ id: VelocityCurve; label: string; desc: string }> = [
   { id: 'linear', label: 'Linear', desc: 'Pass through' },
-  { id: 'soft', label: 'Soft', desc: 'Boost low hits' },
-  { id: 'hard', label: 'Hard', desc: 'Crush high hits' },
-  { id: 's-curve', label: 'S-curve', desc: 'Center bias' },
-  { id: 'custom', label: 'Custom', desc: 'Drag points (coming soon)' },
+  { id: 'soft', label: 'Soft', desc: 'Lift light hits' },
+  { id: 'hard', label: 'Hard', desc: 'Hold light hits down' },
+  { id: 's-curve', label: 'S-curve', desc: 'More dynamics' },
 ]
 
 function VelocityStep({
@@ -555,7 +525,6 @@ function VelocityStep({
                 c.id === currentCurve ? ' is-active' : ''
               }`}
               onClick={() => activePort && onChange(activePort, c.id)}
-              disabled={c.id === 'custom'}
             >
               <strong>{c.label}</strong>
               <small>{c.desc}</small>
@@ -579,8 +548,9 @@ function VelocityStep({
       </div>
 
       <p className="hw-setup-wizard-muted">
-        Backend application of the curve lands in the permanent MIDI panel ship — for now the
-        wizard captures your preference so the future audio-thread tweak picks it up automatically.
+        The curve applies to this port as soon as you pick it, and is remembered for the next time
+        you start Hardwave. Every curve leaves your softest and hardest hits where they are and
+        only moves what is in between, so nothing you can play becomes unreachable.
       </p>
     </>
   )
@@ -589,15 +559,16 @@ function VelocityStep({
 function curvePath(curve: VelocityCurve): string {
   // Render a representative curve as an SVG path. y-axis is inverted
   // (0,100 = bottom-left). All curves end at (100, 0) — top-right.
+  // Shaped to match what the backend actually does: a square root for soft,
+  // a square for hard, smoothstep for the S. A drawing that does not match
+  // the sound is the same lie as a control that does nothing.
   switch (curve) {
     case 'soft':
-      return 'M 0 100 Q 25 60, 60 25 T 100 0'
+      return 'M 0 100 C 15 45, 55 12, 100 0'
     case 'hard':
-      return 'M 0 100 Q 60 80, 80 40 T 100 0'
+      return 'M 0 100 C 45 88, 78 55, 100 0'
     case 's-curve':
-      return 'M 0 100 C 35 100, 65 0, 100 0'
-    case 'custom':
-      return 'M 0 100 L 20 80 L 40 70 L 70 30 L 100 0'
+      return 'M 0 100 C 33 100, 67 0, 100 0'
     case 'linear':
     default:
       return 'M 0 100 L 100 0'

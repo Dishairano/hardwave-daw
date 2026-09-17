@@ -44,7 +44,11 @@ import { SetupWizard } from './components/SetupWizard'
 import './components/SetupWizard.css'
 import { ProjectInfoDialog } from './components/ProjectInfoDialog'
 import { TempoTapper } from './components/TempoTapper'
-import { maybeAutoOpenSetupWizard, useSetupWizardStore } from './stores/setupWizardStore'
+import {
+  applySavedMidiInputSettings,
+  maybeAutoOpenSetupWizard,
+  useSetupWizardStore,
+} from './stores/setupWizardStore'
 import {
   frequencyIntervalMs,
   useAutosavePrefsStore,
@@ -544,6 +548,9 @@ export function App() {
     // the user has finished or skipped. The Help menu has a manual
     // "Re-run setup wizard" entry to reopen it on demand.
     maybeAutoOpenSetupWizard()
+    // The wizard's answers live in localStorage, so the engine has to be told
+    // them on every launch or they only apply in the session they were set.
+    applySavedMidiInputSettings()
 
     // Cancellation flag matches the pattern used at :397-402 below — if
     // the splash is dismissed (or the effect tears down) before the

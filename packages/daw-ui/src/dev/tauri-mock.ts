@@ -172,6 +172,13 @@ const mock: TauriInternals = {
         return [[], []]
       case 'diagnostics_info':
         return { logsDir: '/tmp/mock-logs', currentSessionLog: null }
+      case 'set_midi_master_enabled':
+      case 'set_midi_velocity_curve':
+        return null
+      case 'get_midi_master_enabled':
+        return true
+      case 'get_midi_velocity_curve':
+        return 'linear'
       case 'get_tempo_entries':
         // The screenshot harness seeds this so a mid-song signature change
         // can be photographed; without it the playlist refreshes the map at
@@ -210,7 +217,9 @@ const mock: TauriInternals = {
       case 'get_audio_config':
         return { device: 'Focusrite Scarlett 2i2', sample_rate: 48000, buffer_size: 512 }
       case 'list_midi_inputs':
-        return []
+        // Two named ports so the setup wizard's device and velocity steps can
+        // be photographed with something in them.
+        return ['Akai MPK Mini mk3', 'Novation Launchkey 49']
       case 'get_midi_activity':
         return { open_ports: [], ms_since_last_event: null }
       // Event plugin — let listeners register harmlessly.

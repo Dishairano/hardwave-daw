@@ -8,10 +8,12 @@
 
 use midir::{MidiInput, MidiInputConnection};
 use parking_lot::Mutex;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::velocity::VelocityCurve;
 use crate::MidiEvent;
 
 /// Maximum number of events buffered before the oldest start dropping.
@@ -59,11 +61,30 @@ pub struct ReconcileReport {
 }
 
 pub struct MidiInputManager {
-    active: Vec<(String, MidiInputConnection<Arc<Mutex<SharedState>>>)>,
+    active: Vec<(String, MidiInputConnection<PortContext>)>,
     shared: Arc<Mutex<SharedState>>,
     /// Ports the user has asked to keep open. Survives disconnection so the
     /// reconciler can reopen them when the device reappears.
     desired: Vec<String>,
+    /// Velocity curve per port, shared with the midir callback through an
+    /// atomic so changing it applies to a port that is already open. Kept for
+    /// ports that are not open yet as well, so the setting survives a
+    /// disconnection and a reconnect.
+    velocity_curves: HashMap<String, Arc<AtomicU8>>,
+    /// The master "enable MIDI remote control" switch. The setup wizard has
+    /// offered it since it was written, saying that with it off no MIDI input
+    /// reaches the audio thread, and nothing read it. Ports stay open when it
+    /// is off and their messages are dropped as they arrive, so turning it
+    /// back on needs no reconnection.
+    enabled: Arc<AtomicBool>,
+}
+
+/// What the midir callback for one port needs: the queue every port shares,
+/// and that port's own velocity curve.
+struct PortContext {
+    shared: Arc<Mutex<SharedState>>,
+    velocity_curve: Arc<AtomicU8>,
+    enabled: Arc<AtomicBool>,
 }
 
 impl MidiInputManager {
@@ -72,6 +93,8 @@ impl MidiInputManager {
             active: Vec::new(),
             shared: Arc::new(Mutex::new(SharedState::default())),
             desired: Vec::new(),
+            velocity_curves: HashMap::new(),
+            enabled: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -116,21 +139,62 @@ impl MidiInputManager {
             .find(|p| input.port_name(p).ok().as_deref() == Some(port_name))
             .ok_or_else(|| format!("MIDI port not found: {port_name}"))?;
 
-        let shared = Arc::clone(&self.shared);
+        let context = PortContext {
+            shared: Arc::clone(&self.shared),
+            velocity_curve: Arc::clone(self.velocity_curve_slot(port_name)),
+            enabled: Arc::clone(&self.enabled),
+        };
         let conn = input
             .connect(
                 port,
                 "hardwave-midi-in",
-                move |_stamp, bytes, shared| {
-                    handle_input_bytes(bytes, shared);
+                move |_stamp, bytes, context: &mut PortContext| {
+                    handle_input_bytes(bytes, context);
                 },
-                shared,
+                context,
             )
             .map_err(|e| format!("connect: {e}"))?;
 
         log::info!("Opened MIDI input port: {port_name}");
         self.active.push((port_name.to_string(), conn));
         Ok(())
+    }
+
+    /// Turn MIDI input on or off as a whole.
+    ///
+    /// With it off nothing reaches the queue the audio thread drains, so no
+    /// note, controller move or incoming clock has any effect.
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// The shared slot holding one port's velocity curve, created on demand.
+    fn velocity_curve_slot(&mut self, port_name: &str) -> &Arc<AtomicU8> {
+        self.velocity_curves
+            .entry(port_name.to_string())
+            .or_insert_with(|| Arc::new(AtomicU8::new(VelocityCurve::Linear.to_index())))
+    }
+
+    /// Set the velocity curve for one input port.
+    ///
+    /// Takes effect immediately on an open port, and is remembered for a port
+    /// that is not open yet, so the wizard can apply a saved setting before
+    /// the controller is plugged in.
+    pub fn set_velocity_curve(&mut self, port_name: &str, curve: VelocityCurve) {
+        self.velocity_curve_slot(port_name)
+            .store(curve.to_index(), Ordering::Relaxed);
+    }
+
+    /// The curve in force for one port.
+    pub fn velocity_curve(&self, port_name: &str) -> VelocityCurve {
+        self.velocity_curves
+            .get(port_name)
+            .map(|slot| VelocityCurve::from_index(slot.load(Ordering::Relaxed)))
+            .unwrap_or_default()
     }
 
     /// Close a port by display name. Removes it from the desired set so the
@@ -275,7 +339,11 @@ impl Default for MidiInputManager {
 /// Route one wire-format input message: clock and transport system-realtime
 /// bytes update the shared sync state; every other message goes through the
 /// normal `parse_midi_bytes` + event queue path.
-fn handle_input_bytes(bytes: &[u8], shared: &Arc<Mutex<SharedState>>) {
+fn handle_input_bytes(bytes: &[u8], context: &PortContext) {
+    if !context.enabled.load(Ordering::Relaxed) {
+        return;
+    }
+    let shared = &context.shared;
     let now = Instant::now();
     match bytes.first().copied() {
         Some(0xF8) => {
@@ -319,6 +387,12 @@ fn handle_input_bytes(bytes: &[u8], shared: &Arc<Mutex<SharedState>>) {
         }
         _ => {
             if let Some(event) = parse_midi_bytes(0, bytes) {
+                // The curve belongs to the port the bytes arrived on, so two
+                // controllers with different feels can each be corrected.
+                let event = apply_velocity_curve(
+                    event,
+                    VelocityCurve::from_index(context.velocity_curve.load(Ordering::Relaxed)),
+                );
                 let mut state = shared.lock();
                 if state.events.len() >= QUEUE_CAPACITY {
                     state.events.pop_front();
@@ -328,6 +402,31 @@ fn handle_input_bytes(bytes: &[u8], shared: &Arc<Mutex<SharedState>>) {
                 state.last_event_at = Some(now);
             }
         }
+    }
+}
+
+/// Shape a note's velocity with the port's curve.
+///
+/// Note-on only. A note-off velocity is a release velocity, which almost no
+/// controller sends meaningfully and no synth here reads, and curving it would
+/// change when notes are released rather than how hard they sound.
+fn apply_velocity_curve(event: MidiEvent, curve: VelocityCurve) -> MidiEvent {
+    if curve == VelocityCurve::Linear {
+        return event;
+    }
+    match event {
+        MidiEvent::NoteOn {
+            timing,
+            channel,
+            note,
+            velocity,
+        } => MidiEvent::NoteOn {
+            timing,
+            channel,
+            note,
+            velocity: curve.apply(velocity),
+        },
+        other => other,
     }
 }
 
@@ -431,6 +530,84 @@ mod tests {
             }
             _ => panic!("expected NoteOn"),
         }
+    }
+
+    #[test]
+    fn a_velocity_curve_shapes_note_ons_only() {
+        let note_on = parse_midi_bytes(0, &[0x90, 60, 32]).unwrap();
+        let shaped = apply_velocity_curve(note_on, VelocityCurve::Soft);
+        match shaped {
+            MidiEvent::NoteOn { velocity, .. } => {
+                // 32/127 is about 0.25, and the soft curve lifts it.
+                assert!(velocity > 0.4, "soft curve did not lift it: {velocity}");
+            }
+            other => panic!("expected a note on, got {other:?}"),
+        }
+
+        // A release velocity is left alone: curving it would change when
+        // notes end rather than how hard they sound.
+        let note_off = parse_midi_bytes(0, &[0x80, 60, 32]).unwrap();
+        let shaped_off = apply_velocity_curve(note_off, VelocityCurve::Soft);
+        match shaped_off {
+            MidiEvent::NoteOff { velocity, .. } => {
+                assert!((velocity - 32.0 / 127.0).abs() < 1e-6, "{velocity}");
+            }
+            other => panic!("expected a note off, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_linear_curve_passes_the_controller_through_untouched() {
+        let note_on = parse_midi_bytes(0, &[0x90, 60, 100]).unwrap();
+        let shaped = apply_velocity_curve(note_on, VelocityCurve::Linear);
+        match (note_on, shaped) {
+            (MidiEvent::NoteOn { velocity: a, .. }, MidiEvent::NoteOn { velocity: b, .. }) => {
+                assert_eq!(a, b)
+            }
+            _ => panic!("expected note ons"),
+        }
+    }
+
+    #[test]
+    fn the_master_switch_drops_everything_while_it_is_off() {
+        let shared = Arc::new(Mutex::new(SharedState::default()));
+        let enabled = Arc::new(AtomicBool::new(false));
+        let context = PortContext {
+            shared: Arc::clone(&shared),
+            velocity_curve: Arc::new(AtomicU8::new(VelocityCurve::Linear.to_index())),
+            enabled: Arc::clone(&enabled),
+        };
+
+        handle_input_bytes(&[0x90, 60, 100], &context);
+        handle_input_bytes(&[0xF8], &context);
+        {
+            let state = shared.lock();
+            assert!(state.events.is_empty(), "a note got through while off");
+            assert!(state.last_tick_at.is_none(), "a clock tick got through");
+        }
+
+        // Back on, and the same note arrives, with no reconnection.
+        enabled.store(true, Ordering::Relaxed);
+        handle_input_bytes(&[0x90, 60, 100], &context);
+        assert_eq!(shared.lock().events.len(), 1);
+    }
+
+    #[test]
+    fn midi_input_is_on_until_it_is_switched_off() {
+        let manager = MidiInputManager::new();
+        assert!(manager.is_enabled());
+        manager.set_enabled(false);
+        assert!(!manager.is_enabled());
+    }
+
+    #[test]
+    fn a_ports_curve_is_remembered_before_it_is_opened() {
+        let mut manager = MidiInputManager::new();
+        assert_eq!(manager.velocity_curve("Launchpad"), VelocityCurve::Linear);
+        manager.set_velocity_curve("Launchpad", VelocityCurve::Hard);
+        assert_eq!(manager.velocity_curve("Launchpad"), VelocityCurve::Hard);
+        // Another controller keeps its own feel.
+        assert_eq!(manager.velocity_curve("MPK Mini"), VelocityCurve::Linear);
     }
 
     #[test]

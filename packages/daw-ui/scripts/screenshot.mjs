@@ -61,6 +61,8 @@ try {
       // SHOT_TIMESIG_AT=16:7/8 changes the signature at beat 16, so a
       // mid-song change is photographed, not described.
       + (process.env.SHOT_TIMESIG_AT ? `&timesigat=${process.env.SHOT_TIMESIG_AT}` : '')
+      // SHOT_STEP=velocity opens the setup wizard on that step.
+      + (process.env.SHOT_STEP ? `&step=${process.env.SHOT_STEP}` : '')
     await page.goto(`${BASE}${query}`, { waitUntil: 'networkidle' })
     await sleep(2200) // let async loads + canvas redraw settle
     await page.screenshot({ path: out, scale: 'device' })

@@ -44,6 +44,47 @@ pub fn close_all_midi_inputs(state: State<AppState>) {
     manager.close_all();
 }
 
+/// Turn MIDI input on or off as a whole.
+///
+/// The wizard's master switch said that with it off no MIDI input reaches the
+/// audio thread, and nothing read it. Ports stay open while it is off and
+/// their messages are dropped on arrival, so turning it back on is instant.
+#[tauri::command]
+pub fn set_midi_master_enabled(state: State<AppState>, enabled: bool) {
+    let engine = state.engine.lock();
+    engine.midi_input.lock().set_enabled(enabled);
+}
+
+#[tauri::command]
+pub fn get_midi_master_enabled(state: State<AppState>) -> bool {
+    let engine = state.engine.lock();
+    let enabled = engine.midi_input.lock().is_enabled();
+    enabled
+}
+
+/// Set the velocity curve for one MIDI input port.
+///
+/// The setup wizard has asked for this per controller since it was written
+/// and nothing read the answer, so every curve behaved as linear. The curve
+/// is applied to incoming note-ons on that port.
+#[tauri::command]
+pub fn set_midi_velocity_curve(state: State<AppState>, port_name: String, curve: String) {
+    let engine = state.engine.lock();
+    let mut manager = engine.midi_input.lock();
+    manager.set_velocity_curve(
+        &port_name,
+        hardwave_midi::velocity::VelocityCurve::from_id(&curve),
+    );
+}
+
+/// The velocity curve in force for one port, as the id the UI uses.
+#[tauri::command]
+pub fn get_midi_velocity_curve(state: State<AppState>, port_name: String) -> String {
+    let engine = state.engine.lock();
+    let manager = engine.midi_input.lock();
+    manager.velocity_curve(&port_name).id().to_string()
+}
+
 #[tauri::command]
 pub fn get_midi_activity(state: State<AppState>) -> MidiActivitySnapshot {
     let engine = state.engine.lock();
