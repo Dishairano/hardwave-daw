@@ -189,6 +189,9 @@ pub struct DawEngine {
     /// Click settings, shared with the audio thread.
     metronome: crate::metronome::MetronomeSettings,
 
+    /// Browser audition requests, shared with the audio thread.
+    preview: crate::preview_player::PreviewRequest,
+
     audio_device: AudioDeviceManager,
     command_tx: Sender<EngineCommand>,
     command_rx: Receiver<EngineCommand>,
@@ -288,6 +291,7 @@ impl DawEngine {
             audio_load_permille: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             audio_xruns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             metronome: crate::metronome::MetronomeSettings::new(),
+            preview: crate::preview_player::PreviewRequest::new(),
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
             pending_state_snapshot: Arc::new(Mutex::new(None)),
@@ -494,6 +498,7 @@ impl DawEngine {
                 xruns: Arc::clone(&self.audio_xruns),
             },
             self.metronome.clone(),
+            self.preview.clone(),
         );
 
         self.audio_device.start(callback).map_err(|e| e.to_string())
@@ -632,6 +637,20 @@ impl DawEngine {
         });
     }
 
+    /// Audition a file on the engine's own output device.
+    ///
+    /// Decodes it only once: clicking back and forth through a folder would
+    /// otherwise re-decode and re-resample the same file on every click,
+    /// which on a long sample is a pause before the sound starts.
+    pub fn preview_file(&self, path: &std::path::Path) -> Result<(), String> {
+        let source_id = source_id_for_path(&path.to_string_lossy());
+        if !self.audio_pool.contains(&source_id) {
+            self.load_audio_file_as(path, &source_id)?;
+        }
+        self.preview.play(&source_id);
+        Ok(())
+    }
+
     /// Load an audio file into the pool and return its source ID and info.
     pub fn load_audio_file(
         &self,
@@ -674,6 +693,13 @@ impl DawEngine {
     /// Click settings. The UI writes these; the audio thread reads them.
     pub fn metronome(&self) -> &crate::metronome::MetronomeSettings {
         &self.metronome
+    }
+
+    /// Browser auditions. Previewing through the engine means a sample comes
+    /// out of the device the DAW is using, which the WebView's own audio
+    /// could not do.
+    pub fn preview(&self) -> &crate::preview_player::PreviewRequest {
+        &self.preview
     }
 
     /// Audio-thread load: percentage of each block's time budget in use, and
@@ -1178,6 +1204,9 @@ impl DawEngine {
             LoadCounters::new(),
             // A bounce is the music, not the guide track.
             crate::metronome::MetronomeSettings::silent(),
+            // Its own request slot, never wired to the UI: an export cannot
+            // pick up whatever someone is auditioning in the browser.
+            crate::preview_player::PreviewRequest::new(),
         );
 
         // Populate insert chains from the project metadata so the export
@@ -1303,6 +1332,9 @@ struct EngineCallback {
     /// Renders the click for this block. The offline renderer is built with
     /// permanently silent settings, so a bounce cannot contain it.
     metronome: crate::metronome::Metronome,
+    /// Plays browser auditions. Like the click, mixed in after the tap, so an
+    /// audition cannot end up in a recording or a bounce.
+    preview: crate::preview_player::PreviewPlayer,
 }
 
 /// Audio-thread load counters shared with the UI: how much of each block's
@@ -1408,8 +1440,10 @@ impl EngineCallback {
         buffer_size: u32,
         load: LoadCounters,
         metronome: crate::metronome::MetronomeSettings,
+        preview: crate::preview_player::PreviewRequest,
     ) -> Self {
         let mut cb = Self {
+            preview: crate::preview_player::PreviewPlayer::new(preview),
             audio_load_permille: load.load_permille,
             audio_xruns: load.xruns,
             metronome: crate::metronome::Metronome::new(metronome),
@@ -2599,6 +2633,16 @@ impl AudioCallback for EngineCallback {
             );
         }
 
+        // Browser auditions, alongside the click and for the same reason:
+        // after the tap and the capture path, so listening to a sample in the
+        // browser cannot print itself into a recording or a bounce.
+        self.preview.render(
+            output,
+            num_frames,
+            &self.audio_pool,
+            self.sample_rate as f64,
+        );
+
         // Advance transport only when playing — input-monitoring alone must
         // not move the playhead.
         if playing {
@@ -3109,6 +3153,7 @@ mod rt_safety_tests {
             256,
             LoadCounters::new(),
             crate::metronome::MetronomeSettings::silent(),
+            crate::preview_player::PreviewRequest::new(),
         );
         (cb, cmd_tx)
     }
@@ -3262,6 +3307,7 @@ mod wait_for_input_tests {
             256,
             LoadCounters::new(),
             crate::metronome::MetronomeSettings::silent(),
+            crate::preview_player::PreviewRequest::new(),
         );
         (cb, command_tx)
     }

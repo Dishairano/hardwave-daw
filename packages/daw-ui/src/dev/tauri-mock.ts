@@ -172,6 +172,10 @@ const mock: TauriInternals = {
         return [[], []]
       case 'diagnostics_info':
         return { logsDir: '/tmp/mock-logs', currentSessionLog: null }
+      case 'preview_audio_file':
+      case 'stop_audio_preview':
+      case 'set_preview_volume':
+        return null
       case 'set_clip_muted':
         return true
       case 'slip_clip':

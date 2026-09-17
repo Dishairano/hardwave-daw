@@ -922,3 +922,26 @@ pub fn slip_clip(
     engine.rebuild_graph();
     Ok(new_start)
 }
+
+/// Audition a file through the engine.
+///
+/// The browser used to preview with an HTML `Audio` element inside the
+/// WebView, which plays through whatever output the browser considers
+/// default. That is not the device the DAW holds: on ASIO or WASAPI-exclusive
+/// the audition was silent or came out of the wrong speakers, and it ignored
+/// the preview volume the DAW shows. Loading into the audio pool also means
+/// the file is decoded by the same decoder that will play it on a track.
+#[tauri::command]
+pub fn preview_audio_file(state: State<AppState>, file_path: String) -> Result<(), String> {
+    state.engine.lock().preview_file(&PathBuf::from(&file_path))
+}
+
+#[tauri::command]
+pub fn stop_audio_preview(state: State<AppState>) {
+    state.engine.lock().preview().stop_playing();
+}
+
+#[tauri::command]
+pub fn set_preview_volume(state: State<AppState>, volume: f32) {
+    state.engine.lock().preview().set_volume(volume);
+}

@@ -405,11 +405,12 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
   const [autoPreview, setAutoPreview] = useState<boolean>(() => {
     return localStorage.getItem('hardwave.daw.autoPreview') === '1'
   })
-  const currentAudioRef = useRef<HTMLAudioElement | null>(null)
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     localStorage.setItem('hardwave.daw.previewVolume', String(previewVolume))
-    if (currentAudioRef.current) currentAudioRef.current.volume = previewVolume
+    // Applies to whatever is auditioning right now, not just the next one.
+    invoke('set_preview_volume', { volume: previewVolume }).catch(() => {})
   }, [previewVolume])
 
   useEffect(() => {
@@ -488,29 +489,31 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
     />
   )
 
+  /**
+   * Audition a file through the engine.
+   *
+   * This used to create an HTML `Audio` element, which plays through the
+   * WebView's default output rather than the device the DAW holds: on ASIO or
+   * WASAPI-exclusive the preview was silent or came out of the wrong
+   * speakers, and the volume slider here did not apply to it. The engine now
+   * plays it on the same device, at the project's rate, at this volume.
+   */
   const preview = async (path: string) => {
-    if (currentAudioRef.current) {
-      currentAudioRef.current.pause()
-      currentAudioRef.current = null
+    if (previewing === path) {
+      invoke('stop_audio_preview').catch(() => {})
+      setPreviewing(null)
+      return
     }
-    if (previewing === path) { setPreviewing(null); return }
     try {
-      const { convertFileSrc } = await import('@tauri-apps/api/core')
-      const audio = new Audio(convertFileSrc(path))
-      audio.volume = previewVolume
-      audio.play().catch(() => {})
-      currentAudioRef.current = audio
+      await invoke('set_preview_volume', { volume: previewVolume })
+      await invoke('preview_audio_file', { filePath: path })
       setPreviewing(path)
-      audio.onended = () => {
-        if (currentAudioRef.current === audio) currentAudioRef.current = null
-        setPreviewing(p => p === path ? null : p)
-      }
-      setTimeout(() => {
-        if (currentAudioRef.current === audio) {
-          audio.pause()
-          currentAudioRef.current = null
-          setPreviewing(p => p === path ? null : p)
-        }
+      // The engine stops at the end of the sample on its own. This only
+      // clears the button's highlight, so a long sample does not look like
+      // it is still playing forever.
+      if (previewTimerRef.current) clearTimeout(previewTimerRef.current)
+      previewTimerRef.current = setTimeout(() => {
+        setPreviewing(p => (p === path ? null : p))
       }, 12000)
     } catch {
       setPreviewing(null)
@@ -663,7 +666,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         <WaveformStrip
           path={previewing}
           onStop={() => {
-            if (currentAudioRef.current) { currentAudioRef.current.pause(); currentAudioRef.current = null }
+            invoke('stop_audio_preview').catch(() => {})
             setPreviewing(null)
           }}
         />

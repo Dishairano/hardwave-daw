@@ -313,6 +313,10 @@ pub fn run() {
             commands::audio::split_clip,
             commands::audio::set_clip_muted,
             commands::audio::slip_clip,
+            // Browser auditions through the engine's own output
+            commands::audio::preview_audio_file,
+            commands::audio::stop_audio_preview,
+            commands::audio::set_preview_volume,
             commands::audio::set_clip_gain,
             commands::audio::set_clip_fades,
             commands::audio::set_clip_fade_curves,

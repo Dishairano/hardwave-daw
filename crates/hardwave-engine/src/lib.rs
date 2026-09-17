@@ -11,6 +11,7 @@ pub mod master_tap;
 pub mod metronome;
 pub mod midi_track_node;
 pub mod parallel_eval;
+pub mod preview_player;
 pub mod track_node;
 pub mod transport;
 
