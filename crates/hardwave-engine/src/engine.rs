@@ -154,6 +154,14 @@ pub type PluginStateSnapshotSender =
 pub type PluginStateSnapshotSlot = Arc<Mutex<Option<PluginStateSnapshotSender>>>;
 
 /// Main DAW engine.
+/// How much recording room is reserved when a take starts.
+///
+/// Reserved up front because the audio thread must not allocate. Twenty
+/// minutes of stereo f32 at 48 kHz is about 460 MB, which is the trade: a
+/// long take costs memory, and going past it is reported rather than
+/// silently reallocated.
+const CAPTURE_HEADROOM_SECS: u32 = 20 * 60;
+
 pub struct DawEngine {
     pub transport: TransportState,
     pub project: Arc<Mutex<Project>>,
@@ -442,8 +450,24 @@ impl DawEngine {
         if self.capture.recording.load(Ordering::Relaxed) {
             return;
         }
-        self.capture.buffer.lock().clear();
+        // Reserve the room here, on this thread, so the audio thread never
+        // grows a buffer mid-take. Half an hour of stereo at the device rate
+        // is about 700 MB of f32 at 48 kHz, so this is deliberately a cap:
+        // beyond it the tap reports an overflow rather than reallocating.
+        self.capture
+            .arm(self.current_sample_rate(), CAPTURE_HEADROOM_SECS);
         self.capture.recording.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the last take ran out of reserved room, so the caller can say
+    /// so instead of presenting a truncated file as complete.
+    pub fn capture_overflowed(&self) -> bool {
+        self.capture.overflowed()
+    }
+
+    /// Seconds captured so far in the active take.
+    pub fn capture_seconds(&self) -> f64 {
+        self.capture.seconds_captured(self.current_sample_rate())
     }
 
     /// Finish the active capture and return the interleaved L/R samples
@@ -452,7 +476,7 @@ impl DawEngine {
     pub fn stop_capture(&self) -> Vec<f32> {
         use std::sync::atomic::Ordering;
         self.capture.recording.store(false, Ordering::Relaxed);
-        std::mem::take(&mut *self.capture.buffer.lock())
+        self.capture.take()
     }
 
     /// Sample rate of the running audio device, or the offline default
@@ -2323,23 +2347,33 @@ impl EngineCallback {
             self.graph.connect(src_node, 1, dst_node, 1);
         }
 
-        // Wire armed-and-monitoring tracks to a single InputNode that drains
-        // the live-input ring buffer. Only build the node when at least one
-        // track actually needs it — unused, it would still drain the ring on
-        // every audio block and waste work.
+        // Wire the live input to a single InputNode that drains the input ring
+        // buffer. Two separate questions decide what happens:
+        //
+        //   armed          -> the input has to reach the recording tap
+        //   monitor_input  -> the input also has to be audible
+        //
+        // The node used to be built only for armed AND monitoring tracks, and
+        // the recording tap lives on that node, so arming a track without
+        // switching monitoring on recorded silence: press record, play, get
+        // an empty take and no error. Arming alone is now enough to capture.
         let mut monitor_routes: Vec<crate::graph::NodeId> = Vec::new();
+        let mut any_armed = false;
         for track in &project.tracks {
             if !track.kind.is_audio_bearing() {
                 continue;
             }
-            if track.armed && track.monitor_input {
-                if let Some(&node_id) = track_id_to_node.get(&track.id) {
-                    monitor_routes.push(node_id);
+            if track.armed {
+                any_armed = true;
+                if track.monitor_input {
+                    if let Some(&node_id) = track_id_to_node.get(&track.id) {
+                        monitor_routes.push(node_id);
+                    }
                 }
             }
         }
-        self.has_monitored_input = !monitor_routes.is_empty();
-        if self.has_monitored_input {
+        self.has_monitored_input = any_armed;
+        if any_armed {
             let direct = self
                 .transport
                 .direct_monitoring
@@ -2349,7 +2383,12 @@ impl EngineCallback {
             // CaptureTap Arc handed to every InputNode we ever build.
             input_node.set_capture(Some(Arc::clone(&self.capture)));
             let input_id = self.graph.add_node(Box::new(input_node));
-            if direct {
+            if monitor_routes.is_empty() {
+                // Armed but not monitoring: the node exists only to feed the
+                // recording tap, so it connects to nothing. Wiring it to
+                // master here would make the input audible when the user
+                // switched monitoring off.
+            } else if direct {
                 // Direct monitoring: bypass the track FX chain and route live
                 // input straight to master for minimum latency.
                 self.graph.connect(input_id, 0, master_id, 0);

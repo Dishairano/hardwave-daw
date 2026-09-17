@@ -15,6 +15,9 @@ export const SNAP_VALUES: SnapValue[] = [
 
 const PPQ_TICKS = 960
 
+/** Matches CAPTURE_HEADROOM_SECS in crates/hardwave-engine/src/engine.rs. */
+const RECORD_LIMIT_MINUTES = 20
+
 // ── Count-in ─────────────────────────────────────────────────────────────
 //
 // The engine counts off and starts playback itself. This used to schedule a
@@ -167,6 +170,66 @@ const tapTimes: number[] = []
 // localStorage, which meant it stayed behind on one machine and leaked into
 // whatever project you opened next.
 
+/** What the backend says a finished take turned out to be. */
+interface RecordedTake {
+  path: string | null
+  seconds: number
+  peak: number
+  truncated: boolean
+}
+
+/**
+ * Put a finished take on the armed track, at the position it was recorded.
+ *
+ * Both record paths used to call `importAudioFile(trackId, path, 0)`, so a
+ * take recorded from bar 9 landed at bar 1 and had to be dragged back. The
+ * start position was already being tracked for the MIDI path and simply was
+ * not passed here.
+ *
+ * The three ways a take can disappoint were also silent: nothing captured,
+ * captured silence from the wrong input, and a take that hit the reserved
+ * recording length. Each one now says so.
+ */
+async function placeRecordedTake(take: RecordedTake | null, startSample: number): Promise<void> {
+  const [{ useTrackStore }, { useNotificationStore }] = await Promise.all([
+    import('./trackStore'),
+    import('./notificationStore'),
+  ])
+  const push = useNotificationStore.getState().push
+  if (!take) return
+
+  if (!take.path) {
+    push('warning', 'Nothing was recorded', {
+      detail: 'Check that the track is armed and that an input device is selected in Audio settings.',
+      sticky: true,
+    })
+    return
+  }
+
+  const armedTrack = useTrackStore.getState().tracks.find(t => t.armed)
+  if (!armedTrack) {
+    push('warning', 'Take saved, but no track is armed', { detail: take.path })
+    return
+  }
+
+  const state = useTransportStore.getState()
+  const samplesPerTick = (state.sampleRate || 48000) * 60 / (Math.max(1, state.bpm) * PPQ_TICKS)
+  const positionTicks = samplesPerTick > 0 ? Math.max(0, Math.round(startSample / samplesPerTick)) : 0
+  await useTrackStore.getState().importAudioFile(armedTrack.id, take.path, positionTicks)
+
+  if (take.peak < 0.0005) {
+    push('warning', 'That take is silent', {
+      detail: 'The recording captured no signal. Check the input device and its level in Audio settings.',
+      sticky: true,
+    })
+  } else if (take.truncated) {
+    push('warning', 'The take hit the recording limit', {
+      detail: `Recording stops at ${RECORD_LIMIT_MINUTES} minutes in one take. What was captured up to that point has been kept.`,
+      sticky: true,
+    })
+  }
+}
+
 export const useTransportStore = create<TransportState>((set, get) => ({
   playing: false,
   recording: false,
@@ -216,13 +279,10 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     const wasRecording = get().recording
     if (wasRecording) set({ recording: false })
     try {
-      const path = (await invoke('stop')) as string | null
-      if (wasRecording && path) {
-        const { useTrackStore } = await import('./trackStore')
-        const armedTrack = useTrackStore.getState().tracks.find(t => t.armed)
-        if (armedTrack) {
-          await useTrackStore.getState().importAudioFile(armedTrack.id, path, 0)
-        }
+      const take = (await invoke('stop')) as RecordedTake | null
+      if (wasRecording) {
+        await placeRecordedTake(take, get().recordStartSample ?? 0)
+        set({ recordStartSample: null })
       }
     } catch (e) {
       if (wasRecording) set({ recording: wasRecording })
@@ -260,7 +320,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
       recordStartSample: wasRecording ? null : startSample,
     }))
     try {
-      const path = (await invoke('toggle_recording')) as string | null
+      const take = (await invoke('toggle_recording')) as RecordedTake | null
       if (!wasRecording) return // leading edge, nothing more to do
 
       const { useTrackStore } = await import('./trackStore')
@@ -286,8 +346,8 @@ export const useTransportStore = create<TransportState>((set, get) => ({
           // and surface in console for debugging.
           console.warn('commit_recording_to_midi_clip:', err)
         }
-      } else if (path) {
-        await useTrackStore.getState().importAudioFile(armedTrack.id, path, 0)
+      } else {
+        await placeRecordedTake(take, startSample)
       }
     } catch (e) {
       // Roll back the optimistic toggle if the engine rejected the call.

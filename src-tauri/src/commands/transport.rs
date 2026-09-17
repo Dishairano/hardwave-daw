@@ -1,6 +1,7 @@
 use crate::AppState;
 use hardwave_engine::TransportCommand;
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 #[derive(Serialize)]
@@ -57,7 +58,7 @@ pub fn set_wait_for_input(state: State<AppState>, enabled: bool) {
 }
 
 #[tauri::command]
-pub fn stop(state: State<AppState>) -> Result<Option<String>, String> {
+pub fn stop(state: State<AppState>) -> Result<Option<RecordedTake>, String> {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
     engine
@@ -93,7 +94,7 @@ pub fn stop(state: State<AppState>) -> Result<Option<String>, String> {
     let was_recording = engine.transport.recording.swap(false, Ordering::Relaxed);
     engine.send_command(TransportCommand::Stop);
     if was_recording {
-        finalize_recording_session(&engine)
+        finalize_recording_session(&engine).map(Some)
     } else {
         Ok(None)
     }
@@ -103,23 +104,77 @@ pub fn stop(state: State<AppState>) -> Result<Option<String>, String> {
 /// recordings scratch dir. Returns the file path on success or `None`
 /// when no samples were captured. Shared by `stop` and the trailing
 /// edge of `toggle_recording` so the two paths can't drift.
-fn finalize_recording_session(
-    engine: &hardwave_engine::DawEngine,
-) -> Result<Option<String>, String> {
+/// Where a take is written.
+///
+/// Next to the project when there is one, in a `Recordings` folder beside the
+/// .hwp, so a saved project keeps its takes and "collect samples" can find
+/// them. Otherwise the app's own data folder.
+///
+/// This used to be the operating system's temp folder. Windows empties that
+/// on its own schedule, and Disk Cleanup and Storage Sense both target it, so
+/// a saved project could lose the vocal that was recorded into it with no
+/// warning and nothing to recover.
+fn recordings_dir(engine: &hardwave_engine::DawEngine) -> Result<PathBuf, String> {
+    if let Some(project_dir) = engine.project_dir() {
+        return Ok(project_dir.join("Recordings"));
+    }
+    let base = dirs::data_dir()
+        .ok_or_else(|| "No writable data folder for recordings on this system".to_string())?;
+    Ok(base.join("Hardwave").join("Recordings"))
+}
+
+/// A readable, unique file name for a take.
+///
+/// `Take 2026-09-17 21-04-11.wav` rather than `take-1789503851.wav`: a folder
+/// of takes should be readable without converting unix seconds, and a second
+/// take inside the same second must not overwrite the first.
+fn next_take_name(dir: &Path) -> String {
+    let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+    let base = format!("Take {stamp}");
+    let mut candidate = format!("{base}.wav");
+    let mut n = 2;
+    while dir.join(&candidate).exists() {
+        candidate = format!("{base} ({n}).wav");
+        n += 1;
+    }
+    candidate
+}
+
+/// What a finished take turned out to be.
+///
+/// The command used to answer with a path or null, so the three ways a take
+/// can disappoint were indistinguishable in the UI and all three ended in
+/// silence with no message: nothing captured at all, a captured take that is
+/// pure silence because the wrong input was selected, and a take that hit the
+/// reserved recording length.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedTake {
+    pub path: Option<String>,
+    pub seconds: f64,
+    /// Highest sample in the take, so the UI can warn about a silent one.
+    pub peak: f32,
+    /// True when the take ran past the reserved recording length.
+    pub truncated: bool,
+}
+
+fn finalize_recording_session(engine: &hardwave_engine::DawEngine) -> Result<RecordedTake, String> {
+    let truncated = engine.capture_overflowed();
     let samples = engine.stop_capture();
     if samples.is_empty() {
-        return Ok(None);
+        return Ok(RecordedTake {
+            path: None,
+            seconds: 0.0,
+            peak: 0.0,
+            truncated,
+        });
     }
+    let peak = samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
 
     let sample_rate = engine.current_sample_rate();
-    let project_dir = std::env::temp_dir().join("hardwave-daw-recordings");
-    std::fs::create_dir_all(&project_dir).map_err(|e| e.to_string())?;
-
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let path = project_dir.join(format!("take-{stamp}.wav"));
+    let dir = recordings_dir(engine)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(next_take_name(&dir));
 
     // 32-bit float stereo WAV matches the engine's internal sample format.
     let spec = hound::WavSpec {
@@ -136,7 +191,34 @@ fn finalize_recording_session(
         writer.finalize().map_err(|e| e.to_string())?;
     }
 
-    Ok(Some(path.to_string_lossy().to_string()))
+    let seconds = samples.len() as f64 / 2.0 / sample_rate.max(1) as f64;
+    Ok(RecordedTake {
+        path: Some(path.to_string_lossy().to_string()),
+        seconds,
+        peak,
+        truncated,
+    })
+}
+
+#[cfg(test)]
+mod take_name_tests {
+    use super::*;
+
+    #[test]
+    fn a_take_is_named_readably_and_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = next_take_name(dir.path());
+        assert!(first.starts_with("Take 20"), "got {first}");
+        assert!(first.ends_with(".wav"));
+
+        std::fs::write(dir.path().join(&first), b"x").unwrap();
+        let second = next_take_name(dir.path());
+        assert_ne!(
+            second, first,
+            "a second take in the same second must differ"
+        );
+        assert!(second.contains("(2)"), "got {second}");
+    }
 }
 
 #[tauri::command]
@@ -200,7 +282,7 @@ pub fn set_bpm(state: State<AppState>, bpm: f64) {
 /// `None` when this call started one. The frontend uses this to show a
 /// "took #N saved" notification.
 #[tauri::command]
-pub fn toggle_recording(state: State<AppState>) -> Result<Option<String>, String> {
+pub fn toggle_recording(state: State<AppState>) -> Result<Option<RecordedTake>, String> {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
     let was_recording = engine.transport.recording.load(Ordering::Relaxed);
@@ -215,7 +297,7 @@ pub fn toggle_recording(state: State<AppState>) -> Result<Option<String>, String
 
     // End: stop capturing, drain samples, write a WAV, return its path.
     engine.transport.recording.store(false, Ordering::Relaxed);
-    finalize_recording_session(&engine)
+    finalize_recording_session(&engine).map(Some)
 }
 
 /// Cancel an in-flight recording without finalising the take. FL

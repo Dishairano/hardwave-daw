@@ -635,13 +635,12 @@ fn recording_api_captures_samples() {
         "start_capture must flip the recording flag"
     );
 
-    // Simulate the audio thread pushing samples into the tap. In
-    // production this is `InputNode::process` writing interleaved L/R
-    // pairs into `capture.buffer` while `capture.recording` is true.
-    {
-        let mut buf = engine.capture.buffer.lock();
-        buf.extend_from_slice(&[0.1_f32, -0.1, 0.2, -0.2, 0.3, -0.3]);
-    }
+    // Simulate the audio thread writing into the tap. In production this is
+    // `InputNode::process` handing blocks to `CaptureTap::write_block` while
+    // `capture.recording` is true.
+    engine
+        .capture
+        .write_test_block(&[0.1, 0.2, 0.3], &[-0.1, -0.2, -0.3], 3);
 
     let samples = engine.stop_capture();
     assert_eq!(
