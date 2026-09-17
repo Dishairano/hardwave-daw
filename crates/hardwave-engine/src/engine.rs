@@ -192,6 +192,10 @@ pub struct DawEngine {
     /// Browser audition requests, shared with the audio thread.
     preview: crate::preview_player::PreviewRequest,
 
+    /// Behaviour switches from the Audio settings panel, read by the audio
+    /// thread every block.
+    audio_prefs: crate::audio_prefs::AudioPrefs,
+
     audio_device: AudioDeviceManager,
     command_tx: Sender<EngineCommand>,
     command_rx: Receiver<EngineCommand>,
@@ -292,6 +296,7 @@ impl DawEngine {
             audio_xruns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             metronome: crate::metronome::MetronomeSettings::new(),
             preview: crate::preview_player::PreviewRequest::new(),
+            audio_prefs: crate::audio_prefs::AudioPrefs::new(),
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
             pending_state_snapshot: Arc::new(Mutex::new(None)),
@@ -499,6 +504,7 @@ impl DawEngine {
             },
             self.metronome.clone(),
             self.preview.clone(),
+            self.audio_prefs.clone(),
         );
 
         self.audio_device.start(callback).map_err(|e| e.to_string())
@@ -700,6 +706,11 @@ impl DawEngine {
     /// could not do.
     pub fn preview(&self) -> &crate::preview_player::PreviewRequest {
         &self.preview
+    }
+
+    /// The Audio settings panel's behaviour switches.
+    pub fn audio_prefs(&self) -> &crate::audio_prefs::AudioPrefs {
+        &self.audio_prefs
     }
 
     /// Audio-thread load: percentage of each block's time budget in use, and
@@ -1207,6 +1218,9 @@ impl DawEngine {
             // Its own request slot, never wired to the UI: an export cannot
             // pick up whatever someone is auditioning in the browser.
             crate::preview_player::PreviewRequest::new(),
+            // A bounce should sound like playback, so it reads the same
+            // switches the settings panel sets.
+            self.audio_prefs.clone(),
         );
 
         // Populate insert chains from the project metadata so the export
@@ -1335,6 +1349,9 @@ struct EngineCallback {
     /// Plays browser auditions. Like the click, mixed in after the tap, so an
     /// audition cannot end up in a recording or a bounce.
     preview: crate::preview_player::PreviewPlayer,
+    /// The Audio settings panel's behaviour switches, shared with the engine
+    /// so a change applies to the next block.
+    audio_prefs: crate::audio_prefs::AudioPrefs,
     /// This block's clicks. A fixed-size array rather than a Vec because it
     /// is filled on the audio thread, which must not allocate.
     click_events: [crate::metronome::ClickEvent; crate::metronome::MAX_CLICKS_PER_BLOCK],
@@ -1444,9 +1461,11 @@ impl EngineCallback {
         load: LoadCounters,
         metronome: crate::metronome::MetronomeSettings,
         preview: crate::preview_player::PreviewRequest,
+        audio_prefs: crate::audio_prefs::AudioPrefs,
     ) -> Self {
         let mut cb = Self {
             preview: crate::preview_player::PreviewPlayer::new(preview),
+            audio_prefs,
             click_events: [crate::metronome::ClickEvent {
                 frame_offset: 0,
                 downbeat: false,
@@ -1721,6 +1740,9 @@ impl EngineCallback {
             }
             TransportCommand::Stop => {
                 self.transport.wait_pending.store(false, Relaxed);
+                if self.audio_prefs.reset_on_transport() {
+                    self.reset_nodes();
+                }
                 let was_playing = self
                     .transport
                     .playing
@@ -1776,6 +1798,14 @@ impl EngineCallback {
             }
             TransportCommand::SetPosition(pos) => {
                 self.transport.set_position(pos);
+                // A jump leaves whatever was sounding at the old position
+                // behind: held instrument voices carry on at the new one,
+                // which is the "note stuck on after I moved the playhead"
+                // report. The settings panel offers this as a switch and
+                // nothing read it, so it never happened either way.
+                if self.audio_prefs.reset_on_transport() {
+                    self.reset_nodes();
+                }
             }
             TransportCommand::SetBpm(bpm) => {
                 self.transport
@@ -1885,6 +1915,7 @@ impl EngineCallback {
                     track.name.clone(),
                     meter.clone(),
                 );
+                midi_node.set_prefs(self.audio_prefs.clone());
                 midi_node.set_volume_db(track.volume_db);
                 midi_node.set_pan(track.pan);
                 let effective_mute_midi =
@@ -2391,6 +2422,17 @@ impl EngineCallback {
             std::sync::atomic::Ordering::Relaxed,
         );
     }
+    /// Reset every node in the graph.
+    ///
+    /// Clears held instrument voices and the sample-buffer caches, so nothing
+    /// from before a stop or a jump is still sounding afterwards. Cheap and
+    /// allocation-free: each node's reset only touches state it already owns.
+    fn reset_nodes(&mut self) {
+        for node in self.graph.iter_nodes_mut() {
+            node.reset();
+        }
+    }
+
     /// Work out which beats fall inside this block, and fill `click_events`.
     ///
     /// Returns how many events were filled. The scheduling itself lives in
@@ -3199,6 +3241,9 @@ mod rt_safety_tests {
             LoadCounters::new(),
             crate::metronome::MetronomeSettings::silent(),
             crate::preview_player::PreviewRequest::new(),
+            // Offline and test callbacks get their own switches: a bounce
+            // must not change because of what the settings panel says now.
+            crate::audio_prefs::AudioPrefs::new(),
         );
         (cb, cmd_tx)
     }
@@ -3353,6 +3398,9 @@ mod wait_for_input_tests {
             LoadCounters::new(),
             crate::metronome::MetronomeSettings::silent(),
             crate::preview_player::PreviewRequest::new(),
+            // Offline and test callbacks get their own switches: a bounce
+            // must not change because of what the settings panel says now.
+            crate::audio_prefs::AudioPrefs::new(),
         );
         (cb, command_tx)
     }

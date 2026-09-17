@@ -44,6 +44,30 @@ pub fn close_all_midi_inputs(state: State<AppState>) {
     manager.close_all();
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MidiDriverStatus {
+    pub ok: bool,
+    /// Why not, when it is not ok. Empty when it is.
+    pub detail: String,
+}
+
+/// Whether the MIDI subsystem started.
+///
+/// The setup wizard showed a green "MIDI driver healthy" tick that was drawn
+/// without asking anything, so a machine with no working MIDI was told its
+/// MIDI was fine.
+#[tauri::command]
+pub fn midi_driver_status() -> MidiDriverStatus {
+    match hardwave_midi::MidiInputManager::probe_subsystem() {
+        Ok(()) => MidiDriverStatus {
+            ok: true,
+            detail: String::new(),
+        },
+        Err(detail) => MidiDriverStatus { ok: false, detail },
+    }
+}
+
 /// Turn MIDI input on or off as a whole.
 ///
 /// The wizard's master switch said that with it off no MIDI input reaches the

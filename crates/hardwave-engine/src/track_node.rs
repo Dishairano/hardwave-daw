@@ -992,12 +992,16 @@ impl AudioNode for TrackNode {
     }
 
     fn reset(&mut self) {
-        // Re-cache buffers in case pool contents changed
-        self.cached_buffers = self
-            .clips
-            .iter()
-            .map(|c| self.pool.get(&c.source_id))
-            .collect();
+        // Re-cache buffers in case pool contents changed.
+        //
+        // Refilled in place rather than collected into a new Vec: reset now
+        // runs on the audio thread, on stop and on a playhead jump, and
+        // allocating there is what a dropout sounds like. After the clear the
+        // capacity from the last fill is enough for the same clips.
+        self.cached_buffers.clear();
+        for clip in &self.clips {
+            self.cached_buffers.push(self.pool.get(&clip.source_id));
+        }
     }
 }
 

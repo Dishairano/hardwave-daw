@@ -108,6 +108,10 @@ pub struct MidiTrackNode {
     /// Shared meter state (post-fader peak + RMS). Same struct that the UI
     /// reads for audio tracks, so MIDI tracks light up the meter strip too.
     meter: Arc<TrackMeterState>,
+    /// Shared behaviour switches, read per block. Held here rather than
+    /// passed in at rebuild time so flipping one in the settings panel
+    /// applies to the next block.
+    prefs: crate::audio_prefs::AudioPrefs,
     rms_smooth: f32,
     /// Native instrument the track is voiced with. When set to
     /// [`Instrument::KickSynth`] the built-in sine voicing below is
@@ -174,6 +178,7 @@ impl MidiTrackNode {
             muted: false,
             soloed: false,
             meter,
+            prefs: crate::audio_prefs::AudioPrefs::new(),
             rms_smooth: 0.0,
             instrument: Instrument::BuiltinSine,
             waveform: Waveform::Sine,
@@ -207,6 +212,40 @@ impl MidiTrackNode {
     /// Start a built-in-synth voice. Steals a voice (preferring an
     /// already-releasing/idle one, else the oldest) when at the polyphony
     /// cap so a fresh chord never silently drops notes.
+    /// Share the engine's behaviour switches with this node.
+    pub fn set_prefs(&mut self, prefs: crate::audio_prefs::AudioPrefs) {
+        self.prefs = prefs;
+    }
+
+    /// Start a note the playhead landed in the middle of.
+    ///
+    /// The envelope is placed where it would be if the note had been playing
+    /// all along, so a pad that was already open sounds open instead of
+    /// re-attacking. Attack and decay together are 85 ms, so anything older
+    /// than that is simply at its sustain level.
+    fn start_voice_mid_note(
+        &mut self,
+        pitch: u8,
+        velocity: f32,
+        off_sample: Option<u64>,
+        elapsed_samples: u64,
+        sample_rate: f32,
+    ) {
+        self.start_voice(pitch, velocity, off_sample);
+        let Some(voice) = self.voices.last_mut() else {
+            return;
+        };
+        let elapsed_secs = elapsed_samples as f32 / sample_rate.max(1.0);
+        if elapsed_secs >= ATTACK_SECS + DECAY_SECS {
+            voice.stage = EnvStage::Sustain;
+            voice.env_value = SUSTAIN_LEVEL;
+        } else if elapsed_secs >= ATTACK_SECS {
+            voice.stage = EnvStage::Decay;
+            let into_decay = ((elapsed_secs - ATTACK_SECS) / DECAY_SECS).clamp(0.0, 1.0);
+            voice.env_value = 1.0 - (1.0 - SUSTAIN_LEVEL) * into_decay;
+        }
+    }
+
     fn start_voice(&mut self, pitch: u8, velocity: f32, off_sample: Option<u64>) {
         if self.voices.len() >= MAX_VOICES {
             let steal = self
@@ -468,19 +507,41 @@ impl AudioNode for MidiTrackNode {
                     // Clone the note's fields so the borrow on `self.notes`
                     // ends before `start_voice` borrows `self` mutably.
                     let n = self.notes[self.next_note_idx].clone();
-                    if !n.muted {
+                    // A note that began before this block is one the playhead
+                    // landed inside. The settings panel's "play truncated
+                    // notes" decides what to do with it; until now it was
+                    // always played, and always from its attack, whatever the
+                    // setting said.
+                    let truncated = n.note_on_sample < block_start;
+                    let play = !n.muted && (!truncated || self.prefs.play_truncated_notes());
+                    if play {
                         match self.instrument {
                             Instrument::BuiltinSine => {
                                 // Polyphonic: each clip note adds a voice
                                 // that releases on its own note-off sample.
-                                self.start_voice(
-                                    n.pitch,
-                                    n.velocity.clamp(0.0, 1.0),
-                                    Some(n.note_off_sample),
-                                );
+                                if truncated {
+                                    self.start_voice_mid_note(
+                                        n.pitch,
+                                        n.velocity.clamp(0.0, 1.0),
+                                        Some(n.note_off_sample),
+                                        block_start - n.note_on_sample,
+                                        sr,
+                                    );
+                                } else {
+                                    self.start_voice(
+                                        n.pitch,
+                                        n.velocity.clamp(0.0, 1.0),
+                                        Some(n.note_off_sample),
+                                    );
+                                }
                             }
                             Instrument::KickSynth => {
-                                self.kick.note_on(n.pitch, n.velocity);
+                                // A kick is a transient: starting one from
+                                // its middle is a click, so a truncated one
+                                // is left alone whatever the setting says.
+                                if !truncated {
+                                    self.kick.note_on(n.pitch, n.velocity);
+                                }
                             }
                         }
                     }
@@ -1143,5 +1204,86 @@ mod tests {
             node.next_note_idx, 0,
             "clip schedule must not advance while stopped"
         );
+    }
+
+    /// A long note the playhead jumped into the middle of. The settings
+    /// panel's "play truncated notes" switch decides whether it sounds, and
+    /// until the switch was wired up the note always sounded, always from
+    /// its attack.
+    fn node_with_a_long_note(play_truncated: bool) -> MidiTrackNode {
+        let mut node = make_node();
+        let prefs = crate::audio_prefs::AudioPrefs::new();
+        prefs.set_play_truncated_notes(play_truncated);
+        node.set_prefs(prefs);
+        node.set_notes(vec![MidiNoteRegion {
+            note_on_sample: 0,
+            note_off_sample: 96_000,
+            pitch: 64,
+            velocity: 0.8,
+            muted: false,
+        }]);
+        node
+    }
+
+    fn peak_after_jumping_into_the_note(node: &mut MidiTrackNode) -> f32 {
+        let mut out = block_outputs(256);
+        // Half a second in: well inside a note that runs to sample 96000.
+        let ctx = ctx_at(48_000.0, 256, 24_000, true);
+        let inputs: [&[f32]; 0] = [];
+        let mut midi_out = Vec::new();
+        node.process(&inputs, &mut out, &[], &mut midi_out, &ctx);
+        out[0]
+            .iter()
+            .chain(out[1].iter())
+            .fold(0.0_f32, |a, b| a.max(b.abs()))
+    }
+
+    #[test]
+    fn a_truncated_note_is_silent_when_the_setting_is_off() {
+        let mut node = node_with_a_long_note(false);
+        let peak = peak_after_jumping_into_the_note(&mut node);
+        assert_eq!(peak, 0.0, "the note should not have been started");
+        assert!(node.voices.is_empty());
+    }
+
+    #[test]
+    fn a_truncated_note_sounds_when_the_setting_is_on() {
+        let mut node = node_with_a_long_note(true);
+        let peak = peak_after_jumping_into_the_note(&mut node);
+        assert!(peak > 0.0, "the note should sound, got {peak}");
+        assert_eq!(node.voices.len(), 1);
+    }
+
+    #[test]
+    fn a_truncated_note_starts_from_the_middle_not_from_its_attack() {
+        let mut node = node_with_a_long_note(true);
+        peak_after_jumping_into_the_note(&mut node);
+        let voice = &node.voices[0];
+        // Half a second into a note whose attack and decay together last
+        // 85 ms: it is holding at its sustain level, not climbing from zero.
+        assert!(
+            matches!(voice.stage, EnvStage::Sustain),
+            "{:?}",
+            voice.stage
+        );
+        assert!((voice.env_value - SUSTAIN_LEVEL).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_note_that_starts_inside_the_block_always_plays() {
+        // Not truncated: it begins after the block does, so the setting has
+        // nothing to say about it.
+        let mut node = make_node();
+        let prefs = crate::audio_prefs::AudioPrefs::new();
+        prefs.set_play_truncated_notes(false);
+        node.set_prefs(prefs);
+        node.set_notes(vec![MidiNoteRegion {
+            note_on_sample: 24_100,
+            note_off_sample: 96_000,
+            pitch: 64,
+            velocity: 0.8,
+            muted: false,
+        }]);
+        assert!(peak_after_jumping_into_the_note(&mut node) > 0.0);
     }
 }

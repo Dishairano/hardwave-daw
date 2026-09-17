@@ -160,6 +160,19 @@ impl MidiInputManager {
         Ok(())
     }
 
+    /// Whether the MIDI subsystem could be opened at all.
+    ///
+    /// The setup wizard drew a green tick saying "MIDI driver healthy"
+    /// unconditionally, so a build with no ALSA, or a machine where midir
+    /// cannot start, was told its MIDI was fine. An empty port list is not
+    /// the same answer: a working subsystem with nothing plugged in also
+    /// returns no ports.
+    pub fn probe_subsystem() -> Result<(), String> {
+        MidiInput::new("hardwave-midi-probe")
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     /// Turn MIDI input on or off as a whole.
     ///
     /// With it off nothing reaches the queue the audio thread drains, so no
@@ -590,6 +603,17 @@ mod tests {
         enabled.store(true, Ordering::Relaxed);
         handle_input_bytes(&[0x90, 60, 100], &context);
         assert_eq!(shared.lock().events.len(), 1);
+    }
+
+    #[test]
+    fn the_subsystem_probe_answers_one_way_or_the_other() {
+        // On a build with a MIDI subsystem this is Ok; on one without, it is
+        // an Err carrying the reason. What matters is that it is an answer
+        // rather than a tick drawn without asking.
+        match MidiInputManager::probe_subsystem() {
+            Ok(()) => {}
+            Err(reason) => assert!(!reason.is_empty(), "an error must say why"),
+        }
     }
 
     #[test]

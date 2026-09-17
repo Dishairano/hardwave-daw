@@ -74,9 +74,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [cacheStats, setCacheStats] = useState<{ bytesUsed: number; maxBytes: number; entryCount: number } | null>(null)
   const [cacheMaxMb, setCacheMaxMb] = useState<string>('2048')
 
-  // Audio behavioural preferences (UI-only at the time of writing —
-  // backend wiring queued for the Tier B / Rust ship). Persist via
-  // audioPrefsStore so the user only sets these once.
+  // Audio behaviour switches. The store pushes each change into the engine,
+  // which shares them with the audio thread, and persists them so they only
+  // have to be set once.
   const audioPrefs = useAudioPrefsStore()
   const autosavePrefs = useAutosavePrefsStore()
   const generalPrefs = useGeneralPrefsStore()
@@ -658,9 +658,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               border: `1px solid ${audioPrefs.resetPluginsOnTransport ? hw.accent : hw.borderDark}`,
             }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textSecondary }}>Reset plug-ins on transport</span>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>Reset instruments when the transport moves</span>
                 <span style={{ fontSize: 9, color: hw.textFaint }}>
-                  Calls <code>reset()</code> on every plug-in when transport stops or playhead jumps so delay tails, LFO phase and oscillator state start fresh. (Backend wiring queued.)
+                  Stops held notes when you press stop or move the playhead, instead of letting them carry on at the new position. Leave it on unless you want tails to ring through a jump.
                 </span>
               </div>
               <button
@@ -689,7 +689,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <span style={{ fontSize: 11, color: hw.textSecondary }}>Play truncated notes</span>
                 <span style={{ fontSize: 9, color: hw.textFaint }}>
-                  When the playhead jumps mid-note, fire the remainder of the note from the new position. Off = only notes whose start sample falls after the jump fire. (Backend wiring queued.)
+                  When you start playing in the middle of a note, play the rest of it from where you started, with its envelope already open. Off means only notes that begin after that point sound.
                 </span>
               </div>
               <button

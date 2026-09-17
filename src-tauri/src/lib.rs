@@ -238,6 +238,8 @@ pub fn run() {
             commands::engine::get_graph_latency,
             commands::engine::get_audio_load,
             // Metronome (engine-generated click)
+            commands::engine::set_reset_on_transport,
+            commands::engine::set_play_truncated_notes,
             commands::engine::set_metronome_enabled,
             commands::engine::set_metronome_volume,
             commands::engine::set_metronome_accent,
@@ -350,6 +352,7 @@ pub fn run() {
             commands::midi_input::close_midi_input,
             commands::midi_input::close_all_midi_inputs,
             commands::midi_input::get_midi_activity,
+            commands::midi_input::midi_driver_status,
             commands::midi_input::set_midi_master_enabled,
             commands::midi_input::get_midi_master_enabled,
             commands::midi_input::set_midi_velocity_curve,

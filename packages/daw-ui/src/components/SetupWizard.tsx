@@ -56,6 +56,7 @@ export function SetupWizard() {
   const [enabledPorts, setEnabledPorts] = useState<Set<string>>(new Set())
   const [activity, setActivity] = useState<MidiActivitySnapshot | null>(null)
   const [scanning, setScanning] = useState(false)
+  const [driver, setDriver] = useState<{ ok: boolean; detail: string } | null>(null)
 
   const rescan = useCallback(async () => {
     setScanning(true)
@@ -76,6 +77,12 @@ export function SetupWizard() {
   useEffect(() => {
     if (!visible) return
     void rescan()
+    // Whether MIDI works at all is a separate question from whether anything
+    // is plugged in, and the wizard used to answer it with a tick drawn
+    // without asking.
+    invoke<{ ok: boolean; detail: string }>('midi_driver_status')
+      .then(setDriver)
+      .catch(err => setDriver({ ok: false, detail: String(err) }))
   }, [visible, rescan])
 
   // Activity polling only while the Test step is showing — avoids
@@ -148,7 +155,7 @@ export function SetupWizard() {
 
         <div className="hw-setup-wizard-body">
           {step === 'welcome' && (
-            <WelcomeStep ports={ports} scanning={scanning} rescan={rescan} />
+            <WelcomeStep ports={ports} scanning={scanning} rescan={rescan} driver={driver} />
           )}
           {step === 'audio' && <AudioStep />}
           {step === 'devices' && (
@@ -341,10 +348,13 @@ function AudioStep() {
 function WelcomeStep({
   ports,
   scanning,
+  driver,
 }: {
   ports: string[]
   scanning: boolean
   rescan: () => void
+  /** null while the check is still running. */
+  driver: { ok: boolean; detail: string } | null
 }) {
   return (
     <>
@@ -373,10 +383,24 @@ function WelcomeStep({
           </div>
         </div>
         <div className="hw-setup-wizard-check">
-          <span className="hw-check-icon ok">✓</span>
+          <span className={`hw-check-icon ${driver == null ? 'warn' : driver.ok ? 'ok' : 'warn'}`}>
+            {driver == null ? '…' : driver.ok ? '✓' : '!'}
+          </span>
           <div>
-            <b>MIDI driver healthy</b>
-            <div className="hw-setup-wizard-muted">midir / CoreMIDI / ALSA initialised</div>
+            <b>
+              {driver == null
+                ? 'Checking the MIDI driver'
+                : driver.ok
+                  ? 'MIDI driver working'
+                  : 'MIDI driver not available'}
+            </b>
+            <div className="hw-setup-wizard-muted">
+              {driver == null
+                ? 'One moment.'
+                : driver.ok
+                  ? 'The system MIDI service answered, so controllers can be opened.'
+                  : `Controllers cannot be opened on this machine: ${driver.detail}`}
+            </div>
           </div>
         </div>
       </div>

@@ -44,6 +44,7 @@ import { SetupWizard } from './components/SetupWizard'
 import './components/SetupWizard.css'
 import { ProjectInfoDialog } from './components/ProjectInfoDialog'
 import { TempoTapper } from './components/TempoTapper'
+import { applySavedAudioPrefs } from './stores/audioPrefsStore'
 import {
   applySavedMidiInputSettings,
   maybeAutoOpenSetupWizard,
@@ -551,6 +552,7 @@ export function App() {
     // The wizard's answers live in localStorage, so the engine has to be told
     // them on every launch or they only apply in the session they were set.
     applySavedMidiInputSettings()
+    applySavedAudioPrefs()
 
     // Cancellation flag matches the pattern used at :397-402 below — if
     // the splash is dismissed (or the effect tears down) before the
