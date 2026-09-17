@@ -211,6 +211,8 @@ const mock: TauriInternals = {
       case 'set_metronome_accent':
       case 'set_metronome_record_only':
         return null
+      case 'process_memory':
+        return { usedBytes: 412 * 1024 * 1024, totalBytes: 16 * 1024 * 1024 * 1024 }
       case 'get_audio_load':
         return { loadPct: 12, xruns: 0 }
       case 'get_graph_latency':

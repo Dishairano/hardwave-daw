@@ -785,6 +785,10 @@ function HwTempoContextMenu({
 // of each audio block's deadline the engine spends working. Past 100% the
 // device goes unfed and the user hears it, so the bar saturates there and the
 // xrun count says how often it has happened.
+//
+// MEM is the whole process: samples, graph, plug-ins and all, as a share of
+// the machine's memory. It used to be the WebView's JavaScript heap, which is
+// none of those things.
 
 function HwPerfCluster() {
   const cpuPct = usePerfMetersStore(s => s.cpuPct)
@@ -801,7 +805,13 @@ function HwPerfCluster() {
     ? `CPU ${cpuPct}% of the audio deadline · ${xruns} dropout${xruns === 1 ? '' : 's'} this session, raise the buffer size to stop the clicks`
     : `CPU ${cpuPct}% of the audio deadline · no dropouts`
   return (
-    <div className="fl-perf" title={`${cpuTitle} · MEM ${memMb ?? '—'} MB`} data-testid="perf-cluster">
+    <div
+      className="fl-perf"
+      title={`${cpuTitle} · MEM ${memMb ?? '—'} MB in use by Hardwave${
+        memRatio != null ? ` (${Math.round(memRatio * 100)}% of this machine)` : ''
+      }`}
+      data-testid="perf-cluster"
+    >
       <span className="fl-perf-stack">
         <small>CPU</small>
         <span className="fl-perf-bar"><i style={{ width: `${Math.min(100, cpuPct)}%`, background: cpuColor }} /></span>

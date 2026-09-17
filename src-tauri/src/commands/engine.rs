@@ -323,6 +323,26 @@ pub fn get_input_meter(state: State<AppState>) -> InputMeterSnapshot {
     }
 }
 
+/// This process's memory use, for the toolbar's MEM meter.
+///
+/// `usedBytes` is this process's resident set, or null where it cannot be
+/// read. `totalBytes` is the machine's physical memory when that is known, so
+/// the meter can show a share rather than a bare number.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessMemory {
+    pub used_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+}
+
+#[tauri::command]
+pub fn process_memory() -> ProcessMemory {
+    ProcessMemory {
+        used_bytes: crate::process_memory::resident_bytes(),
+        total_bytes: crate::process_memory::total_bytes(),
+    }
+}
+
 /// Audio behaviour switches from the settings panel.
 ///
 /// The panel has offered these two since it was written and said in its own

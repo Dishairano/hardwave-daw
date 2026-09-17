@@ -57,6 +57,17 @@ shine-rs.workspace = true
 chrono.workspace = true
 vorbis_rs.workspace = true
 
+# Real process memory for the toolbar's MEM meter. The meter used to read the
+# WebView's JS heap, which says nothing about the sample pool, the audio graph
+# or the plug-ins — all of which live in this process. Already in the tree via
+# tauri, so this adds no download.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 tempfile = "3"
 

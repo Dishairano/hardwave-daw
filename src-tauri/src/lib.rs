@@ -12,6 +12,7 @@ mod midi_sync;
 mod midi_timecode;
 mod plugin_probe;
 mod prefs;
+mod process_memory;
 
 use hardwave_engine::DawEngine;
 pub use midi_clock::MidiClockState;
@@ -239,6 +240,7 @@ pub fn run() {
             commands::engine::get_graph_latency,
             commands::engine::get_audio_load,
             // Metronome (engine-generated click)
+            commands::engine::process_memory,
             commands::engine::set_reset_on_transport,
             commands::engine::set_play_truncated_notes,
             commands::engine::set_metronome_enabled,

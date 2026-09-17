@@ -34,9 +34,9 @@ interface PerfMetersState {
   cpuPct: number
   /** Audio blocks that overran their budget this session. */
   xruns: number
-  /** Absolute MB used by the JS heap, or null when not available. */
+  /** MB this process is using, or null when it cannot be read. */
   memMb: number | null
-  /** 0-1 ratio of usedJSHeapSize / totalJSHeapSize, or null. */
+  /** 0-1 share of the machine's physical memory, or null. */
   memRatio: number | null
   set: (next: { cpuPct: number; xruns: number; memMb: number | null; memRatio: number | null }) => void
 }
@@ -62,14 +62,7 @@ export function startPerfMeters(): () => void {
     // block, against that block's real deadline.
     invoke<{ loadPct: number; xruns: number }>('get_audio_load')
       .then(({ loadPct, xruns }) => {
-        // performance.memory is Chrome / Chromium / Tauri-webview only.
-        let memMb: number | null = null
-        let memRatio: number | null = null
-        const pm = (performance as unknown as { memory?: { usedJSHeapSize: number; totalJSHeapSize: number } }).memory
-        if (pm && typeof pm.usedJSHeapSize === 'number' && typeof pm.totalJSHeapSize === 'number') {
-          memMb = Math.round(pm.usedJSHeapSize / (1024 * 1024))
-          memRatio = pm.totalJSHeapSize > 0 ? pm.usedJSHeapSize / pm.totalJSHeapSize : null
-        }
+        const { memMb, memRatio } = usePerfMetersStore.getState()
         usePerfMetersStore.getState().set({
           cpuPct: Math.round(loadPct),
           xruns,
@@ -80,9 +73,42 @@ export function startPerfMeters(): () => void {
       .catch(() => { /* a missed poll is not worth a toast */ })
   }, 200)
 
+  // Memory every second rather than five times a second: it moves slowly,
+  // and it is a syscall rather than a read of a value the engine already has.
+  const memoryId = window.setInterval(pollMemory, 1000)
+  pollMemory()
+
   cleanup = () => {
     window.clearInterval(intervalId)
+    window.clearInterval(memoryId)
     cleanup = null
   }
   return cleanup
+}
+
+/**
+ * Read this process's memory use.
+ *
+ * The meter used to read `performance.memory.usedJSHeapSize`, the WebView's
+ * JavaScript heap. Nothing that costs real memory in a DAW lives there: the
+ * sample pool, the audio graph and every loaded plug-in are in the Rust
+ * process, so a project holding gigabytes of samples showed tens of
+ * megabytes. The share is now of the machine's physical memory, which is what
+ * a producer would compare against.
+ */
+function pollMemory(): void {
+  invoke<{ usedBytes: number | null; totalBytes: number | null }>('process_memory')
+    .then(({ usedBytes, totalBytes }) => {
+      const state = usePerfMetersStore.getState()
+      state.set({
+        cpuPct: state.cpuPct,
+        xruns: state.xruns,
+        memMb: usedBytes == null ? null : Math.round(usedBytes / (1024 * 1024)),
+        memRatio:
+          usedBytes != null && totalBytes != null && totalBytes > 0
+            ? usedBytes / totalBytes
+            : null,
+      })
+    })
+    .catch(() => { /* a missed poll is not worth a toast */ })
 }
