@@ -12,6 +12,7 @@ import { useColorPickerStore } from '../../stores/colorPickerStore'
 import { useLogStore } from '../../dev/logStore'
 import { useMultiTouchGestures } from '../../hooks/useMultiTouchGestures'
 import { hw } from '../../theme'
+import { paintSlotOccupied, paintSlotTick } from './paint'
 
 const PPQ = 960
 const PIXELS_PER_SECOND_BASE = 100
@@ -35,6 +36,9 @@ type DragMode =
   // Drag inside a clip with the slip tool: slides the audio within the clip
   // while the clip keeps its position and length on the timeline.
   | 'slip'
+  // Drag across the playlist with the paint tool: drops a copy of the armed
+  // clip in every grid slot the pointer crosses.
+  | 'paint'
   | 'pending-empty'
   // Ctrl/⌘ + drag in the ruler band → define a loop region. The drag's
   // origin tick anchors one edge, the live cursor tick anchors the
@@ -66,6 +70,14 @@ interface DragState {
   // playing makes a stationary cursor map to an ever-advancing tick (the
   // playhead chases itself). Freezing it keeps screen-X → tick stable.
   scrubScrollOffset?: number
+  // Paint drag only. `paintedSlots` holds `trackId:tick` for every slot this
+  // gesture has already filled, so dragging back and forth over one slot
+  // cannot stack copies. `paintChain` serialises the placements: each one is
+  // two IPC calls, and firing them in parallel makes the backend interleave
+  // a duplicate with another slot's move.
+  paintedSlots?: Set<string>
+  paintChain?: Promise<void>
+  paintStepTicks?: number
 }
 
 interface ContextMenuState {
@@ -789,6 +801,47 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   // to logical (unscrolled) Y once and compare against each track's
   // y from there, so the user's wheel-scroll position stays
   // transparent to every caller.
+  /**
+   * The track row under a pointer position, or undefined past the last track.
+   *
+   * Goes through the same `mouseY + verticalScroll` lift as `hitTest`: the
+   * place-mode branch used to divide the raw viewport Y by the track height,
+   * so with the playlist scrolled down a click dropped the clip on a track
+   * several rows above the one under the cursor.
+   */
+  const trackRowAt = useCallback((mouseY: number) => {
+    const index = Math.floor((mouseY + verticalScroll - RULER_HEIGHT) / trackHeight)
+    return index >= 0 ? audioTracks[index] : undefined
+  }, [audioTracks, trackHeight, verticalScroll])
+
+  /**
+   * Drop one copy of the armed picker clip in a grid slot.
+   *
+   * Used by the paint tool, which crosses many slots in one drag. Each slot
+   * is recorded before its placement runs, because the pointer keeps moving
+   * while the IPC is in flight, and placements are serialised through one
+   * chain: a placement is a duplicate followed by a move, and two of those
+   * in parallel let one slot's move land on the other slot's copy.
+   */
+  const paintClipAt = useCallback((drag: DragState, trackId: string, tick: number) => {
+    const selection = usePickerStore.getState().selection
+    if (selection?.kind !== 'audioClip') return
+    const slot = `${trackId}:${tick}`
+    if (!drag.paintedSlots || drag.paintedSlots.has(slot)) return
+
+    const length = drag.paintStepTicks ?? PPQ
+    const target = useTrackStore.getState().tracks.find(t => t.id === trackId)
+    if (paintSlotOccupied(target?.clips, tick, length)) return
+
+    drag.paintedSlots.add(slot)
+    drag.paintChain = (drag.paintChain ?? Promise.resolve())
+      .then(() => useTrackStore
+        .getState()
+        .placeClipCopy(selection.trackId, selection.clipId, trackId, tick)
+        .then(() => undefined))
+      .catch(err => console.error('paint placeClipCopy failed', err))
+  }, [])
+
   const hitTest = useCallback((mouseX: number, mouseY: number, scrollOffset: number): {
     clip: ClipInfo, trackId: string, edge: 'body' | 'left' | 'right' | 'fade-in' | 'fade-out'
   } | null => {
@@ -891,13 +944,40 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
 
     // Tool-mode branch — selected playlist tool wins over the default
-    // "draw + hold-to-marquee" behaviour. Each tool maps to a one-shot
-    // action with no follow-up drag (except `zoom` which keeps wheel
-    // semantics, and `select` which always starts an immediate
-    // rubber-band). Tools that need bigger plumbing (`paint`, `slip`,
-    // `mute`) currently fall through to default so users can still
-    // place clips while we wire them.
+    // "draw + hold-to-marquee" behaviour. Most tools are a one-shot action
+    // on the clip under the cursor; `paint`, `slip` and `select` start their
+    // own drag, and `zoom` keeps wheel semantics.
     const currentTool = usePlaylistToolStore.getState().tool
+    if (currentTool === 'paint') {
+      // Drag across the playlist and the armed clip lands in every grid slot
+      // the pointer crosses. Until now this tool fell through to the default
+      // single paste, so the toolbar offered a paint brush that painted once.
+      const selection = usePickerStore.getState().selection
+      if (selection?.kind !== 'audioClip') {
+        onSetHint?.('Paint tool: pick a clip in the picker panel first, then drag across the playlist')
+        return
+      }
+      const source = useTrackStore.getState().tracks
+        .find(t => t.id === selection.trackId)?.clips
+        ?.find(c => c.id === selection.clipId)
+      // The grid decides the spacing, and with snap off the clip's own
+      // length does, so painted copies sit end to end instead of on top of
+      // each other.
+      const step = snapTicks > 0 ? snapTicks : Math.max(1, source?.length_ticks ?? PPQ)
+      const targetTrack = trackRowAt(mouseY)
+      if (!targetTrack) return
+      const tick = paintSlotTick(mouseX, scrollOffset, pixelsPerTick, step)
+      dragRef.current = {
+        mode: 'paint', clipId: '', trackId: targetTrack.id,
+        startMouseX: mouseX, startMouseY: mouseY,
+        currentMouseX: mouseX, currentMouseY: mouseY,
+        originalPositionTicks: tick, originalLengthTicks: 0,
+        originalFadeInTicks: 0, originalFadeOutTicks: 0,
+        paintedSlots: new Set<string>(), paintStepTicks: step,
+      }
+      paintClipAt(dragRef.current, targetTrack.id, tick)
+      return
+    }
     if (currentTool === 'slice' || currentTool === 'delete') {
       const hit = hitTest(mouseX, mouseY, scrollOffset)
       if (!hit) return
@@ -970,8 +1050,6 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       forceRender(n => n + 1)
       return
     }
-    // `mute` and `slip` fall through to default for now — wiring TBD.
-
     const hit = hitTest(mouseX, mouseY, scrollOffset)
     if (hit) {
       const gid = clipToGroup[hit.clip.id]
@@ -1031,8 +1109,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // is active (so existing select-multiple workflow is untouched).
       const pickerSel = usePickerStore.getState().selection
       if (pickerSel?.kind === 'audioClip') {
-        const trackIdx = Math.floor((mouseY - RULER_HEIGHT) / trackHeight)
-        const targetTrack = trackIdx >= 0 ? audioTracks[trackIdx] : undefined
+        const targetTrack = trackRowAt(mouseY)
         if (targetTrack) {
           const tickAt = applySnap(
             Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick)),
@@ -1059,7 +1136,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
       // No forceRender — pending state is invisible until promoted.
     }
-  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm, horizontalZoom, setHorizontalZoom])
+  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm, horizontalZoom, setHorizontalZoom, trackRowAt, paintClipAt, onSetHint])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     // Right-mouse-button pan takes priority over any other drag mode.
@@ -1185,6 +1262,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       return
     }
 
+    if (drag.mode === 'paint') {
+      // One copy per slot crossed, on whichever track the pointer is over,
+      // so a diagonal drag paints down the tracks as well as along the bar.
+      const step = drag.paintStepTicks ?? PPQ
+      const track = trackRowAt(mouseY)
+      if (!track) return
+      const tick = paintSlotTick(mouseX, getScrollOffset(), pixelsPerTick, step)
+      paintClipAt(drag, track.id, tick)
+      return
+    }
+
     if (drag.mode === 'slip') {
       // Dragging right pulls later audio into the clip, so the source offset
       // moves forward by the dragged distance. Converted to samples because
@@ -1269,7 +1357,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       moveClipLocal(drag.trackId, drag.clipId, newPos)
       resizeClipLocal(drag.trackId, drag.clipId, newLen)
     }
-  }, [hitTest, getScrollOffset, pixelsPerTick, moveClipLocal, moveClipToTrack, resizeClipLocal, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint, trackHeight, audioTracks])
+  }, [hitTest, getScrollOffset, pixelsPerTick, moveClipLocal, moveClipToTrack, resizeClipLocal, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint, trackHeight, audioTracks, trackRowAt, paintClipAt])
 
   const handleMouseUp = useCallback(() => {
     // Right-mouse-button pan release. If we panned (moved past 4 px)
@@ -1285,6 +1373,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // no-op. No edit-cursor jump, no marquee, no selection change beyond
     // what mousedown already cleared (when ctrl wasn't held).
     if (drag && drag.mode === 'pending-empty') {
+      dragRef.current = null
+      return
+    }
+    // Paint released: every slot was already placed on the way, so there is
+    // nothing to commit. The gesture ends here so the next press starts with
+    // an empty set of painted slots.
+    if (drag && drag.mode === 'paint') {
       dragRef.current = null
       return
     }
