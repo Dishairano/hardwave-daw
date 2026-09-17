@@ -178,6 +178,11 @@ interface TrackState {
   activeMidiClipId: string | null
 
   fetchTracks: () => Promise<void>
+  /// Refresh one track from the backend, leaving the rest of the store
+  /// alone. A fader, mute, solo or pan change only affects the track it was
+  /// made on, and refreshing everything means serialising every track and
+  /// every clip in the project for one number.
+  refreshTrack: (id: string) => Promise<void>
   selectTrack: (id: string) => void
   selectClip: (clipId: string | null, trackId?: string) => void
   setActiveMidiClip: (trackId: string | null, clipId: string | null) => void
@@ -366,6 +371,30 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     }
   },
 
+  refreshTrack: async (id) => {
+    try {
+      const payload = await invoke<(TrackInfo & { clips?: ClipInfo[] }) | null>(
+        'get_track_with_clips',
+        { trackId: id },
+      )
+      if (!payload) {
+        // The track is gone. A whole-store refresh is the honest answer.
+        await get().fetchTracks()
+        return
+      }
+      const updated: TrackWithClips = { ...payload, clips: payload.clips ?? [] }
+      set((s) => ({
+        tracks: s.tracks.map((t) => (t.id === id ? updated : t)),
+        tracksById: { ...s.tracksById, [id]: updated },
+      }))
+    } catch (e) {
+      // Older backend without the single-track endpoint, or a hot-swapped
+      // frontend against a stale binary.
+      console.warn('get_track_with_clips unavailable; refreshing every track', e)
+      await get().fetchTracks()
+    }
+  },
+
   selectTrack: (id) => set({ selectedTrackId: id }),
 
   selectClip: (clipId, trackId) => set({
@@ -433,13 +462,13 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   setVolume: async (id, db) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_volume', { trackId: id, volumeDb: db }, `Set "${name}" volume to ${db.toFixed(1)} dB`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setPan: async (id, pan) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_pan', { trackId: id, pan }, `Set "${name}" pan to ${pan.toFixed(2)}`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   // ---- optimistic-local versions for high-frequency drag/wheel updates ----
@@ -471,7 +500,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
       { trackId: id, volumeDb: db },
       `Set "${name}" volume to ${db.toFixed(1)} dB`,
     )
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
   commitPan: async (id, pan) => {
     const name = get().tracks.find((t) => t.id === id)?.name ?? 'track'
@@ -480,37 +509,39 @@ export const useTrackStore = create<TrackState>((set, get) => ({
       { trackId: id, pan },
       `Set "${name}" pan to ${pan.toFixed(2)}`,
     )
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   toggleMute: async (id) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('toggle_mute', { trackId: id }, `Toggle mute on "${name}"`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   toggleSolo: async (id) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    // Solo only flips this track's own flag; the mixer works out the
+    // effective mute of the others from the list it already has.
     await mut('toggle_solo', { trackId: id }, `Toggle solo on "${name}"`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   toggleArm: async (id) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('toggle_arm', { trackId: id }, `Toggle arm on "${name}"`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackMonitorInput: async (id, enabled) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_monitor_input', { trackId: id, enabled }, `${enabled ? 'Enable' : 'Disable'} input monitoring on "${name}"`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   toggleSoloSafe: async (id) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('toggle_solo_safe', { trackId: id }, `Toggle solo-safe on "${name}"`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   reorderTrack: async (id, newIndex) => {
@@ -524,46 +555,46 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     if (!trimmed) return
     const prev = get().tracks.find(t => t.id === id)?.name ?? ''
     await mut('set_track_name', { trackId: id, name: trimmed }, `Rename "${prev}" to "${trimmed}"`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackColor: async (id, color) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_color', { trackId: id, color }, `Recolor "${name}"`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackPhaseInvert: async (id, invert) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_phase_invert', { trackId: id, invert }, `${invert ? 'Invert' : 'Un-invert'} phase on "${name}"`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackSwapLr: async (id, swap) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_swap_lr', { trackId: id, swap }, `${swap ? 'Swap' : 'Unswap'} L/R on "${name}"`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackStereoSeparation: async (id, separation) => {
     const clamped = Math.max(0, Math.min(2, separation))
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_stereo_separation', { trackId: id, separation: clamped }, `Set "${name}" separation to ${clamped.toFixed(2)}`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackDelaySamples: async (id, samples) => {
     const clamped = Math.max(0, Math.floor(samples))
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_delay_samples', { trackId: id, samples: clamped }, `Set "${name}" delay to ${clamped} samples`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackPitchSemitones: async (id, semitones) => {
     const clamped = Math.max(-24, Math.min(24, Math.round(semitones)))
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_pitch_semitones', { trackId: id, semitones: clamped }, `Set "${name}" pitch to ${clamped > 0 ? '+' : ''}${clamped} st`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackFineTuneCents: async (id, cents) => {
@@ -571,14 +602,14 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const clamped = Math.max(-100, Math.min(100, cents))
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_fine_tune_cents', { trackId: id, cents: clamped }, `Set "${name}" fine tune to ${clamped > 0 ? '+' : ''}${clamped.toFixed(0)} cents`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackFilterType: async (id, filterType) => {
     const normalized = ['off', 'lp', 'hp', 'bp'].includes(filterType) ? filterType : 'off'
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_filter_type', { trackId: id, filterType: normalized }, `Set "${name}" filter to ${normalized}`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackFilterCutoffHz: async (id, cutoffHz) => {
@@ -586,7 +617,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const clamped = Math.max(20, Math.min(20000, cutoffHz))
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_filter_cutoff', { trackId: id, cutoffHz: clamped }, `Set "${name}" filter cutoff to ${Math.round(clamped)} Hz`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackFilterResonance: async (id, resonance) => {
@@ -594,7 +625,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const clamped = Math.max(0, Math.min(1, resonance))
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_filter_resonance', { trackId: id, resonance: clamped }, `Set "${name}" filter Q to ${clamped.toFixed(2)}`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   setTrackOutputBus: async (id, outputBus) => {
@@ -602,7 +633,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const name = tracks.find(t => t.id === id)?.name ?? 'track'
     const targetName = outputBus ? (tracks.find(t => t.id === outputBus)?.name ?? 'Master') : 'Master'
     await mut('set_track_output_bus', { trackId: id, outputBus }, `Route "${name}" to ${targetName}`)
-    await get().fetchTracks()
+    await get().refreshTrack(id)
   },
 
   trackHeights: {},

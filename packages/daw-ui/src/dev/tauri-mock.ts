@@ -132,6 +132,8 @@ const mock: TauriInternals = {
       // mock in browser/dev mode since 2026-07-07): every command the
       // splash-to-idle sequence awaits must resolve with the right SHAPE
       // or the app never leaves the splash and all UI specs fail.
+      case 'get_track_with_clips':
+        return null
       case 'get_tracks':
       case 'get_tracks_with_clips':
       case 'find_missing_plugins':
