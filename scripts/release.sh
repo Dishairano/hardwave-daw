@@ -62,7 +62,10 @@ esac
 #
 # HW_ALLOW_DIRTY=1 skips the check for the rare case where that is wanted.
 if [ "${HW_ALLOW_DIRTY:-0}" != "1" ]; then
-  DIRTY=$(git status --porcelain --untracked-files=no)
+  # RELEASE_CHANGELOG.md is this script's own working file, written from the
+  # commit log and committed as part of the release, so its state is never
+  # user work in progress.
+  DIRTY=$(git status --porcelain --untracked-files=no | grep -v 'RELEASE_CHANGELOG.md' || true)
   if [ -n "$DIRTY" ]; then
     echo "release.sh: the working tree has uncommitted changes." >&2
     echo "" >&2
@@ -365,7 +368,13 @@ if [ "${HW_PREVIEW_CHANGELOG:-0}" = "1" ]; then
   echo "===== changelog preview ($LAST_TAG..HEAD) ====="
   cat "$CHANGELOG_FILE"
   echo "===== end preview ====="
-  rm -f "$CHANGELOG_FILE"
+  # Put the file back the way the last release left it. A plain `rm` deleted a
+  # tracked file, so every preview run left the tree dirty with a deletion.
+  if git ls-files --error-unmatch "$CHANGELOG_FILE" >/dev/null 2>&1; then
+    git checkout -- "$CHANGELOG_FILE"
+  else
+    rm -f "$CHANGELOG_FILE"
+  fi
   exit 0
 fi
 
