@@ -285,7 +285,14 @@ interface TrackState {
     sourceClipId: string,
     targetTrackId: string,
     positionTicks: number,
+    /// Label for the undo list. Pass null inside a gesture that places many
+    /// clips (the paint tool), which pushes one label of its own at the end.
+    label?: string | null,
   ) => Promise<string>
+  /// Treat every mutation until `endHistoryGroup` as one undo step, so a
+  /// gesture is one undo rather than one per clip it touched.
+  beginHistoryGroup: () => Promise<void>
+  endHistoryGroup: (label?: string | null) => Promise<void>
   splitClip: (trackId: string, clipId: string, atTicks: number) => Promise<string>
   /** Silence one clip without deleting it (the playlist's mute tool). */
   setClipMuted: (trackId: string, clipId: string, muted: boolean) => Promise<void>
@@ -393,6 +400,17 @@ export const useTrackStore = create<TrackState>((set, get) => ({
       console.warn('get_track_with_clips unavailable; refreshing every track', e)
       await get().fetchTracks()
     }
+  },
+
+  beginHistoryGroup: async () => {
+    // A failure here only costs finer-grained undo, so it is not worth a
+    // toast: the mutations still happen.
+    await invoke('begin_history_group').catch(() => {})
+  },
+
+  endHistoryGroup: async (label) => {
+    await invoke('end_history_group').catch(() => {})
+    if (label) useHistoryStore.getState().push(label)
   },
 
   selectTrack: (id) => set({ selectedTrackId: id }),
@@ -824,11 +842,17 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     return newId
   },
 
-  placeClipCopy: async (sourceTrackId, sourceClipId, targetTrackId, positionTicks) => {
+  placeClipCopy: async (
+    sourceTrackId,
+    sourceClipId,
+    targetTrackId,
+    positionTicks,
+    label = 'Place clip',
+  ) => {
     const newId = await mut<string>(
       'duplicate_clip',
       { trackId: sourceTrackId, clipId: sourceClipId },
-      'Place clip',
+      label ?? undefined,
     )
     if (sourceTrackId === targetTrackId) {
       await invoke('move_clip', { trackId: targetTrackId, clipId: newId, newPositionTicks: positionTicks })
@@ -878,16 +902,22 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     // Normalize: earliest clip aligns to positionTicks; others preserve relative offset.
     const earliest = clipboard.reduce((m, c) => Math.min(m, c.position_ticks), Infinity)
     const pasteLabel = clipboard.length === 1 ? 'Paste clip' : `Paste ${clipboard.length} clips`
-    for (let i = 0; i < clipboard.length; i++) {
-      const c = clipboard[i]
-      const offset = c.position_ticks - earliest
-      const newPos = positionTicks + offset
-      try {
-        const newId = await mut<string>('duplicate_clip', { trackId, clipId: c.id }, i === 0 ? pasteLabel : undefined)
-        await mut('move_clip', { trackId, clipId: newId, newPositionTicks: newPos })
-      } catch (e) {
-        console.warn('paste failed for clip', c.id, e)
+    // One paste is one undo. Each clip goes in through its own duplicate and
+    // move, so pasting eight clips used to need eight undos to take back.
+    await get().beginHistoryGroup()
+    try {
+      for (const c of clipboard) {
+        const offset = c.position_ticks - earliest
+        const newPos = positionTicks + offset
+        try {
+          const newId = await mut<string>('duplicate_clip', { trackId, clipId: c.id })
+          await mut('move_clip', { trackId, clipId: newId, newPositionTicks: newPos })
+        } catch (e) {
+          console.warn('paste failed for clip', c.id, e)
+        }
       }
+    } finally {
+      await get().endHistoryGroup(pasteLabel)
     }
     await get().fetchTracks()
   },

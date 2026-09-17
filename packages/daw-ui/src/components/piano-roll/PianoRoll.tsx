@@ -626,6 +626,8 @@ export function PianoRoll() {
         : CHORD_TYPES[chordType].intervals
       const intervals = applyInversion(baseIntervals.length > 0 ? baseIntervals : [0], chordInversion)
       const newIndices: number[] = []
+      // A chord is one action, however many notes it lays down.
+      await useTrackStore.getState().beginHistoryGroup()
       try {
         for (const iv of intervals) {
           const p = rootPitch + iv
@@ -644,6 +646,9 @@ export function PianoRoll() {
         await refreshNotes()
         setSelectedNotes(new Set(newIndices))
       } catch (err) { console.warn('chord stamp failed', err) }
+      finally {
+        await useTrackStore.getState().endHistoryGroup('Stamp chord')
+      }
       return
     }
 
@@ -1299,6 +1304,9 @@ export function PianoRoll() {
     const clip = clipboardRef.current
     if (clip.length === 0) return
     const newIndices: number[] = []
+    // One paste is one undo: each note is added through its own command, so
+    // pasting a chord used to take as many undos as it had notes.
+    await useTrackStore.getState().beginHistoryGroup()
     try {
       for (const n of clip) {
         const newIndex = await invoke<number>('add_midi_note', {
@@ -1315,6 +1323,11 @@ export function PianoRoll() {
       await refreshNotes()
       setSelectedNotes(new Set(newIndices))
     } catch (err) { console.warn('paste-in-place failed', err) }
+    finally {
+      await useTrackStore.getState().endHistoryGroup(
+        clip.length === 1 ? 'Paste note' : `Paste ${clip.length} notes`,
+      )
+    }
   }, [activeTrackId, activeClipId, refreshNotes])
 
   const insertNotesFromClipboard = useCallback(async (originTick: number) => {
@@ -1323,6 +1336,7 @@ export function PianoRoll() {
     if (clip.length === 0) return
     const earliest = clip.reduce((m, n) => Math.min(m, n.startTick), Infinity)
     const newIndices: number[] = []
+    await useTrackStore.getState().beginHistoryGroup()
     try {
       for (const n of clip) {
         const offset = n.startTick - earliest
@@ -1340,6 +1354,11 @@ export function PianoRoll() {
       await refreshNotes()
       setSelectedNotes(new Set(newIndices))
     } catch (err) { console.warn('paste failed', err) }
+    finally {
+      await useTrackStore.getState().endHistoryGroup(
+        clip.length === 1 ? 'Paste note' : `Paste ${clip.length} notes`,
+      )
+    }
   }, [activeTrackId, activeClipId, refreshNotes])
 
   const handleKeyDown = useCallback(async (e: KeyboardEvent) => {

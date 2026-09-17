@@ -227,6 +227,10 @@ pub struct DawEngine {
 
     /// Undo/redo history. Take a snapshot BEFORE mutating the project.
     pub history: Arc<Mutex<History>>,
+    /// True while a gesture is being treated as one undo step.
+    history_group_open: Arc<std::sync::atomic::AtomicBool>,
+    /// True once the open group has taken its snapshot.
+    history_group_taken: Arc<std::sync::atomic::AtomicBool>,
 
     /// Circular buffer of recent master-bus output samples. Used by the UI
     /// for oscilloscope / spectrum / correlation visualizations.
@@ -289,6 +293,8 @@ impl DawEngine {
             input_consumer: Arc::new(Mutex::new(None)),
             capture: Arc::new(CaptureTap::default()),
             history: Arc::new(Mutex::new(History::new())),
+            history_group_open: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            history_group_taken: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             master_tap: master_tap::new_shared(),
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             project_dir: Arc::new(Mutex::new(None)),
@@ -355,8 +361,41 @@ impl DawEngine {
     /// Snapshot the project before a mutation. Call this as the first line of any
     /// command that changes `Project`. Redo stack is cleared on new edits.
     pub fn snapshot_before_mutation(&self) {
+        // Inside an open group only the first mutation is snapshotted, so one
+        // gesture is one undo. Painting twenty clips in a drag used to leave
+        // twenty snapshots behind, and undoing the drag meant pressing undo
+        // twenty times.
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.history_group_open.load(Relaxed) && self.history_group_taken.swap(true, Relaxed) {
+            return;
+        }
         let snap = self.project.lock().clone();
         self.history.lock().push(snap);
+    }
+
+    /// Start treating the mutations that follow as one undo step.
+    ///
+    /// Balanced by `end_history_group`. Re-entrant calls are ignored rather
+    /// than nested: a gesture is a gesture.
+    pub fn begin_history_group(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.history_group_open.swap(true, Relaxed) {
+            return;
+        }
+        // Nothing snapshotted for this group yet.
+        self.history_group_taken.store(false, Relaxed);
+    }
+
+    /// End the group, so the next mutation snapshots again.
+    pub fn end_history_group(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.history_group_open.store(false, Relaxed);
+        self.history_group_taken.store(false, Relaxed);
+    }
+
+    pub fn history_group_open(&self) -> bool {
+        self.history_group_open
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Roll the project back to the most recent snapshot. Returns true when a snapshot
@@ -3192,6 +3231,72 @@ mod offline_insert_tests {
             peak_without > 1e-3,
             "without the factory the source should still sound, got peak={peak_without}"
         );
+    }
+}
+
+#[cfg(test)]
+mod history_group_tests {
+    use super::*;
+
+    /// One drag of the paint tool places many clips, each through its own
+    /// command. Without grouping that is one undo step per clip, so undoing
+    /// the drag means pressing undo as many times as it placed.
+    #[test]
+    fn a_group_is_one_undo_step() {
+        let engine = DawEngine::new();
+        assert_eq!(engine.history_sizes().0, 0);
+
+        engine.begin_history_group();
+        for _ in 0..20 {
+            engine.snapshot_before_mutation();
+        }
+        engine.end_history_group();
+
+        assert_eq!(engine.history_sizes().0, 1, "twenty clips, one undo step");
+    }
+
+    #[test]
+    fn mutations_outside_a_group_keep_their_own_steps() {
+        let engine = DawEngine::new();
+        engine.snapshot_before_mutation();
+        engine.snapshot_before_mutation();
+        assert_eq!(engine.history_sizes().0, 2);
+    }
+
+    #[test]
+    fn a_second_group_is_its_own_step() {
+        let engine = DawEngine::new();
+        for _ in 0..2 {
+            engine.begin_history_group();
+            engine.snapshot_before_mutation();
+            engine.snapshot_before_mutation();
+            engine.end_history_group();
+        }
+        assert_eq!(engine.history_sizes().0, 2, "two drags, two undo steps");
+    }
+
+    #[test]
+    fn a_repeated_begin_does_not_open_a_second_group() {
+        let engine = DawEngine::new();
+        engine.begin_history_group();
+        engine.snapshot_before_mutation();
+        // A stray second begin would otherwise reset the group and let the
+        // next mutation snapshot again.
+        engine.begin_history_group();
+        engine.snapshot_before_mutation();
+        engine.end_history_group();
+        assert_eq!(engine.history_sizes().0, 1);
+        assert!(!engine.history_group_open());
+    }
+
+    #[test]
+    fn the_group_ends_even_if_nothing_was_placed() {
+        let engine = DawEngine::new();
+        engine.begin_history_group();
+        engine.end_history_group();
+        assert_eq!(engine.history_sizes().0, 0, "an empty drag is not history");
+        engine.snapshot_before_mutation();
+        assert_eq!(engine.history_sizes().0, 1);
     }
 }
 

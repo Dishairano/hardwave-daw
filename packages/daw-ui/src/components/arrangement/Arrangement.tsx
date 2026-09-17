@@ -846,7 +846,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     drag.paintChain = (drag.paintChain ?? Promise.resolve())
       .then(() => useTrackStore
         .getState()
-        .placeClipCopy(selection.trackId, selection.clipId, trackId, tick)
+        // No per-clip undo entry: the gesture pushes one when it ends.
+        .placeClipCopy(selection.trackId, selection.clipId, trackId, tick, null)
         .then(() => undefined))
       .catch(err => console.error('paint placeClipCopy failed', err))
   }, [])
@@ -976,6 +977,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const targetTrack = trackRowAt(mouseY)
       if (!targetTrack) return
       const tick = paintSlotTick(mouseX, scrollOffset, pixelsPerTick, step)
+      // One drag is one undo, however many clips it lays down.
+      useTrackStore.getState().beginHistoryGroup()
       dragRef.current = {
         mode: 'paint', clipId: '', trackId: targetTrack.id,
         startMouseX: mouseX, startMouseY: mouseY,
@@ -1386,10 +1389,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       return
     }
     // Paint released: every slot was already placed on the way, so there is
-    // nothing to commit. The gesture ends here so the next press starts with
-    // an empty set of painted slots.
+    // nothing to commit. The group closes once the placements it started have
+    // landed, and only then does the drag become one undo entry.
     if (drag && drag.mode === 'paint') {
+      const painted = drag.paintedSlots?.size ?? 0
+      const chain = drag.paintChain ?? Promise.resolve()
       dragRef.current = null
+      chain.finally(() => {
+        useTrackStore.getState().endHistoryGroup(
+          painted > 0 ? `Paint ${painted} clip${painted === 1 ? '' : 's'}` : null,
+        )
+      })
       return
     }
     // Loop-range drag commit: persist the final range to the engine and

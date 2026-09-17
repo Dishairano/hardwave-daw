@@ -387,6 +387,8 @@ pub fn run() {
             commands::history::undo,
             commands::history::redo,
             commands::history::history_sizes,
+            commands::history::begin_history_group,
+            commands::history::end_history_group,
             // Export
             commands::export::export_project_wav,
             commands::export::cancel_export,

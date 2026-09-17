@@ -26,3 +26,19 @@ pub fn redo(state: State<AppState>) -> bool {
 pub fn history_sizes(state: State<AppState>) -> (usize, usize) {
     state.engine.lock().history_sizes()
 }
+
+/// Treat the mutations that follow as one undo step, until
+/// `end_history_group`.
+///
+/// One gesture should be one undo. Painting clips across the playlist places
+/// each clip through its own command, so without this a single drag left as
+/// many undo steps as it placed clips.
+#[tauri::command]
+pub fn begin_history_group(state: State<AppState>) {
+    state.engine.lock().begin_history_group();
+}
+
+#[tauri::command]
+pub fn end_history_group(state: State<AppState>) {
+    state.engine.lock().end_history_group();
+}
