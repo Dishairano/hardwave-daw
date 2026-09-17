@@ -58,6 +58,9 @@ try {
     const query = `?panel=${panel}`
       + (process.env.SHOT_ZOOM ? `&zoom=${process.env.SHOT_ZOOM}` : '')
       + (process.env.SHOT_TIMESIG ? `&timesig=${process.env.SHOT_TIMESIG}` : '')
+      // SHOT_TIMESIG_AT=16:7/8 changes the signature at beat 16, so a
+      // mid-song change is photographed, not described.
+      + (process.env.SHOT_TIMESIG_AT ? `&timesigat=${process.env.SHOT_TIMESIG_AT}` : '')
     await page.goto(`${BASE}${query}`, { waitUntil: 'networkidle' })
     await sleep(2200) // let async loads + canvas redraw settle
     await page.screenshot({ path: out, scale: 'device' })

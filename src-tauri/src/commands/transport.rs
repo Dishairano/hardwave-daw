@@ -141,10 +141,33 @@ fn finalize_recording_session(
 
 #[tauri::command]
 pub fn set_position(state: State<AppState>, position: u64) {
+    use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
     engine.transport.set_position(position);
     // Also queue for the audio thread so double-stop logic stays consistent.
     engine.send_command(TransportCommand::SetPosition(position));
+
+    // Tempo and signature at the new position. While playing the audio thread
+    // follows the map itself, but a seek while stopped never reaches it, so
+    // the transport read-out and the click kept the values from wherever the
+    // playhead used to be.
+    let (bpm, num, den) = {
+        let project = engine.project.lock();
+        if project.tempo_map.entries.len() < 2 {
+            return;
+        }
+        let tick = project
+            .tempo_map
+            .samples_to_tick(position, engine.current_sample_rate() as f64);
+        let (num, den) = project.tempo_map.time_sig_at(tick);
+        (project.tempo_map.bpm_at(tick), num, den)
+    };
+    engine.transport.bpm.store(bpm, Ordering::Relaxed);
+    engine.transport.time_sig.store(
+        hardwave_engine::transport::pack_time_sig(num, den),
+        Ordering::Relaxed,
+    );
+    engine.send_command(TransportCommand::SetTimeSignature(num, den));
 }
 
 #[tauri::command]
@@ -251,15 +274,43 @@ pub fn set_master_volume(state: State<AppState>, db: f64) {
     engine.send_command(TransportCommand::SetMasterVolume(db));
 }
 
+/// Set the project's time signature.
+///
+/// This used to write the transport atomics only, so the signature was lost
+/// on save: reopening the project put it back to whatever the tempo map said,
+/// which was 4/4 for every project ever made in this DAW. It now writes the
+/// tempo map as well.
+///
+/// Entries later in the song that carry the old signature follow the change,
+/// because they inherited it rather than being set deliberately. An entry
+/// with a different signature is a deliberate mid-song change and is left
+/// alone.
 #[tauri::command]
-pub fn set_time_signature(state: State<AppState>, numerator: u32, denominator: u32) {
+pub fn set_time_signature(
+    state: State<AppState>,
+    numerator: u32,
+    denominator: u32,
+) -> Result<(), String> {
     use std::sync::atomic::Ordering;
+    let (num, den) = crate::commands::project::validate_time_signature(numerator, denominator)?;
     let engine = state.engine.lock();
+    engine.snapshot_before_mutation();
+    {
+        let mut project = engine.project.lock();
+        let previous = project.tempo_map.time_sig_at(0);
+        for entry in project.tempo_map.entries.iter_mut() {
+            if (entry.time_sig_num, entry.time_sig_den) == previous {
+                entry.time_sig_num = num;
+                entry.time_sig_den = den;
+            }
+        }
+    }
     engine.transport.time_sig.store(
-        hardwave_engine::transport::pack_time_sig(numerator, denominator),
+        hardwave_engine::transport::pack_time_sig(num, den),
         Ordering::Relaxed,
     );
-    engine.send_command(TransportCommand::SetTimeSignature(numerator, denominator));
+    engine.send_command(TransportCommand::SetTimeSignature(num, den));
+    Ok(())
 }
 
 #[tauri::command]

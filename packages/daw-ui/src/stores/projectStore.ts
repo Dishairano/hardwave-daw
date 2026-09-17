@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { invokeOrToast } from '../api/invoke'
 import { usePatternStore } from './patternStore'
+import { useTempoMapStore } from './tempoMapStore'
 import { hydrateTimelineState, resetTimelineState, serializeTimelineState } from './timelineState'
 
 interface ProjectInfo {
@@ -56,6 +57,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await invoke('set_channel_rack_state', { payload: null })
     // A new song starts with no markers and no punch range.
     resetTimelineState()
+    await useTempoMapStore.getState().refresh()
     set({ filePath: null, projectName: 'Untitled', dirty: false })
   },
 
@@ -85,6 +87,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const rackState = await invoke<string | null>('get_channel_rack_state')
     usePatternStore.getState().hydrate(rackState)
     hydrateTimelineState(await invoke<string | null>('get_timeline_state'))
+    // The playlist's bar grid comes from the loaded project's tempo map, so a
+    // song in 7/8 draws in 7/8 from the moment it opens.
+    await useTempoMapStore.getState().refresh()
     const name = path.split(/[\\/]/).pop()?.replace('.hwp', '') || 'Untitled'
     set({ filePath: path, projectName: name, dirty: false })
     get().pushRecent(path)

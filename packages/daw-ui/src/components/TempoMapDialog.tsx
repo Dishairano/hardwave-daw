@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
+import { useTempoMapStore } from '../stores/tempoMapStore'
+import { barBeatAtTick, meterSegments } from '../utils/meter'
 
 export interface TempoEntryInfo {
   tick: number
@@ -13,10 +15,20 @@ export interface TempoEntryInfo {
 
 const PPQ = 960
 
-function tickToBar(tick: number, tsNum: number): string {
-  const beats = tick / PPQ
-  const bar = Math.floor(beats / tsNum) + 1
-  const beat = (beats % tsNum) + 1
+/**
+ * The signatures offered per entry.
+ *
+ * Kept to the ones a producer writes, with the denominators the backend
+ * accepts: a denominator has to be a note length, so 4/3 is not a signature.
+ */
+const TIME_SIGNATURES = [
+  '2/4', '3/4', '4/4', '5/4', '6/4', '7/4',
+  '3/8', '5/8', '6/8', '7/8', '9/8', '12/8',
+  '2/2', '3/2',
+]
+
+function formatBarBeat(segments: ReturnType<typeof meterSegments>, tick: number): string {
+  const { bar, beat } = barBeatAtTick(segments, tick)
   return `${bar}.${beat.toFixed(2)}`
 }
 
@@ -34,6 +46,8 @@ export function TempoMapDialog({ onClose }: Props) {
     try {
       const list = await invoke<TempoEntryInfo[]>('get_tempo_entries')
       setEntries(list)
+      // The playlist draws its bars from the same map, so it has to be told.
+      await useTempoMapStore.getState().refresh()
       setErr(null)
     } catch (e) {
       setErr(String(e))
@@ -79,6 +93,33 @@ export function TempoMapDialog({ onClose }: Props) {
     } catch (e) { setErr(String(e)) }
   }
 
+  /**
+   * Change the signature of one entry.
+   *
+   * The entry carried a signature from the start, and nothing could set it:
+   * the list showed 4/4 for every entry and a song could not change metre
+   * part-way through at all.
+   */
+  const handleTimeSig = async (index: number, value: string) => {
+    const [num, den] = value.split('/').map(Number)
+    try {
+      await invoke('set_tempo_entry_time_signature', {
+        index,
+        numerator: num,
+        denominator: den,
+      })
+      await reload()
+    } catch (e) { setErr(String(e)) }
+  }
+
+  // Bar numbers in this list are counted the same way the playlist counts
+  // them, across every signature change, so the two cannot disagree.
+  const segments = meterSegments(entries.map(e => ({
+    tick: e.tick,
+    timeSigNum: e.timeSigNum,
+    timeSigDen: e.timeSigDen,
+  })))
+
   const headerStyle: React.CSSProperties = {
     fontSize: 10, fontWeight: 600, color: hw.textFaint,
     textTransform: 'uppercase', letterSpacing: 0.6, padding: '4px 8px',
@@ -121,16 +162,17 @@ export function TempoMapDialog({ onClose }: Props) {
           border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
           background: hw.bgSurface, marginBottom: 14,
         }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 1fr 1fr 40px', ...headerStyle }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 1fr 1fr 1fr 40px', ...headerStyle }}>
             <span>#</span>
             <span>Position (beats)</span>
             <span>BPM</span>
+            <span>Time sig</span>
             <span>Ramp</span>
             <span></span>
           </div>
           {entries.map((e, i) => (
             <div key={i} data-testid={`tempo-entry-${i}`} style={{
-              display: 'grid', gridTemplateColumns: '40px 1fr 1fr 1fr 40px',
+              display: 'grid', gridTemplateColumns: '40px 1fr 1fr 1fr 1fr 40px',
               padding: '6px 8px', gap: 8, alignItems: 'center', fontSize: 12,
               borderBottom: i < entries.length - 1 ? `1px solid ${hw.border}` : undefined,
             }}>
@@ -142,7 +184,7 @@ export function TempoMapDialog({ onClose }: Props) {
                 value={(e.tick / PPQ).toString()}
                 disabled={i === 0}
                 onChange={(ev) => handleEdit(i, 'tick', ev.target.value)}
-                title={i === 0 ? 'Initial entry is always at position 0' : `Bar ${tickToBar(e.tick, e.timeSigNum)}`}
+                title={i === 0 ? 'Initial entry is always at position 0' : `Bar ${formatBarBeat(segments, e.tick)}`}
                 style={inputStyle(i === 0)}
               />
               <input
@@ -154,6 +196,17 @@ export function TempoMapDialog({ onClose }: Props) {
                 onChange={(ev) => handleEdit(i, 'bpm', ev.target.value)}
                 style={inputStyle(false)}
               />
+              <select
+                data-testid={`tempo-entry-timesig-${i}`}
+                value={`${e.timeSigNum}/${e.timeSigDen}`}
+                onChange={(ev) => handleTimeSig(i, ev.target.value)}
+                title="The signature from this entry until the next change"
+                style={{ ...inputStyle(false), cursor: 'pointer' }}
+              >
+                {TIME_SIGNATURES.map(sig => (
+                  <option key={sig} value={sig}>{sig}</option>
+                ))}
+              </select>
               <select
                 value={e.ramp}
                 onChange={(ev) => handleEdit(i, 'ramp', ev.target.value)}

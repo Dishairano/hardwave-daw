@@ -450,8 +450,11 @@ fn async_stretch_bake_lands_and_does_not_stampede() {
     }
 
     // The bake is off-thread, so poll for it rather than assuming timing.
+    // The budget is generous (30s) because this test shares a machine with
+    // the rest of the suite: a five-second budget failed on a loaded box and
+    // passed on its own, which is a red gate that says nothing about the code.
     let mut landed = false;
-    for _ in 0..100 {
+    for _ in 0..600 {
         if engine.audio_pool.stats().entry_count >= 2 {
             landed = true;
             break;

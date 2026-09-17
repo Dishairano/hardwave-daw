@@ -13,6 +13,8 @@ import { useLogStore } from '../../dev/logStore'
 import { useMultiTouchGestures } from '../../hooks/useMultiTouchGestures'
 import { hw } from '../../theme'
 import { paintSlotOccupied, paintSlotTick } from './paint'
+import { useTempoMapStore } from '../../stores/tempoMapStore'
+import { gridLines } from '../../utils/meter'
 
 const PPQ = 960
 const PIXELS_PER_SECOND_BASE = 100
@@ -150,13 +152,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const [renamingMarker, setRenamingMarker] = useState<{ id: string; draft: string } | null>(null)
   const {
     positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
-    timeSigNumerator,
     setLoop, toggleLoop,
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
     clipColorOverrides, editCursorTicks, setEditCursor, setClipColor,
     punchEnabled, punchInTicks, punchOutTicks, setPunchIn, setPunchOut, clearPunch, setPunchRangeFromLoop,
   } = useTransportStore()
   const { markers, addMarker, addTempoMarker, addTimeSigMarker, removeMarker, updateMarker, jumpToNext, jumpToPrev } = useMarkerStore()
+  // Bar layout from the project's tempo map, so a signature change part-way
+  // through the song moves the bar lines and the bar numbers with it.
+  const meterSegments = useTempoMapStore(s => s.segments)
+  const refreshTempoMap = useTempoMapStore(s => s.refresh)
   const clipToGroup = useClipGroupStore(s => s.clipToGroup)
   const groupColors = useClipGroupStore(s => s.groupColors)
   const groupClipsAction = useClipGroupStore(s => s.groupClips)
@@ -169,10 +174,6 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const PIXELS_PER_SECOND = PIXELS_PER_SECOND_BASE * horizontalZoom
   const beatsPerSecond = bpm / 60
   const pixelsPerBeat = PIXELS_PER_SECOND / beatsPerSecond
-  // The grid follows the project's time signature. It used to be hardcoded to
-  // four, so a song in 3/4 or 7/8 was drawn and counted in 4/4: the bar lines
-  // disagreed with the bar numbers, the metronome and the music.
-  const beatsPerBar = timeSigNumerator > 0 ? timeSigNumerator : 4
   const pixelsPerTick = pixelsPerBeat / PPQ
   const snapTicks = snapToTicks(snapValue, snapEnabled)
   const applySnap = (ticks: number): number => snapTicks > 0 ? Math.round(ticks / snapTicks) * snapTicks : ticks
@@ -202,6 +203,12 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       setVerticalScroll((v) => Math.max(0, Math.min(maxScroll, v - dy)))
     },
   })
+
+  // The grid cannot be drawn before the tempo map is known, and the map only
+  // changes when the project or the tempo dialog changes it, so one read at
+  // mount is enough. A signature change made later refreshes the store from
+  // wherever it was made.
+  useEffect(() => { refreshTempoMap() }, [refreshTempoMap])
 
   // Load waveforms. Multi-zoom tiering: cache by (sourceId, tier) so zooming in refetches
   // a higher-resolution peak set rather than stretching the existing buckets.
@@ -309,17 +316,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.stroke()
     }
 
-    // Beat grid — HQ pixel-snapped, mockup palette.
-    const pixelsPerBar = pixelsPerBeat * beatsPerBar
-    const startBeat = Math.floor(scrollOffset / pixelsPerBeat)
-    for (let i = startBeat; i < startBeat + Math.ceil(w / pixelsPerBeat) + 2; i++) {
-      const xRaw = i * pixelsPerBeat - scrollOffset
-      const x = Math.floor(xRaw) + 0.5
+    // Beat grid — HQ pixel-snapped, mockup palette. Walked from the tempo
+    // map's meter segments rather than one bar length, so bars of 3/4 and
+    // 7/8 in the same song are each drawn their own width.
+    const visibleFromTick = pixelsPerTick > 0 ? Math.max(0, scrollOffset / pixelsPerTick) : 0
+    const visibleToTick = pixelsPerTick > 0 ? (scrollOffset + w) / pixelsPerTick : 0
+    const lines = gridLines(meterSegments, visibleFromTick, visibleToTick)
+    for (const line of lines) {
+      const x = Math.floor(line.tick * pixelsPerTick - scrollOffset) + 0.5
       if (x < -1 || x > w + 1) continue
-
-      const isBar = i % beatsPerBar === 0
-
-      ctx.strokeStyle = isBar ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.04)'
+      ctx.strokeStyle = line.isBar ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.04)'
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(x, 0)
@@ -327,21 +333,24 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.stroke()
     }
 
-    // Bar number labels in the ruler band. One label every 4 bars so
-    // they don't crowd at low zoom; per-bar labels at high zoom.
-    if (RULER_HEIGHT > 0 && pixelsPerBar > 0) {
-      const labelEvery = pixelsPerBar >= 80 ? 1 : pixelsPerBar >= 40 ? 2 : 4
+    // Bar number labels in the ruler band. Taken from the same lines as the
+    // grid, so the numbers cannot drift from the bars they sit over, which is
+    // what happened when they were counted from one fixed bar width. Labels
+    // are dropped rather than drawn on top of each other when the zoom makes
+    // the bars narrow.
+    if (RULER_HEIGHT > 0) {
+      const MIN_LABEL_GAP_PX = 34
       ctx.fillStyle = 'rgba(180, 180, 200, 0.7)'
       ctx.font = '600 10px "JetBrains Mono", ui-monospace, Consolas, monospace'
       ctx.textBaseline = 'middle'
-      const startBar = Math.max(0, Math.floor(scrollOffset / pixelsPerBar))
-      const endBar = startBar + Math.ceil(w / pixelsPerBar) + 1
-      for (let bar = startBar; bar <= endBar; bar++) {
-        if (bar % labelEvery !== 0) continue
-        const xRaw = bar * pixelsPerBar - scrollOffset
-        const x = Math.floor(xRaw) + 4
+      let lastLabelX = -Infinity
+      for (const line of lines) {
+        if (!line.isBar) continue
+        const x = Math.floor(line.tick * pixelsPerTick - scrollOffset) + 4
         if (x < -20 || x > w) continue
-        ctx.fillText(String(bar + 1), x, RULER_HEIGHT / 2 + 1)
+        if (x - lastLabelX < MIN_LABEL_GAP_PX) continue
+        lastLabelX = x
+        ctx.fillText(String(line.bar), x, RULER_HEIGHT / 2 + 1)
       }
     }
 
@@ -618,7 +627,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, meterSegments])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,

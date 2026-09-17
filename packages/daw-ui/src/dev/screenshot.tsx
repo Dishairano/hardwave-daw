@@ -20,6 +20,8 @@ import { PianoRoll } from '../components/piano-roll/PianoRoll'
 import { MixerPanel } from '../components/mixer/MixerPanel'
 import { useTrackStore, type TrackWithClips, type ClipInfo } from '../stores/trackStore'
 import { useTransportStore } from '../stores/transportStore'
+import { useTempoMapStore } from '../stores/tempoMapStore'
+import { meterSegments } from '../utils/meter'
 import { SetupWizard } from '../components/SetupWizard'
 import '../components/SetupWizard.css'
 import { useSetupWizardStore } from '../stores/setupWizardStore'
@@ -125,15 +127,64 @@ useTrackStore.setState({
 const noop = () => {}
 const panel = new URLSearchParams(location.search).get('panel') || 'playlist'
 
-// ?timesig=3 seeds a 3/4 project, so a grid change can be seen rather than
-// taken on trust.
-const timesigParam = Number(new URLSearchParams(location.search).get('timesig'))
-if (Number.isFinite(timesigParam) && timesigParam > 0) {
+// ?timesig=3 or ?timesig=7/8 seeds the project's signature, and
+// ?timesigat=16:7/8 adds a change at beat 16, so a mid-song signature change
+// can be seen rather than taken on trust.
+const params = new URLSearchParams(location.search)
+
+function parseSignature(text: string | null): { num: number; den: number } | null {
+  if (!text) return null
+  const [rawNum, rawDen] = text.split('/')
+  const num = Number(rawNum)
+  const den = rawDen === undefined ? 4 : Number(rawDen)
+  if (!Number.isFinite(num) || num <= 0) return null
+  if (!Number.isFinite(den) || den <= 0) return null
+  return { num, den }
+}
+
+const first = parseSignature(params.get('timesig'))
+if (first) {
   // Both: the store for the first paint, and the global the mocked backend
   // reads, or the transport poll would put 4/4 back.
-  ;(window as unknown as { __HW_TIMESIG__?: number }).__HW_TIMESIG__ = timesigParam
-  useTransportStore.setState({ timeSigNumerator: timesigParam })
+  ;(window as unknown as { __HW_TIMESIG__?: number }).__HW_TIMESIG__ = first.num
+  useTransportStore.setState({ timeSigNumerator: first.num, timeSigDenominator: first.den })
 }
+
+// The playlist draws its bars from the tempo map, so the map is what has to
+// be seeded, not just the transport's read-out.
+const entries = [{
+  tick: 0,
+  bpm: 140,
+  timeSigNum: first?.num ?? 4,
+  timeSigDen: first?.den ?? 4,
+  ramp: 'instant',
+}]
+const changeParam = params.get('timesigat')
+if (changeParam) {
+  const [rawBeat, rawSig] = changeParam.split(':')
+  const beat = Number(rawBeat)
+  const changed = parseSignature(rawSig)
+  if (Number.isFinite(beat) && beat > 0 && changed) {
+    entries.push({
+      tick: Math.round(beat * 960),
+      bpm: 140,
+      timeSigNum: changed.num,
+      timeSigDen: changed.den,
+      ramp: 'instant',
+    })
+  }
+}
+// The playlist re-reads the map at mount, so the mocked backend has to give
+// the same answer as this seed.
+;(window as unknown as { __HW_TEMPO_ENTRIES__?: unknown[] }).__HW_TEMPO_ENTRIES__ = entries
+useTempoMapStore.setState({
+  entries,
+  segments: meterSegments(entries.map(e => ({
+    tick: e.tick,
+    timeSigNum: e.timeSigNum,
+    timeSigDen: e.timeSigDen,
+  }))),
+})
 
 function Full({ children }: { children: React.ReactNode }) {
   return <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>{children}</div>

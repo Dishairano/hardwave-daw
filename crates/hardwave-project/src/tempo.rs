@@ -124,24 +124,94 @@ impl TempoMap {
         bpm
     }
 
-    /// Convert tick to (bar, beat) tuple (1-indexed).
-    pub fn tick_to_bar_beat(&self, tick: u64) -> (u32, f64) {
+    /// The time signature in force at a tick.
+    ///
+    /// A signature holds until an entry changes it, so this is the last entry
+    /// at or before the tick. The engine reads it every block while playing,
+    /// which is what makes a signature change part-way through a song reach
+    /// the click, the plug-ins and the bar counter.
+    pub fn time_sig_at(&self, tick: u64) -> (u32, u32) {
         let entry = self
             .entries
             .iter()
             .rev()
             .find(|e| e.tick <= tick)
             .unwrap_or(&self.entries[0]);
-
-        let ticks_per_beat = PPQ;
-        let ticks_per_bar = ticks_per_beat * entry.time_sig_num as u64;
-
-        let relative_tick = tick - entry.tick;
-        let bar = (relative_tick / ticks_per_bar) as u32 + 1;
-        let beat = (relative_tick % ticks_per_bar) as f64 / ticks_per_beat as f64 + 1.0;
-
-        (bar, beat)
+        (entry.time_sig_num.max(1), entry.time_sig_den.max(1))
     }
+
+    /// Where the bars restart, as `(tick, ticks_per_bar)` pairs.
+    ///
+    /// Only an entry that changes the signature starts a new bar. A tempo
+    /// change does not: entries can sit anywhere, and treating every entry as
+    /// a bar line would move the grid whenever someone added a tempo point
+    /// part-way through a bar.
+    pub fn meter_segments(&self) -> Vec<(u64, u64)> {
+        let mut out: Vec<(u64, u64)> = Vec::new();
+        let mut current: Option<(u32, u32)> = None;
+        for entry in &self.entries {
+            let sig = (entry.time_sig_num.max(1), entry.time_sig_den.max(1));
+            if current == Some(sig) {
+                continue;
+            }
+            current = Some(sig);
+            out.push((entry.tick, ticks_per_bar(sig.0, sig.1)));
+        }
+        if out.is_empty() {
+            out.push((0, ticks_per_bar(4, 4)));
+        }
+        // A signature change before the first bar line would leave the song
+        // starting mid-bar, so the first segment always counts from zero.
+        out[0].0 = 0;
+        out
+    }
+
+    /// Convert tick to (bar, beat), both 1-indexed.
+    ///
+    /// Bars are counted from the start of the song across every signature
+    /// change. This used to count from the last tempo entry instead, so bar 1
+    /// appeared again at every entry and the ruler showed the same bar number
+    /// several times in one song.
+    pub fn tick_to_bar_beat(&self, tick: u64) -> (u32, f64) {
+        let segments = self.meter_segments();
+        let mut bar: u64 = 1;
+
+        for (i, &(start, per_bar)) in segments.iter().enumerate() {
+            let end = segments.get(i + 1).map(|&(t, _)| t);
+            let within_this_segment = match end {
+                Some(end) => tick < end,
+                None => true,
+            };
+            if within_this_segment {
+                let into = tick.saturating_sub(start);
+                bar += into / per_bar;
+                let per_beat = ticks_per_beat(self.time_sig_at(tick).1).max(1);
+                let beat = (into % per_bar) as f64 / per_beat as f64 + 1.0;
+                return (bar as u32, beat);
+            }
+            // A signature change starts a new bar, so a segment that does not
+            // divide evenly still consumes the bar it cut short.
+            let span = end.unwrap_or(start).saturating_sub(start);
+            bar += span.div_ceil(per_bar);
+        }
+
+        (bar as u32, 1.0)
+    }
+}
+
+/// Ticks in one beat for a signature's denominator: a quarter note for /4, an
+/// eighth for /8. The denominator was ignored before, so 7/8 was counted in
+/// quarter notes and every bar came out twice as long as it sounded.
+pub fn ticks_per_beat(den: u32) -> u64 {
+    match den {
+        0 => PPQ,
+        den => (PPQ * 4) / den as u64,
+    }
+}
+
+/// Ticks in one bar of a signature.
+pub fn ticks_per_bar(num: u32, den: u32) -> u64 {
+    (ticks_per_beat(den) * num.max(1) as u64).max(1)
 }
 
 fn ticks_to_secs(ticks: u64, bpm: f64) -> f64 {
@@ -260,6 +330,85 @@ mod tests {
         // case that would produce NaN if it were applied blindly.
         let secs = m.tick_to_samples(PPQ * 4, sr) as f64 / sr;
         assert!((secs - 4.0 * 60.0 / 140.0).abs() < 0.001, "got {secs}");
+    }
+
+    fn meter(tick: u64, num: u32, den: u32) -> TempoEntry {
+        TempoEntry {
+            tick,
+            bpm: 140.0,
+            time_sig_num: num,
+            time_sig_den: den,
+            ramp: TempoRamp::Instant,
+        }
+    }
+
+    #[test]
+    fn the_signature_at_a_tick_is_the_last_one_set_before_it() {
+        let m = map(vec![meter(0, 4, 4), meter(PPQ * 16, 3, 4)]);
+        assert_eq!(m.time_sig_at(0), (4, 4));
+        assert_eq!(m.time_sig_at(PPQ * 15), (4, 4));
+        assert_eq!(m.time_sig_at(PPQ * 16), (3, 4), "the change applies");
+        assert_eq!(m.time_sig_at(PPQ * 99), (3, 4), "and it holds");
+    }
+
+    /// Bars used to be counted from the last tempo entry, so bar 1 appeared
+    /// again at every entry and one song showed several bar 1s.
+    #[test]
+    fn bars_keep_counting_across_a_signature_change() {
+        // 4 bars of 4/4, then 3/4 from bar 5.
+        let m = map(vec![meter(0, 4, 4), meter(PPQ * 16, 3, 4)]);
+
+        assert_eq!(m.tick_to_bar_beat(0), (1, 1.0));
+        assert_eq!(m.tick_to_bar_beat(PPQ * 12).0, 4);
+        assert_eq!(m.tick_to_bar_beat(PPQ * 16).0, 5, "not back to bar 1");
+        // Bars are three beats long now, so bar 6 starts three beats later.
+        assert_eq!(m.tick_to_bar_beat(PPQ * 19).0, 6);
+        assert_eq!(m.tick_to_bar_beat(PPQ * 22).0, 7);
+    }
+
+    #[test]
+    fn a_tempo_change_does_not_move_the_bar_lines() {
+        // A tempo point part-way through bar 3, same signature.
+        let m = map(vec![
+            entry(0, 140.0, TempoRamp::Instant),
+            entry(PPQ * 9, 90.0, TempoRamp::Instant),
+        ]);
+        assert_eq!(m.tick_to_bar_beat(PPQ * 9), (3, 2.0), "still bar 3 beat 2");
+        assert_eq!(m.tick_to_bar_beat(PPQ * 12).0, 4);
+    }
+
+    #[test]
+    fn an_eighth_note_signature_is_counted_in_eighths() {
+        // 7/8 is seven eighths, so a bar is 3.5 quarter notes, not seven.
+        let m = map(vec![meter(0, 7, 8)]);
+        assert_eq!(ticks_per_bar(7, 8), PPQ * 7 / 2);
+        assert_eq!(m.tick_to_bar_beat(0), (1, 1.0));
+        assert_eq!(m.tick_to_bar_beat(PPQ / 2), (1, 2.0), "second eighth");
+        assert_eq!(m.tick_to_bar_beat(PPQ * 7 / 2).0, 2);
+    }
+
+    #[test]
+    fn a_signature_change_off_the_grid_still_starts_a_bar() {
+        // The change lands half way through bar 2 of 4/4. That bar is cut
+        // short and the new signature starts a bar of its own, which is what
+        // a DAW shows rather than carrying a fragment into the next bar.
+        let m = map(vec![meter(0, 4, 4), meter(PPQ * 6, 3, 4)]);
+        assert_eq!(m.tick_to_bar_beat(PPQ * 5).0, 2);
+        assert_eq!(m.tick_to_bar_beat(PPQ * 6), (3, 1.0));
+        assert_eq!(m.tick_to_bar_beat(PPQ * 9).0, 4);
+    }
+
+    #[test]
+    fn segments_only_start_where_the_signature_changes() {
+        let m = map(vec![
+            meter(0, 4, 4),
+            // Tempo-only entry: no new segment.
+            entry(PPQ * 8, 90.0, TempoRamp::Instant),
+            meter(PPQ * 16, 5, 4),
+            // Repeat of the same signature: no new segment either.
+            meter(PPQ * 24, 5, 4),
+        ]);
+        assert_eq!(m.meter_segments(), vec![(0, PPQ * 4), (PPQ * 16, PPQ * 5)]);
     }
 
     #[test]

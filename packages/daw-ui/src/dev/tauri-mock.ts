@@ -172,6 +172,14 @@ const mock: TauriInternals = {
         return [[], []]
       case 'diagnostics_info':
         return { logsDir: '/tmp/mock-logs', currentSessionLog: null }
+      case 'get_tempo_entries':
+        // The screenshot harness seeds this so a mid-song signature change
+        // can be photographed; without it the playlist refreshes the map at
+        // mount and paints 4/4 over whatever was seeded.
+        return (window as unknown as { __HW_TEMPO_ENTRIES__?: unknown[] }).__HW_TEMPO_ENTRIES__
+          ?? [{ tick: 0, bpm: 140, timeSigNum: 4, timeSigDen: 4, ramp: 'instant' }]
+      case 'set_tempo_entry_time_signature':
+        return null
       case 'preview_audio_file':
       case 'stop_audio_preview':
       case 'set_preview_volume':

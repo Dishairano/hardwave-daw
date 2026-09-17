@@ -2498,6 +2498,16 @@ impl AudioCallback for EngineCallback {
                     self.transport
                         .bpm
                         .store(cur_bpm, std::sync::atomic::Ordering::Relaxed);
+                    // The signature followed the same way. Only the tempo was
+                    // pushed here, so a signature change part-way through a
+                    // song was stored in the project and then ignored: the
+                    // click kept accenting the old bar length and plug-ins
+                    // kept being told the old meter.
+                    let (num, den) = project.tempo_map.time_sig_at(cur_tick);
+                    self.transport.time_sig.store(
+                        crate::transport::pack_time_sig(num, den),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
                 }
             }
         }

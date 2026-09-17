@@ -31,6 +31,7 @@ pub fn new_project(state: State<AppState>) {
     };
     engine.transport.bpm.store(new_bpm, Ordering::Relaxed);
     engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
+    apply_project_time_signature(&engine);
     engine.reset_history();
     engine.rebuild_graph();
     {
@@ -112,6 +113,9 @@ pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> 
     }
     engine.transport.bpm.store(new_bpm, Ordering::Relaxed);
     engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
+    // Without this a project written in 7/8 opened in 4/4 until playback
+    // started, because only the tempo was taken from the loaded map.
+    apply_project_time_signature(&engine);
     engine.reset_history();
     // Re-load every referenced audio source into the pool BEFORE the graph
     // rebuild — the pool only fills at import time, so without this every
@@ -209,6 +213,73 @@ fn ramp_from_str(s: &str) -> TempoRamp {
         "linear" => TempoRamp::Linear,
         _ => TempoRamp::Instant,
     }
+}
+
+/// Push the project's own time signature into the transport.
+///
+/// The transport's signature is a pair of atomics the audio thread reads, and
+/// loading a project only ever refreshed the tempo, so the signature stayed
+/// at whatever the last project used.
+fn apply_project_time_signature(engine: &hardwave_engine::DawEngine) {
+    use std::sync::atomic::Ordering;
+    let (num, den) = {
+        let project = engine.project.lock();
+        project.tempo_map.time_sig_at(0)
+    };
+    engine.transport.time_sig.store(
+        hardwave_engine::transport::pack_time_sig(num, den),
+        Ordering::Relaxed,
+    );
+    engine.send_command(hardwave_engine::TransportCommand::SetTimeSignature(
+        num, den,
+    ));
+}
+
+/// Change the time signature of one tempo-map entry.
+///
+/// This is how a signature change part-way through a song is made: the entry
+/// holds it, the engine reads it at the playhead, and the playlist draws its
+/// bars from it. Entries after this one that inherited the old signature are
+/// left alone, so the change applies from here to the next deliberate change.
+#[tauri::command]
+pub fn set_tempo_entry_time_signature(
+    state: State<AppState>,
+    index: usize,
+    numerator: u32,
+    denominator: u32,
+) -> Result<(), String> {
+    let (num, den) = validate_time_signature(numerator, denominator)?;
+    let engine = state.engine.lock();
+    engine.snapshot_before_mutation();
+    {
+        let mut project = engine.project.lock();
+        if index >= project.tempo_map.entries.len() {
+            return Err(format!("Index {index} out of range"));
+        }
+        let entry = &mut project.tempo_map.entries[index];
+        entry.time_sig_num = num;
+        entry.time_sig_den = den;
+    }
+    apply_project_time_signature(&engine);
+    engine.rebuild_graph();
+    Ok(())
+}
+
+/// A signature the rest of the app can count in.
+///
+/// The denominator has to be a power of two, because a beat is a note value:
+/// 4/5 has no note length to count. The numerator is capped where a bar stops
+/// being a bar anyone reads.
+pub fn validate_time_signature(numerator: u32, denominator: u32) -> Result<(u32, u32), String> {
+    if !(1..=64).contains(&numerator) {
+        return Err(format!("Numerator {numerator} is outside 1-64"));
+    }
+    if !matches!(denominator, 1 | 2 | 4 | 8 | 16 | 32) {
+        return Err(format!(
+            "Denominator {denominator} is not a note length (1, 2, 4, 8, 16 or 32)"
+        ));
+    }
+    Ok((numerator, denominator))
 }
 
 #[tauri::command]

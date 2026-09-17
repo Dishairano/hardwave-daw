@@ -263,6 +263,7 @@ pub fn run() {
             commands::project::add_tempo_entry,
             commands::project::remove_tempo_entry,
             commands::project::set_tempo_entry,
+            commands::project::set_tempo_entry_time_signature,
             // Autosave / crash recovery
             commands::autosave::autosave_save,
             commands::autosave::autosave_latest,

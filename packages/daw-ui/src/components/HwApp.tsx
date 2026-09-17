@@ -24,6 +24,8 @@ import { AutomationClipLane } from './AutomationClipLane'
 import { KickSynthEditor } from './KickSynthEditor'
 import type { AutomationTargetInfo } from '../stores/trackStore'
 import { useTransportStore } from '../stores/transportStore'
+import { useTempoMapStore } from '../stores/tempoMapStore'
+import { barBeatAtTick, PPQ as PPQ_TICKS } from '../utils/meter'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
@@ -75,18 +77,24 @@ interface HwAppProps {
   onOpenExport?: () => void
 }
 
-/** Format `positionSamples` as "BAR : BEAT : TICK" using transport store metadata. */
+/**
+ * Format `positionSamples` as "BAR : BEAT : TICK".
+ *
+ * Bars are counted through the project's meter segments, so a signature
+ * change part-way through the song moves this counter with it. It used to
+ * divide the whole song by one bar length, so after a change to 3/4 the
+ * counter and the playlist's bar numbers disagreed.
+ */
 function useTransportClock() {
   const bpm = useTransportStore(s => s.bpm)
   const sampleRate = useTransportStore(s => s.sampleRate)
   const positionSamples = useTransportStore(s => s.positionSamples)
-  const tsNum = useTransportStore(s => s.timeSigNumerator)
+  const segments = useTempoMapStore(s => s.segments)
 
   const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
-  const beatsPerBar = tsNum > 0 ? tsNum : 4
   const beats = bpm > 0 ? (seconds * bpm / 60) : 0
-  const bar = Math.floor(beats / beatsPerBar) + 1
-  const beat = Math.floor(beats % beatsPerBar) + 1
+  const { bar, beat: beatInBar } = barBeatAtTick(segments, beats * PPQ_TICKS)
+  const beat = Math.floor(beatInBar)
   const tick = Math.floor((beats % 1) * 96)
   const min = Math.floor(seconds / 60)
   const sec = seconds % 60

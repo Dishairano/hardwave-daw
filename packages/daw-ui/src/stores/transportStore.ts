@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useMetronomeStore } from './metronomeStore'
+import { useNotificationStore } from './notificationStore'
 
 export type SnapValue =
   | 'Off' | '1/1' | '1/2' | '1/4' | '1/8' | '1/16' | '1/32' | '1/64'
@@ -303,8 +304,21 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     set({ masterVolumeDb: db })
   },
   setTimeSignature: (num, den) => {
-    invoke('set_time_signature', { numerator: num, denominator: den })
+    const previousNum = get().timeSigNumerator
+    const previousDen = get().timeSigDenominator
     set({ timeSigNumerator: num, timeSigDenominator: den })
+    invoke('set_time_signature', { numerator: num, denominator: den }).then(() => {
+      // The playlist's bars come from the tempo map, which this writes.
+      import('./tempoMapStore').then(m => m.useTempoMapStore.getState().refresh())
+    }).catch(err => {
+      // The backend rejects a signature that cannot be counted, such as 4/3,
+      // where the denominator is not a note length. The toolbar must not keep
+      // showing a signature the project does not have.
+      set({ timeSigNumerator: previousNum, timeSigDenominator: previousDen })
+      useNotificationStore.getState().push('warning', 'That time signature cannot be used', {
+        detail: String(err),
+      })
+    })
   },
   setPatternMode: (enabled) => {
     invoke('set_pattern_mode', { enabled })
