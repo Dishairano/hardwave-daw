@@ -1,5 +1,26 @@
 # Hardwave DAW — Performance Overview
 
+> **Stale as of 2026-09-17.** Re-checked against the code at v0.220.1; most of
+> this has since been done or was wrong by the time it was written. Verified
+> now:
+>
+> - Release builds are already tuned: `[profile.release]` in the workspace
+>   `Cargo.toml` is `opt-level = 3`, `lto = "thin"`, `codegen-units = 1`.
+> - The fast mixer is on by default (`useNewMixer` defaults to true in
+>   `packages/daw-ui/src/stores/mixerSettingsStore.ts`).
+> - Empty inserts are skipped: `TrackNode::process` returns early for a track
+>   with no clips, no chain slots and no automation, so the 500 inserts a new
+>   project ships with cost nothing.
+> - MIDI plays instruments, reaches plug-ins, and plug-ins without their own
+>   editor get a generic parameter panel. All three shipped long ago.
+> - The audio thread no longer allocates per block. The last case, two scratch
+>   buffers in the KickSynth voicing, was fixed in v0.220.2.
+>
+> Still open from this list: per-track change notifications instead of a full
+> re-fetch on a fader release, and skipping the effect chain on a track that
+> is silent but not empty (which needs care for reverb and delay tails).
+
+
 **Date:** 2026-05-12
 **Audience:** producers, beta testers, anyone who wants to know how the DAW is doing today without reading code
 

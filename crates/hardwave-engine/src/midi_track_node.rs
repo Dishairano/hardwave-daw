@@ -112,6 +112,12 @@ pub struct MidiTrackNode {
     /// passed in at rebuild time so flipping one in the settings panel
     /// applies to the next block.
     prefs: crate::audio_prefs::AudioPrefs,
+    /// Scratch buffers for the kick voicing, owned so the audio thread does
+    /// not allocate. These were `Vec::new()` inside `process`, which is two
+    /// heap allocations per block, thousands a second, on every kick track:
+    /// the classic cause of clicks at small buffer sizes.
+    kick_l: Vec<f32>,
+    kick_r: Vec<f32>,
     rms_smooth: f32,
     /// Native instrument the track is voiced with. When set to
     /// [`Instrument::KickSynth`] the built-in sine voicing below is
@@ -179,6 +185,8 @@ impl MidiTrackNode {
             soloed: false,
             meter,
             prefs: crate::audio_prefs::AudioPrefs::new(),
+            kick_l: Vec::new(),
+            kick_r: Vec::new(),
             rms_smooth: 0.0,
             instrument: Instrument::BuiltinSine,
             waveform: Waveform::Sine,
@@ -476,12 +484,20 @@ impl AudioNode for MidiTrackNode {
         // takes the per-sample path inside the loop. We split the
         // L/R mixing per-sample so volume + pan still apply uniformly
         // regardless of which instrument is active.
-        let mut kick_l: Vec<f32> = Vec::new();
-        let mut kick_r: Vec<f32> = Vec::new();
         if matches!(self.instrument, Instrument::KickSynth) {
-            kick_l.resize(block_size, 0.0);
-            kick_r.resize(block_size, 0.0);
-            self.kick.render_into(&mut kick_l, &mut kick_r);
+            // Grows only when the device's buffer grows, not per block.
+            if self.kick_l.len() < block_size {
+                self.kick_l.resize(block_size, 0.0);
+                self.kick_r.resize(block_size, 0.0);
+            }
+            // The synth accumulates into its output, so last block's kick
+            // has to be cleared or it would be heard again.
+            self.kick_l[..block_size].fill(0.0);
+            self.kick_r[..block_size].fill(0.0);
+            self.kick.render_into(
+                &mut self.kick_l[..block_size],
+                &mut self.kick_r[..block_size],
+            );
         }
 
         // Skip notes that ended before the block starts. This fast-forwards
@@ -586,7 +602,7 @@ impl AudioNode for MidiTrackNode {
                 Instrument::KickSynth => {
                     // Pre-rendered block — pull the i-th sample. Kick
                     // is mono internally so L == R before pan.
-                    (kick_l[i], kick_r[i])
+                    (self.kick_l[i], self.kick_r[i])
                 }
             };
 
