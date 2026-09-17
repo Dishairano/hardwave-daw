@@ -459,6 +459,28 @@ impl DawEngine {
         self.capture.recording.store(true, Ordering::Relaxed);
     }
 
+    /// Set the punch window from timeline ticks.
+    ///
+    /// Ticks rather than samples at the boundary, because the playlist thinks
+    /// in ticks and the tempo map lives here: converting in the UI would drift
+    /// from the engine as soon as a project had a tempo change.
+    pub fn set_punch_ticks(&self, enabled: bool, in_ticks: u64, out_ticks: u64) {
+        let sr = self.current_sample_rate() as f64;
+        let (in_samples, out_samples) = {
+            let project = self.project.lock();
+            (
+                project.tempo_map.tick_to_samples(in_ticks, sr),
+                project.tempo_map.tick_to_samples(out_ticks, sr),
+            )
+        };
+        self.capture.set_punch(enabled, in_samples, out_samples);
+    }
+
+    /// The punch window in samples, as the audio thread sees it.
+    pub fn punch_samples(&self) -> (bool, u64, u64) {
+        self.capture.punch()
+    }
+
     /// Whether the last take ran out of reserved room, so the caller can say
     /// so instead of presenting a truncated file as complete.
     pub fn capture_overflowed(&self) -> bool {

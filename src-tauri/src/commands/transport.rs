@@ -332,6 +332,27 @@ pub fn toggle_loop(state: State<AppState>) {
     engine.transport.looping.store(!current, Ordering::Relaxed);
 }
 
+/// Set the punch range used while recording.
+///
+/// The playlist has let people set a punch range, drawn it in the ruler and
+/// saved it with the project since it was written, and nothing read it:
+/// recording captured the whole pass regardless. Positions are ticks, so the
+/// engine converts them through the project's tempo map.
+#[tauri::command]
+pub fn set_punch_range(state: State<AppState>, enabled: bool, in_ticks: u64, out_ticks: u64) {
+    state
+        .engine
+        .lock()
+        .set_punch_ticks(enabled, in_ticks, out_ticks);
+}
+
+/// The punch window the audio thread is using, in samples. Lets the UI place
+/// a punched take at the punch point rather than where record was pressed.
+#[tauri::command]
+pub fn get_punch_range(state: State<AppState>) -> (bool, u64, u64) {
+    state.engine.lock().punch_samples()
+}
+
 #[tauri::command]
 pub fn set_loop(state: State<AppState>, start: u64, end: u64) {
     use std::sync::atomic::Ordering;

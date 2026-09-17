@@ -51,6 +51,30 @@ case "$BUMP_TYPE" in
     ;;
 esac
 
+# The tree has to be clean before a release starts.
+#
+# This script commits with `git add -A`, so anything left in the working tree
+# is swallowed into the version-bump commit. On 2026-09-17 a half-finished
+# change was picked up that way: the bump commit did not compile, the PC gate
+# caught it and refused to tag, and the branch was left with a broken commit
+# to fix forward. A release is a snapshot of finished work, so it starts from
+# a clean tree, and unfinished work is committed or stashed first.
+#
+# HW_ALLOW_DIRTY=1 skips the check for the rare case where that is wanted.
+if [ "${HW_ALLOW_DIRTY:-0}" != "1" ]; then
+  DIRTY=$(git status --porcelain --untracked-files=no)
+  if [ -n "$DIRTY" ]; then
+    echo "release.sh: the working tree has uncommitted changes." >&2
+    echo "" >&2
+    printf '%s\n' "$DIRTY" >&2
+    echo "" >&2
+    echo "A release commits everything with 'git add -A', so these would ride" >&2
+    echo "along untested. Commit or stash them, then release." >&2
+    echo "Set HW_ALLOW_DIRTY=1 to override." >&2
+    exit 1
+  fi
+fi
+
 # Enforce changelog bullet discipline.
 #
 # Per memory feedback_daw_commit_bullets.md: hardwave-daw release commits

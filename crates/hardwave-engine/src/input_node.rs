@@ -211,7 +211,7 @@ impl AudioNode for InputNode {
         outputs: &mut [Vec<f32>],
         _midi_in: &[hardwave_midi::MidiEvent],
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
-        _ctx: &ProcessContext,
+        ctx: &ProcessContext,
     ) {
         let buf_size = outputs.first().map(|o| o.len()).unwrap_or(0);
         for ch in outputs.iter_mut() {
@@ -324,6 +324,83 @@ mod capture_tests {
         let t = tap(2);
         t.write_test_block(&[0.1; 24_000], &[0.1; 24_000], 24_000);
         assert!((t.seconds_captured(48_000) - 0.5).abs() < 1e-9);
+    }
+
+    /// The punch range was drawn in the playlist and saved with the project,
+    /// and recording ignored it: it captured the whole pass.
+    #[test]
+    fn with_punch_off_the_whole_block_is_captured() {
+        let t = tap(4);
+        t.write_test_block_at(&[0.5; 480], &[0.5; 480], 480, 96_000);
+        assert_eq!(t.take().len(), 960);
+    }
+
+    #[test]
+    fn a_block_before_punch_in_is_not_captured() {
+        let t = tap(4);
+        t.set_punch(true, 48_000, 96_000);
+        t.write_test_block_at(&[0.5; 480], &[0.5; 480], 480, 0);
+        assert!(t.take().is_empty(), "audio before the punch point got in");
+    }
+
+    #[test]
+    fn a_block_after_punch_out_is_not_captured() {
+        let t = tap(4);
+        t.set_punch(true, 48_000, 96_000);
+        t.write_test_block_at(&[0.5; 480], &[0.5; 480], 480, 96_000);
+        assert!(t.take().is_empty(), "audio after the punch point got in");
+    }
+
+    #[test]
+    fn a_block_straddling_punch_in_keeps_only_its_tail() {
+        let t = tap(4);
+        // Punch in 100 frames into this block.
+        t.set_punch(true, 48_100, 96_000);
+        let left: Vec<f32> = (0..480).map(|i| i as f32).collect();
+        t.write_test_block_at(&left, &left, 480, 48_000);
+        let out = t.take();
+        assert_eq!(
+            out.len(),
+            (480 - 100) * 2,
+            "kept the wrong number of frames"
+        );
+        assert_eq!(out[0], 100.0, "the first captured frame is the punch point");
+    }
+
+    #[test]
+    fn a_block_straddling_punch_out_keeps_only_its_head() {
+        let t = tap(4);
+        t.set_punch(true, 48_000, 48_200);
+        let left: Vec<f32> = (0..480).map(|i| i as f32).collect();
+        t.write_test_block_at(&left, &left, 480, 48_000);
+        let out = t.take();
+        assert_eq!(out.len(), 200 * 2);
+        assert_eq!(out[0], 0.0);
+        assert_eq!(out[out.len() - 2], 199.0, "cut exactly at the punch point");
+    }
+
+    #[test]
+    fn a_punch_window_inside_one_block_keeps_only_that_slice() {
+        let t = tap(4);
+        t.set_punch(true, 48_100, 48_150);
+        let left: Vec<f32> = (0..480).map(|i| i as f32).collect();
+        t.write_test_block_at(&left, &left, 480, 48_000);
+        let out = t.take();
+        assert_eq!(out.len(), 50 * 2);
+        assert_eq!(out[0], 100.0);
+    }
+
+    #[test]
+    fn a_reversed_punch_range_is_treated_as_empty_not_infinite() {
+        let t = tap(4);
+        // Out before in: clamped so the window is zero-length, not the whole
+        // song, which would silently record everything.
+        t.set_punch(true, 96_000, 48_000);
+        let (_, punch_in, punch_out) = t.punch();
+        assert_eq!(punch_in, 96_000);
+        assert_eq!(punch_out, 96_000);
+        t.write_test_block_at(&[0.5; 480], &[0.5; 480], 480, 96_000);
+        assert!(t.take().is_empty());
     }
 
     #[test]

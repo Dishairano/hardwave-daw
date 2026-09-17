@@ -211,6 +211,10 @@ const mock: TauriInternals = {
       case 'set_metronome_accent':
       case 'set_metronome_record_only':
         return null
+      case 'set_punch_range':
+        return null
+      case 'get_punch_range':
+        return [false, 0, 0]
       case 'begin_history_group':
       case 'end_history_group':
         return null

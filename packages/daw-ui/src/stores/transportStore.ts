@@ -170,6 +170,29 @@ const tapTimes: number[] = []
 // localStorage, which meant it stayed behind on one machine and leaked into
 // whatever project you opened next.
 
+/**
+ * Tell the engine the punch range.
+ *
+ * The range lived only in this store and in the drawing: recording captured
+ * the whole pass whatever the ruler showed. The engine converts ticks through
+ * the project's tempo map, so a song with tempo changes punches in the right
+ * place.
+ *
+ * A range that is not usable (no points, or out at or before in) is sent as
+ * disabled rather than as a window, so a half-set range cannot silently
+ * record nothing.
+ */
+export function pushPunchToEngine(): void {
+  const { punchEnabled, punchInTicks, punchOutTicks } = useTransportStore.getState()
+  const usable =
+    punchEnabled && punchInTicks != null && punchOutTicks != null && punchOutTicks > punchInTicks
+  invoke('set_punch_range', {
+    enabled: usable,
+    inTicks: usable ? punchInTicks : 0,
+    outTicks: usable ? punchOutTicks : 0,
+  }).catch(() => {})
+}
+
 /** What the backend says a finished take turned out to be. */
 interface RecordedTake {
   path: string | null
@@ -214,7 +237,14 @@ async function placeRecordedTake(take: RecordedTake | null, startSample: number)
 
   const state = useTransportStore.getState()
   const samplesPerTick = (state.sampleRate || 48000) * 60 / (Math.max(1, state.bpm) * PPQ_TICKS)
-  const positionTicks = samplesPerTick > 0 ? Math.max(0, Math.round(startSample / samplesPerTick)) : 0
+  // A punched take starts at the punch point, not where record was pressed:
+  // the engine only captured audio inside the window.
+  const punched =
+    state.punchEnabled && state.punchInTicks != null && state.punchOutTicks != null &&
+    state.punchOutTicks > state.punchInTicks
+  const positionTicks = punched
+    ? state.punchInTicks!
+    : samplesPerTick > 0 ? Math.max(0, Math.round(startSample / samplesPerTick)) : 0
   await useTrackStore.getState().importAudioFile(armedTrack.id, take.path, positionTicks)
 
   if (take.peak < 0.0005) {
@@ -422,15 +452,19 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   }),
   togglePunch: () => {
     set({ punchEnabled: !get().punchEnabled })
+    pushPunchToEngine()
   },
   setPunchIn: (ticks) => {
     set({ punchInTicks: ticks == null ? null : Math.max(0, Math.floor(ticks)) })
+    pushPunchToEngine()
   },
   setPunchOut: (ticks) => {
     set({ punchOutTicks: ticks == null ? null : Math.max(0, Math.floor(ticks)) })
+    pushPunchToEngine()
   },
   clearPunch: () => {
     set({ punchInTicks: null, punchOutTicks: null })
+    pushPunchToEngine()
   },
   setPunchRangeFromLoop: () => {
     const { loopStart, loopEnd, sampleRate, bpm } = get()
@@ -438,6 +472,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     const inTicks = Math.max(0, Math.round((loopStart / sampleRate) * (bpm / 60) * PPQ_TICKS))
     const outTicks = Math.max(inTicks + 1, Math.round((loopEnd / sampleRate) * (bpm / 60) * PPQ_TICKS))
     set({ punchInTicks: inTicks, punchOutTicks: outTicks, punchEnabled: true })
+    pushPunchToEngine()
   },
   tapTempo: () => {
     const now = Date.now()

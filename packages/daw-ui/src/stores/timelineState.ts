@@ -13,7 +13,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { useMarkerStore, type Marker } from './markerStore'
-import { useTransportStore } from './transportStore'
+import { useTransportStore, pushPunchToEngine } from './transportStore'
 
 const LEGACY_MARKERS_KEY = 'hardwave.daw.markers'
 const LEGACY_PUNCH_ENABLED = 'hardwave.daw.punchEnabled'
@@ -95,6 +95,10 @@ function applyTimelineState(state: TimelineState) {
   } finally {
     suppressPush = false
   }
+  // The engine keeps its own copy of the punch window, in samples, so a
+  // project that opens with a punch range set records inside it without the
+  // user touching the controls again.
+  pushPunchToEngine()
 }
 
 /** Reads the pre-project localStorage keys, then clears them. */

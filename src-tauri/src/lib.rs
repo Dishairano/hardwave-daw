@@ -135,6 +135,8 @@ pub fn run() {
             commands::transport::toggle_loop,
             commands::transport::toggle_recording,
             commands::transport::cancel_recording,
+            commands::transport::set_punch_range,
+            commands::transport::get_punch_range,
             commands::transport::set_loop,
             commands::transport::set_master_volume,
             commands::transport::set_time_signature,
