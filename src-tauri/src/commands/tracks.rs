@@ -365,6 +365,36 @@ pub fn get_tracks_with_clips(state: State<AppState>) -> Vec<TrackWithClipsPayloa
         .collect()
 }
 
+/// One track plus its clips.
+///
+/// A fader release, a mute, a solo or a pan used to refresh the whole store,
+/// which on a default project means serialising 501 tracks and all their
+/// clips for a change to one number. That payload is what a fader drag
+/// stutters on in a big session.
+#[tauri::command]
+pub fn get_track_with_clips(
+    state: State<AppState>,
+    track_id: String,
+) -> Option<TrackWithClipsPayload> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    let scanner = engine.plugin_scanner.lock();
+    let name_of = |id: &str| -> String {
+        scanner
+            .find(id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+    project
+        .tracks
+        .iter()
+        .find(|t| t.id == track_id)
+        .map(|t| TrackWithClipsPayload {
+            track: track_to_info(t, &name_of),
+            clips: crate::commands::audio::track_clips_to_info(t),
+        })
+}
+
 #[tauri::command]
 pub fn add_audio_track(state: State<AppState>, name: String) -> String {
     state.engine.lock().snapshot_before_mutation();

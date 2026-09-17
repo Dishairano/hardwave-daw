@@ -1,8 +1,14 @@
-### Bug fixes
-- fix: the click follows the song. It keeps time through a tempo change, a tempo ramp and a signature change instead of drifting away from the music
-- fix: in 7/8 and other eighth-note signatures the click counts eighths, and accents the first beat of the real bar
-- fix: a count-in in 7/8 is one bar long, not two bars' worth of quarter notes
-- fix: the piano roll draws the same bar lines as the playlist, including after a mid-song signature change
-- fix: a custom click sound now follows the same beats as the built-in click
-- fix: with a tempo ramp in the project, the playhead and the bar counter now show the position that is actually playing. They drifted further out the longer the ramp was
+### New features
+- feat: "Play truncated notes" works. Start playing in the middle of a long note and it plays from there, with its envelope already open, instead of re-attacking or staying silent
+- feat: the velocity curve you pick in the setup wizard now changes how hard your controller plays, per controller, and is remembered between sessions
+- feat: "Enable MIDI remote control" now really stops MIDI input when you switch it off, and resumes instantly when you switch it back on
 
+### Bug fixes
+- fix: kick tracks no longer make the audio engine ask the system for memory on every block, which is a cause of clicks at small buffer sizes
+- fix: a held note no longer keeps sounding after you press stop or move the playhead, and the setting that promised this now works
+- fix: both audio behaviour settings survive a restart. They were saved but never reached the engine, so they only applied in the session you set them
+- fix: the setup wizard now really checks whether MIDI works on your machine instead of always showing a green tick
+- fix: the curve drawn in the wizard now matches what the curve does to your playing
+
+### Improvements
+- improve: removed the controller-type dropdown and the "Custom" curve. Neither did anything, and a control that does nothing is worse than no control
