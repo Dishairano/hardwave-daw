@@ -147,15 +147,37 @@ pub fn schedule_block_clicks(
     }
     let end = start + num_frames as u64;
     let start_tick = map.samples_to_tick(start, sample_rate);
-    // Search from a beat earlier: the tick for `start` is rounded, so a beat
+    // Walk from a beat earlier: the tick for `start` is rounded, so a beat
     // sitting exactly on the block boundary can land just behind it, and
-    // starting the walk at `start_tick` would step over that beat entirely.
-    let per_beat = map.beat_grid_at(start_tick).ticks_per_beat.max(1);
-    let mut tick = start_tick.saturating_sub(per_beat);
+    // starting at `start_tick` would step over that beat entirely.
+    let mut grid = map.beat_grid_at(start_tick);
+    let mut next_change = map.next_meter_change_after(start_tick);
+    let per_beat = grid.ticks_per_beat.max(1);
+    let from_tick = start_tick.saturating_sub(per_beat);
+    let mut beat_index = from_tick.saturating_sub(grid.start_tick).div_ceil(per_beat);
 
+    // The grid is read once per block and only refreshed where the signature
+    // changes, rather than asking the map for every candidate beat: a busy
+    // tempo map would otherwise be walked dozens of times per block on the
+    // audio thread.
     let mut count = 0;
     while count < out.len() {
-        let (beat_tick, downbeat) = map.next_beat_at_or_after(tick);
+        let per_beat = grid.ticks_per_beat.max(1);
+        let mut beat_tick = grid.start_tick + beat_index * per_beat;
+        let mut downbeat = beat_index.is_multiple_of(grid.beats_per_bar as u64);
+
+        // A signature change starts a bar of its own, so it takes precedence
+        // over the beat the old grid would have put next.
+        if let Some(change) = next_change {
+            if change <= beat_tick {
+                grid = map.beat_grid_at(change);
+                next_change = map.next_meter_change_after(change);
+                beat_index = 0;
+                beat_tick = change;
+                downbeat = true;
+            }
+        }
+
         let sample = map.tick_to_samples(beat_tick, sample_rate);
         if sample >= end {
             break;
@@ -167,7 +189,7 @@ pub fn schedule_block_clicks(
             };
             count += 1;
         }
-        tick = beat_tick + 1;
+        beat_index += 1;
     }
     count
 }
