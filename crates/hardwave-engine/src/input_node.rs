@@ -44,7 +44,23 @@ pub struct CaptureTap {
     punch_enabled: AtomicBool,
     punch_in: AtomicU64,
     punch_out: AtomicU64,
+    /// Where each loop pass starts in the capture, as a sample index.
+    ///
+    /// Recording with the loop on used to produce one long take holding
+    /// every pass back to back, placed at the loop start: a four bar loop
+    /// recorded three times became a twelve bar clip running eight bars past
+    /// the loop. The tap now notes where the playhead jumped back, so the
+    /// take can be split into one clip per pass. Fixed size so the audio
+    /// thread never allocates; passes past the limit stay in the last one.
+    pass_starts: [AtomicUsize; MAX_LOOP_PASSES],
+    pass_count: AtomicUsize,
+    /// Playhead at the previous block, to notice the jump back at a loop.
+    last_block_start: AtomicU64,
 }
+
+/// Loop passes one take can be split into. Beyond this the extra passes are
+/// kept together in the last one rather than lost.
+pub const MAX_LOOP_PASSES: usize = 64;
 
 impl Default for CaptureTap {
     fn default() -> Self {
@@ -56,6 +72,9 @@ impl Default for CaptureTap {
             punch_enabled: AtomicBool::new(false),
             punch_in: AtomicU64::new(0),
             punch_out: AtomicU64::new(u64::MAX),
+            pass_starts: std::array::from_fn(|_| AtomicUsize::new(0)),
+            pass_count: AtomicUsize::new(0),
+            last_block_start: AtomicU64::new(0),
         }
     }
 }
@@ -73,6 +92,32 @@ impl CaptureTap {
         }
         self.written.store(0, Ordering::Relaxed);
         self.overflowed.store(false, Ordering::Relaxed);
+        self.pass_count.store(0, Ordering::Relaxed);
+        self.last_block_start.store(u64::MAX, Ordering::Relaxed);
+    }
+
+    /// The captured samples split at every loop jump, one entry per pass, in
+    /// the order they were played. One entry when the loop never wrapped.
+    pub fn take_passes(&self) -> Vec<Vec<f32>> {
+        let all = self.take();
+        let count = self
+            .pass_count
+            .swap(0, Ordering::Relaxed)
+            .min(MAX_LOOP_PASSES);
+        let mut bounds: Vec<usize> = (0..count)
+            .map(|i| self.pass_starts[i].load(Ordering::Relaxed).min(all.len()))
+            .collect();
+        bounds.retain(|&b| b > 0 && b < all.len());
+        bounds.dedup();
+        let mut passes = Vec::with_capacity(bounds.len() + 1);
+        let mut from = 0;
+        for b in bounds {
+            passes.push(all[from..b].to_vec());
+            from = b;
+        }
+        passes.push(all[from..].to_vec());
+        passes.retain(|p| !p.is_empty());
+        passes
     }
 
     /// Take the captured samples and reset for the next session.
@@ -156,6 +201,17 @@ impl CaptureTap {
     /// run with recording off, so in a live session this never contends and
     /// never drops a block.
     fn write_block(&self, left: &[f32], right: &[f32], frames: usize, block_start: u64) {
+        // A playhead that went backwards means the loop jumped: the audio
+        // written from here on is a new pass. Checked before the punch window
+        // so a punched loop still splits per pass.
+        let previous = self.last_block_start.swap(block_start, Ordering::Relaxed);
+        if previous != u64::MAX && block_start < previous {
+            let n = self.pass_count.load(Ordering::Relaxed);
+            if n < MAX_LOOP_PASSES {
+                self.pass_starts[n].store(self.written.load(Ordering::Relaxed), Ordering::Relaxed);
+                self.pass_count.store(n + 1, Ordering::Relaxed);
+            }
+        }
         let (offset, take) = self.punched_span(block_start, frames);
         if take == 0 {
             return;
@@ -401,6 +457,67 @@ mod capture_tests {
         assert_eq!(punch_out, 96_000);
         t.write_test_block_at(&[0.5; 480], &[0.5; 480], 480, 96_000);
         assert!(t.take().is_empty());
+    }
+
+    /// Recording with the loop on used to hand back one take holding every
+    /// pass back to back.
+    #[test]
+    fn a_looped_take_splits_into_one_pass_per_loop() {
+        let t = tap(4);
+        // Three passes over a loop from 48000 to 48960, in 480-frame blocks.
+        for pass in 0..3 {
+            t.write_test_block_at(&[pass as f32; 480], &[pass as f32; 480], 480, 48_000);
+            t.write_test_block_at(&[pass as f32; 480], &[pass as f32; 480], 480, 48_480);
+        }
+        let passes = t.take_passes();
+        assert_eq!(passes.len(), 3, "three passes, three takes");
+        for (i, p) in passes.iter().enumerate() {
+            assert_eq!(p.len(), 960 * 2, "pass {i} has the wrong length");
+            assert_eq!(p[0], i as f32, "pass {i} holds another pass's audio");
+        }
+    }
+
+    #[test]
+    fn a_take_without_a_loop_is_one_pass() {
+        let t = tap(4);
+        t.write_test_block_at(&[0.1; 480], &[0.1; 480], 480, 0);
+        t.write_test_block_at(&[0.1; 480], &[0.1; 480], 480, 480);
+        assert_eq!(t.take_passes().len(), 1);
+    }
+
+    #[test]
+    fn a_punched_loop_still_splits_per_pass() {
+        let t = tap(4);
+        // Loop 48000..49920, punch only the middle 960 frames.
+        t.set_punch(true, 48_480, 49_440);
+        for _ in 0..2 {
+            for b in 0..4 {
+                let at = 48_000 + b * 480;
+                t.write_test_block_at(&[0.3; 480], &[0.3; 480], 480, at);
+            }
+        }
+        let passes = t.take_passes();
+        assert_eq!(passes.len(), 2);
+        assert!(
+            passes.iter().all(|p| p.len() == 960 * 2),
+            "each pass is the punch window"
+        );
+    }
+
+    #[test]
+    fn a_new_take_forgets_the_last_takes_passes() {
+        let t = tap(4);
+        t.write_test_block_at(&[0.1; 480], &[0.1; 480], 480, 960);
+        t.write_test_block_at(&[0.1; 480], &[0.1; 480], 480, 0);
+        assert_eq!(t.take_passes().len(), 2);
+
+        t.arm(48_000, 4);
+        t.write_test_block_at(&[0.2; 480], &[0.2; 480], 480, 0);
+        assert_eq!(
+            t.take_passes().len(),
+            1,
+            "passes carried over from the last take"
+        );
     }
 
     #[test]

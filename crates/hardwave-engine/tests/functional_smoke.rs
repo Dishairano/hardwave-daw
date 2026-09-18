@@ -658,6 +658,64 @@ fn recording_api_captures_samples() {
     assert!(engine.stop_capture().is_empty());
 }
 
+/// Loop recording used to come back as one take holding every pass back to
+/// back. Passes are split at the loop jump, trimmed to the loop, and placed
+/// at the loop start after the first.
+#[test]
+fn loop_recording_splits_and_trims_each_pass() {
+    use std::sync::atomic::Ordering;
+    let engine = hardwave_engine::DawEngine::new();
+    // Loop 4800..5760, recording pressed at 5000 (inside the loop).
+    engine.transport.looping.store(true, Ordering::Relaxed);
+    engine.transport.loop_start.store(4_800, Ordering::Relaxed);
+    engine.transport.loop_end.store(5_760, Ordering::Relaxed);
+    engine.transport.set_position(5_000);
+    engine.start_capture();
+
+    // First pass from 5000; the block that crosses the loop end overshoots.
+    engine
+        .capture
+        .write_test_block_at(&[0.1; 480], &[0.1; 480], 480, 5_000);
+    engine
+        .capture
+        .write_test_block_at(&[0.1; 480], &[0.1; 480], 480, 5_480);
+    // Second and third passes from the loop start.
+    for v in [0.2_f32, 0.3] {
+        engine
+            .capture
+            .write_test_block_at(&[v; 480], &[v; 480], 480, 4_800);
+        engine
+            .capture
+            .write_test_block_at(&[v; 480], &[v; 480], 480, 5_280);
+    }
+
+    let passes = engine.stop_capture_passes();
+    assert_eq!(passes.len(), 3);
+
+    let (start, first) = &passes[0];
+    assert_eq!(
+        *start, 5_000,
+        "the first pass starts where record was pressed"
+    );
+    assert_eq!(
+        first.len(),
+        (5_760 - 5_000) * 2,
+        "overshoot past the loop end was kept"
+    );
+
+    let (start, second) = &passes[1];
+    assert_eq!(*start, 4_800, "later passes start at the loop start");
+    assert_eq!(second.len(), 960 * 2);
+    assert!((second[0] - 0.2).abs() < 1e-6);
+
+    let (start, last) = &passes[2];
+    assert_eq!(*start, 4_800);
+    assert!(
+        (last[0] - 0.3).abs() < 1e-6,
+        "passes are in the order played"
+    );
+}
+
 // ───────────────────────────────────────────────────────────────────────
 // Live MIDI smoke tests — guard beta blockers #4 and #5 (v0.164.x).
 //

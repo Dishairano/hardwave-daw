@@ -4,6 +4,16 @@ import { invokeOrNull, invokeOrToast } from '../api/invoke'
 import { useProjectStore } from './projectStore'
 import { useHistoryStore } from './historyStore'
 
+/**
+ * True while a gesture is being grouped into one undo step.
+ *
+ * The engine keeps one snapshot for the whole group, so the undo list must
+ * gain one entry too: the one `endHistoryGroup` pushes. Without this, every
+ * command inside the group pushed its own label and the list showed several
+ * steps where undo would take back all of them at once.
+ */
+let historyGroupOpen = false
+
 async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: string): Promise<T> {
   // invokeOrToast: every track mutation that fails now surfaces a toast
   // instead of dying in a caller's console.error (deep-research P1-8).
@@ -12,7 +22,7 @@ async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: strin
     retry: false,
   })
   useProjectStore.getState().markDirty()
-  if (label) useHistoryStore.getState().push(label)
+  if (label && !historyGroupOpen) useHistoryStore.getState().push(label)
   return r
 }
 
@@ -405,10 +415,12 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   beginHistoryGroup: async () => {
     // A failure here only costs finer-grained undo, so it is not worth a
     // toast: the mutations still happen.
+    historyGroupOpen = true
     await invoke('begin_history_group').catch(() => {})
   },
 
   endHistoryGroup: async (label) => {
+    historyGroupOpen = false
     await invoke('end_history_group').catch(() => {})
     if (label) useHistoryStore.getState().push(label)
   },

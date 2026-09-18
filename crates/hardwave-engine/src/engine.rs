@@ -235,6 +235,9 @@ pub struct DawEngine {
 
     /// Undo/redo history. Take a snapshot BEFORE mutating the project.
     pub history: Arc<Mutex<History>>,
+    /// Playhead where the current take started, so its first pass can be
+    /// placed where it was played.
+    record_start: std::sync::atomic::AtomicU64,
     /// True while a gesture is being treated as one undo step.
     history_group_open: Arc<std::sync::atomic::AtomicBool>,
     /// True once the open group has taken its snapshot.
@@ -301,6 +304,7 @@ impl DawEngine {
             input_consumer: Arc::new(Mutex::new(None)),
             capture: Arc::new(CaptureTap::default()),
             history: Arc::new(Mutex::new(History::new())),
+            record_start: std::sync::atomic::AtomicU64::new(0),
             history_group_open: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_group_taken: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             master_tap: master_tap::new_shared(),
@@ -456,6 +460,8 @@ impl DawEngine {
         // beyond it the tap reports an overflow rather than reallocating.
         self.capture
             .arm(self.current_sample_rate(), CAPTURE_HEADROOM_SECS);
+        self.record_start
+            .store(self.transport.position(), Ordering::Relaxed);
         self.capture.recording.store(true, Ordering::Relaxed);
     }
 
@@ -499,6 +505,48 @@ impl DawEngine {
         use std::sync::atomic::Ordering;
         self.capture.recording.store(false, Ordering::Relaxed);
         self.capture.take()
+    }
+
+    /// Finish the capture and return it split into loop passes, each with
+    /// the timeline position it starts at.
+    ///
+    /// Each pass except the last is trimmed to where the loop (or the punch
+    /// window) ends: the transport wraps at block granularity, so without
+    /// the trim every pass would carry a few milliseconds of audio from past
+    /// the loop end. The last pass is left as played, since recording may
+    /// have stopped part-way through it.
+    pub fn stop_capture_passes(&self) -> Vec<(u64, Vec<f32>)> {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.capture.recording.store(false, Relaxed);
+        let record_start = self.record_start.load(Relaxed);
+        let passes = self.capture.take_passes();
+        let looping = self.transport.looping.load(Relaxed);
+        let loop_start = self.transport.loop_start.load(Relaxed);
+        let loop_end = self.transport.loop_end.load(Relaxed);
+        let (punched, punch_in, punch_out) = self.capture.punch();
+
+        let last = passes.len().saturating_sub(1);
+        passes
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut samples)| {
+                let mut start = if i == 0 { record_start } else { loop_start };
+                let mut end = if looping && loop_end > loop_start {
+                    loop_end
+                } else {
+                    u64::MAX
+                };
+                if punched {
+                    start = start.max(punch_in);
+                    end = end.min(punch_out);
+                }
+                if i < last && end > start && end != u64::MAX {
+                    let frames = (end - start) as usize;
+                    samples.truncate(frames * 2);
+                }
+                (start, samples)
+            })
+            .collect()
     }
 
     /// Sample rate of the running audio device, or the offline default

@@ -193,12 +193,23 @@ export function pushPunchToEngine(): void {
   }).catch(() => {})
 }
 
+/** One loop pass of a take, written as its own file. */
+interface TakePass {
+  path: string
+  startSamples: number
+  startTicks: number
+  seconds: number
+  peak: number
+}
+
 /** What the backend says a finished take turned out to be. */
 interface RecordedTake {
   path: string | null
   seconds: number
   peak: number
   truncated: boolean
+  /** One per loop pass, in the order played. One when the loop never wrapped. */
+  passes: TakePass[]
 }
 
 /**
@@ -221,7 +232,8 @@ async function placeRecordedTake(take: RecordedTake | null, startSample: number)
   const push = useNotificationStore.getState().push
   if (!take) return
 
-  if (!take.path) {
+  const passes = take.passes ?? []
+  if (!take.path || passes.length === 0) {
     push('warning', 'Nothing was recorded', {
       detail: 'Check that the track is armed and that an input device is selected in Audio settings.',
       sticky: true,
@@ -229,24 +241,46 @@ async function placeRecordedTake(take: RecordedTake | null, startSample: number)
     return
   }
 
-  const armedTrack = useTrackStore.getState().tracks.find(t => t.armed)
+  const tracks = useTrackStore.getState()
+  const armedTrack = tracks.tracks.find(t => t.armed)
   if (!armedTrack) {
     push('warning', 'Take saved, but no track is armed', { detail: take.path })
     return
   }
 
+  // The engine reports where each pass starts, through the tempo map and
+  // with the punch window applied, so the clip lands where it was played.
+  // A backend without positions falls back to where record was pressed.
   const state = useTransportStore.getState()
   const samplesPerTick = (state.sampleRate || 48000) * 60 / (Math.max(1, state.bpm) * PPQ_TICKS)
-  // A punched take starts at the punch point, not where record was pressed:
-  // the engine only captured audio inside the window.
-  const punched =
-    state.punchEnabled && state.punchInTicks != null && state.punchOutTicks != null &&
-    state.punchOutTicks > state.punchInTicks
-  const positionTicks = punched
-    ? state.punchInTicks!
-    : samplesPerTick > 0 ? Math.max(0, Math.round(startSample / samplesPerTick)) : 0
-  await useTrackStore.getState().importAudioFile(armedTrack.id, take.path, positionTicks)
+  const fallbackTicks = samplesPerTick > 0 ? Math.max(0, Math.round(startSample / samplesPerTick)) : 0
 
+  // Every pass of a loop recording is one gesture, so one undo takes it all
+  // back rather than one undo per pass.
+  await tracks.beginHistoryGroup()
+  const placed: string[] = []
+  try {
+    for (const pass of passes) {
+      const ticks = Number.isFinite(pass.startTicks) ? pass.startTicks : fallbackTicks
+      const clip = await useTrackStore.getState().importAudioFile(armedTrack.id, pass.path, ticks)
+      if (clip?.clip_id) placed.push(clip.clip_id)
+    }
+    // Loop recording: the latest pass plays, the earlier ones stay on the
+    // track muted, so trying another take is an unmute rather than a redo.
+    for (const clipId of placed.slice(0, -1)) {
+      await useTrackStore.getState().setClipMuted(armedTrack.id, clipId, true)
+    }
+  } finally {
+    await useTrackStore.getState().endHistoryGroup(
+      passes.length > 1 ? `Record ${passes.length} loop passes` : 'Record take',
+    )
+  }
+
+  if (passes.length > 1) {
+    push('info', `Recorded ${passes.length} loop passes`, {
+      detail: 'The last pass is playing. The earlier ones are on the same track, muted: unmute one to use it instead.',
+    })
+  }
   if (take.peak < 0.0005) {
     push('warning', 'That take is silent', {
       detail: 'The recording captured no signal. Check the input device and its level in Audio settings.',

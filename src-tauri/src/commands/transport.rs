@@ -156,48 +156,100 @@ pub struct RecordedTake {
     pub peak: f32,
     /// True when the take ran past the reserved recording length.
     pub truncated: bool,
+    /// One entry per loop pass, in the order played, each with the position
+    /// it starts at. A single entry when the loop never wrapped.
+    pub passes: Vec<TakePass>,
+}
+
+/// One loop pass of a take, written as its own file.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TakePass {
+    pub path: String,
+    /// Timeline position, in samples, where this pass begins.
+    pub start_samples: u64,
+    /// The same position in ticks, through the project's tempo map, so the
+    /// UI places the clip without redoing the conversion at one tempo.
+    pub start_ticks: u64,
+    pub seconds: f64,
+    pub peak: f32,
 }
 
 fn finalize_recording_session(engine: &hardwave_engine::DawEngine) -> Result<RecordedTake, String> {
     let truncated = engine.capture_overflowed();
-    let samples = engine.stop_capture();
-    if samples.is_empty() {
+    let passes = engine.stop_capture_passes();
+    let total: usize = passes.iter().map(|(_, s)| s.len()).sum();
+    if total == 0 {
         return Ok(RecordedTake {
             path: None,
             seconds: 0.0,
             peak: 0.0,
             truncated,
+            passes: Vec::new(),
         });
     }
-    let peak = samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
 
     let sample_rate = engine.current_sample_rate();
     let dir = recordings_dir(engine)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(next_take_name(&dir));
+    let base = next_take_name(&dir);
+    let stem = base.trim_end_matches(".wav").to_string();
+    let several = passes.iter().filter(|(_, s)| !s.is_empty()).count() > 1;
 
-    // 32-bit float stereo WAV matches the engine's internal sample format.
+    let mut files = Vec::new();
+    let mut peak = 0.0_f32;
+    for (i, (start, samples)) in passes.iter().enumerate() {
+        if samples.is_empty() {
+            continue;
+        }
+        let name = if several {
+            format!("{stem} pass {}.wav", i + 1)
+        } else {
+            base.clone()
+        };
+        let path = dir.join(name);
+        write_take_wav(&path, samples, sample_rate)?;
+        let pass_peak = samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        peak = peak.max(pass_peak);
+        let start_ticks = {
+            let project = engine.project.lock();
+            project
+                .tempo_map
+                .samples_to_tick(*start, sample_rate as f64)
+        };
+        files.push(TakePass {
+            path: path.to_string_lossy().to_string(),
+            start_samples: *start,
+            start_ticks,
+            seconds: samples.len() as f64 / 2.0 / sample_rate.max(1) as f64,
+            peak: pass_peak,
+        });
+    }
+
+    let last = files.last().cloned();
+    Ok(RecordedTake {
+        path: last.as_ref().map(|p| p.path.clone()),
+        seconds: files.iter().map(|p| p.seconds).sum(),
+        peak,
+        truncated,
+        passes: files,
+    })
+}
+
+/// 32-bit float stereo WAV, which is the engine's own sample format, so a
+/// take is stored exactly as it was captured.
+fn write_take_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
     let spec = hound::WavSpec {
         channels: 2,
         sample_rate,
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
-    {
-        let mut writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
-        for s in &samples {
-            writer.write_sample(*s).map_err(|e| e.to_string())?;
-        }
-        writer.finalize().map_err(|e| e.to_string())?;
+    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| e.to_string())?;
+    for s in samples {
+        writer.write_sample(*s).map_err(|e| e.to_string())?;
     }
-
-    let seconds = samples.len() as f64 / 2.0 / sample_rate.max(1) as f64;
-    Ok(RecordedTake {
-        path: Some(path.to_string_lossy().to_string()),
-        seconds,
-        peak,
-        truncated,
-    })
+    writer.finalize().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
