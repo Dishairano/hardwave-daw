@@ -27,6 +27,8 @@ import '../components/SetupWizard.css'
 import { useSetupWizardStore, type WizardStep } from '../stores/setupWizardStore'
 import { Browser } from '../components/browser/Browser'
 import { useBrowserStore } from '../stores/browserStore'
+import { FloatingWindow, DetachButton } from '../components/FloatingWindow'
+import { AudioSettings, focusSettingsTab, type SettingsTab } from '../components/settings/AudioSettings'
 
 /** Browser panel with a sample library added to Places and two folders open. */
 function BrowserShot() {
@@ -205,6 +207,21 @@ function Harness() {
       return <Full><WizardShot /></Full>
     case 'browser':
       return <Full><BrowserShot /></Full>
+    case 'settings': {
+      // SHOT_TAB=midi (?tab=) photographs a specific settings tab.
+      focusSettingsTab((new URLSearchParams(location.search).get('tab') || 'audio') as SettingsTab)
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Untitled" />
+          <Arrangement onSetHint={noop} />
+          <FloatingWindow panelId="settings" title="Settings" dockable={false}
+            actions={<DetachButton panelId="settings" />} onClose={noop}>
+            <AudioSettings onClose={noop} />
+          </FloatingWindow>
+        </div>
+      )
+    }
     default:
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>

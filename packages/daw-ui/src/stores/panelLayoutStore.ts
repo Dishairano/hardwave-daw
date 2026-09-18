@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type PanelId = 'browser' | 'channelRack' | 'pianoRoll' | 'mixer' | 'playlist'
+export type PanelId = 'browser' | 'channelRack' | 'pianoRoll' | 'mixer' | 'playlist' | 'settings'
 
 export interface PanelLayout {
   floating: boolean
@@ -19,6 +19,7 @@ const DEFAULT_LAYOUT: Record<PanelId, PanelLayout> = {
   pianoRoll:   { floating: false, x: 240, y: 240, w: 720, h: 420, zIndex: 12 },
   mixer:       { floating: false, x: 120, y: 300, w: 780, h: 300, zIndex: 13 },
   playlist:    { floating: false, x: 160, y: 160, w: 820, h: 440, zIndex: 14 },
+  settings:    { floating: true,  x: 220, y: 90,  w: 720, h: 560, zIndex: 15 },
 }
 
 function loadLayout(): Record<PanelId, PanelLayout> {

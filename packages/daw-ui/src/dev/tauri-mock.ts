@@ -240,6 +240,27 @@ const mock: TauriInternals = {
         ]
       case 'get_audio_config':
         return { device: 'Focusrite Scarlett 2i2', sample_rate: 48000, buffer_size: 512 }
+      // Settings window (screenshot harness renders it headless).
+      case 'get_audio_input_devices':
+        return [{ name: 'Focusrite Scarlett 2i2', is_default: true, sample_rates: [44100, 48000, 96000], max_channels: 2 }]
+      case 'get_audio_input_config':
+        return { device: 'Focusrite Scarlett 2i2', channels: 2 }
+      case 'get_wasapi_exclusive':
+        return { enabled: false, available: true }
+      case 'list_midi_outputs':
+        return ['Microsoft GS Wavetable Synth']
+      case 'get_midi_clock_status':
+        return { enabled: false, open_ports: [] }
+      case 'get_midi_clock_sync_status':
+        return { enabled: false, ticks_seen: false, last_bpm: null }
+      case 'get_midi_mtc_status':
+        return { enabled: false, fps: 25 }
+      case 'get_direct_monitoring':
+        return false
+      case 'get_audio_cache_stats':
+        return { bytesUsed: 96 * 1024 * 1024, maxBytes: 512 * 1024 * 1024, entryCount: 14 }
+      case 'get_input_meter':
+        return { peak_l: 0, peak_r: 0, running: false, sample_rate: 48000, buffer_size: 512 }
       case 'list_midi_inputs':
         // Two named ports so the setup wizard's device and velocity steps can
         // be photographed with something in them.

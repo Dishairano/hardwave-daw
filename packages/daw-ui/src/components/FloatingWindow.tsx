@@ -9,13 +9,17 @@ interface Props {
   panelId: PanelId
   title: string
   onClose?: () => void
+  /** False for windows with no docked home (settings): hides the dock button. */
+  dockable?: boolean
+  /** Extra title-bar buttons, rendered before close. */
+  actions?: ReactNode
   children: ReactNode
 }
 
 const MIN_W = 260
 const MIN_H = 160
 
-export function FloatingWindow({ panelId, title, onClose, children }: Props) {
+export function FloatingWindow({ panelId, title, onClose, dockable = true, actions, children }: Props) {
   const layout = usePanelLayoutStore(s => s.layout[panelId])
   const setPos = usePanelLayoutStore(s => s.setPos)
   const setSize = usePanelLayoutStore(s => s.setSize)
@@ -96,7 +100,8 @@ export function FloatingWindow({ panelId, title, onClose, children }: Props) {
         }}
       >
         <span style={{ flex: 1 }}>{title}</span>
-        {!isMobile && (
+        {!isMobile && actions && <span data-nodrag style={{ display: 'flex' }}>{actions}</span>}
+        {!isMobile && dockable && (
           <button
             data-nodrag
             onClick={() => setFloating(panelId, false)}

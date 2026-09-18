@@ -36,6 +36,32 @@ interface InputMeterSnapshot {
   buffer_size: number
 }
 
+export type SettingsTab = 'audio' | 'midi' | 'playback' | 'files' | 'appearance'
+
+const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: 'audio', label: 'Audio' },
+  { id: 'midi', label: 'MIDI' },
+  { id: 'playback', label: 'Playback' },
+  { id: 'files', label: 'Files' },
+  { id: 'appearance', label: 'Appearance' },
+]
+
+const TAB_KEY = 'hardwave.daw.settingsTab'
+
+function loadTab(): SettingsTab {
+  try {
+    const t = localStorage.getItem(TAB_KEY)
+    if (SETTINGS_TABS.some(x => x.id === t)) return t as SettingsTab
+  } catch { /* storage blocked */ }
+  return 'audio'
+}
+
+/** Open the settings window on a given tab (menu entries like "MIDI settings…"). */
+export function focusSettingsTab(tab: SettingsTab) {
+  try { localStorage.setItem(TAB_KEY, tab) } catch { /* storage blocked */ }
+  window.dispatchEvent(new CustomEvent('daw:settingsTab', { detail: tab }))
+}
+
 interface AudioSettingsProps {
   onClose: () => void
 }
@@ -43,6 +69,16 @@ interface AudioSettingsProps {
 const BUFFER_SIZES = [64, 128, 256, 512, 1024, 2048, 4096]
 
 export function AudioSettings({ onClose }: AudioSettingsProps) {
+  const [tab, setTab] = useState<SettingsTab>(loadTab)
+  const selectTab = (t: SettingsTab) => {
+    setTab(t)
+    try { localStorage.setItem(TAB_KEY, t) } catch { /* storage blocked */ }
+  }
+  useEffect(() => {
+    const onTab = (e: Event) => setTab((e as CustomEvent<SettingsTab>).detail)
+    window.addEventListener('daw:settingsTab', onTab)
+    return () => window.removeEventListener('daw:settingsTab', onTab)
+  }, [])
   const [devices, setDevices] = useState<AudioDevice[]>([])
   const [inputDevices, setInputDevices] = useState<AudioDevice[]>([])
   const [config, setConfig] = useState<AudioConfig>({ device: null, sample_rate: 48000, buffer_size: 512 })
@@ -358,296 +394,526 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const latencyMs = ((selectedBuffer / selectedRate) * 1000).toFixed(1)
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 90,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
-    }} onClick={onClose}>
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          width: 480, background: 'rgba(12,12,16,0.98)',
-          border: `1px solid ${hw.borderLight}`,
-          borderRadius: hw.radius.lg,
-          boxShadow: '0 20px 60px rgba(0,0,0,0.7)',
-          overflow: 'hidden',
-        }}
-      >
-        {/* Header */}
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '12px 16px',
-          background: 'rgba(255,255,255,0.03)',
-          borderBottom: `1px solid ${hw.border}`,
-        }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: hw.accent, letterSpacing: 0.5 }}>
-            AUDIO SETTINGS
-          </span>
-          <div
-            onClick={onClose}
-            style={{ width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              borderRadius: 4, color: hw.textFaint, cursor: 'pointer' }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = hw.textPrimary }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = hw.textFaint }}
-          >
-            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <line x1="2" y1="2" x2="10" y2="10" /><line x1="10" y1="2" x2="2" y2="10" />
-            </svg>
-          </div>
-        </div>
-
-        {/* Body */}
-        <div style={{ padding: '16px 16px 12px' }}>
-          {/* Output Device */}
-          <SettingRow label="Output Device">
-            <Select
-              value={selectedDevice ?? ''}
-              onChange={v => {
-                const dev = v === '' ? null : v
-                setSelectedDevice(dev)
-                // Auto-adjust sample rate if current isn't supported
-                const d = devices.find(d => d.name === v)
-                if (d && d.sample_rates.length > 0 && !d.sample_rates.includes(selectedRate)) {
-                  setSelectedRate(d.sample_rates.includes(48000) ? 48000 : d.sample_rates[0])
-                }
+    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', background: 'rgba(12,12,16,0.98)' }}>
+      {/* Tab rail */}
+      <div role="tablist" aria-orientation="vertical" style={{
+        width: 148, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 2,
+        padding: '10px 8px', background: 'rgba(255,255,255,0.02)',
+        borderRight: `1px solid ${hw.border}`, overflowY: 'auto',
+      }}>
+        {SETTINGS_TABS.map(t => {
+          const active = t.id === tab
+          return (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={active}
+              onClick={() => selectTab(t.id)}
+              style={{
+                textAlign: 'left', padding: '7px 10px', borderRadius: hw.radius.sm,
+                fontSize: 12, fontWeight: active ? 600 : 500, cursor: 'pointer',
+                color: active ? hw.textPrimary : hw.textMuted,
+                background: active ? 'rgba(255,255,255,0.06)' : 'transparent',
+                border: 'none', borderLeft: `2px solid ${active ? hw.accent : 'transparent'}`,
               }}
-              options={[
-                { value: '', label: `System Default${devices.find(d => d.is_default) ? ` (${devices.find(d => d.is_default)!.name})` : ''}` },
-                ...devices.map(d => ({ value: d.name, label: d.name })),
-              ]}
-            />
-          </SettingRow>
+              onMouseEnter={e => { if (!active) e.currentTarget.style.color = hw.textSecondary }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.color = hw.textMuted }}
+            >
+              {t.label}
+            </button>
+          )
+        })}
+      </div>
 
-          {/* Sample Rate */}
-          <SettingRow label="Sample Rate">
-            <Select
-              value={String(selectedRate)}
-              onChange={v => setSelectedRate(Number(v))}
-              options={availableRates.map(r => ({
-                value: String(r),
-                label: `${(r / 1000).toFixed(r % 1000 === 0 ? 0 : 1)} kHz`,
-              }))}
-            />
-          </SettingRow>
-
-          {/* Buffer Size */}
-          <SettingRow label="Buffer Size">
-            <Select
-              value={String(selectedBuffer)}
-              onChange={v => setSelectedBuffer(Number(v))}
-              options={BUFFER_SIZES.map(b => {
-                const ms = ((b / selectedRate) * 1000).toFixed(1)
-                return {
-                  value: String(b),
-                  label: `${b} samples (${ms} ms)`,
-                }
-              })}
-            />
-          </SettingRow>
-
-          {/* Buffer-size guidance hint — matches FL Studio's documented
-             recommendations: 10 ms ≈ 441 samples is the sweet spot;
-             below that adds CPU for diminishing returns. */}
-          <div style={{
-            fontSize: 9, color: hw.textFaint, lineHeight: 1.5,
-            margin: '4px 4px 10px', maxWidth: 360,
-          }}>
-            <strong style={{ color: hw.textMuted }}>Latency = {latencyMs} ms.</strong>{' '}
-            Target ~10 ms (441 samples @ 44.1 kHz · 480 samples @ 48 kHz) for live play.
-            Below ~5 ms is "cutting edge" and CPU-heavy. 11–20 ms is "good".
-            Drop the buffer until you hear underruns, then step back up.
-          </div>
-
-          {/* Audio cache */}
-          <SettingRow label="Audio cache">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
-              <input
-                type="number"
-                min={64}
-                max={65536}
-                step={64}
-                value={cacheMaxMb}
-                onChange={e => setCacheMaxMb(e.target.value)}
-                onBlur={async () => {
-                  const mb = Math.max(64, Math.min(65536, parseInt(cacheMaxMb, 10) || 2048))
-                  setCacheMaxMb(String(mb))
-                  try { await invoke('set_audio_cache_max_bytes', { maxBytes: mb * 1024 * 1024 }) } catch {}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {/* Body */}
+        <div role="tabpanel" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 16px 12px' }}>
+          {tab === 'audio' && (<>
+            {/* Output Device */}
+            <SettingRow label="Output Device">
+              <Select
+                value={selectedDevice ?? ''}
+                onChange={v => {
+                  const dev = v === '' ? null : v
+                  setSelectedDevice(dev)
+                  // Auto-adjust sample rate if current isn't supported
+                  const d = devices.find(d => d.name === v)
+                  if (d && d.sample_rates.length > 0 && !d.sample_rates.includes(selectedRate)) {
+                    setSelectedRate(d.sample_rates.includes(48000) ? 48000 : d.sample_rates[0])
+                  }
                 }}
-                style={{
-                  width: 80, fontSize: 12, padding: '4px 6px',
-                  background: '#0e0e10', color: hw.textPrimary,
-                  border: `1px solid ${hw.borderDark}`, borderRadius: 3,
-                }}
-                data-testid="audio-cache-max-mb"
-                title="Maximum decoded audio memory before oldest entries are evicted (FIFO)"
+                options={[
+                  { value: '', label: `System Default${devices.find(d => d.is_default) ? ` (${devices.find(d => d.is_default)!.name})` : ''}` },
+                  ...devices.map(d => ({ value: d.name, label: d.name })),
+                ]}
               />
-              <span style={{ fontSize: 11, color: hw.textMuted }}>MB cap</span>
-              <span style={{ fontSize: 11, color: hw.textFaint, marginLeft: 'auto' }} data-testid="audio-cache-stats">
-                {cacheStats
-                  ? `${(cacheStats.bytesUsed / (1024 * 1024)).toFixed(1)} MB used · ${cacheStats.entryCount} file${cacheStats.entryCount === 1 ? '' : 's'}`
-                  : '—'}
+            </SettingRow>
+
+            {/* Sample Rate */}
+            <SettingRow label="Sample Rate">
+              <Select
+                value={String(selectedRate)}
+                onChange={v => setSelectedRate(Number(v))}
+                options={availableRates.map(r => ({
+                  value: String(r),
+                  label: `${(r / 1000).toFixed(r % 1000 === 0 ? 0 : 1)} kHz`,
+                }))}
+              />
+            </SettingRow>
+
+            {/* Buffer Size */}
+            <SettingRow label="Buffer Size">
+              <Select
+                value={String(selectedBuffer)}
+                onChange={v => setSelectedBuffer(Number(v))}
+                options={BUFFER_SIZES.map(b => {
+                  const ms = ((b / selectedRate) * 1000).toFixed(1)
+                  return {
+                    value: String(b),
+                    label: `${b} samples (${ms} ms)`,
+                  }
+                })}
+              />
+            </SettingRow>
+
+            {/* Buffer-size guidance hint — matches FL Studio's documented
+               recommendations: 10 ms ≈ 441 samples is the sweet spot;
+               below that adds CPU for diminishing returns. */}
+            <div style={{
+              fontSize: 9, color: hw.textFaint, lineHeight: 1.5,
+              margin: '4px 4px 10px', maxWidth: 360,
+            }}>
+              <strong style={{ color: hw.textMuted }}>Latency = {latencyMs} ms.</strong>{' '}
+              Target ~10 ms (441 samples @ 44.1 kHz · 480 samples @ 48 kHz) for live play.
+              Below ~5 ms is "cutting edge" and CPU-heavy. 11–20 ms is "good".
+              Drop the buffer until you hear underruns, then step back up.
+            </div>
+
+            {/* Audio cache */}
+            <SettingRow label="Audio cache">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+                <input
+                  type="number"
+                  min={64}
+                  max={65536}
+                  step={64}
+                  value={cacheMaxMb}
+                  onChange={e => setCacheMaxMb(e.target.value)}
+                  onBlur={async () => {
+                    const mb = Math.max(64, Math.min(65536, parseInt(cacheMaxMb, 10) || 2048))
+                    setCacheMaxMb(String(mb))
+                    try { await invoke('set_audio_cache_max_bytes', { maxBytes: mb * 1024 * 1024 }) } catch {}
+                  }}
+                  style={{
+                    width: 80, fontSize: 12, padding: '4px 6px',
+                    background: '#0e0e10', color: hw.textPrimary,
+                    border: `1px solid ${hw.borderDark}`, borderRadius: 3,
+                  }}
+                  data-testid="audio-cache-max-mb"
+                  title="Maximum decoded audio memory before oldest entries are evicted (FIFO)"
+                />
+                <span style={{ fontSize: 11, color: hw.textMuted }}>MB cap</span>
+                <span style={{ fontSize: 11, color: hw.textFaint, marginLeft: 'auto' }} data-testid="audio-cache-stats">
+                  {cacheStats
+                    ? `${(cacheStats.bytesUsed / (1024 * 1024)).toFixed(1)} MB used · ${cacheStats.entryCount} file${cacheStats.entryCount === 1 ? '' : 's'}`
+                    : '—'}
+                </span>
+              </div>
+            </SettingRow>
+
+            {/* Input Device */}
+            <SettingRow label="Input Device">
+              <Select
+                value={selectedInput ?? ''}
+                onChange={v => setSelectedInput(v === '' ? null : v)}
+                options={[
+                  { value: '', label: `System Default${inputDevices.find(d => d.is_default) ? ` (${inputDevices.find(d => d.is_default)!.name})` : ''}` },
+                  ...inputDevices.map(d => ({ value: d.name, label: d.name })),
+                  ...(inputDevices.length === 0 ? [{ value: '', label: 'No input devices found' }] : []),
+                ]}
+              />
+            </SettingRow>
+
+            {/* Input Channels */}
+            <SettingRow label="Input Channels">
+              <Select
+                value={String(selectedInputChannels)}
+                onChange={v => setSelectedInputChannels(Number(v))}
+                options={[
+                  { value: '1', label: 'Mono (1 channel, summed)' },
+                  { value: '2', label: 'Stereo (2 channels)' },
+                ]}
+              />
+            </SettingRow>
+
+            {/* Input Monitor / pre-record level meter */}
+            <div style={{
+              marginBottom: 10, padding: '8px 12px',
+              background: hw.bgPanel, borderRadius: hw.radius.sm,
+              border: `1px solid ${hw.borderDark}`,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: monitorOn ? 6 : 0 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 11, color: hw.textMuted }}>Input Monitor</span>
+                  <span style={{ fontSize: 10, color: hw.textFaint }}>
+                    {monitorOn && monitor?.running
+                      ? `Live — ${monitor.sample_rate} Hz, ${monitor.buffer_size} samples`
+                      : 'Preview input signal level before recording'}
+                  </span>
+                </div>
+                <button
+                  onClick={toggleMonitor}
+                  style={{
+                    padding: '4px 12px', fontSize: 11, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none',
+                    cursor: 'pointer',
+                    background: monitorOn ? hw.accent : 'rgba(255,255,255,0.08)',
+                    color: monitorOn ? '#fff' : hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  {monitorOn ? 'Stop' : 'Start'}
+                </button>
+              </div>
+              {monitorOn && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <MeterBar label="L" peak={monitor?.peak_l ?? 0} />
+                  {selectedInputChannels === 2 && (
+                    <MeterBar label="R" peak={monitor?.peak_r ?? 0} />
+                  )}
+                </div>
+              )}
+              <div style={{
+                marginTop: 8,
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '6px 8px',
+                background: 'rgba(0,0,0,0.25)',
+                borderRadius: hw.radius.sm,
+                border: `1px solid ${directMonitoring ? hw.accent : hw.borderDark}`,
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 11, color: hw.textSecondary }}>Direct monitoring</span>
+                  <span style={{ fontSize: 9, color: hw.textFaint }}>
+                    {directMonitoring
+                      ? 'Live input routes straight to master — track FX bypassed.'
+                      : 'Software monitor: live input passes through the track FX chain.'}
+                  </span>
+                </div>
+                <button
+                  onClick={toggleDirectMonitoring}
+                  style={{
+                    padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none',
+                    cursor: 'pointer',
+                    background: directMonitoring ? hw.accent : 'rgba(255,255,255,0.08)',
+                    color: directMonitoring ? '#fff' : hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  {directMonitoring ? 'On' : 'Off'}
+                </button>
+              </div>
+            </div>
+
+            {/* Latency readout */}
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              marginTop: 12, padding: '8px 12px',
+              background: hw.bgPanel, borderRadius: hw.radius.sm,
+              border: `1px solid ${hw.borderDark}`,
+            }}>
+              <span style={{ fontSize: 11, color: hw.textMuted }}>Output Latency</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: hw.textPrimary, fontFamily: "'Consolas', monospace" }}>
+                {latencyMs} ms
               </span>
             </div>
-          </SettingRow>
 
-          {/* System Settings — General (FL F10 → General page parity) */}
-          <SettingRow label="Note naming">
-            <Select
-              value={generalPrefs.noteNaming}
-              onChange={v => generalPrefs.setNoteNaming(v as typeof generalPrefs.noteNaming)}
-              options={[
-                { value: 'english', label: 'English (C-B)' },
-                { value: 'germanic', label: 'Germanic (C-H)' },
-                { value: 'solfege', label: 'Solfège (Do-Ti)' },
-              ]}
-            />
-          </SettingRow>
-
-          <div style={{
-            display: 'flex', gap: 8, padding: '0 0 12px 0',
-          }}>
-            <button
-              onClick={() => generalPrefs.setAnimationsEnabled(!generalPrefs.animationsEnabled)}
-              style={{
-                flex: 1,
-                padding: '6px 10px', fontSize: 10, fontWeight: 600,
-                borderRadius: hw.radius.sm,
-                cursor: 'pointer',
-                background: generalPrefs.animationsEnabled ? 'rgba(255,255,255,0.08)' : hw.accent,
-                color: generalPrefs.animationsEnabled ? hw.textSecondary : '#fff',
-                border: `1px solid ${generalPrefs.animationsEnabled ? hw.borderDark : hw.accent}`,
-                fontFamily: 'inherit',
-              }}
-              title="When off, the UI runs without transitions or animations (FL 'Don't distract me')"
-            >
-              Animations: {generalPrefs.animationsEnabled ? 'On' : 'Off'}
-            </button>
-            <button
-              onClick={() => generalPrefs.setHighVisibility(!generalPrefs.highVisibility)}
-              style={{
-                flex: 1,
-                padding: '6px 10px', fontSize: 10, fontWeight: 600,
-                borderRadius: hw.radius.sm,
-                cursor: 'pointer',
-                background: generalPrefs.highVisibility ? hw.accent : 'rgba(255,255,255,0.08)',
-                color: generalPrefs.highVisibility ? '#fff' : hw.textSecondary,
-                border: `1px solid ${generalPrefs.highVisibility ? hw.accent : hw.borderDark}`,
-                fontFamily: 'inherit',
-              }}
-              title="Bumps text + border contrast and adds focus rings for accessibility"
-            >
-              High-visibility: {generalPrefs.highVisibility ? 'On' : 'Off'}
-            </button>
-          </div>
-
-          {/* Autosave frequency — FL File Settings → Backup parity */}
-          <SettingRow label="Autosave">
-            <Select
-              value={autosavePrefs.frequency}
-              onChange={v => autosavePrefs.setFrequency(v as typeof autosavePrefs.frequency)}
-              options={AUTOSAVE_OPTIONS.map(o => ({ value: o.id, label: o.label }))}
-            />
-          </SettingRow>
-          <div style={{
-            fontSize: 9, color: hw.textFaint, lineHeight: 1.5,
-            margin: '-4px 4px 10px', maxWidth: 360,
-          }}>
-            {AUTOSAVE_OPTIONS.find(o => o.id === autosavePrefs.frequency)?.desc}
-          </div>
-
-          {/* Input Device */}
-          <SettingRow label="Input Device">
-            <Select
-              value={selectedInput ?? ''}
-              onChange={v => setSelectedInput(v === '' ? null : v)}
-              options={[
-                { value: '', label: `System Default${inputDevices.find(d => d.is_default) ? ` (${inputDevices.find(d => d.is_default)!.name})` : ''}` },
-                ...inputDevices.map(d => ({ value: d.name, label: d.name })),
-                ...(inputDevices.length === 0 ? [{ value: '', label: 'No input devices found' }] : []),
-              ]}
-            />
-          </SettingRow>
-
-          {/* Input Channels */}
-          <SettingRow label="Input Channels">
-            <Select
-              value={String(selectedInputChannels)}
-              onChange={v => setSelectedInputChannels(Number(v))}
-              options={[
-                { value: '1', label: 'Mono (1 channel, summed)' },
-                { value: '2', label: 'Stereo (2 channels)' },
-              ]}
-            />
-          </SettingRow>
-
-          {/* Input Monitor / pre-record level meter */}
-          <div style={{
-            marginBottom: 10, padding: '8px 12px',
-            background: hw.bgPanel, borderRadius: hw.radius.sm,
-            border: `1px solid ${hw.borderDark}`,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: monitorOn ? 6 : 0 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textMuted }}>Input Monitor</span>
-                <span style={{ fontSize: 10, color: hw.textFaint }}>
-                  {monitorOn && monitor?.running
-                    ? `Live — ${monitor.sample_rate} Hz, ${monitor.buffer_size} samples`
-                    : 'Preview input signal level before recording'}
-                </span>
-              </div>
-              <button
-                onClick={toggleMonitor}
-                style={{
-                  padding: '4px 12px', fontSize: 11, fontWeight: 600,
-                  borderRadius: hw.radius.sm, border: 'none',
-                  cursor: 'pointer',
-                  background: monitorOn ? hw.accent : 'rgba(255,255,255,0.08)',
-                  color: monitorOn ? '#fff' : hw.textSecondary,
-                  fontFamily: 'inherit',
-                }}
-              >
-                {monitorOn ? 'Stop' : 'Start'}
-              </button>
-            </div>
-            {monitorOn && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <MeterBar label="L" peak={monitor?.peak_l ?? 0} />
-                {selectedInputChannels === 2 && (
-                  <MeterBar label="R" peak={monitor?.peak_r ?? 0} />
-                )}
-              </div>
-            )}
+            {/* WASAPI exclusive-mode toggle (Windows only) */}
             <div style={{
-              marginTop: 8,
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '6px 8px',
-              background: 'rgba(0,0,0,0.25)',
-              borderRadius: hw.radius.sm,
-              border: `1px solid ${directMonitoring ? hw.accent : hw.borderDark}`,
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              marginTop: 8, padding: '8px 12px',
+              background: hw.bgPanel, borderRadius: hw.radius.sm,
+              border: `1px solid ${hw.borderDark}`,
+              opacity: exclusive.available ? 1 : 0.5,
             }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textSecondary }}>Direct monitoring</span>
-                <span style={{ fontSize: 9, color: hw.textFaint }}>
-                  {directMonitoring
-                    ? 'Live input routes straight to master — track FX bypassed.'
-                    : 'Software monitor: live input passes through the track FX chain.'}
+                <span style={{ fontSize: 11, color: hw.textMuted }}>WASAPI Exclusive Mode</span>
+                <span style={{ fontSize: 10, color: hw.textFaint }}>
+                  {exclusive.available
+                    ? 'Lowest latency, locks the output device to the DAW'
+                    : 'Only available on Windows with WASAPI host'}
                 </span>
               </div>
               <button
-                onClick={toggleDirectMonitoring}
+                disabled={!exclusive.available}
+                onClick={toggleExclusive}
                 style={{
-                  padding: '2px 10px', fontSize: 10, fontWeight: 600,
-                  borderRadius: hw.radius.sm, border: 'none',
-                  cursor: 'pointer',
-                  background: directMonitoring ? hw.accent : 'rgba(255,255,255,0.08)',
-                  color: directMonitoring ? '#fff' : hw.textSecondary,
-                  fontFamily: 'inherit',
+                  width: 38, height: 20,
+                  borderRadius: 10, border: 'none',
+                  background: exclusive.enabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                  cursor: exclusive.available ? 'pointer' : 'default',
+                  position: 'relative', transition: 'background 150ms ease',
                 }}
               >
-                {directMonitoring ? 'On' : 'Off'}
+                <span style={{
+                  position: 'absolute', top: 2, left: exclusive.enabled ? 20 : 2,
+                  width: 16, height: 16, borderRadius: '50%',
+                  background: '#fff', transition: 'left 150ms ease',
+                }} />
               </button>
             </div>
+          </>)}
 
+          {tab === 'midi' && (<>
+            {/* MIDI Inputs */}
+            <div style={{
+              marginBottom: 10, padding: '8px 12px',
+              background: hw.bgPanel, borderRadius: hw.radius.sm,
+              border: `1px solid ${hw.borderDark}`,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: midiPorts.length > 0 ? 6 : 0 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 11, color: hw.textMuted }}>MIDI Inputs</span>
+                  <span style={{ fontSize: 10, color: hw.textFaint }}>
+                    {midiPorts.length === 0
+                      ? 'No MIDI input ports detected'
+                      : `${midiOpen.length} of ${midiPorts.length} open`}
+                  </span>
+                </div>
+                <button
+                  onClick={rescanMidi}
+                  style={{
+                    padding: '4px 10px', fontSize: 11, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none',
+                    cursor: 'pointer',
+                    background: 'rgba(255,255,255,0.08)',
+                    color: hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  Rescan
+                </button>
+              </div>
+              {midiPorts.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {midiPorts.map(port => {
+                    const open = midiOpen.includes(port)
+                    return (
+                      <div key={port} style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '4px 8px',
+                        background: 'rgba(0,0,0,0.25)',
+                        borderRadius: hw.radius.sm,
+                        border: `1px solid ${open ? hw.accent : hw.borderDark}`,
+                      }}>
+                        <span style={{ fontSize: 11, color: hw.textSecondary, fontFamily: 'inherit' }}>
+                          {port}
+                        </span>
+                        <button
+                          disabled={midiBusy}
+                          onClick={() => toggleMidiPort(port)}
+                          style={{
+                            padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                            borderRadius: hw.radius.sm, border: 'none',
+                            cursor: midiBusy ? 'default' : 'pointer',
+                            background: open ? hw.accent : 'rgba(255,255,255,0.08)',
+                            color: open ? '#fff' : hw.textSecondary,
+                            fontFamily: 'inherit',
+                          }}
+                        >
+                          {open ? 'Connected' : 'Connect'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <div style={{
+                marginTop: midiPorts.length > 0 ? 8 : 6,
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '6px 8px',
+                background: 'rgba(0,0,0,0.25)',
+                borderRadius: hw.radius.sm,
+                border: `1px solid ${midiSyncEnabled ? hw.accent : hw.borderDark}`,
+                opacity: midiOpen.length === 0 ? 0.6 : 1,
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 11, color: hw.textSecondary }}>Sync to external clock</span>
+                  <span style={{ fontSize: 9, color: hw.textFaint, fontFamily: "'Consolas', monospace" }}>
+                    {midiSyncTicksSeen
+                      ? (midiSyncBpm != null
+                        ? `Master: ${midiSyncBpm.toFixed(2)} BPM`
+                        : 'Master detected · waiting for stable tempo')
+                      : 'No clock ticks received yet'}
+                  </span>
+                </div>
+                <button
+                  onClick={toggleMidiSync}
+                  disabled={midiOpen.length === 0}
+                  style={{
+                    padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none',
+                    cursor: midiOpen.length === 0 ? 'default' : 'pointer',
+                    background: midiSyncEnabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                    color: midiSyncEnabled ? '#fff' : hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  {midiSyncEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
+            </div>
+
+            {/* MIDI Outputs — clock send to external hardware */}
+            <div style={{
+              marginBottom: 10, padding: '8px 12px',
+              background: hw.bgPanel, borderRadius: hw.radius.sm,
+              border: `1px solid ${hw.borderDark}`,
+            }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                marginBottom: midiOutPorts.length > 0 ? 6 : 0,
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 11, color: hw.textMuted }}>MIDI Outputs</span>
+                  <span style={{ fontSize: 10, color: hw.textFaint }}>
+                    {midiOutPorts.length === 0
+                      ? 'No MIDI output ports detected'
+                      : `${midiOutOpen.length} of ${midiOutPorts.length} open`}
+                  </span>
+                </div>
+                <button
+                  onClick={rescanMidiOut}
+                  style={{
+                    padding: '4px 10px', fontSize: 11, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none',
+                    cursor: 'pointer',
+                    background: 'rgba(255,255,255,0.08)',
+                    color: hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  Rescan
+                </button>
+              </div>
+              {midiOutPorts.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {midiOutPorts.map(port => {
+                    const open = midiOutOpen.includes(port)
+                    return (
+                      <div key={port} style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '4px 8px',
+                        background: 'rgba(0,0,0,0.25)',
+                        borderRadius: hw.radius.sm,
+                        border: `1px solid ${open ? hw.accent : hw.borderDark}`,
+                      }}>
+                        <span style={{ fontSize: 11, color: hw.textSecondary, fontFamily: 'inherit' }}>
+                          {port}
+                        </span>
+                        <button
+                          disabled={midiOutBusy}
+                          onClick={() => toggleMidiOutPort(port)}
+                          style={{
+                            padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                            borderRadius: hw.radius.sm, border: 'none',
+                            cursor: midiOutBusy ? 'default' : 'pointer',
+                            background: open ? hw.accent : 'rgba(255,255,255,0.08)',
+                            color: open ? '#fff' : hw.textSecondary,
+                            fontFamily: 'inherit',
+                          }}
+                        >
+                          {open ? 'Connected' : 'Connect'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <div style={{
+                marginTop: midiOutPorts.length > 0 ? 8 : 6,
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '6px 8px',
+                background: 'rgba(0,0,0,0.25)',
+                borderRadius: hw.radius.sm,
+                border: `1px solid ${midiClockEnabled ? hw.accent : hw.borderDark}`,
+                opacity: midiOutOpen.length === 0 ? 0.6 : 1,
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 11, color: hw.textSecondary }}>Send MIDI clock</span>
+                  <span style={{ fontSize: 9, color: hw.textFaint }}>
+                    Broadcasts 24 PPQN clock + Start/Stop to every open output.
+                  </span>
+                </div>
+                <button
+                  onClick={toggleMidiClock}
+                  disabled={midiOutOpen.length === 0}
+                  style={{
+                    padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none',
+                    cursor: midiOutOpen.length === 0 ? 'default' : 'pointer',
+                    background: midiClockEnabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                    color: midiClockEnabled ? '#fff' : hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  {midiClockEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
+              <div style={{
+                marginTop: 6,
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '6px 8px',
+                background: 'rgba(0,0,0,0.25)',
+                borderRadius: hw.radius.sm,
+                border: `1px solid ${midiMtcEnabled ? hw.accent : hw.borderDark}`,
+                opacity: midiOutOpen.length === 0 ? 0.6 : 1,
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 11, color: hw.textSecondary }}>Send MIDI timecode</span>
+                  <span style={{ fontSize: 9, color: hw.textFaint }}>
+                    Broadcasts SMPTE timecode as MTC Quarter Frames while playing.
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <select
+                    value={midiMtcFps}
+                    onChange={(e) => changeMidiMtcFps(Number(e.target.value))}
+                    disabled={midiOutOpen.length === 0}
+                    style={{
+                      fontSize: 10,
+                      background: 'rgba(255,255,255,0.05)',
+                      color: hw.textSecondary,
+                      border: `1px solid ${hw.borderDark}`,
+                      borderRadius: hw.radius.sm,
+                      padding: '2px 4px',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    <option value={24}>24 fps</option>
+                    <option value={25}>25 fps</option>
+                    <option value={30}>30 fps</option>
+                  </select>
+                  <button
+                    onClick={toggleMidiMtc}
+                    disabled={midiOutOpen.length === 0}
+                    style={{
+                      padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                      borderRadius: hw.radius.sm, border: 'none',
+                      cursor: midiOutOpen.length === 0 ? 'default' : 'pointer',
+                      background: midiMtcEnabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                      color: midiMtcEnabled ? '#fff' : hw.textSecondary,
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {midiMtcEnabled ? 'On' : 'Off'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>)}
+
+          {tab === 'playback' && (<>
             {/* Mixer-settings preferences (FL Audio Settings → Mixer settings) */}
             <div style={{
               marginTop: 8,
@@ -706,302 +972,76 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 {audioPrefs.playTruncatedNotes ? 'On' : 'Off'}
               </button>
             </div>
-          </div>
+          </>)}
 
-          {/* MIDI Inputs */}
-          <div style={{
-            marginBottom: 10, padding: '8px 12px',
-            background: hw.bgPanel, borderRadius: hw.radius.sm,
-            border: `1px solid ${hw.borderDark}`,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: midiPorts.length > 0 ? 6 : 0 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textMuted }}>MIDI Inputs</span>
-                <span style={{ fontSize: 10, color: hw.textFaint }}>
-                  {midiPorts.length === 0
-                    ? 'No MIDI input ports detected'
-                    : `${midiOpen.length} of ${midiPorts.length} open`}
-                </span>
-              </div>
+          {tab === 'files' && (<>
+            {/* Autosave frequency — FL File Settings → Backup parity */}
+            <SettingRow label="Autosave">
+              <Select
+                value={autosavePrefs.frequency}
+                onChange={v => autosavePrefs.setFrequency(v as typeof autosavePrefs.frequency)}
+                options={AUTOSAVE_OPTIONS.map(o => ({ value: o.id, label: o.label }))}
+              />
+            </SettingRow>
+            <div style={{
+              fontSize: 9, color: hw.textFaint, lineHeight: 1.5,
+              margin: '-4px 4px 10px', maxWidth: 360,
+            }}>
+              {AUTOSAVE_OPTIONS.find(o => o.id === autosavePrefs.frequency)?.desc}
+            </div>
+          </>)}
+
+          {tab === 'appearance' && (<>
+            {/* System Settings — General (FL F10 → General page parity) */}
+            <SettingRow label="Note naming">
+              <Select
+                value={generalPrefs.noteNaming}
+                onChange={v => generalPrefs.setNoteNaming(v as typeof generalPrefs.noteNaming)}
+                options={[
+                  { value: 'english', label: 'English (C-B)' },
+                  { value: 'germanic', label: 'Germanic (C-H)' },
+                  { value: 'solfege', label: 'Solfège (Do-Ti)' },
+                ]}
+              />
+            </SettingRow>
+
+            <div style={{
+              display: 'flex', gap: 8, padding: '0 0 12px 0',
+            }}>
               <button
-                onClick={rescanMidi}
+                onClick={() => generalPrefs.setAnimationsEnabled(!generalPrefs.animationsEnabled)}
                 style={{
-                  padding: '4px 10px', fontSize: 11, fontWeight: 600,
-                  borderRadius: hw.radius.sm, border: 'none',
+                  flex: 1,
+                  padding: '6px 10px', fontSize: 10, fontWeight: 600,
+                  borderRadius: hw.radius.sm,
                   cursor: 'pointer',
-                  background: 'rgba(255,255,255,0.08)',
-                  color: hw.textSecondary,
+                  background: generalPrefs.animationsEnabled ? 'rgba(255,255,255,0.08)' : hw.accent,
+                  color: generalPrefs.animationsEnabled ? hw.textSecondary : '#fff',
+                  border: `1px solid ${generalPrefs.animationsEnabled ? hw.borderDark : hw.accent}`,
                   fontFamily: 'inherit',
                 }}
+                title="When off, the UI runs without transitions or animations (FL 'Don't distract me')"
               >
-                Rescan
+                Animations: {generalPrefs.animationsEnabled ? 'On' : 'Off'}
               </button>
-            </div>
-            {midiPorts.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {midiPorts.map(port => {
-                  const open = midiOpen.includes(port)
-                  return (
-                    <div key={port} style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '4px 8px',
-                      background: 'rgba(0,0,0,0.25)',
-                      borderRadius: hw.radius.sm,
-                      border: `1px solid ${open ? hw.accent : hw.borderDark}`,
-                    }}>
-                      <span style={{ fontSize: 11, color: hw.textSecondary, fontFamily: 'inherit' }}>
-                        {port}
-                      </span>
-                      <button
-                        disabled={midiBusy}
-                        onClick={() => toggleMidiPort(port)}
-                        style={{
-                          padding: '2px 10px', fontSize: 10, fontWeight: 600,
-                          borderRadius: hw.radius.sm, border: 'none',
-                          cursor: midiBusy ? 'default' : 'pointer',
-                          background: open ? hw.accent : 'rgba(255,255,255,0.08)',
-                          color: open ? '#fff' : hw.textSecondary,
-                          fontFamily: 'inherit',
-                        }}
-                      >
-                        {open ? 'Connected' : 'Connect'}
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-            <div style={{
-              marginTop: midiPorts.length > 0 ? 8 : 6,
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '6px 8px',
-              background: 'rgba(0,0,0,0.25)',
-              borderRadius: hw.radius.sm,
-              border: `1px solid ${midiSyncEnabled ? hw.accent : hw.borderDark}`,
-              opacity: midiOpen.length === 0 ? 0.6 : 1,
-            }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textSecondary }}>Sync to external clock</span>
-                <span style={{ fontSize: 9, color: hw.textFaint, fontFamily: "'Consolas', monospace" }}>
-                  {midiSyncTicksSeen
-                    ? (midiSyncBpm != null
-                      ? `Master: ${midiSyncBpm.toFixed(2)} BPM`
-                      : 'Master detected · waiting for stable tempo')
-                    : 'No clock ticks received yet'}
-                </span>
-              </div>
               <button
-                onClick={toggleMidiSync}
-                disabled={midiOpen.length === 0}
+                onClick={() => generalPrefs.setHighVisibility(!generalPrefs.highVisibility)}
                 style={{
-                  padding: '2px 10px', fontSize: 10, fontWeight: 600,
-                  borderRadius: hw.radius.sm, border: 'none',
-                  cursor: midiOpen.length === 0 ? 'default' : 'pointer',
-                  background: midiSyncEnabled ? hw.accent : 'rgba(255,255,255,0.08)',
-                  color: midiSyncEnabled ? '#fff' : hw.textSecondary,
-                  fontFamily: 'inherit',
-                }}
-              >
-                {midiSyncEnabled ? 'On' : 'Off'}
-              </button>
-            </div>
-          </div>
-
-          {/* MIDI Outputs — clock send to external hardware */}
-          <div style={{
-            marginBottom: 10, padding: '8px 12px',
-            background: hw.bgPanel, borderRadius: hw.radius.sm,
-            border: `1px solid ${hw.borderDark}`,
-          }}>
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              marginBottom: midiOutPorts.length > 0 ? 6 : 0,
-            }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textMuted }}>MIDI Outputs</span>
-                <span style={{ fontSize: 10, color: hw.textFaint }}>
-                  {midiOutPorts.length === 0
-                    ? 'No MIDI output ports detected'
-                    : `${midiOutOpen.length} of ${midiOutPorts.length} open`}
-                </span>
-              </div>
-              <button
-                onClick={rescanMidiOut}
-                style={{
-                  padding: '4px 10px', fontSize: 11, fontWeight: 600,
-                  borderRadius: hw.radius.sm, border: 'none',
+                  flex: 1,
+                  padding: '6px 10px', fontSize: 10, fontWeight: 600,
+                  borderRadius: hw.radius.sm,
                   cursor: 'pointer',
-                  background: 'rgba(255,255,255,0.08)',
-                  color: hw.textSecondary,
+                  background: generalPrefs.highVisibility ? hw.accent : 'rgba(255,255,255,0.08)',
+                  color: generalPrefs.highVisibility ? '#fff' : hw.textSecondary,
+                  border: `1px solid ${generalPrefs.highVisibility ? hw.accent : hw.borderDark}`,
                   fontFamily: 'inherit',
                 }}
+                title="Bumps text + border contrast and adds focus rings for accessibility"
               >
-                Rescan
+                High-visibility: {generalPrefs.highVisibility ? 'On' : 'Off'}
               </button>
             </div>
-            {midiOutPorts.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {midiOutPorts.map(port => {
-                  const open = midiOutOpen.includes(port)
-                  return (
-                    <div key={port} style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '4px 8px',
-                      background: 'rgba(0,0,0,0.25)',
-                      borderRadius: hw.radius.sm,
-                      border: `1px solid ${open ? hw.accent : hw.borderDark}`,
-                    }}>
-                      <span style={{ fontSize: 11, color: hw.textSecondary, fontFamily: 'inherit' }}>
-                        {port}
-                      </span>
-                      <button
-                        disabled={midiOutBusy}
-                        onClick={() => toggleMidiOutPort(port)}
-                        style={{
-                          padding: '2px 10px', fontSize: 10, fontWeight: 600,
-                          borderRadius: hw.radius.sm, border: 'none',
-                          cursor: midiOutBusy ? 'default' : 'pointer',
-                          background: open ? hw.accent : 'rgba(255,255,255,0.08)',
-                          color: open ? '#fff' : hw.textSecondary,
-                          fontFamily: 'inherit',
-                        }}
-                      >
-                        {open ? 'Connected' : 'Connect'}
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-            <div style={{
-              marginTop: midiOutPorts.length > 0 ? 8 : 6,
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '6px 8px',
-              background: 'rgba(0,0,0,0.25)',
-              borderRadius: hw.radius.sm,
-              border: `1px solid ${midiClockEnabled ? hw.accent : hw.borderDark}`,
-              opacity: midiOutOpen.length === 0 ? 0.6 : 1,
-            }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textSecondary }}>Send MIDI clock</span>
-                <span style={{ fontSize: 9, color: hw.textFaint }}>
-                  Broadcasts 24 PPQN clock + Start/Stop to every open output.
-                </span>
-              </div>
-              <button
-                onClick={toggleMidiClock}
-                disabled={midiOutOpen.length === 0}
-                style={{
-                  padding: '2px 10px', fontSize: 10, fontWeight: 600,
-                  borderRadius: hw.radius.sm, border: 'none',
-                  cursor: midiOutOpen.length === 0 ? 'default' : 'pointer',
-                  background: midiClockEnabled ? hw.accent : 'rgba(255,255,255,0.08)',
-                  color: midiClockEnabled ? '#fff' : hw.textSecondary,
-                  fontFamily: 'inherit',
-                }}
-              >
-                {midiClockEnabled ? 'On' : 'Off'}
-              </button>
-            </div>
-            <div style={{
-              marginTop: 6,
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '6px 8px',
-              background: 'rgba(0,0,0,0.25)',
-              borderRadius: hw.radius.sm,
-              border: `1px solid ${midiMtcEnabled ? hw.accent : hw.borderDark}`,
-              opacity: midiOutOpen.length === 0 ? 0.6 : 1,
-            }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textSecondary }}>Send MIDI timecode</span>
-                <span style={{ fontSize: 9, color: hw.textFaint }}>
-                  Broadcasts SMPTE timecode as MTC Quarter Frames while playing.
-                </span>
-              </div>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <select
-                  value={midiMtcFps}
-                  onChange={(e) => changeMidiMtcFps(Number(e.target.value))}
-                  disabled={midiOutOpen.length === 0}
-                  style={{
-                    fontSize: 10,
-                    background: 'rgba(255,255,255,0.05)',
-                    color: hw.textSecondary,
-                    border: `1px solid ${hw.borderDark}`,
-                    borderRadius: hw.radius.sm,
-                    padding: '2px 4px',
-                    fontFamily: 'inherit',
-                  }}
-                >
-                  <option value={24}>24 fps</option>
-                  <option value={25}>25 fps</option>
-                  <option value={30}>30 fps</option>
-                </select>
-                <button
-                  onClick={toggleMidiMtc}
-                  disabled={midiOutOpen.length === 0}
-                  style={{
-                    padding: '2px 10px', fontSize: 10, fontWeight: 600,
-                    borderRadius: hw.radius.sm, border: 'none',
-                    cursor: midiOutOpen.length === 0 ? 'default' : 'pointer',
-                    background: midiMtcEnabled ? hw.accent : 'rgba(255,255,255,0.08)',
-                    color: midiMtcEnabled ? '#fff' : hw.textSecondary,
-                    fontFamily: 'inherit',
-                  }}
-                >
-                  {midiMtcEnabled ? 'On' : 'Off'}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Latency readout */}
-          <div style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            marginTop: 12, padding: '8px 12px',
-            background: hw.bgPanel, borderRadius: hw.radius.sm,
-            border: `1px solid ${hw.borderDark}`,
-          }}>
-            <span style={{ fontSize: 11, color: hw.textMuted }}>Output Latency</span>
-            <span style={{ fontSize: 12, fontWeight: 600, color: hw.textPrimary, fontFamily: "'Consolas', monospace" }}>
-              {latencyMs} ms
-            </span>
-          </div>
-
-          {/* WASAPI exclusive-mode toggle (Windows only) */}
-          <div style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            marginTop: 8, padding: '8px 12px',
-            background: hw.bgPanel, borderRadius: hw.radius.sm,
-            border: `1px solid ${hw.borderDark}`,
-            opacity: exclusive.available ? 1 : 0.5,
-          }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <span style={{ fontSize: 11, color: hw.textMuted }}>WASAPI Exclusive Mode</span>
-              <span style={{ fontSize: 10, color: hw.textFaint }}>
-                {exclusive.available
-                  ? 'Lowest latency, locks the output device to the DAW'
-                  : 'Only available on Windows with WASAPI host'}
-              </span>
-            </div>
-            <button
-              disabled={!exclusive.available}
-              onClick={toggleExclusive}
-              style={{
-                width: 38, height: 20,
-                borderRadius: 10, border: 'none',
-                background: exclusive.enabled ? hw.accent : 'rgba(255,255,255,0.08)',
-                cursor: exclusive.available ? 'pointer' : 'default',
-                position: 'relative', transition: 'background 150ms ease',
-              }}
-            >
-              <span style={{
-                position: 'absolute', top: 2, left: exclusive.enabled ? 20 : 2,
-                width: 16, height: 16, borderRadius: '50%',
-                background: '#fff', transition: 'left 150ms ease',
-              }} />
-            </button>
-          </div>
+          </>)}
 
           {error && (
             <div style={{ marginTop: 8, fontSize: 11, color: hw.red, padding: '6px 10px', background: hw.redDim, borderRadius: hw.radius.sm }}>

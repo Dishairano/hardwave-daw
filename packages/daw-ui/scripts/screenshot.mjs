@@ -15,7 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser', 'settings']
 const arg = process.argv[2]
 const single = arg && ALL.includes(arg)
 const panels = single ? [arg] : ALL
@@ -63,6 +63,8 @@ try {
       + (process.env.SHOT_TIMESIG_AT ? `&timesigat=${process.env.SHOT_TIMESIG_AT}` : '')
       // SHOT_STEP=velocity opens the setup wizard on that step.
       + (process.env.SHOT_STEP ? `&step=${process.env.SHOT_STEP}` : '')
+      // SHOT_TAB=midi opens the settings window on that tab.
+      + (process.env.SHOT_TAB ? `&tab=${process.env.SHOT_TAB}` : '')
     await page.goto(`${BASE}${query}`, { waitUntil: 'networkidle' })
     await sleep(2200) // let async loads + canvas redraw settle
     await page.screenshot({ path: out, scale: 'device' })

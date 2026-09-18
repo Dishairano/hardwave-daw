@@ -21,11 +21,12 @@ import { MixerPanel } from './components/mixer/MixerPanel'
 import { ChannelRack } from './components/channelrack/ChannelRack'
 import { Arrangement } from './components/arrangement/Arrangement'
 import { Browser } from './components/browser/Browser'
+import { AudioSettings } from './components/settings/AudioSettings'
 import { hw } from './theme'
 
 const TITLES: Record<string, string> = {
   pianoRoll: 'Piano Roll', mixer: 'Mixer', channelRack: 'Channel Rack',
-  playlist: 'Playlist', browser: 'Browser',
+  playlist: 'Playlist', browser: 'Browser', settings: 'Settings',
 }
 
 export function PanelWindow({ panel, params }: { panel: string; params: URLSearchParams }) {
@@ -63,6 +64,7 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
       case 'channelRack': return <ChannelRack />
       case 'playlist': return <Arrangement />
       case 'browser': return <Browser />
+      case 'settings': return <AudioSettings onClose={() => { void getCurrentWindow().close() }} />
       default: return <div style={{ padding: 16, color: hw.textMuted }}>Unknown panel: {panel}</div>
     }
   }

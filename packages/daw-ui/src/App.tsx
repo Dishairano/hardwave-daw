@@ -11,7 +11,7 @@ import { Browser } from './components/browser/Browser'
 import { ChannelRack } from './components/channelrack/ChannelRack'
 import { PianoRoll } from './components/piano-roll/PianoRoll'
 import { Roadmap } from './components/roadmap/Roadmap'
-import { AudioSettings } from './components/settings/AudioSettings'
+import { AudioSettings, focusSettingsTab } from './components/settings/AudioSettings'
 import { ThemePicker } from './components/settings/ThemePicker'
 import { useMixerSettingsStore } from './stores/mixerSettingsStore'
 import { usePlaylistToolStore } from './stores/playlistToolStore'
@@ -19,7 +19,7 @@ import { useMarkerStore } from './stores/markerStore'
 import { ColorPicker } from './components/primitives/ColorPicker'
 import { UpdateModal } from './components/UpdateModal'
 import { AboutDialog } from './components/AboutDialog'
-import { FloatingWindow } from './components/FloatingWindow'
+import { FloatingWindow, DetachButton } from './components/FloatingWindow'
 import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChangesDialog'
 import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
 import { ExportDialog } from './components/ExportDialog'
@@ -399,7 +399,7 @@ export function App() {
   useEffect(() => {
     const setters: Record<string, (v: boolean) => void> = {
       browser: setShowBrowser, playlist: setShowPlaylist, channelRack: setShowChannelRack,
-      pianoRoll: setShowPianoRoll, mixer: setShowMixer,
+      pianoRoll: setShowPianoRoll, mixer: setShowMixer, settings: setShowAudioSettings,
     }
     const onPopout = (e: Event) => setters[(e as CustomEvent<string>).detail]?.(false)
     const onRedock = (e: Event) => setters[(e as CustomEvent<string>).detail]?.(true)
@@ -1475,7 +1475,7 @@ export function App() {
           useTypingKeyboardStore.getState().toggle()
           return
         }
-        case 'toggleMidiSettings':    setShowAudioSettings(v => !v); return
+        case 'toggleMidiSettings':    focusSettingsTab('midi'); setShowAudioSettings(v => !v); return
         case 'toggleSongInfo':
           // F11 — FL Studio convention. ProjectInfoDialog renders the
           // metadata fields + auto-saves to the project on Save.
@@ -1695,10 +1695,10 @@ export function App() {
         label: 'Options',
         items: [
           // System settings — FL Options menu top group
-          { label: 'MIDI settings…', shortcut: 'F10', action: () => setShowAudioSettings(true) },
-          { label: 'Audio settings…', action: () => setShowAudioSettings(true) },
-          { label: 'General settings…', action: () => setShowAudioSettings(true) },
-          { label: 'File settings…', action: () => setShowAudioSettings(true) },
+          { label: 'MIDI settings…', shortcut: 'F10', action: () => { focusSettingsTab('midi'); setShowAudioSettings(true) } },
+          { label: 'Audio settings…', action: () => { focusSettingsTab('audio'); setShowAudioSettings(true) } },
+          { label: 'General settings…', action: () => { focusSettingsTab('appearance'); setShowAudioSettings(true) } },
+          { label: 'File settings…', action: () => { focusSettingsTab('files'); setShowAudioSettings(true) } },
           { label: 'Theme settings…', action: () => setShowThemePicker(true) },
           { separator: true, label: '' },
           // Project settings
@@ -1913,7 +1913,17 @@ export function App() {
 
       {/* Floating detached panels */}
       {showRoadmap && <Roadmap onClose={() => setShowRoadmap(false)} />}
-      {showAudioSettings && <AudioSettings onClose={() => setShowAudioSettings(false)} />}
+      {showAudioSettings && (
+        <FloatingWindow
+          panelId="settings"
+          title="Settings"
+          dockable={false}
+          actions={<DetachButton panelId="settings" title="Pop settings out into its own window" />}
+          onClose={() => setShowAudioSettings(false)}
+        >
+          <AudioSettings onClose={() => setShowAudioSettings(false)} />
+        </FloatingWindow>
+      )}
       {showThemePicker && <ThemePicker onClose={() => setShowThemePicker(false)} />}
       <ColorPicker />
 
