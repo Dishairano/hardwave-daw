@@ -479,6 +479,141 @@ fn async_stretch_bake_lands_and_does_not_stampede() {
 /// read every audio clip 8.8% too slow — flat and long — while MIDI/synth
 /// tracks, generated at the render rate, stayed in tune. Samples and synths
 /// came out of the same bounce in different keys.
+/// The whole point of the DAW, in one test: record something, put it on the
+/// timeline where it was recorded, bounce the project, and find it in the
+/// bounce at that position. Record, arrange, export.
+///
+/// Muted loop passes are part of it. Loop recording leaves the earlier
+/// passes on the track muted, so a bounce that ignored clip mute would play
+/// every pass at once.
+#[test]
+fn a_recorded_take_comes_back_in_the_bounce_at_its_position() {
+    let sr = 48_000_u32;
+    let engine = DawEngine::new();
+    engine
+        .transport
+        .looping
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    engine
+        .transport
+        .loop_start
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    engine
+        .transport
+        .loop_end
+        .store(sr as u64, std::sync::atomic::Ordering::Relaxed);
+    engine.transport.set_position(0);
+
+    // Record two loop passes: a quiet one, then a loud one.
+    engine.start_capture();
+    let blocks = sr as usize / 480;
+    for (pass, level) in [0.2_f32, 0.8].into_iter().enumerate() {
+        for b in 0..blocks {
+            let at = (b * 480) as u64;
+            if pass > 0 && b == 0 {
+                // The playhead jumping back is what marks a new pass.
+                engine
+                    .capture
+                    .write_test_block_at(&[level; 480], &[level; 480], 480, 0);
+                continue;
+            }
+            engine
+                .capture
+                .write_test_block_at(&[level; 480], &[level; 480], 480, at);
+        }
+    }
+    let passes = engine.stop_capture_passes();
+    assert_eq!(passes.len(), 2, "two passes were recorded");
+
+    // Put both passes on a track, one second in, the way the UI does: the
+    // last pass audible, the earlier one muted.
+    let track_id = {
+        let mut project = engine.project.lock();
+        project.add_audio_track("Recorded".into())
+    };
+    // One second in, asked of the tempo map rather than assumed: a new
+    // project is 140 bpm, so two beats is not a second.
+    let one_second_of_ticks = {
+        let project = engine.project.lock();
+        project.tempo_map.samples_to_tick(sr as u64, sr as f64)
+    };
+    for (i, (_, samples)) in passes.iter().enumerate() {
+        let id = format!("take-{i}");
+        let frames = samples.len() / 2;
+        engine.audio_pool.insert(
+            id.clone(),
+            hardwave_engine::AudioBuffer {
+                channels: vec![
+                    samples.iter().step_by(2).copied().collect(),
+                    samples.iter().skip(1).step_by(2).copied().collect(),
+                ],
+                sample_rate: sr,
+                num_frames: frames,
+            },
+        );
+        let mut project = engine.project.lock();
+        if let Some(t) = project.track_mut(&track_id) {
+            t.clips.push(ClipPlacement {
+                content: ClipContent::Audio(AudioClip {
+                    id: format!("clip-{i}"),
+                    name: id.clone(),
+                    source_path: id,
+                    source_hash: String::new(),
+                    source_start: 0,
+                    source_end: frames as u64,
+                    gain_db: 0.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
+                    // Every pass but the last is muted, as the UI leaves them.
+                    muted: i + 1 < passes.len(),
+                    reversed: false,
+                    pitch_semitones: 0.0,
+                    stretch_ratio: 1.0,
+                    warp_markers: Vec::new(),
+                    fade_in_curve: FadeCurve::Linear,
+                    fade_out_curve: FadeCurve::Linear,
+                    source_file: String::new(),
+                }),
+                track_id: track_id.clone(),
+                position_ticks: one_second_of_ticks,
+                length_ticks: 1_000_000,
+                lane: 0,
+            });
+        }
+    }
+
+    let mut out: Vec<f32> = Vec::new();
+    engine
+        .render_offline(sr, 3 * sr as u64, |block| {
+            out.extend_from_slice(block);
+            true
+        })
+        .expect("offline render");
+
+    let peak_between = |from_secs: f64, to_secs: f64| -> f32 {
+        let from = (from_secs * sr as f64) as usize * 2;
+        let to = ((to_secs * sr as f64) as usize * 2).min(out.len());
+        out[from.min(out.len())..to]
+            .iter()
+            .fold(0.0_f32, |m, s| m.max(s.abs()))
+    };
+
+    // Silence before the clip, the take after it, and only the audible pass.
+    assert!(
+        peak_between(0.0, 0.9) < 0.01,
+        "audio before the clip position"
+    );
+    let recorded = peak_between(1.1, 1.9);
+    assert!(
+        recorded > 0.5,
+        "the recorded take is missing from the bounce: {recorded}"
+    );
+    assert!(
+        recorded < 1.1,
+        "both passes played at once, so clip mute was ignored: {recorded}"
+    );
+}
+
 #[test]
 fn render_rate_does_not_detune_audio_clips() {
     let source_rate = 48_000_u32;
