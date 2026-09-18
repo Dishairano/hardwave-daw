@@ -400,6 +400,18 @@ pub fn set_punch_range(state: State<AppState>, enabled: bool, in_ticks: u64, out
 
 /// The punch window the audio thread is using, in samples. Lets the UI place
 /// a punched take at the punch point rather than where record was pressed.
+/// The playhead in ticks, through the project's tempo map. The UI only sees
+/// the playhead in samples, and a one-tempo conversion there puts anything
+/// placed "at the playhead" in the wrong bar after a tempo change.
+#[tauri::command]
+pub fn get_playhead_tick(state: State<AppState>) -> u64 {
+    let engine = state.engine.lock();
+    let sample_rate = engine.current_sample_rate() as f64;
+    let position = engine.transport.position();
+    let project = engine.project.lock();
+    project.tempo_map.samples_to_tick(position, sample_rate)
+}
+
 #[tauri::command]
 pub fn get_punch_range(state: State<AppState>) -> (bool, u64, u64) {
     state.engine.lock().punch_samples()

@@ -165,3 +165,24 @@ mod tests {
         assert!(entries[0].is_dir);
     }
 }
+
+/// Move a browser file to the recycle bin (the browser's "Delete file…").
+///
+/// Only audio files the browser lists can be removed this way, and they go to
+/// the recycle bin rather than being unlinked, so a wrong click in a sample
+/// library can be undone from Explorer.
+#[tauri::command]
+pub async fn trash_browser_file(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = Path::new(&path);
+        if !p.is_file() {
+            return Err(format!("not a file: {path}"));
+        }
+        if !is_audio_file(p) {
+            return Err(format!("not an audio file: {path}"));
+        }
+        trash::delete(p).map_err(|e| format!("could not move {path} to the recycle bin: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}

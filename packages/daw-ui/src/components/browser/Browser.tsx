@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { usePluginStore } from '../../stores/pluginStore'
@@ -7,6 +7,10 @@ import { useBrowserStore, isSameOrInsideDiskPath, type FolderNode } from '../../
 import { useSampleEditorStore } from '../../stores/sampleEditorStore'
 import { useBeatSlicerStore } from '../../stores/beatSlicerStore'
 import { DetachButton } from '../FloatingWindow'
+import {
+  selectedSendTarget, sendToSelectedChannel, openInNewChannel,
+  sendToPlaylistAsClip, sendToPlaylistAsAudioTrack, showInFolder, trashFile,
+} from './fileActions'
 
 type Tab = 'favorites' | 'folders' | 'audio' | 'lists' | 'search'
 
@@ -829,6 +833,20 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, r
     return () => { cancelled = true }
   }, [expanded, path, reloadToken])
 
+  // A file moved to the recycle bin from the menu leaves the listing at once.
+  useEffect(() => {
+    const onRemoved = (e: Event) => {
+      const gone = (e as CustomEvent<string>).detail
+      const cached = diskListingCache.get(path)
+      if (!cached || !cached.some(x => x.path === gone)) return
+      const next = cached.filter(x => x.path !== gone)
+      diskListingCache.set(path, next)
+      setEntries(next)
+    }
+    window.addEventListener('daw:browserFileRemoved', onRemoved)
+    return () => window.removeEventListener('daw:browserFileRemoved', onRemoved)
+  }, [path])
+
   const refresh = () => {
     dropCachedListingsUnder(path)
     setReloadToken(t => t + 1)
@@ -1105,6 +1123,28 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
   const name = path.split(/[\\/]/).pop() || path
   const dir = path.slice(0, path.length - name.length).replace(/[\\/]+$/, '')
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+
+  // Keep the menu on screen: it is tall, and a file near the bottom of the
+  // browser would otherwise open it half below the window.
+  useLayoutEffect(() => {
+    const el = menuRef.current
+    if (!ctxMenu || !el) return
+    const r = el.getBoundingClientRect()
+    const x = Math.max(4, Math.min(ctxMenu.x, window.innerWidth - r.width - 4))
+    const y = Math.max(4, Math.min(ctxMenu.y, window.innerHeight - r.height - 4))
+    if (x !== ctxMenu.x || y !== ctxMenu.y) setCtxMenu({ x, y })
+  }, [ctxMenu])
+
+  // Menu actions close the menu when they succeed and keep it open with the
+  // reason when they fail, so a sample that will not decode says so.
+  const run = (action: () => Promise<unknown>) => {
+    setActionError(null)
+    action()
+      .then(() => setCtxMenu(null))
+      .catch(e => setActionError(String(e)))
+  }
 
   useEffect(() => {
     if (!ctxMenu) return
@@ -1136,6 +1176,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
       }}
       onContextMenu={(e) => {
         e.preventDefault()
+        setActionError(null)
         setCtxMenu({ x: e.clientX, y: e.clientY })
       }}
       style={{
@@ -1234,6 +1275,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
       )}
       {ctxMenu && (
         <div
+          ref={menuRef}
           data-file-ctx-menu
           onMouseDown={e => e.stopPropagation()}
           style={{
@@ -1253,17 +1295,33 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           }}>
             {name}
           </div>
+          {(() => {
+            const target = selectedSendTarget()
+            const sendHint = target.kind === 'none' ? target.reason
+              : target.kind === 'audio' ? `Clip at the playhead on ${target.name}`
+              : `Load into the sampler on ${target.name}`
+            return (
+              <FileMenuItem label="Send to selected channel" hint={sendHint}
+                disabled={target.kind === 'none'} onClick={() => run(() => sendToSelectedChannel(path))} />
+            )
+          })()}
+          <FileMenuItem label="Open in new channel" hint="New sampler channel with this sample" onClick={() => run(() => openInNewChannel(path))} />
+          <MenuDivider />
+          <FileMenuItem label="Send to playlist as audio clip" onClick={() => run(() => sendToPlaylistAsClip(path))} />
+          <FileMenuItem label="Send to playlist as audio track" onClick={() => run(() => sendToPlaylistAsAudioTrack(path))} />
+          <MenuDivider />
+          <FileMenuItem label="Edit in audio editor" onClick={() => { setCtxMenu(null); useSampleEditorStore.getState().open(path) }} />
+          <FileMenuItem label="Open in slicer" onClick={() => { setCtxMenu(null); useBeatSlicerStore.getState().open(path) }} />
           <FileMenuItem label={isPreviewing ? 'Stop preview' : 'Preview'} onClick={() => { setCtxMenu(null); onPreview() }} />
-          <FileMenuItem label="Import to selected track" onClick={() => { setCtxMenu(null); onImport() }} />
-          <FileMenuItem label="Edit sample…" onClick={() => { setCtxMenu(null); useSampleEditorStore.getState().open(path) }} />
-          <FileMenuItem label="Slice sample…" onClick={() => { setCtxMenu(null); useBeatSlicerStore.getState().open(path) }} />
-          <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
-          <FileMenuItem label={isFavorite ? 'Remove favorite' : 'Add to favorites'} onClick={() => { setCtxMenu(null); onToggleFavorite() }} />
+          <MenuSection label="System" />
+          <FileMenuItem label="Open parent folder" onClick={() => run(() => showInFolder(path))} />
           <FileMenuItem label="Copy full path" onClick={copyPath} />
           <FileMenuItem label="Copy filename" onClick={copyFilename} />
+          <FileMenuItem label="Delete file…" danger onClick={() => run(() => trashFile(path))} />
+          <MenuSection label="Tags" />
+          <FileMenuItem label="Favorite" checked={isFavorite} onClick={() => { setCtxMenu(null); onToggleFavorite() }} />
           {onAddTag && (
             <>
-              <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
               <FileMenuItem label="Add tag…" onClick={() => { setCtxMenu(null); onAddTag() }} />
               {tags.map(t => (
                 <FileMenuItem
@@ -1279,9 +1337,12 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           )}
           {onRemove && (
             <>
-              <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+              <MenuDivider />
               <FileMenuItem label="Remove from list" danger onClick={() => { setCtxMenu(null); onRemove() }} />
             </>
+          )}
+          {actionError && (
+            <div style={{ padding: '4px 8px', fontSize: 9, color: hw.red, maxWidth: 260 }}>{actionError}</div>
           )}
         </div>
       )}
@@ -1289,22 +1350,45 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
   )
 }
 
-function FileMenuItem({ label, danger, onClick }: { label: string; danger?: boolean; onClick: () => void }) {
+function FileMenuItem({ label, hint, danger, disabled, checked, onClick }: {
+  label: string; hint?: string; danger?: boolean; disabled?: boolean; checked?: boolean; onClick: () => void
+}) {
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      title={hint}
       style={{
         width: '100%', display: 'flex', alignItems: 'center',
-        padding: '5px 8px', gap: 8, border: 'none',
-        background: 'transparent', color: danger ? hw.red : hw.textSecondary,
-        fontSize: 11, cursor: 'pointer', borderRadius: hw.radius.sm,
+        padding: '5px 8px', gap: 6, border: 'none',
+        background: 'transparent',
+        color: disabled ? hw.textFaint : danger ? hw.red : hw.textSecondary,
+        fontSize: 11, cursor: disabled ? 'default' : 'pointer', borderRadius: hw.radius.sm,
         textAlign: 'left',
       }}
-      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)' }}
+      onMouseEnter={e => { if (!disabled) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)' }}
       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
     >
+      {checked !== undefined && (
+        <span style={{ width: 10, color: hw.accent, fontSize: 10 }}>{checked ? '✓' : ''}</span>
+      )}
       {label}
     </button>
+  )
+}
+
+function MenuDivider() {
+  return <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
+}
+
+function MenuSection({ label }: { label: string }) {
+  return (
+    <div style={{
+      margin: '4px 0 2px', padding: '3px 8px', fontSize: 8, color: hw.textFaint,
+      letterSpacing: 0.5, textTransform: 'uppercase', borderTop: `1px solid ${hw.border}`,
+    }}>
+      {label}
+    </div>
   )
 }
 

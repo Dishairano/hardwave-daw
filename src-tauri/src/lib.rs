@@ -141,6 +141,7 @@ pub fn run() {
             commands::transport::cancel_recording,
             commands::transport::set_punch_range,
             commands::transport::get_punch_range,
+            commands::transport::get_playhead_tick,
             commands::transport::set_loop,
             commands::transport::set_master_volume,
             commands::transport::set_time_signature,
@@ -310,6 +311,7 @@ pub fn run() {
             commands::engine::set_wasapi_exclusive,
             // Browser
             commands::browser::list_directory,
+            commands::browser::trash_browser_file,
             // Bug reports
             commands::bugs::bug_report_env,
             commands::bugs::session_log_tail,
