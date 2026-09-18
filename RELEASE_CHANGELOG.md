@@ -1,11 +1,7 @@
 ### New features
-- feat: punch recording works for MIDI as well as audio
+- feat: right-click a fader or a channel rack knob and pick "Automate this" to get its automation lane, instead of the item being greyed out
 
 ### Bug fixes
-- fix: recorded MIDI sits where you played it. Notes used to be pulled onto the nearest audio block, which at a 512 sample buffer is about 10 ms late, every time
-- fix: recording MIDI over a loop keeps every pass as its own clip, the last one playing and the earlier ones muted. The take used to be discarded completely
-- fix: a MIDI recording can be undone
-- fix: recorded MIDI lands in the right bar in a song with tempo changes
+- fix: automation curves stay where you drew them in a song with tempo changes. They drifted further out of place the longer the song ran
+- fix: adding an automation lane can be undone and marks the project as changed
 
-### Improvements
-- improve: a MIDI take that captured nothing says so instead of failing quietly
