@@ -238,6 +238,11 @@ pub struct DawEngine {
     /// Playhead where the current take started, so its first pass can be
     /// placed where it was played.
     record_start: std::sync::atomic::AtomicU64,
+    /// Which loop pass the recording is on, and the playhead at the previous
+    /// block, so a jump back can be spotted. Counted here rather than in the
+    /// capture tap because a MIDI-only recording has no input node at all.
+    record_pass: Arc<std::sync::atomic::AtomicU32>,
+    record_last_pos: Arc<std::sync::atomic::AtomicU64>,
     /// True while a gesture is being treated as one undo step.
     history_group_open: Arc<std::sync::atomic::AtomicBool>,
     /// True once the open group has taken its snapshot.
@@ -305,6 +310,8 @@ impl DawEngine {
             capture: Arc::new(CaptureTap::default()),
             history: Arc::new(Mutex::new(History::new())),
             record_start: std::sync::atomic::AtomicU64::new(0),
+            record_pass: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            record_last_pos: Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
             history_group_open: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_group_taken: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             master_tap: master_tap::new_shared(),
@@ -462,6 +469,8 @@ impl DawEngine {
             .arm(self.current_sample_rate(), CAPTURE_HEADROOM_SECS);
         self.record_start
             .store(self.transport.position(), Ordering::Relaxed);
+        self.record_pass.store(0, Ordering::Relaxed);
+        self.record_last_pos.store(u64::MAX, Ordering::Relaxed);
         self.capture.recording.store(true, Ordering::Relaxed);
     }
 
@@ -480,6 +489,13 @@ impl DawEngine {
             )
         };
         self.capture.set_punch(enabled, in_samples, out_samples);
+    }
+
+    /// How many loop passes the current or last recording ran for.
+    pub fn record_passes(&self) -> u32 {
+        self.record_pass
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .saturating_add(1)
     }
 
     /// The punch window in samples, as the audio thread sees it.
@@ -638,6 +654,8 @@ impl DawEngine {
             self.metronome.clone(),
             self.preview.clone(),
             self.audio_prefs.clone(),
+            Arc::clone(&self.record_pass),
+            Arc::clone(&self.record_last_pos),
         );
 
         self.audio_device.start(callback).map_err(|e| e.to_string())
@@ -1354,6 +1372,8 @@ impl DawEngine {
             // A bounce should sound like playback, so it reads the same
             // switches the settings panel sets.
             self.audio_prefs.clone(),
+            Arc::clone(&self.record_pass),
+            Arc::clone(&self.record_last_pos),
         );
 
         // Populate insert chains from the project metadata so the export
@@ -1462,6 +1482,9 @@ struct EngineCallback {
     /// Reusable per-block scratch for live MIDI events. Pre-sized so
     /// the audio thread doesn't allocate when the controller is busy.
     midi_event_scratch: Vec<hardwave_midi::MidiEvent>,
+    /// Drained events with how late each one is, in samples. Pre-sized so
+    /// the audio thread never allocates for it.
+    midi_aged_scratch: Vec<(hardwave_midi::MidiEvent, u64)>,
     /// Shared rolling capture for "dump last N seconds to pattern".
     /// Pushed-into per block on the audio thread.
     midi_capture_ring: Arc<Mutex<MidiCaptureRing>>,
@@ -1485,6 +1508,10 @@ struct EngineCallback {
     /// The Audio settings panel's behaviour switches, shared with the engine
     /// so a change applies to the next block.
     audio_prefs: crate::audio_prefs::AudioPrefs,
+    /// Which loop pass the recording is on, shared with the engine so a MIDI
+    /// take can be split per pass the way an audio take is.
+    record_pass: Arc<std::sync::atomic::AtomicU32>,
+    record_last_pos: Arc<std::sync::atomic::AtomicU64>,
     /// This block's clicks. A fixed-size array rather than a Vec because it
     /// is filled on the audio thread, which must not allocate.
     click_events: [crate::metronome::ClickEvent; crate::metronome::MAX_CLICKS_PER_BLOCK],
@@ -1595,10 +1622,14 @@ impl EngineCallback {
         metronome: crate::metronome::MetronomeSettings,
         preview: crate::preview_player::PreviewRequest,
         audio_prefs: crate::audio_prefs::AudioPrefs,
+        record_pass: Arc<std::sync::atomic::AtomicU32>,
+        record_last_pos: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
         let mut cb = Self {
             preview: crate::preview_player::PreviewPlayer::new(preview),
             audio_prefs,
+            record_pass,
+            record_last_pos,
             click_events: [crate::metronome::ClickEvent {
                 frame_offset: 0,
                 downbeat: false,
@@ -1634,6 +1665,7 @@ impl EngineCallback {
             // up-front so the audio thread doesn't grow the Vec on its
             // first busy block.
             midi_event_scratch: Vec::with_capacity(256),
+            midi_aged_scratch: Vec::with_capacity(256),
             midi_capture_ring,
             // 64 comfortably exceeds the commands one UI tick can emit
             // for tracks that don't have nodes yet (a track add plus a
@@ -2765,19 +2797,54 @@ impl AudioCallback for EngineCallback {
         // clearing here would eat the very note that started playback.)
         if !drained_while_parked {
             self.midi_event_scratch.clear();
+            self.midi_aged_scratch.clear();
             if let Some(mgr) = self.midi_input.try_lock() {
-                mgr.try_drain_events_into(&mut self.midi_event_scratch);
+                // With ages, so a recorded note goes back to when it was
+                // played rather than to the start of the block that noticed
+                // it. The graph still gets the plain events.
+                mgr.try_drain_events_with_age_into(
+                    &mut self.midi_aged_scratch,
+                    self.sample_rate as f64,
+                );
+            }
+            for (ev, _) in &self.midi_aged_scratch {
+                self.midi_event_scratch.push(*ev);
             }
         }
 
         // Push drained events into the rolling capture ring. try_lock
         // keeps the audio thread non-blocking — if the UI is mid-dump
         // we skip this block (events still feed the graph below).
-        if !self.midi_event_scratch.is_empty() {
-            if let Some(mut ring) = self.midi_capture_ring.try_lock() {
-                let abs = self.transport.position();
-                for ev in &self.midi_event_scratch {
-                    ring.push(abs, *ev);
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            // Notice a loop jump while recording, so captured MIDI can be
+            // split per pass the way audio is. Inside a loop the positions
+            // repeat, so without this a second pass reads as more notes in
+            // the first one.
+            let abs = self.transport.position();
+            if self.transport.recording.load(Relaxed) {
+                let previous = self.record_last_pos.swap(abs, Relaxed);
+                if previous != u64::MAX && abs < previous {
+                    self.record_pass.fetch_add(1, Relaxed);
+                }
+            }
+            if !self.midi_event_scratch.is_empty() {
+                if let Some(mut ring) = self.midi_capture_ring.try_lock() {
+                    let pass = self.record_pass.load(Relaxed);
+                    if self.midi_aged_scratch.len() == self.midi_event_scratch.len() {
+                        for (ev, age) in &self.midi_aged_scratch {
+                            // Back off the lateness, but never past the block
+                            // before this one: a stalled UI thread must not
+                            // throw a note into an earlier bar.
+                            let corrected = abs.saturating_sub((*age).min(num_frames as u64));
+                            ring.push_in_pass(corrected, pass, *ev);
+                        }
+                    } else {
+                        // Parked-drain path, which has no ages.
+                        for ev in &self.midi_event_scratch {
+                            ring.push_in_pass(abs, pass, *ev);
+                        }
+                    }
                 }
             }
         }
@@ -3455,9 +3522,9 @@ mod rt_safety_tests {
             LoadCounters::new(),
             crate::metronome::MetronomeSettings::silent(),
             crate::preview_player::PreviewRequest::new(),
-            // Offline and test callbacks get their own switches: a bounce
-            // must not change because of what the settings panel says now.
             crate::audio_prefs::AudioPrefs::new(),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
         );
         (cb, cmd_tx)
     }
@@ -3612,9 +3679,9 @@ mod wait_for_input_tests {
             LoadCounters::new(),
             crate::metronome::MetronomeSettings::silent(),
             crate::preview_player::PreviewRequest::new(),
-            // Offline and test callbacks get their own switches: a bounce
-            // must not change because of what the settings panel says now.
             crate::audio_prefs::AudioPrefs::new(),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
         );
         (cb, command_tx)
     }

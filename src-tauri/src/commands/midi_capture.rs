@@ -9,6 +9,7 @@
 
 use crate::AppState;
 use serde::Serialize;
+use std::sync::atomic::Ordering;
 use tauri::State;
 
 /// Serialised entry from the rolling ring. `sample_pos` is the absolute
@@ -195,112 +196,158 @@ pub fn commit_recording_to_midi_clip(
     end_sample: u64,
     quantize_ticks: Option<u64>,
     blend: Option<bool>,
-) -> Result<String, String> {
+) -> Result<Vec<String>, String> {
     use hardwave_midi::{MidiClip, MidiEvent, MidiRecorder};
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
 
-    if end_sample <= start_sample {
-        return Err("end_sample must be > start_sample".into());
-    }
-
     let engine = state.engine.lock();
     let sample_rate = engine.current_sample_rate() as f64;
-    let bpm = engine
-        .transport
-        .bpm
-        .load(std::sync::atomic::Ordering::Relaxed);
-    if bpm <= 0.0 || sample_rate <= 0.0 {
-        return Err("invalid tempo / sample rate for tick conversion".into());
-    }
-    // 960 PPQ matches `hardwave_midi::PPQ` and is the project default.
-    let samples_per_tick = sample_rate * 60.0 / (bpm * 960.0);
-    if samples_per_tick <= 0.0 {
-        return Err("computed samples_per_tick is non-positive".into());
+    if sample_rate <= 0.0 {
+        return Err("invalid sample rate for tick conversion".into());
     }
 
-    // Snapshot entries in range under the ring lock. try_lock would
-    // race against the audio thread's push; the command path can wait.
-    let entries: Vec<(u64, MidiEvent)> = engine
-        .midi_capture_ring
-        .lock()
-        .entries_in_order()
-        .into_iter()
-        .filter(|(pos, _)| *pos >= start_sample && *pos < end_sample)
-        .collect();
+    // The window a pass covers. With the loop on, the playhead wraps, so the
+    // stop position is behind the start: the command used to reject that
+    // outright and the UI only logged it, which lost the whole take. The
+    // loop bounds are used instead, and each pass is committed separately.
+    let looping = engine.transport.looping.load(Ordering::Relaxed);
+    let loop_start = engine.transport.loop_start.load(Ordering::Relaxed);
+    let loop_end = engine.transport.loop_end.load(Ordering::Relaxed);
+    let (punched, punch_in, punch_out) = engine.punch_samples();
 
-    let mut recorder = MidiRecorder::default();
-    if let Some(q) = quantize_ticks {
-        recorder.set_quantize(Some(q));
-    }
-    recorder.start();
-    for (sample_pos, ev) in entries {
-        let rel = sample_pos.saturating_sub(start_sample);
-        let tick = (rel as f64 / samples_per_tick).round() as u64;
-        match ev {
-            MidiEvent::NoteOn {
-                note,
-                velocity,
-                channel,
-                ..
-            } => recorder.note_on(tick, note, velocity, channel),
-            MidiEvent::NoteOff { note, channel, .. } => recorder.note_off(tick, note, channel),
-            _ => {} // CC / pitch bend skipped — captured separately by automation
+    let captured = engine.midi_capture_ring.lock().captured_in_order();
+    let passes = engine.record_passes();
+
+    // One window per pass: the first from where record was pressed, the rest
+    // from the loop start, each ending at the loop end (or where recording
+    // stopped on the last pass), narrowed by the punch window.
+    let window_for = |pass: u32| -> (u64, u64) {
+        let is_last = pass + 1 >= passes;
+        let mut from = if pass == 0 { start_sample } else { loop_start };
+        let mut to = if is_last && !(looping && end_sample <= start_sample) {
+            end_sample.max(from)
+        } else if looping && loop_end > loop_start {
+            loop_end
+        } else {
+            end_sample.max(from)
+        };
+        if punched {
+            from = from.max(punch_in);
+            to = to.min(punch_out);
         }
-    }
-    recorder.stop();
+        (from, to.max(from))
+    };
 
-    let notes = recorder.take_notes();
-    if notes.is_empty() {
-        return Err("no MIDI notes captured in the recording window".into());
-    }
+    engine.snapshot_before_mutation();
 
-    let length_ticks = ((end_sample - start_sample) as f64 / samples_per_tick).ceil() as u64;
-    let position_ticks = (start_sample as f64 / samples_per_tick).round() as u64;
+    let mut created = Vec::new();
+    for pass in 0..passes {
+        let (from, to) = window_for(pass);
+        if to <= from {
+            continue;
+        }
+        let events: Vec<(u64, MidiEvent)> = captured
+            .iter()
+            .filter(|c| c.pass == pass && c.sample_pos >= from && c.sample_pos < to)
+            .map(|c| (c.sample_pos, c.event))
+            .collect();
+        if events.is_empty() {
+            continue;
+        }
 
-    // Blend-record: merge into an overlapping clip when one exists.
-    if blend.unwrap_or(false) {
-        let merged = {
+        // Ticks through the project's tempo map, not one tempo: a song with a
+        // tempo change used to record its notes in the wrong place.
+        let (position_ticks, length_ticks, tick_of) = {
+            let project = engine.project.lock();
+            let map = &project.tempo_map;
+            let position = map.samples_to_tick(from, sample_rate);
+            let end = map.samples_to_tick(to, sample_rate);
+            let of = |pos: u64| {
+                map.samples_to_tick(pos, sample_rate)
+                    .saturating_sub(position)
+            };
+            (
+                position,
+                end.saturating_sub(position).max(1),
+                events
+                    .iter()
+                    .map(|(p, ev)| (of(*p), *ev))
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let mut recorder = MidiRecorder::default();
+        if let Some(q) = quantize_ticks {
+            recorder.set_quantize(Some(q));
+        }
+        recorder.start();
+        for (tick, ev) in tick_of {
+            match ev {
+                MidiEvent::NoteOn {
+                    note,
+                    velocity,
+                    channel,
+                    ..
+                } => recorder.note_on(tick, note, velocity, channel),
+                MidiEvent::NoteOff { note, channel, .. } => recorder.note_off(tick, note, channel),
+                _ => {} // CC and pitch bend are captured by automation instead
+            }
+        }
+        recorder.stop();
+        let notes = recorder.take_notes();
+        if notes.is_empty() {
+            continue;
+        }
+
+        // Blend-record merges into an overlapping clip when one exists.
+        if blend.unwrap_or(false) {
+            let merged = {
+                let mut project = engine.project.lock();
+                let Some(track) = project.track_mut(&track_id) else {
+                    return Err(format!("track {track_id} not found"));
+                };
+                merge_notes_into_overlapping_clip(track, position_ticks, length_ticks, &notes)
+            };
+            if let Some(clip_id) = merged {
+                created.push(clip_id);
+                continue;
+            }
+        }
+
+        let clip_id = uuid::Uuid::new_v4().to_string();
+        let name = if passes > 1 {
+            format!("Recording {}", pass + 1)
+        } else {
+            "Recording".to_string()
+        };
+        let mut clip = MidiClip::new(clip_id.clone(), name, length_ticks);
+        clip.notes = notes;
+        {
             let mut project = engine.project.lock();
             let Some(track) = project.track_mut(&track_id) else {
                 return Err(format!("track {track_id} not found"));
             };
-            merge_notes_into_overlapping_clip(track, position_ticks, length_ticks, &notes)
-        };
-        if let Some(clip_id) = merged {
-            drop(engine);
-            state.engine.lock().rebuild_graph();
-            return Ok(clip_id);
+            track.clips.push(ClipPlacement {
+                content: ClipContent::Midi(MidiClipRef {
+                    id: clip_id.clone(),
+                    clip,
+                }),
+                track_id: track_id.clone(),
+                position_ticks,
+                length_ticks,
+                lane: 0,
+            });
         }
-        // No overlapping clip — fall through to the new-clip path.
+        created.push(clip_id);
     }
 
-    let clip_id = uuid::Uuid::new_v4().to_string();
-    let mut clip = MidiClip::new(clip_id.clone(), "Recording".into(), length_ticks);
-    clip.notes = notes;
-
-    {
-        let mut project = engine.project.lock();
-        let Some(track) = project.track_mut(&track_id) else {
-            return Err(format!("track {track_id} not found"));
-        };
-        track.clips.push(ClipPlacement {
-            content: ClipContent::Midi(MidiClipRef {
-                id: clip_id.clone(),
-                clip,
-            }),
-            track_id: track_id.clone(),
-            position_ticks,
-            length_ticks,
-            lane: 0,
-        });
+    if created.is_empty() {
+        return Err("no MIDI notes were captured in the recorded range".into());
     }
+
     drop(engine);
-
-    // Rebuild the audio graph so the new clip is picked up on the
-    // next audio block. Caller doesn't have to do this manually.
     state.engine.lock().rebuild_graph();
-
-    Ok(clip_id)
+    Ok(created)
 }
 
 /// Wipe the capture ring. Used by the UI on project switch so the

@@ -269,11 +269,23 @@ impl MidiRecorder {
 /// 3 minutes of dense input (~8 events/sec * 180s = 1440 conservative
 /// minimum; we allocate 8 192 entries to cover dense chord playing,
 /// CC sweeps, and pitch-bend streams from a real session).
+/// One captured event: where it happened, which loop pass it belongs to, and
+/// what it was.
+#[derive(Debug, Clone, Copy)]
+pub struct CapturedMidi {
+    pub sample_pos: u64,
+    pub pass: u32,
+    pub event: crate::MidiEvent,
+}
+
 pub struct MidiCaptureRing {
-    /// (absolute sample position when captured, event). Position is
-    /// drawn from the transport so the UI can convert to ticks using
-    /// the same sample-rate / tempo it sees on screen.
-    entries: Vec<(u64, crate::MidiEvent)>,
+    /// (absolute sample position when captured, loop pass, event).
+    ///
+    /// The position is the transport's, so it can be converted to ticks
+    /// through the project's tempo map. The pass number is what tells two
+    /// loop passes apart: inside a loop the positions repeat, so without it
+    /// a second pass looks like more notes in the first one.
+    entries: Vec<CapturedMidi>,
     head: usize,
     full: bool,
     capacity: usize,
@@ -292,14 +304,24 @@ impl MidiCaptureRing {
     /// Push a single event. Wraps around at capacity, overwriting the
     /// oldest entry — never blocks, never allocates after warm-up.
     pub fn push(&mut self, sample_pos: u64, ev: crate::MidiEvent) {
+        self.push_in_pass(sample_pos, 0, ev)
+    }
+
+    /// Push an event recorded during loop pass `pass`.
+    pub fn push_in_pass(&mut self, sample_pos: u64, pass: u32, ev: crate::MidiEvent) {
+        let entry = CapturedMidi {
+            sample_pos,
+            pass,
+            event: ev,
+        };
         if self.entries.len() < self.capacity {
-            self.entries.push((sample_pos, ev));
+            self.entries.push(entry);
             self.head = self.entries.len() % self.capacity;
             if self.entries.len() == self.capacity {
                 self.full = true;
             }
         } else {
-            self.entries[self.head] = (sample_pos, ev);
+            self.entries[self.head] = entry;
             self.head = (self.head + 1) % self.capacity;
         }
     }
@@ -308,6 +330,14 @@ impl MidiCaptureRing {
     /// pattern; callers walk the slice and convert sample positions to
     /// ticks against the project's tempo map.
     pub fn entries_in_order(&self) -> Vec<(u64, crate::MidiEvent)> {
+        self.captured_in_order()
+            .into_iter()
+            .map(|c| (c.sample_pos, c.event))
+            .collect()
+    }
+
+    /// Every entry oldest to newest, with its loop pass.
+    pub fn captured_in_order(&self) -> Vec<CapturedMidi> {
         if !self.full {
             return self.entries.clone();
         }
@@ -331,6 +361,60 @@ impl MidiCaptureRing {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod capture_ring_pass_tests {
+    use super::*;
+    use crate::MidiEvent;
+
+    fn note(n: u8) -> MidiEvent {
+        MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: n,
+            velocity: 0.8,
+        }
+    }
+
+    /// Inside a loop the positions repeat, so two passes were
+    /// indistinguishable and read as more notes in the first pass.
+    #[test]
+    fn a_pass_number_tells_two_loop_passes_apart() {
+        let mut ring = MidiCaptureRing::new(16);
+        ring.push_in_pass(4_800, 0, note(60));
+        ring.push_in_pass(4_800, 1, note(62));
+        ring.push_in_pass(4_800, 2, note(64));
+
+        let all = ring.captured_in_order();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].pass, 0);
+        assert_eq!(all[1].pass, 1);
+        assert_eq!(all[2].pass, 2);
+        // The old view still works for callers that do not care.
+        assert_eq!(ring.entries_in_order().len(), 3);
+    }
+
+    #[test]
+    fn a_plain_push_is_the_first_pass() {
+        let mut ring = MidiCaptureRing::new(4);
+        ring.push(1_000, note(60));
+        assert_eq!(ring.captured_in_order()[0].pass, 0);
+    }
+
+    #[test]
+    fn passes_survive_the_ring_wrapping() {
+        let mut ring = MidiCaptureRing::new(3);
+        for (i, pass) in [0u32, 0, 1, 1, 2].into_iter().enumerate() {
+            ring.push_in_pass(1_000 + i as u64, pass, note(60 + i as u8));
+        }
+        let all = ring.captured_in_order();
+        assert_eq!(all.len(), 3, "ring keeps the newest three");
+        assert_eq!(
+            all.iter().map(|c| c.pass).collect::<Vec<_>>(),
+            vec![1, 1, 2]
+        );
     }
 }
 

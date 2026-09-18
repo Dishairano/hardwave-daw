@@ -40,7 +40,11 @@ pub struct ClockSyncSnapshot {
 
 #[derive(Default)]
 struct SharedState {
-    events: VecDeque<MidiEvent>,
+    /// (arrival, event). The arrival time is what makes recorded timing
+    /// better than the audio block it was noticed in: every event used to be
+    /// stamped with the block's start position, so a recorded part was
+    /// quantised to the buffer size, about 10 ms at 512 frames.
+    events: VecDeque<(Instant, MidiEvent)>,
     last_event_at: Option<Instant>,
     dropped: u64,
     // Clock sync — updated in the midir callback on system realtime bytes.
@@ -283,7 +287,7 @@ impl MidiInputManager {
     /// audio block so events stay fresh even with many ports open.
     pub fn drain_events(&self) -> Vec<MidiEvent> {
         let mut state = self.shared.lock();
-        state.events.drain(..).collect()
+        state.events.drain(..).map(|(_, ev)| ev).collect()
     }
 
     /// Non-blocking drain into a caller-owned buffer. Returns true when the
@@ -297,7 +301,29 @@ impl MidiInputManager {
         let Some(mut state) = self.shared.try_lock() else {
             return false;
         };
-        out.extend(state.events.drain(..));
+        out.extend(state.events.drain(..).map(|(_, ev)| ev));
+        true
+    }
+
+    /// Drain events with how late each one is, in samples.
+    ///
+    /// An event is noticed at the start of the block after it arrived, so
+    /// recording it at that block's position puts it late by up to a whole
+    /// buffer. The age says by how much, so the recorder can put it back
+    /// where it was played.
+    pub fn try_drain_events_with_age_into(
+        &self,
+        out: &mut Vec<(MidiEvent, u64)>,
+        sample_rate: f64,
+    ) -> bool {
+        let Some(mut state) = self.shared.try_lock() else {
+            return false;
+        };
+        let now = Instant::now();
+        out.extend(state.events.drain(..).map(|(arrived, ev)| {
+            let age = now.saturating_duration_since(arrived).as_secs_f64() * sample_rate.max(1.0);
+            (ev, age.max(0.0) as u64)
+        }));
         true
     }
 
@@ -311,7 +337,7 @@ impl MidiInputManager {
             state.events.pop_front();
             state.dropped = state.dropped.saturating_add(1);
         }
-        state.events.push_back(ev);
+        state.events.push_back((Instant::now(), ev));
         state.last_event_at = Some(Instant::now());
     }
 
@@ -411,7 +437,7 @@ fn handle_input_bytes(bytes: &[u8], context: &PortContext) {
                     state.events.pop_front();
                     state.dropped = state.dropped.saturating_add(1);
                 }
-                state.events.push_back(event);
+                state.events.push_back((now, event));
                 state.last_event_at = Some(now);
             }
         }
@@ -614,6 +640,62 @@ mod tests {
             Ok(()) => {}
             Err(reason) => assert!(!reason.is_empty(), "an error must say why"),
         }
+    }
+
+    /// Every event used to be stamped with the start of the audio block that
+    /// noticed it, so a recorded part was quantised to the buffer size.
+    #[test]
+    fn a_drained_event_says_how_late_it_is() {
+        let manager = MidiInputManager::new();
+        manager.inject(MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.8,
+        });
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        let mut out = Vec::new();
+        assert!(manager.try_drain_events_with_age_into(&mut out, 48_000.0));
+        assert_eq!(out.len(), 1);
+        let (_, age) = out[0];
+        // 5 ms at 48 kHz is 240 samples. Generous bounds: this is wall clock.
+        assert!(age >= 120, "age {age} is too small to be real");
+        assert!(age < 48_000, "age {age} is implausible");
+    }
+
+    #[test]
+    fn draining_with_ages_empties_the_queue() {
+        let manager = MidiInputManager::new();
+        for n in 60..64 {
+            manager.inject(MidiEvent::NoteOn {
+                timing: 0,
+                channel: 0,
+                note: n,
+                velocity: 0.5,
+            });
+        }
+        let mut out = Vec::new();
+        manager.try_drain_events_with_age_into(&mut out, 48_000.0);
+        assert_eq!(out.len(), 4);
+
+        let mut second = Vec::new();
+        manager.try_drain_events_with_age_into(&mut second, 48_000.0);
+        assert!(second.is_empty(), "events were drained twice");
+    }
+
+    #[test]
+    fn the_plain_drain_still_returns_events_only() {
+        let manager = MidiInputManager::new();
+        manager.inject(MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.8,
+        });
+        let mut out = Vec::new();
+        assert!(manager.try_drain_events_into(&mut out));
+        assert_eq!(out.len(), 1);
     }
 
     #[test]

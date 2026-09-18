@@ -394,21 +394,47 @@ export const useTransportStore = create<TransportState>((set, get) => ({
       const endSample = get().positionSamples
       if (armedTrack.kind === 'Midi') {
         try {
-          const { useRecordingPrefsStore } = await import('./recordingPrefsStore')
-          await invoke('commit_recording_to_midi_clip', {
-            trackId: armedTrack.id,
-            startSample,
-            endSample,
-            quantizeTicks: null,
-            // Blend-record (Ctrl+B): merge into the overlapping clip
-            // instead of stacking a new one.
-            blend: useRecordingPrefsStore.getState().blendRecord,
-          })
+          const [{ useRecordingPrefsStore }, { useNotificationStore }] = await Promise.all([
+            import('./recordingPrefsStore'),
+            import('./notificationStore'),
+          ])
+          // Every pass of a loop recording is one gesture, so one undo.
+          await useTrackStore.getState().beginHistoryGroup()
+          let clipIds: string[] = []
+          try {
+            clipIds = (await invoke('commit_recording_to_midi_clip', {
+              trackId: armedTrack.id,
+              startSample,
+              endSample,
+              quantizeTicks: null,
+              // Blend-record (Ctrl+B): merge into the overlapping clip
+              // instead of stacking a new one.
+              blend: useRecordingPrefsStore.getState().blendRecord,
+            })) as string[]
+            // Loop recording: the latest pass plays, earlier ones are muted
+            // on the same track, the same as an audio take.
+            for (const clipId of clipIds.slice(0, -1)) {
+              await useTrackStore.getState().setClipMuted(armedTrack.id, clipId, true)
+            }
+          } finally {
+            await useTrackStore.getState().endHistoryGroup(
+              clipIds.length > 1 ? `Record ${clipIds.length} loop passes` : 'Record MIDI take',
+            )
+          }
           await useTrackStore.getState().fetchTracks()
+          if (clipIds.length > 1) {
+            useNotificationStore.getState().push('info', `Recorded ${clipIds.length} loop passes`, {
+              detail: 'The last pass is playing. The earlier ones are on the same track, muted.',
+            })
+          }
         } catch (err) {
-          // No notes captured / no MIDI input — leave the take blank
-          // and surface in console for debugging.
-          console.warn('commit_recording_to_midi_clip:', err)
+          // This used to be a console warning, so a MIDI take that captured
+          // nothing looked exactly like one that worked.
+          const { useNotificationStore } = await import('./notificationStore')
+          useNotificationStore.getState().push('warning', 'Nothing was recorded', {
+            detail: `${String(err)}\nCheck that the track is armed and that your controller is enabled in the setup wizard.`,
+            sticky: true,
+          })
         }
       } else {
         await placeRecordedTake(take, startSample)

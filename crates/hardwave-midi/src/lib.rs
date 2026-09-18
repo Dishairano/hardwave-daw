@@ -16,7 +16,9 @@ pub use generators::{
 pub use input::{ClockSyncSnapshot, MidiInputManager, ReconcileReport};
 pub use osc::{OscArg, OscError, OscMessage};
 pub use output::{MidiOutputManager, MIDI_CLOCK_TICK, MIDI_CONTINUE, MIDI_START, MIDI_STOP};
-pub use recording::{CcEvent, MidiCaptureRing, MidiCcRecorder, MidiRecordMode, MidiRecorder};
+pub use recording::{
+    CapturedMidi, CcEvent, MidiCaptureRing, MidiCcRecorder, MidiRecordMode, MidiRecorder,
+};
 pub use smf::write_smf;
 pub use theory::{generate_melody, major_scale, suggest_next_chord, Chord, ChordQuality};
 
