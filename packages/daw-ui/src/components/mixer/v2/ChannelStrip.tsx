@@ -17,6 +17,11 @@ import {
   useTrackArmed,
 } from '../../../stores/trackStore'
 import { useMixerSettingsStore } from '../../../stores/mixerSettingsStore'
+import {
+  normalizePan,
+  normalizeVolumeDb,
+  useAutomationWriteStore,
+} from '../../../stores/automationWriteStore'
 
 export interface ChannelStripProps {
   trackId: string
@@ -63,25 +68,40 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const showWidthKnob = useMixerSettingsStore((s) => s.showWidthKnob)
 
   // ---- volume ----
+  // Each drag also streams into automation when a write mode is on. The
+  // recorder existed with no caller, so a fader move during playback wrote
+  // nothing; these two lines are where a move becomes a lane.
   const onVolChange = useCallback(
-    (db: number) => useTrackStore.getState().setVolumeLocal(trackId, db),
+    (db: number) => {
+      useTrackStore.getState().setVolumeLocal(trackId, db)
+      useAutomationWriteStore
+        .getState()
+        .writeSample(trackId, { kind: 'track_volume' }, normalizeVolumeDb(db))
+    },
     [trackId],
   )
   const onVolCommit = useCallback(
     (db: number) => {
       useTrackStore.getState().commitVolume(trackId, db).catch(console.error)
+      useAutomationWriteStore.getState().endTouch(trackId, { kind: 'track_volume' })
     },
     [trackId],
   )
 
   // ---- pan ----
   const onPanChange = useCallback(
-    (next: number) => useTrackStore.getState().setPanLocal(trackId, next),
+    (next: number) => {
+      useTrackStore.getState().setPanLocal(trackId, next)
+      useAutomationWriteStore
+        .getState()
+        .writeSample(trackId, { kind: 'track_pan' }, normalizePan(next))
+    },
     [trackId],
   )
   const onPanCommit = useCallback(
     (next: number) => {
       useTrackStore.getState().commitPan(trackId, next).catch(console.error)
+      useAutomationWriteStore.getState().endTouch(trackId, { kind: 'track_pan' })
     },
     [trackId],
   )

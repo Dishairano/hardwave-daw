@@ -36,6 +36,7 @@ import { useHoverInfoStore } from '../stores/hoverInfoStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useMetronomeStore } from '../stores/metronomeStore'
 import { useRecordingPrefsStore } from '../stores/recordingPrefsStore'
+import { useAutomationWriteStore } from '../stores/automationWriteStore'
 import { useTypingKeyboardStore } from '../stores/typingKeyboardStore'
 import { usePerfMetersStore, startPerfMeters } from '../stores/perfMetersStore'
 import type { ActionId } from '../stores/shortcutsStore'
@@ -162,6 +163,8 @@ export function HwTopbar({
   const toggleBlendRecord = useRecordingPrefsStore(s => s.toggleBlendRecord)
   const stepEditing = useRecordingPrefsStore(s => s.stepEditing)
   const toggleStepEditing = useRecordingPrefsStore(s => s.toggleStepEditing)
+  const automationWriteMode = useAutomationWriteStore(s => s.mode)
+  const cycleAutomationWrite = useAutomationWriteStore(s => s.cycleMode)
   const typingKbdEnabled = useTypingKeyboardStore(s => s.enabled)
   const toggleTypingKbd = useTypingKeyboardStore(s => s.toggle)
   const precountBars = useMetronomeStore(s => s.precountBars)
@@ -526,6 +529,19 @@ export function HwTopbar({
           <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
             <circle cx="5" cy="6" r="3"/>
             <circle cx="8" cy="6" r="3"/>
+          </svg>
+        </button>
+        <button
+          onClick={() => cycleAutomationWrite()}
+          className={`fl-mini-btn${automationWriteMode !== 'off' ? ' on' : ''}`}
+          title={
+            automationWriteMode === 'off'
+              ? 'Automation write: off. Click to cycle Write, Touch, Latch.'
+              : `Automation write: ${automationWriteMode}. Moving a fader or knob while playing records it into a lane.`
+          }
+        >
+          <svg className="ic" width="13" height="12" viewBox="0 0 13 12" fill="none" stroke="currentColor" strokeWidth="1.1">
+            <path d="M1 9.5c2-6 4.5-6 6 0s3.5 3 5-2" strokeLinecap="round" />
           </svg>
         </button>
         <button

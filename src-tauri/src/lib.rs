@@ -28,6 +28,9 @@ pub struct AppState {
     /// The export command clears it on entry and checks it each block.
     pub export_cancel: Arc<AtomicBool>,
     pub midi_mappings: Arc<Mutex<MidiMappings>>,
+    /// Live automation recording sessions. The recorder module existed with
+    /// tests and no caller, so moving a control during playback wrote nothing.
+    pub automation_write: Arc<commands::automation_write::AutomationWriteSessions>,
     pub midi_clock: Arc<MidiClockState>,
     pub midi_sync: Arc<MidiClockSyncState>,
     pub midi_timecode: Arc<MidiTimecodeState>,
@@ -112,6 +115,7 @@ pub fn run() {
         plugin_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
         midi_mappings: Arc::clone(&midi_mappings),
+        automation_write: Arc::new(commands::automation_write::AutomationWriteSessions::new()),
         midi_clock: Arc::clone(&midi_clock),
         midi_sync: Arc::clone(&midi_sync),
         midi_timecode: Arc::clone(&midi_timecode),
@@ -144,6 +148,11 @@ pub fn run() {
             commands::transport::set_wait_for_input,
             commands::transport::get_transport_state,
             // Automation
+            commands::automation_write::set_automation_write_mode,
+            commands::automation_write::get_automation_write_mode,
+            commands::automation_write::automation_touch_begin,
+            commands::automation_write::automation_write_sample,
+            commands::automation_write::automation_touch_end,
             commands::automation::add_automation_lane,
             commands::automation::delete_automation_lane,
             commands::automation::add_automation_point,

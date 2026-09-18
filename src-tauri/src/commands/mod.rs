@@ -2,6 +2,7 @@ pub mod arrangements;
 pub mod audio;
 pub mod automation;
 pub mod automation_clips;
+pub mod automation_write;
 pub mod autosave;
 pub mod browser;
 pub mod bugs;
