@@ -9,6 +9,13 @@ pub struct ProcessContext {
     pub tempo: f64,
     pub time_sig: (u32, u32),
     pub position_samples: u64,
+    /// The same position in ticks, through the project's tempo map.
+    ///
+    /// Computed once per block by the engine, because a node cannot take the
+    /// project lock on the audio thread. Automation used to work this out
+    /// itself as `samples / rate * tempo`, which is only right for a song at
+    /// one tempo: with a tempo change or a ramp the curve slid off the music.
+    pub position_ticks: u64,
     pub playing: bool,
 }
 

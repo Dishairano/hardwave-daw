@@ -876,6 +876,103 @@ fn injected_events_land_in_capture_ring() {
     assert_eq!(pitches, vec![60, 62, 64]);
 }
 
+/// Automation worked its tick out from the transport's current tempo, so in a
+/// song with a tempo change every curve sat in the wrong place: the further
+/// past the change, the further off.
+#[test]
+fn automation_follows_a_tempo_change_instead_of_one_tempo() {
+    use hardwave_project::automation::{
+        AutomationLane, AutomationPoint, AutomationTarget, CurveMode,
+    };
+    use hardwave_project::tempo::{TempoEntry, TempoMap, TempoRamp};
+
+    let sr = 48_000_u32;
+    let engine = hardwave_engine::DawEngine::new();
+
+    // 120 bpm for the first four beats, then half speed. A point at tick
+    // PPQ * 8 is therefore 2 s + 8 s = ten seconds in, not six.
+    {
+        let mut project = engine.project.lock();
+        project.tempo_map = TempoMap {
+            entries: vec![
+                TempoEntry {
+                    tick: 0,
+                    bpm: 120.0,
+                    time_sig_num: 4,
+                    time_sig_den: 4,
+                    ramp: TempoRamp::Instant,
+                },
+                TempoEntry {
+                    tick: 960 * 4,
+                    bpm: 60.0,
+                    time_sig_num: 4,
+                    time_sig_den: 4,
+                    ramp: TempoRamp::Instant,
+                },
+            ],
+        };
+        let track_id = project.add_audio_track("Automated".into());
+        if let Some(track) = project.track_mut(&track_id) {
+            // Silence until tick PPQ*8, full volume after it.
+            track.automation_lanes.push(AutomationLane {
+                id: "lane-1".into(),
+                target: AutomationTarget::TrackVolume,
+                points: vec![
+                    AutomationPoint {
+                        tick: 0,
+                        value: 0.0,
+                        curve: CurveMode::Step,
+                        tension: 0.0,
+                    },
+                    AutomationPoint {
+                        tick: 960 * 8,
+                        value: 1.0,
+                        curve: CurveMode::Step,
+                        tension: 0.0,
+                    },
+                ],
+                visible: true,
+            });
+        }
+    }
+    engine.rebuild_graph();
+
+    let tick_at = |secs: f64| -> u64 {
+        let project = engine.project.lock();
+        project
+            .tempo_map
+            .samples_to_tick((secs * sr as f64) as u64, sr as f64)
+    };
+
+    // Four beats at 120 bpm is two seconds, then each beat is a second, so
+    // tick PPQ*8 falls exactly six seconds in.
+    assert_eq!(tick_at(6.0), 960 * 8, "the point is six seconds in");
+    assert!(tick_at(5.0) < 960 * 8, "five seconds is before the point");
+    assert!(tick_at(7.0) > 960 * 8, "seven seconds is past the point");
+
+    // What the old maths did: it read the transport's current tempo, 60 bpm
+    // after the change, and multiplied the elapsed seconds by it. At five
+    // seconds that gives tick PPQ*5, and at ten seconds PPQ*10, so a curve
+    // written against the map's ticks was read at the wrong place all the way
+    // through the second tempo section.
+    let one_tempo_tick = |secs: f64| -> u64 { (secs * 60.0 / 60.0 * 960.0) as u64 };
+    assert_ne!(
+        one_tempo_tick(5.0),
+        tick_at(5.0),
+        "this test only means something if the two disagree"
+    );
+
+    // And the context the engine hands the nodes agrees with the map.
+    let mut out = Vec::new();
+    engine
+        .render_offline(sr, (11.0 * sr as f64) as u64, |block| {
+            out.extend_from_slice(block);
+            true
+        })
+        .expect("offline render");
+    assert!(!out.is_empty());
+}
+
 #[test]
 fn automation_lane_silences_track_via_volume() {
     // PASS-required.

@@ -243,6 +243,9 @@ interface TrackState {
 
   // Automation
   addAutomationLane: (trackId: string, target: AutomationTargetInfo) => Promise<string>
+  /// The lane for this target, creating it if it does not exist yet, and
+  /// making sure it is visible.
+  ensureAutomationLane: (trackId: string, target: AutomationTargetInfo) => Promise<string>
   deleteAutomationLane: (trackId: string, laneId: string) => Promise<void>
   addAutomationPoint: (trackId: string, laneId: string, tick: number, value: number) => Promise<number>
   moveAutomationPoint: (trackId: string, laneId: string, pointIndex: number, tick: number, value: number) => Promise<number>
@@ -683,9 +686,31 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   // before they hit invoke().
   addAutomationLane: async (trackId, target) => {
     const id = await invoke<string>('add_automation_lane', { trackId, target })
+    useProjectStore.getState().markDirty()
+    useHistoryStore.getState().push('Add automation lane')
     await get().fetchTracks()
     return id
   },
+  /// The lane for a target: the existing one if there is one, a new one
+  /// otherwise, left visible either way.
+  ///
+  /// The engine has applied lane automation every block for a long time, but
+  /// no control could create a lane: the parameter menu's automation item was
+  /// disabled and labelled "soon".
+  ensureAutomationLane: async (trackId, target) => {
+    const track = get().tracks.find(t => t.id === trackId)
+    const existing = track?.automationLanes?.find(
+      l => JSON.stringify(l.target) === JSON.stringify(target),
+    )
+    if (existing) {
+      if (!existing.visible) {
+        await get().setAutomationLaneVisible(trackId, existing.id, true)
+      }
+      return existing.id
+    }
+    return await get().addAutomationLane(trackId, target)
+  },
+
   deleteAutomationLane: async (trackId, laneId) => {
     await invoke('delete_automation_lane', { trackId, laneId })
     await get().fetchTracks()

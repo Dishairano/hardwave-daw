@@ -25,10 +25,15 @@ export interface ParameterContextMenuProps {
   onSet: (v: number) => void
   onClose: () => void
   onMidiLearn?: () => void
+  /// Create an automation lane for this parameter. The engine has applied
+  /// lane automation every block for a long time, but this menu item was
+  /// disabled and labelled "soon", so there was no way in from a control.
+  /// Callers that know which target the control maps to pass this.
+  onAutomate?: () => void
 }
 
 export function ParameterContextMenu(props: ParameterContextMenuProps) {
-  const { x, y, label, value, defaultValue, unit = '', min, max, decimals = 2, onSet, onClose, onMidiLearn } = props
+  const { x, y, label, value, defaultValue, unit = '', min, max, decimals = 2, onSet, onClose, onMidiLearn, onAutomate } = props
   const [typing, setTyping] = useState(false)
   const [draft, setDraft] = useState(() => value.toFixed(decimals))
   const inputRef = useRef<HTMLInputElement>(null)
@@ -133,7 +138,17 @@ export function ParameterContextMenu(props: ParameterContextMenuProps) {
             setTyping(true)
           }} />
           <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
-          <Item label="Automation…" disabled shortcut="soon" onClick={() => {}} />
+          <Item
+            label="Automate this"
+            disabled={!onAutomate}
+            shortcut={onAutomate ? undefined : 'soon'}
+            onClick={() => {
+              if (onAutomate) {
+                onAutomate()
+                onClose()
+              }
+            }}
+          />
           <Item
             label="MIDI Learn"
             disabled={!onMidiLearn}

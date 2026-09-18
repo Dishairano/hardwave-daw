@@ -1417,6 +1417,9 @@ export function ChannelRack() {
               onMidiLearn={() => window.dispatchEvent(new CustomEvent('daw:openMidiLearn', {
                 detail: { kind: 'trackPan', trackId: ch.id },
               }))}
+              onAutomate={() => {
+                void useTrackStore.getState().ensureAutomationLane(ch.id, { kind: 'track_pan' })
+              }}
             />
           )
         }
@@ -1436,6 +1439,9 @@ export function ChannelRack() {
             onMidiLearn={() => window.dispatchEvent(new CustomEvent('daw:openMidiLearn', {
               detail: { kind: 'trackVolume', trackId: ch.id },
             }))}
+            onAutomate={() => {
+              void useTrackStore.getState().ensureAutomationLane(ch.id, { kind: 'track_volume' })
+            }}
           />
         )
       })()}

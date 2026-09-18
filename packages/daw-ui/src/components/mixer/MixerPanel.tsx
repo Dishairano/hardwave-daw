@@ -684,6 +684,15 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
                   }))
                 : undefined
           }
+          onAutomate={
+            trackId && !isMaster
+              ? () => {
+                  void useTrackStore
+                    .getState()
+                    .ensureAutomationLane(trackId, { kind: 'track_volume' })
+                }
+              : undefined
+          }
         />
       )}
     </div>

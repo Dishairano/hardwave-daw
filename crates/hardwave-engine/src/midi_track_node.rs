@@ -829,6 +829,7 @@ mod tests {
     fn ctx_at(sr: f64, n: u32, pos: u64, playing: bool) -> ProcessContext {
         ProcessContext {
             sample_rate: sr,
+            position_ticks: 0,
             buffer_size: n,
             tempo: 120.0,
             time_sig: (4, 4),

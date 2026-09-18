@@ -2771,9 +2771,30 @@ impl AudioCallback for EngineCallback {
             }
         }
 
+        // The block's position in ticks, for everything downstream that thinks
+        // musically: automation curves, and anything that follows. Taken from
+        // the project's tempo map when the lock is free, so it is right under
+        // a tempo change or a ramp, and from the current tempo otherwise,
+        // which is what a one-tempo song gives anyway.
+        let position_samples = self.transport.position();
+        let tempo_now = self
+            .transport
+            .bpm
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let position_ticks = match self.project.try_lock() {
+            Some(project) => project
+                .tempo_map
+                .samples_to_tick(position_samples, self.sample_rate as f64),
+            None => {
+                let secs = position_samples as f64 / (self.sample_rate as f64).max(1.0);
+                (secs * tempo_now.max(1.0) / 60.0 * hardwave_midi::PPQ as f64).max(0.0) as u64
+            }
+        };
+
         let ctx = ProcessContext {
             sample_rate: self.sample_rate as f64,
             buffer_size: num_frames as u32,
+            position_ticks,
             tempo: self
                 .transport
                 .bpm

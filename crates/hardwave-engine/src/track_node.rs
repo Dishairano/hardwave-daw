@@ -630,10 +630,11 @@ impl AudioNode for TrackNode {
             && ctx.sample_rate > 0.0
             && ctx.tempo > 0.0
         {
-            let secs = ctx.position_samples as f64 / ctx.sample_rate;
-            let beats = secs * ctx.tempo / 60.0;
-            // 960 ticks per quarter (PPQ) matches the project default.
-            let tick = (beats * 960.0).max(0.0) as u64;
+            // The engine works this out once per block, through the project's
+            // tempo map. Deriving it here from one tempo, as this used to,
+            // put every curve in the wrong place as soon as the song had a
+            // tempo change or a ramp.
+            let tick = ctx.position_ticks;
             let mut volume = self.static_volume;
             let mut pan = self.static_pan;
             // Mute lanes can flip the running mute state mid-block;
@@ -1051,6 +1052,7 @@ mod tests {
 
         let ctx = ProcessContext {
             sample_rate: 48000.0,
+            position_ticks: 0,
             buffer_size: 64,
             tempo: 140.0,
             time_sig: (4, 4),
