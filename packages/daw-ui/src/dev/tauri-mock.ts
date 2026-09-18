@@ -259,6 +259,8 @@ const mock: TauriInternals = {
         return false
       case 'get_audio_cache_stats':
         return { bytesUsed: 96 * 1024 * 1024, maxBytes: 512 * 1024 * 1024, entryCount: 14 }
+      case 'get_recording_latency':
+        return { outputMs: 10.7, inputMs: 10.7, queueMs: 2.1, offsetMs: 0, totalMs: 23.5, inputRunning: true }
       case 'get_input_meter':
         return { peak_l: 0, peak_r: 0, running: false, sample_rate: 48000, buffer_size: 512 }
       case 'list_midi_inputs':

@@ -3,7 +3,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, SampleRate, StreamConfig, SupportedStreamConfigRange};
 use parking_lot::Mutex as PlMutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -103,6 +103,44 @@ impl InputPeakTracker {
     }
 }
 
+/// Output and input latency as the running streams report them, in
+/// nanoseconds so input and output may run at different rates.
+///
+/// Written by the audio callbacks, read by the engine when a recording
+/// starts, to place the take where it was played.
+#[derive(Default)]
+pub struct StreamLatency {
+    output_nanos: AtomicU64,
+    input_nanos: AtomicU64,
+}
+
+impl StreamLatency {
+    /// Time from the output callback to the moment its first frame is heard.
+    pub fn output_nanos(&self) -> u64 {
+        self.output_nanos.load(Ordering::Relaxed)
+    }
+
+    /// Time from a frame reaching the input to the input callback seeing it.
+    pub fn input_nanos(&self) -> u64 {
+        self.input_nanos.load(Ordering::Relaxed)
+    }
+
+    fn set_output(&self, nanos: u64) {
+        self.output_nanos.store(nanos, Ordering::Relaxed);
+    }
+
+    fn set_input(&self, nanos: u64) {
+        self.input_nanos.store(nanos, Ordering::Relaxed);
+    }
+}
+
+fn frames_to_nanos(frames: usize, sample_rate: u32) -> u64 {
+    if sample_rate == 0 {
+        return 0;
+    }
+    (frames as u64).saturating_mul(1_000_000_000) / sample_rate as u64
+}
+
 // ---------------------------------------------------------------------------
 // Audio device manager
 // ---------------------------------------------------------------------------
@@ -152,6 +190,8 @@ pub struct AudioDeviceManager {
     input_active_sample_rate: u32,
     /// Buffer size the input stream is running at.
     input_active_buffer_size: u32,
+    /// Latency the running streams report.
+    latency: Arc<StreamLatency>,
 }
 
 impl AudioDeviceManager {
@@ -207,7 +247,13 @@ impl AudioDeviceManager {
             input_monitor_producer: Arc::new(PlMutex::new(None)),
             input_active_sample_rate: 0,
             input_active_buffer_size: 0,
+            latency: Arc::new(StreamLatency::default()),
         }
+    }
+
+    /// Latency the running streams report, shared with the callbacks.
+    pub fn latency(&self) -> Arc<StreamLatency> {
+        Arc::clone(&self.latency)
     }
 
     /// Whether the current stream is running in WASAPI exclusive mode.
@@ -424,6 +470,10 @@ impl AudioDeviceManager {
                 )?;
                 self.wasapi_stream = Some(stream);
                 self.active_exclusive = true;
+                // The exclusive stream reports no timestamps; one buffer is
+                // what an exclusive endpoint holds.
+                self.latency
+                    .set_output(frames_to_nanos(self.buffer_size as usize, self.sample_rate));
                 return Ok(());
             }
             self.active_exclusive = false;
@@ -445,6 +495,8 @@ impl AudioDeviceManager {
         };
         let running = Arc::clone(&self.running);
         let stream_error = Arc::clone(&self.stream_error);
+        let latency = Arc::clone(&self.latency);
+        let stream_rate = self.sample_rate;
         let mut cb = callback;
 
         // On macOS, the first invocation of the callback (which runs on the
@@ -460,7 +512,7 @@ impl AudioDeviceManager {
         let stream = device
             .build_output_stream(
                 &config,
-                move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+                move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
                     #[cfg(target_os = "macos")]
                     {
                         if !workgroup_joined {
@@ -474,6 +526,16 @@ impl AudioDeviceManager {
                         return;
                     }
                     let num_frames = data.len() / 2;
+                    // At least the block being written has to play out before
+                    // anything after it is heard. The driver's own estimate is
+                    // used when it is larger.
+                    let ts = info.timestamp();
+                    let reported = ts
+                        .playback
+                        .duration_since(&ts.callback)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0);
+                    latency.set_output(reported.max(frames_to_nanos(num_frames, stream_rate)));
                     cb.process(data, num_frames, 2);
                 },
                 move |err| {
@@ -603,14 +665,27 @@ impl AudioDeviceManager {
 
         let peaks = Arc::clone(&self.input_peaks);
         let monitor_producer = Arc::clone(&self.input_monitor_producer);
+        let latency = Arc::clone(&self.latency);
+        let input_rate = sample_rate;
         let chans = channels;
         let stream = device
             .build_input_stream(
                 &config,
-                move |data: &[f32], _info: &cpal::InputCallbackInfo| {
+                move |data: &[f32], info: &cpal::InputCallbackInfo| {
                     if data.is_empty() {
                         return;
                     }
+                    // How old the first frame of this buffer is. When the
+                    // driver gives no timestamp, the buffer itself is the
+                    // least it can be.
+                    let ts = info.timestamp();
+                    let frames = data.len() / chans.max(1) as usize;
+                    let reported = ts
+                        .callback
+                        .duration_since(&ts.capture)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0);
+                    latency.set_input(reported.max(frames_to_nanos(frames, input_rate)));
                     let mut max_l = 0.0_f32;
                     let mut max_r = 0.0_f32;
 
@@ -686,6 +761,7 @@ impl AudioDeviceManager {
             log::info!("Input stream stopped");
         }
         let _ = self.input_peaks.take();
+        self.latency.set_input(0);
         self.input_active_sample_rate = 0;
         self.input_active_buffer_size = 0;
     }

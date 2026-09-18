@@ -9,7 +9,7 @@
 //! switch takes effect on the next block instead of the next project change,
 //! and the audio thread never waits on the UI to read one.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -21,6 +21,10 @@ pub struct AudioPrefs {
     /// Play a note the playhead landed in the middle of, from the middle,
     /// rather than waiting for the next note to start.
     play_truncated_notes: Arc<AtomicBool>,
+    /// Milliseconds added to the measured recording latency. Drivers do not
+    /// always report all of it (converters, USB buffering), so a take can
+    /// still sit a little late or early; this is the manual correction.
+    record_offset_ms: Arc<AtomicI32>,
 }
 
 impl AudioPrefs {
@@ -30,6 +34,7 @@ impl AudioPrefs {
             // agree before the UI has said anything.
             reset_on_transport: Arc::new(AtomicBool::new(true)),
             play_truncated_notes: Arc::new(AtomicBool::new(false)),
+            record_offset_ms: Arc::new(AtomicI32::new(0)),
         }
     }
 
@@ -47,6 +52,17 @@ impl AudioPrefs {
 
     pub fn play_truncated_notes(&self) -> bool {
         self.play_truncated_notes.load(Ordering::Relaxed)
+    }
+
+    /// Clamped to half a second either way: anything larger is a mistake,
+    /// not a converter.
+    pub fn set_record_offset_ms(&self, ms: i32) {
+        self.record_offset_ms
+            .store(ms.clamp(-500, 500), Ordering::Relaxed);
+    }
+
+    pub fn record_offset_ms(&self) -> i32 {
+        self.record_offset_ms.load(Ordering::Relaxed)
     }
 }
 

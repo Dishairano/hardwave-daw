@@ -255,6 +255,8 @@ pub fn run() {
             commands::engine::process_memory,
             commands::engine::set_reset_on_transport,
             commands::engine::set_play_truncated_notes,
+            commands::engine::set_record_offset_ms,
+            commands::engine::get_recording_latency,
             commands::engine::set_metronome_enabled,
             commands::engine::set_metronome_volume,
             commands::engine::set_metronome_accent,

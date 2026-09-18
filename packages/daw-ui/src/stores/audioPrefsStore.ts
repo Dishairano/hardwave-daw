@@ -16,12 +16,16 @@ import { invoke } from '@tauri-apps/api/core'
  *  - playTruncatedNotes: when on, a note the playhead landed in the middle of
  *    is played from its middle, with its envelope where it would have been.
  *    When off, only notes that start at or after the playhead are played.
+ *  - recordOffsetMs: manual correction added to the measured recording
+ *    latency, for interfaces that do not report all of theirs.
  */
 interface AudioPrefsState {
   resetPluginsOnTransport: boolean
   playTruncatedNotes: boolean
+  recordOffsetMs: number
   setResetPluginsOnTransport: (v: boolean) => void
   setPlayTruncatedNotes: (v: boolean) => void
+  setRecordOffsetMs: (ms: number) => void
 }
 
 export const useAudioPrefsStore = create<AudioPrefsState>()(
@@ -29,6 +33,7 @@ export const useAudioPrefsStore = create<AudioPrefsState>()(
     (set) => ({
       resetPluginsOnTransport: true,
       playTruncatedNotes: false,
+      recordOffsetMs: 0,
       setResetPluginsOnTransport: (resetPluginsOnTransport) => {
         set({ resetPluginsOnTransport })
         invoke('set_reset_on_transport', { enabled: resetPluginsOnTransport }).catch(() => {})
@@ -36,6 +41,11 @@ export const useAudioPrefsStore = create<AudioPrefsState>()(
       setPlayTruncatedNotes: (playTruncatedNotes) => {
         set({ playTruncatedNotes })
         invoke('set_play_truncated_notes', { enabled: playTruncatedNotes }).catch(() => {})
+      },
+      setRecordOffsetMs: (ms) => {
+        const recordOffsetMs = Math.max(-500, Math.min(500, Math.round(Number.isFinite(ms) ? ms : 0)))
+        set({ recordOffsetMs })
+        invoke('set_record_offset_ms', { ms: recordOffsetMs }).catch(() => {})
       },
     }),
     { name: 'hw-audio-prefs' },
@@ -50,7 +60,8 @@ export const useAudioPrefsStore = create<AudioPrefsState>()(
  * boot, and safe to call again.
  */
 export function applySavedAudioPrefs(): void {
-  const { resetPluginsOnTransport, playTruncatedNotes } = useAudioPrefsStore.getState()
+  const { resetPluginsOnTransport, playTruncatedNotes, recordOffsetMs } = useAudioPrefsStore.getState()
   invoke('set_reset_on_transport', { enabled: resetPluginsOnTransport }).catch(() => {})
   invoke('set_play_truncated_notes', { enabled: playTruncatedNotes }).catch(() => {})
+  invoke('set_record_offset_ms', { ms: recordOffsetMs ?? 0 }).catch(() => {})
 }

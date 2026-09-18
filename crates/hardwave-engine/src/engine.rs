@@ -162,6 +162,17 @@ pub type PluginStateSnapshotSlot = Arc<Mutex<Option<PluginStateSnapshotSender>>>
 /// silently reallocated.
 const CAPTURE_HEADROOM_SECS: u32 = 20 * 60;
 
+/// The parts of the recording latency, for the settings read-out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordingLatency {
+    pub sample_rate: u32,
+    pub output_frames: u64,
+    pub input_frames: u64,
+    pub queue_frames: u64,
+    pub offset_ms: i32,
+    pub total_frames: u64,
+}
+
 pub struct DawEngine {
     pub transport: TransportState,
     pub project: Arc<Mutex<Project>>,
@@ -465,13 +476,45 @@ impl DawEngine {
         // grows a buffer mid-take. Half an hour of stereo at the device rate
         // is about 700 MB of f32 at 48 kHz, so this is deliberately a cap:
         // beyond it the tap reports an overflow rather than reallocating.
-        self.capture
-            .arm(self.current_sample_rate(), CAPTURE_HEADROOM_SECS);
-        self.record_start
-            .store(self.transport.position(), Ordering::Relaxed);
+        let record_start = self.transport.position();
+        let latency = self.recording_latency().total_frames;
+        self.capture.arm_compensated(
+            self.current_sample_rate(),
+            CAPTURE_HEADROOM_SECS,
+            latency,
+            record_start,
+        );
+        self.record_start.store(record_start, Ordering::Relaxed);
         self.record_pass.store(0, Ordering::Relaxed);
         self.record_last_pos.store(u64::MAX, Ordering::Relaxed);
         self.capture.recording.store(true, Ordering::Relaxed);
+    }
+
+    /// How late a played sample reaches the recording, and so how far each
+    /// take is moved back: what the output takes to be heard, what the
+    /// input takes to arrive, what waits in the queue between the two, and
+    /// the user's own correction.
+    pub fn recording_latency(&self) -> RecordingLatency {
+        let sr = self.current_sample_rate() as u64;
+        let stream = self.audio_device.latency();
+        let to_frames = |nanos: u64| nanos.saturating_mul(sr) / 1_000_000_000;
+        let output_frames = to_frames(stream.output_nanos());
+        let input_frames = to_frames(stream.input_nanos());
+        let queue_frames = self.capture.queue_frames() as u64;
+        let offset_ms = self.audio_prefs.record_offset_ms();
+        let measured = (output_frames + input_frames + queue_frames) as i64;
+        let offset_frames = offset_ms as i64 * sr as i64 / 1000;
+        // Capped at a second: a larger figure is a broken report, and moving
+        // a take that far would be worse than not moving it.
+        let total_frames = (measured + offset_frames).clamp(0, sr as i64) as u64;
+        RecordingLatency {
+            sample_rate: sr as u32,
+            output_frames,
+            input_frames,
+            queue_frames,
+            offset_ms,
+            total_frames,
+        }
     }
 
     /// Set the punch window from timeline ticks.
@@ -535,6 +578,10 @@ impl DawEngine {
         use std::sync::atomic::Ordering::Relaxed;
         self.capture.recording.store(false, Relaxed);
         let record_start = self.record_start.load(Relaxed);
+        // Where the first kept sample was played. With latency compensation
+        // that is not always the record start: a punch-in or a pass that
+        // began late moves it.
+        let first = self.capture.first_position().unwrap_or(record_start);
         let passes = self.capture.take_passes();
         let looping = self.transport.looping.load(Relaxed);
         let loop_start = self.transport.loop_start.load(Relaxed);
@@ -546,7 +593,7 @@ impl DawEngine {
             .into_iter()
             .enumerate()
             .map(|(i, mut samples)| {
-                let mut start = if i == 0 { record_start } else { loop_start };
+                let mut start = if i == 0 { first } else { loop_start };
                 let mut end = if looping && loop_end > loop_start {
                     loop_end
                 } else {
@@ -3804,6 +3851,50 @@ mod wait_for_input_tests {
         assert!(
             cb.transport.is_playing(),
             "turning the pref off honours the earlier Play press"
+        );
+    }
+}
+
+#[cfg(test)]
+mod recording_latency_tests {
+    use super::*;
+
+    #[test]
+    fn the_manual_offset_moves_the_compensation_and_never_below_zero() {
+        let engine = DawEngine::new();
+        let sr = engine.current_sample_rate() as u64;
+        let base = engine.recording_latency().total_frames;
+
+        engine.audio_prefs().set_record_offset_ms(10);
+        assert_eq!(engine.recording_latency().total_frames, base + sr / 100);
+
+        engine.audio_prefs().set_record_offset_ms(-500);
+        assert_eq!(
+            engine.recording_latency().total_frames,
+            0,
+            "a large negative offset clamps at zero rather than moving takes later than played"
+        );
+    }
+
+    #[test]
+    fn a_take_starts_where_its_first_sample_was_played() {
+        let engine = DawEngine::new();
+        engine.audio_prefs().set_record_offset_ms(1); // 48 frames at 48 kHz
+        let latency = engine.recording_latency().total_frames;
+        assert!(latency > 0);
+        engine.transport.set_position(10_000);
+        engine.start_capture();
+        let block = vec![0.5_f32; 256];
+        engine
+            .capture
+            .write_test_block_at(&block, &block, 256, 10_000);
+        let passes = engine.stop_capture_passes();
+        assert_eq!(passes.len(), 1);
+        assert_eq!(passes[0].0, 10_000, "the take starts at the record start");
+        assert_eq!(
+            passes[0].1.len() as u64,
+            (256 - latency) * 2,
+            "the frames played before recording began are not kept"
         );
     }
 }

@@ -4,6 +4,7 @@ import { hw } from '../../theme'
 import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
 import { AUTOSAVE_OPTIONS, useAutosavePrefsStore } from '../../stores/autosavePrefsStore'
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
+import { RecordingLatencyRow } from './RecordingLatency'
 
 interface AudioDevice {
   name: string
@@ -627,6 +628,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 {latencyMs} ms
               </span>
             </div>
+            <RecordingLatencyRow />
 
             {/* WASAPI exclusive-mode toggle (Windows only) */}
             <div style={{
