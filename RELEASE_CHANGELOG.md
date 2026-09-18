@@ -1,7 +1,11 @@
 ### New features
-- feat: loop recording keeps every pass. Each one lands on the track as its own clip, the last one playing and the earlier ones muted, ready to swap in
+- feat: punch recording works for MIDI as well as audio
 
 ### Bug fixes
-- fix: a loop recording no longer turns into one long clip that runs past the end of the loop
-- fix: the undo list shows one entry for a recording, a paste or a paint drag, matching what undo actually takes back
+- fix: recorded MIDI sits where you played it. Notes used to be pulled onto the nearest audio block, which at a 512 sample buffer is about 10 ms late, every time
+- fix: recording MIDI over a loop keeps every pass as its own clip, the last one playing and the earlier ones muted. The take used to be discarded completely
+- fix: a MIDI recording can be undone
+- fix: recorded MIDI lands in the right bar in a song with tempo changes
 
+### Improvements
+- improve: a MIDI take that captured nothing says so instead of failing quietly
