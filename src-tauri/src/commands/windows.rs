@@ -56,30 +56,20 @@ pub async fn open_panel_window(
         return Ok(label);
     }
 
-    // Carry the panel id + context via an INITIALIZATION SCRIPT, not the URL.
-    // Any query/hash on the window URL can break Tauri's asset resolution so
-    // index.html never loads (blank white window — the bug the founder hit).
-    // An init script runs before the page loads and sets a global the frontend
-    // reads (main.tsx). The URL stays a plain `index.html` that always loads.
     let params_js = params.unwrap_or_default().replace(['"', '\\'], "");
-    // Comprehensive REMOTE-LOG diagnostic (init script runs before the bundle,
-    // so it reports even if the frontend never loads). Beacons the window's
-    // real URL, JS errors, DOMContentLoaded, and whether React mounted to our
-    // collector (suite.hardwavestudios.com/daw-log) so we can diagnose the
-    // blank-white detach without devtools. Temporary — remove when solved.
-    let log_url = "https://suite.hardwavestudios.com/daw-log";
+    // The panel id and its context reach the page through an INITIALIZATION
+    // SCRIPT, not the URL. Any query or hash on the window URL can break
+    // Tauri's asset resolution, so index.html never loads and the window
+    // stays blank white. An init script runs before the page and sets a
+    // global the frontend reads (main.tsx).
+    //
+    // This used to carry a diagnostic that posted the window's URL, its
+    // errors and whether React mounted to a collector on our server. It was
+    // written to find the blank-white window, that is solved, and shipping
+    // it to other people would send their machine's activity to us without
+    // saying so.
     let init = format!(
-        "(function(){{var P=\"{slug}\";var U=\"{log_url}\";\
-         window.__HW_PANEL__={{panel:P,params:\"{params_js}\"}};\
-         function S(t,d){{try{{fetch(U,{{method:'POST',mode:'no-cors',headers:{{'Content-Type':'text/plain'}},body:JSON.stringify({{t:t,panel:P,href:location.href,data:d}})}});}}catch(e){{}}}}\
-         window.__HW_LOG__=S;S('init',{{rs:document.readyState,ua:navigator.userAgent.slice(0,50)}});\
-         addEventListener('error',function(e){{S('error',{{m:''+(e.message||''),s:''+(e.filename||''),l:e.lineno,stk:(''+((e.error&&e.error.stack)||'')).slice(0,500)}});}});\
-         addEventListener('unhandledrejection',function(e){{S('reject',{{r:(''+((e.reason&&(e.reason.stack||e.reason.message))||e.reason||'')).slice(0,500)}});}});\
-         addEventListener('DOMContentLoaded',function(){{S('dom',{{title:document.title,scripts:document.scripts.length}});\
-           setTimeout(function(){{var r=document.getElementById('root');\
-             S('mount',{{root:r?r.childElementCount:'no-root',bodyLen:document.body?document.body.innerHTML.length:0}});\
-             if(r&&r.childElementCount===0){{document.body.style.background='#1a0008';document.body.innerHTML='<pre style=\"color:#ff8a8a;padding:16px;font:12px monospace;white-space:pre-wrap\">Panel loaded but the app did not mount (remote log sent). panel='+P+'</pre>';}}\
-           }},3000);}});}})();"
+        "(function(){{window.__HW_PANEL__={{panel:\"{slug}\",params:\"{params_js}\"}};}})();"
     );
 
     // Load the EXACT url the main window is showing rather than guessing

@@ -1,4 +1,3 @@
 ### Improvements
-- style: build the test projects with struct update syntax
-- The song file no longer depends on the order of fields in the code: songs are written with field names, older songs still open, and a song from a newer version of the DAW now says so instead of loading wrong.
-- fix(daw): the project file no longer depends on the order of fields in the code
+- fix(daw): four edits that undo could not take back
+- Undo now takes back the tempo, loading a sample into the sampler, relinking a file and collecting samples, which it silently skipped before.
