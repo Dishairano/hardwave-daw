@@ -304,7 +304,12 @@ jobs:
           echo "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=lld-link.exe" >> $env:GITHUB_ENV
 
       - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli@latest
+        # PINNED. `@latest` picked up 2.12.0 on 2026-09-26, whose NSIS
+        # template calls RestartManager macros that the nsis_tauri_utils it
+        # downloads does not define, so every Windows build died with
+        # `macro named "RestartManager_StartSession" not found` (v0.230.0).
+        # Move this forward deliberately, together with the tauri crate.
+        run: npm install -g @tauri-apps/cli@2.11.5
 
       # Pre-create the GitHub release if it doesn't exist yet. tauri-action
       # auto-creates releases with the GITHUB_TOKEN, but during periods of
