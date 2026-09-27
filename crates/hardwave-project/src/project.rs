@@ -50,7 +50,6 @@ pub struct ProjectMetadata {
 /// being read as whatever happens to line up.
 pub const FORMAT_VERSION: u32 = 2;
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub version: u32,
@@ -684,5 +683,4 @@ mod tests {
         assert!(text.contains(&FORMAT_VERSION.to_string()));
         let _ = std::fs::remove_file(&path);
     }
-
 }
