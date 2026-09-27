@@ -40,6 +40,17 @@ pub struct ProjectMetadata {
     pub working_time_seconds: u64,
 }
 
+/// The project file format this build writes.
+///
+/// 1: MessagePack, struct written as a positional array.
+/// 2: MessagePack with field names, so the order of fields in the code no
+///    longer decides whether an older song opens correctly.
+///
+/// A file claiming a higher number than this is refused on load instead of
+/// being read as whatever happens to line up.
+pub const FORMAT_VERSION: u32 = 2;
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub version: u32,
@@ -116,7 +127,7 @@ impl Default for Project {
         }
 
         Self {
-            version: 1,
+            version: FORMAT_VERSION,
             metadata: ProjectMetadata {
                 name: "Untitled".into(),
                 author: String::new(),
@@ -188,17 +199,59 @@ impl Project {
     /// mid-save can never leave a truncated .hwp behind — the previous
     /// save (and the autosave, which uses this same path) stays intact.
     pub fn save(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let data = rmp_serde::to_vec(self)?;
+        // Written with FIELD NAMES (`to_vec_named`), not as a positional
+        // array. Until format 2 the file was an array in struct order, so a
+        // field added anywhere but the end shifted every field after it and
+        // misread every existing project: the whole save format rested on
+        // nobody ever inserting a line in the wrong place. Named fields cost
+        // a little size and end that class of accident. Reading still takes
+        // either shape, so files written before this keep opening.
+        let mut data = rmp_serde::to_vec_named(self)?;
+        // `version` is a field like any other, and a project loaded from an
+        // older file carries the version it was migrated to, so the value
+        // written here is already FORMAT_VERSION. This guards the one case
+        // where it is not: a Project built by hand in code.
+        if self.version != FORMAT_VERSION {
+            let mut copy = self.clone();
+            copy.version = FORMAT_VERSION;
+            data = rmp_serde::to_vec_named(&copy)?;
+        }
         let compressed = zstd::encode_all(data.as_slice(), 3)?;
         write_atomic(path, &compressed)
     }
 
     /// Load project from a .hwp file.
+    ///
+    /// Accepts both shapes: the named-field format written from format 2 on,
+    /// and the positional one written before it. A file from a newer DAW is
+    /// refused by name rather than decoded into something that looks right
+    /// and is not.
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let compressed = std::fs::read(path)?;
         let data = zstd::decode_all(compressed.as_slice())?;
-        let project: Project = rmp_serde::from_slice(&data)?;
+        let mut project: Project = rmp_serde::from_slice(&data)?;
+        if project.version > FORMAT_VERSION {
+            return Err(format!(
+                "This song was saved by a newer version of Hardwave DAW \
+                 (project format {}, this build reads up to {}). \
+                 Update the DAW and open it again.",
+                project.version, FORMAT_VERSION
+            )
+            .into());
+        }
+        project.migrate();
         Ok(project)
+    }
+
+    /// Bring a project loaded from an older format up to the current one.
+    ///
+    /// Format 1 to 2 changed how the file is written, not what it holds, so
+    /// there is nothing to move: reading it already produced the right
+    /// values. Later steps go here, each one keyed on the version it starts
+    /// from, and the version is stamped at the end so the next save writes
+    /// the current format.
+    fn migrate(&mut self) {
+        self.version = FORMAT_VERSION;
     }
 
     /// Save as JSON (for debugging / interop). Atomic like `save`.
@@ -555,4 +608,81 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
     }
+    /// The point of format 2: the order fields sit in the file no longer
+    /// decides whether a song opens correctly. Before it, this file would
+    /// have been read as version = whatever landed in slot one.
+    #[test]
+    fn a_file_whose_fields_are_in_another_order_still_opens() {
+        let dir = std::env::temp_dir().join(format!("hwp-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("order.hwp");
+
+        // The same field names, declared in a deliberately different order,
+        // and missing several: what a file written by another build with a
+        // different field layout looks like.
+        #[derive(Serialize)]
+        struct Reordered<'a> {
+            timeline_state: Option<String>,
+            metadata: &'a ProjectMetadata,
+            active_arrangement: String,
+            version: u32,
+            tracks: Vec<Track>,
+            tempo_map: &'a TempoMap,
+        }
+        let p = Project::default();
+        let reordered = Reordered {
+            timeline_state: Some(r#"{"markers":[]}"#.into()),
+            metadata: &p.metadata,
+            active_arrangement: "arr-1".into(),
+            version: FORMAT_VERSION,
+            tracks: Vec::new(),
+            tempo_map: &p.tempo_map,
+        };
+        let data = rmp_serde::to_vec_named(&reordered).unwrap();
+        std::fs::write(&path, zstd::encode_all(data.as_slice(), 3).unwrap()).unwrap();
+
+        let back = Project::load(&path).expect("load");
+        assert_eq!(back.version, FORMAT_VERSION);
+        assert_eq!(back.active_arrangement, "arr-1");
+        assert_eq!(back.timeline_state.as_deref(), Some(r#"{"markers":[]}"#));
+        assert!(back.tracks.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_saved_project_carries_the_current_format_version() {
+        let dir = std::env::temp_dir().join(format!("hwp-version-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("version.hwp");
+
+        let mut p = Project::default();
+        p.version = 1; // as an older file would have it in memory
+        p.save(&path).expect("save");
+        let back = Project::load(&path).expect("load");
+        assert_eq!(back.version, FORMAT_VERSION);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Opening a song from a newer DAW must say so, not decode it into
+    /// something that looks plausible.
+    #[test]
+    fn a_file_from_a_newer_daw_is_refused_by_name() {
+        let dir = std::env::temp_dir().join(format!("hwp-newer-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("newer.hwp");
+
+        let mut p = Project::default();
+        p.version = FORMAT_VERSION + 5;
+        // Write it without going through `save`, which would stamp the
+        // current version.
+        let data = rmp_serde::to_vec_named(&p).unwrap();
+        std::fs::write(&path, zstd::encode_all(data.as_slice(), 3).unwrap()).unwrap();
+
+        let err = Project::load(&path).expect_err("a newer file must not load");
+        let text = err.to_string();
+        assert!(text.contains("newer version"), "unhelpful message: {text}");
+        assert!(text.contains(&FORMAT_VERSION.to_string()));
+        let _ = std::fs::remove_file(&path);
+    }
+
 }
