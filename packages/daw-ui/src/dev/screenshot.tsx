@@ -27,6 +27,7 @@ import '../components/SetupWizard.css'
 import { useSetupWizardStore, type WizardStep } from '../stores/setupWizardStore'
 import { Browser } from '../components/browser/Browser'
 import { useBrowserStore } from '../stores/browserStore'
+import { useMidiCcStore } from '../stores/midiCcStore'
 import { FloatingWindow, DetachButton } from '../components/FloatingWindow'
 import { AudioSettings, focusSettingsTab, type SettingsTab } from '../components/settings/AudioSettings'
 
@@ -201,8 +202,15 @@ function Harness() {
       return <Full><MixerPanel /></Full>
     case 'channelrack':
       return <Full><ChannelRack /></Full>
-    case 'pianoroll':
+    case 'pianoroll': {
+      // SHOT_CC=cc1 opens a controller lane under the notes.
+      const lane = new URLSearchParams(location.search).get('cc')
+      if (lane) {
+        const clipId = useTrackStore.getState().activeMidiClipId
+        if (clipId) useMidiCcStore.getState().addLane(clipId, lane)
+      }
       return <Full><PianoRoll /></Full>
+    }
     case 'wizard':
       return <Full><WizardShot /></Full>
     case 'browser':

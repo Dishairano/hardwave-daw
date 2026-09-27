@@ -65,6 +65,8 @@ try {
       + (process.env.SHOT_STEP ? `&step=${process.env.SHOT_STEP}` : '')
       // SHOT_TAB=midi opens the settings window on that tab.
       + (process.env.SHOT_TAB ? `&tab=${process.env.SHOT_TAB}` : '')
+      // SHOT_CC=cc1 opens that controller lane in the piano roll.
+      + (process.env.SHOT_CC ? `&cc=${process.env.SHOT_CC}` : '')
     await page.goto(`${BASE}${query}`, { waitUntil: 'networkidle' })
     await sleep(2200) // let async loads + canvas redraw settle
     await page.screenshot({ path: out, scale: 'device' })

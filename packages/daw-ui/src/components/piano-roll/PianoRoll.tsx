@@ -9,6 +9,7 @@ import {
   BUILT_IN_CC_LANES,
   customCcLane,
   CcLaneDefinition,
+  laneDefinition,
   useMidiCcStore,
 } from '../../stores/midiCcStore'
 import { DetachButton } from '../FloatingWindow'
@@ -184,6 +185,25 @@ export function PianoRoll() {
   const clearCcLane = useMidiCcStore(s => s.clearLane)
   const setCcLaneHeight = useMidiCcStore(s => s.setLaneHeight)
   const ccLaneResize = useRef<{ startY: number; startH: number } | null>(null)
+
+  // Controller lanes edit the clip itself, so they follow whichever clip is
+  // open and read their points back out of it. Without this the lanes drew
+  // on a value kept in the browser that nothing played and nothing saved.
+  const activeClipLengthTicks = useTrackStore(s => {
+    const clip = s.tracks
+      .find(t => t.id === s.activeMidiTrackId)
+      ?.clips.find(c => c.id === s.activeMidiClipId)
+    return clip?.length_ticks ?? 0
+  })
+  useEffect(() => {
+    const cc = useMidiCcStore.getState()
+    cc.bind(activeTrackId, activeClipId, activeClipLengthTicks)
+    if (!activeTrackId || !activeClipId || activeClipLengthTicks <= 0) return
+    for (const laneId of visibleCcLaneIds) {
+      const def = laneDefinition(laneId)
+      if (def) void cc.loadLane(activeTrackId, activeClipId, def, activeClipLengthTicks)
+    }
+  }, [activeTrackId, activeClipId, activeClipLengthTicks, visibleCcLaneIds])
   const onCcLaneResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     if (!activeClipId) return

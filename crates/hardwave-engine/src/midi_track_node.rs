@@ -22,6 +22,16 @@ use crate::track_node::TrackMeterState;
 /// position offset) happens once on the UI thread inside
 /// `engine.rebuild_graph()`, so the audio thread sees a flat, sorted list of
 /// pre-baked sample indices and never touches the tempo map.
+/// A controller movement, already mapped to an absolute timeline sample.
+#[derive(Debug, Clone, Copy)]
+pub struct MidiControlRegion {
+    pub sample: u64,
+    pub channel: u8,
+    pub kind: hardwave_midi::MidiControlKind,
+    /// 0..=1 for a control change and pressure, -1..=1 for pitch bend.
+    pub value: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct MidiNoteRegion {
     /// Absolute timeline sample at which note-on fires.
@@ -81,6 +91,14 @@ const DECAY_SECS: f32 = 0.080;
 const SUSTAIN_LEVEL: f32 = 0.70;
 const RELEASE_SECS: f32 = 0.150;
 
+/// Pitch bend as a frequency multiplier, over the standard two semitones
+/// either way that a synth defaults to.
+#[inline]
+fn bend_multiplier(bend: f32) -> f32 {
+    const BEND_SEMITONES: f32 = 2.0;
+    2.0_f32.powf(bend.clamp(-1.0, 1.0) * BEND_SEMITONES / 12.0)
+}
+
 /// Convert MIDI pitch number → frequency in Hz using equal-temperament.
 #[inline]
 fn pitch_to_freq(pitch: u8) -> f32 {
@@ -91,6 +109,17 @@ pub struct MidiTrackNode {
     track_id: String,
     name: String,
     notes: Vec<MidiNoteRegion>,
+    /// Controller movements from the clips on this track, sorted by sample.
+    controls: Vec<MidiControlRegion>,
+    /// Next control point to consider, the same walk as `next_note_idx`.
+    next_control_idx: usize,
+    /// This block's controller events, kept between blocks so collecting
+    /// them does not allocate on the audio thread.
+    control_scratch: Vec<hardwave_midi::MidiEvent>,
+    /// Pitch bend the built-in synth is currently playing at, as a
+    /// frequency multiplier. Plug-in instruments get the events themselves;
+    /// the built-in synth has no MIDI input, so it reads this.
+    bend_mul: f32,
     /// Index of the next note to consider for note-on. We advance through
     /// `notes` linearly each block; because `notes` is kept sorted by
     /// `note_on_sample`, the audio thread does no per-sample scanning.
@@ -177,6 +206,10 @@ impl MidiTrackNode {
             track_id,
             name,
             notes: Vec::new(),
+            controls: Vec::new(),
+            next_control_idx: 0,
+            control_scratch: Vec::with_capacity(64),
+            bend_mul: 1.0,
             next_note_idx: 0,
             voices: Vec::new(),
             volume: 1.0,
@@ -315,6 +348,31 @@ impl MidiTrackNode {
     /// Replace this node's note schedule. Caller must pre-sort by
     /// `note_on_sample`; the audio thread relies on monotonic ordering for
     /// its linear scan.
+    /// Controller movements for this track's clips. Sorted here so the
+    /// audio thread walks them in order without scanning.
+    pub fn set_controls(&mut self, mut controls: Vec<MidiControlRegion>) {
+        controls.sort_by_key(|c| c.sample);
+        // Room for a whole block's worth up front: the audio thread must
+        // not grow this while it collects them.
+        self.control_scratch.reserve(
+            controls
+                .len()
+                .min(256)
+                .saturating_sub(self.control_scratch.capacity()),
+        );
+        self.controls = controls;
+        self.next_control_idx = 0;
+        self.bend_mul = 1.0;
+    }
+
+    /// The built-in synth reads pitch bend rather than receiving it, so
+    /// each point passing under the playhead updates it here.
+    fn apply_to_builtin(&mut self, c: &MidiControlRegion) {
+        if matches!(c.kind, hardwave_midi::MidiControlKind::PitchBend) {
+            self.bend_mul = bend_multiplier(c.value);
+        }
+    }
+
     pub fn set_notes(&mut self, mut notes: Vec<MidiNoteRegion>) {
         notes.sort_by_key(|n| n.note_on_sample);
         self.notes = notes;
@@ -449,6 +507,9 @@ impl AudioNode for MidiTrackNode {
                         }
                     }
                 }
+                hardwave_midi::MidiEvent::PitchBend { value, .. } => {
+                    self.bend_mul = bend_multiplier(value);
+                }
                 _ => {}
             }
         }
@@ -499,6 +560,44 @@ impl AudioNode for MidiTrackNode {
                 &mut self.kick_r[..block_size],
             );
         }
+
+        // Controller movements recorded or drawn in the clips, collected
+        // before the synth renders so a bend applies to this block rather
+        // than the next one. Within a block the last value wins for the
+        // built-in synth; a plug-in gets each event at its own offset.
+        let mut controls = std::mem::take(&mut self.control_scratch);
+        controls.clear();
+        if ctx.playing {
+            let block_end = block_start.saturating_add(block_size as u64);
+            // After a seek, run past everything before the block so the
+            // playhead lands on the value written for that point.
+            while self.next_control_idx < self.controls.len()
+                && self.controls[self.next_control_idx].sample < block_start
+            {
+                let c = self.controls[self.next_control_idx];
+                self.apply_to_builtin(&c);
+                self.next_control_idx += 1;
+            }
+            while self.next_control_idx < self.controls.len()
+                && self.controls[self.next_control_idx].sample < block_end
+            {
+                let c = self.controls[self.next_control_idx];
+                self.apply_to_builtin(&c);
+                let timing = c.sample.saturating_sub(block_start) as u32;
+                controls.push(
+                    hardwave_midi::MidiControlPoint {
+                        tick: 0,
+                        channel: c.channel,
+                        kind: c.kind,
+                        value: c.value,
+                    }
+                    .event(timing),
+                );
+                self.next_control_idx += 1;
+            }
+        }
+        self.control_scratch = controls;
+        let bend_mul = self.bend_mul;
 
         // Skip notes that ended before the block starts. This fast-forwards
         // `next_note_idx` after a seek so we don't fire stale note-ons.
@@ -591,7 +690,7 @@ impl AudioNode for MidiTrackNode {
                         }
                         let env = Self::step_envelope(v, sr);
                         let osc = self.waveform.sample(v.phase);
-                        v.phase += TWO_PI * v.freq / sr;
+                        v.phase += TWO_PI * v.freq * bend_mul / sr;
                         if v.phase >= TWO_PI {
                             v.phase -= TWO_PI;
                         }
@@ -623,6 +722,7 @@ impl AudioNode for MidiTrackNode {
         // insert chain so a hosted instrument plug-in (VST3 / CLAP synth
         // or sampler) can generate audio from them. Timing is block-local.
         let mut block_midi: Vec<hardwave_midi::MidiEvent> = midi_in.to_vec();
+        block_midi.extend_from_slice(&self.control_scratch);
         if ctx.playing {
             let block_end = block_start.saturating_add(block_size as u64);
             for n in &self.notes {
@@ -1302,5 +1402,124 @@ mod tests {
             muted: false,
         }]);
         assert!(peak_after_jumping_into_the_note(&mut node) > 0.0);
+    }
+    /// Zero crossings per block, a cheap pitch measurement.
+    fn crossings(buf: &[f32]) -> usize {
+        buf.windows(2)
+            .filter(|w| (w[0] <= 0.0 && w[1] > 0.0) || (w[0] > 0.0 && w[1] <= 0.0))
+            .count()
+    }
+
+    /// A recorded pitch bend has to bend the built-in synth, not just be
+    /// handed to plug-ins: the synth has no MIDI input of its own.
+    #[test]
+    fn a_pitch_bend_in_the_clip_bends_the_builtin_synth() {
+        let render = |bend: Option<f32>| {
+            let mut node = make_node();
+            node.set_notes(vec![MidiNoteRegion {
+                note_on_sample: 0,
+                note_off_sample: 96_000,
+                pitch: 69,
+                velocity: 0.9,
+                muted: false,
+            }]);
+            if let Some(value) = bend {
+                node.set_controls(vec![MidiControlRegion {
+                    sample: 0,
+                    channel: 0,
+                    kind: hardwave_midi::MidiControlKind::PitchBend,
+                    value,
+                }]);
+            }
+            let mut out = block_outputs(4096);
+            let ctx = ctx_at(48_000.0, 4096, 0, true);
+            let inputs: [&[f32]; 0] = [];
+            let mut midi_out = Vec::new();
+            node.process(&inputs, &mut out, &[], &mut midi_out, &ctx);
+            crossings(&out[0])
+        };
+        let flat = render(None);
+        let up = render(Some(1.0));
+        assert!(flat > 0, "the note sounds");
+        // Two semitones up is a factor of 1.122, so the crossings rise by
+        // roughly a tenth. Compared as a ratio to stay independent of the
+        // envelope's attack.
+        let ratio = up as f32 / flat as f32;
+        assert!(
+            (1.08..1.17).contains(&ratio),
+            "a full bend up should raise the pitch by two semitones, got a ratio of {ratio}"
+        );
+    }
+
+    /// The events themselves have to reach the insert chain, which is how
+    /// a hosted synth or the sampler hears them.
+    #[test]
+    fn clip_controllers_are_handed_to_the_chain() {
+        let mut node = make_node();
+        node.set_controls(vec![
+            MidiControlRegion {
+                sample: 10,
+                channel: 0,
+                kind: hardwave_midi::MidiControlKind::Cc(1),
+                value: 0.75,
+            },
+            MidiControlRegion {
+                sample: 5_000,
+                channel: 0,
+                kind: hardwave_midi::MidiControlKind::Cc(1),
+                value: 0.25,
+            },
+        ]);
+        let mut out = block_outputs(256);
+        let ctx = ctx_at(48_000.0, 256, 0, true);
+        let inputs: [&[f32]; 0] = [];
+        let mut midi_out = Vec::new();
+        node.process(&inputs, &mut out, &[], &mut midi_out, &ctx);
+        let sent = &node.control_scratch;
+        assert_eq!(sent.len(), 1, "only the point inside this block is sent");
+        match sent[0] {
+            MidiEvent::ControlChange {
+                timing, cc, value, ..
+            } => {
+                assert_eq!(cc, 1);
+                assert_eq!(timing, 10, "at its own offset inside the block");
+                assert!((value - 0.75).abs() < 1e-6);
+            }
+            other => panic!("expected a control change, got {other:?}"),
+        }
+    }
+
+    /// Starting playback in the middle must not replay everything before
+    /// it, but the last value written before that point still applies.
+    #[test]
+    fn a_seek_past_controllers_keeps_the_last_value() {
+        let mut node = make_node();
+        node.set_controls(vec![
+            MidiControlRegion {
+                sample: 0,
+                channel: 0,
+                kind: hardwave_midi::MidiControlKind::PitchBend,
+                value: 1.0,
+            },
+            MidiControlRegion {
+                sample: 100,
+                channel: 0,
+                kind: hardwave_midi::MidiControlKind::PitchBend,
+                value: -1.0,
+            },
+        ]);
+        let mut out = block_outputs(256);
+        let ctx = ctx_at(48_000.0, 256, 48_000, true);
+        let inputs: [&[f32]; 0] = [];
+        let mut midi_out = Vec::new();
+        node.process(&inputs, &mut out, &[], &mut midi_out, &ctx);
+        assert!(
+            node.control_scratch.is_empty(),
+            "nothing before the block is replayed into the chain"
+        );
+        assert!(
+            (node.bend_mul - bend_multiplier(-1.0)).abs() < 1e-6,
+            "the synth holds the last value written before the playhead"
+        );
     }
 }

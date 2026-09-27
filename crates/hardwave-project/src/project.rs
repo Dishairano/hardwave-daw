@@ -502,4 +502,57 @@ mod tests {
             "active arrangement survives"
         );
     }
+    /// A clip's controller moves have to survive a save, like its notes.
+    /// They are the last field in the clip for the same reason the mute
+    /// flag was: the format is positional.
+    #[test]
+    fn clip_controllers_round_trip_through_a_save() {
+        use crate::clip::{ClipContent, ClipPlacement, MidiClipRef};
+        use hardwave_midi::{MidiClip, MidiControlKind, MidiControlPoint};
+
+        let dir = std::env::temp_dir().join(format!("hwp-controls-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("controls.hwp");
+
+        let mut p = Project::default();
+        let track_id = p.add_midi_track("Lead".to_string());
+        let mut clip = MidiClip::new("c1".into(), "Take".into(), 1920);
+        clip.controls = vec![
+            MidiControlPoint {
+                tick: 0,
+                channel: 0,
+                kind: MidiControlKind::Cc(1),
+                value: 0.25,
+            },
+            MidiControlPoint {
+                tick: 960,
+                channel: 0,
+                kind: MidiControlKind::PitchBend,
+                value: -1.0,
+            },
+        ];
+        p.track_mut(&track_id).unwrap().clips.push(ClipPlacement {
+            content: ClipContent::Midi(MidiClipRef {
+                id: "c1".into(),
+                clip,
+            }),
+            track_id: track_id.clone(),
+            position_ticks: 0,
+            length_ticks: 1920,
+            lane: 0,
+        });
+        p.save(&path).expect("save");
+
+        let back = Project::load(&path).expect("load");
+        let ClipContent::Midi(ref m) = back.track(&track_id).unwrap().clips[0].content else {
+            panic!("the clip came back as something else")
+        };
+        assert_eq!(m.clip.controls.len(), 2);
+        assert_eq!(m.clip.controls[0].kind, MidiControlKind::Cc(1));
+        assert!((m.clip.controls[0].value - 0.25).abs() < 1e-6);
+        assert_eq!(m.clip.controls[1].kind, MidiControlKind::PitchBend);
+        assert!((m.clip.controls[1].value + 1.0).abs() < 1e-6);
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

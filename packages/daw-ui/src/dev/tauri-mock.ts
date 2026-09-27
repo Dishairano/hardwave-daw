@@ -117,6 +117,17 @@ const mock: TauriInternals = {
     switch (cmd) {
       case 'get_waveform_peaks':
         return synthPeaks((args?.numBuckets as number) ?? 256)
+      case 'get_clip_controls': {
+        // A mod-wheel swell so the controller lane can be photographed.
+        const a = args as { kind?: string }
+        if (a?.kind !== 'cc') return []
+        return Array.from({ length: 33 }, (_, i) => ({
+          tick: i * 60,
+          value: Math.sin((i / 32) * Math.PI) * 0.9,
+        }))
+      }
+      case 'set_clip_controls':
+        return null
       case 'get_midi_notes':
         return synthNotes()
       case 'list_directory':

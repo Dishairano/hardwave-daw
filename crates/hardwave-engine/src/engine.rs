@@ -2160,6 +2160,8 @@ impl EngineCallback {
                 // here on the UI thread so the audio thread sees a flat
                 // sorted list.
                 let mut note_regions: Vec<crate::midi_track_node::MidiNoteRegion> = Vec::new();
+                let mut control_regions: Vec<crate::midi_track_node::MidiControlRegion> =
+                    Vec::new();
                 for clip in &track.clips {
                     let hardwave_project::clip::ClipContent::Midi(midi_ref) = &clip.content else {
                         continue;
@@ -2182,8 +2184,22 @@ impl EngineCallback {
                             muted: note.muted,
                         });
                     }
+                    // Controller movements: mod wheel, sustain, bend. Mapped
+                    // through the tempo map here, like the notes, and kept
+                    // inside the clip so a clip moved on the playlist takes
+                    // them with it.
+                    for c in &midi_ref.clip.controls {
+                        let tick = clip.position_ticks + c.tick.min(midi_ref.clip.length_ticks);
+                        control_regions.push(crate::midi_track_node::MidiControlRegion {
+                            sample: tempo_map.tick_to_samples(tick, sample_rate),
+                            channel: c.channel,
+                            kind: c.kind,
+                            value: c.value,
+                        });
+                    }
                 }
                 midi_node.set_notes(note_regions);
+                midi_node.set_controls(control_regions);
 
                 let node_id = self.graph.add_node(Box::new(midi_node));
                 // Every MIDI track accepts live input by default. This

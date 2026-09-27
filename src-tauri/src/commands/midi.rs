@@ -145,7 +145,112 @@ pub fn export_clip_midi(
     Ok(())
 }
 
-/// Get all notes in a MIDI clip.
+/// One controller lane's points, as the piano roll draws them.
+#[derive(Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlPointInfo {
+    pub tick: u64,
+    /// 0..=1 for a control change and channel pressure, -1..=1 for bend.
+    pub value: f32,
+}
+
+fn lane_kind(kind: &str, cc: Option<u8>) -> Result<hardwave_midi::MidiControlKind, String> {
+    match kind {
+        "cc" => Ok(hardwave_midi::MidiControlKind::Cc(
+            cc.ok_or("a cc lane needs a cc number")?,
+        )),
+        "pitchBend" => Ok(hardwave_midi::MidiControlKind::PitchBend),
+        "channelPressure" => Ok(hardwave_midi::MidiControlKind::ChannelPressure),
+        other => Err(format!("unknown controller lane: {other}")),
+    }
+}
+
+/// The points of one controller lane in a clip: mod wheel, sustain, bend.
+#[tauri::command]
+pub fn get_clip_controls(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    kind: String,
+    cc: Option<u8>,
+) -> Result<Vec<ControlPointInfo>, String> {
+    let want = lane_kind(&kind, cc)?;
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    let track = project
+        .track(&track_id)
+        .ok_or_else(|| format!("Track not found: {}", track_id))?;
+    for clip in &track.clips {
+        if let hardwave_project::clip::ClipContent::Midi(mc) = &clip.content {
+            if mc.id == clip_id {
+                let mut points: Vec<ControlPointInfo> = mc
+                    .clip
+                    .controls
+                    .iter()
+                    .filter(|c| c.kind == want)
+                    .map(|c| ControlPointInfo {
+                        tick: c.tick,
+                        value: c.value,
+                    })
+                    .collect();
+                points.sort_by_key(|p| p.tick);
+                return Ok(points);
+            }
+        }
+    }
+    Err(format!("MIDI clip not found: {}", clip_id))
+}
+
+/// Replace one controller lane in a clip. The other lanes are untouched,
+/// so drawing the mod wheel cannot wipe a recorded bend.
+#[tauri::command]
+pub fn set_clip_controls(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    kind: String,
+    cc: Option<u8>,
+    points: Vec<ControlPointInfo>,
+) -> Result<(), String> {
+    let lane = lane_kind(&kind, cc)?;
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find_map(|clip| match &mut clip.content {
+                hardwave_project::clip::ClipContent::Midi(mc) if mc.id == clip_id => {
+                    Some(&mut mc.clip)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| format!("MIDI clip not found: {}", clip_id))?;
+        clip.controls.retain(|c| c.kind != lane);
+        let bend = matches!(lane, hardwave_midi::MidiControlKind::PitchBend);
+        for p in points {
+            clip.controls.push(hardwave_midi::MidiControlPoint {
+                tick: p.tick,
+                channel: 0,
+                kind: lane,
+                value: if bend {
+                    p.value.clamp(-1.0, 1.0)
+                } else {
+                    p.value.clamp(0.0, 1.0)
+                },
+            });
+        }
+        clip.controls.sort_by_key(|c| c.tick);
+    }
+    engine.rebuild_graph();
+    Ok(())
+}
+
+/// Get all notes in a MIDI clip./// Get all notes in a MIDI clip.
 #[tauri::command]
 pub fn get_midi_notes(
     state: State<AppState>,

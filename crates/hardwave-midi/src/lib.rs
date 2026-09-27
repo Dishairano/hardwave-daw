@@ -107,12 +107,66 @@ pub struct MidiClip {
     /// The playlist's mute tool had nothing behind it for either kind of
     /// clip; audio clips at least carried the flag, pattern clips did not.
     ///
-    /// MUST STAY LAST: projects are MessagePack written by
+    /// New fields go AFTER this one: projects are MessagePack written by
     /// `rmp_serde::to_vec`, which encodes a struct positionally, so a field
     /// added anywhere else shifts every field after it and misreads every
     /// existing project.
     #[serde(default)]
     pub muted: bool,
+    /// Controller movements played or drawn in this clip: mod wheel,
+    /// expression, sustain, pitch bend, channel pressure.
+    ///
+    /// Recording used to keep the notes and throw everything else away, so a
+    /// take with a mod-wheel swell or a bend came back flat and the piano
+    /// roll's controller lanes drew on a value nothing ever read.
+    #[serde(default)]
+    pub controls: Vec<MidiControlPoint>,
+}
+
+/// What a control point moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MidiControlKind {
+    /// A control change, by its number: 1 is the mod wheel, 64 sustain.
+    Cc(u8),
+    PitchBend,
+    ChannelPressure,
+}
+
+/// One controller value at one point in a clip, in ticks (960 PPQ).
+///
+/// `value` is 0..=1 for a control change and channel pressure, and -1..=1
+/// for pitch bend, so a lane can draw any of them without knowing the MIDI
+/// byte layout.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct MidiControlPoint {
+    pub tick: u64,
+    pub channel: u8,
+    pub kind: MidiControlKind,
+    pub value: f32,
+}
+
+impl MidiControlPoint {
+    /// The MIDI event this point plays as, at `timing` samples into a block.
+    pub fn event(&self, timing: u32) -> MidiEvent {
+        match self.kind {
+            MidiControlKind::Cc(cc) => MidiEvent::ControlChange {
+                timing,
+                channel: self.channel,
+                cc,
+                value: self.value.clamp(0.0, 1.0),
+            },
+            MidiControlKind::PitchBend => MidiEvent::PitchBend {
+                timing,
+                channel: self.channel,
+                value: self.value.clamp(-1.0, 1.0),
+            },
+            MidiControlKind::ChannelPressure => MidiEvent::ChannelPressure {
+                timing,
+                channel: self.channel,
+                pressure: self.value.clamp(0.0, 1.0),
+            },
+        }
+    }
 }
 
 impl MidiClip {
@@ -123,6 +177,7 @@ impl MidiClip {
             notes: Vec::new(),
             length_ticks,
             muted: false,
+            controls: Vec::new(),
         }
     }
 }

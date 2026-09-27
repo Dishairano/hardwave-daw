@@ -350,6 +350,8 @@ pub fn run() {
             commands::midi::create_midi_clip,
             commands::midi::export_clip_midi,
             commands::midi::get_midi_notes,
+            commands::midi::get_clip_controls,
+            commands::midi::set_clip_controls,
             commands::midi::add_midi_note,
             commands::midi::update_midi_note,
             commands::midi::delete_midi_note,

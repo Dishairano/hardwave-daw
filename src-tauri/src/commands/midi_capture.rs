@@ -139,6 +139,7 @@ fn merge_notes_into_overlapping_clip(
     position_ticks: u64,
     length_ticks: u64,
     notes: &[hardwave_midi::MidiNote],
+    controls: &[hardwave_midi::MidiControlPoint],
 ) -> Option<String> {
     use hardwave_project::clip::ClipContent;
 
@@ -162,6 +163,12 @@ fn merge_notes_into_overlapping_clip(
         merged.start_tick += offset;
         midi_ref.clip.notes.push(merged);
     }
+    for c in controls {
+        let mut merged = *c;
+        merged.tick += offset;
+        midi_ref.clip.controls.push(merged);
+    }
+    midi_ref.clip.controls.sort_by_key(|c| c.tick);
     // Recording may run past the clip's end — grow, never shrink.
     let needed = rec_end.saturating_sub(target.position_ticks);
     if needed > target.length_ticks {
@@ -197,7 +204,7 @@ pub fn commit_recording_to_midi_clip(
     quantize_ticks: Option<u64>,
     blend: Option<bool>,
 ) -> Result<Vec<String>, String> {
-    use hardwave_midi::{MidiClip, MidiEvent, MidiRecorder};
+    use hardwave_midi::{MidiClip, MidiControlKind, MidiControlPoint, MidiEvent, MidiRecorder};
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
 
     let engine = state.engine.lock();
@@ -281,6 +288,9 @@ pub fn commit_recording_to_midi_clip(
             recorder.set_quantize(Some(q));
         }
         recorder.start();
+        // Controller movements are kept as played: quantizing a mod-wheel
+        // sweep to the grid would turn it into steps.
+        let mut controls: Vec<MidiControlPoint> = Vec::new();
         for (tick, ev) in tick_of {
             match ev {
                 MidiEvent::NoteOn {
@@ -290,12 +300,35 @@ pub fn commit_recording_to_midi_clip(
                     ..
                 } => recorder.note_on(tick, note, velocity, channel),
                 MidiEvent::NoteOff { note, channel, .. } => recorder.note_off(tick, note, channel),
-                _ => {} // CC and pitch bend are captured by automation instead
+                MidiEvent::ControlChange {
+                    channel, cc, value, ..
+                } => controls.push(MidiControlPoint {
+                    tick,
+                    channel,
+                    kind: MidiControlKind::Cc(cc),
+                    value: value.clamp(0.0, 1.0),
+                }),
+                MidiEvent::PitchBend { channel, value, .. } => controls.push(MidiControlPoint {
+                    tick,
+                    channel,
+                    kind: MidiControlKind::PitchBend,
+                    value: value.clamp(-1.0, 1.0),
+                }),
+                MidiEvent::ChannelPressure {
+                    channel, pressure, ..
+                } => controls.push(MidiControlPoint {
+                    tick,
+                    channel,
+                    kind: MidiControlKind::ChannelPressure,
+                    value: pressure.clamp(0.0, 1.0),
+                }),
+                // Per-note aftertouch has nowhere to live in a clip yet.
+                MidiEvent::Aftertouch { .. } => {}
             }
         }
         recorder.stop();
         let notes = recorder.take_notes();
-        if notes.is_empty() {
+        if notes.is_empty() && controls.is_empty() {
             continue;
         }
 
@@ -306,7 +339,13 @@ pub fn commit_recording_to_midi_clip(
                 let Some(track) = project.track_mut(&track_id) else {
                     return Err(format!("track {track_id} not found"));
                 };
-                merge_notes_into_overlapping_clip(track, position_ticks, length_ticks, &notes)
+                merge_notes_into_overlapping_clip(
+                    track,
+                    position_ticks,
+                    length_ticks,
+                    &notes,
+                    &controls,
+                )
             };
             if let Some(clip_id) = merged {
                 created.push(clip_id);
@@ -322,6 +361,7 @@ pub fn commit_recording_to_midi_clip(
         };
         let mut clip = MidiClip::new(clip_id.clone(), name, length_ticks);
         clip.notes = notes;
+        clip.controls = controls;
         {
             let mut project = engine.project.lock();
             let Some(track) = project.track_mut(&track_id) else {
@@ -342,7 +382,7 @@ pub fn commit_recording_to_midi_clip(
     }
 
     if created.is_empty() {
-        return Err("no MIDI notes were captured in the recorded range".into());
+        return Err("nothing was captured in the recorded range".into());
     }
 
     drop(engine);
@@ -408,7 +448,7 @@ mod blend_tests {
         // Existing clip at tick 1000, len 4000. Recording at 2000 → the
         // merged note must land at clip-relative tick 1000 + its own 480.
         let mut t = track_with_midi_clip(1000, 4000);
-        let merged = merge_notes_into_overlapping_clip(&mut t, 2000, 1000, &[note(480)]);
+        let merged = merge_notes_into_overlapping_clip(&mut t, 2000, 1000, &[note(480)], &[]);
         assert_eq!(merged.as_deref(), Some("existing"));
         let ClipContent::Midi(ref m) = t.clips[0].content else {
             panic!()
@@ -425,7 +465,7 @@ mod blend_tests {
     fn grows_clip_when_recording_runs_past_the_end() {
         let mut t = track_with_midi_clip(0, 1000);
         // Recording overlaps the tail and extends 2000 ticks beyond it.
-        let merged = merge_notes_into_overlapping_clip(&mut t, 500, 2500, &[note(0)]);
+        let merged = merge_notes_into_overlapping_clip(&mut t, 500, 2500, &[note(0)], &[]);
         assert!(merged.is_some());
         assert_eq!(
             t.clips[0].length_ticks, 3000,
@@ -441,10 +481,31 @@ mod blend_tests {
     fn no_merge_when_nothing_overlaps_or_clip_starts_later() {
         // Recording entirely AFTER the clip → no merge.
         let mut t = track_with_midi_clip(0, 1000);
-        assert!(merge_notes_into_overlapping_clip(&mut t, 5000, 1000, &[note(0)]).is_none());
+        assert!(merge_notes_into_overlapping_clip(&mut t, 5000, 1000, &[note(0)], &[]).is_none());
         // Clip starts AFTER the recording window → no merge (would need
         // negative note ticks).
         let mut t2 = track_with_midi_clip(3000, 1000);
-        assert!(merge_notes_into_overlapping_clip(&mut t2, 2500, 400, &[note(0)]).is_none());
+        assert!(merge_notes_into_overlapping_clip(&mut t2, 2500, 400, &[note(0)], &[]).is_none());
+    }
+    #[test]
+    fn blend_recording_merges_controller_moves_too() {
+        use hardwave_midi::{MidiControlKind, MidiControlPoint};
+        let mut t = track_with_midi_clip(1000, 2000);
+        let controls = vec![MidiControlPoint {
+            tick: 100,
+            channel: 0,
+            kind: MidiControlKind::Cc(1),
+            value: 0.5,
+        }];
+        let merged = merge_notes_into_overlapping_clip(&mut t, 2000, 1000, &[note(0)], &controls);
+        assert!(merged.is_some());
+        let ClipContent::Midi(ref m) = t.clips[0].content else {
+            panic!()
+        };
+        assert_eq!(m.clip.controls.len(), 1);
+        assert_eq!(
+            m.clip.controls[0].tick, 1100,
+            "the move shifts by where the take sits inside the clip"
+        );
     }
 }
