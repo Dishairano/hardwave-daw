@@ -1,2 +1,2 @@
 ### Improvements
-- fix(daw): recorded audio lands where it was played, not late
+- feat(daw): clips keep pitch bend, mod wheel and sustain
