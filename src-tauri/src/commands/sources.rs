@@ -109,6 +109,9 @@ pub fn relink_source(
     if !path.is_file() {
         return Err(format!("{new_path} is not a file"));
     }
+    // Pointing clips at a different file is an edit like any other: undo
+    // has to put the old path back.
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     engine.load_audio_file_as(&path, &source_id)?;
 
@@ -267,6 +270,9 @@ pub fn collect_project_samples(
         .parent()
         .ok_or_else(|| format!("{project_path} has no folder"))?
         .to_path_buf();
+    // Collecting rewrites every clip's path to the copy in the project
+    // folder. Undo puts the original paths back; the copies stay on disk.
+    state.engine.lock().snapshot_before_mutation();
     let stem = project_file
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())

@@ -311,6 +311,10 @@ pub fn set_bpm(state: State<AppState>, bpm: f64) {
         return;
     }
     let bpm = bpm.clamp(20.0, 999.0);
+    // The tempo is part of the song, so undo restores it. A drag over the
+    // tempo field is one gesture on the UI side, which wraps it in a
+    // history group, so this does not fill the list with one step per pixel.
+    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     engine.transport.bpm.store(bpm, Ordering::Relaxed);
     engine.send_command(TransportCommand::SetBpm(bpm));

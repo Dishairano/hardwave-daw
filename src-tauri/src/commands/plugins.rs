@@ -757,6 +757,9 @@ pub fn load_sampler(
     path: String,
     base_note: Option<u8>,
 ) -> Result<(), String> {
+    // Loading a sample into a sampler is an edit: undo has to bring back
+    // whatever the slot held before.
+    state.engine.lock().snapshot_before_mutation();
     let (info, channels) =
         hardwave_dsp::audio_file::AudioFileReader::read(std::path::Path::new(&path))
             .map_err(|e| format!("decode {path}: {e:?}"))?;
