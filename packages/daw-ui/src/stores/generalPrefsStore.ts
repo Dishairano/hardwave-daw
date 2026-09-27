@@ -26,10 +26,16 @@ interface GeneralPrefsState {
    * focus ring on every interactive element. Applies `.hw-high-vis`
    * on `<html>`. */
   highVisibility: boolean
+  /** When true, the playlist and piano roll scroll along with the playhead
+   * while the song plays. Off by default: the view jumping while you work
+   * on a part further along is worse than losing sight of the playhead,
+   * and the FOLLOW buttons turn it on for the moment you want it. */
+  followPlayhead: boolean
 
   setNoteNaming: (n: NoteNamingConvention) => void
   setAnimationsEnabled: (v: boolean) => void
   setHighVisibility: (v: boolean) => void
+  setFollowPlayhead: (v: boolean) => void
 }
 
 export const useGeneralPrefsStore = create<GeneralPrefsState>()(
@@ -38,9 +44,11 @@ export const useGeneralPrefsStore = create<GeneralPrefsState>()(
       noteNaming: 'english',
       animationsEnabled: true,
       highVisibility: false,
+      followPlayhead: false,
       setNoteNaming: (noteNaming) => set({ noteNaming }),
       setAnimationsEnabled: (animationsEnabled) => set({ animationsEnabled }),
       setHighVisibility: (highVisibility) => set({ highVisibility }),
+      setFollowPlayhead: (followPlayhead) => set({ followPlayhead }),
     }),
     { name: 'hw-general-prefs' },
   ),

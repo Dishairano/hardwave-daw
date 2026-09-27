@@ -8,6 +8,7 @@ import { useTrackFolderStore } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { usePickerStore } from '../../stores/pickerStore'
 import { usePlaylistToolStore } from '../../stores/playlistToolStore'
+import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { useColorPickerStore } from '../../stores/colorPickerStore'
 import { useLogStore } from '../../dev/logStore'
 import { useMultiTouchGestures } from '../../hooks/useMultiTouchGestures'
@@ -129,7 +130,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   // timeline could not be navigated by hand at all. Mirrors the piano
   // roll's scrollX + followPlayhead pair.
   const [scrollX, setScrollX] = useState(0)
-  const [followPlayhead, setFollowPlayhead] = useState(true)
+  // Following the playhead is one saved switch, shared with the piano roll
+  // and off by default. The playlist used to scroll itself the moment the
+  // song played, which drags the view away from the part being worked on.
+  // Panning by hand turns it off, the same way dragging a scrollbar does in
+  // every other DAW, and the FOLLOW button turns it back on.
+  const followPlayhead = useGeneralPrefsStore(s => s.followPlayhead)
+  const setFollowPlayhead = useGeneralPrefsStore(s => s.setFollowPlayhead)
   /// FL Studio convention: right-mouse-button + drag = 2D pan (vertical
   /// scroll + horizontal pan via setting the playhead-derived offset).
   /// We track that here so onContextMenu can suppress its menu when the

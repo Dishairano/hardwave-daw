@@ -26,6 +26,7 @@ import type { AutomationTargetInfo } from '../stores/trackStore'
 import { useTransportStore } from '../stores/transportStore'
 import { useTempoMapStore } from '../stores/tempoMapStore'
 import { barBeatAtTick, PPQ as PPQ_TICKS } from '../utils/meter'
+import { useGeneralPrefsStore } from '../stores/generalPrefsStore'
 import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
@@ -1511,6 +1512,34 @@ function HwPlaylistRuler(_props: { totalBars?: number; step?: number }) {
 
 // ─── Playlist panel header ───────────────────────────────────────────────────
 
+/**
+ * Turns following the playhead on and off. The playlist used to scroll along
+ * with the song and there was no way to stop it, which pulls the view off
+ * whatever part is being worked on. It is off by default now, saved, and
+ * shared with the piano roll's own FOLLOW button.
+ */
+function FollowPlayheadButton() {
+  const on = useGeneralPrefsStore(s => s.followPlayhead)
+  const setOn = useGeneralPrefsStore(s => s.setFollowPlayhead)
+  return (
+    <button
+      onClick={() => setOn(!on)}
+      title={on
+        ? 'The view scrolls with the playhead. Click to keep it still.'
+        : 'The view stays where you put it. Click to scroll with the playhead.'}
+      style={{
+        marginLeft: 8, padding: '1px 6px', fontSize: 8.5, fontWeight: 700,
+        letterSpacing: 0.4, borderRadius: 3, cursor: 'pointer',
+        color: on ? 'var(--accent, #EF4444)' : 'var(--text-dim)',
+        background: on ? 'rgba(239,68,68,0.14)' : 'rgba(255,255,255,0.04)',
+        border: `1px solid ${on ? 'rgba(239,68,68,0.45)' : 'rgba(255,255,255,0.08)'}`,
+      }}
+    >
+      FOLLOW
+    </button>
+  )
+}
+
 function HwPlaylistHead() {
   const patterns = usePatternStore(s => s.patterns)
   const activeId = usePatternStore(s => s.activeId)
@@ -1529,6 +1558,7 @@ function HwPlaylistHead() {
         <ArrangementSwitcher />
         <span style={{ color: 'var(--text-dim)', margin: '0 4px' }}>›</span>
         <b>{activePattern?.name || 'Pattern 1'}</b>
+        <FollowPlayheadButton />
       </span>
       <span style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center', color: 'var(--text-dim)' }}>
         <svg className="ic" width="11" height="11" viewBox="0 0 16 16" fill="none">

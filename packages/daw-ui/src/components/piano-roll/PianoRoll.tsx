@@ -15,6 +15,7 @@ import {
 import { DetachButton } from '../FloatingWindow'
 import { useTrackStore } from '../../stores/trackStore'
 import { useProjectStore } from '../../stores/projectStore'
+import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { useTransportStore } from '../../stores/transportStore'
 import { useRecordingPrefsStore } from '../../stores/recordingPrefsStore'
 import { useTempoMapStore } from '../../stores/tempoMapStore'
@@ -161,7 +162,10 @@ export function PianoRoll() {
   const [scrollX, setScrollX] = useState(0)
   const [noteHeight, setNoteHeight] = useState(DEFAULT_NOTE_HEIGHT)
   const [scrollY, setScrollY] = useState(DEFAULT_NOTE_HEIGHT * 60)
-  const [followPlayhead, setFollowPlayhead] = useState(false)
+  // The same saved switch the playlist uses, so FOLLOW means one thing in
+  // the whole app rather than one per view.
+  const followPlayhead = useGeneralPrefsStore(s => s.followPlayhead)
+  const setFollowPlayhead = useGeneralPrefsStore(s => s.setFollowPlayhead)
   const [pixelsPerTick, setPixelsPerTick] = useState(0.12)
   const [snap, setSnap] = useState(DEFAULT_SNAP)
   const [selectedNotes, setSelectedNotes] = useState<Set<number>>(new Set())
@@ -1896,7 +1900,7 @@ export function PianoRoll() {
           FIT
         </button>
         <button
-          onClick={() => setFollowPlayhead(v => !v)}
+          onClick={() => setFollowPlayhead(!followPlayhead)}
           title="Follow playhead"
           style={{
             padding: '1px 6px', fontSize: 9, fontWeight: 600,

@@ -916,6 +916,36 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
           </>)}
 
           {tab === 'playback' && (<>
+            {/* Whether the view chases the song. Off by default. */}
+            <div style={{
+              marginTop: 8,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '6px 8px',
+              background: 'rgba(0,0,0,0.25)',
+              borderRadius: hw.radius.sm,
+              border: `1px solid ${generalPrefs.followPlayhead ? hw.accent : hw.borderDark}`,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>Scroll with the playhead</span>
+                <span style={{ fontSize: 9, color: hw.textFaint }}>
+                  The playlist and piano roll follow the song while it plays. Off keeps the view where you put it, so working on one part is not interrupted by the view jumping. The FOLLOW buttons switch it too.
+                </span>
+              </div>
+              <button
+                onClick={() => generalPrefs.setFollowPlayhead(!generalPrefs.followPlayhead)}
+                style={{
+                  padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                  borderRadius: hw.radius.sm, border: 'none',
+                  cursor: 'pointer',
+                  background: generalPrefs.followPlayhead ? hw.accent : 'rgba(255,255,255,0.08)',
+                  color: generalPrefs.followPlayhead ? '#fff' : hw.textSecondary,
+                  fontFamily: 'inherit',
+                }}
+              >
+                {generalPrefs.followPlayhead ? 'On' : 'Off'}
+              </button>
+            </div>
+
             {/* Mixer-settings preferences (FL Audio Settings → Mixer settings) */}
             <div style={{
               marginTop: 8,
