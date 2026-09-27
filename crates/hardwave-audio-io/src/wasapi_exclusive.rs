@@ -210,6 +210,7 @@ fn run_render_thread<C: AudioCallback>(
         }
         let out = &mut scratch[..samples];
         out.fill(0.0);
+        crate::denormals::flush_denormals_to_zero();
         callback.process(out, frames as usize, 2);
 
         let bytes_out = &mut bytes[..frames as usize * bytes_per_frame];

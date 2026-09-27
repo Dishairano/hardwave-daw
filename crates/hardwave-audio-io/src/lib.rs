@@ -9,6 +9,8 @@ use thiserror::Error;
 
 pub use rtrb;
 
+pub mod denormals;
+
 #[cfg(target_os = "windows")]
 mod wasapi_exclusive;
 
@@ -525,6 +527,9 @@ impl AudioDeviceManager {
                         data.fill(0.0);
                         return;
                     }
+                    // Denormals turn a reverb tail into a CPU spike; every
+                    // DAW switches them off on its audio thread.
+                    crate::denormals::flush_denormals_to_zero();
                     let num_frames = data.len() / 2;
                     // At least the block being written has to play out before
                     // anything after it is heard. The driver's own estimate is
