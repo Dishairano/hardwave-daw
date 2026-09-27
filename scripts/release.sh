@@ -114,6 +114,15 @@ BULLETERR
   exit 1
 fi
 
+# Rust lives in ~/.cargo/bin, which a non-login shell does not always have on
+# its PATH. Without cargo the version check below is skipped AND Cargo.lock
+# keeps the previous version, so the next gate run rewrites the lock and
+# disowns its own result ("the tree changed while the gate ran").
+if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
+  PATH="$HOME/.cargo/bin:$PATH"
+  export PATH
+fi
+
 CONF="src-tauri/tauri.conf.json"
 cd "$(git rev-parse --show-toplevel)"
 

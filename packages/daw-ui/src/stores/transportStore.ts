@@ -224,73 +224,155 @@ interface RecordedTake {
  * captured silence from the wrong input, and a take that hit the reserved
  * recording length. Each one now says so.
  */
-async function placeRecordedTake(take: RecordedTake | null, startSample: number): Promise<void> {
+/**
+ * Put a finished recording on every armed track.
+ *
+ * Recording used to look at one track: `tracks.find(t => t.armed)`. Arming a
+ * synth and a microphone recorded whichever came first in the list and threw
+ * the other away without a word, and pressing Stop (rather than Record) in the
+ * middle of a MIDI take committed nothing at all. Both are handled here, in
+ * one place, so the two ways of ending a recording behave the same.
+ *
+ * An interface with one stereo input gives every armed audio track the same
+ * two channels. Choosing which input feeds which track needs multi-channel
+ * routing, which the DAW does not have yet, so the notification says so
+ * rather than leaving someone to wonder why two tracks sound identical.
+ */
+async function commitRecording(
+  take: RecordedTake | null,
+  startSample: number,
+  endSample: number,
+): Promise<void> {
   const [{ useTrackStore }, { useNotificationStore }] = await Promise.all([
     import('./trackStore'),
     import('./notificationStore'),
   ])
   const push = useNotificationStore.getState().push
-  if (!take) return
 
-  const passes = take.passes ?? []
-  if (!take.path || passes.length === 0) {
-    push('warning', 'Nothing was recorded', {
-      detail: 'Check that the track is armed and that an input device is selected in Audio settings.',
-      sticky: true,
-    })
+  const armed = useTrackStore.getState().tracks.filter(t => t.armed)
+  const audioArmed = armed.filter(t => t.kind === 'Audio')
+  const midiArmed = armed.filter(t => t.kind === 'Midi')
+  const passes = take?.passes ?? []
+  const haveAudio = Boolean(take?.path) && passes.length > 0
+
+  if (armed.length === 0) {
+    if (haveAudio) push('warning', 'Take saved, but no track is armed', { detail: take!.path! })
     return
   }
 
-  const tracks = useTrackStore.getState()
-  const armedTrack = tracks.tracks.find(t => t.armed)
-  if (!armedTrack) {
-    push('warning', 'Take saved, but no track is armed', { detail: take.path })
-    return
-  }
-
-  // The engine reports where each pass starts, through the tempo map and
-  // with the punch window applied, so the clip lands where it was played.
-  // A backend without positions falls back to where record was pressed.
+  // Where each pass starts comes from the engine, through the tempo map and
+  // with the punch window applied. A backend without positions falls back to
+  // where record was pressed.
   const state = useTransportStore.getState()
   const samplesPerTick = (state.sampleRate || 48000) * 60 / (Math.max(1, state.bpm) * PPQ_TICKS)
   const fallbackTicks = samplesPerTick > 0 ? Math.max(0, Math.round(startSample / samplesPerTick)) : 0
 
-  // Every pass of a loop recording is one gesture, so one undo takes it all
-  // back rather than one undo per pass.
-  await tracks.beginHistoryGroup()
-  const placed: string[] = []
+  const [{ useRecordingPrefsStore }] = await Promise.all([import('./recordingPrefsStore')])
+  const blend = useRecordingPrefsStore.getState().blendRecord
+
+  const audioDone: string[] = []
+  const midiDone: string[] = []
+  const failures: string[] = []
+  let passCount = 0
+
+  // One gesture, one undo: every armed track and every loop pass comes back
+  // together rather than one undo per clip.
+  await useTrackStore.getState().beginHistoryGroup()
   try {
-    for (const pass of passes) {
-      const ticks = Number.isFinite(pass.startTicks) ? pass.startTicks : fallbackTicks
-      const clip = await useTrackStore.getState().importAudioFile(armedTrack.id, pass.path, ticks)
-      if (clip?.clip_id) placed.push(clip.clip_id)
+    for (const track of audioArmed) {
+      if (!haveAudio) continue
+      const placed: string[] = []
+      for (const pass of passes) {
+        const ticks = Number.isFinite(pass.startTicks) ? pass.startTicks : fallbackTicks
+        try {
+          const clip = await useTrackStore.getState().importAudioFile(track.id, pass.path, ticks)
+          if (clip?.clip_id) placed.push(clip.clip_id)
+        } catch (err) {
+          failures.push(`${track.name}: ${String(err)}`)
+        }
+      }
+      // Loop recording: the latest pass plays, earlier ones stay on the track
+      // muted, so trying another take is an unmute rather than a redo.
+      for (const clipId of placed.slice(0, -1)) {
+        await useTrackStore.getState().setClipMuted(track.id, clipId, true)
+      }
+      if (placed.length > 0) {
+        audioDone.push(track.name)
+        passCount = Math.max(passCount, placed.length)
+      }
     }
-    // Loop recording: the latest pass plays, the earlier ones stay on the
-    // track muted, so trying another take is an unmute rather than a redo.
-    for (const clipId of placed.slice(0, -1)) {
-      await useTrackStore.getState().setClipMuted(armedTrack.id, clipId, true)
+
+    for (const track of midiArmed) {
+      try {
+        const clipIds = (await invoke('commit_recording_to_midi_clip', {
+          trackId: track.id,
+          startSample,
+          endSample,
+          quantizeTicks: null,
+          // Blend-record (Ctrl+B): merge into the overlapping clip instead of
+          // stacking a new one.
+          blend,
+        })) as string[]
+        for (const clipId of clipIds.slice(0, -1)) {
+          await useTrackStore.getState().setClipMuted(track.id, clipId, true)
+        }
+        if (clipIds.length > 0) {
+          midiDone.push(track.name)
+          passCount = Math.max(passCount, clipIds.length)
+        }
+      } catch (err) {
+        failures.push(`${track.name}: ${String(err)}`)
+      }
     }
   } finally {
+    const tracksDone = audioDone.length + midiDone.length
     await useTrackStore.getState().endHistoryGroup(
-      passes.length > 1 ? `Record ${passes.length} loop passes` : 'Record take',
+      passCount > 1
+        ? `Record ${passCount} loop passes on ${tracksDone} track${tracksDone === 1 ? '' : 's'}`
+        : tracksDone > 1
+          ? `Record ${tracksDone} tracks`
+          : 'Record take',
     )
   }
+  await useTrackStore.getState().fetchTracks()
 
-  if (passes.length > 1) {
-    push('info', `Recorded ${passes.length} loop passes`, {
+  if (audioDone.length === 0 && midiDone.length === 0) {
+    push('warning', 'Nothing was recorded', {
+      detail: failures.length > 0
+        ? failures.join('\n')
+        : 'Check that the track is armed, that an input device is selected in Audio settings, and that your controller is enabled in the setup wizard.',
+      sticky: true,
+    })
+    return
+  }
+
+  if (failures.length > 0) {
+    push('warning', 'Part of the take did not land', { detail: failures.join('\n'), sticky: true })
+  }
+  if (audioDone.length + midiDone.length > 1) {
+    push('info', `Recorded ${audioDone.length + midiDone.length} tracks`, {
+      detail: audioDone.length > 1
+        ? 'Your interface has one stereo input, so every armed audio track got the same take.'
+        : [...audioDone, ...midiDone].join(', '),
+    })
+  }
+  if (passCount > 1) {
+    push('info', `Recorded ${passCount} loop passes`, {
       detail: 'The last pass is playing. The earlier ones are on the same track, muted: unmute one to use it instead.',
     })
   }
-  if (take.peak < 0.0005) {
-    push('warning', 'That take is silent', {
-      detail: 'The recording captured no signal. Check the input device and its level in Audio settings.',
-      sticky: true,
-    })
-  } else if (take.truncated) {
-    push('warning', 'The take hit the recording limit', {
-      detail: `Recording stops at ${RECORD_LIMIT_MINUTES} minutes in one take. What was captured up to that point has been kept.`,
-      sticky: true,
-    })
+  if (haveAudio && audioArmed.length > 0) {
+    if (take!.peak < 0.0005) {
+      push('warning', 'That take is silent', {
+        detail: 'The recording captured no signal. Check the input device and its level in Audio settings.',
+        sticky: true,
+      })
+    } else if (take!.truncated) {
+      push('warning', 'The take hit the recording limit', {
+        detail: `Recording stops at ${RECORD_LIMIT_MINUTES} minutes in one take. What was captured up to that point has been kept.`,
+        sticky: true,
+      })
+    }
   }
 }
 
@@ -336,16 +418,19 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   stop: async () => {
     cancelPrecount()
     // If a recording is in flight when Stop fires (typically Spacebar
-    // mid-record), the Rust side finalises the capture buffer and
-    // returns the WAV path so we can drop the take on the first armed
-    // track — same trailing-edge behaviour as toggleRecording. Without
-    // this, Space mid-record silently discarded the take.
+    // mid-record), the Rust side finalises the capture buffer and returns
+    // the WAV path, and the take goes onto the armed tracks exactly as it
+    // does when Record is pressed again. Stop used to place the audio only,
+    // so ending a MIDI take with the spacebar recorded nothing.
     const wasRecording = get().recording
+    // Read the playhead before stopping: it is the end of the MIDI window,
+    // and the transport may move it as it stops.
+    const endSample = get().positionSamples
     if (wasRecording) set({ recording: false })
     try {
       const take = (await invoke('stop')) as RecordedTake | null
       if (wasRecording) {
-        await placeRecordedTake(take, get().recordStartSample ?? 0)
+        await commitRecording(take, get().recordStartSample ?? 0, endSample)
         set({ recordStartSample: null })
       }
     } catch (e) {
@@ -363,18 +448,11 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     set(s => ({ looping: !s.looping }))
   },
   toggleRecording: async () => {
-    // Engine flips the recording flag and starts/stops the capture
-    // session. On the trailing edge it returns the path of the WAV
-    // that was just written to disk; we then drop a clip on the first
-    // armed track so the take is immediately visible on the timeline.
-    //
-    // Audio vs MIDI armed track branch:
-    //   - Audio track: import the returned WAV path as an audio clip.
-    //   - MIDI track:  drop the WAV path, invoke `commit_recording_to_midi_clip`
-    //     to drain the engine's rolling capture ring into a MidiClip
-    //     placed at the start position. The capture ring is always
-    //     recording (see Page 7 work), so any notes played between the
-    //     leading + trailing edges of this toggle land in the clip.
+    // The engine flips the recording flag and starts or stops the capture
+    // session. On the trailing edge it returns the WAV it just wrote, and
+    // `commitRecording` puts that, and the MIDI captured in the same window,
+    // on every armed track. The capture ring is always recording, so notes
+    // played between the two edges of this toggle land in the clip.
     const wasRecording = get().recording
     const startSample = wasRecording
       ? (get().recordStartSample ?? 0)
@@ -386,59 +464,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     try {
       const take = (await invoke('toggle_recording')) as RecordedTake | null
       if (!wasRecording) return // leading edge, nothing more to do
-
-      const { useTrackStore } = await import('./trackStore')
-      const armedTrack = useTrackStore.getState().tracks.find(t => t.armed)
-      if (!armedTrack) return
-
-      const endSample = get().positionSamples
-      if (armedTrack.kind === 'Midi') {
-        try {
-          const [{ useRecordingPrefsStore }, { useNotificationStore }] = await Promise.all([
-            import('./recordingPrefsStore'),
-            import('./notificationStore'),
-          ])
-          // Every pass of a loop recording is one gesture, so one undo.
-          await useTrackStore.getState().beginHistoryGroup()
-          let clipIds: string[] = []
-          try {
-            clipIds = (await invoke('commit_recording_to_midi_clip', {
-              trackId: armedTrack.id,
-              startSample,
-              endSample,
-              quantizeTicks: null,
-              // Blend-record (Ctrl+B): merge into the overlapping clip
-              // instead of stacking a new one.
-              blend: useRecordingPrefsStore.getState().blendRecord,
-            })) as string[]
-            // Loop recording: the latest pass plays, earlier ones are muted
-            // on the same track, the same as an audio take.
-            for (const clipId of clipIds.slice(0, -1)) {
-              await useTrackStore.getState().setClipMuted(armedTrack.id, clipId, true)
-            }
-          } finally {
-            await useTrackStore.getState().endHistoryGroup(
-              clipIds.length > 1 ? `Record ${clipIds.length} loop passes` : 'Record MIDI take',
-            )
-          }
-          await useTrackStore.getState().fetchTracks()
-          if (clipIds.length > 1) {
-            useNotificationStore.getState().push('info', `Recorded ${clipIds.length} loop passes`, {
-              detail: 'The last pass is playing. The earlier ones are on the same track, muted.',
-            })
-          }
-        } catch (err) {
-          // This used to be a console warning, so a MIDI take that captured
-          // nothing looked exactly like one that worked.
-          const { useNotificationStore } = await import('./notificationStore')
-          useNotificationStore.getState().push('warning', 'Nothing was recorded', {
-            detail: `${String(err)}\nCheck that the track is armed and that your controller is enabled in the setup wizard.`,
-            sticky: true,
-          })
-        }
-      } else {
-        await placeRecordedTake(take, startSample)
-      }
+      await commitRecording(take, startSample, get().positionSamples)
     } catch (e) {
       // Roll back the optimistic toggle if the engine rejected the call.
       set({ recording: wasRecording, recordStartSample: null })
