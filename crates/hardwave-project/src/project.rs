@@ -654,8 +654,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("version.hwp");
 
-        let mut p = Project::default();
-        p.version = 1; // as an older file would have it in memory
+        // As an older file would have it in memory.
+        let p = Project {
+            version: 1,
+            ..Project::default()
+        };
         p.save(&path).expect("save");
         let back = Project::load(&path).expect("load");
         assert_eq!(back.version, FORMAT_VERSION);
@@ -670,8 +673,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("newer.hwp");
 
-        let mut p = Project::default();
-        p.version = FORMAT_VERSION + 5;
+        let p = Project {
+            version: FORMAT_VERSION + 5,
+            ..Project::default()
+        };
         // Write it without going through `save`, which would stamp the
         // current version.
         let data = rmp_serde::to_vec_named(&p).unwrap();
