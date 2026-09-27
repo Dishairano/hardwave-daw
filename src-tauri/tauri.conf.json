@@ -49,8 +49,9 @@
     "createUpdaterArtifacts": "v1Compatible",
     "windows": {
       "nsis": {
-        "installMode": "perMachine",
+        "installMode": "currentUser",
         "template": "nsis/installer.nsi",
+        "installerHooks": "nsis/hooks.nsh",
         "headerImage": "nsis/header.bmp",
         "sidebarImage": "nsis/sidebar.bmp",
         "installerIcon": "icons/icon.ico"
