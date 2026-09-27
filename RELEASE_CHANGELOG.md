@@ -1,2 +1,2 @@
 ### Improvements
-- feat(daw): the view no longer chases the playhead unless you ask it to
+- fix(daw): the project file no longer depends on the order of fields in the code
