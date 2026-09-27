@@ -382,6 +382,7 @@ pub fn run() {
             commands::midi_input::get_midi_clock_sync_status,
             commands::midi_input::inject_midi_event,
             commands::midi_capture::dump_midi_capture,
+            commands::midi_capture::capture_recent_midi,
             commands::midi_capture::clear_midi_capture,
             commands::midi_capture::commit_recording_to_midi_clip,
             // MIDI Learn

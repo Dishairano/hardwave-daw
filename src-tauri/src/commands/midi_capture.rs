@@ -178,7 +178,48 @@ fn merge_notes_into_overlapping_clip(
     Some(midi_ref.id.clone())
 }
 
-/// Commit a slice of the rolling capture into a MIDI clip placed on the
+/// Turn what was just played into a clip, without having pressed record.
+///
+/// The DAW keeps recent MIDI input in a rolling buffer whether or not it is
+/// recording, and a command could already read it, but nothing in the app
+/// called it: playing something good with record off meant playing it again.
+///
+/// The buffer timestamps events with the playhead, so this covers the case
+/// it can honestly cover: notes played while the song was running. With the
+/// transport stopped every event carries the same position and there is
+/// nothing to lay out, which the error says.
+#[tauri::command]
+pub fn capture_recent_midi(
+    state: State<AppState>,
+    track_id: String,
+) -> Result<Vec<String>, String> {
+    let (from, to) = {
+        let ring_arc = {
+            let engine = state.engine.lock();
+            std::sync::Arc::clone(&engine.midi_capture_ring)
+        };
+        let Some(ring) = ring_arc.try_lock() else {
+            return Err("the capture buffer is busy; try again".into());
+        };
+        let entries = ring.entries_in_order();
+        if entries.is_empty() {
+            return Err("nothing has been played recently".into());
+        }
+        let first = entries.first().map(|(pos, _)| *pos).unwrap_or(0);
+        let last = entries.last().map(|(pos, _)| *pos).unwrap_or(0);
+        (first, last.saturating_add(1))
+    };
+    if to <= from + 1 {
+        return Err(
+            "everything in the buffer was played at the same point, which happens when the \
+             song was not running. Capture works while the song plays."
+                .into(),
+        );
+    }
+    commit_recording_to_midi_clip(state, track_id, from, to, None, Some(false))
+}
+
+/// Commit a slice of the rolling capture into a MIDI clip placed on the/// Commit a slice of the rolling capture into a MIDI clip placed on the
 /// target track at the given timeline position. Implements the
 /// "arm + record + play" flow on top of the always-on capture ring,
 /// reusing `hardwave_midi::MidiRecorder` to pair NoteOn / NoteOff

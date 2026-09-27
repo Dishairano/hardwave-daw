@@ -81,6 +81,12 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
     return () => window.removeEventListener('daw:settingsTab', onTab)
   }, [])
   const [devices, setDevices] = useState<AudioDevice[]>([])
+  // Driver type (WASAPI, ASIO, CoreAudio, ALSA, JACK). The engine could
+  // switch between them since it was written and only a test page ever
+  // called it, so ASIO users had no way to pick ASIO.
+  const [hosts, setHosts] = useState<string[]>([])
+  const [host, setHost] = useState<string>('')
+  const [hostError, setHostError] = useState<string | null>(null)
   const [inputDevices, setInputDevices] = useState<AudioDevice[]>([])
   const [config, setConfig] = useState<AudioConfig>({ device: null, sample_rate: 48000, buffer_size: 512 })
   const [inputConfig, setInputConfig] = useState<AudioInputConfig>({ device: null, channels: 2 })
@@ -132,7 +138,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       invoke<{ enabled: boolean; ticks_seen: boolean; last_bpm: number | null }>('get_midi_clock_sync_status'),
       invoke<{ enabled: boolean; fps: number }>('get_midi_mtc_status'),
       invoke<boolean>('get_direct_monitoring'),
-    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity, outPorts, clockStatus, syncStatus, mtcStatus, directMon]) => {
+      invoke<string[]>('list_audio_hosts'),
+      invoke<string>('get_audio_host'),
+    ]).then(([devs, inputs, cfg, inCfg, excl, ports, activity, outPorts, clockStatus, syncStatus, mtcStatus, directMon, hostList, activeHost]) => {
       setDevices(devs)
       setInputDevices(inputs)
       setConfig(cfg)
@@ -154,6 +162,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setMidiMtcEnabled(mtcStatus.enabled)
       setMidiMtcFps(mtcStatus.fps)
       setDirectMonitoring(directMon)
+      setHosts(hostList)
+      setHost(activeHost)
     })
   }, [])
 
@@ -430,6 +440,41 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
         {/* Body */}
         <div role="tabpanel" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 16px 12px' }}>
           {tab === 'audio' && (<>
+            {/* Driver type. Only shown when the build has more than one:
+                on a plain Windows build that is WASAPI alone, and a row
+                with one choice is noise. */}
+            {hosts.length > 1 && (
+              <SettingRow label="Audio Driver">
+                <Select
+                  value={host}
+                  onChange={v => {
+                    const previous = host
+                    setHost(v)
+                    setHostError(null)
+                    invoke('set_audio_host', { hostName: v })
+                      .then(() => Promise.all([
+                        invoke<AudioDevice[]>('get_audio_devices'),
+                        invoke<AudioConfig>('get_audio_config'),
+                      ]))
+                      .then(([devs, cfg]) => {
+                        // The device list belongs to the driver, so it is
+                        // read again rather than left showing the old one.
+                        setDevices(devs)
+                        setConfig(cfg)
+                        setSelectedDevice(cfg.device)
+                        setSelectedRate(cfg.sample_rate)
+                        setSelectedBuffer(cfg.buffer_size)
+                      })
+                      .catch(e => { setHost(previous); setHostError(String(e)) })
+                  }}
+                  options={hosts.map(h => ({ value: h, label: h }))}
+                />
+              </SettingRow>
+            )}
+            {hostError && (
+              <div style={{ fontSize: 10, color: hw.red, margin: '-4px 0 8px' }}>{hostError}</div>
+            )}
+
             {/* Output Device */}
             <SettingRow label="Output Device">
               <Select

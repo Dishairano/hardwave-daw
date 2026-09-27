@@ -12,7 +12,7 @@ import { DetachButton } from '../FloatingWindow'
 export function TrackList() {
   const {
     tracks, selectedTrackId, selectTrack,
-    toggleMute, toggleSolo, toggleSoloSafe, toggleArm, reorderTrack,
+    toggleMute, toggleSolo, soloExclusively, toggleSoloSafe, toggleArm, reorderTrack,
     trackHeights, setTrackHeight,
     renameTrack, setTrackColor, removeTrack,
   } = useTrackStore()
@@ -268,8 +268,16 @@ export function TrackList() {
                   }}
                 >M</button>
                 <button
-                  onClick={e => { e.stopPropagation(); toggleSolo(track.id) }}
-                  title={track.solo_safe ? 'Solo (solo-safe on: ignores other solos)' : 'Solo'}
+                  onClick={e => {
+                    e.stopPropagation()
+                    // Ctrl-click solos this track alone, the way every other
+                    // DAW does it; a plain click still adds to the solo set.
+                    if (e.ctrlKey || e.metaKey) soloExclusively(track.id)
+                    else toggleSolo(track.id)
+                  }}
+                  title={track.solo_safe
+                    ? 'Solo (solo-safe on: ignores other solos). Ctrl-click: solo this one alone'
+                    : 'Solo. Ctrl-click: solo this one alone'}
                   style={{
                     ...tb,
                     color: track.soloed ? hw.yellow : hw.textMuted,

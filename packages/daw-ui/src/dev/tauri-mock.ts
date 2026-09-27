@@ -244,6 +244,12 @@ const mock: TauriInternals = {
       case 'get_graph_latency':
         return { samples: 0, ms: 0, pdcEnabled: true }
       // Setup-wizard audio step (screenshot harness renders it headless).
+      case 'list_audio_hosts':
+        return ['WASAPI', 'ASIO']
+      case 'get_audio_host':
+        return 'WASAPI'
+      case 'set_audio_host':
+        return null
       case 'get_audio_devices':
         return [
           { name: 'Focusrite Scarlett 2i2', is_default: false, sample_rates: [44100, 48000, 96000], max_channels: 2 },

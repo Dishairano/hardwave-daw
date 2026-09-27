@@ -244,6 +244,33 @@ export function App() {
   // remembers its open/closed status across reloads.
   const touchControllerVisible = useTouchControllerStore((s) => s.visible)
   const setTouchControllerVisible = useTouchControllerStore((s) => s.setVisible)
+  /**
+   * Turn what was just played into a clip on the selected instrument track.
+   * The DAW always keeps recent MIDI input, so a good take played with
+   * record off is not lost.
+   */
+  const captureRecentMidi = useCallback(async () => {
+    const tracks = useTrackStore.getState()
+    const target = tracks.tracks.find(t => t.id === tracks.selectedTrackId && t.kind === 'Midi')
+      ?? tracks.tracks.find(t => t.armed && t.kind === 'Midi')
+      ?? tracks.tracks.find(t => t.kind === 'Midi')
+    if (!target) {
+      useNotificationStore.getState().push('warning', 'No instrument channel to capture into', {
+        detail: 'Add or select an instrument channel first.',
+      })
+      return
+    }
+    try {
+      const clips = await invoke<string[]>('capture_recent_midi', { trackId: target.id })
+      await useTrackStore.getState().fetchTracks()
+      useNotificationStore.getState().push('info', `Captured onto "${target.name}"`, {
+        detail: clips.length > 1 ? `${clips.length} clips` : undefined,
+      })
+    } catch (e) {
+      useNotificationStore.getState().push('warning', 'Nothing to capture', { detail: String(e) })
+    }
+  }, [])
+
   const toggleTouchController = useTouchControllerStore((s) => s.toggleVisible)
   const [pdcEnabled, setPdcEnabled] = useState(true)
   const useNewMixer = useMixerSettingsStore(s => s.useNewMixer)
@@ -1737,6 +1764,10 @@ export function App() {
           { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },
           { separator: true, label: '' },
           // MIDI / controllers
+          {
+            label: 'Capture what you just played',
+            action: () => { void captureRecentMidi() },
+          },
           { label: 'MIDI mappings…', action: () => setShowMidiMappings(true) },
           { label: 'Touch Controller', shortcut: 'Alt+F7', action: () => toggleTouchController() },
           {

@@ -219,6 +219,8 @@ interface TrackState {
   commitPan: (id: string, pan: number) => Promise<void>
   toggleMute: (id: string) => Promise<void>
   toggleSolo: (id: string) => Promise<void>
+  /** Solo this track and unsolo every other one (ctrl-click on Solo). */
+  soloExclusively: (id: string) => Promise<void>
   toggleArm: (id: string) => Promise<void>
   setTrackMonitorInput: (id: string, enabled: boolean) => Promise<void>
   toggleSoloSafe: (id: string) => Promise<void>
@@ -557,6 +559,14 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     // effective mute of the others from the list it already has.
     await mut('toggle_solo', { trackId: id }, `Toggle solo on "${name}"`)
     await get().refreshTrack(id)
+  },
+
+  soloExclusively: async (id) => {
+    // The command has existed since solo was written and nothing called it,
+    // so soloing one part meant clearing the others by hand.
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_exclusive_solo', { trackId: id }, `Solo only "${name}"`)
+    await get().fetchTracks()
   },
 
   toggleArm: async (id) => {

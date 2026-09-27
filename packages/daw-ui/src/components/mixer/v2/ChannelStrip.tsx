@@ -130,7 +130,12 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const onSolo = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
-      useTrackStore.getState().toggleSolo(trackId).catch(console.error)
+      // Ctrl-click solos this strip alone; a plain click adds to the set.
+      const store = useTrackStore.getState()
+      const action = e.ctrlKey || e.metaKey
+        ? store.soloExclusively(trackId)
+        : store.toggleSolo(trackId)
+      action.catch(console.error)
     },
     [trackId],
   )
@@ -181,7 +186,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
             <button
               className={'mx-pill mx-pill-s' + (soloed ? ' on' : '')}
               onClick={onSolo}
-              title={soloed ? 'Unsolo' : 'Solo'}
+              title={`${soloed ? 'Unsolo' : 'Solo'}. Ctrl-click: solo this one alone`}
             >
               S
             </button>
