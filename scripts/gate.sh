@@ -27,6 +27,15 @@ cd "$(git rev-parse --show-toplevel)"
 # rustup installs here and non-login shells do not always have it on PATH.
 export PATH="$HOME/.cargo/bin:$PATH"
 
+# One gate at a time. Two runs share the same target directory, and the
+# cache clean-up below can delete the incremental files the other run is
+# writing, which surfaces as "failed to move dependency graph" and reads
+# like a broken toolchain. A second gate waits rather than racing.
+if [ -z "${HW_GATE_LOCKED:-}" ]; then
+  export HW_GATE_LOCKED=1
+  exec flock "$(git rev-parse --git-dir)/hw-gate.lock" "$0" "$@"
+fi
+
 # Builds die strangely when the target volume fills: rustc is killed and
 # cargo reports "failed to parse process output", which reads like a
 # compiler bug rather than a full disk. The incremental cache is the part
