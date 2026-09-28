@@ -20,6 +20,7 @@ pub mod plugins;
 pub mod project;
 pub mod sends;
 pub mod sources;
+pub mod timeline_edit;
 pub mod tracks;
 pub mod transport;
 pub mod windows;

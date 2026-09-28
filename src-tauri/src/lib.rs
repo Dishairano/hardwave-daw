@@ -207,6 +207,8 @@ pub fn run() {
             commands::tracks::toggle_mute,
             commands::tracks::toggle_solo,
             commands::tracks::set_exclusive_solo,
+            commands::timeline_edit::insert_time,
+            commands::timeline_edit::delete_time,
             commands::tracks::save_mixer_snapshot,
             commands::tracks::list_mixer_snapshots,
             commands::tracks::recall_mixer_snapshot,

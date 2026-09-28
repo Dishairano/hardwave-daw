@@ -300,6 +300,60 @@ export function App() {
     }
   }, [])
 
+  /**
+   * Make room for, or take out, a stretch of the song.
+   *
+   * Adding two bars in the middle used to mean selecting everything after
+   * that point on every track and dragging it, and automation, tempo
+   * changes and markers did not come along. The loop range says which
+   * stretch; the DAW moves everything.
+   */
+  const loopRangeTicks = useCallback((): { at: number; length: number } | null => {
+    const t = useTransportStore.getState()
+    const samplesPerTick = (t.sampleRate || 48000) * 60 / (Math.max(1, t.bpm) * 960)
+    if (samplesPerTick <= 0 || t.loopEnd <= t.loopStart) return null
+    return {
+      at: Math.round(t.loopStart / samplesPerTick),
+      length: Math.round((t.loopEnd - t.loopStart) / samplesPerTick),
+    }
+  }, [])
+
+  const insertTimeAtLoop = useCallback(async () => {
+    const range = loopRangeTicks()
+    if (!range) {
+      useNotificationStore.getState().push('info', 'Set the loop range first', {
+        detail: 'The loop range says where the time goes in and how much.',
+      })
+      return
+    }
+    try {
+      await invoke('insert_time', { atTicks: range.at, lengthTicks: range.length })
+      await useTrackStore.getState().fetchTracks()
+      useNotificationStore.getState().push('info', 'Made room for the loop range')
+    } catch (e) {
+      useNotificationStore.getState().push('warning', 'Could not insert time', { detail: String(e) })
+    }
+  }, [loopRangeTicks])
+
+  const deleteTimeAtLoop = useCallback(async () => {
+    const range = loopRangeTicks()
+    if (!range) {
+      useNotificationStore.getState().push('info', 'Set the loop range first', {
+        detail: 'The loop range says which stretch of the song to remove.',
+      })
+      return
+    }
+    try {
+      await invoke('delete_time', { atTicks: range.at, lengthTicks: range.length })
+      await useTrackStore.getState().fetchTracks()
+      useNotificationStore.getState().push('info', 'Removed the loop range', {
+        detail: 'Clips that only overlapped the edge were moved, not cut.',
+      })
+    } catch (e) {
+      useNotificationStore.getState().push('warning', 'Could not delete time', { detail: String(e) })
+    }
+  }, [loopRangeTicks])
+
   const playSelection = useCallback(() => {
     const ts = useTrackStore.getState()
     const selected = new Set(ts.selectedClipIds)
@@ -1755,6 +1809,9 @@ export function App() {
           { label: 'Select all', shortcut: 'Ctrl+A', action: () => useTrackStore.getState().selectAllClips() },
           { separator: true, label: '' },
           { label: 'Play selection', shortcut: 'Shift+Space', action: playSelection },
+          { separator: true, label: '' },
+          { label: 'Insert time at the loop range', action: () => { void insertTimeAtLoop() } },
+          { label: 'Delete the loop range', action: () => { void deleteTimeAtLoop() } },
         ],
       },
       {
