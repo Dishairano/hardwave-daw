@@ -41,6 +41,9 @@ interface PerfMetersState {
   /** Share of the block each track is taking, keyed by track id. The whole
    *  mix meter says the load is high; this says which track it is. */
   trackLoad: Record<string, number>
+  /** How much each insert is pulling the level down, in dB, keyed
+   *  `trackId:slotId`. Zero or missing means it is not reducing. */
+  gainReduction: Record<string, number>
   set: (next: { cpuPct: number; xruns: number; memMb: number | null; memRatio: number | null }) => void
 }
 
@@ -50,6 +53,7 @@ export const usePerfMetersStore = create<PerfMetersState>((set) => ({
   memMb: null,
   memRatio: null,
   trackLoad: {},
+  gainReduction: {},
   set: (next) => set(next),
 }))
 
@@ -92,12 +96,26 @@ export function startPerfMeters(): () => void {
       .catch(() => { /* a missed poll is not worth a toast */ })
   }, 500)
 
+  // Gain reduction moves fast, but a compressor's meter is read as a
+  // feel rather than a number, so ten times a second is plenty and keeps
+  // the poll off the frame budget.
+  const reductionId = window.setInterval(() => {
+    invoke<{ trackId: string; slotId: string; reductionDb: number }[]>('get_gain_reduction')
+      .then(rows => {
+        const gainReduction: Record<string, number> = {}
+        for (const row of rows) gainReduction[`${row.trackId}:${row.slotId}`] = row.reductionDb
+        usePerfMetersStore.setState({ gainReduction })
+      })
+      .catch(() => { /* a missed poll is not worth a toast */ })
+  }, 100)
+
   const memoryId = window.setInterval(pollMemory, 1000)
   pollMemory()
 
   cleanup = () => {
     window.clearInterval(intervalId)
     window.clearInterval(trackLoadId)
+    window.clearInterval(reductionId)
     window.clearInterval(memoryId)
     cleanup = null
   }

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Knob } from '../../primitives/Knob'
 import type { InsertInfo } from '../../../stores/trackStore'
+import { usePerfMetersStore } from '../../../stores/perfMetersStore'
 import { usePluginPresetStore } from '../../../stores/pluginPresetStore'
 
 export interface FxSlotProps {
@@ -42,6 +43,9 @@ export interface FxSlotProps {
  */
 export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
   const { trackId, slotIndex, insert, onOpenPicker } = props
+  const reductionDb = usePerfMetersStore(
+    s => (insert ? s.gainReduction[`${trackId}:${insert.id}`] ?? 0 : 0),
+  )
   const rowRef = useRef<HTMLDivElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   /// Preset dropdown anchor — click on plug-in name opens the list at
@@ -196,6 +200,19 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
         }}
       >
         {insert.pluginName}
+        {/* What this plug-in is doing to the level. Compressors and
+            limiters worked it out every sample and nothing showed it. */}
+        {reductionDb < -0.1 && (
+          <span
+            title={`Pulling the level down by ${Math.abs(reductionDb).toFixed(1)} dB`}
+            style={{
+              position: 'absolute', right: 2, bottom: 1, height: 2,
+              // Full width at 12 dB down, which covers most mixing.
+              width: `${Math.min(1, Math.abs(reductionDb) / 12) * 60}%`,
+              background: '#F59E0B', borderRadius: 1, pointerEvents: 'none',
+            }}
+          />
+        )}
       </div>
       <button
         type="button"

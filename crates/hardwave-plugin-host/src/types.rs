@@ -86,6 +86,16 @@ pub trait HostedPlugin: Send {
 
     fn latency_samples(&self) -> u32;
 
+    /// How many dB this plug-in is currently pulling the signal down by,
+    /// as a non-positive number, or `None` when it does not reduce gain.
+    ///
+    /// Compressors and limiters already work this out every sample and
+    /// threw it away, so a mixer could not show what a compressor was
+    /// doing. Dynamics plug-ins override it; everything else does not.
+    fn gain_reduction_db(&self) -> Option<f32> {
+        None
+    }
+
     /// Open the plugin's native editor window, parented to the given handle.
     fn open_editor(&mut self, parent_handle: raw_window_handle::RawWindowHandle) -> bool;
     fn close_editor(&mut self);

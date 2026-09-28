@@ -33,6 +33,8 @@ const LIMITER_KNEE_DB: f32 = 0.5;
 
 pub struct NativeLimiter {
     descriptor: PluginDescriptor,
+    /// The last reduction applied, for the mixer's gain-reduction meter.
+    last_reduction_db: f32,
     env_l: EnvelopeFollower,
     env_r: EnvelopeFollower,
     threshold_db: f32,
@@ -71,6 +73,7 @@ impl NativeLimiter {
     pub fn new() -> Self {
         Self {
             descriptor: Self::descriptor(),
+            last_reduction_db: 0.0,
             env_l: EnvelopeFollower::default(),
             env_r: EnvelopeFollower::default(),
             threshold_db: -3.0,
@@ -128,6 +131,10 @@ impl Default for NativeLimiter {
 impl HostedPlugin for NativeLimiter {
     fn descriptor(&self) -> &PluginDescriptor {
         &self.descriptor
+    }
+
+    fn gain_reduction_db(&self) -> Option<f32> {
+        Some(self.last_reduction_db)
     }
 
     fn activate(&mut self, sample_rate: f64, _max_block_size: u32) -> Result<(), String> {
@@ -198,6 +205,8 @@ impl HostedPlugin for NativeLimiter {
                 LIMITER_RATIO,
                 LIMITER_KNEE_DB,
             );
+            // The deeper of the two, so the meter shows the loudest side.
+            self.last_reduction_db = red_l_db.min(red_r_db);
             let g_l = db_to_linear(red_l_db);
             let g_r = db_to_linear(red_r_db);
 

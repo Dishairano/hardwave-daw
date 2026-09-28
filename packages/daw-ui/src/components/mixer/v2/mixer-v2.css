@@ -600,6 +600,8 @@
   box-shadow: none;
 }
 .mx-fx-slot-name {
+  /* The gain-reduction bar sits along the bottom of this cell. */
+  position: relative;
   color: #fff;
   letter-spacing: 0.02em;
   white-space: nowrap;

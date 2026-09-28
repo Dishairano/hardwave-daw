@@ -248,6 +248,11 @@ pub fn rescan_and_restore_missing_plugins(
                         .lock()
                         .insert((track_id.clone(), slot_id.clone()), queue);
                 }
+                let gain_reduction_db = LiveSlot::new_gain_reduction();
+                state.slot_gain_reduction.lock().insert(
+                    (track_id.clone(), slot_id.clone()),
+                    gain_reduction_db.clone(),
+                );
                 let cmd = InsertCommand::Add {
                     track_id,
                     slot: LiveSlot {
@@ -256,6 +261,7 @@ pub fn rescan_and_restore_missing_plugins(
                         enabled,
                         wet,
                         sidechain_active: false,
+                        gain_reduction_db,
                     },
                 };
                 if state.engine.lock().try_send_insert_command(cmd).is_err() {
@@ -494,6 +500,11 @@ pub fn add_plugin_to_track(
     // Phase 3: ship the freshly-built LiveSlot to the audio thread via
     // the lock-free InsertCommand queue. The chain takes ownership and
     // calls activate() before processing the next block.
+    let gain_reduction_db = LiveSlot::new_gain_reduction();
+    state.slot_gain_reduction.lock().insert(
+        (track_id.clone(), slot_id.clone()),
+        gain_reduction_db.clone(),
+    );
     let cmd = InsertCommand::Add {
         track_id: track_id.clone(),
         slot: LiveSlot {
@@ -501,6 +512,7 @@ pub fn add_plugin_to_track(
             plugin,
             enabled: true,
             wet: 1.0,
+            gain_reduction_db,
             // Synced to the project's sidechain_source on the next
             // graph rebuild; new inserts start with none.
             sidechain_active: false,
@@ -737,7 +749,36 @@ pub fn get_plugin_parameters(
     Ok(out)
 }
 
-/// Hydrate every persisted PluginSlot in the current project into the
+/// How much each insert is pulling the level down right now, in dB.
+///
+/// The compressors and limiters have always worked this out and thrown it
+/// away, so a mixer could not show what a compressor was doing: the only
+/// way to tell was by ear against the meter.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotGainReduction {
+    pub track_id: String,
+    pub slot_id: String,
+    /// Non-positive dB. Zero means the plug-in is not reducing anything.
+    pub reduction_db: f32,
+}
+
+#[tauri::command]
+pub fn get_gain_reduction(state: State<AppState>) -> Vec<SlotGainReduction> {
+    use std::sync::atomic::Ordering;
+    state
+        .slot_gain_reduction
+        .lock()
+        .iter()
+        .map(|((track_id, slot_id), value)| SlotGainReduction {
+            track_id: track_id.clone(),
+            slot_id: slot_id.clone(),
+            reduction_db: value.load(Ordering::Relaxed),
+        })
+        .collect()
+}
+
+/// Hydrate every persisted PluginSlot in the current project/// Hydrate every persisted PluginSlot in the current project into the
 /// audio thread's chains. Called from `load_project` after the project
 /// state has been replaced. For each insert: instantiate the plug-in,
 /// ship an Add command. Plug-ins missing from the scanner cache are
@@ -849,6 +890,11 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
                         );
                     }
                 }
+                let gain_reduction_db = LiveSlot::new_gain_reduction();
+                state.slot_gain_reduction.lock().insert(
+                    (track_id.clone(), slot_id.clone()),
+                    gain_reduction_db.clone(),
+                );
                 let cmd = InsertCommand::Add {
                     track_id,
                     slot: LiveSlot {
@@ -857,6 +903,7 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
                         enabled,
                         wet,
                         sidechain_active,
+                        gain_reduction_db,
                     },
                 };
                 if state.engine.lock().try_send_insert_command(cmd).is_err() {

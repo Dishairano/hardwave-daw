@@ -51,6 +51,18 @@ pub struct AppState {
     #[allow(clippy::type_complexity)]
     pub slot_param_queues:
         Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
+    /// Where each insert publishes its gain reduction, keyed by track and
+    /// slot. Compressors and limiters worked this out every sample and
+    /// threw it away; the mixer can show it now.
+    #[allow(clippy::type_complexity)]
+    pub slot_gain_reduction: Arc<
+        Mutex<
+            std::collections::HashMap<
+                (String, String),
+                Arc<hardwave_engine::atomic_float::AtomicF32>,
+            >,
+        >,
+    >,
     /// Cached launch-time decision from `resolve_launch_plan`. Populated
     /// by the splash-driven `frontend_update_check_and_apply` and READ by
     /// the follow-up `version_contract_state` command so both fronts of
@@ -114,6 +126,7 @@ pub fn run() {
         export_cancel: Arc::new(AtomicBool::new(false)),
         plugin_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        slot_gain_reduction: Arc::new(Mutex::new(std::collections::HashMap::new())),
         midi_mappings: Arc::clone(&midi_mappings),
         automation_write: Arc::new(commands::automation_write::AutomationWriteSessions::new()),
         midi_clock: Arc::clone(&midi_clock),
@@ -246,6 +259,7 @@ pub fn run() {
             commands::plugins::set_plugin_parameter,
             commands::plugins::get_plugin_parameters,
             commands::plugins::load_sampler,
+            commands::plugins::get_gain_reduction,
             commands::plugins::set_plugin_sidechain_source,
             commands::plugins::find_missing_plugins,
             commands::plugins::rescan_and_restore_missing_plugins,

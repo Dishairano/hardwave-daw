@@ -12,6 +12,10 @@ pub mod master_tap;
 pub mod metronome;
 pub mod midi_track_node;
 pub mod pan;
+
+/// Re-exported so callers outside this crate can hold the same atomic
+/// float the meters and gain-reduction channels use.
+pub use atomic_float;
 pub mod parallel_eval;
 pub mod preview_player;
 pub mod track_node;

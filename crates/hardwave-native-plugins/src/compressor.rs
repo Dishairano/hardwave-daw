@@ -23,6 +23,8 @@ const PARAM_COUNT: u32 = 8;
 
 pub struct NativeCompressor {
     descriptor: PluginDescriptor,
+    /// The last reduction applied, for the mixer's gain-reduction meter.
+    last_reduction_db: f32,
     env_l: EnvelopeFollower,
     env_r: EnvelopeFollower,
     threshold_db: f32,
@@ -59,6 +61,7 @@ impl NativeCompressor {
     pub fn new() -> Self {
         Self {
             descriptor: Self::descriptor(),
+            last_reduction_db: 0.0,
             env_l: EnvelopeFollower::default(),
             env_r: EnvelopeFollower::default(),
             threshold_db: -18.0,
@@ -110,6 +113,11 @@ impl NativeCompressor {
         // value (0 dB = no reduction, more negative = more reduction).
         let reduction_db =
             compressor_gain_reduction_db(env_db, self.threshold_db, self.ratio, self.knee_db);
+        // Keep the deeper of the two channels, so the meter shows what the
+        // loudest side is doing rather than flickering between them.
+        if ch == 0 || reduction_db < self.last_reduction_db {
+            self.last_reduction_db = reduction_db;
+        }
         let makeup = self.effective_makeup_db();
         let gain = db_to_linear(reduction_db + makeup);
         sample * gain
@@ -125,6 +133,10 @@ impl Default for NativeCompressor {
 impl HostedPlugin for NativeCompressor {
     fn descriptor(&self) -> &PluginDescriptor {
         &self.descriptor
+    }
+
+    fn gain_reduction_db(&self) -> Option<f32> {
+        Some(self.last_reduction_db)
     }
 
     fn activate(&mut self, sample_rate: f64, _max_block_size: u32) -> Result<(), String> {

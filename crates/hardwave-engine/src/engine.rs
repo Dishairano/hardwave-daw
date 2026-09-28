@@ -1921,6 +1921,8 @@ impl EngineCallback {
                     // which silently dropped ducking from every export while
                     // playback ducked correctly.
                     sidechain_active: sidechained,
+                    // Nothing reads a meter during an offline render.
+                    gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
                 };
                 node.push_offline_slot(slot, sr, buffer_size);
             }

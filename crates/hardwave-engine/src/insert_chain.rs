@@ -50,6 +50,17 @@ pub struct LiveSlot {
     /// this plug-in as extra input channels [2,3]; a sidechain-aware
     /// plug-in (e.g. the compressor) keys its detector off them.
     pub sidechain_active: bool,
+    /// Where this slot publishes how much it is pulling the signal down,
+    /// in dB, for the mixer's gain-reduction meter. Dynamics plug-ins fill
+    /// it; everything else leaves it at zero.
+    pub gain_reduction_db: std::sync::Arc<atomic_float::AtomicF32>,
+}
+
+impl LiveSlot {
+    /// A fresh place for this slot to publish its gain reduction.
+    pub fn new_gain_reduction() -> std::sync::Arc<atomic_float::AtomicF32> {
+        std::sync::Arc::new(atomic_float::AtomicF32::new(0.0))
+    }
 }
 
 /// Ordered list of live insert slots for one track.
@@ -133,6 +144,13 @@ impl InsertChain {
                     );
                 }
             }
+            // What the plug-in just did to the level, if it is the kind
+            // that does anything: one relaxed store, no allocation.
+            if let Some(reduction) = slot.plugin.gain_reduction_db() {
+                slot.gain_reduction_db
+                    .store(reduction, std::sync::atomic::Ordering::Relaxed);
+            }
+
             let wet = slot.wet.clamp(0.0, 1.0);
             let dry = 1.0 - wet;
             // Plug-ins are allowed to under-fill their output buffer
@@ -773,6 +791,7 @@ mod tests {
             enabled,
             wet: 1.0,
             sidechain_active: false,
+            gain_reduction_db: LiveSlot::new_gain_reduction(),
         };
         (slot, counter)
     }
@@ -891,6 +910,7 @@ mod tests {
                     enabled: true,
                     wet: 1.0,
                     sidechain_active: false,
+                    gain_reduction_db: LiveSlot::new_gain_reduction(),
                 },
                 48_000.0,
                 256,
@@ -937,6 +957,7 @@ mod tests {
                     enabled: true,
                     wet: 1.0,
                     sidechain_active: false,
+                    gain_reduction_db: LiveSlot::new_gain_reduction(),
                 },
                 48_000.0,
                 256,
@@ -989,6 +1010,7 @@ mod tests {
                     enabled: false,
                     wet: 1.0,
                     sidechain_active: false,
+                    gain_reduction_db: LiveSlot::new_gain_reduction(),
                 },
                 48_000.0,
                 256,
