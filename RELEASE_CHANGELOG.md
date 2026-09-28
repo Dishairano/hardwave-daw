@@ -1,4 +1,4 @@
 ### Improvements
-- feat(daw): mixer snapshots, and a ruler that can count in time
-- Tools > Save mixer snapshot keeps every fader, pan, mute and solo under a name, and Recall puts them back, so two mixes can be compared without writing the numbers down. Snapshots are saved with the song.
-- Settings > Playback can set the playlist ruler to minutes and seconds or timecode instead of bars, for work to picture.
+- style: sort the search results with sort_by_key
+- feat(daw): the browser search finds files you have not opened yet
+- The browser's search now finds files anywhere in your Places folders, not just in the folders you already opened.
