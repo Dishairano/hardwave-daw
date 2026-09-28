@@ -117,6 +117,10 @@ pub fn save_plugin_preset(
         .clone();
 
     let dir = preset_dir(&app, &plugin_id)?;
+    // The folder name is the plug-in id with everything awkward replaced,
+    // which cannot be turned back into the id. The sidecar keeps the real
+    // one so the browser can list every plug-in's presets together.
+    write_owner(&dir, &plugin_id);
     let preset_id = uuid::Uuid::new_v4().to_string();
     fs::write(blob_path(&dir, &preset_id), &bytes).map_err(|e| format!("write blob: {e}"))?;
 
@@ -196,4 +200,73 @@ pub fn rename_plugin_preset(
         return Err(format!("preset {preset_id} not found"));
     }
     write_index(&dir, &list)
+}
+
+/// The real plug-in id, written beside the index because the folder name
+/// is a one-way flattening of it.
+fn owner_path(dir: &Path) -> PathBuf {
+    dir.join("plugin.json")
+}
+
+fn write_owner(dir: &Path, plugin_id: &str) {
+    let body = serde_json::json!({ "pluginId": plugin_id });
+    if let Ok(bytes) = serde_json::to_vec_pretty(&body) {
+        let _ = fs::write(owner_path(dir), bytes);
+    }
+}
+
+fn read_owner(dir: &Path) -> Option<String> {
+    let bytes = fs::read(owner_path(dir)).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value
+        .get("pluginId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// One plug-in's saved presets, for the browser that shows them all.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetBank {
+    pub plugin_id: String,
+    pub presets: Vec<PresetInfo>,
+}
+
+/// Every saved preset, grouped by the plug-in it belongs to.
+///
+/// Presets used to be reachable only from the slot that made them, so a
+/// patch saved on Insert 3 was invisible while working on Insert 11. This
+/// walks the presets folder instead, and a folder from an older build
+/// without the sidecar is listed under its flattened name rather than
+/// dropped.
+#[tauri::command]
+pub fn list_all_presets(app: AppHandle) -> Result<Vec<PresetBank>, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?
+        .join("hardwave")
+        .join("presets");
+    let Ok(entries) = fs::read_dir(&base) else {
+        return Ok(Vec::new());
+    };
+    let mut banks: Vec<PresetBank> = Vec::new();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let presets = read_index(&dir);
+        if presets.is_empty() {
+            continue;
+        }
+        let plugin_id = read_owner(&dir).unwrap_or_else(|| {
+            dir.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
+        });
+        banks.push(PresetBank { plugin_id, presets });
+    }
+    banks.sort_by(|a, b| a.plugin_id.to_lowercase().cmp(&b.plugin_id.to_lowercase()));
+    Ok(banks)
 }

@@ -224,6 +224,7 @@ pub fn run() {
             commands::macros::remove_macro_link,
             commands::macros::set_macro_link_range,
             commands::macros::apply_all_macros,
+            commands::plugin_presets::list_all_presets,
             commands::tracks::save_mixer_snapshot,
             commands::tracks::list_mixer_snapshots,
             commands::tracks::recall_mixer_snapshot,
