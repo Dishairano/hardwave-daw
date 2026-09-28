@@ -116,6 +116,10 @@ pub struct MidiTrackNode {
     /// This block's controller events, kept between blocks so collecting
     /// them does not allocate on the audio thread.
     control_scratch: Vec<hardwave_midi::MidiEvent>,
+    /// The last value of each controller skipped over by a seek, so it can
+    /// be sent once instead of replaying the whole history. Kept between
+    /// blocks for the same reason.
+    chase_scratch: Vec<(u8, hardwave_midi::MidiControlKind, f32)>,
     /// Pitch bend the built-in synth is currently playing at, as a
     /// frequency multiplier. Plug-in instruments get the events themselves;
     /// the built-in synth has no MIDI input, so it reads this.
@@ -209,6 +213,7 @@ impl MidiTrackNode {
             controls: Vec::new(),
             next_control_idx: 0,
             control_scratch: Vec::with_capacity(64),
+            chase_scratch: Vec::with_capacity(16),
             bend_mul: 1.0,
             next_note_idx: 0,
             voices: Vec::new(),
@@ -570,14 +575,44 @@ impl AudioNode for MidiTrackNode {
         if ctx.playing {
             let block_end = block_start.saturating_add(block_size as u64);
             // After a seek, run past everything before the block so the
-            // playhead lands on the value written for that point.
+            // playhead lands on the value written for that point, and send
+            // the value each controller was left at into the chain.
+            //
+            // Without this, starting playback in the middle of a song left
+            // a plug-in on whatever it happened to hold: a filter opened by
+            // a mod-wheel sweep earlier in the song stayed shut, and a
+            // sustain pedal pressed before the start point was never sent.
+            // Only the last value of each controller is sent, at the top of
+            // the block, not the whole history.
+            let mut chased = std::mem::take(&mut self.chase_scratch);
+            chased.clear();
             while self.next_control_idx < self.controls.len()
                 && self.controls[self.next_control_idx].sample < block_start
             {
                 let c = self.controls[self.next_control_idx];
                 self.apply_to_builtin(&c);
+                if let Some(slot) = chased
+                    .iter_mut()
+                    .find(|(channel, kind, _)| *channel == c.channel && *kind == c.kind)
+                {
+                    slot.2 = c.value;
+                } else {
+                    chased.push((c.channel, c.kind, c.value));
+                }
                 self.next_control_idx += 1;
             }
+            for (channel, kind, value) in chased.iter().copied() {
+                controls.push(
+                    hardwave_midi::MidiControlPoint {
+                        tick: 0,
+                        channel,
+                        kind,
+                        value,
+                    }
+                    .event(0),
+                );
+            }
+            self.chase_scratch = chased;
             while self.next_control_idx < self.controls.len()
                 && self.controls[self.next_control_idx].sample < block_end
             {
@@ -1523,5 +1558,61 @@ mod tests {
             (node.bend_mul - bend_multiplier(-1.0)).abs() < 1e-6,
             "the synth holds the last value written before the playhead"
         );
+    }
+    /// Starting in the middle of a song must leave the plug-in holding the
+    /// values the song had written by that point, not whatever it happened
+    /// to hold. Only the last value of each controller is sent.
+    #[test]
+    fn a_seek_sends_the_value_each_controller_was_left_at() {
+        let mut node = make_node();
+        node.set_controls(vec![
+            MidiControlRegion {
+                sample: 0,
+                channel: 0,
+                kind: hardwave_midi::MidiControlKind::Cc(1),
+                value: 0.2,
+            },
+            MidiControlRegion {
+                sample: 100,
+                channel: 0,
+                kind: hardwave_midi::MidiControlKind::Cc(1),
+                value: 0.9,
+            },
+            MidiControlRegion {
+                sample: 200,
+                channel: 0,
+                kind: hardwave_midi::MidiControlKind::Cc(64),
+                value: 1.0,
+            },
+        ]);
+        let mut out = block_outputs(256);
+        // Start playing at 48000, long past all three points.
+        let ctx = ctx_at(48_000.0, 256, 48_000, true);
+        let inputs: [&[f32]; 0] = [];
+        let mut midi_out = Vec::new();
+        node.process(&inputs, &mut out, &[], &mut midi_out, &ctx);
+
+        let sent = &node.control_scratch;
+        assert_eq!(sent.len(), 2, "one value per controller, not the history");
+        let mut seen: Vec<(u8, f32)> = sent
+            .iter()
+            .filter_map(|e| match e {
+                MidiEvent::ControlChange {
+                    cc, value, timing, ..
+                } => {
+                    assert_eq!(*timing, 0, "chased values arrive at the top of the block");
+                    Some((*cc, *value))
+                }
+                _ => None,
+            })
+            .collect();
+        seen.sort_by_key(|(cc, _)| *cc);
+        assert_eq!(seen[0].0, 1);
+        assert!(
+            (seen[0].1 - 0.9).abs() < 1e-6,
+            "the last mod wheel value, not the first"
+        );
+        assert_eq!(seen[1].0, 64);
+        assert!((seen[1].1 - 1.0).abs() < 1e-6);
     }
 }
