@@ -424,7 +424,132 @@ pub fn set_clip_warp_markers(
     Ok(())
 }
 
-/// Set clip time-stretch ratio (range 0.25..4.0). 1.0 = realtime.
+/// Pin every detected beat in an audio clip to the nearest grid line.
+///
+/// Warp markers, the piecewise map from timeline position to position in the
+/// file, have been in the engine and the project format since they were
+/// written, with a command to set them and nothing that ever called it: a
+/// loop at the wrong tempo could only be stretched as a whole.
+///
+/// This is the automatic half of warping. It finds the transients, works out
+/// where each one currently falls in the song, snaps that to the grid, and
+/// writes the result as markers. A marker is only kept when the beat is not
+/// already on the grid, so a loop that is already in time is left alone
+/// rather than pinned to itself a hundred times.
+///
+/// `grid_ticks` is the playlist's snap setting, in ticks.
+/// Returns how many markers were written.
+#[tauri::command]
+pub fn warp_clip_to_grid(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    grid_ticks: u64,
+) -> Result<usize, String> {
+    if grid_ticks == 0 {
+        return Err("warping needs a grid; turn snap on first".into());
+    }
+    let engine = state.engine.lock();
+    let sample_rate = engine.current_sample_rate() as f64;
+
+    // What the clip plays, and where it sits.
+    let (source_id, source_start, source_end, position_ticks, length_ticks, stretch) = {
+        let project = engine.project.lock();
+        let track = project
+            .track(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let placement = track
+            .clips
+            .iter()
+            .find(|c| match &c.content {
+                hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+                _ => false,
+            })
+            .ok_or_else(|| format!("Audio clip not found: {clip_id}"))?;
+        let hardwave_project::clip::ClipContent::Audio(ac) = &placement.content else {
+            return Err("that clip is not audio".into());
+        };
+        (
+            ac.source_path.clone(),
+            ac.source_start,
+            ac.source_end,
+            placement.position_ticks,
+            placement.length_ticks,
+            ac.stretch_ratio.max(0.01),
+        )
+    };
+
+    let buffer = engine
+        .audio_pool
+        .get(&source_id)
+        .ok_or_else(|| "that clip's audio is not loaded".to_string())?;
+    let mono: Vec<f32> = if buffer.channels.len() > 1 {
+        buffer.channels[0]
+            .iter()
+            .zip(buffer.channels[1].iter())
+            .map(|(l, r)| (l + r) * 0.5)
+            .collect()
+    } else {
+        buffer.channels.first().cloned().unwrap_or_default()
+    };
+    let onsets = hardwave_dsp::onset::detect_onsets(&mono, buffer.sample_rate);
+
+    // Each onset's current place in the song, then snapped to the grid.
+    let markers = {
+        let project = engine.project.lock();
+        let map = &project.tempo_map;
+        let clip_start_samples = map.tick_to_samples(position_ticks, sample_rate);
+        let mut out: Vec<hardwave_project::clip::WarpMarker> = Vec::new();
+        for onset in onsets {
+            if onset < source_start || (source_end > 0 && onset >= source_end) {
+                continue;
+            }
+            // Where it sounds now: its distance into the file, slowed or
+            // sped by the clip's stretch, measured from the clip's start.
+            let into_clip = (onset - source_start) as f64 / stretch;
+            let absolute = clip_start_samples + into_clip.round() as u64;
+            let tick = map.samples_to_tick(absolute, sample_rate);
+            let clip_tick = tick.saturating_sub(position_ticks);
+            if clip_tick >= length_ticks {
+                continue;
+            }
+            let snapped = ((clip_tick as f64 / grid_ticks as f64).round() as u64) * grid_ticks;
+            if snapped >= length_ticks {
+                continue;
+            }
+            // Already on the grid: nothing to pull.
+            if snapped.abs_diff(clip_tick) == 0 {
+                continue;
+            }
+            out.push(hardwave_project::clip::WarpMarker {
+                clip_tick: snapped,
+                source_sample: onset,
+            });
+        }
+        out.sort_by_key(|m| m.clip_tick);
+        out.dedup_by_key(|m| m.clip_tick);
+        out
+    };
+
+    if markers.is_empty() {
+        return Err(
+            "no beats to move: either none were found, or they already sit on the grid".into(),
+        );
+    }
+
+    drop(engine);
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let count = markers.len();
+    with_audio_clip_mut(&engine, &track_id, &clip_id, |ac| {
+        ac.warp_markers = markers;
+    })?;
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(count)
+}
+
+/// Set clip time-stretch ratio (range 0.25..4.0). 1.0 = realtime./// Set clip time-stretch ratio (range 0.25..4.0). 1.0 = realtime.
 #[tauri::command]
 pub fn set_clip_stretch(
     state: State<AppState>,

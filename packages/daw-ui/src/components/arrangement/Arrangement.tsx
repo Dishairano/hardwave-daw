@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo, FadeCurveKind } from '../../stores/trackStore'
+import { invoke } from '@tauri-apps/api/core'
 import { useTransportStore, snapToTicks } from '../../stores/transportStore'
 import { useMarkerStore } from '../../stores/markerStore'
 import { useClipGroupStore } from '../../stores/clipGroupStore'
@@ -1949,6 +1950,32 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           <MenuItem label={menuClip?.reversed ? 'Un-reverse' : 'Reverse audio'} onClick={async () => {
             await toggleClipReverse(contextMenu.trackId, contextMenu.clipId)
             setContextMenu(null)
+          }} />
+          {/* Warping: the engine has always been able to pin a clip's beats
+              to the grid and nothing could ask it to. */}
+          <MenuItem label="Warp beats to the grid" onClick={async () => {
+            const { trackId, clipId } = contextMenu
+            setContextMenu(null)
+            const grid = snapEnabled ? snapToTicks(snapValue, true) : 0
+            try {
+              const count = await invoke<number>('warp_clip_to_grid', {
+                trackId, clipId, gridTicks: grid,
+              })
+              await useTrackStore.getState().fetchTracks()
+              useNotificationStore.getState().push('info', `Warped ${count} beats to the grid`)
+            } catch (e) {
+              useNotificationStore.getState().push('warning', 'Nothing to warp', { detail: String(e) })
+            }
+          }} />
+          <MenuItem label="Remove warping" onClick={async () => {
+            const { trackId, clipId } = contextMenu
+            setContextMenu(null)
+            try {
+              await invoke('set_clip_warp_markers', { trackId, clipId, markers: [] })
+              await useTrackStore.getState().fetchTracks()
+            } catch (e) {
+              useNotificationStore.getState().push('warning', 'Could not remove the warping', { detail: String(e) })
+            }
           }} />
           <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
           {(() => {
