@@ -620,6 +620,61 @@ pub fn toggle_clip_reverse(
 
 /// Get downsampled waveform peaks for an audio source.
 /// Returns pairs of (min, max) per bucket for rendering.
+/// A small waveform for a file in the browser, without importing it.
+///
+/// The browser listed sample packs as names. Picking a kick out of two
+/// hundred meant auditioning them one at a time, when the shape of the
+/// sound says most of it at a glance.
+///
+/// The file is decoded once and kept in the engine's pool, which is where
+/// previewing it would put it anyway, so browsing a folder and then playing
+/// one of its files does not decode twice.
+#[tauri::command]
+pub fn get_file_peaks(
+    state: State<AppState>,
+    file_path: String,
+    num_buckets: usize,
+) -> Result<Vec<[f32; 2]>, String> {
+    let path = PathBuf::from(&file_path);
+    let engine = state.engine.lock();
+    let source_id = hardwave_engine::engine::source_id_for_path(&path.to_string_lossy());
+    if !engine.audio_pool.contains(&source_id) {
+        engine.load_audio_file_as(&path, &source_id)?;
+    }
+    let buffer = engine
+        .audio_pool
+        .get(&source_id)
+        .ok_or_else(|| format!("could not read {file_path}"))?;
+    let frames = buffer.num_frames;
+    if frames == 0 || num_buckets == 0 {
+        return Ok(Vec::new());
+    }
+    let bucket = (frames as f64 / num_buckets as f64).ceil().max(1.0) as usize;
+    let left = buffer.channels.first();
+    let right = buffer.channels.get(1);
+    let mut out = Vec::with_capacity(num_buckets);
+    let mut start = 0usize;
+    while start < frames {
+        let end = (start + bucket).min(frames);
+        let mut low = 0.0f32;
+        let mut high = 0.0f32;
+        for i in start..end {
+            let l = left.and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+            let r = right.and_then(|c| c.get(i)).copied().unwrap_or(l);
+            let sample = (l + r) * 0.5;
+            if sample < low {
+                low = sample;
+            }
+            if sample > high {
+                high = sample;
+            }
+        }
+        out.push([low, high]);
+        start = end;
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub fn get_waveform_peaks(
     state: State<AppState>,

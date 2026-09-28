@@ -1493,7 +1493,7 @@ fn md5_hash(data: &[u8]) -> u64 {
 
 /// The pool key `load_audio_file` derives for a path — kept in one place so
 /// `rehydrate_audio_pool`'s already-resident check can never drift from it.
-fn source_id_for_path(path: &str) -> String {
+pub fn source_id_for_path(path: &str) -> String {
     format!("{:x}", md5_hash(path.as_bytes()))
 }
 

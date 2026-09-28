@@ -6,6 +6,7 @@ import { useTrackStore } from '../../stores/trackStore'
 import { useBrowserStore, isSameOrInsideDiskPath, type FolderNode } from '../../stores/browserStore'
 import { useSampleEditorStore } from '../../stores/sampleEditorStore'
 import { useBeatSlicerStore } from '../../stores/beatSlicerStore'
+import { FileWaveform } from './FileWaveform'
 import { DetachButton } from '../FloatingWindow'
 import {
   selectedSendTarget, sendToSelectedChannel, openInNewChannel,
@@ -1336,6 +1337,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           </div>
         )}
       </div>
+      <FileWaveform path={path} />
       <button
         onClick={(e) => { e.stopPropagation(); onPreview() }}
         title="Preview"

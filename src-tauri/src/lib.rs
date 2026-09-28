@@ -349,6 +349,7 @@ pub fn run() {
             commands::audio::import_audio_file,
             commands::audio::get_track_clips,
             commands::audio::get_waveform_peaks,
+            commands::audio::get_file_peaks,
             commands::audio::move_clip,
             commands::audio::move_clip_to_track,
             commands::audio::resize_clip,

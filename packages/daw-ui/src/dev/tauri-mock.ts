@@ -115,6 +115,13 @@ const mock: TauriInternals = {
   unregisterCallback: () => {},
   invoke: async (cmd, args) => {
     switch (cmd) {
+      case 'get_file_peaks': {
+        // A decaying shape, so the browser's thumbnails can be photographed.
+        return Array.from({ length: 48 }, (_, i) => {
+          const a = Math.exp(-i / 14) * (0.4 + 0.6 * Math.abs(Math.sin(i * 1.7)))
+          return [-a, a]
+        })
+      }
       case 'get_waveform_peaks':
         return synthPeaks((args?.numBuckets as number) ?? 256)
       case 'get_clip_controls': {
