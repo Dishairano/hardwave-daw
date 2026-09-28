@@ -166,6 +166,8 @@ export function HwTopbar({
   const toggleStepEditing = useRecordingPrefsStore(s => s.toggleStepEditing)
   const automationWriteMode = useAutomationWriteStore(s => s.mode)
   const cycleAutomationWrite = useAutomationWriteStore(s => s.cycleMode)
+  const automationTrim = useAutomationWriteStore(s => s.trim)
+  const setAutomationTrim = useAutomationWriteStore(s => s.setTrim)
   const typingKbdEnabled = useTypingKeyboardStore(s => s.enabled)
   const toggleTypingKbd = useTypingKeyboardStore(s => s.toggle)
   const precountBars = useMetronomeStore(s => s.precountBars)
@@ -532,6 +534,22 @@ export function HwTopbar({
             <circle cx="8" cy="6" r="3"/>
           </svg>
         </button>
+        {/* Trim: a pass rides the ride that is already there. Only worth
+            showing while automation is being recorded. */}
+        {automationWriteMode !== 'off' && (
+          <button
+            onClick={() => setAutomationTrim(!automationTrim)}
+            className={`fl-mini-btn${automationTrim ? ' on' : ''}`}
+            title={automationTrim
+              ? 'Trim: a pass moves the automation that is already there up or down, keeping its shape.'
+              : 'Trim is off: a pass replaces the automation it covers. Click to ride it instead.'}
+          >
+            <svg className="ic" width="13" height="12" viewBox="0 0 13 12" fill="none" stroke="currentColor" strokeWidth="1.1">
+              <path d="M1 8c2-4 4.5-4 6 0s3.5 2 5-1" strokeLinecap="round" />
+              <path d="M1 4.5h11" strokeLinecap="round" strokeDasharray="1.5 1.5" />
+            </svg>
+          </button>
+        )}
         <button
           onClick={() => cycleAutomationWrite()}
           className={`fl-mini-btn${automationWriteMode !== 'off' ? ' on' : ''}`}

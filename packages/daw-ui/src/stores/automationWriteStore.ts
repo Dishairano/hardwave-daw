@@ -35,7 +35,10 @@ interface AutomationWriteState {
   mode: AutomationWriteMode
   /** Targets with a gesture in progress, so a drag opens one session. */
   touching: string[]
+  /** Ride the curve that is already there rather than replacing it. */
+  trim: boolean
   setMode: (mode: AutomationWriteMode) => void
+  setTrim: (trim: boolean) => void
   cycleMode: () => void
   /** True when a control movement should be recorded. */
   isRecording: () => boolean
@@ -52,11 +55,17 @@ function keyOf(trackId: string, target: AutomationTargetInfo): string {
 
 export const useAutomationWriteStore = create<AutomationWriteState>((set, get) => ({
   mode: 'off',
+  trim: false,
   touching: [],
 
   setMode: (mode) => {
     set({ mode, touching: [] })
     invoke('set_automation_write_mode', { mode }).catch(() => {})
+  },
+
+  setTrim: (trim) => {
+    set({ trim })
+    invoke('set_automation_trim', { trim }).catch(() => {})
   },
 
   cycleMode: () => {

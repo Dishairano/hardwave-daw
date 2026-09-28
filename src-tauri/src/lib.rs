@@ -164,6 +164,8 @@ pub fn run() {
             // Automation
             commands::automation_write::set_automation_write_mode,
             commands::automation_write::get_automation_write_mode,
+            commands::automation_write::set_automation_trim,
+            commands::automation_write::get_automation_trim,
             commands::automation_write::automation_touch_begin,
             commands::automation_write::automation_write_sample,
             commands::automation_write::automation_touch_end,

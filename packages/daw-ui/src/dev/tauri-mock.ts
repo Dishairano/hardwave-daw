@@ -206,6 +206,9 @@ const mock: TauriInternals = {
         return { ok: true, detail: '' }
       case 'set_pan_law':
         return null
+      case 'set_automation_trim':
+      case 'get_automation_trim':
+        return false
       case 'set_reset_on_transport':
       case 'set_play_truncated_notes':
         return null

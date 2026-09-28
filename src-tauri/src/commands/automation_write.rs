@@ -28,6 +28,11 @@ use tauri::State;
 pub struct AutomationWriteSessions {
     sessions: Mutex<HashMap<(String, String), AutomationRecorder>>,
     mode: Mutex<WriteMode>,
+    /// Trim: a pass rides the curve that is already there instead of
+    /// replacing it. Recording a fader move over an existing ride used to
+    /// throw that ride away, so a chorus that was already automated to duck
+    /// under the vocal came back flat.
+    trim: Mutex<bool>,
 }
 
 impl Default for AutomationWriteSessions {
@@ -41,6 +46,7 @@ impl AutomationWriteSessions {
         Self {
             sessions: Mutex::new(HashMap::new()),
             mode: Mutex::new(WriteMode::Off),
+            trim: Mutex::new(false),
         }
     }
 }
@@ -79,6 +85,17 @@ pub fn set_automation_write_mode(state: State<AppState>, mode: String) {
     if matches!(parsed, WriteMode::Off | WriteMode::Read) {
         state.automation_write.sessions.lock().unwrap().clear();
     }
+}
+
+/// Turn trim on or off. It applies to whichever write mode is selected.
+#[tauri::command]
+pub fn set_automation_trim(state: State<AppState>, trim: bool) {
+    *state.automation_write.trim.lock().unwrap() = trim;
+}
+
+#[tauri::command]
+pub fn get_automation_trim(state: State<AppState>) -> bool {
+    *state.automation_write.trim.lock().unwrap()
 }
 
 #[tauri::command]
@@ -173,11 +190,36 @@ pub fn automation_touch_end(
         return None;
     }
 
+    let trim = *state.automation_write.trim.lock().unwrap();
     let engine = state.engine.lock();
     engine.snapshot_before_mutation();
     let lane_id = {
         let mut project = engine.project.lock();
         let track = project.track_mut(&track_id)?;
+        if trim {
+            // Ride what is there: every point in the range moves by how far
+            // the fader moved from where the pass started, so the shape of
+            // the existing ride is kept and only its level changes.
+            let lane = track
+                .automation_lanes
+                .iter_mut()
+                .find(|l| automation_targets_match(&l.target, &target))?;
+            let from = points.first().map(|p| p.tick).unwrap_or(0);
+            let to = points.last().map(|p| p.tick).unwrap_or(0);
+            let base = points.first().map(|p| p.value).unwrap_or(0.0);
+            for point in lane.points.iter_mut() {
+                if point.tick < from || point.tick > to {
+                    continue;
+                }
+                let delta = value_at(&points, point.tick) - base;
+                point.value = (point.value + delta).clamp(0.0, 1.0);
+            }
+            lane.visible = true;
+            let id = lane.id.clone();
+            drop(project);
+            engine.rebuild_graph();
+            return Some(id);
+        }
         // Into the lane that already targets this parameter, if there is one,
         // so a second pass replaces the first rather than stacking lanes.
         match track
@@ -205,6 +247,30 @@ pub fn automation_touch_end(
     };
     engine.rebuild_graph();
     Some(lane_id)
+}
+
+/// The recorded pass's value at a tick, walking the points it produced.
+/// Straight lines between points, which is what the pass was thinned to.
+fn value_at(points: &[hardwave_project::automation::AutomationPoint], tick: u64) -> f64 {
+    if points.is_empty() {
+        return 0.0;
+    }
+    if tick <= points[0].tick {
+        return points[0].value;
+    }
+    let last = &points[points.len() - 1];
+    if tick >= last.tick {
+        return last.value;
+    }
+    for pair in points.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        if tick >= a.tick && tick <= b.tick {
+            let span = (b.tick - a.tick).max(1) as f64;
+            let position = (tick - a.tick) as f64 / span;
+            return a.value + (b.value - a.value) * position;
+        }
+    }
+    last.value
 }
 
 /// Whether two targets are the same parameter.
