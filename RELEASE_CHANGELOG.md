@@ -1,3 +1,3 @@
 ### Improvements
-- fix(daw): saving markers no longer wipes mixer snapshots and grooves
-- Fixed: moving a marker could wipe the mixer snapshots and grooves saved with the song. Both are kept now.
+- feat(daw): arrangement sections
+- Arrangement sections. Mark the loop range as a verse, chorus or drop, see it named in a coloured band on the ruler, and repeat a whole section with everything in it: the clips are copied and everything after moves along.
