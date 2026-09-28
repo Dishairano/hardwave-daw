@@ -45,6 +45,27 @@ pub struct MidiNoteRegion {
     pub velocity: f32,
     /// When true, the note is skipped entirely (used by the "mute" tool).
     pub muted: bool,
+    /// Where this one note sits, -1 left to 1 right, on top of the track pan.
+    pub pan: f32,
+    /// Detune for this one note, in cents.
+    pub fine_cents: f32,
+    /// How hard the key was let go, 0 to 1. Shortens the release as it rises.
+    pub release_velocity: f32,
+}
+
+impl Default for MidiNoteRegion {
+    fn default() -> Self {
+        Self {
+            note_on_sample: 0,
+            note_off_sample: 0,
+            pitch: 60,
+            velocity: 1.0,
+            muted: false,
+            pan: 0.0,
+            fine_cents: 0.0,
+            release_velocity: 0.5,
+        }
+    }
 }
 
 /// Phase of the ADSR envelope. See [`Voice::sample_envelope`] for the
@@ -78,6 +99,13 @@ struct Voice {
     /// For clip-scheduled notes, the absolute sample at which to release.
     /// `None` for live/held notes (released by an explicit NoteOff).
     off_sample: Option<u64>,
+    /// This note's own place in the stereo field, -1 to 1. Sits on top of
+    /// the track's pan, so a note panned left on a track panned left ends
+    /// up hard left.
+    pan: f32,
+    /// How long the release takes for this voice, in seconds. Taken from
+    /// the note's release velocity: harder release, shorter tail.
+    release_secs: f32,
 }
 
 /// Max simultaneous built-in-synth voices. Beyond this, the oldest voice
@@ -85,6 +113,25 @@ struct Voice {
 const MAX_VOICES: usize = 16;
 
 const TWO_PI: f32 = std::f32::consts::TAU;
+
+/// A detune in cents as a frequency multiplier. 100 cents is a semitone.
+fn cents_multiplier(cents: f32) -> f32 {
+    if cents == 0.0 {
+        return 1.0;
+    }
+    2.0_f32.powf(cents.clamp(-1200.0, 1200.0) / 1200.0)
+}
+
+/// How long a voice takes to fade once it is let go.
+///
+/// A release velocity of 0.5 gives the standard time, which is what every
+/// note had before this was settable. Harder shortens it to a quarter,
+/// softer stretches it to four times, which is the range a hardware synth
+/// covers with the same control.
+fn release_seconds(release_velocity: f32) -> f32 {
+    let v = release_velocity.clamp(0.0, 1.0);
+    RELEASE_SECS * 4.0_f32.powf(0.5 - v)
+}
 
 const ATTACK_SECS: f32 = 0.005;
 const DECAY_SECS: f32 = 0.080;
@@ -269,6 +316,7 @@ impl MidiTrackNode {
     /// all along, so a pad that was already open sounds open instead of
     /// re-attacking. Attack and decay together are 85 ms, so anything older
     /// than that is simply at its sustain level.
+    #[allow(clippy::too_many_arguments)]
     fn start_voice_mid_note(
         &mut self,
         pitch: u8,
@@ -276,8 +324,18 @@ impl MidiTrackNode {
         off_sample: Option<u64>,
         elapsed_samples: u64,
         sample_rate: f32,
+        pan: f32,
+        fine_cents: f32,
+        release_velocity: f32,
     ) {
-        self.start_voice(pitch, velocity, off_sample);
+        self.start_voice_shaped(
+            pitch,
+            velocity,
+            off_sample,
+            pan,
+            fine_cents,
+            release_velocity,
+        );
         let Some(voice) = self.voices.last_mut() else {
             return;
         };
@@ -293,6 +351,23 @@ impl MidiTrackNode {
     }
 
     fn start_voice(&mut self, pitch: u8, velocity: f32, off_sample: Option<u64>) {
+        self.start_voice_shaped(pitch, velocity, off_sample, 0.0, 0.0, 0.5);
+    }
+
+    /// Start a voice with this note's own pan, detune and release.
+    ///
+    /// A live note from a controller carries none of these, so it lands in
+    /// the middle, in tune, with the standard release. A note from a clip
+    /// brings whatever was set on it in the piano roll.
+    fn start_voice_shaped(
+        &mut self,
+        pitch: u8,
+        velocity: f32,
+        off_sample: Option<u64>,
+        pan: f32,
+        fine_cents: f32,
+        release_velocity: f32,
+    ) {
         if self.voices.len() >= MAX_VOICES {
             let steal = self
                 .voices
@@ -303,12 +378,14 @@ impl MidiTrackNode {
         }
         self.voices.push(Voice {
             pitch,
-            freq: pitch_to_freq(pitch),
+            freq: pitch_to_freq(pitch) * cents_multiplier(fine_cents),
             velocity,
             phase: 0.0,
             stage: EnvStage::Attack,
             env_value: 0.0,
             off_sample,
+            pan: pan.clamp(-1.0, 1.0),
+            release_secs: release_seconds(release_velocity),
         });
     }
 
@@ -432,8 +509,8 @@ impl MidiTrackNode {
             }
             EnvStage::Sustain => SUSTAIN_LEVEL,
             EnvStage::Release => {
-                let step = if RELEASE_SECS > 0.0 {
-                    voice.env_value / (RELEASE_SECS * sr)
+                let step = if voice.release_secs > 0.0 {
+                    voice.env_value / (voice.release_secs * sr)
                 } else {
                     voice.env_value
                 };
@@ -676,12 +753,18 @@ impl AudioNode for MidiTrackNode {
                                         Some(n.note_off_sample),
                                         block_start - n.note_on_sample,
                                         sr,
+                                        n.pan,
+                                        n.fine_cents,
+                                        n.release_velocity,
                                     );
                                 } else {
-                                    self.start_voice(
+                                    self.start_voice_shaped(
                                         n.pitch,
                                         n.velocity.clamp(0.0, 1.0),
                                         Some(n.note_off_sample),
+                                        n.pan,
+                                        n.fine_cents,
+                                        n.release_velocity,
                                     );
                                 }
                             }
@@ -718,7 +801,13 @@ impl AudioNode for MidiTrackNode {
                 Instrument::BuiltinSine => {
                     // Sum every active voice (polyphony). Idle voices are
                     // pruned after the block.
-                    let mut s = 0.0_f32;
+                    // Summed per side, because a note can sit somewhere
+                    // of its own in the stereo field. A note with no pan
+                    // of its own lands in both sides equally, which is
+                    // what every note did before.
+                    let mut s_l = 0.0_f32;
+                    let mut s_r = 0.0_f32;
+                    let law = self.prefs.pan_law();
                     for v in self.voices.iter_mut() {
                         if matches!(v.stage, EnvStage::Idle) {
                             continue;
@@ -729,9 +818,23 @@ impl AudioNode for MidiTrackNode {
                         if v.phase >= TWO_PI {
                             v.phase -= TWO_PI;
                         }
-                        s += osc * env * v.velocity;
+                        let value = osc * env * v.velocity;
+                        if v.pan == 0.0 {
+                            s_l += value;
+                            s_r += value;
+                        } else {
+                            let (gl, gr) = crate::pan::gains(v.pan, law);
+                            // The pan law already takes 0.707 out of the
+                            // middle, and the track pan applies it again
+                            // below, so a centred note would drop 3 dB
+                            // against an unpanned one. Scaling by the
+                            // centre gain keeps the two level.
+                            let (cl, cr) = crate::pan::gains(0.0, law);
+                            s_l += value * gl / cl;
+                            s_r += value * gr / cr;
+                        }
                     }
-                    (s, s)
+                    (s_l, s_r)
                 }
                 Instrument::KickSynth => {
                     // Pre-rendered block — pull the i-th sample. Kick
@@ -1343,6 +1446,7 @@ mod tests {
             pitch: 64,
             velocity: 0.8,
             muted: false,
+            ..Default::default()
         }]);
         let mut out = block_outputs(256);
         let ctx = ctx_at(48_000.0, 256, 0, false);
@@ -1375,6 +1479,7 @@ mod tests {
             pitch: 64,
             velocity: 0.8,
             muted: false,
+            ..Default::default()
         }]);
         node
     }
@@ -1437,6 +1542,7 @@ mod tests {
             pitch: 64,
             velocity: 0.8,
             muted: false,
+            ..Default::default()
         }]);
         assert!(peak_after_jumping_into_the_note(&mut node) > 0.0);
     }
@@ -1459,6 +1565,7 @@ mod tests {
                 pitch: 69,
                 velocity: 0.9,
                 muted: false,
+                ..Default::default()
             }]);
             if let Some(value) = bend {
                 node.set_controls(vec![MidiControlRegion {
@@ -1618,5 +1725,39 @@ mod tests {
         );
         assert_eq!(seen[1].0, 64);
         assert!((seen[1].1 - 1.0).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod per_note_shape_tests {
+    use super::*;
+
+    #[test]
+    fn a_hundred_cents_is_a_semitone() {
+        let semitone = 2.0_f32.powf(1.0 / 12.0);
+        assert!((cents_multiplier(100.0) - semitone).abs() < 1e-5);
+        assert!((cents_multiplier(-100.0) - 1.0 / semitone).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_note_with_nothing_set_is_not_detuned() {
+        assert_eq!(cents_multiplier(0.0), 1.0);
+    }
+
+    #[test]
+    fn the_middle_release_is_the_one_every_note_used_to_get() {
+        assert!((release_seconds(0.5) - RELEASE_SECS).abs() < 1e-6);
+    }
+
+    #[test]
+    fn letting_go_harder_shortens_the_tail() {
+        assert!(release_seconds(1.0) < release_seconds(0.5));
+        assert!(release_seconds(0.0) > release_seconds(0.5));
+    }
+
+    #[test]
+    fn a_release_value_outside_the_control_cannot_stretch_the_tail_further() {
+        assert_eq!(release_seconds(-3.0), release_seconds(0.0));
+        assert_eq!(release_seconds(7.0), release_seconds(1.0));
     }
 }

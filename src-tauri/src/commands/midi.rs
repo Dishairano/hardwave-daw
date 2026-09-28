@@ -66,6 +66,12 @@ pub struct MidiNoteInfo {
     pub velocity: f32,
     pub channel: u8,
     pub muted: bool,
+    /// Per-note pan, -1 left to 1 right.
+    pub pan: f32,
+    /// Per-note detune in cents.
+    pub fine_cents: f32,
+    /// How hard the key was let go, 0 to 1.
+    pub release_velocity: f32,
 }
 
 /// Create a new empty MIDI clip on a track.
@@ -382,6 +388,9 @@ pub fn get_midi_notes(
                         velocity: n.velocity,
                         channel: n.channel,
                         muted: n.muted,
+                        pan: n.pan,
+                        fine_cents: n.fine_cents,
+                        release_velocity: n.release_velocity,
                     })
                     .collect());
             }
@@ -419,6 +428,7 @@ pub fn add_midi_note(
                     velocity: velocity.unwrap_or(0.8),
                     channel: 0,
                     muted: false,
+                    ..Default::default()
                 };
                 mc.clip.notes.push(note);
                 let idx = mc.clip.notes.len() - 1;
@@ -443,6 +453,9 @@ pub fn update_midi_note(
     duration_ticks: Option<u64>,
     velocity: Option<f32>,
     muted: Option<bool>,
+    pan: Option<f32>,
+    fine_cents: Option<f32>,
+    release_velocity: Option<f32>,
 ) -> Result<(), String> {
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
@@ -473,6 +486,18 @@ pub fn update_midi_note(
                 }
                 if let Some(m) = muted {
                     note.muted = m;
+                }
+                // Clamped here rather than trusted: the piano roll drags
+                // these, and a drag that runs past the end of its strip
+                // should stop at the edge, not detune a note by an octave.
+                if let Some(p) = pan {
+                    note.pan = p.clamp(-1.0, 1.0);
+                }
+                if let Some(c) = fine_cents {
+                    note.fine_cents = c.clamp(-100.0, 100.0);
+                }
+                if let Some(r) = release_velocity {
+                    note.release_velocity = r.clamp(0.0, 1.0);
                 }
                 return Ok(());
             }

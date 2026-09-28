@@ -94,6 +94,7 @@ fn engine_renders_pattern_with_1500_midi_notes() {
             velocity: 0.75,
             channel: 0,
             muted: false,
+            ..Default::default()
         });
     }
 

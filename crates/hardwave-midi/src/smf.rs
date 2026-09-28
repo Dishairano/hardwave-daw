@@ -135,6 +135,7 @@ mod tests {
             velocity: vel,
             channel: 0,
             muted: false,
+            ..Default::default()
         }
     }
 
@@ -202,6 +203,7 @@ mod tests {
             velocity: 0.8,
             channel: 0,
             muted: false,
+            ..Default::default()
         }]);
         clip.controls = vec![
             MidiControlPoint {
@@ -240,6 +242,7 @@ mod tests {
             velocity: 0.8,
             channel: 0,
             muted: false,
+            ..Default::default()
         }]);
         clip.controls = vec![MidiControlPoint {
             tick: 480,

@@ -94,6 +94,44 @@ pub struct MidiNote {
     pub velocity: f32,
     pub channel: u8,
     pub muted: bool,
+    /// Where this one note sits in the stereo field, -1 left to 1 right.
+    ///
+    /// A hi-hat pattern where every other hit steps to the side is one
+    /// clip here instead of two tracks. It moves the built-in instruments;
+    /// a hosted plug-in would need note expression, which the host does
+    /// not send yet.
+    #[serde(default)]
+    pub pan: f32,
+    /// Detune for this one note, in cents, -100 to 100. The pitch field is
+    /// whole semitones, so a fifth that has to sit two cents sharp needs
+    /// this.
+    #[serde(default)]
+    pub fine_cents: f32,
+    /// How hard the key was let go, 0 to 1. Shortens the release as it
+    /// rises, the way a hardware synth does. A note with nothing set sits
+    /// at 0.5, the middle.
+    #[serde(default = "default_release_velocity")]
+    pub release_velocity: f32,
+}
+
+fn default_release_velocity() -> f32 {
+    0.5
+}
+
+impl Default for MidiNote {
+    fn default() -> Self {
+        Self {
+            start_tick: 0,
+            duration_ticks: 480,
+            pitch: 60,
+            velocity: 0.8,
+            channel: 0,
+            muted: false,
+            pan: 0.0,
+            fine_cents: 0.0,
+            release_velocity: default_release_velocity(),
+        }
+    }
 }
 
 /// A MIDI clip containing notes and CC data.

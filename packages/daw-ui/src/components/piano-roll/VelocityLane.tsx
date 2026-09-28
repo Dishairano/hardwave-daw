@@ -1,5 +1,4 @@
 import { useRef, useEffect, useCallback } from 'react'
-import { hw } from '../../theme'
 
 interface Note {
   index: number
@@ -8,6 +7,51 @@ interface Note {
   pitch: number
   velocity: number
   muted: boolean
+  pan: number
+  fineCents: number
+  releaseVelocity: number
+}
+
+/**
+ * Which per-note property the lane edits.
+ *
+ * FL sets pan, fine pitch and release on a single note. The lane used to
+ * do velocity only, so the other three had nowhere to live. They share
+ * one strip and one dragging behaviour, because they are the same
+ * gesture with a different number under it.
+ */
+export type NoteProperty = 'velocity' | 'pan' | 'fine' | 'release'
+
+export const NOTE_PROPERTY_LABEL: Record<NoteProperty, string> = {
+  velocity: 'VEL',
+  pan: 'PAN',
+  fine: 'FINE',
+  release: 'REL',
+}
+
+/** Read the property off a note, normalised to 0..1 for the strip. */
+function readNormalised(note: Note, property: NoteProperty): number {
+  switch (property) {
+    case 'velocity': return note.velocity
+    case 'pan': return (note.pan + 1) / 2
+    case 'fine': return (note.fineCents + 100) / 200
+    case 'release': return note.releaseVelocity
+  }
+}
+
+/** Turn a 0..1 strip position back into the property's own units. */
+export function denormaliseNoteProperty(property: NoteProperty, t: number): number {
+  switch (property) {
+    case 'velocity': return Math.max(0.01, Math.min(1, t))
+    case 'pan': return Math.max(-1, Math.min(1, t * 2 - 1))
+    case 'fine': return Math.max(-100, Math.min(100, t * 200 - 100))
+    case 'release': return Math.max(0, Math.min(1, t))
+  }
+}
+
+/** Pan and fine pitch read from the middle, the others from the floor. */
+function isCentred(property: NoteProperty): boolean {
+  return property === 'pan' || property === 'fine'
 }
 
 interface VelocityLaneProps {
@@ -17,11 +61,12 @@ interface VelocityLaneProps {
   keyboardWidth: number
   scrollX: number
   pixelsPerTick: number
-  onVelocityChange: (index: number, velocity: number) => void
+  property: NoteProperty
+  onVelocityChange: (index: number, value: number) => void
 }
 
 export function VelocityLane({
-  notes, selectedNotes, height, keyboardWidth, scrollX, pixelsPerTick, onVelocityChange,
+  notes, selectedNotes, height, keyboardWidth, scrollX, pixelsPerTick, property, onVelocityChange,
 }: VelocityLaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -59,25 +104,42 @@ export function VelocityLane({
     ctx.fillStyle = 'rgba(255,255,255,0.04)'
     ctx.fillRect(0, 0, w, 1)
 
-    // Label
-    ctx.fillStyle = hw.textFaint
-    ctx.font = '8px Inter, ui-sans-serif, sans-serif'
-    ctx.fillText('VEL', 4, 12)
+    // No label is drawn here: the buttons over the lane name the property
+    // and drawing it twice put text under the first button.
 
-    // Velocity bars — red gradient
+    // A centre line, so a pan or a detune of zero is visible as zero.
+    const centred = isCentred(property)
+    if (centred) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(0, height / 2)
+      ctx.lineTo(w, height / 2)
+      ctx.stroke()
+    }
+
     const barW = Math.max(3, 6 * pixelsPerTick)
     for (const note of notes) {
       const x = note.startTick * pixelsPerTick - scrollX
       if (x + barW < 0 || x > w) continue
 
-      const barH = note.velocity * (height - 4)
+      const t = readNormalised(note, property)
       const isSelected = selectedNotes.has(note.index)
 
-      const gradient = ctx.createLinearGradient(0, height - barH, 0, height)
-      if (note.velocity > 0.85) {
+      // A centred property grows out of the middle in both directions;
+      // the others stand on the floor.
+      const top = centred
+        ? Math.min(height / 2, height * (1 - t))
+        : height - t * (height - 4)
+      const barH = centred
+        ? Math.abs(height * (1 - t) - height / 2)
+        : t * (height - 4)
+
+      const gradient = ctx.createLinearGradient(0, top, 0, top + Math.max(barH, 1))
+      if (t > 0.85) {
         gradient.addColorStop(0, '#EF4444')
         gradient.addColorStop(1, '#B91C1C')
-      } else if (note.velocity > 0.5) {
+      } else if (t > 0.5) {
         gradient.addColorStop(0, '#DC2626')
         gradient.addColorStop(1, '#991B1B')
       } else {
@@ -87,14 +149,14 @@ export function VelocityLane({
 
       ctx.fillStyle = gradient
       ctx.globalAlpha = isSelected ? 1 : 0.7
-      ctx.fillRect(x, height - barH, barW, barH)
+      ctx.fillRect(x, top, barW, Math.max(barH, 1))
       ctx.globalAlpha = 1
 
-      // Top cap
+      // Cap on the moving edge.
       ctx.fillStyle = isSelected ? '#fff' : 'rgba(255,255,255,0.4)'
-      ctx.fillRect(x, height - barH - 1, barW, 2)
+      ctx.fillRect(x, top - 1, barW, 2)
     }
-  }, [notes, selectedNotes, height, scrollX, pixelsPerTick])
+  }, [notes, selectedNotes, height, scrollX, pixelsPerTick, property])
 
   useEffect(() => { draw() }, [draw])
 
@@ -121,7 +183,7 @@ export function VelocityLane({
     const rect = canvasRef.current!.getBoundingClientRect()
     const my = clientY - rect.top
     const mx = clientX - rect.left
-    const newVel = Math.max(0.01, Math.min(1, 1 - my / height))
+    const newVel = denormaliseNoteProperty(property, 1 - my / height)
 
     if (draggedIdx != null) {
       onVelocityChange(draggedIdx, newVel)
@@ -133,7 +195,7 @@ export function VelocityLane({
       draggingNoteRef.current = idx
       onVelocityChange(idx, newVel)
     }
-  }, [findNoteAtX, height, onVelocityChange])
+  }, [findNoteAtX, height, onVelocityChange, property])
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     draggingNoteRef.current = null

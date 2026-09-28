@@ -133,6 +133,7 @@ mod tests {
             velocity,
             channel: 0,
             muted: false,
+            ..Default::default()
         }
     }
 

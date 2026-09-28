@@ -182,6 +182,7 @@ impl MidiRecorder {
                 velocity: p.velocity,
                 channel: p.channel,
                 muted: false,
+                ..Default::default()
             });
             false
         });
@@ -238,6 +239,7 @@ impl MidiRecorder {
                 velocity: pending.velocity,
                 channel: pending.channel,
                 muted: false,
+                ..Default::default()
             });
         }
     }
@@ -433,6 +435,7 @@ mod tests {
             velocity: 0.8,
             channel: 0,
             muted: false,
+            ..Default::default()
         }]);
         rec.start();
         rec.note_on(960, 64, 0.7, 0);
@@ -454,6 +457,7 @@ mod tests {
                 velocity: 0.8,
                 channel: 0,
                 muted: false,
+                ..Default::default()
             },
             MidiNote {
                 start_tick: 960,
@@ -462,6 +466,7 @@ mod tests {
                 velocity: 0.8,
                 channel: 0,
                 muted: false,
+                ..Default::default()
             },
         ]);
         rec.start();
@@ -485,6 +490,7 @@ mod tests {
                 velocity: 0.8,
                 channel: 0,
                 muted: false,
+                ..Default::default()
             },
             MidiNote {
                 start_tick: 1000,
@@ -493,6 +499,7 @@ mod tests {
                 velocity: 0.8,
                 channel: 0,
                 muted: false,
+                ..Default::default()
             },
             MidiNote {
                 start_tick: 2000,
@@ -501,6 +508,7 @@ mod tests {
                 velocity: 0.8,
                 channel: 0,
                 muted: false,
+                ..Default::default()
             },
         ]);
         // Replace only ticks [500, 1500).

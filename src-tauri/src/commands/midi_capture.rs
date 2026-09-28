@@ -464,6 +464,7 @@ mod blend_tests {
             velocity: 0.8,
             channel: 0,
             muted: false,
+            ..Default::default()
         }
     }
 

@@ -97,6 +97,7 @@ pub fn arpeggiate(notes: &[MidiNote], settings: &ArpSettings) -> Vec<MidiNote> {
             velocity,
             channel,
             muted: false,
+            ..Default::default()
         });
         tick += step;
         idx += 1;
@@ -334,6 +335,7 @@ pub fn note_repeat(notes: &[MidiNote], repeats: u32, gate: f32, decay: f32) -> V
                 velocity: vel,
                 channel: n.channel,
                 muted: false,
+                ..Default::default()
             });
         }
     }
@@ -366,6 +368,7 @@ pub fn chordify(notes: &[MidiNote], quality: ChordQuality) -> Vec<MidiNote> {
                     velocity: n.velocity,
                     channel: n.channel,
                     muted: false,
+                    ..Default::default()
                 }),
                 _ => {}
             }
@@ -427,6 +430,7 @@ pub fn generate_progression(
                     velocity: 0.8,
                     channel: 0,
                     muted: false,
+                    ..Default::default()
                 });
             }
         }
@@ -477,6 +481,7 @@ pub fn generate_melody_line(
             velocity: 0.75,
             channel: 0,
             muted: false,
+            ..Default::default()
         });
     }
     out
@@ -547,6 +552,7 @@ mod tests {
             velocity: 0.8,
             channel: 0,
             muted: false,
+            ..Default::default()
         }
     }
 

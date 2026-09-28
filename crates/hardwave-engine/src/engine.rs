@@ -2234,6 +2234,9 @@ impl EngineCallback {
                             pitch: note.pitch,
                             velocity: note.velocity,
                             muted: note.muted,
+                            pan: note.pan,
+                            fine_cents: note.fine_cents,
+                            release_velocity: note.release_velocity,
                         });
                     }
                     // Controller movements: mod wheel, sustain, bend. Mapped

@@ -241,6 +241,7 @@ fn kicksynth_instrument_produces_kick_audio() {
             velocity: 1.0,
             channel: 0,
             muted: false,
+            ..Default::default()
         });
         let mref = MidiClipRef {
             id: "smoke-kick-clip".to_string(),
@@ -361,6 +362,7 @@ fn midi_clip_produces_sound() {
             velocity: 1.0,
             channel: 0,
             muted: false,
+            ..Default::default()
         });
 
         let mref = MidiClipRef {
@@ -410,6 +412,7 @@ fn a_muted_pattern_clip_is_silent() {
                 velocity: 1.0,
                 channel: 0,
                 muted: false,
+                ..Default::default()
             });
             if let Some(track) = project.track_mut(&id) {
                 track.clips.push(ClipPlacement {
@@ -1904,6 +1907,7 @@ fn a_routed_track_plays_the_notes_of_the_track_that_feeds_it() {
                 velocity: 1.0,
                 channel: 0,
                 muted: false,
+                ..Default::default()
             });
             if let Some(track) = project.track_mut(&source) {
                 track.clips.push(ClipPlacement {
@@ -1936,5 +1940,60 @@ fn a_routed_track_plays_the_notes_of_the_track_that_feeds_it() {
     assert!(
         with > 0.001,
         "the routed track should play the source's notes, got peak={with:.6}"
+    );
+}
+
+/// Per-note pan, fine pitch and release. FL sets these on one note; here a
+/// note had pitch, time, length, velocity, channel and mute only.
+///
+/// Pan is the one that can be measured from outside without picking the
+/// render apart: a note panned hard left has to come out louder on the
+/// left than on the right, and a note with nothing set stays even.
+#[test]
+fn a_note_panned_left_is_louder_on_the_left() {
+    use hardwave_midi::{MidiClip, MidiNote};
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+
+    let render = |pan: f32| -> (f32, f32) {
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            let id = project.add_midi_track("Synth".to_string());
+            let mut clip = MidiClip::new("pan-clip".to_string(), "pan".to_string(), 1920);
+            clip.notes.push(MidiNote {
+                start_tick: 0,
+                duration_ticks: 480,
+                pitch: 60,
+                velocity: 1.0,
+                pan,
+                ..Default::default()
+            });
+            if let Some(track) = project.track_mut(&id) {
+                track.clips.push(ClipPlacement {
+                    content: ClipContent::Midi(MidiClipRef {
+                        id: "pan-clip".to_string(),
+                        clip,
+                    }),
+                    track_id: id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1920,
+                    lane: 0,
+                });
+            }
+        }
+        let stats = render_and_measure_stereo(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 2);
+        (stats.0, stats.1)
+    };
+
+    let (centre_l, centre_r) = render(0.0);
+    assert!(
+        centre_l > 0.001 && (centre_l - centre_r).abs() < 0.001,
+        "a note with no pan of its own should sit in the middle, got L={centre_l:.6} R={centre_r:.6}"
+    );
+
+    let (left_l, left_r) = render(-1.0);
+    assert!(
+        left_l > left_r * 4.0,
+        "a note panned hard left should be much louder on the left, got L={left_l:.6} R={left_r:.6}"
     );
 }

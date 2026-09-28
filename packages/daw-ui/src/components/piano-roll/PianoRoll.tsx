@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { PianoKeyboard } from './PianoKeyboard'
-import { VelocityLane } from './VelocityLane'
+import { VelocityLane, NOTE_PROPERTY_LABEL, type NoteProperty } from './VelocityLane'
 import { CcLane, CcTool } from './CcLane'
 import { Minimap } from './Minimap'
 import {
@@ -125,6 +125,12 @@ interface Note {
   pitch: number
   velocity: number
   muted: boolean
+  /** -1 left to 1 right, on top of the track's own pan. */
+  pan: number
+  /** Detune in cents, -100 to 100. */
+  fineCents: number
+  /** How hard the key was let go, 0 to 1. Shortens the tail as it rises. */
+  releaseVelocity: number
 }
 
 interface MidiNoteInfo {
@@ -135,6 +141,9 @@ interface MidiNoteInfo {
   velocity: number
   channel: number
   muted: boolean
+  pan: number
+  fine_cents: number
+  release_velocity: number
 }
 
 function toNote(n: MidiNoteInfo): Note {
@@ -145,11 +154,16 @@ function toNote(n: MidiNoteInfo): Note {
     pitch: n.pitch,
     velocity: n.velocity,
     muted: n.muted,
+    pan: n.pan ?? 0,
+    fineCents: n.fine_cents ?? 0,
+    releaseVelocity: n.release_velocity ?? 0.5,
   }
 }
 
 export function PianoRoll() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  // Which per-note property the strip under the notes edits.
+  const [noteProperty, setNoteProperty] = useState<NoteProperty>('velocity')
   const containerRef = useRef<HTMLDivElement>(null)
   const activeTrackId = useTrackStore(s => s.activeMidiTrackId)
   const activeClipId = useTrackStore(s => s.activeMidiClipId)
@@ -321,6 +335,9 @@ export function PianoRoll() {
           for (const n of data) {
             collected.push({
               index: -1,
+              pan: n.pan ?? 0,
+              fineCents: n.fine_cents ?? 0,
+              releaseVelocity: n.release_velocity ?? 0.5,
               startTick: n.start_tick,
               durationTicks: n.duration_ticks,
               pitch: n.pitch,
@@ -697,6 +714,9 @@ export function PianoRoll() {
         useProjectStore.getState().markDirty()
         const draftNote: Note = {
           index: newIndex,
+          pan: 0,
+          fineCents: 0,
+          releaseVelocity: 0.5,
           startTick: snappedTick,
           durationTicks: snap,
           pitch: drawPitch,
@@ -883,19 +903,29 @@ export function PianoRoll() {
     } catch (err) { console.warn('update_midi_note failed', err) }
   }, [notes, activeTrackId, activeClipId, refreshNotes, snap])
 
-  const handleVelocityChange = useCallback(async (noteIndex: number, velocity: number) => {
+  const handleVelocityChange = useCallback(async (noteIndex: number, value: number) => {
     if (!activeTrackId || !activeClipId) return
-    setNotes(prev => prev.map(n => n.index === noteIndex ? { ...n, velocity } : n))
+    const field = ({
+      velocity: 'velocity',
+      pan: 'pan',
+      fine: 'fineCents',
+      release: 'releaseVelocity',
+    } as const)[noteProperty]
+    setNotes(prev => prev.map(n => n.index === noteIndex ? { ...n, [field]: value } : n))
+    const args: Record<string, unknown> = {
+      trackId: activeTrackId,
+      clipId: activeClipId,
+      noteIndex,
+    }
+    if (noteProperty === 'velocity') args.velocity = value
+    else if (noteProperty === 'pan') args.pan = value
+    else if (noteProperty === 'fine') args.fineCents = value
+    else args.releaseVelocity = value
     try {
-      await invoke('update_midi_note', {
-        trackId: activeTrackId,
-        clipId: activeClipId,
-        noteIndex,
-        velocity,
-      })
+      await invoke('update_midi_note', args)
       useProjectStore.getState().markDirty()
-    } catch (err) { console.warn('update_midi_note velocity failed', err) }
-  }, [activeTrackId, activeClipId])
+    } catch (err) { console.warn(`update_midi_note ${noteProperty} failed`, err) }
+  }, [activeTrackId, activeClipId, noteProperty])
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
@@ -1678,6 +1708,9 @@ export function PianoRoll() {
       useProjectStore.getState().markDirty()
       const draftNote: Note = {
         index: newIndex,
+        pan: 0,
+        fineCents: 0,
+        releaseVelocity: 0.5,
         startTick: snappedTick,
         durationTicks: snap,
         pitch,
@@ -2626,15 +2659,42 @@ export function PianoRoll() {
         )}
       </div>
 
-      <VelocityLane
-        notes={notes}
-        selectedNotes={selectedNotes}
-        height={VELOCITY_LANE_HEIGHT}
-        keyboardWidth={KEYBOARD_WIDTH}
-        scrollX={scrollX}
-        pixelsPerTick={pixelsPerTick}
-        onVelocityChange={handleVelocityChange}
-      />
+      <div style={{ position: 'relative' }}>
+        <VelocityLane
+          notes={notes}
+          selectedNotes={selectedNotes}
+          height={VELOCITY_LANE_HEIGHT}
+          keyboardWidth={KEYBOARD_WIDTH}
+          scrollX={scrollX}
+          pixelsPerTick={pixelsPerTick}
+          property={noteProperty}
+          onVelocityChange={handleVelocityChange}
+        />
+        {/* The strip edits one property at a time; this says which. */}
+        <div style={{
+          position: 'absolute', top: 2, left: 4, display: 'flex', gap: 2,
+        }}>
+          {(['velocity', 'pan', 'fine', 'release'] as NoteProperty[]).map(p => (
+            <button
+              key={p}
+              onClick={() => setNoteProperty(p)}
+              title={{
+                velocity: 'How hard the note was played',
+                pan: 'Where this one note sits, left to right',
+                fine: 'Detune this one note, in cents',
+                release: 'How hard the key was let go: harder is a shorter tail',
+              }[p]}
+              style={{
+                fontSize: 8, padding: '1px 5px', cursor: 'pointer',
+                background: 'transparent',
+                border: `1px solid ${p === noteProperty ? hw.accent : 'rgba(255,255,255,0.12)'}`,
+                borderRadius: 2,
+                color: p === noteProperty ? hw.accent : hw.textFaint,
+              }}
+            >{NOTE_PROPERTY_LABEL[p]}</button>
+          ))}
+        </div>
+      </div>
 
       {activeClipId && visibleCcLaneIds.length > 0 && (() => {
         const clipForLen = activeTrackId

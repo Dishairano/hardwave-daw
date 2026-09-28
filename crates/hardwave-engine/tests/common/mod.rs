@@ -183,3 +183,34 @@ pub fn render_and_measure(engine: &DawEngine, sample_rate: u32, total_samples: u
         inf_count,
     }
 }
+
+/// Peak on each side separately, for anything that has to prove a signal
+/// sits somewhere in the stereo field rather than merely being audible.
+/// The render is interleaved stereo, so even samples are left.
+#[allow(dead_code)]
+pub fn render_and_measure_stereo(
+    engine: &DawEngine,
+    sample_rate: u32,
+    total_samples: u64,
+) -> (f32, f32) {
+    let mut peak_l = 0.0_f32;
+    let mut peak_r = 0.0_f32;
+    let result = engine.render_offline(sample_rate, total_samples, |block| {
+        for (index, &s) in block.iter().enumerate() {
+            if !s.is_finite() {
+                continue;
+            }
+            let abs = s.abs();
+            if index % 2 == 0 {
+                if abs > peak_l {
+                    peak_l = abs;
+                }
+            } else if abs > peak_r {
+                peak_r = abs;
+            }
+        }
+        true
+    });
+    assert!(result.is_ok(), "render_offline failed: {result:?}");
+    (peak_l, peak_r)
+}

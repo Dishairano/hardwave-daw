@@ -71,9 +71,14 @@ function synthNotes() {
       start_tick: Math.floor((step * PPQ) / 4),
       duration_ticks: Math.floor(PPQ / 4) - 30,
       pitch: scale[wave],
-      velocity: 74 + ((step * 13) % 48),
+      velocity: (74 + ((step * 13) % 48)) / 127,
       channel: 0,
       muted: false,
+      // Every other hit steps to the side, which is what the pan strip
+      // is for and what the screenshot has to show.
+      pan: step % 2 === 0 ? -0.6 : 0.6,
+      fine_cents: step % 8 === 0 ? 4 : 0,
+      release_velocity: 0.5,
     })
   }
   // chord stabs every bar (triads, held half a bar)
