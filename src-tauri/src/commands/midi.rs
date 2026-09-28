@@ -250,7 +250,110 @@ pub fn set_clip_controls(
     Ok(())
 }
 
-/// Get all notes in a MIDI clip./// Get all notes in a MIDI clip.
+/// Grooves are kept with the song, beside the markers and the mixer
+/// snapshots, so a feel taken from one part is still there tomorrow.
+const GROOVE_KEY: &str = "grooves";
+
+fn read_grooves(project: &hardwave_project::Project) -> Vec<hardwave_midi::groove::Groove> {
+    let Some(raw) = project.timeline_state.as_deref() else {
+        return Vec::new();
+    };
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.get(GROOVE_KEY).cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+fn write_grooves(
+    project: &mut hardwave_project::Project,
+    grooves: &[hardwave_midi::groove::Groove],
+) {
+    let mut value: serde_json::Value = project
+        .timeline_state
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    value[GROOVE_KEY] = serde_json::to_value(grooves).unwrap_or(serde_json::Value::Null);
+    project.timeline_state = Some(value.to_string());
+}
+
+/// Take the timing and accents of a clip and keep them under a name.
+#[tauri::command]
+pub fn extract_groove(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    grid_ticks: u64,
+    name: String,
+) -> Result<usize, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("give the groove a name".into());
+    }
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    let (notes, length) = {
+        let track = project
+            .track(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let clip = track
+            .clips
+            .iter()
+            .find_map(|c| match &c.content {
+                hardwave_project::clip::ClipContent::Midi(mc) if mc.id == clip_id => Some(&mc.clip),
+                _ => None,
+            })
+            .ok_or_else(|| format!("MIDI clip not found: {clip_id}"))?;
+        (clip.notes.clone(), clip.length_ticks)
+    };
+    if notes.is_empty() {
+        return Err("that clip has no notes to take a groove from".into());
+    }
+    let groove = hardwave_midi::groove::extract(&notes, grid_ticks, length, name.clone());
+    let steps = groove.steps.len();
+    let mut grooves = read_grooves(&project);
+    grooves.retain(|g| g.name != name);
+    grooves.push(groove);
+    write_grooves(&mut project, &grooves);
+    Ok(steps)
+}
+
+#[tauri::command]
+pub fn list_grooves(state: State<AppState>) -> Vec<String> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    read_grooves(&project).into_iter().map(|g| g.name).collect()
+}
+
+/// Put a saved groove on a clip. `strength` runs 0 to 1.
+#[tauri::command]
+pub fn apply_groove(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    name: String,
+    strength: f32,
+) -> Result<usize, String> {
+    let groove = {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        read_grooves(&project)
+            .into_iter()
+            .find(|g| g.name == name)
+            .ok_or_else(|| format!("no groove called {name}"))?
+    };
+    with_clip_notes(&state, &track_id, &clip_id, |notes| {
+        hardwave_midi::groove::apply(notes, &groove, strength);
+        notes.len()
+    })
+}
+
+/// Get all notes in a MIDI clip./// Get all notes in a MIDI clip./// Get all notes in a MIDI clip.
 #[tauri::command]
 pub fn get_midi_notes(
     state: State<AppState>,

@@ -1,6 +1,7 @@
 //! Hardwave MIDI — MIDI I/O, event types, and quantization.
 
 pub mod generators;
+pub mod groove;
 pub mod input;
 pub mod osc;
 pub mod output;

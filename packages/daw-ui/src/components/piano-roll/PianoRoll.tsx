@@ -1241,6 +1241,60 @@ export function PianoRoll() {
     } catch (err) { console.warn('humanize failed', err) }
   }, [activeTrackId, activeClipId, selectedIndices, refreshNotes])
 
+  /**
+   * Grooves: take the feel of a played part and put it on a typed one.
+   *
+   * Quantizing makes a part correct and lifeless. This is the other
+   * direction, and the DAW only had a fixed swing amount before.
+   */
+  const runExtractGroove = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setGenOpen(false)
+    const name = window.prompt('Name this groove', 'Groove 1')?.trim()
+    if (!name) return
+    try {
+      const steps = await invoke<number>('extract_groove', {
+        trackId: activeTrackId, clipId: activeClipId,
+        gridTicks: snap > 0 ? snap : 240,
+        name,
+      })
+      useNotificationStore.getState().push('info', `Saved "${name}"`, {
+        detail: `${steps} steps of timing and accent, kept with the song.`,
+      })
+    } catch (err) {
+      useNotificationStore.getState().push('warning', 'Could not take that groove', { detail: String(err) })
+    }
+  }, [activeTrackId, activeClipId, snap])
+
+  const runApplyGroove = useCallback(async () => {
+    if (!activeTrackId || !activeClipId) return
+    setGenOpen(false)
+    let names: string[] = []
+    try {
+      names = await invoke<string[]>('list_grooves')
+    } catch { names = [] }
+    if (names.length === 0) {
+      useNotificationStore.getState().push('info', 'No grooves saved yet', {
+        detail: 'Open a part that was played in, and use "Take groove" first.',
+      })
+      return
+    }
+    const name = window.prompt(`Apply which groove?\n\n${names.join('\n')}`, names[names.length - 1])?.trim()
+    if (!name) return
+    const amount = window.prompt('How much of it? 0 to 100', '100')?.trim()
+    const strength = Math.max(0, Math.min(1, (Number(amount) || 0) / 100))
+    try {
+      const moved = await invoke<number>('apply_groove', {
+        trackId: activeTrackId, clipId: activeClipId, name, strength,
+      })
+      useProjectStore.getState().markDirty()
+      await refreshNotes()
+      useNotificationStore.getState().push('info', `Put "${name}" on ${moved} notes`)
+    } catch (err) {
+      useNotificationStore.getState().push('warning', 'Could not apply that groove', { detail: String(err) })
+    }
+  }, [activeTrackId, activeClipId, refreshNotes])
+
   const runNoteRepeat = useCallback(async () => {
     if (!activeTrackId || !activeClipId) return
     setGenOpen(false)
@@ -2263,6 +2317,29 @@ export function PianoRoll() {
                     background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
                   }}>
                   Humanize {selectedNotes.size > 0 ? 'selection' : 'all'}
+                </button>
+              </div>
+
+              <div style={{ height: 1, background: hw.border }} />
+
+              {/* Groove */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Groove</div>
+                <button onClick={runExtractGroove}
+                  title="Take the timing and accents of this part and keep them under a name"
+                  style={{
+                    padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
+                    background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
+                  }}>
+                  Take groove
+                </button>
+                <button onClick={runApplyGroove}
+                  title="Put a saved groove on this part"
+                  style={{
+                    padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
+                    background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
+                  }}>
+                  Apply groove
                 </button>
               </div>
 
