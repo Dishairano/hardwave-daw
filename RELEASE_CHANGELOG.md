@@ -1,5 +1,3 @@
 ### Improvements
-- feat(daw): a preset browser across every plug-in
-- Macro knobs. Tools > Macro knobs makes one control that moves several parameters at once across several plug-ins and tracks. Each link says which two values the parameter travels between, so one knob can open one filter while it closes another. Macros and their positions are saved with the song.
-- feat(daw): macro knobs
-- A preset browser. Tools > Presets lists every preset you have saved across every plug-in, searches them by preset or plug-in name, and loads one into whichever slot you pick. Rename and delete are there too. Presets built into a plug-in are still not listed, and the panel says so.
+- feat(daw): one part can play several instruments
+- One part can play several instruments. Right-click a MIDI track, pick "Send its notes to…", and the ticked tracks play the same notes through their own instrument and their own effects. The notes stay in one place, so editing the part changes every layer at once.
