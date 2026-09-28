@@ -1,3 +1,3 @@
 ### Improvements
-- feat(daw): per-note pan, fine pitch and release
-- Per-note pan, fine pitch and release. The strip under the piano roll now switches between VEL, PAN, FINE and REL, so one note can sit to the side, be detuned by a few cents, or have a shorter tail than the note next to it. A hi-hat pattern that steps left and right is one clip instead of two tracks.
+- feat(daw): VCA groups
+- VCA groups. A rail beside the mixer faders holds groups that ride several tracks at once: pick the tracks a group covers, and its fader is added to each of theirs. Nothing is rerouted, so where the effects sit and what the sidechain keys off stay exactly as they were, and the balance inside the group is kept. A group can be muted, and a track can sit in more than one.
