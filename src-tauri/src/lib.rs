@@ -225,6 +225,8 @@ pub fn run() {
             commands::macros::set_macro_link_range,
             commands::macros::apply_all_macros,
             commands::plugin_presets::list_all_presets,
+            commands::comping::comp_take_range,
+            commands::comping::spread_takes_to_lanes,
             commands::vcas::list_vcas,
             commands::vcas::add_vca,
             commands::vcas::rename_vca,

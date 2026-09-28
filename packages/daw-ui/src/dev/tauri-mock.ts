@@ -152,6 +152,10 @@ const mock: TauriInternals = {
           hitLimit: false,
         }
       }
+      case 'comp_take_range':
+        return 3
+      case 'spread_takes_to_lanes':
+        return 2
       case 'list_vcas':
         return [
           { id: 'v1', name: 'Drums', gain_db: -3.5, muted: false, members: ['insert-001', 'insert-002'] },

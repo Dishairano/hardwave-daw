@@ -6,6 +6,7 @@ pub mod automation_write;
 pub mod autosave;
 pub mod browser;
 pub mod bugs;
+pub mod comping;
 pub mod dev;
 pub mod engine;
 pub mod export;

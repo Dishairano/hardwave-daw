@@ -58,6 +58,8 @@ export interface ClipInfo {
   stretchRatio: number
   fadeInCurve: FadeCurveKind
   fadeOutCurve: FadeCurveKind
+  /** Take lane. 0 unless the takes on this track have been spread out. */
+  lane?: number
 }
 
 export interface InsertInfo {

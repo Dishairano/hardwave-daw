@@ -113,6 +113,13 @@ const tracks: TrackWithClips[] = [
     Array.from({length: 4}, (_, i) => clip('Reese', 'src-bass', i * 2, 2))),
   track('t-screech', 'Screech', '#ef4444', [clip('Screech', 'src-crash', 2, 2), clip('Screech', 'src-crash', 6, 2)]),
   track('t-fx', 'FX', '#14b8a6', [clip('Riser', 'src-crash', 3, 1), clip('Impact', 'src-kick', 4, 1), clip('Riser', 'src-crash', 7, 1)]),
+  // Three loop passes of a vocal, spread onto lanes the way comping
+  // leaves them: the chosen take plays and the others are muted.
+  track('t-vox', 'Vocal', '#f97316', [
+    { ...clip('Take 1', 'src-vox-1', 0, 4), lane: 0 },
+    { ...clip('Take 2', 'src-vox-2', 0, 4), lane: 1, muted: true },
+    { ...clip('Take 3', 'src-vox-3', 0, 4), lane: 2, muted: true },
+  ]),
   midiTrack,
 ]
 

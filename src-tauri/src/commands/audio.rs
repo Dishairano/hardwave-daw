@@ -144,6 +144,7 @@ pub(crate) fn track_clips_to_info(track: &hardwave_project::Track) -> Vec<ClipIn
                 warp_markers: ac.warp_markers.clone(),
                 fade_in_curve: fade_curve_name(ac.fade_in_curve),
                 fade_out_curve: fade_curve_name(ac.fade_out_curve),
+                lane: clip.lane,
             },
             hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
                 id: mc.id.clone(),
@@ -162,6 +163,7 @@ pub(crate) fn track_clips_to_info(track: &hardwave_project::Track) -> Vec<ClipIn
                 warp_markers: Vec::new(),
                 fade_in_curve: "linear".into(),
                 fade_out_curve: "linear".into(),
+                lane: clip.lane,
             },
         })
         .collect()
@@ -205,6 +207,9 @@ pub struct ClipInfo {
     fade_in_curve: String,
     #[serde(rename = "fadeOutCurve")]
     fade_out_curve: String,
+    /// Which take lane this piece sits on. 0 unless the takes on the
+    /// track have been spread out for comping.
+    lane: u32,
 }
 
 fn fade_curve_name(curve: hardwave_project::clip::FadeCurve) -> String {

@@ -387,6 +387,19 @@ export function TrackList() {
               setCtxMenu(null)
               await toggleSolo(t.id)
             }} />
+            <TrackMenuItem label="Spread the takes onto lanes" onClick={async () => {
+              setCtxMenu(null)
+              // Loop recording stacks every pass on top of the last. On
+              // lanes they can be compared and comped.
+              try {
+                const lanes = await invoke<number>('spread_takes_to_lanes', { trackId: t.id })
+                await useTrackStore.getState().fetchTracks()
+                useNotificationStore.getState().push('info',
+                  lanes > 1 ? `${lanes} takes on their own lanes` : 'Only one take on this track')
+              } catch (e) {
+                useNotificationStore.getState().push('warning', 'Could not spread the takes', { detail: String(e) })
+              }
+            }} />
             {t.kind === 'Midi' && (
               <TrackMenuItem label="Send its notes to…" onClick={() => {
                 setCtxMenu(null)

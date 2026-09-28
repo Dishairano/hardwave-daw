@@ -459,9 +459,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const track = audioTracks[i]
       const defaultColor = CLIP_COLORS[i % CLIP_COLORS.length]
 
+      // Take lanes: with several takes spread out, the track band is
+      // split into one row per lane so the passes can be compared
+      // instead of hiding behind each other.
+      const laneCount = track.clips.reduce((max, c) => Math.max(max, (c.lane ?? 0) + 1), 1)
       for (const clip of track.clips) {
         const color = clipColorOverrides[clip.id] || defaultColor
-        drawClip(ctx, clip, color, y, scrollOffset, w, pixelsPerTick)
+        drawClip(ctx, clip, color, y, scrollOffset, w, pixelsPerTick, clip.lane ?? 0, laneCount)
       }
     }
 
@@ -699,16 +703,19 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     scrollOffset: number,
     viewWidth: number,
     pxPerTick: number,
+    lane: number = 0,
+    laneCount: number = 1,
   ) {
     const clipX = clip.position_ticks * pxPerTick - scrollOffset
     const clipW = clip.length_ticks * pxPerTick
     if (clipX + clipW < 0 || clipX > viewWidth) return
 
     const pad = 1
+    const laneHeight = trackHeight / Math.max(1, laneCount)
     const x = clipX
-    const y = trackY + pad
+    const y = trackY + lane * laneHeight + pad
     const w = clipW
-    const h = trackHeight - pad * 2
+    const h = laneHeight - pad * 2
     const isSelected = clip.id === selectedClipId || selectedClipIds.has(clip.id)
     const color = clip.muted ? '#1a1a24' : baseColor
     // Mockup-style: sharp 1px corners, thin proportional header, full-saturation header stripe.

@@ -1487,6 +1487,47 @@ export function App() {
     if (t) tracks.duplicateClip(t.id, sel)
   }, [])
 
+  /**
+   * Comping: play the selected take over the loop range.
+   *
+   * Loop recording keeps every pass, but "the second half of take 1 with
+   * the first half of take 3" meant splitting clips by hand and muting
+   * the right pieces. This is that, in one step and one undo.
+   */
+  const compSelectedTake = useCallback(async () => {
+    const tracks = useTrackStore.getState()
+    const sel = tracks.selectedClipId
+    const range = loopRangeTicks()
+    if (!sel) {
+      useNotificationStore.getState().push('info', 'Pick a take first', {
+        detail: 'Click the take you want to hear, then set the loop range over the part you want from it.',
+      })
+      return
+    }
+    if (!range) {
+      useNotificationStore.getState().push('info', 'Set the loop range first', {
+        detail: 'The loop range is the part the chosen take plays over.',
+      })
+      return
+    }
+    const track = tracks.tracks.find(t => t.clips.some(c => c.id === sel))
+    if (!track) return
+    try {
+      await invoke<number>('comp_take_range', {
+        trackId: track.id,
+        clipId: sel,
+        startTicks: range.at,
+        endTicks: range.at + range.length,
+      })
+      await tracks.fetchTracks()
+      useNotificationStore.getState().push('info', 'Take chosen for that range', {
+        detail: 'The other takes are muted over it. Choose another and they swap.',
+      })
+    } catch (e) {
+      useNotificationStore.getState().push('warning', 'Could not use that take', { detail: String(e) })
+    }
+  }, [loopRangeTicks])
+
   const cutSelection = useCallback(async () => {
     const tracks = useTrackStore.getState()
     tracks.copySelectedClips()
@@ -1893,6 +1934,7 @@ export function App() {
           { separator: true, label: '' },
           { label: 'Play selection', shortcut: 'Shift+Space', action: playSelection },
           { separator: true, label: '' },
+          { label: 'Use the selected take over the loop range', action: () => { void compSelectedTake() } },
           { label: 'Mark the loop range as a section…', action: () => { void markSection() } },
           { label: 'Repeat a section', action: () => { void repeatSection() } },
           { label: 'Remove a section', action: () => { void removeSection() } },
