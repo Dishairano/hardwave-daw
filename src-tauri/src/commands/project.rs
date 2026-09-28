@@ -187,7 +187,39 @@ pub fn get_timeline_state(state: State<AppState>) -> Option<String> {
 pub fn set_timeline_state(state: State<AppState>, payload: Option<String>) {
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
-    project.timeline_state = payload;
+    // MERGE, do not replace. This blob started as the markers and the punch
+    // range, which the UI owns, and now also carries things the backend
+    // owns: mixer snapshots and grooves. The UI sends only its own keys, so
+    // replacing the blob wholesale threw the rest away the next time a
+    // marker moved.
+    let Some(raw) = payload else {
+        project.timeline_state = None;
+        return;
+    };
+    let incoming: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        // Not JSON: keep the old behaviour rather than silently dropping it.
+        Err(_) => {
+            project.timeline_state = Some(raw);
+            return;
+        }
+    };
+    let mut merged: serde_json::Value = project
+        .timeline_state
+        .as_deref()
+        .and_then(|existing| serde_json::from_str(existing).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    match (merged.as_object_mut(), incoming.as_object()) {
+        (Some(target), Some(source)) => {
+            for (key, value) in source {
+                target.insert(key.clone(), value.clone());
+            }
+            project.timeline_state = Some(merged.to_string());
+        }
+        // Either side is not an object: the incoming value is what the
+        // caller asked for.
+        _ => project.timeline_state = Some(raw),
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -496,4 +528,45 @@ pub fn tick_project_working_time(state: State<AppState>, seconds: u64) {
         .metadata
         .working_time_seconds
         .saturating_add(seconds);
+}
+
+#[cfg(test)]
+mod timeline_state_merge_tests {
+    /// The merge itself, without a running engine: the UI sends its own
+    /// keys, and whatever else is in the blob has to survive.
+    fn merge(existing: Option<&str>, incoming: &str) -> String {
+        let incoming: serde_json::Value = serde_json::from_str(incoming).unwrap();
+        let mut merged: serde_json::Value = existing
+            .and_then(|e| serde_json::from_str(e).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let (Some(target), Some(source)) = (merged.as_object_mut(), incoming.as_object()) {
+            for (key, value) in source {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        merged.to_string()
+    }
+
+    #[test]
+    fn what_the_backend_owns_survives_a_marker_move() {
+        let existing =
+            r#"{"markers":[],"mixerSnapshots":[{"name":"Mix A"}],"grooves":[{"name":"swing"}]}"#;
+        let from_ui = r#"{"markers":[{"id":"m1","tick":960}],"punch":{"enabled":false}}"#;
+        let merged = merge(Some(existing), from_ui);
+        assert!(
+            merged.contains("Mix A"),
+            "the snapshots are still there: {merged}"
+        );
+        assert!(
+            merged.contains("swing"),
+            "the grooves are still there: {merged}"
+        );
+        assert!(merged.contains("m1"), "and the new marker landed");
+    }
+
+    #[test]
+    fn a_first_write_needs_nothing_to_merge_into() {
+        let merged = merge(None, r#"{"markers":[]}"#);
+        assert_eq!(merged, r#"{"markers":[]}"#);
+    }
 }
