@@ -1,5 +1,3 @@
 ### Improvements
-- feat(daw): the settings window gains Recording and Plug-ins
-- feat(daw): audition a loop at the song's tempo
-- The browser's Sync button auditions a loop at the song's tempo when the file name says what tempo it is, and says so rather than repitching quietly.
-- Settings has a Recording tab (metronome, count-in, recording compensation) and a Plug-ins tab (plug-in folders and rescan), which lived in other panels.
+- feat(daw): insert and delete time across the whole song
+- Edit > Insert time at the loop range makes room in the middle of a song, and Edit > Delete the loop range takes a section out. Both move clips, automation, tempo changes and markers together, in one undo step.
