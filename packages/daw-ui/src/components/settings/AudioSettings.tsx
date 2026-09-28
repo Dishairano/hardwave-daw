@@ -5,6 +5,8 @@ import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
 import { AUTOSAVE_OPTIONS, useAutosavePrefsStore } from '../../stores/autosavePrefsStore'
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { RecordingLatencyRow } from './RecordingLatency'
+import { useMetronomeStore } from '../../stores/metronomeStore'
+import { usePluginStore } from '../../stores/pluginStore'
 
 interface AudioDevice {
   name: string
@@ -37,12 +39,21 @@ interface InputMeterSnapshot {
   buffer_size: number
 }
 
-export type SettingsTab = 'audio' | 'midi' | 'playback' | 'files' | 'appearance'
+export type SettingsTab =
+  | 'audio'
+  | 'midi'
+  | 'playback'
+  | 'recording'
+  | 'plugins'
+  | 'files'
+  | 'appearance'
 
 const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'audio', label: 'Audio' },
   { id: 'midi', label: 'MIDI' },
   { id: 'playback', label: 'Playback' },
+  { id: 'recording', label: 'Recording' },
+  { id: 'plugins', label: 'Plug-ins' },
   { id: 'files', label: 'Files' },
   { id: 'appearance', label: 'Appearance' },
 ]
@@ -71,6 +82,14 @@ const BUFFER_SIZES = [64, 128, 256, 512, 1024, 2048, 4096]
 
 export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [tab, setTab] = useState<SettingsTab>(loadTab)
+  const metronome = useMetronomeStore()
+  const plugins = usePluginStore(s => s.plugins)
+  const scanning = usePluginStore(s => s.scanning)
+  const customVst3Paths = usePluginStore(s => s.customVst3Paths)
+  const customClapPaths = usePluginStore(s => s.customClapPaths)
+  const setCustomPaths = usePluginStore(s => s.setCustomPaths)
+  const scanPlugins = usePluginStore(s => s.scanPlugins)
+  const [newPluginPath, setNewPluginPath] = useState('')
   const selectTab = (t: SettingsTab) => {
     setTab(t)
     try { localStorage.setItem(TAB_KEY, t) } catch { /* storage blocked */ }
@@ -1082,6 +1101,140 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               >
                 {audioPrefs.playTruncatedNotes ? 'On' : 'Off'}
               </button>
+            </div>
+          </>)}
+
+          {tab === 'recording' && (<>
+            {/* Everything the DAW does while you record, in one place: the
+                click, the count-in, and how late the take lands. */}
+            <SettingRow label="Metronome">
+              <Btn
+                label={metronome.enabled ? 'On' : 'Off'}
+                primary={metronome.enabled}
+                onClick={() => metronome.setEnabled(!metronome.enabled)}
+              />
+            </SettingRow>
+            <SettingRow label="Click only while recording">
+              <Btn
+                label={metronome.recordOnly ? 'On' : 'Off'}
+                primary={metronome.recordOnly}
+                onClick={() => metronome.setRecordOnly(!metronome.recordOnly)}
+              />
+            </SettingRow>
+            <SettingRow label="Accent the downbeat">
+              <Btn
+                label={metronome.accent ? 'On' : 'Off'}
+                primary={metronome.accent}
+                onClick={() => metronome.setAccent(!metronome.accent)}
+              />
+            </SettingRow>
+            <SettingRow label="Click volume">
+              <input
+                type="range" min={0} max={1} step={0.01}
+                value={metronome.volume}
+                onChange={e => metronome.setVolume(parseFloat(e.target.value))}
+                style={{ flex: 1, accentColor: hw.accent }}
+              />
+              <span style={{ fontSize: 11, color: hw.textMuted, minWidth: 34, textAlign: 'right' }}>
+                {Math.round(metronome.volume * 100)}%
+              </span>
+            </SettingRow>
+            <SettingRow label="Count-in">
+              <Select
+                value={String(metronome.precountBars)}
+                onChange={v => metronome.setPrecountBars(Number(v))}
+                options={[
+                  { value: '0', label: 'Off' },
+                  { value: '1', label: '1 bar' },
+                  { value: '2', label: '2 bars' },
+                  { value: '4', label: '4 bars' },
+                ]}
+              />
+            </SettingRow>
+            <RecordingLatencyRow />
+          </>)}
+
+          {tab === 'plugins' && (<>
+            {/* Where the DAW looks for plug-ins. This lived in the browser
+                panel, which is not where anyone looks for a setting. */}
+            <div style={{ fontSize: 11, color: hw.textSecondary, marginBottom: 8 }}>
+              {scanning ? 'Scanning…' : `${plugins.length} plug-ins found`}
+              <span style={{ marginLeft: 8 }}>
+                <Btn label="Rescan" onClick={() => { void scanPlugins() }} disabled={scanning} />
+              </span>
+            </div>
+            <div style={{ fontSize: 10, color: hw.textFaint, marginBottom: 10, lineHeight: 1.5 }}>
+              The usual system folders are always searched. Add a folder here when you keep
+              plug-ins somewhere else.
+            </div>
+            {[...customVst3Paths, ...customClapPaths].length === 0 && (
+              <div style={{ fontSize: 10, color: hw.textFaint, marginBottom: 8 }}>
+                No extra folders.
+              </div>
+            )}
+            {customVst3Paths.map(path => (
+              <div key={`vst3:${path}`} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0',
+                fontSize: 11, color: hw.textSecondary,
+              }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {path}
+                </span>
+                <span style={{ fontSize: 9, color: hw.textFaint }}>VST3</span>
+                <Btn
+                  label="Remove"
+                  onClick={() => {
+                    void setCustomPaths(customVst3Paths.filter(p => p !== path), customClapPaths)
+                  }}
+                />
+              </div>
+            ))}
+            {customClapPaths.map(path => (
+              <div key={`clap:${path}`} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0',
+                fontSize: 11, color: hw.textSecondary,
+              }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {path}
+                </span>
+                <span style={{ fontSize: 9, color: hw.textFaint }}>CLAP</span>
+                <Btn
+                  label="Remove"
+                  onClick={() => {
+                    void setCustomPaths(customVst3Paths, customClapPaths.filter(p => p !== path))
+                  }}
+                />
+              </div>
+            ))}
+            <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+              <input
+                value={newPluginPath}
+                onChange={e => setNewPluginPath(e.target.value)}
+                placeholder="C:\\Program Files\\Common Files\\VST3"
+                style={{
+                  flex: 1, padding: '4px 6px', fontSize: 11,
+                  background: hw.bgInput, color: hw.textPrimary,
+                  border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+                }}
+              />
+              <Btn
+                label="Add VST3 folder"
+                onClick={() => {
+                  const path = newPluginPath.trim()
+                  if (!path) return
+                  void setCustomPaths([...customVst3Paths, path], customClapPaths)
+                  setNewPluginPath('')
+                }}
+              />
+              <Btn
+                label="Add CLAP folder"
+                onClick={() => {
+                  const path = newPluginPath.trim()
+                  if (!path) return
+                  void setCustomPaths(customVst3Paths, [...customClapPaths, path])
+                  setNewPluginPath('')
+                }}
+              />
             </div>
           </>)}
 
