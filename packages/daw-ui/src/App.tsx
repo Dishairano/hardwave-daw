@@ -249,6 +249,35 @@ export function App() {
    * The DAW always keeps recent MIDI input, so a good take played with
    * record off is not lost.
    */
+  /**
+   * Play the selected clips from the first to the last, then stop.
+   *
+   * Hearing one part on its own meant setting the loop, which changes
+   * something the song keeps, or playing to the end of the track.
+   */
+  const playSelection = useCallback(() => {
+    const ts = useTrackStore.getState()
+    const selected = new Set(ts.selectedClipIds)
+    let first = Number.POSITIVE_INFINITY
+    let last = 0
+    for (const track of ts.tracks) {
+      for (const clip of track.clips) {
+        if (!selected.has(clip.id)) continue
+        first = Math.min(first, clip.position_ticks)
+        last = Math.max(last, clip.position_ticks + clip.length_ticks)
+      }
+    }
+    if (!Number.isFinite(first) || last <= first) {
+      useNotificationStore.getState().push('info', 'Select a clip first', {
+        detail: 'Play selection plays from the first selected clip to the end of the last.',
+      })
+      return
+    }
+    const t = useTransportStore.getState()
+    const samplesPerTick = (t.sampleRate || 48000) * 60 / (Math.max(1, t.bpm) * 960)
+    t.playRange(Math.round(first * samplesPerTick), Math.round(last * samplesPerTick))
+  }, [])
+
   const captureRecentMidi = useCallback(async () => {
     const tracks = useTrackStore.getState()
     const target = tracks.tracks.find(t => t.id === tracks.selectedTrackId && t.kind === 'Midi')
@@ -515,6 +544,26 @@ export function App() {
       if (clipId) ts.setActiveMidiClip(trackId, clipId)
     }).catch(() => {})
   }, [showPianoRoll])
+
+  // Play selection: stop the transport when it reaches the end of the range
+  // that Play selection started. Watched here, on the same playhead events
+  // the punch watcher below uses, so the stop lands with the audio rather
+  // than on a timer that drifts against it.
+  useEffect(() => {
+    let last = useTransportStore.getState().positionSamples
+    const unsub = useTransportStore.subscribe((s) => {
+      const previous = last
+      last = s.positionSamples
+      const end = s.playRangeEnd
+      if (end === null || !s.playing) return
+      // Crossed the end, or jumped past it.
+      if (previous < end && s.positionSamples >= end) {
+        useTransportStore.getState().clearPlayRange()
+        void useTransportStore.getState().stop()
+      }
+    })
+    return () => unsub()
+  }, [])
 
   // Punch in/out recording. When punch is enabled and the transport is
   // playing, auto-engage recording as the playhead crosses the punch-in
@@ -1403,6 +1452,7 @@ export function App() {
         case 'undo':        tracks.undo(); return
         case 'redo':        tracks.redo(); return
         case 'togglePlay':  transport.togglePlayback(); return
+        case 'playSelection': playSelection(); return
         case 'deleteSelection': tracks.deleteSelectedClips(); return
         case 'splitClip': {
           const sel = tracks.selectedClipId
@@ -1658,6 +1708,8 @@ export function App() {
           { label: 'Duplicate', shortcut: 'Ctrl+D', action: duplicateSelection },
           { separator: true, label: '' },
           { label: 'Select all', shortcut: 'Ctrl+A', action: () => useTrackStore.getState().selectAllClips() },
+          { separator: true, label: '' },
+          { label: 'Play selection', shortcut: 'Shift+Space', action: playSelection },
         ],
       },
       {

@@ -1967,6 +1967,30 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
               useNotificationStore.getState().push('warning', 'Nothing to warp', { detail: String(e) })
             }
           }} />
+          <MenuItem label="Consolidate selected clips" onClick={async () => {
+            const { trackId } = contextMenu
+            setContextMenu(null)
+            // The span the selected clips cover on this track, glued into
+            // one clip so the part moves as a piece.
+            const ts = useTrackStore.getState()
+            const track = ts.tracks.find(t => t.id === trackId)
+            const chosen = (track?.clips ?? []).filter(c => selectedClipIds.has(c.id))
+            const clips = chosen.length > 0
+              ? chosen
+              : (track?.clips ?? []).filter(c => c.id === contextMenu.clipId)
+            if (clips.length === 0) return
+            const from = Math.min(...clips.map(c => c.position_ticks))
+            const to = Math.max(...clips.map(c => c.position_ticks + c.length_ticks))
+            const push = useNotificationStore.getState().push
+            push('info', 'Consolidating…')
+            try {
+              await invoke('consolidate_track_range', { trackId, startTicks: from, endTicks: to })
+              await useTrackStore.getState().fetchTracks()
+              push('info', `Consolidated ${clips.length} clips into one`)
+            } catch (e) {
+              push('warning', 'Could not consolidate', { detail: String(e), sticky: true })
+            }
+          }} />
           <MenuItem label="Remove warping" onClick={async () => {
             const { trackId, clipId } = contextMenu
             setContextMenu(null)

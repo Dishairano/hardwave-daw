@@ -103,6 +103,8 @@ interface TransportState {
    * Used to commit_recording_to_midi_clip with the right window on the
    * trailing edge of toggleRecording. `null` when not recording. */
   recordStartSample: number | null
+  /** Sample the transport stops at for Play selection, or null. */
+  playRangeEnd: number | null
   looping: boolean
   positionSamples: number
   bpm: number
@@ -131,6 +133,8 @@ interface TransportState {
   toggleLoop: () => void
   toggleRecording: () => void
   setLoop: (start: number, end: number) => void
+  playRange: (startSamples: number, endSamples: number) => void
+  clearPlayRange: () => void
   setMasterVolume: (db: number) => void
   setTimeSignature: (num: number, den: number) => void
   setPatternMode: (enabled: boolean) => void
@@ -379,6 +383,7 @@ async function commitRecording(
 export const useTransportStore = create<TransportState>((set, get) => ({
   playing: false,
   recording: false,
+  playRangeEnd: null,
   recordStartSample: null,
   looping: false,
   positionSamples: 0,
@@ -471,6 +476,24 @@ export const useTransportStore = create<TransportState>((set, get) => ({
       throw e
     }
   },
+  /**
+   * Play from `start` to `end` and stop, without touching the loop.
+   *
+   * There was no way to hear one part on its own: only loop, which changes
+   * a setting the song keeps, and plain play, which runs to the end. The
+   * watcher lives in `App.tsx` beside the punch one, so the stop happens on
+   * the same playhead events rather than a timer that drifts.
+   */
+  playRange: (startSamples, endSamples) => {
+    if (endSamples <= startSamples) return
+    set({ playRangeEnd: endSamples })
+    invoke('set_position', { position: startSamples })
+    invoke('play')
+    set({ playing: true, positionSamples: startSamples })
+  },
+
+  clearPlayRange: () => set({ playRangeEnd: null }),
+
   setLoop: (start, end) => {
     invoke('set_loop', { start, end })
     set({ loopStart: start, loopEnd: end })

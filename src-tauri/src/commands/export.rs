@@ -1258,7 +1258,142 @@ fn sanitize_filename(name: &str) -> String {
     }
 }
 
-/// Render one track through its plug-ins to audio, put the result on a new
+/// Glue a track's clips between two points into one audio clip.
+///
+/// Several takes, chopped and rearranged, are fine to work with and awkward
+/// to move: dragging the arrangement means dragging fifteen pieces and
+/// hoping none slipped. Consolidating renders that stretch of the track,
+/// with its plug-ins, into one clip and replaces the pieces with it.
+///
+/// Returns the path of the rendered file.
+#[tauri::command]
+pub async fn consolidate_track_range(
+    app: AppHandle,
+    track_id: String,
+    start_ticks: u64,
+    end_ticks: u64,
+) -> Result<String, String> {
+    if end_ticks <= start_ticks {
+        return Err("select a range with some length in it".into());
+    }
+    let (engine, cancel) = {
+        let state: State<AppState> = app.state();
+        (state.engine.clone(), state.export_cancel.clone())
+    };
+    cancel.store(false, Ordering::Relaxed);
+
+    let source_track_id = track_id.clone();
+    let rendered =
+        tauri::async_runtime::spawn_blocking(move || -> Result<(String, u64, u64), String> {
+            let engine_guard = engine.lock();
+            let sample_rate = engine_guard.current_sample_rate();
+            let (start_samples, end_samples, track_name) = {
+                let project = engine_guard.project.lock();
+                let name = project
+                    .track(&track_id)
+                    .map(|t| t.name.clone())
+                    .ok_or_else(|| format!("Track not found: {track_id}"))?;
+                let map = &project.tempo_map;
+                (
+                    map.tick_to_samples(start_ticks, sample_rate as f64),
+                    map.tick_to_samples(end_ticks, sample_rate as f64),
+                    name,
+                )
+            };
+            let total_samples = end_samples.saturating_sub(start_samples);
+            if total_samples == 0 {
+                return Err("that range is empty".into());
+            }
+
+            let dir = match engine_guard.project_dir() {
+                Some(d) => d.join("Bounces"),
+                None => dirs::data_dir()
+                    .ok_or_else(|| "No writable folder for bounces on this system".to_string())?
+                    .join("Hardwave")
+                    .join("Bounces"),
+            };
+            fs::create_dir_all(&dir).map_err(|e| format!("create folder: {e}"))?;
+            let safe: String = track_name
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == ' ' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+            let out_path = dir.join(format!("{safe} consolidated {stamp}.wav"));
+
+            let fmt = RenderFormat {
+                sample_rate,
+                bit_depth: 32,
+                normalize: NormalizeMode::parse("off"),
+                normalize_target_db: -1.0,
+                dither: DitherMode::parse("none"),
+                mp3_bitrate_kbps: 320,
+                mp3_vbr_quality: None,
+                ogg_quality: 0.5,
+            };
+
+            let target = track_id.clone();
+            let completed = write_render(
+                &engine_guard,
+                &out_path,
+                fmt,
+                total_samples,
+                start_samples,
+                &cancel,
+                |_, _| {},
+                move |proj: &mut Project| {
+                    for t in proj.tracks.iter_mut() {
+                        t.stem_excluded = t.id != target;
+                    }
+                },
+            )?;
+            if !completed {
+                let _ = fs::remove_file(&out_path);
+                return Err("consolidating was cancelled".into());
+            }
+            Ok((
+                out_path.to_string_lossy().into_owned(),
+                start_samples,
+                end_samples,
+            ))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let (path, _, _) = rendered;
+
+    // Replacing the pieces with the render is one step, so one undo puts
+    // the original clips back.
+    let state: State<AppState> = app.state();
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&source_track_id) {
+            // Only what lies inside the range goes: a clip that merely
+            // overlaps the edge is left alone rather than silently cut.
+            track.clips.retain(|c| {
+                let clip_end = c.position_ticks + c.length_ticks;
+                !(c.position_ticks >= start_ticks && clip_end <= end_ticks)
+            });
+        }
+    }
+    crate::commands::audio::import_audio_file(
+        state.clone(),
+        source_track_id.clone(),
+        path.clone(),
+        Some(start_ticks),
+    )?;
+    state.engine.lock().rebuild_graph();
+    Ok(path)
+}
+
+/// Render one track through its plug-ins to audio, put the result on a new/// Render one track through its plug-ins to audio, put the result on a new
 /// track, and mute the original.
 ///
 /// A track with three plug-ins on it costs that CPU on every block, for the
