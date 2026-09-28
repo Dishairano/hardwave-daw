@@ -847,11 +847,16 @@ impl DawEngine {
     /// otherwise re-decode and re-resample the same file on every click,
     /// which on a long sample is a pause before the sound starts.
     pub fn preview_file(&self, path: &std::path::Path) -> Result<(), String> {
+        self.preview_file_at_speed(path, 1.0)
+    }
+
+    /// Audition a file, optionally sped up or slowed to the song's tempo.
+    pub fn preview_file_at_speed(&self, path: &std::path::Path, speed: f64) -> Result<(), String> {
         let source_id = source_id_for_path(&path.to_string_lossy());
         if !self.audio_pool.contains(&source_id) {
             self.load_audio_file_as(path, &source_id)?;
         }
-        self.preview.play(&source_id);
+        self.preview.play_at_speed(&source_id, speed);
         Ok(())
     }
 

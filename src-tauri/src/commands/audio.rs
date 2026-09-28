@@ -1061,6 +1061,100 @@ pub fn preview_audio_file(state: State<AppState>, file_path: String) -> Result<(
     state.engine.lock().preview_file(&PathBuf::from(&file_path))
 }
 
+/// What the DAW can work out about a file before importing it: the tempo
+/// written in its name, and what that means for auditioning it against the
+/// song.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewPlan {
+    /// Tempo read from the file name, or null when the name does not say.
+    pub file_bpm: Option<f64>,
+    /// Speed the preview will run at: 1.0 is the file's own speed.
+    pub speed: f64,
+}
+
+/// Read a tempo out of a file name: "Kick 150.wav", "loop_128bpm.wav",
+/// "174 dnb break.wav".
+///
+/// Names are all a loop usually carries. Reading it is a guess, which is
+/// why the UI says where the number came from rather than silently
+/// repitching someone's sample.
+fn bpm_from_name(name: &str) -> Option<f64> {
+    let lower = name.to_lowercase();
+    let bytes = lower.as_bytes();
+    let mut best: Option<f64> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        let digits = &lower[start..i];
+        // A sample rate or a date is not a tempo.
+        if digits.len() > 3 {
+            continue;
+        }
+        let Ok(value) = digits.parse::<f64>() else {
+            continue;
+        };
+        if !(60.0..=220.0).contains(&value) {
+            continue;
+        }
+        // "128bpm" is a tempo for certain; a bare number is a guess, so a
+        // labelled one always wins.
+        let labelled = lower[i..].trim_start().starts_with("bpm");
+        if labelled {
+            return Some(value);
+        }
+        if best.is_none() {
+            best = Some(value);
+        }
+    }
+    best
+}
+
+/// Preview a file, matched to the song's tempo when the file name says what
+/// tempo it is.
+///
+/// Loops previewed at their own speed are hard to judge: the only way to
+/// tell whether a 128 BPM loop fits a 150 BPM song was to import it. This
+/// speeds the preview up or down to the song's tempo, which also moves the
+/// pitch, the way a turntable does. It is not time stretching and the UI
+/// says so.
+#[tauri::command]
+pub fn preview_audio_file_in_tempo(
+    state: State<AppState>,
+    file_path: String,
+    match_tempo: bool,
+) -> Result<PreviewPlan, String> {
+    let path = PathBuf::from(&file_path);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let file_bpm = bpm_from_name(&name);
+    let engine = state.engine.lock();
+    let song_bpm = {
+        let project = engine.project.lock();
+        project
+            .tempo_map
+            .entries
+            .first()
+            .map(|e| e.bpm)
+            .unwrap_or(120.0)
+    };
+    let speed = match (match_tempo, file_bpm) {
+        (true, Some(bpm)) if bpm > 0.0 => (song_bpm / bpm).clamp(0.25, 4.0),
+        _ => 1.0,
+    };
+    engine.preview_file_at_speed(&path, speed)?;
+    Ok(PreviewPlan { file_bpm, speed })
+}
+
 #[tauri::command]
 pub fn stop_audio_preview(state: State<AppState>) {
     state.engine.lock().preview().stop_playing();
@@ -1069,4 +1163,30 @@ pub fn stop_audio_preview(state: State<AppState>) {
 #[tauri::command]
 pub fn set_preview_volume(state: State<AppState>, volume: f32) {
     state.engine.lock().preview().set_volume(volume);
+}
+
+#[cfg(test)]
+mod preview_tempo_tests {
+    use super::bpm_from_name;
+
+    #[test]
+    fn a_labelled_tempo_wins_over_any_other_number() {
+        assert_eq!(bpm_from_name("track 3 loop_128bpm.wav"), Some(128.0));
+        assert_eq!(bpm_from_name("02 - 174 BPM dnb break.wav"), Some(174.0));
+    }
+
+    #[test]
+    fn a_bare_number_in_range_is_taken_as_the_tempo() {
+        assert_eq!(bpm_from_name("Kick 150.wav"), Some(150.0));
+        assert_eq!(bpm_from_name("hardstyle 155 lead.wav"), Some(155.0));
+    }
+
+    #[test]
+    fn numbers_that_are_not_tempos_are_left_alone() {
+        // A sample rate, a year, a take number, a note name.
+        assert_eq!(bpm_from_name("vocal 44100.wav"), None);
+        assert_eq!(bpm_from_name("session 2026 master.wav"), None);
+        assert_eq!(bpm_from_name("Take 3.wav"), None);
+        assert_eq!(bpm_from_name("Screech F.wav"), None);
+    }
 }

@@ -415,6 +415,16 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
   const [autoPreview, setAutoPreview] = useState<boolean>(() => {
     return localStorage.getItem('hardwave.daw.autoPreview') === '1'
   })
+  // Auditioning a loop at its own speed says nothing about whether it fits
+  // the song. With this on, a file whose name carries a tempo is played at
+  // the song's tempo instead.
+  const [matchTempo, setMatchTempo] = useState<boolean>(() => {
+    return localStorage.getItem('hardwave.daw.previewMatchTempo') === '1'
+  })
+  useEffect(() => {
+    localStorage.setItem('hardwave.daw.previewMatchTempo', matchTempo ? '1' : '0')
+  }, [matchTempo])
+  const [previewNote, setPreviewNote] = useState<string | null>(null)
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -516,8 +526,23 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
     }
     try {
       await invoke('set_preview_volume', { volume: previewVolume })
-      await invoke('preview_audio_file', { filePath: path })
+      const plan = await invoke<{ fileBpm: number | null; speed: number }>(
+        'preview_audio_file_in_tempo',
+        { filePath: path, matchTempo },
+      )
       setPreviewing(path)
+      // Say what happened rather than quietly repitching someone's sample.
+      if (!matchTempo) {
+        setPreviewNote(null)
+      } else if (plan.fileBpm === null) {
+        setPreviewNote('No tempo in the file name, so it played at its own speed')
+      } else if (Math.abs(plan.speed - 1) < 0.001) {
+        setPreviewNote(`${Math.round(plan.fileBpm)} BPM, same as the song`)
+      } else {
+        setPreviewNote(
+          `${Math.round(plan.fileBpm)} BPM played at ${plan.speed.toFixed(2)}x, so the pitch moves too`,
+        )
+      }
       // The engine stops at the end of the sample on its own. This only
       // clears the button's highlight, so a long sample does not look like
       // it is still playing forever.
@@ -696,7 +721,28 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         >
           Auto
         </button>
+        <button
+          onClick={() => setMatchTempo(v => !v)}
+          title={matchTempo
+            ? "Previews play at the song's tempo when the file name says the tempo. The pitch moves with it."
+            : 'Previews play at the speed the file was recorded at'}
+          data-testid="preview-tempo-toggle"
+          style={{
+            padding: '2px 6px', fontSize: 9, fontWeight: 600,
+            color: matchTempo ? hw.accent : hw.textFaint,
+            background: matchTempo ? 'rgba(124,201,255,0.12)' : 'transparent',
+            border: `1px solid ${matchTempo ? hw.accent : hw.border}`,
+            borderRadius: hw.radius.sm, cursor: 'pointer',
+          }}
+        >
+          Sync
+        </button>
       </div>
+      {previewNote && (
+        <div style={{ padding: '2px 10px 4px', fontSize: 9, color: hw.textFaint }}>
+          {previewNote}
+        </div>
+      )}
 
       {previewing && (
         <WaveformStrip

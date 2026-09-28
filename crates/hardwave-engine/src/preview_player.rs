@@ -27,6 +27,9 @@ pub struct PreviewRequest {
     stop: Arc<AtomicBool>,
     /// Linear gain in f32 bits.
     volume: Arc<AtomicU32>,
+    /// Playback speed in f64 bits, for auditioning a loop at the song's
+    /// tempo. 1.0 is the file's own speed.
+    speed: Arc<std::sync::atomic::AtomicU64>,
     /// Pool id of the source to audition. Guarded by a lock only the UI
     /// thread takes for writing; the audio thread clones the string once when
     /// a start is pending, not per block.
@@ -36,6 +39,7 @@ pub struct PreviewRequest {
 impl PreviewRequest {
     pub fn new() -> Self {
         Self {
+            speed: Arc::new(std::sync::atomic::AtomicU64::new(1.0f64.to_bits())),
             start: Arc::new(AtomicBool::new(false)),
             stop: Arc::new(AtomicBool::new(false)),
             volume: Arc::new(AtomicU32::new(0.7f32.to_bits())),
@@ -47,9 +51,23 @@ impl PreviewRequest {
     /// A second call replaces whatever is playing: the audio thread builds a
     /// new voice from this request, so two clicks never layer.
     pub fn play(&self, source_id: &str) {
+        self.play_at_speed(source_id, 1.0);
+    }
+
+    /// Play a preview faster or slower, for auditioning a loop against the
+    /// song's tempo. `speed` above 1.0 plays faster, which also raises the
+    /// pitch: this is varispeed, the way a turntable is, not time
+    /// stretching. It is what a preview needs, and it is honest about it.
+    pub fn play_at_speed(&self, source_id: &str, speed: f64) {
         *self.source_id.lock() = source_id.to_string();
+        self.speed
+            .store(speed.clamp(0.25, 4.0).to_bits(), Ordering::Relaxed);
         self.stop.store(false, Ordering::Relaxed);
         self.start.store(true, Ordering::Release);
+    }
+
+    pub fn speed(&self) -> f64 {
+        f64::from_bits(self.speed.load(Ordering::Relaxed)).clamp(0.25, 4.0)
     }
 
     pub fn stop_playing(&self) {
@@ -125,7 +143,7 @@ impl PreviewPlayer {
                     buffer,
                     position: 0.0,
                     step: if device_rate > 0.0 {
-                        source_rate / device_rate
+                        (source_rate / device_rate) * self.request.speed()
                     } else {
                         1.0
                     },

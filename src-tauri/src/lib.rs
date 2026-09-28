@@ -357,6 +357,7 @@ pub fn run() {
             commands::audio::slip_clip,
             // Browser auditions through the engine's own output
             commands::audio::preview_audio_file,
+            commands::audio::preview_audio_file_in_tempo,
             commands::audio::stop_audio_preview,
             commands::audio::set_preview_volume,
             commands::audio::set_clip_gain,
