@@ -961,6 +961,24 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
           </>)}
 
           {tab === 'playback' && (<>
+            {/* Pan law: how loud a track stays as it is panned. */}
+            <SettingRow label="Pan Law">
+              <Select
+                value={audioPrefs.panLaw}
+                onChange={v => audioPrefs.setPanLaw(v as typeof audioPrefs.panLaw)}
+                options={[
+                  { value: '-3', label: '-3 dB centre (default)' },
+                  { value: '-4.5', label: '-4.5 dB centre' },
+                  { value: '-6', label: '-6 dB centre' },
+                  { value: '0', label: '0 dB centre' },
+                ]}
+              />
+            </SettingRow>
+            <div style={{ fontSize: 9, color: hw.textFaint, margin: '-4px 0 10px' }}>
+              How much quieter a track is in the middle than panned hard to one side.
+              Match the DAW a song came from, or its panning will sit at a different level.
+            </div>
+
             {/* Whether the view chases the song. Off by default. */}
             <div style={{
               marginTop: 8,

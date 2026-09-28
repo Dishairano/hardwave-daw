@@ -23,9 +23,12 @@ interface AudioPrefsState {
   resetPluginsOnTransport: boolean
   playTruncatedNotes: boolean
   recordOffsetMs: number
+  /** dB the centre sits at: '-3' (default), '-4.5', '-6' or '0'. */
+  panLaw: '-3' | '-4.5' | '-6' | '0'
   setResetPluginsOnTransport: (v: boolean) => void
   setPlayTruncatedNotes: (v: boolean) => void
   setRecordOffsetMs: (ms: number) => void
+  setPanLaw: (law: '-3' | '-4.5' | '-6' | '0') => void
 }
 
 export const useAudioPrefsStore = create<AudioPrefsState>()(
@@ -34,6 +37,7 @@ export const useAudioPrefsStore = create<AudioPrefsState>()(
       resetPluginsOnTransport: true,
       playTruncatedNotes: false,
       recordOffsetMs: 0,
+      panLaw: '-3',
       setResetPluginsOnTransport: (resetPluginsOnTransport) => {
         set({ resetPluginsOnTransport })
         invoke('set_reset_on_transport', { enabled: resetPluginsOnTransport }).catch(() => {})
@@ -41,6 +45,10 @@ export const useAudioPrefsStore = create<AudioPrefsState>()(
       setPlayTruncatedNotes: (playTruncatedNotes) => {
         set({ playTruncatedNotes })
         invoke('set_play_truncated_notes', { enabled: playTruncatedNotes }).catch(() => {})
+      },
+      setPanLaw: (panLaw) => {
+        set({ panLaw })
+        invoke('set_pan_law', { law: panLaw }).catch(() => {})
       },
       setRecordOffsetMs: (ms) => {
         const recordOffsetMs = Math.max(-500, Math.min(500, Math.round(Number.isFinite(ms) ? ms : 0)))
@@ -60,8 +68,9 @@ export const useAudioPrefsStore = create<AudioPrefsState>()(
  * boot, and safe to call again.
  */
 export function applySavedAudioPrefs(): void {
-  const { resetPluginsOnTransport, playTruncatedNotes, recordOffsetMs } = useAudioPrefsStore.getState()
+  const { resetPluginsOnTransport, playTruncatedNotes, recordOffsetMs, panLaw } = useAudioPrefsStore.getState()
   invoke('set_reset_on_transport', { enabled: resetPluginsOnTransport }).catch(() => {})
   invoke('set_play_truncated_notes', { enabled: playTruncatedNotes }).catch(() => {})
   invoke('set_record_offset_ms', { ms: recordOffsetMs ?? 0 }).catch(() => {})
+  invoke('set_pan_law', { law: panLaw ?? '-3' }).catch(() => {})
 }

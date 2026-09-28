@@ -368,6 +368,22 @@ pub fn set_play_truncated_notes(state: State<AppState>, enabled: bool) {
         .set_play_truncated_notes(enabled);
 }
 
+/// Which pan law the tracks use: "-3", "-4.5", "-6" or "0" (dB at centre).
+#[tauri::command]
+pub fn set_pan_law(state: State<AppState>, law: String) -> Result<(), String> {
+    use hardwave_engine::pan::PanLaw;
+    let law = match law.as_str() {
+        "-3" => PanLaw::Minus3dB,
+        "-4.5" => PanLaw::Minus4_5dB,
+        "-6" => PanLaw::Minus6dB,
+        "0" => PanLaw::Zero,
+        other => return Err(format!("unknown pan law: {other}")),
+    };
+    state.engine.lock().audio_prefs().set_pan_law(law);
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
 /// Manual correction on top of the measured recording latency, in ms.
 #[tauri::command]
 pub fn set_record_offset_ms(state: State<AppState>, ms: i32) {

@@ -9,7 +9,7 @@
 //! switch takes effect on the next block instead of the next project change,
 //! and the audio thread never waits on the UI to read one.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -25,6 +25,9 @@ pub struct AudioPrefs {
     /// always report all of it (converters, USB buffering), so a take can
     /// still sit a little late or early; this is the manual correction.
     record_offset_ms: Arc<AtomicI32>,
+    /// Which pan law the tracks use. Stored as a number so the audio thread
+    /// can read it without a lock.
+    pan_law: Arc<AtomicU8>,
 }
 
 impl AudioPrefs {
@@ -35,6 +38,7 @@ impl AudioPrefs {
             reset_on_transport: Arc::new(AtomicBool::new(true)),
             play_truncated_notes: Arc::new(AtomicBool::new(false)),
             record_offset_ms: Arc::new(AtomicI32::new(0)),
+            pan_law: Arc::new(AtomicU8::new(crate::pan::PanLaw::Minus3dB.as_u8())),
         }
     }
 
@@ -63,6 +67,14 @@ impl AudioPrefs {
 
     pub fn record_offset_ms(&self) -> i32 {
         self.record_offset_ms.load(Ordering::Relaxed)
+    }
+
+    pub fn set_pan_law(&self, law: crate::pan::PanLaw) {
+        self.pan_law.store(law.as_u8(), Ordering::Relaxed);
+    }
+
+    pub fn pan_law(&self) -> crate::pan::PanLaw {
+        crate::pan::PanLaw::from_u8(self.pan_law.load(Ordering::Relaxed))
     }
 }
 

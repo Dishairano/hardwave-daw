@@ -187,6 +187,8 @@ const mock: TauriInternals = {
         return { logsDir: '/tmp/mock-logs', currentSessionLog: null }
       case 'midi_driver_status':
         return { ok: true, detail: '' }
+      case 'set_pan_law':
+        return null
       case 'set_reset_on_transport':
       case 'set_play_truncated_notes':
         return null

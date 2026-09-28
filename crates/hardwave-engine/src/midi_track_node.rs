@@ -532,9 +532,7 @@ impl AudioNode for MidiTrackNode {
         // cos(π/4) = sin(π/4) ≈ 0.707; at pan=±1 the far channel hits
         // unity while the near channel is silent. Matches the standard
         // pan law every audio TrackNode in the engine uses.
-        let theta = (self.pan + 1.0) * std::f32::consts::FRAC_PI_4;
-        let pan_l = theta.cos();
-        let pan_r = theta.sin();
+        let (pan_l, pan_r) = crate::pan::gains(self.pan, self.prefs.pan_law());
 
         let mut peak_l = 0.0_f32;
         let mut peak_r = 0.0_f32;

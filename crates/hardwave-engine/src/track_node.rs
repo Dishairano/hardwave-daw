@@ -284,6 +284,9 @@ pub struct TrackNode {
     soloed: bool,
     phase_invert: bool,
     swap_lr: bool,
+    /// Shared behaviour switches, read on the audio thread. Only the pan
+    /// law is used here; the rest belong to the instrument tracks.
+    prefs: crate::audio_prefs::AudioPrefs,
     /// 0.0 = mono, 1.0 = normal, >1.0 = widened.
     stereo_separation: f32,
     /// Positive = delay, negative = advance. Bounded against delay_capacity.
@@ -345,6 +348,7 @@ impl TrackNode {
             name,
             pool,
             clips: Vec::new(),
+            prefs: crate::audio_prefs::AudioPrefs::new(),
             volume: 1.0,
             pan: 0.0,
             muted: false,
@@ -420,6 +424,12 @@ impl TrackNode {
     /// path) and shipped here through `rebuild_graph`. Empty list means
     /// no automation — volume / pan stick to the static values that
     /// `set_volume_db` / `set_pan` last applied.
+    /// Share the engine's switches with this node. Called on every graph
+    /// rebuild, like the other per-track settings.
+    pub fn set_prefs(&mut self, prefs: crate::audio_prefs::AudioPrefs) {
+        self.prefs = prefs;
+    }
+
     pub fn set_automation_lanes(
         &mut self,
         lanes: Vec<hardwave_project::automation::AutomationLane>,
@@ -958,7 +968,7 @@ impl AudioNode for TrackNode {
         }
 
         // Apply track volume and pan, and measure post-fader peak/RMS.
-        let (pan_l, pan_r) = pan_law(self.pan);
+        let (pan_l, pan_r) = crate::pan::gains(self.pan, self.prefs.pan_law());
         let vol = self.volume;
 
         let (out_left, out_rest) = outputs.split_at_mut(1);
@@ -1021,11 +1031,11 @@ fn linear_to_db(linear: f32) -> f32 {
     (20.0 * (linear + 1e-10).log10()).clamp(-100.0, 6.0)
 }
 
-/// Constant-power pan law. Returns (left_gain, right_gain).
+/// The default law, kept for the tests that assert the centre and the edges.
+#[cfg(test)]
 #[inline]
 fn pan_law(pan: f32) -> (f32, f32) {
-    let angle = (pan + 1.0) * 0.25 * std::f32::consts::PI;
-    (angle.cos(), angle.sin())
+    crate::pan::gains(pan, crate::pan::PanLaw::Minus3dB)
 }
 
 #[cfg(test)]

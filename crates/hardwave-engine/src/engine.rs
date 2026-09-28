@@ -2226,6 +2226,7 @@ impl EngineCallback {
             // onto the audio-thread node. Cloned here on the UI thread
             // so process() never has to walk the project tree under a
             // lock. Empty list is the no-automation steady state.
+            node.set_prefs(self.audio_prefs.clone());
             node.set_automation_lanes(track.automation_lanes.clone());
             node.set_automation_clips(track.automation_clips.clone());
             // Reattach the plug-in chain stashed at the top of this
