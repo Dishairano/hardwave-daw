@@ -896,6 +896,7 @@ mod tests {
                     enabled: true,
                     wet: 1.0,
                     sidechain_active: true,
+                    gain_reduction_db: LiveSlot::new_gain_reduction(),
                 },
                 48_000.0,
                 256,
