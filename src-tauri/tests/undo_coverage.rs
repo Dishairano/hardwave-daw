@@ -19,6 +19,14 @@ use std::path::Path;
 /// whether a person would ever press Ctrl+Z expecting that change back.
 const ALLOWED: &[(&str, &str)] = &[
     (
+        "set_vca_gain",
+        "a fader being moved; a whole move would fill the history",
+    ),
+    (
+        "set_vca_muted",
+        "a mute button on a group, the same as a track mute, which is also not a history step",
+    ),
+    (
         "set_macro_value",
         "turning a knob; a whole sweep would fill the history and make Ctrl+Z useless",
     ),

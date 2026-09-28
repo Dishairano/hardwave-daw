@@ -1997,3 +1997,76 @@ fn a_note_panned_left_is_louder_on_the_left() {
         "a note panned hard left should be much louder on the left, got L={left_l:.6} R={left_r:.6}"
     );
 }
+
+/// Pulling a drum group down meant routing every drum into a bus, which
+/// changes where the effects sit, or dragging six faders by hand. A VCA
+/// adds its level to each member's own fader and moves nothing in the
+/// signal path.
+///
+/// The proof is the master: the same song, the same routing, quieter by
+/// the amount the group was pulled down, and silent when the group is
+/// muted.
+#[test]
+fn a_vca_group_rides_the_faders_of_its_members() {
+    use hardwave_midi::{MidiClip, MidiNote};
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+    use hardwave_project::vca::Vca;
+
+    let render_peak = |group: Option<(f64, bool)>| -> f32 {
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            let id = project.add_midi_track("Synth".to_string());
+            let mut clip = MidiClip::new("vca-clip".to_string(), "vca".to_string(), 1920);
+            clip.notes.push(MidiNote {
+                start_tick: 0,
+                duration_ticks: 480,
+                pitch: 60,
+                velocity: 1.0,
+                ..Default::default()
+            });
+            if let Some(track) = project.track_mut(&id) {
+                track.clips.push(ClipPlacement {
+                    content: ClipContent::Midi(MidiClipRef {
+                        id: "vca-clip".to_string(),
+                        clip,
+                    }),
+                    track_id: id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1920,
+                    lane: 0,
+                });
+            }
+            if let Some((gain_db, muted)) = group {
+                let mut vca = Vca::new("v1".to_string(), "Drums".to_string());
+                vca.gain_db = gain_db;
+                vca.muted = muted;
+                vca.members = vec![id.clone()];
+                project.vcas.push(vca);
+            }
+        }
+        render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 2).peak
+    };
+
+    let plain = render_peak(None);
+    assert!(plain > 0.001, "the track should be audible to start with");
+
+    let pulled_down = render_peak(Some((-12.0, false)));
+    let expected = plain * 10f32.powf(-12.0 / 20.0);
+    assert!(
+        (pulled_down - expected).abs() < expected * 0.15,
+        "a group at -12 dB should take the member down by 12 dB: got {pulled_down:.6}, expected about {expected:.6}"
+    );
+
+    let group_muted = render_peak(Some((0.0, true)));
+    assert!(
+        group_muted < 0.001,
+        "a muted group should silence its members, got peak={group_muted:.6}"
+    );
+
+    let untouched = render_peak(Some((0.0, false)));
+    assert!(
+        (untouched - plain).abs() < plain * 0.02,
+        "a group sitting at 0 dB should change nothing: got {untouched:.6} against {plain:.6}"
+    );
+}

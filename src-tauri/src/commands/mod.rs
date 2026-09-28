@@ -24,4 +24,5 @@ pub mod sources;
 pub mod timeline_edit;
 pub mod tracks;
 pub mod transport;
+pub mod vcas;
 pub mod windows;

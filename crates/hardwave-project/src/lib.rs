@@ -19,6 +19,7 @@ pub mod sidechain_routing;
 pub mod tempo;
 pub mod track;
 pub mod track_freeze;
+pub mod vca;
 
 pub use arrangement::{Arrangement, TrackTimeline};
 pub use automation::{AutomationLane, AutomationPoint, AutomationTarget};
@@ -30,3 +31,4 @@ pub use mixer::{ChannelStrip, Send as MixerSend};
 pub use project::Project;
 pub use tempo::{TempoEntry, TempoMap};
 pub use track::{Track, TrackId, TrackKind};
+pub use vca::Vca;

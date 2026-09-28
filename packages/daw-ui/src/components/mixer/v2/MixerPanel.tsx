@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect } from 'react'
 import { MasterStrip } from './MasterStrip'
 import { StripsScroller } from './StripsScroller'
+import { VcaRail } from './VcaRail'
 import { FxRackPanel } from './FxRackPanel'
 import { DetachButton } from '../../FloatingWindow'
 import { useTrackStore } from '../../../stores/trackStore'
@@ -68,6 +69,7 @@ export const MixerPanelV2 = memo(function MixerPanelV2() {
       </div>
       <div className="mx-v2-body">
         <MasterStrip selected={selectedId === masterId} onSelect={onSelect} />
+        <VcaRail />
         <StripsScroller selectedId={selectedId} onSelect={onSelect} />
         <FxRackPanel />
       </div>

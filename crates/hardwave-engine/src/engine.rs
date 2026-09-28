@@ -2173,10 +2173,12 @@ impl EngineCallback {
                     meter.clone(),
                 );
                 midi_node.set_prefs(self.audio_prefs.clone());
-                midi_node.set_volume_db(track.volume_db);
+                let (vca_gain_db, vca_muted) =
+                    hardwave_project::vca::offset_for(&project.vcas, &track.id);
+                midi_node.set_volume_db(track.volume_db + vca_gain_db);
                 midi_node.set_pan(track.pan);
                 let effective_mute_midi =
-                    track.muted || (any_soloed && !track.soloed && !track.solo_safe);
+                    track.muted || vca_muted || (any_soloed && !track.soloed && !track.solo_safe);
                 midi_node.set_muted(effective_mute_midi);
                 midi_node.set_soloed(track.soloed);
                 // Map the project's NativeInstrument enum to the
@@ -2290,9 +2292,14 @@ impl EngineCallback {
             if let Some(chain) = stashed_chains.remove(&track.id) {
                 node.restore_chain(chain);
             }
-            node.set_volume_db(track.volume_db);
+            // A VCA group adds its level to the member's own fader and can
+            // silence it, without moving anything in the signal path.
+            let (vca_gain_db, vca_muted) =
+                hardwave_project::vca::offset_for(&project.vcas, &track.id);
+            node.set_volume_db(track.volume_db + vca_gain_db);
             node.set_pan(track.pan);
-            let effective_mute = track.muted || (any_soloed && !track.soloed && !track.solo_safe);
+            let effective_mute =
+                track.muted || vca_muted || (any_soloed && !track.soloed && !track.solo_safe);
             node.set_muted(effective_mute);
             node.set_soloed(track.soloed);
             node.set_phase_invert(track.phase_invert);

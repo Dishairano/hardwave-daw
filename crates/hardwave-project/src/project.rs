@@ -99,6 +99,11 @@ pub struct Project {
     /// simply stops early and serde fills this from `default`.
     #[serde(default)]
     pub macros: Vec<crate::macros::Macro>,
+    /// VCA groups: faders that ride several tracks without routing them
+    /// anywhere. Appended after `macros` for the same reason that field
+    /// sits where it does.
+    #[serde(default)]
+    pub vcas: Vec<crate::vca::Vca>,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a
@@ -155,6 +160,7 @@ impl Default for Project {
             active_arrangement: String::new(),
             timeline_state: None,
             macros: Vec::new(),
+            vcas: Vec::new(),
         }
     }
 }

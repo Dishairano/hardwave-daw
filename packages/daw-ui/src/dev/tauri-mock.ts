@@ -152,6 +152,19 @@ const mock: TauriInternals = {
           hitLimit: false,
         }
       }
+      case 'list_vcas':
+        return [
+          { id: 'v1', name: 'Drums', gain_db: -3.5, muted: false, members: ['insert-001', 'insert-002'] },
+          { id: 'v2', name: 'Leads', gain_db: 0, muted: false, members: ['insert-003'] },
+        ]
+      case 'add_vca':
+        return 'v3'
+      case 'set_vca_gain':
+      case 'set_vca_muted':
+      case 'set_vca_members':
+      case 'rename_vca':
+      case 'delete_vca':
+        return null
       case 'get_midi_routes':
         return []
       case 'set_midi_routes':

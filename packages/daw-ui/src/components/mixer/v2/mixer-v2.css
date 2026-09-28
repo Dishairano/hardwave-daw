@@ -33,7 +33,9 @@
 .mx-v2-body {
   flex: 1;
   display: grid;
-  grid-template-columns: var(--mx-strip-w) 1fr 360px;
+  /* master | VCA rail | channels | FX rack. The rail sizes itself to the
+     groups that exist, so a song without any loses nothing to it. */
+  grid-template-columns: var(--mx-strip-w) auto 1fr 360px;
   min-height: 0;
   background: var(--mx-bg);
 }
