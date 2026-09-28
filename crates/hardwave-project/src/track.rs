@@ -239,6 +239,18 @@ pub struct Track {
     /// Never persisted — it only ever exists on a render snapshot.
     #[serde(skip)]
     pub stem_excluded: bool,
+
+    /// Other MIDI tracks this track's notes also play.
+    ///
+    /// Layering a supersaw under a lead used to mean copying the clip onto
+    /// the second track and keeping the two copies in step by hand. With a
+    /// route the notes stay in one place: the named tracks play the same
+    /// clips through their own instrument and their own chain.
+    ///
+    /// Empty on every older project, and a route to a track that no longer
+    /// exists is ignored rather than an error.
+    #[serde(default)]
+    pub midi_route_to: Vec<TrackId>,
 }
 
 impl Track {
@@ -273,6 +285,7 @@ impl Track {
             automation_lanes: Vec::new(),
             automation_clips: Vec::new(),
             stem_excluded: false,
+            midi_route_to: Vec::new(),
         }
     }
 

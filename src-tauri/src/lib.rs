@@ -225,6 +225,8 @@ pub fn run() {
             commands::macros::set_macro_link_range,
             commands::macros::apply_all_macros,
             commands::plugin_presets::list_all_presets,
+            commands::tracks::get_midi_routes,
+            commands::tracks::set_midi_routes,
             commands::tracks::save_mixer_snapshot,
             commands::tracks::list_mixer_snapshots,
             commands::tracks::recall_mixer_snapshot,

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { MidiRouteDialog } from './MidiRouteDialog'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { useTransportStore } from '../../stores/transportStore'
@@ -45,6 +46,7 @@ export function TrackList() {
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
   const resizingRef = useRef<{ id: string; startY: number; startH: number } | null>(null)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string } | null>(null)
+  const [routeDialogTrackId, setRouteDialogTrackId] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
@@ -347,6 +349,12 @@ export function TrackList() {
           return placeholders
         })()}
       </div>
+      {routeDialogTrackId && (
+        <MidiRouteDialog
+          trackId={routeDialogTrackId}
+          onClose={() => setRouteDialogTrackId(null)}
+        />
+      )}
       {ctxMenu && (() => {
         const t = audioTracks.find(x => x.id === ctxMenu.trackId)
         if (!t) return null
@@ -379,6 +387,12 @@ export function TrackList() {
               setCtxMenu(null)
               await toggleSolo(t.id)
             }} />
+            {t.kind === 'Midi' && (
+              <TrackMenuItem label="Send its notes to…" onClick={() => {
+                setCtxMenu(null)
+                setRouteDialogTrackId(t.id)
+              }} />
+            )}
             <TrackMenuItem label="Bounce to audio" onClick={async () => {
               setCtxMenu(null)
               // Renders this track through its plug-ins, puts the result on

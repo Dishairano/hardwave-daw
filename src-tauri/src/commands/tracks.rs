@@ -1123,3 +1123,65 @@ pub fn set_track_output_bus(
     engine.rebuild_graph();
     Ok(())
 }
+
+/// Where this track's MIDI also goes.
+#[tauri::command]
+pub fn get_midi_routes(state: State<AppState>, track_id: String) -> Vec<String> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    project
+        .track(&track_id)
+        .map(|t| t.midi_route_to.clone())
+        .unwrap_or_default()
+}
+
+/// Send one track's notes to another instrument as well.
+///
+/// Layering two synths off one part meant copying the clip and keeping
+/// both copies in step by hand. A route leaves the notes in one place:
+/// the target plays the same clips through its own instrument and chain.
+///
+/// A route to itself, to a track that does not exist, or to a track that
+/// is not a MIDI track is refused, and so is a route that would make a
+/// loop, because a loop would feed a node its own notes forever.
+#[tauri::command]
+pub fn set_midi_routes(
+    state: State<AppState>,
+    track_id: String,
+    targets: Vec<String>,
+) -> Result<(), String> {
+    {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        let source = project
+            .track(&track_id)
+            .ok_or_else(|| "no track with that id".to_string())?;
+        if !matches!(source.kind, hardwave_project::TrackKind::Midi) {
+            return Err("only a MIDI track can send its notes on".into());
+        }
+        for target in &targets {
+            if target == &track_id {
+                return Err("a track cannot send its notes to itself".into());
+            }
+            let Some(track) = project.track(target) else {
+                return Err("no track with that id".into());
+            };
+            if !matches!(track.kind, hardwave_project::TrackKind::Midi) {
+                return Err("notes can only go to another MIDI track".into());
+            }
+            if track.midi_route_to.contains(&track_id) {
+                return Err("that track already sends its notes here".into());
+            }
+        }
+    }
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.midi_route_to = targets;
+        }
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}

@@ -2136,6 +2136,22 @@ impl EngineCallback {
             .collect();
         meters.retain(|id, _| live_ids.contains(id));
 
+        // MIDI routes, gathered once: for each target track, the tracks
+        // whose notes it also plays. A route to a track that has been
+        // deleted simply never appears here.
+        let mut midi_routes: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, source) in project.tracks.iter().enumerate() {
+            if !matches!(source.kind, hardwave_project::TrackKind::Midi) {
+                continue;
+            }
+            for target in &source.midi_route_to {
+                if target == &source.id {
+                    continue;
+                }
+                midi_routes.entry(target.clone()).or_default().push(index);
+            }
+        }
+
         for track in &project.tracks {
             if !track.kind.is_audio_bearing() {
                 continue;
@@ -2191,7 +2207,14 @@ impl EngineCallback {
                 let mut note_regions: Vec<crate::midi_track_node::MidiNoteRegion> = Vec::new();
                 let mut control_regions: Vec<crate::midi_track_node::MidiControlRegion> =
                     Vec::new();
-                for clip in &track.clips {
+                // The track's own clips, plus the clips of every track
+                // routed into it. A routed clip plays this track's
+                // instrument through this track's chain, which is what
+                // layering two synths off one part means.
+                let routed = midi_routes.get(&track.id).cloned().unwrap_or_default();
+                let clip_sources = std::iter::once(&track.clips)
+                    .chain(routed.iter().map(|index| &project.tracks[*index].clips));
+                for clip in clip_sources.flatten() {
                     let hardwave_project::clip::ClipContent::Midi(midi_ref) = &clip.content else {
                         continue;
                     };

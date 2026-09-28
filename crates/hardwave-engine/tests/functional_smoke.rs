@@ -1877,3 +1877,64 @@ fn plugin_latency_is_compensated() {
          (peak={peak:.4}, one track={single:.4}) — plug-in latency not compensated?"
     );
 }
+
+/// Layering two synths off one part meant copying the clip onto the second
+/// track and keeping both copies in step by hand. A MIDI route leaves the
+/// notes in one place: the target plays them through its own instrument.
+///
+/// The proof is the target track on its own. Its clip list is empty, so any
+/// sound it makes came down the route.
+#[test]
+fn a_routed_track_plays_the_notes_of_the_track_that_feeds_it() {
+    use hardwave_midi::{MidiClip, MidiNote};
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+
+    let render_peak = |routed: bool| -> f32 {
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            let source = project.add_midi_track("Lead".to_string());
+            let target = project.add_midi_track("Layer".to_string());
+
+            let mut clip = MidiClip::new("route-clip".to_string(), "lead".to_string(), 1920);
+            clip.notes.push(MidiNote {
+                start_tick: 0,
+                duration_ticks: 480,
+                pitch: 60,
+                velocity: 1.0,
+                channel: 0,
+                muted: false,
+            });
+            if let Some(track) = project.track_mut(&source) {
+                track.clips.push(ClipPlacement {
+                    content: ClipContent::Midi(MidiClipRef {
+                        id: "route-clip".to_string(),
+                        clip,
+                    }),
+                    track_id: source.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1920,
+                    lane: 0,
+                });
+                if routed {
+                    track.midi_route_to = vec![target.clone()];
+                }
+                // The source is silent either way, so what is measured is
+                // only ever the target.
+                track.muted = true;
+            }
+        }
+        render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 2).peak
+    };
+
+    let without = render_peak(false);
+    let with = render_peak(true);
+    assert!(
+        without < 0.001,
+        "the target track has no clips of its own, so it should be silent without a route, got peak={without:.6}"
+    );
+    assert!(
+        with > 0.001,
+        "the routed track should play the source's notes, got peak={with:.6}"
+    );
+}

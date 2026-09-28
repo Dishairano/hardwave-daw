@@ -147,6 +147,10 @@ const mock: TauriInternals = {
           hitLimit: false,
         }
       }
+      case 'get_midi_routes':
+        return []
+      case 'set_midi_routes':
+        return null
       case 'list_all_presets':
         return [
           {
