@@ -147,6 +147,32 @@ const mock: TauriInternals = {
           hitLimit: false,
         }
       }
+      case 'list_macros':
+        return [
+          {
+            id: 'm1', name: 'Open', value: 0.42,
+            links: [
+              { id: 'l1', track_id: 'insert-001', target: { PluginParam: { slot_id: 'sl1', param_id: 4 } }, min: 200, max: 8000 },
+              { id: 'l2', track_id: 'insert-002', target: 'TrackVolume', min: -18, max: -3 },
+            ],
+          },
+          { id: 'm2', name: 'Wide', value: 0, links: [] },
+        ]
+      case 'get_plugin_parameters':
+        return [
+          { id: 0, name: 'Drive', defaultValue: 0.3, value: 0.3, min: 0, max: 1, unit: '', automatable: true },
+          { id: 4, name: 'Cutoff', defaultValue: 1200, value: 1200, min: 20, max: 20000, unit: 'Hz', automatable: true },
+        ]
+      case 'add_macro':
+      case 'add_macro_link':
+        return 'new-id'
+      case 'set_macro_value':
+      case 'set_macro_link_range':
+      case 'remove_macro_link':
+      case 'rename_macro':
+      case 'delete_macro':
+      case 'apply_all_macros':
+        return null
       case 'list_sections':
         return [
           { id: 's1', name: 'Intro', startTicks: 0, endTicks: 7680 },

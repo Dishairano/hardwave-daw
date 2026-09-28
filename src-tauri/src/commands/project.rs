@@ -156,6 +156,11 @@ pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> 
         }
         m.save();
     }
+
+    // The chains are up and the graph is built, so the saved macro values
+    // can be pushed. Without this a song opens with its macro knobs where
+    // they were left but the plug-ins at whatever the preset says.
+    crate::commands::macros::apply_all_macros(state);
     Ok(())
 }
 

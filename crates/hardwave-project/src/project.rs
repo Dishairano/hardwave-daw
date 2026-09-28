@@ -93,6 +93,12 @@ pub struct Project {
     /// the gap from `default`.
     #[serde(default)]
     pub timeline_state: Option<String>,
+    /// Macros: one knob that moves several parameters across several
+    /// plug-ins. Appended after `timeline_state` for the same reason that
+    /// field carries its warning: a positional file written by version 1
+    /// simply stops early and serde fills this from `default`.
+    #[serde(default)]
+    pub macros: Vec<crate::macros::Macro>,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a
@@ -148,6 +154,7 @@ impl Default for Project {
             arrangements: Vec::new(),
             active_arrangement: String::new(),
             timeline_state: None,
+            macros: Vec::new(),
         }
     }
 }

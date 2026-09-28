@@ -19,6 +19,14 @@ use std::path::Path;
 /// whether a person would ever press Ctrl+Z expecting that change back.
 const ALLOWED: &[(&str, &str)] = &[
     (
+        "set_macro_value",
+        "turning a knob; a whole sweep would fill the history and make Ctrl+Z useless",
+    ),
+    (
+        "apply_all_macros",
+        "pushes saved macro values into the engine after a song opens; changes nothing",
+    ),
+    (
         "duplicate_section",
         "calls insert_time, which takes the snapshot; one Ctrl+Z undoes the whole repeat",
     ),

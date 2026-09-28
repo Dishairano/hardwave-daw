@@ -10,6 +10,7 @@ pub mod dev;
 pub mod engine;
 pub mod export;
 pub mod history;
+pub mod macros;
 pub mod midi;
 pub mod midi_capture;
 pub mod midi_input;

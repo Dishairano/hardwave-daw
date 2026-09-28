@@ -56,6 +56,7 @@ import {
 } from './stores/autosavePrefsStore'
 import { useGeneralPrefsStore } from './stores/generalPrefsStore'
 import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappingsPanel'
+import { MacroPanel } from './components/MacroPanel'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
 import { PrecountOverlay } from './components/transport/PrecountOverlay'
@@ -233,6 +234,8 @@ export function App() {
     showHistory, setShowHistory,
     showDevPanel, setShowDevPanel,
   } = useAppDialogs()
+  // Local rather than in useAppDialogs: only the Tools menu opens it.
+  const [showMacros, setShowMacros] = useState(false)
   // Local rather than in useAppDialogs: nothing else toggles it, and it has
   // one extra piece of state (whether the report follows a crash).
   const [bugReport, setBugReport] = useState<{ open: boolean; afterCrash: boolean }>({
@@ -2007,6 +2010,7 @@ export function App() {
             label: 'Capture what you just played',
             action: () => { void captureRecentMidi() },
           },
+          { label: 'Macro knobs…', action: () => setShowMacros(true) },
           { label: 'MIDI mappings…', action: () => setShowMidiMappings(true) },
           { label: 'Touch Controller', shortcut: 'Alt+F7', action: () => toggleTouchController() },
           {
@@ -2215,6 +2219,7 @@ export function App() {
         onClose={() => setBugReport({ open: false, afterCrash: false })}
       />
       {showTempoTapper && <TempoTapper onClose={() => setShowTempoTapper(false)} />}
+      {showMacros && <MacroPanel onClose={() => setShowMacros(false)} />}
       {showMidiMappings && (
         <MidiMappingsPanel
           onClose={() => { setShowMidiMappings(false); setMidiLearnPreset(undefined) }}
