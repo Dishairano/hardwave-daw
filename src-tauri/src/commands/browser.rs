@@ -243,7 +243,7 @@ pub async fn search_library(roots: Vec<String>, query: String) -> Result<Library
                 }
             }
         }
-        matches.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        matches.sort_by_key(|m| m.name.to_lowercase());
         LibrarySearch { matches, hit_limit }
     })
     .await
