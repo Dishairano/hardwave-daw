@@ -27,6 +27,7 @@ pub mod modulation;
 pub mod modulation_matrix;
 pub mod multiband;
 pub mod onset;
+pub mod oversample;
 pub mod parametric_eq;
 pub mod phase_vocoder;
 pub mod recording;

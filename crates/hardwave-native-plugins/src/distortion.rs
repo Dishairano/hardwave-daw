@@ -21,7 +21,11 @@ const PARAM_DRIVE: u32 = 0;
 const PARAM_MODE: u32 = 1;
 const PARAM_MIX: u32 = 2;
 const PARAM_OUTPUT: u32 = 3;
-const PARAM_COUNT: u32 = 4;
+/// 0 = off, 1 = 2x, 2 = 4x. Distortion folds harmonics above the sample
+/// rate back down as unmusical ringing; running the curve faster pushes
+/// that out of the way.
+const PARAM_OVERSAMPLE: u32 = 4;
+const PARAM_COUNT: u32 = 5;
 
 /// Curve to apply. Stored as a normalised parameter so the
 /// automation pipeline doesn't need a separate enum codec.
@@ -60,6 +64,11 @@ impl Mode {
 }
 
 pub struct NativeDistortion {
+    /// The rate the host is running at, for the oversampler's filters.
+    sample_rate: f32,
+    /// Runs the curve at 2x or 4x so its harmonics do not fold back.
+    oversampler: hardwave_dsp::oversample::Oversampler,
+    oversample: hardwave_dsp::oversample::OversampleFactor,
     descriptor: PluginDescriptor,
     drive_db: f32, // 0..=24
     mode: Mode,
@@ -90,26 +99,14 @@ impl NativeDistortion {
     pub fn new() -> Self {
         Self {
             descriptor: Self::descriptor(),
+            sample_rate: 48_000.0,
+            oversampler: hardwave_dsp::oversample::Oversampler::new(),
+            oversample: hardwave_dsp::oversample::OversampleFactor::Two,
             drive_db: 6.0,
             mode: Mode::Soft,
             mix: 1.0,
             output_db: 0.0,
             active: false,
-        }
-    }
-
-    fn apply_curve(&self, sample: f32, drive_lin: f32) -> f32 {
-        match self.mode {
-            Mode::Soft => soft_clip(sample, drive_lin),
-            Mode::Hard => hard_clip(sample, drive_lin),
-            Mode::Tape => tape_saturation(sample, drive_lin),
-            Mode::Tube => tube_emulation(sample, drive_lin),
-            Mode::Bitcrush => {
-                // Map drive 0..=24 dB → 16..=2 bits so cranking drive
-                // crushes harder. Inverse so the knob feels right.
-                let bits = (16.0 - (self.drive_db / 24.0).clamp(0.0, 1.0) * 14.0).round() as u8;
-                bitcrush(sample, bits.max(1))
-            }
         }
     }
 
@@ -141,12 +138,31 @@ impl Default for NativeDistortion {
     }
 }
 
+/// The curve itself, free of the plug-in, so the oversampler can call it
+/// without borrowing the whole plug-in while it runs.
+fn apply_curve_with(mode: Mode, sample: f32, drive_lin: f32, drive_db: f32) -> f32 {
+    match mode {
+        Mode::Soft => soft_clip(sample, drive_lin),
+        Mode::Hard => hard_clip(sample, drive_lin),
+        Mode::Tape => tape_saturation(sample, drive_lin),
+        Mode::Tube => tube_emulation(sample, drive_lin),
+        Mode::Bitcrush => {
+            // Map drive 0..=24 dB to 16..=2 bits, so cranking the drive
+            // crushes harder. Inverse, so the knob feels right.
+            let bits = (16.0 - (drive_db / 24.0).clamp(0.0, 1.0) * 14.0).round() as u8;
+            bitcrush(sample, bits.max(1))
+        }
+    }
+}
+
 impl HostedPlugin for NativeDistortion {
     fn descriptor(&self) -> &PluginDescriptor {
         &self.descriptor
     }
-    fn activate(&mut self, _sr: f64, _max_block: u32) -> Result<(), String> {
+    fn activate(&mut self, sr: f64, _max_block: u32) -> Result<(), String> {
         self.active = true;
+        self.sample_rate = sr as f32;
+        self.oversampler.reset();
         Ok(())
     }
     fn deactivate(&mut self) {
@@ -174,11 +190,21 @@ impl HostedPlugin for NativeDistortion {
         }
         let drive_lin = 10.0_f32.powf(self.drive_db / 20.0);
         let output_lin = 10.0_f32.powf(self.output_db / 20.0);
+        self.oversampler
+            .configure(self.sample_rate, self.oversample);
+        let mode = self.mode;
+        let drive_db = self.drive_db;
         for i in 0..num_samples {
             let in_l = inputs[0].get(i).copied().unwrap_or(0.0);
             let in_r = inputs[1].get(i).copied().unwrap_or(0.0);
-            let dist_l = self.apply_curve(in_l, drive_lin);
-            let dist_r = self.apply_curve(in_r, drive_lin);
+            // The curve, and only the curve, runs at the higher rate: the
+            // mix and the output gain are linear and gain nothing from it.
+            let (dist_l, dist_r) = self.oversampler.process_frame(in_l, in_r, |l, r| {
+                (
+                    apply_curve_with(mode, l, drive_lin, drive_db),
+                    apply_curve_with(mode, r, drive_lin, drive_db),
+                )
+            });
             // Compensate so increasing drive doesn't blast out volume —
             // approximates the perceived loudness of clean signal at
             // matched RMS.
@@ -231,6 +257,17 @@ impl HostedPlugin for NativeDistortion {
                 unit: "dB".into(),
                 automatable: true,
             }),
+            PARAM_OVERSAMPLE => Some(ParameterInfo {
+                id: PARAM_OVERSAMPLE,
+                name: "Oversample".into(),
+                // 2x by default: it costs little and it is what stops a
+                // hard drive setting sounding brittle.
+                default_value: 0.5,
+                min: 0.0,
+                max: 1.0,
+                unit: "off / 2x / 4x".into(),
+                automatable: false,
+            }),
             _ => None,
         }
     }
@@ -241,6 +278,11 @@ impl HostedPlugin for NativeDistortion {
             PARAM_MODE => self.mode.to_normalised() as f64,
             PARAM_MIX => self.mix as f64,
             PARAM_OUTPUT => Self::to_normalised(id, self.output_db as f64),
+            PARAM_OVERSAMPLE => match self.oversample {
+                hardwave_dsp::oversample::OversampleFactor::Off => 0.0,
+                hardwave_dsp::oversample::OversampleFactor::Two => 0.5,
+                hardwave_dsp::oversample::OversampleFactor::Four => 1.0,
+            },
             _ => 0.0,
         }
     }
@@ -251,6 +293,16 @@ impl HostedPlugin for NativeDistortion {
             PARAM_MODE => self.mode = Mode::from_normalised(value as f32),
             PARAM_MIX => self.mix = value.clamp(0.0, 1.0) as f32,
             PARAM_OUTPUT => self.output_db = Self::from_normalised(id, value) as f32,
+            PARAM_OVERSAMPLE => {
+                use hardwave_dsp::oversample::OversampleFactor;
+                self.oversample = if value < 0.25 {
+                    OversampleFactor::Off
+                } else if value < 0.75 {
+                    OversampleFactor::Two
+                } else {
+                    OversampleFactor::Four
+                };
+            }
             _ => {}
         }
     }
