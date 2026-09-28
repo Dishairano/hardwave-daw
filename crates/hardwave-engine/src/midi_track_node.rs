@@ -1527,7 +1527,8 @@ mod tests {
     }
 
     /// Starting playback in the middle must not replay everything before
-    /// it, but the last value written before that point still applies.
+    /// it. The last value written before that point does apply, and is
+    /// sent once, both to the built-in synth and into the chain.
     #[test]
     fn a_seek_past_controllers_keeps_the_last_value() {
         let mut node = make_node();
@@ -1550,9 +1551,12 @@ mod tests {
         let inputs: [&[f32]; 0] = [];
         let mut midi_out = Vec::new();
         node.process(&inputs, &mut out, &[], &mut midi_out, &ctx);
-        assert!(
-            node.control_scratch.is_empty(),
-            "nothing before the block is replayed into the chain"
+        // The whole history is not replayed: one event carries the value
+        // the controller was left at.
+        assert_eq!(
+            node.control_scratch.len(),
+            1,
+            "the last value is sent once, not every point before the block"
         );
         assert!(
             (node.bend_mul - bend_multiplier(-1.0)).abs() < 1e-6,
