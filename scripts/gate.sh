@@ -49,13 +49,25 @@ free_target_gib() {
   mkdir -p "$dir" 2>/dev/null || true
   df -BG --output=avail "$dir" 2>/dev/null | tail -1 | tr -dc '0-9'
 }
+target_dir() {
+  cargo metadata --format-version 1 --no-deps 2>/dev/null \
+    | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'
+}
 avail=$(free_target_gib)
 if [ -n "$avail" ] && [ "$avail" -lt 12 ]; then
   echo "gate.sh: only ${avail}G free on the build volume; clearing the incremental cache"
-  find "$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
-    | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')" \
-    -maxdepth 2 -type d -name incremental -exec rm -rf {} + 2>/dev/null || true
-  echo "gate.sh: $(free_target_gib)G free now"
+  find "$(target_dir)" -maxdepth 2 -type d -name incremental -exec rm -rf {} + 2>/dev/null || true
+  avail=$(free_target_gib)
+  echo "gate.sh: ${avail}G free now"
+fi
+# The incremental cache is a few gigabytes; the compiled dependencies are
+# tens. When dropping the cache is not enough, the debug build goes too. It
+# costs one slow build and it is the difference between a gate that runs and
+# a gate that dies with "No space left on device" halfway through linking.
+if [ -n "$avail" ] && [ "$avail" -lt 8 ]; then
+  echo "gate.sh: still ${avail}G free; clearing the debug build as well"
+  rm -rf "$(target_dir)/debug" 2>/dev/null || true
+  echo "gate.sh: $(free_target_gib)G free now, this build will be a slow one"
 fi
 
 # Fingerprint = the exact content of the working tree, as a git tree hash.
