@@ -137,6 +137,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   // Panning by hand turns it off, the same way dragging a scrollbar does in
   // every other DAW, and the FOLLOW button turns it back on.
   const followPlayhead = useGeneralPrefsStore(s => s.followPlayhead)
+  const rulerUnits = useGeneralPrefsStore(s => s.rulerUnits)
   const setFollowPlayhead = useGeneralPrefsStore(s => s.setFollowPlayhead)
   /// FL Studio convention: right-mouse-button + drag = 2D pan (vertical
   /// scroll + horizontal pan via setting the playhead-derived offset).
@@ -352,13 +353,35 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.font = '600 10px "JetBrains Mono", ui-monospace, Consolas, monospace'
       ctx.textBaseline = 'middle'
       let lastLabelX = -Infinity
+      // Bars for music; minutes and seconds or timecode for picture and
+      // sound design, which had no way to read this timeline at all. The
+      // seconds come from the same tick the bar line sits on, through the
+      // project tempo, so the two readings never disagree.
+      const secondsAt = (tick: number) => (tick / PPQ) * (60 / Math.max(1, bpm))
+      const label = (line: { tick: number; bar: number }): string => {
+        if (rulerUnits === 'bars') return String(line.bar)
+        const total = secondsAt(line.tick)
+        const minutes = Math.floor(total / 60)
+        const seconds = total - minutes * 60
+        if (rulerUnits === 'time') {
+          return `${minutes}:${seconds.toFixed(1).padStart(4, '0')}`
+        }
+        // Timecode at 25 fps, the rate the MIDI timecode sender defaults to.
+        const whole = Math.floor(seconds)
+        const frames = Math.round((seconds - whole) * 25) % 25
+        const pad = (n: number) => String(n).padStart(2, '0')
+        return `${pad(minutes)}:${pad(whole)}:${pad(frames)}`
+      }
+      // Time labels are wider than a bar number, so they need more room
+      // before they start overlapping.
+      const gap = rulerUnits === 'bars' ? MIN_LABEL_GAP_PX : MIN_LABEL_GAP_PX * 2
       for (const line of lines) {
         if (!line.isBar) continue
         const x = Math.floor(line.tick * pixelsPerTick - scrollOffset) + 4
         if (x < -20 || x > w) continue
-        if (x - lastLabelX < MIN_LABEL_GAP_PX) continue
+        if (x - lastLabelX < gap) continue
         lastLabelX = x
-        ctx.fillText(String(line.bar), x, RULER_HEIGHT / 2 + 1)
+        ctx.fillText(label(line), x, RULER_HEIGHT / 2 + 1)
       }
     }
 
@@ -635,7 +658,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, meterSegments])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, meterSegments])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,

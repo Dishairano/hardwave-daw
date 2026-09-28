@@ -31,11 +31,16 @@ interface GeneralPrefsState {
    * on a part further along is worse than losing sight of the playhead,
    * and the FOLLOW buttons turn it on for the moment you want it. */
   followPlayhead: boolean
+  /** What the playlist ruler counts in: bars, minutes and seconds, or
+   *  timecode. Bars for music, the other two for picture and sound design,
+   *  which had no way to read the timeline at all. */
+  rulerUnits: 'bars' | 'time' | 'timecode'
 
   setNoteNaming: (n: NoteNamingConvention) => void
   setAnimationsEnabled: (v: boolean) => void
   setHighVisibility: (v: boolean) => void
   setFollowPlayhead: (v: boolean) => void
+  setRulerUnits: (v: 'bars' | 'time' | 'timecode') => void
 }
 
 export const useGeneralPrefsStore = create<GeneralPrefsState>()(
@@ -45,10 +50,12 @@ export const useGeneralPrefsStore = create<GeneralPrefsState>()(
       animationsEnabled: true,
       highVisibility: false,
       followPlayhead: false,
+      rulerUnits: 'bars',
       setNoteNaming: (noteNaming) => set({ noteNaming }),
       setAnimationsEnabled: (animationsEnabled) => set({ animationsEnabled }),
       setHighVisibility: (highVisibility) => set({ highVisibility }),
       setFollowPlayhead: (followPlayhead) => set({ followPlayhead }),
+      setRulerUnits: (rulerUnits) => set({ rulerUnits }),
     }),
     { name: 'hw-general-prefs' },
   ),

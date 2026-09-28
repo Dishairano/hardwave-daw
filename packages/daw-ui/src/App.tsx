@@ -255,6 +255,51 @@ export function App() {
    * Hearing one part on its own meant setting the loop, which changes
    * something the song keeps, or playing to the end of the track.
    */
+  /**
+   * Mixer snapshots: the mix as it stands, saved under a name and put back
+   * later. Comparing two mixes used to mean writing the numbers down.
+   *
+   * The prompts are the browser's own: a dialog of our own for a name and a
+   * list is the next slice, and asking for a name should not wait for it.
+   */
+  const saveMixerSnapshot = useCallback(async () => {
+    const name = window.prompt('Name this mixer snapshot', 'Mix A')?.trim()
+    if (!name) return
+    try {
+      await invoke('save_mixer_snapshot', { name })
+      useNotificationStore.getState().push('info', `Saved the mixer as "${name}"`)
+    } catch (e) {
+      useNotificationStore.getState().push('warning', 'Could not save that snapshot', { detail: String(e) })
+    }
+  }, [])
+
+  const recallMixerSnapshot = useCallback(async () => {
+    let names: string[] = []
+    try {
+      names = await invoke<string[]>('list_mixer_snapshots')
+    } catch (e) {
+      useNotificationStore.getState().push('warning', 'Could not read the snapshots', { detail: String(e) })
+      return
+    }
+    if (names.length === 0) {
+      useNotificationStore.getState().push('info', 'No mixer snapshots yet', {
+        detail: 'Tools > Save mixer snapshot keeps the mix as it stands.',
+      })
+      return
+    }
+    const name = window.prompt(`Recall which snapshot?\n\n${names.join('\n')}`, names[names.length - 1])?.trim()
+    if (!name) return
+    try {
+      const restored = await invoke<number>('recall_mixer_snapshot', { name })
+      await useTrackStore.getState().fetchTracks()
+      useNotificationStore.getState().push('info', `Recalled "${name}"`, {
+        detail: `${restored} tracks set back. Tracks added since were left alone.`,
+      })
+    } catch (e) {
+      useNotificationStore.getState().push('warning', 'Could not recall that snapshot', { detail: String(e) })
+    }
+  }, [])
+
   const playSelection = useCallback(() => {
     const ts = useTrackStore.getState()
     const selected = new Set(ts.selectedClipIds)
@@ -1811,6 +1856,9 @@ export function App() {
         label: 'Tools',
         items: [
           // Analyzers
+          { label: 'Save mixer snapshot…', action: () => { void saveMixerSnapshot() } },
+          { label: 'Recall mixer snapshot…', action: () => { void recallMixerSnapshot() } },
+          { separator: true, label: '' },
           { label: 'Loudness meter…', action: () => setShowLoudness(true) },
           { label: 'Oscilloscope…', action: () => setShowOscilloscope(true) },
           { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },

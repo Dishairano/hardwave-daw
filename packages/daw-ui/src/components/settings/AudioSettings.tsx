@@ -979,6 +979,22 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               Match the DAW a song came from, or its panning will sit at a different level.
             </div>
 
+            {/* What the playlist ruler counts in. */}
+            <SettingRow label="Timeline shows">
+              <Select
+                value={generalPrefs.rulerUnits}
+                onChange={v => generalPrefs.setRulerUnits(v as typeof generalPrefs.rulerUnits)}
+                options={[
+                  { value: 'bars', label: 'Bars' },
+                  { value: 'time', label: 'Minutes and seconds' },
+                  { value: 'timecode', label: 'Timecode (25 fps)' },
+                ]}
+              />
+            </SettingRow>
+            <div style={{ fontSize: 9, color: hw.textFaint, margin: '-4px 0 10px' }}>
+              Bars for music. The other two are for work to picture, where a cue lands at a time, not a bar.
+            </div>
+
             {/* Whether the view chases the song. Off by default. */}
             <div style={{
               marginTop: 8,

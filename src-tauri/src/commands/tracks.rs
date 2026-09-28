@@ -672,7 +672,144 @@ pub fn toggle_solo(state: State<AppState>, track_id: String) {
     engine.rebuild_graph();
 }
 
-/// Exclusive solo: solo only this track, unsolo all others.
+/// One saved mixer state: every track's fader, pan and mute or solo.
+///
+/// Comparing two mixes meant writing the numbers down: there was nothing in
+/// the DAW that could hold "the mix as it was ten minutes ago" and put it
+/// back. Snapshots are kept with the song, so a comparison survives closing
+/// the project.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MixerSnapshot {
+    pub name: String,
+    pub tracks: Vec<MixerSnapshotTrack>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MixerSnapshotTrack {
+    pub track_id: String,
+    pub volume_db: f64,
+    pub pan: f64,
+    pub muted: bool,
+    pub soloed: bool,
+}
+
+/// Snapshots live in the project's timeline blob, beside the markers, so
+/// they travel with the song without another field in the file format.
+const SNAPSHOT_KEY: &str = "mixerSnapshots";
+
+fn read_snapshots(project: &hardwave_project::Project) -> Vec<MixerSnapshot> {
+    let Some(raw) = project.timeline_state.as_deref() else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Vec::new();
+    };
+    value
+        .get(SNAPSHOT_KEY)
+        .and_then(|v| serde_json::from_value::<Vec<MixerSnapshot>>(v.clone()).ok())
+        .unwrap_or_default()
+}
+
+fn write_snapshots(project: &mut hardwave_project::Project, snapshots: &[MixerSnapshot]) {
+    let mut value: serde_json::Value = project
+        .timeline_state
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    value[SNAPSHOT_KEY] = serde_json::to_value(snapshots).unwrap_or(serde_json::Value::Null);
+    project.timeline_state = Some(value.to_string());
+}
+
+/// Save the mixer as it stands under a name, replacing one of the same name.
+#[tauri::command]
+pub fn save_mixer_snapshot(state: State<AppState>, name: String) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("give the snapshot a name".into());
+    }
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    let tracks: Vec<MixerSnapshotTrack> = project
+        .tracks
+        .iter()
+        .map(|t| MixerSnapshotTrack {
+            track_id: t.id.clone(),
+            volume_db: t.volume_db,
+            pan: t.pan,
+            muted: t.muted,
+            soloed: t.soloed,
+        })
+        .collect();
+    let mut snapshots = read_snapshots(&project);
+    snapshots.retain(|s| s.name != name);
+    snapshots.push(MixerSnapshot { name, tracks });
+    write_snapshots(&mut project, &snapshots);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_mixer_snapshots(state: State<AppState>) -> Vec<String> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    read_snapshots(&project)
+        .into_iter()
+        .map(|s| s.name)
+        .collect()
+}
+
+/// Put a saved mixer back. Tracks added since are left alone rather than
+/// reset to something the snapshot never knew about.
+#[tauri::command]
+pub fn recall_mixer_snapshot(state: State<AppState>, name: String) -> Result<usize, String> {
+    state.engine.lock().snapshot_before_mutation();
+    let restored = {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let snapshots = read_snapshots(&project);
+        let snapshot = snapshots
+            .into_iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| format!("no snapshot called {name}"))?;
+        let mut restored = 0usize;
+        for saved in snapshot.tracks {
+            if let Some(track) = project.track_mut(&saved.track_id) {
+                track.volume_db = saved.volume_db;
+                track.pan = saved.pan;
+                track.muted = saved.muted;
+                track.soloed = saved.soloed;
+                restored += 1;
+            }
+        }
+        restored
+    };
+    let engine = state.engine.lock();
+    engine.sync_track_meters();
+    engine.rebuild_graph();
+    Ok(restored)
+}
+
+#[tauri::command]
+pub fn delete_mixer_snapshot(state: State<AppState>, name: String) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    let mut snapshots = read_snapshots(&project);
+    let before = snapshots.len();
+    snapshots.retain(|s| s.name != name);
+    if snapshots.len() == before {
+        return Err(format!("no snapshot called {name}"));
+    }
+    write_snapshots(&mut project, &snapshots);
+    Ok(())
+}
+
+/// Exclusive solo: solo only this track, unsolo all others./// Exclusive solo: solo only this track, unsolo all others.
 #[tauri::command]
 pub fn set_exclusive_solo(state: State<AppState>, track_id: String) {
     state.engine.lock().snapshot_before_mutation();
