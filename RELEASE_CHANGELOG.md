@@ -1,4 +1,5 @@
 ### Improvements
-- style: sort the search results with sort_by_key
-- feat(daw): the browser search finds files you have not opened yet
-- The browser's search now finds files anywhere in your Places folders, not just in the folders you already opened.
+- feat(daw): the settings window gains Recording and Plug-ins
+- feat(daw): audition a loop at the song's tempo
+- The browser's Sync button auditions a loop at the song's tempo when the file name says what tempo it is, and says so rather than repitching quietly.
+- Settings has a Recording tab (metronome, count-in, recording compensation) and a Plug-ins tab (plug-in folders and rescan), which lived in other panels.
