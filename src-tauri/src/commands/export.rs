@@ -1258,6 +1258,132 @@ fn sanitize_filename(name: &str) -> String {
     }
 }
 
+/// Render one track through its plug-ins to audio, put the result on a new
+/// track, and mute the original.
+///
+/// A track with three plug-ins on it costs that CPU on every block, for the
+/// whole song, whether or not the part is finished. Every DAW lets you turn
+/// a finished part into audio to get that back. The engine has had a freeze
+/// registry since it was written, with nothing wired to it; this does the
+/// half that is honest to build blind, using the same render path the stem
+/// export already uses in anger.
+///
+/// Returns the path of the rendered file.
+#[tauri::command]
+pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<String, String> {
+    // The render runs on a blocking thread and takes its own copy of the id.
+    let source_track_id = track_id.clone();
+    let (engine, cancel) = {
+        let state: State<AppState> = app.state();
+        (state.engine.clone(), state.export_cancel.clone())
+    };
+    cancel.store(false, Ordering::Relaxed);
+
+    let rendered =
+        tauri::async_runtime::spawn_blocking(move || -> Result<(String, String), String> {
+            let engine_guard = engine.lock();
+            let sample_rate = engine_guard.current_sample_rate();
+            let total_samples = engine_guard.project_end_samples(sample_rate);
+            if total_samples == 0 {
+                return Err("there is nothing on the timeline to bounce".into());
+            }
+
+            let track_name = {
+                let project = engine_guard.project.lock();
+                project
+                    .track(&track_id)
+                    .map(|t| t.name.clone())
+                    .ok_or_else(|| format!("Track not found: {track_id}"))?
+            };
+
+            // Beside the project's takes, so a bounced part travels with the
+            // song the way a recording does.
+            let dir = match engine_guard.project_dir() {
+                Some(d) => d.join("Bounces"),
+                None => dirs::data_dir()
+                    .ok_or_else(|| "No writable folder for bounces on this system".to_string())?
+                    .join("Hardwave")
+                    .join("Bounces"),
+            };
+            fs::create_dir_all(&dir).map_err(|e| format!("create folder: {e}"))?;
+            let safe: String = track_name
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == ' ' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+            let out_path = dir.join(format!("{safe} {stamp}.wav"));
+
+            let fmt = RenderFormat {
+                sample_rate,
+                bit_depth: 32,
+                normalize: NormalizeMode::parse("off"),
+                normalize_target_db: -1.0,
+                dither: DitherMode::parse("none"),
+                mp3_bitrate_kbps: 320,
+                mp3_vbr_quality: None,
+                ogg_quality: 0.5,
+            };
+
+            let target = track_id.clone();
+            let completed = write_render(
+                &engine_guard,
+                &out_path,
+                fmt,
+                total_samples,
+                0,
+                &cancel,
+                |_, _| {},
+                move |proj: &mut Project| {
+                    // Exclude the others rather than muting them, the same way
+                    // stems do: a muted track stops feeding sidechains and
+                    // sends, which changes what the bounced track sounds like.
+                    for t in proj.tracks.iter_mut() {
+                        t.stem_excluded = t.id != target;
+                    }
+                },
+            )?;
+            if !completed {
+                let _ = fs::remove_file(&out_path);
+                return Err("the bounce was cancelled".into());
+            }
+            Ok((out_path.to_string_lossy().into_owned(), track_name))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let (path, track_name) = rendered;
+
+    // Placing it is one undo step together with muting the original.
+    let state: State<AppState> = app.state();
+    state.engine.lock().snapshot_before_mutation();
+    let new_track_id = {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        project.add_audio_track(format!("{track_name} (bounced)"))
+    };
+    crate::commands::audio::import_audio_file(
+        state.clone(),
+        new_track_id.clone(),
+        path.clone(),
+        Some(0),
+    )?;
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        if let Some(t) = project.track_mut(&source_track_id) {
+            t.muted = true;
+        }
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(path)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn export_project_stems(

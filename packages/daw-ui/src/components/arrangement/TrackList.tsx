@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { useTransportStore } from '../../stores/transportStore'
@@ -377,6 +378,23 @@ export function TrackList() {
             <TrackMenuItem label={t.soloed ? 'Unsolo' : 'Solo'} onClick={async () => {
               setCtxMenu(null)
               await toggleSolo(t.id)
+            }} />
+            <TrackMenuItem label="Bounce to audio" onClick={async () => {
+              setCtxMenu(null)
+              // Renders this track through its plug-ins, puts the result on
+              // a new track and mutes this one, so the CPU it was spending
+              // goes back to the rest of the song.
+              const push = useNotificationStore.getState().push
+              push('info', `Bouncing "${t.name}"…`)
+              try {
+                await invoke<string>('bounce_track_to_audio', { trackId: t.id })
+                await useTrackStore.getState().fetchTracks()
+                push('info', `Bounced "${t.name}"`, {
+                  detail: 'The original is muted. Unmute it to go back to the plug-ins.',
+                })
+              } catch (e) {
+                push('warning', 'Could not bounce that track', { detail: String(e), sticky: true })
+              }
             }} />
             <TrackMenuItem label={t.solo_safe ? 'Disable solo-safe' : 'Solo-safe'} onClick={async () => {
               setCtxMenu(null)

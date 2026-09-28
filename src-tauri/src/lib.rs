@@ -412,6 +412,7 @@ pub fn run() {
             commands::export::export_project_wav,
             commands::export::cancel_export,
             commands::export::export_project_stems,
+            commands::export::bounce_track_to_audio,
             // Dev panel (stripped before merge to master)
             commands::dev::dev_dump_state,
             commands::dev::dev_force_device_error,
