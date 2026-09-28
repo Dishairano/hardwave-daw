@@ -147,6 +147,20 @@ const mock: TauriInternals = {
           hitLimit: false,
         }
       }
+      case 'list_all_presets':
+        return [
+          {
+            pluginId: 'hardwave.wettboi',
+            presets: [
+              { id: 'p1', name: 'Rawstyle screech', created_at: 1758900000 },
+              { id: 'p2', name: 'Wide pad', created_at: 1758800000 },
+            ],
+          },
+          {
+            pluginId: 'hardwave.loudlab',
+            presets: [{ id: 'p3', name: 'Club master', created_at: 1758700000 }],
+          },
+        ]
       case 'list_macros':
         return [
           {

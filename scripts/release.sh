@@ -455,7 +455,20 @@ fi
 # hard-coded `master` aborts the release half-way through and leaves the
 # tree committed but unpushed.
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-git add -A
+# Stage only the files a version bump touches.
+#
+# `git add -A` used to stage the whole tree here. The clean-tree check above
+# runs at the start, and everything between it and this line is a window:
+# on 2026-09-28 a half-written command edited during that minute rode into
+# the v0.252.0 bump commit, failed clippy on the PC gate and cost the tag.
+# Naming the files closes the window, and anything else in the tree stays
+# where it was, still uncommitted.
+git add -- Cargo.toml Cargo.lock src-tauri/Cargo.toml src-tauri/tauri.conf.json \
+  packages/daw-ui/package.json RELEASE_CHANGELOG.md 2>/dev/null || true
+if [ -z "$(git diff --cached --name-only)" ]; then
+  echo "release.sh: nothing staged for the version bump; the bump files did not change." >&2
+  exit 1
+fi
 git commit -m "$MSG"
 # The commit this release is, captured now. The tag below names it by SHA
 # rather than following HEAD: with HW_GATE_ON_PC the gate wait is minutes

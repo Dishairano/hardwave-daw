@@ -267,6 +267,6 @@ pub fn list_all_presets(app: AppHandle) -> Result<Vec<PresetBank>, String> {
         });
         banks.push(PresetBank { plugin_id, presets });
     }
-    banks.sort_by(|a, b| a.plugin_id.to_lowercase().cmp(&b.plugin_id.to_lowercase()));
+    banks.sort_by_key(|b| b.plugin_id.to_lowercase());
     Ok(banks)
 }
