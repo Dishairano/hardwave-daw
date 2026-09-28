@@ -13,10 +13,16 @@ use std::path::PathBuf;
 const PARAM_DRIVE: u32 = 0;
 const PARAM_CEILING: u32 = 1;
 const PARAM_AUTO_GAIN: u32 = 2;
-const PARAM_COUNT: u32 = 3;
+/// 0 = off, 1 = 2x, 2 = 4x. A hard clip is the worst case for harmonics
+/// folding back down, so this matters more here than anywhere.
+const PARAM_OVERSAMPLE: u32 = 3;
+const PARAM_COUNT: u32 = 4;
 
 pub struct NativeClipper {
     descriptor: PluginDescriptor,
+    sample_rate: f32,
+    oversampler: hardwave_dsp::oversample::Oversampler,
+    oversample: hardwave_dsp::oversample::OversampleFactor,
     drive_db: f32,
     ceiling: f32,
     auto_gain: bool,
@@ -45,6 +51,9 @@ impl NativeClipper {
     pub fn new() -> Self {
         Self {
             descriptor: Self::descriptor(),
+            sample_rate: 48_000.0,
+            oversampler: hardwave_dsp::oversample::Oversampler::new(),
+            oversample: hardwave_dsp::oversample::OversampleFactor::Two,
             drive_db: 0.0,
             ceiling: 0.95,
             auto_gain: true,
@@ -64,8 +73,10 @@ impl HostedPlugin for NativeClipper {
         &self.descriptor
     }
 
-    fn activate(&mut self, _sr: f64, _max: u32) -> Result<(), String> {
+    fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.active = true;
+        self.sample_rate = sr as f32;
+        self.oversampler.reset();
         Ok(())
     }
     fn deactivate(&mut self) {
@@ -98,11 +109,21 @@ impl HostedPlugin for NativeClipper {
         } else {
             1.0
         };
+        self.oversampler
+            .configure(self.sample_rate, self.oversample);
+        let ceiling = self.ceiling;
         for i in 0..num_samples {
             let in_l = inputs[0].get(i).copied().unwrap_or(0.0);
             let in_r = inputs[1].get(i).copied().unwrap_or(0.0);
-            outputs[0][i] = hard_clip(in_l * drive_lin, self.ceiling) * comp;
-            outputs[1][i] = hard_clip(in_r * drive_lin, self.ceiling) * comp;
+            // Only the clip runs faster. The drive and the compensation are
+            // gains, which alias no matter what rate they run at.
+            let (clipped_l, clipped_r) =
+                self.oversampler
+                    .process_frame(in_l * drive_lin, in_r * drive_lin, |l, r| {
+                        (hard_clip(l, ceiling), hard_clip(r, ceiling))
+                    });
+            outputs[0][i] = clipped_l * comp;
+            outputs[1][i] = clipped_r * comp;
         }
     }
 
@@ -115,6 +136,7 @@ impl HostedPlugin for NativeClipper {
             PARAM_DRIVE => ("Drive", 0.0, "dB"),
             PARAM_CEILING => ("Ceiling", 0.95, ""),
             PARAM_AUTO_GAIN => ("Auto-Gain", 1.0, ""),
+            PARAM_OVERSAMPLE => ("Oversample", 0.5, "off / 2x / 4x"),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -134,6 +156,11 @@ impl HostedPlugin for NativeClipper {
             PARAM_DRIVE => (self.drive_db / 36.0).clamp(0.0, 1.0) as f64,
             PARAM_CEILING => self.ceiling.clamp(0.0, 1.0) as f64,
             PARAM_AUTO_GAIN if self.auto_gain => 1.0,
+            PARAM_OVERSAMPLE => match self.oversample {
+                hardwave_dsp::oversample::OversampleFactor::Off => 0.0,
+                hardwave_dsp::oversample::OversampleFactor::Two => 0.5,
+                hardwave_dsp::oversample::OversampleFactor::Four => 1.0,
+            },
             _ => 0.0,
         }
     }
@@ -144,6 +171,16 @@ impl HostedPlugin for NativeClipper {
             PARAM_DRIVE => self.drive_db = (v * 36.0) as f32,
             PARAM_CEILING => self.ceiling = v.max(0.01) as f32,
             PARAM_AUTO_GAIN => self.auto_gain = v >= 0.5,
+            PARAM_OVERSAMPLE => {
+                use hardwave_dsp::oversample::OversampleFactor;
+                self.oversample = if v < 0.25 {
+                    OversampleFactor::Off
+                } else if v < 0.75 {
+                    OversampleFactor::Two
+                } else {
+                    OversampleFactor::Four
+                };
+            }
             _ => {}
         }
     }
