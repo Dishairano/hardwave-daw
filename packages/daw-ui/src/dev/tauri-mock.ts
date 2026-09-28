@@ -147,6 +147,11 @@ const mock: TauriInternals = {
           hitLimit: false,
         }
       }
+      case 'list_sections':
+        return [
+          { id: 's1', name: 'Intro', startTicks: 0, endTicks: 7680 },
+          { id: 's2', name: 'Drop', startTicks: 7680, endTicks: 15360 },
+        ]
       case 'list_directory':
         return mockDirectory(String(args?.path ?? ''))
       case 'plugin:dialog|open':

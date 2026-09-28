@@ -19,6 +19,10 @@ use std::path::Path;
 /// whether a person would ever press Ctrl+Z expecting that change back.
 const ALLOWED: &[(&str, &str)] = &[
     (
+        "duplicate_section",
+        "calls insert_time, which takes the snapshot; one Ctrl+Z undoes the whole repeat",
+    ),
+    (
         "save_project",
         "writing the file to disk changes nothing in the song",
     ),

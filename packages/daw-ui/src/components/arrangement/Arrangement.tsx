@@ -138,6 +138,19 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   // every other DAW, and the FOLLOW button turns it back on.
   const followPlayhead = useGeneralPrefsStore(s => s.followPlayhead)
   const rulerUnits = useGeneralPrefsStore(s => s.rulerUnits)
+  // Named stretches of the song, drawn along the ruler so the arrangement
+  // can be read at a glance instead of counted in bars.
+  const [sections, setSections] = useState<{ id: string; name: string; startTicks: number; endTicks: number }[]>([])
+  useEffect(() => {
+    const load = () => {
+      invoke<{ id: string; name: string; startTicks: number; endTicks: number }[]>('list_sections')
+        .then(setSections)
+        .catch(() => setSections([]))
+    }
+    load()
+    window.addEventListener('daw:sectionsChanged', load)
+    return () => window.removeEventListener('daw:sectionsChanged', load)
+  }, [])
   const setFollowPlayhead = useGeneralPrefsStore(s => s.setFollowPlayhead)
   /// FL Studio convention: right-mouse-button + drag = 2D pan (vertical
   /// scroll + horizontal pan via setting the playhead-derived offset).
@@ -383,6 +396,24 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         lastLabelX = x
         ctx.fillText(label(line), x, RULER_HEIGHT / 2 + 1)
       }
+
+      // Section names, over the bar numbers they cover. Drawn as a tinted
+      // band so the shape of the arrangement reads without counting bars.
+      for (const section of sections) {
+        const x1 = Math.floor(section.startTicks * pixelsPerTick - scrollOffset)
+        const x2 = Math.floor(section.endTicks * pixelsPerTick - scrollOffset)
+        if (x2 < 0 || x1 > w) continue
+        ctx.fillStyle = 'rgba(220,38,38,0.16)'
+        ctx.fillRect(x1, 0, Math.max(1, x2 - x1), RULER_HEIGHT)
+        ctx.strokeStyle = 'rgba(220,38,38,0.5)'
+        ctx.beginPath()
+        ctx.moveTo(x1 + 0.5, 0)
+        ctx.lineTo(x1 + 0.5, RULER_HEIGHT)
+        ctx.stroke()
+        ctx.fillStyle = 'rgba(255,220,220,0.9)'
+        ctx.fillText(section.name, x1 + 5, RULER_HEIGHT / 2 + 1)
+      }
+      ctx.fillStyle = 'rgba(180, 180, 200, 0.7)'
     }
 
     // Sub-beat snap grid — only when snap is finer than 1/4 and lines won't be too dense
@@ -658,7 +689,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, meterSegments])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, sections, meterSegments])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
