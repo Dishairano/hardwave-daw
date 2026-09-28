@@ -1,4 +1,5 @@
 import { memo, useCallback } from 'react'
+import { usePerfMetersStore } from '../../../stores/perfMetersStore'
 import { Knob } from '../../primitives/Knob'
 import { Fader } from '../../primitives/Fader'
 import { MeterPair } from '../../primitives/Meter'
@@ -127,6 +128,8 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
     },
     [trackId],
   )
+  const load = usePerfMetersStore(s => s.trackLoad[trackId] ?? 0)
+
   const onSolo = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
@@ -203,6 +206,21 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
         )}
       </div>
       <div className="mx-s-name">{name || 'Track'}</div>
+      {/* What share of each audio block this track is taking. The CPU meter
+          in the toolbar says the load is high; this says which track. Shown
+          only once a track is worth noticing, so a mixer full of quiet
+          strips is not a wall of 0%. */}
+      {load >= 3 && (
+        <div
+          title={`This track is using ${load.toFixed(0)}% of each audio block`}
+          style={{
+            fontSize: 8, textAlign: 'center', letterSpacing: 0.3,
+            color: load >= 40 ? '#EF4444' : load >= 15 ? '#F59E0B' : 'var(--text-dim)',
+          }}
+        >
+          {load.toFixed(0)}%
+        </div>
+      )}
 
       <div className="mx-s-knob-row">
         <div className="mx-knob-cell">

@@ -465,6 +465,8 @@ impl AudioNode for MidiTrackNode {
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
         ctx: &ProcessContext,
     ) {
+        // Per-track load, published on every exit from this block.
+        let _cpu = crate::track_node::CpuTimer::new(&self.meter);
         // Defensive: zero outputs first so we never leak undefined data.
         for buf in outputs.iter_mut() {
             for s in buf.iter_mut() {

@@ -38,6 +38,9 @@ interface PerfMetersState {
   memMb: number | null
   /** 0-1 share of the machine's physical memory, or null. */
   memRatio: number | null
+  /** Share of the block each track is taking, keyed by track id. The whole
+   *  mix meter says the load is high; this says which track it is. */
+  trackLoad: Record<string, number>
   set: (next: { cpuPct: number; xruns: number; memMb: number | null; memRatio: number | null }) => void
 }
 
@@ -46,6 +49,7 @@ export const usePerfMetersStore = create<PerfMetersState>((set) => ({
   xruns: 0,
   memMb: null,
   memRatio: null,
+  trackLoad: {},
   set: (next) => set(next),
 }))
 
@@ -75,11 +79,25 @@ export function startPerfMeters(): () => void {
 
   // Memory every second rather than five times a second: it moves slowly,
   // and it is a syscall rather than a read of a value the engine already has.
+  // Per-track load twice a second. It is read for the mixer's read-out,
+  // which nobody watches frame by frame, and it keeps the poll cheap on a
+  // project with hundreds of tracks.
+  const trackLoadId = window.setInterval(() => {
+    invoke<{ trackId: string; percent: number }[]>('get_track_load')
+      .then(rows => {
+        const trackLoad: Record<string, number> = {}
+        for (const row of rows) trackLoad[row.trackId] = row.percent
+        usePerfMetersStore.setState({ trackLoad })
+      })
+      .catch(() => { /* a missed poll is not worth a toast */ })
+  }, 500)
+
   const memoryId = window.setInterval(pollMemory, 1000)
   pollMemory()
 
   cleanup = () => {
     window.clearInterval(intervalId)
+    window.clearInterval(trackLoadId)
     window.clearInterval(memoryId)
     cleanup = null
   }

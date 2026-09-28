@@ -1052,6 +1052,28 @@ impl DawEngine {
             .collect()
     }
 
+    /// How much of each block every track is taking, as a percentage of the
+    /// time the block has. Returns (track id, percent).
+    ///
+    /// The whole-mix CPU meter can say the load is high and not which track
+    /// is causing it, which is the question anyone actually has.
+    pub fn track_cpu_percent(&self) -> Vec<(String, f32)> {
+        use std::sync::atomic::Ordering;
+        let block_ns = {
+            let frames = self.audio_device.buffer_size.max(1) as f64;
+            let rate = self.current_sample_rate().max(1) as f64;
+            (frames / rate) * 1_000_000_000.0
+        };
+        let meters = self.track_meters.lock();
+        meters
+            .iter()
+            .map(|(id, m)| {
+                let ns = m.cpu_ns.load(Ordering::Relaxed) as f64;
+                (id.clone(), ((ns / block_ns) * 100.0) as f32)
+            })
+            .collect()
+    }
+
     /// Snapshot the most recent `n_frames` stereo frames from the master
     /// tap, interleaved. Returns fewer samples if the tap hasn't filled.
     pub fn master_tap_snapshot(&self, n_frames: usize) -> Vec<f32> {

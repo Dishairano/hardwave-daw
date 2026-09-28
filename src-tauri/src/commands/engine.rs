@@ -244,6 +244,25 @@ pub struct AudioLoad {
     pub xruns: u32,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackLoad {
+    pub track_id: String,
+    pub percent: f32,
+}
+
+/// What share of each block every track is taking.
+#[tauri::command]
+pub fn get_track_load(state: State<AppState>) -> Vec<TrackLoad> {
+    state
+        .engine
+        .lock()
+        .track_cpu_percent()
+        .into_iter()
+        .map(|(track_id, percent)| TrackLoad { track_id, percent })
+        .collect()
+}
+
 #[tauri::command]
 pub fn get_audio_load(state: State<AppState>) -> AudioLoad {
     let (load_pct, xruns) = state.engine.lock().audio_load();

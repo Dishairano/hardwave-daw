@@ -251,6 +251,7 @@ pub fn run() {
             commands::plugins::rescan_and_restore_missing_plugins,
             commands::engine::get_graph_latency,
             commands::engine::get_audio_load,
+            commands::engine::get_track_load,
             // Metronome (engine-generated click)
             commands::engine::process_memory,
             commands::engine::set_reset_on_transport,

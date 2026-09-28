@@ -11,6 +11,42 @@ use atomic_float::AtomicF32;
 use crate::audio_pool::{AudioBuffer, AudioPool};
 use crate::graph::{AudioNode, ProcessContext};
 
+/// Publishes how long a block took into the track's meter when it drops,
+/// so every way out of `process` is counted, not just the last line.
+pub(crate) struct CpuTimer {
+    // An Arc rather than a borrow: the node mutates itself while this is
+    // alive, which a borrow of one of its fields would forbid. Cloning an
+    // Arc is one atomic increment, not an allocation.
+    meter: Arc<TrackMeterState>,
+    started: std::time::Instant,
+}
+
+impl CpuTimer {
+    pub(crate) fn new(meter: &Arc<TrackMeterState>) -> Self {
+        Self {
+            meter: Arc::clone(meter),
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Drop for CpuTimer {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let took = self.started.elapsed().as_nanos() as u64;
+        // Averaged over about eight blocks, so one slow block (a plug-in
+        // loading, the OS scheduling something else) does not read as a
+        // track eating the CPU.
+        let previous = self.meter.cpu_ns.load(Relaxed);
+        let smoothed = if previous == 0 {
+            took
+        } else {
+            (previous * 7 + took) / 8
+        };
+        self.meter.cpu_ns.store(smoothed, Relaxed);
+    }
+}
+
 /// Post-fader meter state shared between the audio thread and the UI thread.
 /// Using atomics so the audio thread never allocates or locks.
 #[derive(Default)]
@@ -22,6 +58,10 @@ pub struct TrackMeterState {
     pub rms_db: AtomicF32,
     /// Pre-fader peak in dB (max of L/R before volume/pan).
     pub pre_fader_peak_db: AtomicF32,
+    /// How long this track took on the last blocks, in nanoseconds, as a
+    /// running average. The CPU meter says the load is high and cannot say
+    /// which track is causing it; this can.
+    pub cpu_ns: std::sync::atomic::AtomicU64,
 }
 
 /// Description of a clip placed on this track, used by the audio thread.
@@ -580,6 +620,11 @@ impl AudioNode for TrackNode {
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
         ctx: &ProcessContext,
     ) {
+        // How long this track takes, for the per-track load read-out. The
+        // clock read costs a few nanoseconds and needs no lock, the same
+        // reason the whole-block CPU meter can do it on this thread. The
+        // guard publishes on every exit, including the early ones.
+        let _cpu = CpuTimer::new(&self.meter);
         let buf_size = ctx.buffer_size as usize;
 
         // Ensure outputs are sized. Channels 0/1 carry post-fader L/R; 2/3
