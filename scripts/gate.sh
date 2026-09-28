@@ -27,6 +27,28 @@ cd "$(git rev-parse --show-toplevel)"
 # rustup installs here and non-login shells do not always have it on PATH.
 export PATH="$HOME/.cargo/bin:$PATH"
 
+# Builds die strangely when the target volume fills: rustc is killed and
+# cargo reports "failed to parse process output", which reads like a
+# compiler bug rather than a full disk. The incremental cache is the part
+# that grows without bound and the part builds can rebuild, so it goes
+# first, and only when the volume is nearly full.
+free_target_gib() {
+  local dir
+  dir=$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
+    | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+  [ -n "$dir" ] || dir="target"
+  mkdir -p "$dir" 2>/dev/null || true
+  df -BG --output=avail "$dir" 2>/dev/null | tail -1 | tr -dc '0-9'
+}
+avail=$(free_target_gib)
+if [ -n "$avail" ] && [ "$avail" -lt 12 ]; then
+  echo "gate.sh: only ${avail}G free on the build volume; clearing the incremental cache"
+  find "$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
+    | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')" \
+    -maxdepth 2 -type d -name incremental -exec rm -rf {} + 2>/dev/null || true
+  echo "gate.sh: $(free_target_gib)G free now"
+fi
+
 # Fingerprint = the exact content of the working tree, as a git tree hash.
 #
 # Built in a throwaway index so the real one is never touched. The first
