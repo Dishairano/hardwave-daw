@@ -1,7 +1,7 @@
 ### Improvements
-- feat(daw): three things the engine could already do, now reachable
-- feat(daw): installing no longer asks for administrator rights
-- Installing no longer asks for administrator rights: the DAW installs for you alone, and an older all-users copy is offered for removal on the way in.
-- Settings > Audio can pick the audio driver (WASAPI, ASIO) when your build has more than one.
-- Ctrl-click Solo to solo one track alone, in the playlist and the mixer.
-- Tools > Capture what you just played turns recent playing into a clip when you forgot to press record.
+- feat(daw): choose the pan law
+- feat(daw): bounce a finished track to audio
+- feat(daw): warp a loop's beats onto the grid
+- Right-click an audio clip and pick Warp beats to the grid to pull a loop that drifts onto the beat, or Remove warping to undo it.
+- Right-click a track and pick Bounce to audio to render it through its plug-ins onto a new track and get the CPU back.
+- Settings > Audio can set the pan law (-3, -4.5, -6 or 0 dB at centre) to match the DAW a song came from.
