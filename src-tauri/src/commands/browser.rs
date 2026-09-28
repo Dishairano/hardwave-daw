@@ -166,7 +166,91 @@ mod tests {
     }
 }
 
-/// Move a browser file to the recycle bin (the browser's "Delete file…").
+/// Find audio files by name under the browser's Places folders.
+///
+/// Search only filtered the folders that happened to be open, so finding a
+/// kick in a sample pack meant opening every folder first. This walks the
+/// roots and returns what matches.
+///
+/// Bounded on purpose: a sample library is tens of thousands of files on a
+/// slow drive, and a search box that hangs the panel is worse than one that
+/// says it stopped early. `hit_limit` tells the UI which happened.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySearch {
+    pub matches: Vec<BrowserEntry>,
+    /// True when the walk stopped at the limit rather than finishing.
+    pub hit_limit: bool,
+}
+
+const SEARCH_MAX_MATCHES: usize = 300;
+const SEARCH_MAX_VISITED: usize = 60_000;
+
+#[tauri::command]
+pub async fn search_library(roots: Vec<String>, query: String) -> Result<LibrarySearch, String> {
+    let needle = query.trim().to_lowercase();
+    if needle.len() < 2 {
+        return Ok(LibrarySearch {
+            matches: Vec::new(),
+            hit_limit: false,
+        });
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut matches: Vec<BrowserEntry> = Vec::new();
+        let mut visited = 0usize;
+        let mut hit_limit = false;
+        // Breadth first, so shallow folders (where people keep the packs
+        // they use) come back before a deep archive.
+        let mut queue: std::collections::VecDeque<std::path::PathBuf> =
+            roots.iter().map(std::path::PathBuf::from).collect();
+        while let Some(dir) = queue.pop_front() {
+            if matches.len() >= SEARCH_MAX_MATCHES || visited >= SEARCH_MAX_VISITED {
+                hit_limit = true;
+                break;
+            }
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                visited += 1;
+                if visited >= SEARCH_MAX_VISITED {
+                    hit_limit = true;
+                    break;
+                }
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || name.starts_with("._") {
+                    continue;
+                }
+                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                if is_dir {
+                    queue.push_back(path);
+                    continue;
+                }
+                if !is_audio_file(&path) || !name.to_lowercase().contains(&needle) {
+                    continue;
+                }
+                let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                matches.push(BrowserEntry {
+                    name,
+                    path: path.to_string_lossy().to_string(),
+                    is_dir: false,
+                    size_bytes,
+                });
+                if matches.len() >= SEARCH_MAX_MATCHES {
+                    hit_limit = true;
+                    break;
+                }
+            }
+        }
+        matches.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        LibrarySearch { matches, hit_limit }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Move a browser file to the recycle bin/// Move a browser file to the recycle bin (the browser's "Delete file…").
 ///
 /// Only audio files the browser lists can be removed this way, and they go to
 /// the recycle bin rather than being unlinked, so a wrong click in a sample

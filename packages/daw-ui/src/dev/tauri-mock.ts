@@ -130,6 +130,16 @@ const mock: TauriInternals = {
         return null
       case 'get_midi_notes':
         return synthNotes()
+      case 'search_library': {
+        const q = String((args as { query?: string })?.query ?? '').toLowerCase()
+        const pool = ['Kick Hard 01.wav', 'Kick Rawstyle 03.wav', 'Screech 150 F.wav']
+        return {
+          matches: pool.filter(n => n.toLowerCase().includes(q)).map(n => ({
+            name: n, path: `/samples/${n}`, isDir: false, sizeBytes: 1024,
+          })),
+          hitLimit: false,
+        }
+      }
       case 'list_directory':
         return mockDirectory(String(args?.path ?? ''))
       case 'plugin:dialog|open':

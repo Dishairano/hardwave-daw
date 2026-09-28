@@ -334,6 +334,7 @@ pub fn run() {
             // Browser
             commands::browser::list_directory,
             commands::browser::trash_browser_file,
+            commands::browser::search_library,
             // Bug reports
             commands::bugs::bug_report_env,
             commands::bugs::session_log_tail,

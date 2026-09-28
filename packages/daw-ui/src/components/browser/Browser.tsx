@@ -395,6 +395,12 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
   const removeFileTag = useBrowserStore(s => s.removeFileTag)
   const clearFileTags = useBrowserStore(s => s.clearFileTags)
   const diskRoots = useBrowserStore(s => s.diskRoots)
+  // Searching used to filter only the folders that happened to be open, so
+  // finding a kick in a pack meant opening every folder first. With
+  // something typed, the backend walks the Places folders instead.
+  const [libraryHits, setLibraryHits] = useState<{ path: string; name: string }[]>([])
+  const [librarySearching, setLibrarySearching] = useState(false)
+  const [libraryCapped, setLibraryCapped] = useState(false)
   const addDiskRoot = useBrowserStore(s => s.addDiskRoot)
   const removeDiskRoot = useBrowserStore(s => s.removeDiskRoot)
   const { selectedTrackId, importAudioFile } = useTrackStore()
@@ -589,6 +595,32 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
     )
   }
 
+  // Debounced so typing does not start a walk per keystroke.
+  useEffect(() => {
+    const needle = query.trim()
+    if (needle.length < 2 || diskRoots.length === 0) {
+      setLibraryHits([])
+      setLibraryCapped(false)
+      setLibrarySearching(false)
+      return
+    }
+    let cancelled = false
+    setLibrarySearching(true)
+    const timer = window.setTimeout(() => {
+      invoke<{ matches: { path: string; name: string }[]; hitLimit: boolean }>('search_library', {
+        roots: diskRoots, query: needle,
+      })
+        .then(result => {
+          if (cancelled) return
+          setLibraryHits(result.matches)
+          setLibraryCapped(result.hitLimit)
+        })
+        .catch(() => { if (!cancelled) { setLibraryHits([]); setLibraryCapped(false) } })
+        .finally(() => { if (!cancelled) setLibrarySearching(false) })
+    }, 250)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [query, diskRoots])
+
   const rootFolders = childFolders(null)
   const rootFiles = filesInFolder(null)
   const favHasAny = rootFolders.length > 0 || rootFiles.length > 0 || favoritePaths.length > 0
@@ -674,6 +706,28 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
             setPreviewing(null)
           }}
         />
+      )}
+
+      {/* What the search found across the whole library. */}
+      {query.trim().length >= 2 && diskRoots.length > 0 && (
+        <TreeGroup
+          label={librarySearching ? 'Searching…' : `Found in Places (${libraryHits.length})`}
+          count={libraryHits.length}
+          expanded
+          onToggle={() => {}}
+        >
+          {libraryHits.map(hit => renderDiskFile(hit.path, 1))}
+          {!librarySearching && libraryHits.length === 0 && (
+            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 9 }}>
+              Nothing in your folders matches that.
+            </div>
+          )}
+          {libraryCapped && (
+            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 9 }}>
+              Stopped early: there is more to find. Type more of the name to narrow it.
+            </div>
+          )}
+        </TreeGroup>
       )}
 
       <div data-testid="browser-places">
