@@ -3,7 +3,11 @@ use crate::AppState;
 use serde::Serialize;
 use tauri::State;
 
+/// Camel case because the app reads `lastLearned`. Without the rename the
+/// field arrived as `last_learned` and every reader of it saw undefined,
+/// so the mappings panel's "last learned" line was never filled in.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MidiLearnStatus {
     pub learning: bool,
     pub target: Option<MidiMapTarget>,

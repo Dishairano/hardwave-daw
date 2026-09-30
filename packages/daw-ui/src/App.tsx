@@ -67,7 +67,7 @@ import { useAppDialogs } from './hooks/useAppDialogs'
 import { useIsMobile } from './hooks/useIsMobile'
 import { MobileTabBar, type MobilePanel } from './components/MobileTabBar'
 import { MissingPluginsBanner } from './components/MissingPluginsBanner'
-import { syncWaitForInput } from './stores/recordingPrefsStore'
+import { syncWaitForInput, useRecordingPrefsStore } from './stores/recordingPrefsStore'
 import { useMissingPluginsStore, type MissingPluginInfo } from './stores/missingPluginsStore'
 // Lazy: the DevPanel drags the whole in-app test harness (~7k lines)
 // with it — as a static import it sat in the STARTUP bundle for every
@@ -702,15 +702,72 @@ export function App() {
     return () => { for (const u of unlistens) u() }
   }, [])
 
+  /**
+   * "MIDI learn" on a control.
+   *
+   * Normally it opens the mappings dialog with that control waiting for a
+   * knob. With Multilink on it arms the learn straight away and leaves the
+   * dialog shut, so a controller is mapped control after control in one
+   * pass instead of one dialog per knob.
+   */
   useEffect(() => {
     const onOpen = (e: Event) => {
       const target = (e as CustomEvent<MidiMapTarget>).detail
+      if (useRecordingPrefsStore.getState().multilinkActive) {
+        invoke('midi_learn_start', { target })
+          .then(() => {
+            useNotificationStore.getState().push('info', 'Waiting for a knob', {
+              detail: 'Move the control on your controller to link it. Multilink stays on for the next one.',
+            })
+          })
+          .catch((err) => {
+            useNotificationStore.getState().push('warning', 'Could not arm the link', { detail: String(err) })
+          })
+        return
+      }
       setMidiLearnPreset(target)
       setShowMidiMappings(true)
     }
     window.addEventListener('daw:openMidiLearn', onOpen)
     return () => window.removeEventListener('daw:openMidiLearn', onOpen)
   }, [])
+
+  /**
+   * While Multilink is on, watch for each link landing.
+   *
+   * The engine clears `learning` as soon as a controller message arrives,
+   * so the poll is how the app knows a knob was caught. It counts the
+   * link and says so, and the next control can be armed right away.
+   */
+  const multilinkActive = useRecordingPrefsStore(s => s.multilinkActive)
+  useEffect(() => {
+    if (!multilinkActive) return
+    let lastSeen: number | null = null
+    let stop = false
+    const tick = async () => {
+      try {
+        const status = await invoke<{
+          learning: boolean
+          lastLearned: { id: number; cc: number } | null
+        }>('midi_learn_status')
+        // Arming clears the last link, so anything here is one that just
+        // landed. The id guards against counting the same one twice
+        // while the next control is being picked.
+        const learned = status.lastLearned
+        if (learned && learned.id !== lastSeen) {
+          lastSeen = learned.id
+          useRecordingPrefsStore.getState().noteMultilinkLink()
+          const count = useRecordingPrefsStore.getState().multilinkCount
+          useNotificationStore.getState().push('info', `Linked CC ${learned.cc}`, {
+            detail: `${count} linked in this pass. Pick the next control.`,
+          })
+        }
+      } catch { /* no engine: the toggle is still honoured, nothing to poll */ }
+    }
+    void tick()
+    const timer = window.setInterval(() => { if (!stop) void tick() }, 400)
+    return () => { stop = true; window.clearInterval(timer) }
+  }, [multilinkActive])
 
   // When Piano Roll opens with no active clip but a MIDI track is selected,
   // ensure a default clip exists and bind it.
@@ -1776,6 +1833,9 @@ export function App() {
           return
         }
         case 'toggleMidiSettings':    focusSettingsTab('midi'); setShowAudioSettings(v => !v); return
+        case 'toggleMultilink':       useRecordingPrefsStore.getState().toggleMultilink(); return
+        case 'toggleBlendRecord':     useRecordingPrefsStore.getState().toggleBlendRecord(); return
+        case 'toggleWaitForInput':    useRecordingPrefsStore.getState().toggleWaitForInput(); return
         case 'toggleSongInfo':
           // F11 — FL Studio convention. ProjectInfoDialog renders the
           // metadata fields + auto-saves to the project on Save.

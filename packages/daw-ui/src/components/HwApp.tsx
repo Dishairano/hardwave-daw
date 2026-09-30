@@ -162,6 +162,9 @@ export function HwTopbar({
   const toggleWaitForInput = useRecordingPrefsStore(s => s.toggleWaitForInput)
   const blendRecord = useRecordingPrefsStore(s => s.blendRecord)
   const toggleBlendRecord = useRecordingPrefsStore(s => s.toggleBlendRecord)
+  const multilinkActive = useRecordingPrefsStore(s => s.multilinkActive)
+  const multilinkCount = useRecordingPrefsStore(s => s.multilinkCount)
+  const toggleMultilink = useRecordingPrefsStore(s => s.toggleMultilink)
   const stepEditing = useRecordingPrefsStore(s => s.stepEditing)
   const toggleStepEditing = useRecordingPrefsStore(s => s.toggleStepEditing)
   const automationWriteMode = useAutomationWriteStore(s => s.mode)
@@ -519,10 +522,10 @@ export function HwTopbar({
       <span className="fl-toolsep" />
 
       {/* Recording toggle cluster. A button here only exists once the
-          behaviour behind it does: multilink is still absent for that
-          reason. Wait-for-input + blend-record returned 2026-07-08, and
-          step editing returned 2026-09-17, when the typing keyboard learned
-          to audition instead of always writing. */}
+          behaviour behind it does. Wait-for-input + blend-record returned
+          2026-07-08, step editing 2026-09-17 when the typing keyboard
+          learned to audition instead of always writing, and multilink
+          2026-09-30 when MIDI learn learned to stay armed. */}
       <div className="fl-action-row">
         <button
           onClick={() => toggleBlendRecord()}
@@ -561,6 +564,19 @@ export function HwTopbar({
         >
           <svg className="ic" width="13" height="12" viewBox="0 0 13 12" fill="none" stroke="currentColor" strokeWidth="1.1">
             <path d="M1 9.5c2-6 4.5-6 6 0s3.5 3 5-2" strokeLinecap="round" />
+          </svg>
+        </button>
+        <button
+          onClick={() => toggleMultilink()}
+          className={`fl-mini-btn${multilinkActive ? ' on' : ''}`}
+          title={multilinkActive
+            ? `Multilink is on: "MIDI learn" on a control arms it straight away and stays on for the next one. ${multilinkCount} linked in this pass.`
+            : 'Multilink (Ctrl+J) — map a whole controller in one pass instead of one dialog per knob'}
+        >
+          <svg className="ic" width="13" height="12" viewBox="0 0 13 12" fill="none" stroke="currentColor" strokeWidth="1.1">
+            <path d="M4.5 7.5 8.5 3.5" strokeLinecap="round" />
+            <path d="M3 6 1.8 7.2a2 2 0 0 0 2.8 2.8L5.8 8.8" strokeLinecap="round" />
+            <path d="M10 6l1.2-1.2a2 2 0 0 0-2.8-2.8L7.2 3.2" strokeLinecap="round" />
           </svg>
         </button>
         <button

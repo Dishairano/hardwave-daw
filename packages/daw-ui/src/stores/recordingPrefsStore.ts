@@ -10,8 +10,7 @@ import { invoke } from '@tauri-apps/api/core'
  * through `zustand/middleware persist` so the user's recording
  * setup survives a relaunch, just like FL's per-project flags.
  *
- * Three of the four are wired. `multilinkActive` is the exception and has
- * no button in the toolbar for that reason:
+ * All four are wired.
  *
  *  - stepEditing      : WIRED (2026-09-17, FL Ctrl+E) — with it ON the
  *                       typing keyboard writes each note into the open
@@ -29,15 +28,23 @@ import { invoke } from '@tauri-apps/api/core'
  *                       stacking a new one (backend
  *                       merge_notes_into_overlapping_clip; audio
  *                       recording already layers takes).
- *  - multilinkActive  : when ON, the next N tweaked controls record
- *                       linkage sequence for batch hardware mapping
- *                       (FL Ctrl+J). Needs Multilink record buffer.
+ *  - multilinkActive  : WIRED (2026-09-30, FL Ctrl+J) — mapping a
+ *                       controller meant opening the MIDI mappings
+ *                       dialog once per knob. With it ON, "MIDI learn"
+ *                       on a control arms the learn straight away and
+ *                       stays armed for the next control, so a whole
+ *                       controller is mapped in one pass. The number of
+ *                       links made in the pass is kept here for the
+ *                       toolbar to show.
  */
 export interface RecordingPrefsState {
   stepEditing: boolean
   waitForInput: boolean
   blendRecord: boolean
   multilinkActive: boolean
+  /** Links made since multilink was armed. Reset each time it is armed. */
+  multilinkCount: number
+  noteMultilinkLink: () => void
   toggleStepEditing: () => void
   toggleWaitForInput: () => void
   toggleBlendRecord: () => void
@@ -51,6 +58,7 @@ export const useRecordingPrefsStore = create<RecordingPrefsState>()(
       waitForInput: false,
       blendRecord: false,
       multilinkActive: false,
+      multilinkCount: 0,
       toggleStepEditing:   () => set((s) => ({ stepEditing: !s.stepEditing })),
       toggleWaitForInput:  () => set((s) => {
         const next = !s.waitForInput
@@ -60,9 +68,26 @@ export const useRecordingPrefsStore = create<RecordingPrefsState>()(
         return { waitForInput: next }
       }),
       toggleBlendRecord:   () => set((s) => ({ blendRecord: !s.blendRecord })),
-      toggleMultilink:     () => set((s) => ({ multilinkActive: !s.multilinkActive })),
+      toggleMultilink:     () => set((s) => {
+        const next = !s.multilinkActive
+        // Switching it off cancels a learn still waiting for a knob that
+        // is never going to move.
+        if (!next) invoke('midi_learn_cancel').catch(() => {})
+        return { multilinkActive: next, multilinkCount: 0 }
+      }),
+      noteMultilinkLink:   () => set((s) => ({ multilinkCount: s.multilinkCount + 1 })),
     }),
-    { name: 'hw-recording-prefs' },
+    {
+      name: 'hw-recording-prefs',
+      // The count belongs to one mapping pass, not to the machine, so it
+      // is not written to disk.
+      partialize: (s) => ({
+        stepEditing: s.stepEditing,
+        waitForInput: s.waitForInput,
+        blendRecord: s.blendRecord,
+        multilinkActive: s.multilinkActive,
+      }) as RecordingPrefsState,
+    },
   ),
 )
 
