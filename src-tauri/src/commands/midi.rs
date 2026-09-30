@@ -785,3 +785,92 @@ pub fn chordify_clip_notes(
         count
     })
 }
+
+// ---------------------------------------------------------------------------
+// MIDI effects before the instrument
+// ---------------------------------------------------------------------------
+
+/// The chain on one track, in order.
+#[tauri::command]
+pub fn get_midi_fx(
+    state: State<AppState>,
+    track_id: String,
+) -> Vec<hardwave_midi::midi_fx::MidiFx> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    project
+        .track(&track_id)
+        .map(|t| t.midi_fx.clone())
+        .unwrap_or_default()
+}
+
+/// Replace the chain on one track.
+///
+/// The whole chain at once rather than one effect at a time: the order
+/// matters, and sending the list the app is showing is the only way the
+/// two cannot drift apart.
+#[tauri::command]
+pub fn set_midi_fx(
+    state: State<AppState>,
+    track_id: String,
+    chain: Vec<hardwave_midi::midi_fx::MidiFx>,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        if !matches!(track.kind, hardwave_project::TrackKind::Midi) {
+            return Err("MIDI effects belong on a MIDI track".into());
+        }
+        track.midi_fx = chain;
+    }
+    // The chain is folded into the note schedule when the graph is built,
+    // so the rebuild is what makes it audible.
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// What the instrument hears for one clip, with the chain applied.
+///
+/// The piano roll draws this behind the written notes, so an arpeggiator
+/// can be seen as well as heard instead of being a knob that changes
+/// something invisible.
+#[tauri::command]
+pub fn preview_midi_fx(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+) -> Result<Vec<MidiNoteInfo>, String> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    let track = project
+        .track(&track_id)
+        .ok_or_else(|| format!("Track not found: {track_id}"))?;
+    for clip in &track.clips {
+        if let hardwave_project::clip::ClipContent::Midi(mc) = &clip.content {
+            if mc.id == clip_id {
+                let heard = hardwave_midi::midi_fx::apply_chain(&mc.clip.notes, &track.midi_fx);
+                return Ok(heard
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| MidiNoteInfo {
+                        index: i,
+                        start_tick: n.start_tick,
+                        duration_ticks: n.duration_ticks,
+                        pitch: n.pitch,
+                        velocity: n.velocity,
+                        channel: n.channel,
+                        muted: n.muted,
+                        pan: n.pan,
+                        fine_cents: n.fine_cents,
+                        release_velocity: n.release_velocity,
+                    })
+                    .collect());
+            }
+        }
+    }
+    Err(format!("MIDI clip not found: {clip_id}"))
+}

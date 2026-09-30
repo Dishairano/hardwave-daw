@@ -3,6 +3,7 @@
 pub mod generators;
 pub mod groove;
 pub mod input;
+pub mod midi_fx;
 pub mod osc;
 pub mod output;
 pub mod recording;
@@ -86,7 +87,7 @@ impl MidiEvent {
 // ---------------------------------------------------------------------------
 
 /// A note in a MIDI clip. Uses ticks (960 PPQ).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MidiNote {
     pub start_tick: u64,
     pub duration_ticks: u64,

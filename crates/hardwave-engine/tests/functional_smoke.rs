@@ -2070,3 +2070,65 @@ fn a_vca_group_rides_the_faders_of_its_members() {
         "a group sitting at 0 dB should change nothing: got {untouched:.6} against {plain:.6}"
     );
 }
+
+/// MIDI effects sit between the clip and the instrument, so what the
+/// synth plays is not what is written in the clip.
+///
+/// A held chord with an arpeggiator on a short gate is the case that can
+/// be measured from outside: the same notes, but the instrument spends
+/// most of the bar silent, so the average level drops a long way while
+/// the peak stays where it was.
+#[test]
+fn an_arpeggiator_on_the_track_changes_what_the_instrument_plays() {
+    use hardwave_midi::midi_fx::{ArpMode, MidiFx};
+    use hardwave_midi::{MidiClip, MidiNote};
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+
+    let render = |chain: Vec<MidiFx>| -> (f32, f32) {
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            let id = project.add_midi_track("Chords".to_string());
+            let mut clip = MidiClip::new("chord-clip".to_string(), "chord".to_string(), 1920);
+            for pitch in [60, 64, 67] {
+                clip.notes.push(MidiNote {
+                    start_tick: 0,
+                    duration_ticks: 1920,
+                    pitch,
+                    velocity: 1.0,
+                    ..Default::default()
+                });
+            }
+            if let Some(track) = project.track_mut(&id) {
+                track.clips.push(ClipPlacement {
+                    content: ClipContent::Midi(MidiClipRef {
+                        id: "chord-clip".to_string(),
+                        clip,
+                    }),
+                    track_id: id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1920,
+                    lane: 0,
+                });
+                track.midi_fx = chain;
+            }
+        }
+        let stats = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64);
+        (stats.peak, stats.rms)
+    };
+
+    let (held_peak, held_rms) = render(Vec::new());
+    assert!(held_peak > 0.001, "the chord should be audible");
+
+    let (arp_peak, arp_rms) = render(vec![MidiFx::Arpeggiator {
+        step_ticks: 240,
+        mode: ArpMode::Up,
+        gate: 0.25,
+        octaves: 1,
+    }]);
+    assert!(arp_peak > 0.001, "the arpeggio should be audible too");
+    assert!(
+        arp_rms < held_rms * 0.8,
+        "one note at a time on a quarter gate should sit well below a held chord: held rms {held_rms:.5}, arp rms {arp_rms:.5}"
+    );
+}

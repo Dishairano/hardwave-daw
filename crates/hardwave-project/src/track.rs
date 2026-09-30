@@ -251,6 +251,16 @@ pub struct Track {
     /// exists is ignored rather than an error.
     #[serde(default)]
     pub midi_route_to: Vec<TrackId>,
+
+    /// MIDI effects between the clips and the instrument.
+    ///
+    /// An arpeggiator, a chord maker and a scale snapper used to be tools
+    /// that rewrote the notes in the clip, so the part on screen stopped
+    /// matching what was played and taking the effect off meant undoing.
+    /// In the chain the clip keeps its notes and the chain decides what
+    /// the instrument hears.
+    #[serde(default)]
+    pub midi_fx: Vec<hardwave_midi::midi_fx::MidiFx>,
 }
 
 impl Track {
@@ -286,6 +296,7 @@ impl Track {
             automation_clips: Vec::new(),
             stem_excluded: false,
             midi_route_to: Vec::new(),
+            midi_fx: Vec::new(),
         }
     }
 

@@ -2225,7 +2225,19 @@ impl EngineCallback {
                     if midi_ref.clip.muted {
                         continue;
                     }
-                    for note in &midi_ref.clip.notes {
+                    // MIDI effects sit between the clip and the
+                    // instrument. With an empty chain this is the clip's
+                    // own notes, which is every project written before
+                    // the chain existed.
+                    let heard = if track.midi_fx.is_empty() {
+                        std::borrow::Cow::Borrowed(&midi_ref.clip.notes)
+                    } else {
+                        std::borrow::Cow::Owned(hardwave_midi::midi_fx::apply_chain(
+                            &midi_ref.clip.notes,
+                            &track.midi_fx,
+                        ))
+                    };
+                    for note in heard.iter() {
                         let on_tick = clip.position_ticks + note.start_tick;
                         let off_tick = on_tick + note.duration_ticks.max(1);
                         let note_on = tempo_map.tick_to_samples(on_tick, sample_rate);
@@ -2255,6 +2267,8 @@ impl EngineCallback {
                         });
                     }
                 }
+                // Live input goes through the same chain the clips did.
+                midi_node.set_midi_fx(track.midi_fx.clone());
                 midi_node.set_notes(note_regions);
                 midi_node.set_controls(control_regions);
 

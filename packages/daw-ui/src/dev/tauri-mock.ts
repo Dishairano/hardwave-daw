@@ -169,6 +169,15 @@ const mock: TauriInternals = {
       case 'rename_vca':
       case 'delete_vca':
         return null
+      case 'get_midi_fx':
+        return [
+          { Arpeggiator: { step_ticks: 240, mode: 'Up', gate: 0.9, octaves: 2 } },
+          { Scale: { root: 4, kind: 'PhrygianDominant' } },
+        ]
+      case 'set_midi_fx':
+        return null
+      case 'preview_midi_fx':
+        return []
       case 'get_midi_routes':
         return []
       case 'set_midi_routes':

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { MidiRouteDialog } from './MidiRouteDialog'
+import { MidiFxPanel } from '../MidiFxPanel'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { useTransportStore } from '../../stores/transportStore'
@@ -47,6 +48,7 @@ export function TrackList() {
   const resizingRef = useRef<{ id: string; startY: number; startH: number } | null>(null)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string } | null>(null)
   const [routeDialogTrackId, setRouteDialogTrackId] = useState<string | null>(null)
+  const [midiFxTrackId, setMidiFxTrackId] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
@@ -349,6 +351,12 @@ export function TrackList() {
           return placeholders
         })()}
       </div>
+      {midiFxTrackId && (
+        <MidiFxPanel
+          trackId={midiFxTrackId}
+          onClose={() => setMidiFxTrackId(null)}
+        />
+      )}
       {routeDialogTrackId && (
         <MidiRouteDialog
           trackId={routeDialogTrackId}
@@ -400,6 +408,12 @@ export function TrackList() {
                 useNotificationStore.getState().push('warning', 'Could not spread the takes', { detail: String(e) })
               }
             }} />
+            {t.kind === 'Midi' && (
+              <TrackMenuItem label="MIDI effects…" onClick={() => {
+                setCtxMenu(null)
+                setMidiFxTrackId(t.id)
+              }} />
+            )}
             {t.kind === 'Midi' && (
               <TrackMenuItem label="Send its notes to…" onClick={() => {
                 setCtxMenu(null)

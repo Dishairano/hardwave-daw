@@ -16,6 +16,7 @@ import ReactDOM from 'react-dom/client'
 import { HwTopbar, HwSecondRow } from '../components/HwApp'
 import { MacroPanel } from '../components/MacroPanel'
 import { PresetBrowser } from '../components/PresetBrowser'
+import { MidiFxPanel } from '../components/MidiFxPanel'
 import { Arrangement } from '../components/arrangement/Arrangement'
 import { ChannelRack } from '../components/channelrack/ChannelRack'
 import { PianoRoll } from '../components/piano-roll/PianoRoll'
@@ -220,6 +221,15 @@ function Harness() {
       }
       return <Full><PianoRoll /></Full>
     }
+    case 'midifx':
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Untitled" />
+          <Arrangement onSetHint={noop} />
+          <MidiFxPanel trackId="t-lead" onClose={noop} />
+        </div>
+      )
     case 'presets':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>

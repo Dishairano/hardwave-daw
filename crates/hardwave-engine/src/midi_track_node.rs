@@ -112,6 +112,9 @@ struct Voice {
 /// is stolen — bounds CPU while comfortably covering chords.
 const MAX_VOICES: usize = 16;
 
+/// How many notes one live key press can become after a chord effect.
+const LIVE_CHORD_MAX: usize = 16;
+
 const TWO_PI: f32 = std::f32::consts::TAU;
 
 /// A detune in cents as a frequency multiplier. 100 cents is a semitone.
@@ -163,6 +166,10 @@ pub struct MidiTrackNode {
     /// This block's controller events, kept between blocks so collecting
     /// them does not allocate on the audio thread.
     control_scratch: Vec<hardwave_midi::MidiEvent>,
+    /// MIDI effects between the input and the instrument. Clip notes are
+    /// already through the chain by the time they arrive here; this is
+    /// for what is played live.
+    midi_fx: Vec<hardwave_midi::midi_fx::MidiFx>,
     /// The last value of each controller skipped over by a seek, so it can
     /// be sent once instead of replaying the whole history. Kept between
     /// blocks for the same reason.
@@ -260,6 +267,7 @@ impl MidiTrackNode {
             controls: Vec::new(),
             next_control_idx: 0,
             control_scratch: Vec::with_capacity(64),
+            midi_fx: Vec::new(),
             chase_scratch: Vec::with_capacity(16),
             bend_mul: 1.0,
             next_note_idx: 0,
@@ -432,6 +440,68 @@ impl MidiTrackNode {
     /// its linear scan.
     /// Controller movements for this track's clips. Sorted here so the
     /// audio thread walks them in order without scanning.
+    /// The MIDI effects this track's live input passes through.
+    ///
+    /// Clip notes are run through the chain when the graph is built, so
+    /// they arrive here already arpeggiated. Live playing has to be
+    /// transformed as it comes in, which covers the chord, scale and
+    /// transpose effects. An arpeggiator needs a clock of its own to
+    /// hold a chord and step through it, so live input passes it by; a
+    /// part written into a clip does get arpeggiated.
+    pub fn set_midi_fx(&mut self, chain: Vec<hardwave_midi::midi_fx::MidiFx>) {
+        self.midi_fx = chain;
+    }
+
+    /// What one live note turns into after the chain.
+    ///
+    /// A fixed buffer rather than a Vec: this runs on the audio thread,
+    /// where an allocation per key press is not worth a chord effect.
+    /// A chord wider than the buffer is cut off at it.
+    fn live_pitches(&self, pitch: u8) -> ([u8; LIVE_CHORD_MAX], usize) {
+        let mut buffer = [0u8; LIVE_CHORD_MAX];
+        buffer[0] = pitch;
+        let mut count = 1usize;
+        for effect in &self.midi_fx {
+            match effect {
+                hardwave_midi::midi_fx::MidiFx::Chord { intervals } => {
+                    let held = count;
+                    for index in 0..held {
+                        let base = buffer[index] as i32;
+                        for interval in intervals {
+                            if count >= LIVE_CHORD_MAX {
+                                break;
+                            }
+                            let moved = base + *interval as i32;
+                            if (0..=127).contains(&moved) {
+                                buffer[count] = moved as u8;
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+                hardwave_midi::midi_fx::MidiFx::Scale { root, kind } => {
+                    for slot in buffer.iter_mut().take(count) {
+                        *slot = hardwave_midi::midi_fx::snap_to_scale(*slot, *root, *kind);
+                    }
+                }
+                hardwave_midi::midi_fx::MidiFx::Transpose { semitones } => {
+                    let mut kept = 0usize;
+                    for index in 0..count {
+                        let moved = buffer[index] as i32 + *semitones as i32;
+                        if (0..=127).contains(&moved) {
+                            buffer[kept] = moved as u8;
+                            kept += 1;
+                        }
+                    }
+                    count = kept;
+                }
+                // See set_midi_fx: an arpeggiator needs a clock of its own.
+                hardwave_midi::midi_fx::MidiFx::Arpeggiator { .. } => {}
+            }
+        }
+        (buffer, count)
+    }
+
     pub fn set_controls(&mut self, mut controls: Vec<MidiControlRegion>) {
         controls.sort_by_key(|c| c.sample);
         // Room for a whole block's worth up front: the audio thread must
@@ -568,21 +638,31 @@ impl AudioNode for MidiTrackNode {
         // makes that work.
         for ev in midi_in {
             match *ev {
-                hardwave_midi::MidiEvent::NoteOn { note, velocity, .. } => match self.instrument {
-                    Instrument::BuiltinSine => {
-                        // Live note → a held voice (off_sample None).
-                        self.start_voice(note, velocity.clamp(0.0, 1.0), None);
+                hardwave_midi::MidiEvent::NoteOn { note, velocity, .. } => {
+                    // The chain turns one key press into whatever the
+                    // chord, scale and transpose effects make of it.
+                    let (pitches, count) = self.live_pitches(note);
+                    for pitch in pitches.iter().take(count).copied() {
+                        match self.instrument {
+                            Instrument::BuiltinSine => {
+                                // Live note → a held voice (off_sample None).
+                                self.start_voice(pitch, velocity.clamp(0.0, 1.0), None);
+                            }
+                            Instrument::KickSynth => {
+                                self.kick.note_on(pitch, velocity);
+                            }
+                        }
                     }
-                    Instrument::KickSynth => {
-                        self.kick.note_on(note, velocity);
-                    }
-                },
+                }
                 hardwave_midi::MidiEvent::NoteOff { note, .. } => {
                     // Release held (live) voices of this pitch. Clip-driven
                     // voices (off_sample Some) release on their own schedule
                     // so a live release can't cut a playing clip note.
+                    // The same chain maps the release, so every note the
+                    // press started is let go.
+                    let (pitches, count) = self.live_pitches(note);
                     for v in self.voices.iter_mut() {
-                        if v.pitch == note
+                        if pitches.iter().take(count).any(|p| *p == v.pitch)
                             && v.off_sample.is_none()
                             && v.stage != EnvStage::Idle
                             && v.stage != EnvStage::Release
