@@ -3057,6 +3057,35 @@ impl AudioCallback for EngineCallback {
             }
         }
 
+        // Modulation. A source that keeps running, wired to a plug-in's
+        // knob: automation draws a shape once, this one never stops. The
+        // routes live in the project, which the audio thread must not
+        // wait on, so a busy block leaves every knob where it was.
+        {
+            let bpm = tempo_now;
+            if let Some(project) = self.project.try_lock() {
+                for route in &project.modulations {
+                    if !route.enabled {
+                        continue;
+                    }
+                    let value = route.value_at(position_ticks, bpm, hardwave_midi::PPQ);
+                    let Some(&node_id) = self.track_id_to_node.get(&route.track_id) else {
+                        continue;
+                    };
+                    match &route.target {
+                        hardwave_project::modulation::ModTarget::PluginParam {
+                            slot_id,
+                            param_id,
+                        } => {
+                            if let Some(node) = self.graph.node_mut(node_id) {
+                                node.set_chain_parameter(slot_id, *param_id, value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let ctx = ProcessContext {
             sample_rate: self.sample_rate as f64,
             buffer_size: num_frames as u32,

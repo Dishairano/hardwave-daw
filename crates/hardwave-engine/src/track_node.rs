@@ -524,6 +524,10 @@ impl TrackNode {
 }
 
 impl AudioNode for TrackNode {
+    fn set_chain_parameter(&mut self, slot_id: &str, param_id: u32, value: f64) {
+        self.chain.set_parameter(slot_id, param_id, value);
+    }
+
     /// The engine calls this through the trait after the send pass, so the
     /// override has to live here: an inherent method of the same name is
     /// never reached through `Box<dyn AudioNode>`, which is why a bus with

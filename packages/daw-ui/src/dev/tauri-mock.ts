@@ -169,6 +169,21 @@ const mock: TauriInternals = {
       case 'rename_vca':
       case 'delete_vca':
         return null
+      case 'list_modulations':
+        return [
+          {
+            id: 'm1', name: 'Cutoff 1/4', enabled: true,
+            source: { Lfo: { shape: 'Sine', rate: { TempoSync: { num: 1, den: 4 } }, phase_offset: 0 } },
+            track_id: 'insert-001',
+            target: { PluginParam: { slot_id: 'sl1', param_id: 4 } },
+            center: 0.5, depth: 0.35,
+          },
+        ]
+      case 'add_modulation':
+        return 'm2'
+      case 'set_modulation':
+      case 'delete_modulation':
+        return null
       case 'get_channel_offsets':
         return { input: 0, output: 0 }
       case 'set_channel_offsets':

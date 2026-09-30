@@ -43,6 +43,13 @@ pub trait AudioNode: Send {
     /// of its own on it still mixes what reaches it. Only track nodes care.
     fn set_receives_input(&mut self, _receives: bool) {}
 
+    /// Move one knob of one plug-in in this node's chain.
+    ///
+    /// Borrowed rather than a command: modulation sets a knob every
+    /// block, and building a command would allocate on the audio thread
+    /// once per route per block.
+    fn set_chain_parameter(&mut self, _slot_id: &str, _param_id: u32, _value: f64) {}
+
     /// Stable project-side identifier for the track this node represents,
     /// if any. Returns `None` for non-track nodes (master, input bus,
     /// etc.). Used by the engine to route per-track plug-in commands.

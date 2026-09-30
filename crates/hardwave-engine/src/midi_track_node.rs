@@ -596,6 +596,10 @@ impl MidiTrackNode {
 }
 
 impl AudioNode for MidiTrackNode {
+    fn set_chain_parameter(&mut self, slot_id: &str, param_id: u32, value: f64) {
+        self.chain.set_parameter(slot_id, param_id, value);
+    }
+
     fn name(&self) -> &str {
         &self.name
     }

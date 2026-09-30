@@ -104,6 +104,9 @@ pub struct Project {
     /// sits where it does.
     #[serde(default)]
     pub vcas: Vec<crate::vca::Vca>,
+    /// Modulation routes: a source that keeps running wired to a knob.
+    #[serde(default)]
+    pub modulations: Vec<crate::modulation::ModRoute>,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a
@@ -161,6 +164,7 @@ impl Default for Project {
             timeline_state: None,
             macros: Vec::new(),
             vcas: Vec::new(),
+            modulations: Vec::new(),
         }
     }
 }

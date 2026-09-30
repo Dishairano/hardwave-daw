@@ -8,14 +8,14 @@
  *   node scripts/screenshot.mjs                 # sweep all panels → /tmp/daw-<panel>.png
  *   node scripts/screenshot.mjs playlist out.png  # one panel to a file
  *
- * Panels: playlist | mixer | channelrack | pianoroll | wizard | browser | settings | macros | presets | midifx | manual
+ * Panels: playlist | mixer | channelrack | pianoroll | wizard | browser | settings | macros | presets | midifx | manual | modulation
  */
 import { spawn } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation']
 const arg = process.argv[2]
 const single = arg && ALL.includes(arg)
 const panels = single ? [arg] : ALL

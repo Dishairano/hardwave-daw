@@ -19,6 +19,10 @@ use std::path::Path;
 /// whether a person would ever press Ctrl+Z expecting that change back.
 const ALLOWED: &[(&str, &str)] = &[
     (
+        "set_modulation",
+        "depth and centre are knobs; a sweep of one would fill the history",
+    ),
+    (
         "set_vca_gain",
         "a fader being moved; a whole move would fill the history",
     ),

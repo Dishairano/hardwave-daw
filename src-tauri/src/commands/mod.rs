@@ -17,6 +17,7 @@ pub mod midi_capture;
 pub mod midi_input;
 pub mod midi_learn;
 pub mod midi_output;
+pub mod modulation;
 pub mod plugin_presets;
 pub mod plugins;
 pub mod project;
