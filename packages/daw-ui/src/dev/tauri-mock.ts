@@ -169,6 +169,10 @@ const mock: TauriInternals = {
       case 'rename_vca':
       case 'delete_vca':
         return null
+      case 'get_channel_offsets':
+        return { input: 0, output: 0 }
+      case 'set_channel_offsets':
+        return null
       case 'drain_plugin_knob_moves':
         return []
       case 'list_frozen_tracks':

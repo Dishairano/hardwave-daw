@@ -143,6 +143,10 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [inputConfig, setInputConfig] = useState<AudioInputConfig>({ device: null, channels: 2 })
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null)
   const [selectedInput, setSelectedInput] = useState<string | null>(null)
+  // Which pair of a multi-channel interface is used. Zero is the first
+  // pair, which is what every interface calls its main in and out.
+  const [inputOffset, setInputOffset] = useState(0)
+  const [outputOffset, setOutputOffset] = useState(0)
   const [selectedInputChannels, setSelectedInputChannels] = useState(2)
   const [selectedRate, setSelectedRate] = useState(48000)
   const [selectedBuffer, setSelectedBuffer] = useState(512)
@@ -198,6 +202,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setInputConfig(inCfg)
       setSelectedDevice(cfg.device)
       setSelectedInput(inCfg.device)
+      invoke<{ input: number; output: number }>('get_channel_offsets')
+        .then(o => { setInputOffset(o.input); setOutputOffset(o.output) })
+        .catch(() => { /* older build or no engine */ })
       setSelectedInputChannels(inCfg.channels)
       setSelectedRate(cfg.sample_rate)
       setSelectedBuffer(cfg.buffer_size)
@@ -658,6 +665,45 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   { value: '1', label: 'Mono (1 channel, summed)' },
                   { value: '2', label: 'Stereo (2 channels)' },
                 ]}
+              />
+            </SettingRow>
+
+            {/* Which pair of a multi-channel interface. An interface with
+                eight ins was always recorded from the first two, so a
+                guitar on input 3 could not be recorded at all. */}
+            <SettingRow label="Input pair">
+              <Select
+                value={String(inputOffset)}
+                onChange={v => {
+                  const next = Number(v)
+                  setInputOffset(next)
+                  invoke('set_channel_offsets', { input: next, output: outputOffset })
+                    .catch(() => {})
+                }}
+                options={channelPairOptions(
+                  inputDevices.find(d => d.name === selectedInput)?.max_channels
+                  ?? inputDevices.find(d => d.is_default)?.max_channels
+                  ?? 2,
+                )}
+              />
+            </SettingRow>
+
+            <SettingRow label="Output pair">
+              <Select
+                value={String(outputOffset)}
+                onChange={v => {
+                  const next = Number(v)
+                  setOutputOffset(next)
+                  // The pair is fixed when the stream opens, so the engine
+                  // restarts audio: a moment of silence, then the new pair.
+                  invoke('set_channel_offsets', { input: inputOffset, output: next })
+                    .catch(() => {})
+                }}
+                options={channelPairOptions(
+                  devices.find(d => d.name === selectedDevice)?.max_channels
+                  ?? devices.find(d => d.is_default)?.max_channels
+                  ?? 2,
+                )}
               />
             </SettingRow>
 
@@ -1385,6 +1431,19 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       </div>
     </div>
   )
+}
+
+/**
+ * The pairs an interface offers: 1/2, 3/4, and so on up to its channel
+ * count. A two-channel interface has one pair, which is why the control
+ * says so rather than being empty.
+ */
+function channelPairOptions(maxChannels: number): { value: string; label: string }[] {
+  const pairs = Math.max(1, Math.floor(maxChannels / 2))
+  return Array.from({ length: pairs }, (_, i) => ({
+    value: String(i * 2),
+    label: `${i * 2 + 1} / ${i * 2 + 2}`,
+  }))
 }
 
 function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {

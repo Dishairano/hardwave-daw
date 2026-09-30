@@ -170,6 +170,16 @@ pub struct AudioDeviceManager {
     /// How many channels the engine should open on the input stream: 1 = mono
     /// (sums), 2 = stereo. Devices with more channels are downmixed.
     pub input_channels: u16,
+    /// Which input of the interface the recording pair starts at.
+    ///
+    /// An interface with eight inputs was always recorded from the first
+    /// one: a guitar on input 3 could not be recorded at all. The stream
+    /// opens with the device's own channel count when this is not zero,
+    /// and the pair is taken from there.
+    pub input_channel_offset: u16,
+    /// Which output of the interface the mix is sent to, as the first of
+    /// a pair. Zero is the usual main out.
+    pub output_channel_offset: u16,
     /// Request WASAPI exclusive mode (Windows only). When true and the active
     /// host is WASAPI, the next stream start tries to acquire the endpoint
     /// exclusively for lower latency and bit-perfect output. No effect on
@@ -242,6 +252,8 @@ impl AudioDeviceManager {
             active_device_name: None,
             selected_input_device: None,
             input_channels: 2,
+            input_channel_offset: 0,
+            output_channel_offset: 0,
             wasapi_exclusive: false,
             active_exclusive: false,
             input_stream: None,
@@ -490,10 +502,30 @@ impl AudioDeviceManager {
             self.active_exclusive = false;
         }
 
+        // How many channels to open. Two unless the mix is going to a
+        // pair further along the interface, in which case the stream has
+        // to be wide enough to reach it.
+        let out_offset = self.output_channel_offset;
+        let device_out_channels = device
+            .default_output_config()
+            .map(|c| c.channels())
+            .unwrap_or(2);
+        let stream_channels = if out_offset == 0 {
+            2
+        } else {
+            device_out_channels.max(out_offset + 2)
+        };
         let config = StreamConfig {
-            channels: 2,
+            channels: stream_channels,
             sample_rate: SampleRate(self.sample_rate),
             buffer_size: cpal::BufferSize::Fixed(self.buffer_size),
+        };
+        // Scratch for the scatter path, allocated once here rather than
+        // in the callback, which must not allocate.
+        let mut scatter: Vec<f32> = if stream_channels == 2 {
+            Vec::new()
+        } else {
+            vec![0.0; self.buffer_size as usize * 2]
         };
         let running = Arc::clone(&self.running);
         let stream_error = Arc::clone(&self.stream_error);
@@ -541,7 +573,33 @@ impl AudioDeviceManager {
                         .map(|d| d.as_nanos() as u64)
                         .unwrap_or(0);
                     latency.set_output(reported.max(frames_to_nanos(num_frames, stream_rate)));
-                    cb.process(data, num_frames, 2);
+                    if stream_channels == 2 {
+                        cb.process(data, num_frames, 2);
+                    } else {
+                        // Render the mix as stereo, then put it on the
+                        // pair the user picked and leave the rest of the
+                        // interface silent.
+                        let needed = num_frames * 2;
+                        if scatter.len() < needed {
+                            // The driver handed a bigger block than the
+                            // size asked for. Rather than allocate here,
+                            // play what fits and let the rest be silence.
+                            data.fill(0.0);
+                            return;
+                        }
+                        scatter[..needed].fill(0.0);
+                        cb.process(&mut scatter[..needed], num_frames, 2);
+                        data.fill(0.0);
+                        let left = out_offset as usize;
+                        let right = left + 1;
+                        for frame in 0..num_frames {
+                            let base = frame * stream_channels as usize;
+                            if base + right < data.len() {
+                                data[base + left] = scatter[frame * 2];
+                                data[base + right] = scatter[frame * 2 + 1];
+                            }
+                        }
+                    }
                 },
                 move |err| {
                     log::error!("Audio stream error: {}", err);
@@ -647,7 +705,20 @@ impl AudioDeviceManager {
         self.stop_input_stream();
 
         let device = self.resolve_input_device()?;
-        let channels = self.input_channels.clamp(1, 2);
+        let wanted = self.input_channels.clamp(1, 2);
+        let in_offset = self.input_channel_offset;
+        // Recording from input 3 means opening the interface wide enough
+        // to reach it. Without an offset nothing changes: two channels,
+        // the way it always was.
+        let device_in_channels = device
+            .default_input_config()
+            .map(|c| c.channels())
+            .unwrap_or(wanted);
+        let channels = if in_offset == 0 {
+            wanted
+        } else {
+            device_in_channels.max(in_offset + wanted)
+        };
         let sample_rate = self.negotiate_input_rate(&device);
 
         // Prefer the output buffer size so the monitor latency tracks the
@@ -673,6 +744,10 @@ impl AudioDeviceManager {
         let latency = Arc::clone(&self.latency);
         let input_rate = sample_rate;
         let chans = channels;
+        // Which channel of the stream the take is read from, and whether
+        // the take is mono.
+        let first = in_offset as usize;
+        let mono = wanted == 1;
         let stream = device
             .build_input_stream(
                 &config,
@@ -702,43 +777,31 @@ impl AudioDeviceManager {
                     let mut producer_guard = monitor_producer.try_lock();
                     let mut producer = producer_guard.as_mut().and_then(|g| g.as_mut());
 
-                    match chans {
-                        1 => {
-                            for &s in data {
-                                let a = s.abs();
-                                if a > max_l {
-                                    max_l = a;
-                                }
-                                if let Some(ref mut p) = producer {
-                                    let _ = p.push(s);
-                                    let _ = p.push(s);
-                                }
-                            }
-                            max_r = max_l;
+                    // Interleaved, however wide the interface is: the take
+                    // is the chosen channel and the one after it, or that
+                    // one channel twice when the take is mono.
+                    let step = chans.max(1) as usize;
+                    let mut i = 0;
+                    while i + first < data.len() {
+                        let l = data[i + first];
+                        let r = if mono {
+                            l
+                        } else {
+                            data.get(i + first + 1).copied().unwrap_or(l)
+                        };
+                        let al = l.abs();
+                        let ar = r.abs();
+                        if al > max_l {
+                            max_l = al;
                         }
-                        _ => {
-                            // Interleaved stereo (or more; we only look at
-                            // the first two channels).
-                            let step = chans as usize;
-                            let mut i = 0;
-                            while i + 1 < data.len() {
-                                let l = data[i];
-                                let r = data[i + 1];
-                                let al = l.abs();
-                                let ar = r.abs();
-                                if al > max_l {
-                                    max_l = al;
-                                }
-                                if ar > max_r {
-                                    max_r = ar;
-                                }
-                                if let Some(ref mut p) = producer {
-                                    let _ = p.push(l);
-                                    let _ = p.push(r);
-                                }
-                                i += step;
-                            }
+                        if ar > max_r {
+                            max_r = ar;
                         }
+                        if let Some(ref mut p) = producer {
+                            let _ = p.push(l);
+                            let _ = p.push(r);
+                        }
+                        i += step;
                     }
                     peaks.record(max_l, max_r);
                 },

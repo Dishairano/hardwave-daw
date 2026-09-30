@@ -118,6 +118,8 @@ pub fn run() {
         log::warn!("Failed to apply saved audio output prefs: {e}");
     }
     engine.set_input_config(prefs.input_device.clone(), prefs.input_channels);
+    // Which pair of the interface is recorded from and played out of.
+    engine.set_channel_offsets(prefs.input_channel_offset, prefs.output_channel_offset);
     #[cfg(target_os = "windows")]
     if prefs.wasapi_exclusive {
         if let Err(e) = engine.set_wasapi_exclusive(true) {
@@ -238,6 +240,8 @@ pub fn run() {
             commands::midi::get_midi_fx,
             commands::midi::set_midi_fx,
             commands::midi::preview_midi_fx,
+            commands::engine::get_channel_offsets,
+            commands::engine::set_channel_offsets,
             commands::plugins::drain_plugin_knob_moves,
             commands::export::freeze_track,
             commands::export::unfreeze_track,

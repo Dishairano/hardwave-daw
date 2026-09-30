@@ -1235,6 +1235,34 @@ impl DawEngine {
         )
     }
 
+    /// Which pair of the interface is recorded from, and which pair the
+    /// mix goes out of. Both are the first of a pair, counting from zero.
+    pub fn channel_offsets(&self) -> (u16, u16) {
+        (
+            self.audio_device.input_channel_offset,
+            self.audio_device.output_channel_offset,
+        )
+    }
+
+    /// Record from another pair of the interface, or send the mix out of
+    /// one. Restarts whichever stream is running so the change is heard
+    /// straight away.
+    pub fn set_channel_offsets(&mut self, input: u16, output: u16) {
+        let input_changed = self.audio_device.input_channel_offset != input;
+        let output_changed = self.audio_device.output_channel_offset != output;
+        self.audio_device.input_channel_offset = input;
+        self.audio_device.output_channel_offset = output;
+        if input_changed && self.audio_device.is_input_running() {
+            let _ = self.audio_device.start_input_stream();
+        }
+        if output_changed && self.audio_device.is_running() {
+            // The output pair is fixed when the stream opens, so the
+            // stream has to come back up on the new one.
+            self.audio_device.stop();
+            let _ = self.start();
+        }
+    }
+
     /// Update the input device preferences. The engine does not restart any
     /// input stream yet — recording isn't live — but the choice is stored so
     /// the recording pipeline picks it up when we ship it.

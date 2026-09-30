@@ -10,6 +10,7 @@ fn persist_audio_prefs(state: &State<AppState>) {
     let engine = state.engine.lock();
     let (output_device, sample_rate, buffer_size) = engine.audio_config();
     let (input_device, input_channels) = engine.input_config();
+    let (input_channel_offset, output_channel_offset) = engine.channel_offsets();
     let prefs = AudioPrefs {
         output_device,
         sample_rate,
@@ -17,6 +18,8 @@ fn persist_audio_prefs(state: &State<AppState>) {
         wasapi_exclusive: engine.wasapi_exclusive(),
         input_device,
         input_channels,
+        input_channel_offset,
+        output_channel_offset,
     };
     drop(engine);
     prefs.save();
@@ -483,4 +486,31 @@ pub fn set_metronome_record_only(state: State<AppState>, record_only: bool) {
         .metronome()
         .record_only
         .store(record_only, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Which pair of the interface is recorded from, and which pair the mix
+/// goes out of. Both are the first channel of a pair, counting from zero.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelOffsets {
+    pub input: u16,
+    pub output: u16,
+}
+
+#[tauri::command]
+pub fn get_channel_offsets(state: State<AppState>) -> ChannelOffsets {
+    let (input, output) = state.engine.lock().channel_offsets();
+    ChannelOffsets { input, output }
+}
+
+/// Record from another pair of the interface, or send the mix out of one.
+///
+/// An interface with eight ins and outs was always the first two of each:
+/// a guitar on input 3 could not be recorded, and a cue mix on outputs
+/// 3 and 4 could not be sent. Whichever stream is running restarts, so
+/// the change is heard straight away.
+#[tauri::command]
+pub fn set_channel_offsets(state: State<AppState>, input: u16, output: u16) {
+    state.engine.lock().set_channel_offsets(input, output);
+    persist_audio_prefs(&state);
 }

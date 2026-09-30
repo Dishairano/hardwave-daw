@@ -28,6 +28,12 @@ pub struct AudioPrefs {
     pub input_device: Option<String>,
     #[serde(default = "default_input_channels")]
     pub input_channels: u16,
+    /// First channel of the pair recorded from, counting from zero.
+    #[serde(default)]
+    pub input_channel_offset: u16,
+    /// First channel of the pair the mix goes out of.
+    #[serde(default)]
+    pub output_channel_offset: u16,
 }
 
 fn default_sample_rate() -> u32 {
@@ -90,6 +96,8 @@ impl AudioPrefs {
             wasapi_exclusive: false,
             input_device: None,
             input_channels: default_input_channels(),
+            input_channel_offset: 0,
+            output_channel_offset: 0,
         }
     }
 }
