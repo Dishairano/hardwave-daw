@@ -57,6 +57,7 @@ import {
 import { useGeneralPrefsStore } from './stores/generalPrefsStore'
 import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappingsPanel'
 import { MacroPanel } from './components/MacroPanel'
+import { ManualWindow } from './components/ManualWindow'
 import { PresetBrowser } from './components/PresetBrowser'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
@@ -238,6 +239,7 @@ export function App() {
   // Local rather than in useAppDialogs: only the Tools menu opens it.
   const [showMacros, setShowMacros] = useState(false)
   const [showPresets, setShowPresets] = useState(false)
+  const [showManual, setShowManual] = useState(false)
   // Local rather than in useAppDialogs: nothing else toggles it, and it has
   // one extra piece of state (whether the report follows a crash).
   const [bugReport, setBugReport] = useState<{ open: boolean; afterCrash: boolean }>({
@@ -2161,7 +2163,7 @@ export function App() {
           { label: 'Roadmap', action: () => setShowRoadmap(v => !v) },
           { label: 'Re-run setup wizard…', action: () => useSetupWizardStore.getState().open() },
           { separator: true, label: '' },
-          { label: 'Online user manual', action: () => window.open('https://github.com/Dishairano/hardwave-daw/wiki', '_blank', 'noopener,noreferrer') },
+          { label: 'Manual', action: () => setShowManual(true) },
           { label: 'Release notes', action: () => window.open('https://github.com/Dishairano/hardwave-daw/releases', '_blank', 'noopener,noreferrer') },
           { label: 'Report a bug…', action: () => setBugReport({ open: true, afterCrash: false }) },
           { label: 'Report an issue on GitHub', action: () => window.open('https://github.com/Dishairano/hardwave-daw/issues', '_blank', 'noopener,noreferrer') },
@@ -2328,6 +2330,7 @@ export function App() {
       />
       {showTempoTapper && <TempoTapper onClose={() => setShowTempoTapper(false)} />}
       {showMacros && <MacroPanel onClose={() => setShowMacros(false)} />}
+      {showManual && <ManualWindow onClose={() => setShowManual(false)} />}
       {showPresets && <PresetBrowser onClose={() => setShowPresets(false)} />}
       {showMidiMappings && (
         <MidiMappingsPanel

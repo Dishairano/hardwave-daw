@@ -7,6 +7,12 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    fs: {
+      // The manual lives at the repository root and is imported as text
+      // by the in-app manual window, so one file is both what the app
+      // shows and what the repository carries.
+      allow: ['..', '../..'],
+    },
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
