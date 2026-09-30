@@ -25,7 +25,15 @@ function groupByCategory(): Category[] {
 
 const CATEGORIES = groupByCategory()
 
-export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ShortcutsPanel({ open, onClose, embedded = false }: {
+  open: boolean
+  onClose: () => void
+  /**
+   * Rendered as a settings tab instead of a window of its own. Shortcuts
+   * were the other page you had to leave settings to reach.
+   */
+  embedded?: boolean
+}) {
   const [query, setQuery] = useState('')
   const bindings = useShortcutsStore(s => s.bindings)
   const capturingFor = useShortcutsStore(s => s.capturingFor)
@@ -141,23 +149,7 @@ export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () =
     hw.accent
 
   return (
-    <div
-      onMouseDown={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 15000,
-        background: 'rgba(0,0,0,0.55)', backdropFilter: hw.blur.sm,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-    >
-      <div
-        onMouseDown={e => e.stopPropagation()}
-        style={{
-          width: 'min(760px, 92vw)', maxHeight: '82vh',
-          display: 'flex', flexDirection: 'column',
-          background: 'rgba(12,12,18,0.98)', border: `1px solid ${hw.borderLight}`,
-          borderRadius: hw.radius.lg, boxShadow: '0 16px 48px rgba(0,0,0,0.6)',
-        }}
-      >
+    <Shell embedded={embedded} onClose={onClose}>
         {/* Header */}
         <div style={{
           padding: '12px 16px', borderBottom: `1px solid ${hw.border}`,
@@ -217,7 +209,9 @@ export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () =
             setBanner({ kind: 'info', text: 'All shortcuts reset to defaults.' })
           }}>Reset</HeaderBtn>
           <HeaderBtn onClick={() => printShortcuts(filteredCategories, bindings)}>Print</HeaderBtn>
-          <HeaderBtn onClick={onClose}>Close</HeaderBtn>
+          {/* A tab has the settings window's own Close; a second one
+              next to it only raises the question of what it closes. */}
+            {!embedded && <HeaderBtn onClick={onClose}>Close</HeaderBtn>}
         </div>
 
         {banner && (
@@ -310,6 +304,40 @@ export function ShortcutsPanel({ open, onClose }: { open: boolean; onClose: () =
             </div>
           ))}
         </div>
+    </Shell>
+  )
+}
+
+/**
+ * The window around the panel, or nothing at all when it is a tab.
+ */
+function Shell({
+  embedded, onClose, children,
+}: { embedded: boolean; onClose: () => void; children: React.ReactNode }) {
+  if (embedded) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>{children}</div>
+    )
+  }
+  return (
+    <div
+      onMouseDown={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 15000,
+        background: 'rgba(0,0,0,0.55)', backdropFilter: hw.blur.sm,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <div
+        onMouseDown={e => e.stopPropagation()}
+        style={{
+          width: 'min(760px, 92vw)', maxHeight: '82vh',
+          display: 'flex', flexDirection: 'column',
+          background: 'rgba(12,12,18,0.98)', border: `1px solid ${hw.borderLight}`,
+          borderRadius: hw.radius.lg, boxShadow: '0 16px 48px rgba(0,0,0,0.6)',
+        }}
+      >
+        {children}
       </div>
     </div>
   )

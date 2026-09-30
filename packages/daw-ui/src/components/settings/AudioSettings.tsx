@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
+import { ThemePicker } from './ThemePicker'
+import { ShortcutsPanel } from '../ShortcutsPanel'
 import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
 import { AUTOSAVE_OPTIONS, useAutosavePrefsStore } from '../../stores/autosavePrefsStore'
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
@@ -47,6 +49,8 @@ export type SettingsTab =
   | 'plugins'
   | 'files'
   | 'appearance'
+  | 'theme'
+  | 'shortcuts'
 
 const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'audio', label: 'Audio' },
@@ -56,6 +60,8 @@ const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'plugins', label: 'Plug-ins' },
   { id: 'files', label: 'Files' },
   { id: 'appearance', label: 'Appearance' },
+  { id: 'theme', label: 'Theme' },
+  { id: 'shortcuts', label: 'Shortcuts' },
 ]
 
 const TAB_KEY = 'hardwave.daw.settingsTab'
@@ -82,6 +88,11 @@ const BUFFER_SIZES = [64, 128, 256, 512, 1024, 2048, 4096]
 
 export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [tab, setTab] = useState<SettingsTab>(loadTab)
+  // Search across every page. The rows carry their label in the DOM, so
+  // the filter reads what is really on screen instead of a second list
+  // that drifts away from it.
+  const [query, setQuery] = useState('')
+  const bodyRef = useRef<HTMLDivElement>(null)
   const metronome = useMetronomeStore()
   const plugins = usePluginStore(s => s.plugins)
   const scanning = usePluginStore(s => s.scanning)
@@ -99,6 +110,27 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
     window.addEventListener('daw:settingsTab', onTab)
     return () => window.removeEventListener('daw:settingsTab', onTab)
   }, [])
+
+  /**
+   * Filter the page to the rows that match the search.
+   *
+   * Done against the rendered rows rather than a list kept beside them:
+   * a second list goes stale the moment a setting is added, and a search
+   * that cannot find a setting that exists is worse than no search.
+   */
+  useEffect(() => {
+    const body = bodyRef.current
+    if (!body) return
+    const needle = query.trim().toLowerCase()
+    const rows = body.querySelectorAll<HTMLElement>('[data-setting-label]')
+    for (const row of rows) {
+      const label = row.dataset.settingLabel ?? ''
+      row.style.display = needle === '' || label.includes(needle) ? '' : 'none'
+    }
+    return () => {
+      for (const row of rows) row.style.display = ''
+    }
+  }, [query, tab])
   const [devices, setDevices] = useState<AudioDevice[]>([])
   // Driver type (WASAPI, ASIO, CoreAudio, ALSA, JACK). The engine could
   // switch between them since it was written and only a test page ever
@@ -431,6 +463,18 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
         padding: '10px 8px', background: 'rgba(255,255,255,0.02)',
         borderRight: `1px solid ${hw.border}`, overflowY: 'auto',
       }}>
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search settings"
+          aria-label="Search settings"
+          style={{
+            marginBottom: 8, padding: '5px 7px', fontSize: 11,
+            background: hw.bgInput, color: hw.textPrimary,
+            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+            outline: 'none', minWidth: 0,
+          }}
+        />
         {SETTINGS_TABS.map(t => {
           const active = t.id === tab
           return (
@@ -457,7 +501,13 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {/* Body */}
-        <div role="tabpanel" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 16px 12px' }}>
+        <div ref={bodyRef} role="tabpanel" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 16px 12px' }}>
+          {query.trim() !== '' && (
+            <div style={{ fontSize: 11, color: hw.textMuted, marginBottom: 10 }}>
+              Showing what matches "{query.trim()}" on this page. Other pages are
+              searched as you open them.
+            </div>
+          )}
           {tab === 'audio' && (<>
             {/* Driver type. Only shown when the build has more than one:
                 on a plain Windows build that is WASAPI alone, and a row
@@ -1255,6 +1305,14 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
             </div>
           </>)}
 
+          {tab === 'theme' && (
+            <ThemePicker embedded onClose={onClose} />
+          )}
+
+          {tab === 'shortcuts' && (
+            <ShortcutsPanel embedded open onClose={onClose} />
+          )}
+
           {tab === 'appearance' && (<>
             {/* System Settings — General (FL F10 → General page parity) */}
             <SettingRow label="Note naming">
@@ -1331,7 +1389,12 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
 
 function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+    <div
+      // The settings search reads these, so a row that exists can always
+      // be found by name.
+      data-setting-label={label.toLowerCase()}
+      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}
+    >
       <span style={{ fontSize: 12, color: hw.textSecondary }}>{label}</span>
       {children}
     </div>

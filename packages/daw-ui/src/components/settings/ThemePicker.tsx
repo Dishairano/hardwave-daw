@@ -10,9 +10,15 @@ import {
 
 interface ThemePickerProps {
   onClose: () => void
+  /**
+   * Rendered inside the settings window rather than as a window of its
+   * own. Theme used to be the one page you had to leave settings to
+   * reach, which is why it is here as a tab now.
+   */
+  embedded?: boolean
 }
 
-export function ThemePicker({ onClose }: ThemePickerProps) {
+export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
   const activeId = useThemeStore(s => s.activeId)
   const setTheme = useThemeStore(s => s.setTheme)
   const customs = useThemeStore(s => s.customs)
@@ -77,25 +83,10 @@ export function ThemePicker({ onClose }: ThemePickerProps) {
   }
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 90,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
-      }}
-      onClick={onClose}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          width: 560, background: 'rgba(12,12,16,0.98)',
-          border: `1px solid ${hw.borderLight}`,
-          borderRadius: hw.radius.lg,
-          boxShadow: '0 20px 60px rgba(0,0,0,0.7)',
-          overflow: 'hidden',
-        }}
-      >
-        {/* Header */}
+    <Shell embedded={embedded} onClose={onClose}>
+        {/* Header. The settings window has its own, so the tab does not
+            need a second one. */}
+        {!embedded && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '12px 16px',
@@ -119,6 +110,7 @@ export function ThemePicker({ onClose }: ThemePickerProps) {
             </svg>
           </div>
         </div>
+        )}
 
         {/* Body */}
         <div style={{ padding: 16 }}>
@@ -293,7 +285,6 @@ export function ThemePicker({ onClose }: ThemePickerProps) {
             Apply & Reload
           </button>
         </div>
-      </div>
       {editorOpen && (
         <CustomThemeEditor
           existingIds={allPalettes.map(p => p.id)}
@@ -303,6 +294,38 @@ export function ThemePicker({ onClose }: ThemePickerProps) {
           onClose={() => setEditorOpen(false)}
         />
       )}
+    </Shell>
+  )
+}
+
+/**
+ * The window around the picker, or nothing at all when it is a tab.
+ */
+function Shell({
+  embedded, onClose, children,
+}: { embedded: boolean; onClose: () => void; children: React.ReactNode }) {
+  if (embedded) return <>{children}</>
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 90,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: 560, background: 'rgba(12,12,16,0.98)',
+          border: `1px solid ${hw.borderLight}`,
+          borderRadius: hw.radius.lg,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.7)',
+          overflow: 'hidden',
+        }}
+      >
+        {children}
+      </div>
     </div>
   )
 }

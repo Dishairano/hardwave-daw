@@ -1702,7 +1702,7 @@ export function App() {
       // F1 opens the in-app help overlay (Shift+F1 opens the shortcuts panel).
       if (e.code === 'F1') {
         e.preventDefault()
-        if (e.shiftKey) setShowShortcuts(v => !v)
+        if (e.shiftKey) { focusSettingsTab('shortcuts'); setShowAudioSettings(true) }
         else setShowHelp(v => !v)
         return
       }
@@ -1826,7 +1826,10 @@ export function App() {
         case 'togglePianoRoll':       setShowPianoRoll(v => !v); return
         case 'toggleBrowser':         setShowBrowser(v => !v); return
         case 'toggleMixer':           setShowMixer(v => !v); return
-        case 'toggleShortcutsPanel':  setShowShortcuts(v => !v); return
+        // Theme and shortcuts are pages of the settings window now, so
+        // the shortcut opens them there instead of in a window of their
+        // own that the settings window knew nothing about.
+        case 'toggleShortcutsPanel':  focusSettingsTab('shortcuts'); setShowAudioSettings(true); return
         case 'toggleTouchController': toggleTouchController(); return
         case 'toggleTypingKeyboard': {
           useTypingKeyboardStore.getState().toggle()
@@ -2069,7 +2072,7 @@ export function App() {
           { label: 'Audio settings…', action: () => { focusSettingsTab('audio'); setShowAudioSettings(true) } },
           { label: 'General settings…', action: () => { focusSettingsTab('appearance'); setShowAudioSettings(true) } },
           { label: 'File settings…', action: () => { focusSettingsTab('files'); setShowAudioSettings(true) } },
-          { label: 'Theme settings…', action: () => setShowThemePicker(true) },
+          { label: 'Theme settings…', action: () => { focusSettingsTab('theme'); setShowAudioSettings(true) } },
           { separator: true, label: '' },
           // Project settings
           { label: 'Project info…', shortcut: 'F11', action: () => setShowProjectInfo(true) },
@@ -2154,7 +2157,7 @@ export function App() {
         label: 'Help',
         items: [
           { label: 'Help topics', shortcut: 'F1', action: () => setShowHelp(v => !v) },
-          { label: 'Keyboard shortcuts', shortcut: 'Shift+F1', action: () => setShowShortcuts(v => !v) },
+          { label: 'Keyboard shortcuts', shortcut: 'Shift+F1', action: () => { focusSettingsTab('shortcuts'); setShowAudioSettings(true) } },
           { label: 'Roadmap', action: () => setShowRoadmap(v => !v) },
           { label: 'Re-run setup wizard…', action: () => useSetupWizardStore.getState().open() },
           { separator: true, label: '' },
