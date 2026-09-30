@@ -882,6 +882,126 @@ fn injected_events_land_in_capture_ring() {
 /// Automation worked its tick out from the transport's current tempo, so in a
 /// song with a tempo change every curve sat in the wrong place: the further
 /// past the change, the further off.
+/// A send level automation lane was stored in the project and drawn in the
+/// lane editor, and the engine never applied it: sends are graph edges whose
+/// gain was baked at rebuild time, so the curve did nothing.
+#[test]
+fn a_send_level_lane_moves_the_send() {
+    use hardwave_project::automation::{
+        AutomationLane, AutomationPoint, AutomationTarget, CurveMode,
+    };
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve};
+    use hardwave_project::mixer::Send;
+
+    let sr = 48_000_u32;
+
+    let sine = |secs: f64| -> hardwave_engine::AudioBuffer {
+        let frames = (sr as f64 * secs) as usize;
+        let ch: Vec<f32> = (0..frames)
+            .map(|n| {
+                let t = n as f32 / sr as f32;
+                (std::f32::consts::TAU * 220.0 * t).sin() * 0.5
+            })
+            .collect();
+        hardwave_engine::AudioBuffer {
+            channels: vec![ch.clone(), ch],
+            sample_rate: sr,
+            num_frames: frames,
+        }
+    };
+
+    // A steady tone on a track, sent to a bus. The bus is the only thing
+    // reaching master, so what comes out is the send level.
+    let render_with_lane = |lane: Option<AutomationLane>| -> Vec<f32> {
+        let engine = hardwave_engine::DawEngine::new();
+        let buf = sine(2.0);
+        let frames = buf.num_frames as u64;
+        engine.audio_pool.insert("tone".to_string(), buf);
+        {
+            let mut project = engine.project.lock();
+            let bus_id = project.add_audio_track("Bus".into());
+            let track_id = project.add_audio_track("Source".into());
+            if let Some(track) = project.track_mut(&track_id) {
+                track.clips.push(ClipPlacement {
+                    content: ClipContent::Audio(AudioClip {
+                        id: "clip".into(),
+                        name: "tone".into(),
+                        source_path: "tone".into(),
+                        source_hash: String::new(),
+                        source_start: 0,
+                        source_end: frames,
+                        gain_db: 0.0,
+                        fade_in_ticks: 0,
+                        fade_out_ticks: 0,
+                        muted: false,
+                        reversed: false,
+                        pitch_semitones: 0.0,
+                        stretch_ratio: 1.0,
+                        warp_markers: Vec::new(),
+                        fade_in_curve: FadeCurve::Linear,
+                        fade_out_curve: FadeCurve::Linear,
+                        source_file: String::new(),
+                    }),
+                    track_id: track_id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1_000_000,
+                    lane: 0,
+                });
+                // Silent on its own fader, audible only through the send.
+                track.volume_db = -100.0;
+                track.sends.push(Send {
+                    target: bus_id.clone(),
+                    gain_db: -100.0,
+                    pre_fader: true,
+                    enabled: true,
+                });
+                if let Some(lane) = lane {
+                    track.automation_lanes.push(lane);
+                }
+            }
+        }
+        engine.rebuild_graph();
+        let mut out = Vec::new();
+        engine
+            .render_offline(sr, sr as u64, |block| {
+                out.extend_from_slice(block);
+                true
+            })
+            .expect("offline render");
+        out
+    };
+
+    let peak = |out: &[f32]| out.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+
+    // Without a lane the send sits at its stored -100 dB: silence.
+    let without = render_with_lane(None);
+    assert!(
+        peak(&without) < 0.001,
+        "the send should be down: {}",
+        peak(&without)
+    );
+
+    // A lane holding the send wide open has to be audible.
+    let open = AutomationLane {
+        id: "send-lane".into(),
+        target: AutomationTarget::SendLevel { send_index: 0 },
+        points: vec![AutomationPoint {
+            tick: 0,
+            // 0..1 across -60..+6 dB, so 0.91 is about unity.
+            value: 0.91,
+            curve: CurveMode::Step,
+            tension: 0.0,
+        }],
+        visible: true,
+    };
+    let with = render_with_lane(Some(open));
+    assert!(
+        peak(&with) > 0.05,
+        "the send lane did not open the send: {}",
+        peak(&with)
+    );
+}
+
 #[test]
 fn automation_follows_a_tempo_change_instead_of_one_tempo() {
     use hardwave_project::automation::{

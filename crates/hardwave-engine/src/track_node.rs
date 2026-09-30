@@ -362,6 +362,9 @@ pub struct TrackNode {
     /// `[start, start+length]` window; outside it, it's silent and the
     /// lane / static value stands.
     automation_clips: Vec<hardwave_project::automation_clip::AutomationClip>,
+    /// True when another track routes into this one, which makes it a bus
+    /// that has work to do even with nothing of its own on it.
+    receives_input: bool,
     /// Cached static fader value so we can restore it when an
     /// automation lane is removed mid-session. We store the linear
     /// gain so the runtime path stays branch-light.
@@ -409,6 +412,7 @@ impl TrackNode {
             chain_scratch: crate::insert_chain::Scratch::default(),
             automation_lanes: Vec::new(),
             automation_clips: Vec::new(),
+            receives_input: false,
             static_volume: 1.0,
             static_pan: 0.0,
         }
@@ -499,6 +503,17 @@ impl TrackNode {
         self.static_pan = p;
     }
 
+    /// Tell the node that something routes into it, so the idle gate below
+    /// does not skip it.
+    ///
+    /// A bus with no clips, no inserts and no automation looked idle, so the
+    /// gate returned before mixing its inputs: every send into an empty bus
+    /// was silent, and a reverb bus is empty by definition until a plug-in is
+    /// added to it.
+    pub fn set_receives_input(&mut self, receives: bool) {
+        self.receives_input = receives;
+    }
+
     pub fn set_muted(&mut self, muted: bool) {
         self.muted = muted;
     }
@@ -509,6 +524,15 @@ impl TrackNode {
 }
 
 impl AudioNode for TrackNode {
+    /// The engine calls this through the trait after the send pass, so the
+    /// override has to live here: an inherent method of the same name is
+    /// never reached through `Box<dyn AudioNode>`, which is why a bus with
+    /// nothing of its own on it stayed on the idle path and every send into
+    /// it was silent.
+    fn set_receives_input(&mut self, receives: bool) {
+        TrackNode::set_receives_input(self, receives);
+    }
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -660,7 +684,10 @@ impl AudioNode for TrackNode {
         // Hence the chain.slots check below covers the monitoring case
         // implicitly: an armed track with no chain = nothing for us to
         // do; an armed track WITH chain = process for monitoring.
-        if self.clips.is_empty() && self.chain.slots.is_empty() && self.automation_lanes.is_empty()
+        if self.clips.is_empty()
+            && self.chain.slots.is_empty()
+            && self.automation_lanes.is_empty()
+            && !self.receives_input
         {
             // Park the meter at silence so the UI doesn't show stale
             // values from a previous active block.
@@ -725,10 +752,9 @@ impl AudioNode for TrackNode {
                         self.chain.set_parameter(slot_id, *param_id, v);
                     }
                     AutomationTarget::SendLevel { .. } => {
-                        // Send routing automation lands in a follow-up
-                        // commit: the send matrix lives outside
-                        // TrackNode (in the engine's send pass) and
-                        // needs its own value-cache plumbing.
+                        // Handled by the engine, not here: a send is a graph
+                        // edge between two nodes, so its gain is moved in the
+                        // callback's send pass where the edges are known.
                     }
                 }
             }

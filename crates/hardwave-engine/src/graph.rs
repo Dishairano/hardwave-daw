@@ -39,6 +39,10 @@ pub trait AudioNode: Send {
     }
     fn reset(&mut self) {}
 
+    /// Tell a node that another track routes into it, so a bus with nothing
+    /// of its own on it still mixes what reaches it. Only track nodes care.
+    fn set_receives_input(&mut self, _receives: bool) {}
+
     /// Stable project-side identifier for the track this node represents,
     /// if any. Returns `None` for non-track nodes (master, input bus,
     /// etc.). Used by the engine to route per-track plug-in commands.
@@ -275,6 +279,21 @@ impl AudioGraph {
     }
 
     /// Connect with a linear gain multiplier. Used for sends.
+    /// Index of the edge a `connect_with_gain` call created, so its gain can
+    /// be changed later without rebuilding the graph. Sends are edges with a
+    /// gain, and a send level baked at rebuild time cannot be automated.
+    pub fn last_edge_index(&self) -> usize {
+        self.edges.len().saturating_sub(1)
+    }
+
+    /// Change one edge's gain. Called from the audio thread, once per block
+    /// per automated send, so it does no work beyond the write.
+    pub fn set_edge_gain(&mut self, edge: usize, gain: f32) {
+        if let Some(e) = self.edges.get_mut(edge) {
+            e.gain = gain;
+        }
+    }
+
     pub fn connect_with_gain(
         &mut self,
         source: NodeId,

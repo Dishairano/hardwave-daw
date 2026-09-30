@@ -1586,9 +1586,21 @@ struct EngineCallback {
     /// take can be split per pass the way an audio take is.
     record_pass: Arc<std::sync::atomic::AtomicU32>,
     record_last_pos: Arc<std::sync::atomic::AtomicU64>,
+    /// Which graph edges carry each send, filled at rebuild so a SendLevel
+    /// automation lane can move a send's gain per block.
+    send_edges: Vec<SendEdges>,
     /// This block's clicks. A fixed-size array rather than a Vec because it
     /// is filled on the audio thread, which must not allocate.
     click_events: [crate::metronome::ClickEvent; crate::metronome::MAX_CLICKS_PER_BLOCK],
+}
+
+/// The pair of graph edges that carry one send, so its gain can be moved
+/// without rebuilding the graph.
+struct SendEdges {
+    track_id: String,
+    send_index: usize,
+    left_edge: usize,
+    right_edge: usize,
 }
 
 /// Audio-thread load counters shared with the UI: how much of each block's
@@ -1704,6 +1716,7 @@ impl EngineCallback {
             audio_prefs,
             record_pass,
             record_last_pos,
+            send_edges: Vec::with_capacity(64),
             click_events: [crate::metronome::ClickEvent {
                 frame_offset: 0,
                 downbeat: false,
@@ -2111,6 +2124,7 @@ impl EngineCallback {
         }
 
         self.graph.clear();
+        self.send_edges.clear();
 
         let sample_rate = self.sample_rate as f64;
         let tempo_map = &project.tempo_map;
@@ -2647,6 +2661,10 @@ impl EngineCallback {
         // the source track's pre-fader tap (ports 2/3) or post-fader output
         // (ports 0/1) into the target track's input (ports 0/1), with the
         // send amount applied as per-edge gain.
+        // Tracks that something routes into. A bus with nothing of its own on
+        // it still has to mix what reaches it.
+        let mut receives_input: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for track in &project.tracks {
             // An excluded track's sends are dropped too, so a stem carries only
             // the target's own send tail rather than everyone else's.
@@ -2657,7 +2675,7 @@ impl EngineCallback {
                 Some(&id) => id,
                 None => continue,
             };
-            for send in &track.sends {
+            for (send_index, send) in track.sends.iter().enumerate() {
                 if !send.enabled {
                     continue;
                 }
@@ -2676,8 +2694,33 @@ impl EngineCallback {
                 let (src_l, src_r) = if send.pre_fader { (2, 3) } else { (0, 1) };
                 self.graph
                     .connect_with_gain(src_node, src_l, dst_node, 0, gain);
+                let left_edge = self.graph.last_edge_index();
                 self.graph
                     .connect_with_gain(src_node, src_r, dst_node, 1, gain);
+                let right_edge = self.graph.last_edge_index();
+                // Remember which edges carry this send, so a SendLevel
+                // automation lane can move its gain per block. The level used
+                // to be baked here at rebuild time, which is why send
+                // automation was stored, drawn and never applied.
+                receives_input.insert(send.target.clone());
+                self.send_edges.push(SendEdges {
+                    track_id: track.id.clone(),
+                    send_index,
+                    left_edge,
+                    right_edge,
+                });
+            }
+        }
+
+        // Now that every send is known, tell the receiving nodes they are
+        // buses. Without this a bus with no clips, no inserts and no
+        // automation took the idle path and every send into it was silent.
+        for (track_id, &node_id) in track_id_to_node.iter() {
+            if !receives_input.contains(track_id) {
+                continue;
+            }
+            if let Some(node) = self.graph.node_mut(node_id) {
+                node.set_receives_input(true);
             }
         }
 
@@ -2930,6 +2973,42 @@ impl AudioCallback for EngineCallback {
                 (secs * tempo_now.max(1.0) / 60.0 * hardwave_midi::PPQ as f64).max(0.0) as u64
             }
         };
+
+        // Send level automation. Sends are graph edges with a gain baked at
+        // rebuild, so a SendLevel lane had nowhere to land: it was stored,
+        // drawn in the lane editor, and never applied. The lanes live in the
+        // project, which the audio thread must not wait on, so this runs only
+        // when the lock is free, and a busy block leaves the send at its last
+        // value rather than jumping to silence.
+        if !self.send_edges.is_empty() {
+            if let Some(project) = self.project.try_lock() {
+                for entry in &self.send_edges {
+                    let Some(track) = project.tracks.iter().find(|t| t.id == entry.track_id) else {
+                        continue;
+                    };
+                    let lane = track.automation_lanes.iter().find(|l| {
+                        l.visible
+                            && matches!(
+                                l.target,
+                                hardwave_project::automation::AutomationTarget::SendLevel {
+                                    send_index
+                                } if send_index == entry.send_index
+                            )
+                    });
+                    let Some(lane) = lane else { continue };
+                    // Lane values are 0..1 across the send's own range, the
+                    // same shape the mixer's send control uses.
+                    let db = lane.denormalized_value_at(position_ticks, -60.0, 6.0);
+                    let gain = if db <= -60.0 {
+                        0.0
+                    } else {
+                        10.0_f64.powf(db / 20.0) as f32
+                    };
+                    self.graph.set_edge_gain(entry.left_edge, gain);
+                    self.graph.set_edge_gain(entry.right_edge, gain);
+                }
+            }
+        }
 
         let ctx = ProcessContext {
             sample_rate: self.sample_rate as f64,
