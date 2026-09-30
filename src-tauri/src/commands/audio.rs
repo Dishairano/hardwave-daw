@@ -22,7 +22,9 @@ fn hash_source_file(path: &Path) -> String {
 #[derive(Serialize)]
 pub struct ImportedClip {
     track_id: String,
-    clip_id: String,
+    /// Readable by other commands: freezing has to find the clip it just
+    /// imported to move it onto the freeze lane.
+    pub(crate) clip_id: String,
     name: String,
     source_id: String,
     duration_secs: f64,

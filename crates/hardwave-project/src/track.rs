@@ -252,6 +252,20 @@ pub struct Track {
     #[serde(default)]
     pub midi_route_to: Vec<TrackId>,
 
+    /// Frozen: the track plays one rendered file instead of its clips and
+    /// its plug-ins.
+    ///
+    /// A part with three plug-ins on it costs that CPU on every block for
+    /// the whole song, finished or not. Bouncing gives the CPU back but
+    /// replaces the part with audio. Freezing leaves everything where it
+    /// is, plays the render, and unfreezing puts the live chain back with
+    /// nothing lost.
+    ///
+    /// The render itself rides on the track as a clip on
+    /// `FREEZE_LANE`, so it loads with the project like any other audio.
+    #[serde(default)]
+    pub frozen: bool,
+
     /// MIDI effects between the clips and the instrument.
     ///
     /// An arpeggiator, a chord maker and a scale snapper used to be tools
@@ -296,6 +310,7 @@ impl Track {
             automation_clips: Vec::new(),
             stem_excluded: false,
             midi_route_to: Vec::new(),
+            frozen: false,
             midi_fx: Vec::new(),
         }
     }

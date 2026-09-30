@@ -110,3 +110,9 @@ pub struct ClipPlacement {
     /// Lane index for comping (0 = main lane).
     pub lane: u32,
 }
+
+/// The lane a freeze render sits on.
+///
+/// Out of the way of the take lanes, which count up from zero, so a
+/// frozen track's render never shows up as one more take to comp.
+pub const FREEZE_LANE: u32 = u32::MAX;

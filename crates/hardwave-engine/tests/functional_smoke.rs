@@ -2252,3 +2252,106 @@ fn an_arpeggiator_on_the_track_changes_what_the_instrument_plays() {
         "one note at a time on a quarter gate should sit well below a held chord: held rms {held_rms:.5}, arp rms {arp_rms:.5}"
     );
 }
+
+/// Freezing plays a render of the track instead of its clips and its
+/// plug-ins, and unfreezing puts the live chain back with nothing lost.
+///
+/// What can be measured from outside is which of the two is heard: the
+/// track's own clip and the render carry different tones, so the tone
+/// that comes out says which path the engine took.
+#[test]
+fn a_frozen_track_plays_its_render_and_unfreezing_puts_the_part_back() {
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve, FREEZE_LANE};
+
+    let sr = 48_000_u32;
+    let tone = |freq: f32| -> hardwave_engine::AudioBuffer {
+        let frames = sr as usize;
+        let ch: Vec<f32> = (0..frames)
+            .map(|n| (std::f32::consts::TAU * freq * n as f32 / sr as f32).sin() * 0.5)
+            .collect();
+        hardwave_engine::AudioBuffer {
+            channels: vec![ch.clone(), ch],
+            sample_rate: sr,
+            num_frames: frames,
+        }
+    };
+
+    let clip_at = |id: &str, source: &str, lane: u32, track_id: &str| ClipPlacement {
+        content: ClipContent::Audio(AudioClip {
+            id: id.into(),
+            name: source.into(),
+            source_path: source.into(),
+            source_hash: String::new(),
+            source_start: 0,
+            source_end: sr as u64,
+            gain_db: 0.0,
+            fade_in_ticks: 0,
+            fade_out_ticks: 0,
+            muted: false,
+            reversed: false,
+            pitch_semitones: 0.0,
+            stretch_ratio: 1.0,
+            warp_markers: Vec::new(),
+            fade_in_curve: FadeCurve::Linear,
+            fade_out_curve: FadeCurve::Linear,
+            source_file: String::new(),
+        }),
+        track_id: track_id.to_string(),
+        position_ticks: 0,
+        length_ticks: 1_000_000,
+        lane,
+    };
+
+    // One bin of a Fourier transform: how much of one frequency is there.
+    let energy_at = |samples: &[f32], freq: f32| -> f32 {
+        let n = samples.len().min(16_384);
+        let k = (n as f32 * freq / sr as f32).round();
+        let w = std::f32::consts::TAU * k / n as f32;
+        let coeff = 2.0 * w.cos();
+        let (mut s1, mut s2) = (0.0f32, 0.0f32);
+        for x in samples.iter().take(n).step_by(2) {
+            let s0 = x + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        (s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0).sqrt()
+    };
+
+    let render = |frozen: bool| -> Vec<f32> {
+        let engine = hardwave_engine::DawEngine::new();
+        engine.audio_pool.insert("part".to_string(), tone(220.0));
+        engine.audio_pool.insert("render".to_string(), tone(880.0));
+        {
+            let mut project = engine.project.lock();
+            let track_id = project.add_audio_track("Synth".into());
+            if let Some(track) = project.track_mut(&track_id) {
+                track.clips.push(clip_at("live", "part", 0, &track_id));
+                track
+                    .clips
+                    .push(clip_at("frozen", "render", FREEZE_LANE, &track_id));
+                track.frozen = frozen;
+            }
+        }
+        engine.rebuild_graph();
+        let mut out = Vec::new();
+        engine
+            .render_offline(sr, sr as u64 / 2, |block| {
+                out.extend_from_slice(block);
+                true
+            })
+            .expect("offline render");
+        out
+    };
+
+    let live = render(false);
+    assert!(
+        energy_at(&live, 220.0) > energy_at(&live, 880.0) * 4.0,
+        "a live track plays its own part, not the render"
+    );
+
+    let frozen = render(true);
+    assert!(
+        energy_at(&frozen, 880.0) > energy_at(&frozen, 220.0) * 4.0,
+        "a frozen track plays the render, not its part"
+    );
+}

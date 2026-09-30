@@ -2180,7 +2180,10 @@ impl EngineCallback {
             // monosynth that converts pre-resolved note schedules into
             // audio. The TrackNode path below is for audio-bearing tracks
             // that play sample clips, which can't service MIDI content.
-            if matches!(track.kind, hardwave_project::TrackKind::Midi) {
+            // A frozen MIDI track is audio now: it falls through to the
+            // TrackNode path below, which plays the render. Building the
+            // instrument node as well would play the part twice.
+            if matches!(track.kind, hardwave_project::TrackKind::Midi) && !track.frozen {
                 let mut midi_node = crate::midi_track_node::MidiTrackNode::new(
                     track.id.clone(),
                     track.name.clone(),
@@ -2317,8 +2320,16 @@ impl EngineCallback {
             // Reattach the plug-in chain stashed at the top of this
             // rebuild. Tracks that didn't exist before fall through to
             // the default-empty chain that TrackNode::new gave them.
+            //
+            // A frozen track is the exception: the render already went
+            // through the chain, so running it again would apply every
+            // plug-in twice and cost the CPU freezing was meant to give
+            // back. The chain is dropped from the graph, not from the
+            // project, so unfreezing puts it back untouched.
             if let Some(chain) = stashed_chains.remove(&track.id) {
-                node.restore_chain(chain);
+                if !track.frozen {
+                    node.restore_chain(chain);
+                }
             }
             // A VCA group adds its level to the member's own fader and can
             // silence it, without moving anything in the signal path.
@@ -2354,9 +2365,17 @@ impl EngineCallback {
             // clip gets a fade-out across the overlap and the later clip gets a fade-in.
             // User-authored fades take precedence when they are already longer than the
             // auto-computed value.
-            let mut regions: Vec<ClipRegion> = track
-                .clips
-                .iter()
+            // Frozen: the render, and nothing else. Live: everything but
+            // the render, which is parked on its own lane.
+            let clips_to_play = track.clips.iter().filter(|clip| {
+                let is_freeze = clip.lane == hardwave_project::clip::FREEZE_LANE;
+                if track.frozen {
+                    is_freeze
+                } else {
+                    !is_freeze
+                }
+            });
+            let mut regions: Vec<ClipRegion> = clips_to_play
                 .filter_map(|clip| match &clip.content {
                     hardwave_project::clip::ClipContent::Audio(audio_clip) => {
                         let timeline_start =

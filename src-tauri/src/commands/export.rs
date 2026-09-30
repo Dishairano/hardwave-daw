@@ -1743,3 +1743,160 @@ pub async fn export_project_stems(
 
     Ok(result)
 }
+
+/// Freeze a track: play a render of it instead of its clips and plug-ins.
+///
+/// Bouncing gives the CPU back but replaces the part with audio on a new
+/// track. Freezing leaves the part, the plug-ins and the automation
+/// exactly where they are and plays a render instead, so unfreezing costs
+/// nothing but the CPU it gives back.
+///
+/// The render is a clip on the track's freeze lane, so it loads with the
+/// project like any other audio and travels with the song.
+#[tauri::command]
+pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, String> {
+    let source_track_id = track_id.clone();
+    let (engine, cancel) = {
+        let state: State<AppState> = app.state();
+        (state.engine.clone(), state.export_cancel.clone())
+    };
+    cancel.store(false, Ordering::Relaxed);
+
+    let rendered = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let engine_guard = engine.lock();
+        let sample_rate = engine_guard.current_sample_rate();
+        let total_samples = engine_guard.project_end_samples(sample_rate);
+        if total_samples == 0 {
+            return Err("there is nothing on the timeline to freeze".into());
+        }
+        let track_name = {
+            let project = engine_guard.project.lock();
+            let track = project
+                .track(&track_id)
+                .ok_or_else(|| format!("Track not found: {track_id}"))?;
+            if track.frozen {
+                return Err("that track is already frozen".into());
+            }
+            track.name.clone()
+        };
+
+        let dir = match engine_guard.project_dir() {
+            Some(d) => d.join("Freeze"),
+            None => dirs::data_dir()
+                .ok_or_else(|| "No writable folder for freezes on this system".to_string())?
+                .join("Hardwave")
+                .join("Freeze"),
+        };
+        fs::create_dir_all(&dir).map_err(|e| format!("create folder: {e}"))?;
+        let safe: String = track_name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == ' ' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+        let out_path = dir.join(format!("{safe} frozen {stamp}.wav"));
+
+        let fmt = RenderFormat {
+            sample_rate,
+            bit_depth: 32,
+            normalize: NormalizeMode::parse("off"),
+            normalize_target_db: -1.0,
+            dither: DitherMode::parse("none"),
+            mp3_bitrate_kbps: 320,
+            mp3_vbr_quality: None,
+            ogg_quality: 0.5,
+        };
+
+        let target = track_id.clone();
+        let completed = write_render(
+            &engine_guard,
+            &out_path,
+            fmt,
+            total_samples,
+            0,
+            &cancel,
+            |_, _| {},
+            move |proj: &mut Project| {
+                // Excluded rather than muted, the same way stems do it: a
+                // muted track stops feeding sidechains and sends, which
+                // changes what the frozen track sounds like.
+                for t in proj.tracks.iter_mut() {
+                    t.stem_excluded = t.id != target;
+                }
+            },
+        )?;
+        if !completed {
+            let _ = fs::remove_file(&out_path);
+            return Err("the freeze was cancelled".into());
+        }
+        Ok(out_path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Placing the render and flipping the switch are one undo step.
+    let state: State<AppState> = app.state();
+    state.engine.lock().snapshot_before_mutation();
+    let clip = crate::commands::audio::import_audio_file(
+        state.clone(),
+        source_track_id.clone(),
+        rendered.clone(),
+        Some(0),
+    )?;
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&source_track_id) {
+            for placement in track.clips.iter_mut() {
+                let is_render = match &placement.content {
+                    hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip.clip_id,
+                    hardwave_project::clip::ClipContent::Midi(_) => false,
+                };
+                if is_render {
+                    placement.lane = hardwave_project::clip::FREEZE_LANE;
+                }
+            }
+            track.frozen = true;
+        }
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(rendered)
+}
+
+/// Put the live chain back. The render stays on the freeze lane, so
+/// freezing again with nothing changed is instant.
+#[tauri::command]
+pub fn unfreeze_track(state: State<AppState>, track_id: String) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        if !track.frozen {
+            return Err("that track is not frozen".into());
+        }
+        track.frozen = false;
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// Which tracks are frozen, for the app to show.
+#[tauri::command]
+pub fn list_frozen_tracks(state: State<AppState>) -> Vec<String> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    project
+        .tracks
+        .iter()
+        .filter(|t| t.frozen)
+        .map(|t| t.id.clone())
+        .collect()
+}

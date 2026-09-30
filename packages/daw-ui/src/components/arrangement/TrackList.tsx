@@ -49,6 +49,19 @@ export function TrackList() {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string } | null>(null)
   const [routeDialogTrackId, setRouteDialogTrackId] = useState<string | null>(null)
   const [midiFxTrackId, setMidiFxTrackId] = useState<string | null>(null)
+  // Which tracks are frozen, so the menu offers the right verb and the
+  // list can say so.
+  const [frozenTracks, setFrozenTracks] = useState<string[]>([])
+  useEffect(() => {
+    const load = () => {
+      invoke<string[]>('list_frozen_tracks')
+        .then(setFrozenTracks)
+        .catch(() => { /* no engine in the browser preview */ })
+    }
+    load()
+    window.addEventListener('daw:tracksChanged', load)
+    return () => window.removeEventListener('daw:tracksChanged', load)
+  }, [])
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
@@ -262,6 +275,16 @@ export function TrackList() {
                     {track.name}
                   </span>
                 )}
+                {frozenTracks.includes(track.id) && (
+                  <span
+                    title="Frozen: this track plays a render, so its plug-ins cost nothing"
+                    style={{
+                      fontFamily: hw.font.mono, fontSize: 7, letterSpacing: 0.5,
+                      color: hw.textFaint, border: `1px solid ${hw.border}`,
+                      borderRadius: 2, padding: '0 3px', flexShrink: 0,
+                    }}
+                  >FROZEN</span>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 3, marginTop: 5 }}>
                 <button
@@ -420,6 +443,33 @@ export function TrackList() {
                 setRouteDialogTrackId(t.id)
               }} />
             )}
+            <TrackMenuItem
+              label={frozenTracks.includes(t.id) ? 'Unfreeze' : 'Freeze'}
+              onClick={async () => {
+                setCtxMenu(null)
+                const push = useNotificationStore.getState().push
+                const isFrozen = frozenTracks.includes(t.id)
+                try {
+                  if (isFrozen) {
+                    await invoke('unfreeze_track', { trackId: t.id })
+                    push('info', `"${t.name}" is live again`, {
+                      detail: 'The part, the plug-ins and the automation are exactly as they were.',
+                    })
+                  } else {
+                    push('info', `Freezing "${t.name}"…`)
+                    await invoke<string>('freeze_track', { trackId: t.id })
+                    push('info', `"${t.name}" is frozen`, {
+                      detail: 'It plays a render now, so its plug-ins cost nothing until you unfreeze it.',
+                    })
+                  }
+                  await useTrackStore.getState().fetchTracks()
+                  setFrozenTracks(await invoke<string[]>('list_frozen_tracks'))
+                } catch (e) {
+                  push('warning', isFrozen ? 'Could not unfreeze that track' : 'Could not freeze that track',
+                    { detail: String(e) })
+                }
+              }}
+            />
             <TrackMenuItem label="Bounce to audio" onClick={async () => {
               setCtxMenu(null)
               // Renders this track through its plug-ins, puts the result on

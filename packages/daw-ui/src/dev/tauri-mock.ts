@@ -169,6 +169,12 @@ const mock: TauriInternals = {
       case 'rename_vca':
       case 'delete_vca':
         return null
+      case 'list_frozen_tracks':
+        return ['t-bass']
+      case 'freeze_track':
+        return '/freeze/bass.wav'
+      case 'unfreeze_track':
+        return null
       case 'get_midi_fx':
         return [
           { Arpeggiator: { step_ticks: 240, mode: 'Up', gate: 0.9, octaves: 2 } },
