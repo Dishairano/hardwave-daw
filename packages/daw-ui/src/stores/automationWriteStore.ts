@@ -53,6 +53,53 @@ function keyOf(trackId: string, target: AutomationTargetInfo): string {
   return `${trackId}:${JSON.stringify(target)}`
 }
 
+/**
+ * Follow the knobs inside plug-in windows while automation is being
+ * written.
+ *
+ * The app moves the faders and the generic parameter sheet, so those
+ * recorded from the start. A knob in a plug-in's own window is moved by
+ * the plug-in: the host keeps a log of those moves and this drains it
+ * on a timer and writes each one like any other control.
+ */
+// Plain setInterval rather than window.setInterval: the store is also
+// loaded in tests, which run without a window.
+let knobPoll: ReturnType<typeof setInterval> | null = null
+
+function startKnobPolling() {
+  if (knobPoll !== null) return
+  knobPoll = setInterval(() => {
+    const store = useAutomationWriteStore.getState()
+    // The mode can be put back to off without going through setMode, so
+    // the tick checks rather than trusting that it was stopped.
+    if (!store.isRecording()) {
+      stopKnobPolling()
+      return
+    }
+    invoke<{ trackId: string; slotId: string; paramId: number; value: number }[]>(
+      'drain_plugin_knob_moves',
+    )
+      .then(moves => {
+        if (!Array.isArray(moves) || moves.length === 0) return
+        if (!store.isRecording()) return
+        for (const move of moves) {
+          store.writeSample(
+            move.trackId,
+            { kind: 'plugin_param', slotId: move.slotId, paramId: move.paramId },
+            move.value,
+          )
+        }
+      })
+      .catch(() => { /* no engine: nothing to follow */ })
+  }, 60)
+}
+
+function stopKnobPolling() {
+  if (knobPoll === null) return
+  clearInterval(knobPoll)
+  knobPoll = null
+}
+
 export const useAutomationWriteStore = create<AutomationWriteState>((set, get) => ({
   mode: 'off',
   trim: false,
@@ -61,6 +108,14 @@ export const useAutomationWriteStore = create<AutomationWriteState>((set, get) =
   setMode: (mode) => {
     set({ mode, touching: [] })
     invoke('set_automation_write_mode', { mode }).catch(() => {})
+    // Only poll while something is being recorded: an idle DAW has no
+    // reason to ask the engine anything sixteen times a second.
+    if (mode === 'off') {
+      stopKnobPolling()
+      invoke('drain_plugin_knob_moves').catch(() => {})
+    } else {
+      startKnobPolling()
+    }
   },
 
   setTrim: (trim) => {

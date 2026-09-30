@@ -248,6 +248,12 @@ pub fn rescan_and_restore_missing_plugins(
                         .lock()
                         .insert((track_id.clone(), slot_id.clone()), queue);
                 }
+                if let Some(log) = plugin.gui_edit_log() {
+                    state
+                        .slot_gui_edit_logs
+                        .lock()
+                        .insert((track_id.clone(), slot_id.clone()), log);
+                }
                 let gain_reduction_db = LiveSlot::new_gain_reduction();
                 state.slot_gain_reduction.lock().insert(
                     (track_id.clone(), slot_id.clone()),
@@ -495,6 +501,14 @@ pub fn add_plugin_to_track(
             .slot_param_queues
             .lock()
             .insert((track_id.clone(), slot_id.clone()), queue);
+    }
+    // The second copy of those edits, the one the app drains, is what
+    // lets automation record a knob inside the plug-in's own window.
+    if let Some(log) = plugin.gui_edit_log() {
+        state
+            .slot_gui_edit_logs
+            .lock()
+            .insert((track_id.clone(), slot_id.clone()), log);
     }
 
     // Phase 3: ship the freshly-built LiveSlot to the audio thread via
@@ -1000,4 +1014,44 @@ pub fn set_fx_chain_bypassed(
 #[tauri::command]
 pub fn retry_blocked_plugin(path: String) {
     crate::plugin_probe::retry(std::path::Path::new(&path));
+}
+
+/// One knob move made inside a plug-in's own window.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginKnobMove {
+    pub track_id: String,
+    pub slot_id: String,
+    pub param_id: u32,
+    /// 0 to 1, the same shape an automation lane stores.
+    pub value: f64,
+}
+
+/// Take the knob moves made in plug-in windows since the last call.
+///
+/// Faders and the generic parameter sheet have recorded automation
+/// since v0.226 because the app is the one moving them. A knob inside a
+/// plug-in's own window is moved by the plug-in, and the queue that
+/// carried those moves was drained by the audio thread before the app
+/// could see it. The host keeps a second copy now, and this hands it
+/// over so automation write can follow it like any other control.
+#[tauri::command]
+pub fn drain_plugin_knob_moves(state: State<AppState>) -> Vec<PluginKnobMove> {
+    let logs = state.slot_gui_edit_logs.lock();
+    let mut moves = Vec::new();
+    for ((track_id, slot_id), log) in logs.iter() {
+        let taken: Vec<(u32, f64)> = {
+            let mut q = log.lock();
+            std::mem::take(&mut *q)
+        };
+        for (param_id, value) in taken {
+            moves.push(PluginKnobMove {
+                track_id: track_id.clone(),
+                slot_id: slot_id.clone(),
+                param_id,
+                value: value.clamp(0.0, 1.0),
+            });
+        }
+    }
+    moves
 }

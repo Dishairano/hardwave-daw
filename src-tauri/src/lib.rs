@@ -51,6 +51,15 @@ pub struct AppState {
     #[allow(clippy::type_complexity)]
     pub slot_param_queues:
         Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
+    /// Where each insert logs the knob moves made in its own window.
+    ///
+    /// The queue above is drained by the plug-in on the audio path, so
+    /// the app never saw those edits: a knob inside a plug-in window
+    /// could be heard but not recorded. This one is drained by the app,
+    /// which is what lets automation write follow it.
+    #[allow(clippy::type_complexity)]
+    pub slot_gui_edit_logs:
+        Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
     /// Where each insert publishes its gain reduction, keyed by track and
     /// slot. Compressors and limiters worked this out every sample and
     /// threw it away; the mixer can show it now.
@@ -126,6 +135,7 @@ pub fn run() {
         export_cancel: Arc::new(AtomicBool::new(false)),
         plugin_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        slot_gui_edit_logs: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_gain_reduction: Arc::new(Mutex::new(std::collections::HashMap::new())),
         midi_mappings: Arc::clone(&midi_mappings),
         automation_write: Arc::new(commands::automation_write::AutomationWriteSessions::new()),
@@ -228,6 +238,7 @@ pub fn run() {
             commands::midi::get_midi_fx,
             commands::midi::set_midi_fx,
             commands::midi::preview_midi_fx,
+            commands::plugins::drain_plugin_knob_moves,
             commands::export::freeze_track,
             commands::export::unfreeze_track,
             commands::export::list_frozen_tracks,

@@ -118,6 +118,17 @@ pub trait HostedPlugin: Send {
     fn pending_params(&self) -> Option<SharedParamQueue> {
         None
     }
+
+    /// A copy of every edit made in the plug-in's own window.
+    ///
+    /// `pending_params` is drained by the plug-in itself on the audio
+    /// path, so by the time the app looks it is empty: knobs inside a
+    /// plug-in window could be heard but never recorded. This second
+    /// queue is written at the same moment and drained only by the app,
+    /// which is what lets automation record a knob the plug-in owns.
+    fn gui_edit_log(&self) -> Option<SharedParamQueue> {
+        None
+    }
 }
 
 /// Shared queue for GUI → audio parameter edits, used by both VST3 and

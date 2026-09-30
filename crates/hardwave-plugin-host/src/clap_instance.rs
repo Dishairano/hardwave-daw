@@ -50,6 +50,7 @@ pub struct ClapPluginInstance {
     /// injects `CLAP_EVENT_PARAM_VALUE` events into the plugin each block.
     /// Shared with a separate editor instance via `load_with_shared_pending`.
     pending_params: SharedParamQueue,
+    gui_edit_log: SharedParamQueue,
     /// True between a successful `open_editor` and `close_editor` so we
     /// don't double-create / leak the plugin's GUI.
     gui_open: bool,
@@ -61,6 +62,8 @@ pub struct ClapPluginInstance {
 struct ClapHostContext {
     plugin: *const ClapPlugin,
     pending: SharedParamQueue,
+    /// Every GUI edit again, drained by the app for automation recording.
+    gui_edit_log: SharedParamQueue,
 }
 
 // SAFETY: all pointers point into the plugin binary (lifetime bound
@@ -131,9 +134,11 @@ impl ClapPluginInstance {
         // valid even after the boxes move into `Self`.
         let pending_params: SharedParamQueue =
             shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
+        let gui_edit_log: SharedParamQueue = Arc::new(Mutex::new(Vec::new()));
         let mut host_ctx = Box::new(ClapHostContext {
             plugin: std::ptr::null(),
             pending: Arc::clone(&pending_params),
+            gui_edit_log: Arc::clone(&gui_edit_log),
         });
         let mut host = Box::new(build_static_host());
         host.host_data = &*host_ctx as *const ClapHostContext as *mut c_void;
@@ -182,6 +187,7 @@ impl ClapPluginInstance {
             cached_params: Vec::new(),
             initialized: true,
             pending_params,
+            gui_edit_log,
             gui_open: false,
         };
         me.refresh_params();
@@ -623,6 +629,10 @@ impl HostedPlugin for ClapPluginInstance {
         self.descriptor.has_editor
     }
 
+    fn gui_edit_log(&self) -> Option<SharedParamQueue> {
+        Some(Arc::clone(&self.gui_edit_log))
+    }
+
     fn pending_params(&self) -> Option<SharedParamQueue> {
         Some(Arc::clone(&self.pending_params))
     }
@@ -779,6 +789,10 @@ unsafe extern "C" fn clap_host_get_extension(
 
 struct ParamCapture {
     out: SharedParamQueue,
+    /// The same edits again, for the app. `out` is drained on the audio
+    /// path, so without a second copy a knob moved in the plug-in's own
+    /// window can be heard but never recorded.
+    log: SharedParamQueue,
 }
 
 /// Output-event sink passed to `params.flush`: records param-value
@@ -802,6 +816,20 @@ unsafe extern "C" fn param_capture_push(
             }
         }
         q.push((pv.param_id, pv.value));
+        drop(q);
+        let mut log = cap.log.lock();
+        if let Some(last) = log.last_mut() {
+            if last.0 == pv.param_id {
+                last.1 = pv.value;
+                return true;
+            }
+        }
+        // Bounded: if the app is not draining, the oldest moves go
+        // rather than the memory.
+        if log.len() >= 256 {
+            log.remove(0);
+        }
+        log.push((pv.param_id, pv.value));
     }
     true
 }
@@ -834,6 +862,7 @@ unsafe extern "C" fn host_params_request_flush(host: *const ClapHost) {
     };
     let cap = Box::into_raw(Box::new(ParamCapture {
         out: Arc::clone(&ctx.pending),
+        log: Arc::clone(&ctx.gui_edit_log),
     }));
     let out_events = ClapOutputEvents {
         ctx: cap as *mut c_void,

@@ -169,6 +169,8 @@ const mock: TauriInternals = {
       case 'rename_vca':
       case 'delete_vca':
         return null
+      case 'drain_plugin_knob_moves':
+        return []
       case 'list_frozen_tracks':
         return ['t-bass']
       case 'freeze_track':

@@ -131,6 +131,8 @@ struct Vst3Inner {
     /// the floating editor window were silent — the host never heard
     /// about them and the live audio kept rendering from stale values.
     pending_params: crate::types::SharedParamQueue,
+    /// Every GUI edit again, drained by the app for automation recording.
+    gui_edit_log: crate::types::SharedParamQueue,
     /// Holds the IComponentHandler ComWrapper alive for the lifetime
     /// of the plugin instance. Dropping the wrapper would invalidate
     /// the pointer the controller still holds.
@@ -147,6 +149,10 @@ struct Vst3Inner {
 /// on the next block.
 struct HardwaveComponentHandler {
     pending: crate::types::SharedParamQueue,
+    /// The same edits again, for the app rather than the audio thread.
+    /// Nothing on the audio path drains this, so a knob moved in the
+    /// plug-in's own window can be recorded as automation.
+    log: crate::types::SharedParamQueue,
 }
 
 impl vst3::Class for HardwaveComponentHandler {
@@ -177,6 +183,20 @@ impl IComponentHandlerTrait for HardwaveComponentHandler {
                 }
             }
             q.push((id, value));
+        }
+        if let Some(mut log) = self.log.try_lock() {
+            if let Some(last) = log.last_mut() {
+                if last.0 == id {
+                    last.1 = value;
+                    return kResultOk;
+                }
+            }
+            // Bounded: if the app is not draining, the oldest moves go
+            // rather than the memory.
+            if log.len() >= 256 {
+                log.remove(0);
+            }
+            log.push((id, value));
         }
         kResultOk
     }
@@ -367,8 +387,10 @@ impl Vst3PluginInstance {
         // Vst3Inner so its lifetime tracks the plugin instance.
         let pending_params: crate::types::SharedParamQueue =
             shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
+        let gui_edit_log: crate::types::SharedParamQueue = Arc::new(Mutex::new(Vec::new()));
         let handler_wrapper = vst3::ComWrapper::new(HardwaveComponentHandler {
             pending: Arc::clone(&pending_params),
+            log: Arc::clone(&gui_edit_log),
         });
         if let Some(ctrl) = &controller {
             if let Some(handler_ptr) = handler_wrapper.to_com_ptr::<IComponentHandler>() {
@@ -396,6 +418,7 @@ impl Vst3PluginInstance {
             num_outputs,
             has_midi_input,
             pending_params,
+            gui_edit_log,
             component_handler: Some(handler_wrapper),
         });
 
@@ -821,6 +844,10 @@ impl HostedPlugin for Vst3PluginInstance {
 
     fn pending_params(&self) -> Option<crate::types::SharedParamQueue> {
         Some(Arc::clone(&self.inner.pending_params))
+    }
+
+    fn gui_edit_log(&self) -> Option<crate::types::SharedParamQueue> {
+        Some(Arc::clone(&self.inner.gui_edit_log))
     }
 }
 
