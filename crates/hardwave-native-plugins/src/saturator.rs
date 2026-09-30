@@ -14,7 +14,8 @@ use std::path::PathBuf;
 const PARAM_AMOUNT: u32 = 0;
 const PARAM_OUTPUT: u32 = 1;
 const PARAM_MIX: u32 = 2;
-const PARAM_COUNT: u32 = 3;
+const PARAM_OVERSAMPLE: u32 = 3;
+const PARAM_COUNT: u32 = 4;
 
 pub struct NativeSaturator {
     descriptor: PluginDescriptor,
@@ -23,6 +24,12 @@ pub struct NativeSaturator {
     output_db: f32,
     mix: f32,
     active: bool,
+    sample_rate: f32,
+    /// A tanh curve folds harmonics back down the spectrum at the project
+    /// rate. Running the curve faster and filtering on the way back puts
+    /// them where they belong, the same as the distortion and the clipper.
+    oversample: hardwave_dsp::oversample::OversampleFactor,
+    oversampler: hardwave_dsp::oversample::Oversampler,
 }
 
 impl NativeSaturator {
@@ -52,6 +59,11 @@ impl NativeSaturator {
             output_db: 0.0,
             mix: 1.0,
             active: false,
+            sample_rate: 48_000.0,
+            // Two times by default: the curve is gentler than the
+            // clipper's, so two is enough for the settings people use.
+            oversample: hardwave_dsp::oversample::OversampleFactor::Two,
+            oversampler: hardwave_dsp::oversample::Oversampler::new(),
         }
     }
 }
@@ -67,8 +79,10 @@ impl HostedPlugin for NativeSaturator {
         &self.descriptor
     }
 
-    fn activate(&mut self, _sr: f64, _max: u32) -> Result<(), String> {
+    fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.active = true;
+        self.sample_rate = sr as f32;
+        self.oversampler.reset();
         Ok(())
     }
     fn deactivate(&mut self) {
@@ -97,13 +111,20 @@ impl HostedPlugin for NativeSaturator {
         let out_lin = 10.0_f32.powf(self.output_db / 20.0);
         let mix = self.mix;
         let dry = 1.0 - mix;
+        self.oversampler
+            .configure(self.sample_rate, self.oversample);
+        let drive_l = &self.drive_l;
+        let drive_r = &self.drive_r;
         for i in 0..num_samples {
             let in_l = inputs[0].get(i).copied().unwrap_or(0.0);
             let in_r = inputs[1].get(i).copied().unwrap_or(0.0);
-            let wet_l = self.drive_l.process(in_l) * out_lin;
-            let wet_r = self.drive_r.process(in_r) * out_lin;
-            outputs[0][i] = in_l * dry + wet_l * mix;
-            outputs[1][i] = in_r * dry + wet_r * mix;
+            // Only the curve runs faster. The output level and the mix are
+            // gains, which alias at no rate.
+            let (wet_l, wet_r) = self
+                .oversampler
+                .process_frame(in_l, in_r, |l, r| (drive_l.process(l), drive_r.process(r)));
+            outputs[0][i] = in_l * dry + wet_l * out_lin * mix;
+            outputs[1][i] = in_r * dry + wet_r * out_lin * mix;
         }
     }
 
@@ -116,6 +137,7 @@ impl HostedPlugin for NativeSaturator {
             PARAM_AMOUNT => ("Amount", 0.3, "%"),
             PARAM_OUTPUT => ("Output", 0.5, "dB"), // 0.5 = unity
             PARAM_MIX => ("Mix", 1.0, "%"),
+            PARAM_OVERSAMPLE => ("Oversample", 0.5, "off / 2x / 4x"),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -135,6 +157,11 @@ impl HostedPlugin for NativeSaturator {
             // -24..=+12 dB
             PARAM_OUTPUT => ((self.output_db + 24.0) / 36.0).clamp(0.0, 1.0) as f64,
             PARAM_MIX => self.mix as f64,
+            PARAM_OVERSAMPLE => match self.oversample {
+                hardwave_dsp::oversample::OversampleFactor::Off => 0.0,
+                hardwave_dsp::oversample::OversampleFactor::Two => 0.5,
+                hardwave_dsp::oversample::OversampleFactor::Four => 1.0,
+            },
             _ => 0.0,
         }
     }
@@ -148,6 +175,16 @@ impl HostedPlugin for NativeSaturator {
             }
             PARAM_OUTPUT => self.output_db = (v * 36.0 - 24.0) as f32,
             PARAM_MIX => self.mix = v as f32,
+            PARAM_OVERSAMPLE => {
+                use hardwave_dsp::oversample::OversampleFactor;
+                self.oversample = if v < 0.25 {
+                    OversampleFactor::Off
+                } else if v < 0.75 {
+                    OversampleFactor::Two
+                } else {
+                    OversampleFactor::Four
+                };
+            }
             _ => {}
         }
     }
@@ -194,5 +231,89 @@ impl HostedPlugin for NativeSaturator {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hardwave_dsp::oversample::OversampleFactor;
+
+    /// One bin of a discrete Fourier transform, which is all that is
+    /// needed to ask how much sits at one frequency.
+    fn goertzel(samples: &[f32], sample_rate: f32, freq: f32) -> f32 {
+        let k = (samples.len() as f32 * freq / sample_rate).round();
+        let w = std::f32::consts::TAU * k / samples.len() as f32;
+        let coeff = 2.0 * w.cos();
+        let (mut s1, mut s2) = (0.0f32, 0.0f32);
+        for x in samples {
+            let s0 = x + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        (s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0).sqrt()
+    }
+
+    /// How much of a hard-driven high tone comes back as a tone that was
+    /// never played. A saturator folds harmonics down the spectrum at the
+    /// project rate; running the curve faster is what stops it.
+    fn fold_back_share(factor: OversampleFactor) -> f32 {
+        let sample_rate = 48_000.0f32;
+        let mut sat = NativeSaturator::new();
+        sat.activate(sample_rate as f64, 512).expect("activate");
+        sat.set_parameter_value(PARAM_AMOUNT, 1.0);
+        sat.set_parameter_value(PARAM_MIX, 1.0);
+        sat.set_parameter_value(
+            PARAM_OVERSAMPLE,
+            match factor {
+                OversampleFactor::Off => 0.0,
+                OversampleFactor::Two => 0.5,
+                OversampleFactor::Four => 1.0,
+            },
+        );
+
+        let frames = 4096;
+        let tone: Vec<f32> = (0..frames)
+            .map(|n| (std::f32::consts::TAU * 17_000.0 * n as f32 / sample_rate).sin() * 0.9)
+            .collect();
+        let inputs: Vec<&[f32]> = vec![&tone, &tone];
+        let mut outputs = vec![Vec::new(), Vec::new()];
+        sat.process(&inputs, &mut outputs, &[], &mut Vec::new(), frames);
+
+        // 17 kHz driven hard puts its third harmonic at 51 kHz, which at
+        // 48 kHz folds back to 3 kHz: a tone nothing played.
+        let fundamental = goertzel(&outputs[0], sample_rate, 17_000.0);
+        let folded = goertzel(&outputs[0], sample_rate, 3_000.0);
+        folded / fundamental.max(1e-9)
+    }
+
+    #[test]
+    fn oversampling_reduces_what_the_saturator_folds_back() {
+        let plain = fold_back_share(OversampleFactor::Off);
+        let four = fold_back_share(OversampleFactor::Four);
+        assert!(
+            four < plain * 0.5,
+            "four times should cut the fold-back well below the project rate: {plain:.5} against {four:.5}"
+        );
+    }
+
+    #[test]
+    fn the_saturator_still_passes_audio_with_oversampling_on() {
+        let sample_rate = 48_000.0f32;
+        let mut sat = NativeSaturator::new();
+        sat.activate(sample_rate as f64, 512).expect("activate");
+        sat.set_parameter_value(PARAM_AMOUNT, 0.5);
+        let frames = 1024;
+        let tone: Vec<f32> = (0..frames)
+            .map(|n| (std::f32::consts::TAU * 220.0 * n as f32 / sample_rate).sin() * 0.5)
+            .collect();
+        let inputs: Vec<&[f32]> = vec![&tone, &tone];
+        let mut outputs = vec![Vec::new(), Vec::new()];
+        sat.process(&inputs, &mut outputs, &[], &mut Vec::new(), frames);
+        let peak = outputs[0].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(
+            peak > 0.1,
+            "a 220 Hz tone should come out audible, got {peak:.4}"
+        );
     }
 }
