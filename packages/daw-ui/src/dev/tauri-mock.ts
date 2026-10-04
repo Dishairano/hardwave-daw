@@ -169,6 +169,10 @@ const mock: TauriInternals = {
       case 'rename_vca':
       case 'delete_vca':
         return null
+      case 'get_mpe':
+        return false
+      case 'set_mpe':
+        return null
       case 'get_tuning':
         return null
       case 'load_tuning_file':

@@ -106,6 +106,10 @@ struct Voice {
     /// How long the release takes for this voice, in seconds. Taken from
     /// the note's release velocity: harder release, shorter tail.
     release_secs: f32,
+    /// Which MIDI channel started this voice. Only meaningful with MPE
+    /// on, where every note arrives on a channel of its own and is bent
+    /// and pressed on that channel alone.
+    channel: u8,
 }
 
 /// Max simultaneous built-in-synth voices. Beyond this, the oldest voice
@@ -169,6 +173,16 @@ pub struct MidiTrackNode {
     /// What each MIDI note sounds at, when the track is not in twelve
     /// equal. `None` is twelve equal, which is the plain formula.
     tuning_table: Option<Box<[f32; 128]>>,
+    /// MPE: every note on its own channel, bent and pressed on that
+    /// channel alone. Off means one bend for the whole track, which is
+    /// how ordinary MIDI works.
+    mpe: bool,
+    /// Which channel the note being started came in on.
+    live_channel: u8,
+    /// Per-channel bend and pressure, for MPE. Channel 0 is the master
+    /// channel, which a desk uses for the whole zone.
+    channel_bend: [f32; 16],
+    channel_pressure: [f32; 16],
     /// MIDI effects between the input and the instrument. Clip notes are
     /// already through the chain by the time they arrive here; this is
     /// for what is played live.
@@ -271,6 +285,10 @@ impl MidiTrackNode {
             next_control_idx: 0,
             control_scratch: Vec::with_capacity(64),
             tuning_table: None,
+            mpe: false,
+            live_channel: 0,
+            channel_bend: [1.0; 16],
+            channel_pressure: [0.0; 16],
             midi_fx: Vec::new(),
             chase_scratch: Vec::with_capacity(16),
             bend_mul: 1.0,
@@ -398,6 +416,7 @@ impl MidiTrackNode {
             off_sample,
             pan: pan.clamp(-1.0, 1.0),
             release_secs: release_seconds(release_velocity),
+            channel: self.live_channel,
         });
     }
 
@@ -465,6 +484,21 @@ impl MidiTrackNode {
         match &self.tuning_table {
             Some(table) => table[pitch as usize],
             None => pitch_to_freq(pitch),
+        }
+    }
+
+    /// Switch MPE on for this track.
+    ///
+    /// With it on, a note is bent and pressed by the channel it arrived
+    /// on rather than by one bend for the whole track, which is what
+    /// lets a controller bend one note of a chord. The built-in voices
+    /// follow it; a hosted plug-in gets the events as they came in and
+    /// decides for itself.
+    pub fn set_mpe(&mut self, enabled: bool) {
+        self.mpe = enabled;
+        if !enabled {
+            self.channel_bend = [1.0; 16];
+            self.channel_pressure = [0.0; 16];
         }
     }
 
@@ -662,7 +696,16 @@ impl AudioNode for MidiTrackNode {
         // makes that work.
         for ev in midi_in {
             match *ev {
-                hardwave_midi::MidiEvent::NoteOn { note, velocity, .. } => {
+                hardwave_midi::MidiEvent::NoteOn {
+                    note,
+                    velocity,
+                    channel,
+                    ..
+                } => {
+                    // With MPE the note belongs to the channel it came
+                    // in on, which is what lets one note of a chord be
+                    // bent on its own.
+                    self.live_channel = if self.mpe { channel & 0x0F } else { 0 };
                     // The chain turns one key press into whatever the
                     // chord, scale and transpose effects make of it.
                     let (pitches, count) = self.live_pitches(note);
@@ -695,8 +738,23 @@ impl AudioNode for MidiTrackNode {
                         }
                     }
                 }
-                hardwave_midi::MidiEvent::PitchBend { value, .. } => {
-                    self.bend_mul = bend_multiplier(value);
+                hardwave_midi::MidiEvent::PitchBend { value, channel, .. } => {
+                    if self.mpe {
+                        self.channel_bend[(channel & 0x0F) as usize] = bend_multiplier(value);
+                        // Channel 0 is the master channel of the zone:
+                        // a bend there moves everything, as the spec says.
+                        if channel & 0x0F == 0 {
+                            self.bend_mul = bend_multiplier(value);
+                        }
+                    } else {
+                        self.bend_mul = bend_multiplier(value);
+                    }
+                }
+                hardwave_midi::MidiEvent::ChannelPressure {
+                    channel, pressure, ..
+                } if self.mpe => {
+                    // Pressure on a channel presses that one note.
+                    self.channel_pressure[(channel & 0x0F) as usize] = pressure.clamp(0.0, 1.0);
                 }
                 _ => {}
             }
@@ -814,6 +872,7 @@ impl AudioNode for MidiTrackNode {
         }
         self.control_scratch = controls;
         let bend_mul = self.bend_mul;
+        let mpe = self.mpe;
 
         // Skip notes that ended before the block starts. This fast-forwards
         // `next_note_idx` after a seek so we don't fire stale note-ons.
@@ -918,11 +977,28 @@ impl AudioNode for MidiTrackNode {
                         }
                         let env = Self::step_envelope(v, sr);
                         let osc = self.waveform.sample(v.phase);
-                        v.phase += TWO_PI * v.freq * bend_mul / sr;
+                        // With MPE the bend and the pressure belong to
+                        // the voice's own channel; without it there is
+                        // one bend for the track and no pressure.
+                        let voice_bend = if mpe {
+                            bend_mul * self.channel_bend[v.channel as usize]
+                        } else {
+                            bend_mul
+                        };
+                        v.phase += TWO_PI * v.freq * voice_bend / sr;
                         if v.phase >= TWO_PI {
                             v.phase -= TWO_PI;
                         }
-                        let value = osc * env * v.velocity;
+                        let press = if mpe {
+                            // Pressure adds on top of the key velocity
+                            // rather than replacing it, so leaning into
+                            // a note is heard without a quiet note
+                            // jumping to full.
+                            1.0 + self.channel_pressure[v.channel as usize]
+                        } else {
+                            1.0
+                        };
+                        let value = osc * env * v.velocity * press;
                         if v.pan == 0.0 {
                             s_l += value;
                             s_r += value;
@@ -1863,5 +1939,114 @@ mod per_note_shape_tests {
     fn a_release_value_outside_the_control_cannot_stretch_the_tail_further() {
         assert_eq!(release_seconds(-3.0), release_seconds(0.0));
         assert_eq!(release_seconds(7.0), release_seconds(1.0));
+    }
+}
+
+#[cfg(test)]
+mod mpe_tests {
+    use super::*;
+    use hardwave_midi::MidiEvent;
+
+    fn node() -> MidiTrackNode {
+        MidiTrackNode::new(
+            "t1".to_string(),
+            "Synth".to_string(),
+            std::sync::Arc::new(crate::track_node::TrackMeterState::default()),
+        )
+    }
+
+    fn note_on(channel: u8, note: u8) -> MidiEvent {
+        MidiEvent::NoteOn {
+            timing: 0,
+            channel,
+            note,
+            velocity: 1.0,
+        }
+    }
+
+    fn bend(channel: u8, value: f32) -> MidiEvent {
+        MidiEvent::PitchBend {
+            timing: 0,
+            channel,
+            value,
+        }
+    }
+
+    fn render(node: &mut MidiTrackNode, events: &[MidiEvent]) -> Vec<Vec<f32>> {
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            buffer_size: 4096,
+            tempo: 140.0,
+            time_sig: (4, 4),
+            position_samples: 0,
+            position_ticks: 0,
+            // Stopped: live notes still sound, which is what is being
+            // measured here.
+            playing: false,
+        };
+        // The graph hands the node buffers that are already the right
+        // size, so the test does the same.
+        let mut outputs = vec![vec![0.0f32; 4096]; 4];
+        let empty: Vec<f32> = vec![0.0; 4096];
+        let inputs: Vec<&[f32]> = vec![&empty, &empty, &empty, &empty];
+        let mut midi_out = Vec::new();
+        node.process(&inputs, &mut outputs, events, &mut midi_out, &ctx);
+        outputs
+    }
+
+    /// Counting zero crossings is a cheap way to ask what pitch came
+    /// out without running a transform over the block.
+    fn crossings(samples: &[f32]) -> usize {
+        samples
+            .windows(2)
+            .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
+            .count()
+    }
+
+    #[test]
+    fn without_mpe_a_bend_on_another_channel_moves_the_note_anyway() {
+        let mut n = node();
+        let plain = render(&mut n, &[note_on(0, 69)]);
+        let before = crossings(&plain[0]);
+        // Ordinary MIDI: one bend for the whole track, whatever channel
+        // it arrives on.
+        let bent = render(&mut n, &[bend(5, 1.0)]);
+        assert!(
+            crossings(&bent[0]) > before,
+            "the note should have gone up: {before} then {}",
+            crossings(&bent[0])
+        );
+    }
+
+    #[test]
+    fn with_mpe_a_bend_only_moves_the_note_on_that_channel() {
+        let mut n = node();
+        n.set_mpe(true);
+        let plain = render(&mut n, &[note_on(1, 69)]);
+        let before = crossings(&plain[0]);
+        // A bend on a channel nothing is playing on leaves it alone.
+        let other = render(&mut n, &[bend(7, 1.0)]);
+        assert_eq!(
+            crossings(&other[0]),
+            before,
+            "a bend on another channel must not move this note"
+        );
+        // A bend on its own channel moves it.
+        let own = render(&mut n, &[bend(1, 1.0)]);
+        assert!(
+            crossings(&own[0]) > before,
+            "the note's own channel should bend it: {before} then {}",
+            crossings(&own[0])
+        );
+    }
+
+    #[test]
+    fn switching_mpe_off_forgets_the_channels_it_was_holding() {
+        let mut n = node();
+        n.set_mpe(true);
+        render(&mut n, &[note_on(2, 60), bend(2, 1.0)]);
+        n.set_mpe(false);
+        assert!(n.channel_bend.iter().all(|b| (*b - 1.0).abs() < 1e-9));
+        assert!(n.channel_pressure.iter().all(|p| *p == 0.0));
     }
 }

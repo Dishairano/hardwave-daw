@@ -977,3 +977,36 @@ pub fn set_tuning_root(
     state.engine.lock().rebuild_graph();
     Ok(())
 }
+
+/// Whether a track reads MPE: every note on its own channel.
+#[tauri::command]
+pub fn get_mpe(state: State<AppState>, track_id: String) -> bool {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    project.track(&track_id).map(|t| t.mpe).unwrap_or(false)
+}
+
+/// Switch MPE on for a track.
+///
+/// With it on, a note is bent and pressed by the channel it arrived on
+/// rather than by one bend for the whole track, so a controller can
+/// bend one note of a chord. The built-in instruments follow it; a
+/// hosted plug-in receives the events as they came in and decides for
+/// itself.
+#[tauri::command]
+pub fn set_mpe(state: State<AppState>, track_id: String, enabled: bool) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        if !matches!(track.kind, hardwave_project::TrackKind::Midi) {
+            return Err("MPE belongs on a MIDI track".into());
+        }
+        track.mpe = enabled;
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}

@@ -55,6 +55,8 @@ export function TrackList() {
   // Which tracks play in something other than twelve equal, by scale
   // name, so the menu can offer to clear it rather than only set it.
   const [tunedTracks, setTunedTracks] = useState<Record<string, string>>({})
+  // Which MIDI tracks read MPE.
+  const [mpeTracks, setMpeTracks] = useState<string[]>([])
   useEffect(() => {
     const load = () => {
       invoke<string[]>('list_frozen_tracks')
@@ -80,6 +82,14 @@ export function TrackList() {
       const next: Record<string, string> = {}
       for (const [id, name] of pairs) if (name) next[id] = name
       setTunedTracks(next)
+    })
+    Promise.all(ids.map(id =>
+      invoke<boolean>('get_mpe', { trackId: id })
+        .then(on => [id, on] as const)
+        .catch(() => [id, false] as const),
+    )).then(pairs => {
+      if (cancelled) return
+      setMpeTracks(pairs.filter(([, on]) => on).map(([id]) => id))
     })
     return () => { cancelled = true }
   }, [midiTrackIds])
@@ -452,6 +462,26 @@ export function TrackList() {
                 useNotificationStore.getState().push('warning', 'Could not spread the takes', { detail: String(e) })
               }
             }} />
+            {t.kind === 'Midi' && (
+              <TrackMenuItem
+                label={mpeTracks.includes(t.id) ? 'MPE: on' : 'MPE: off'}
+                onClick={async () => {
+                  setCtxMenu(null)
+                  const next = !mpeTracks.includes(t.id)
+                  try {
+                    await invoke('set_mpe', { trackId: t.id, enabled: next })
+                    setMpeTracks(prev => next ? [...prev, t.id] : prev.filter(id => id !== t.id))
+                    useNotificationStore.getState().push('info',
+                      next ? `"${t.name}" reads MPE` : `"${t.name}" reads ordinary MIDI`,
+                      { detail: next
+                        ? 'Each note is bent and pressed on the channel it arrives on, so one note of a chord can be bent on its own.'
+                        : 'One bend for the whole track again.' })
+                  } catch (e) {
+                    useNotificationStore.getState().push('warning', 'Could not change that', { detail: String(e) })
+                  }
+                }}
+              />
+            )}
             {t.kind === 'Midi' && (
               <TrackMenuItem
                 label={tunedTracks[t.id] ? `Tuning: ${tunedTracks[t.id]} (clear)` : 'Tuning from a Scala file…'}

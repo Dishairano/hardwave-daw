@@ -266,6 +266,12 @@ pub struct Track {
     #[serde(default)]
     pub frozen: bool,
 
+    /// MPE: every note on its own MIDI channel, bent and pressed on
+    /// that channel alone, which is what lets a controller bend one
+    /// note of a chord. Off is ordinary MIDI, one bend for the track.
+    #[serde(default)]
+    pub mpe: bool,
+
     /// A tuning other than twelve equal for this track's instrument.
     ///
     /// Kept as the degrees themselves rather than a path to a file, so
@@ -318,6 +324,7 @@ impl Track {
             automation_clips: Vec::new(),
             stem_excluded: false,
             midi_route_to: Vec::new(),
+            mpe: false,
             tuning: None,
             frozen: false,
             midi_fx: Vec::new(),

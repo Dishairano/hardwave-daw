@@ -249,6 +249,8 @@ pub fn run() {
             commands::midi_input::get_control_surface,
             commands::midi_input::set_control_surface_enabled,
             commands::midi_input::set_control_surface_bank,
+            commands::midi::get_mpe,
+            commands::midi::set_mpe,
             commands::midi::load_tuning_file,
             commands::midi::clear_tuning,
             commands::midi::get_tuning,

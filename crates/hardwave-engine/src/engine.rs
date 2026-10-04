@@ -2317,6 +2317,7 @@ impl EngineCallback {
                 // A tuning other than twelve equal, worked out here so
                 // the audio thread only ever reads a table.
                 midi_node.set_tuning(track.tuning.as_ref().map(|t| Box::new(t.table())));
+                midi_node.set_mpe(track.mpe);
                 midi_node.set_notes(note_regions);
                 midi_node.set_controls(control_regions);
 
