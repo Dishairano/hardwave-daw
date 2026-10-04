@@ -1709,6 +1709,107 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     return () => window.removeEventListener('mousedown', close)
   }, [markerCtx])
 
+  /**
+   * Keyboard use of the arrangement.
+   *
+   * The playlist is a canvas, so without this there is nothing to tab
+   * to and nothing for a screen reader to read: the whole arrangement
+   * was mouse-only. The canvas takes focus, the arrows walk the tracks
+   * and the clips on them, and what the focus lands on is spoken.
+   */
+  const [spokenFocus, setSpokenFocus] = useState('')
+
+  const speakClip = useCallback((trackIndex: number, clipIndex: number) => {
+    const track = audioTracks[trackIndex]
+    if (!track) return
+    const clip = track.clips[clipIndex]
+    if (!clip) {
+      setSpokenFocus(`${track.name}, no clips`)
+      return
+    }
+    const bar = Math.floor(clip.position_ticks / (PPQ * 4)) + 1
+    const bars = Math.max(1, Math.round(clip.length_ticks / (PPQ * 4)))
+    setSpokenFocus(
+      `${track.name}, clip ${clipIndex + 1} of ${track.clips.length}, `
+      + `bar ${bar}, ${bars} bar${bars === 1 ? '' : 's'}`
+      + `${clip.muted ? ', muted' : ''}`,
+    )
+  }, [audioTracks])
+
+  const handleCanvasKeyDown = useCallback((e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    if (e.altKey) return // marker navigation owns Alt
+    const ts = useTrackStore.getState()
+    const current = ts.selectedClipId
+    let trackIndex = audioTracks.findIndex(t => t.clips.some(c => c.id === current))
+    if (trackIndex < 0) trackIndex = 0
+    const track = audioTracks[trackIndex]
+    if (!track) return
+    let clipIndex = track.clips.findIndex(c => c.id === current)
+
+    const select = (ti: number, ci: number) => {
+      const t = audioTracks[ti]
+      if (!t) return
+      const clip = t.clips[ci]
+      ts.selectTrack(t.id)
+      ts.selectClip(clip ? clip.id : null, t.id)
+      speakClip(ti, ci)
+    }
+
+    switch (e.key) {
+      case 'ArrowDown':
+      case 'ArrowUp': {
+        e.preventDefault()
+        const next = Math.min(
+          audioTracks.length - 1,
+          Math.max(0, trackIndex + (e.key === 'ArrowDown' ? 1 : -1)),
+        )
+        select(next, 0)
+        return
+      }
+      case 'ArrowRight':
+      case 'ArrowLeft': {
+        e.preventDefault()
+        const step = e.key === 'ArrowRight' ? 1 : -1
+        if ((e.ctrlKey || e.metaKey) && clipIndex >= 0) {
+          // Nudge by the snap value rather than walking the clips.
+          const clip = track.clips[clipIndex]
+          const by = snapTicks > 0 ? snapTicks : PPQ
+          const to = Math.max(0, clip.position_ticks + step * by)
+          void ts.moveClip(track.id, clip.id, to)
+          setSpokenFocus(`moved to bar ${Math.floor(to / (PPQ * 4)) + 1}`)
+          return
+        }
+        if (clipIndex < 0) clipIndex = step > 0 ? -1 : track.clips.length
+        const next = Math.min(track.clips.length - 1, Math.max(0, clipIndex + step))
+        select(trackIndex, next)
+        return
+      }
+      case 'Enter': {
+        if (clipIndex < 0) return
+        e.preventDefault()
+        const clip = track.clips[clipIndex]
+        if (clip.kind === 'midi') {
+          ts.setActiveMidiClip(track.id, clip.id)
+          window.dispatchEvent(new CustomEvent('daw:openPianoRoll'))
+          setSpokenFocus(`opened ${clip.name} in the piano roll`)
+        } else {
+          setSpokenFocus(`${clip.name} is audio, nothing to open`)
+        }
+        return
+      }
+      case 'Delete':
+      case 'Backspace': {
+        if (clipIndex < 0) return
+        e.preventDefault()
+        const name = track.clips[clipIndex].name
+        void ts.deleteSelectedClips()
+        setSpokenFocus(`removed ${name}`)
+        return
+      }
+      default:
+    }
+  }, [audioTracks, snapTicks, speakClip])
+
   // Marker navigation hotkeys
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1948,11 +2049,25 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         ...(dropHighlight ? { outline: `2px solid ${hw.accent}`, outlineOffset: -2 } : {}),
       }}
     >
+      {/* What the keyboard is on, spoken for a screen reader. The
+          arrangement is drawn on a canvas, which a reader cannot see
+          into, so the canvas says out loud what it is showing. */}
+      <div
+        aria-live="polite"
+        style={{
+          position: 'absolute', width: 1, height: 1, overflow: 'hidden',
+          clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap',
+        }}
+      >{spokenFocus}</div>
       <canvas
         ref={canvasRef}
         data-testid="arrangement-canvas"
         data-track-height={trackHeight}
-        style={{ position: 'absolute', top: 0, left: 0 }}
+        tabIndex={0}
+        role="application"
+        aria-label="Arrangement. Arrow keys move between tracks and clips, Enter opens a clip, Delete removes it, Ctrl with left or right nudges it by the snap value."
+        onKeyDown={handleCanvasKeyDown}
+        style={{ position: 'absolute', top: 0, left: 0, outline: 'none' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
