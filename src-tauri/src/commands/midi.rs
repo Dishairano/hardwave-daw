@@ -874,3 +874,106 @@ pub fn preview_midi_fx(
     }
     Err(format!("MIDI clip not found: {clip_id}"))
 }
+
+// ---------------------------------------------------------------------------
+// Tuning
+// ---------------------------------------------------------------------------
+
+/// Read a Scala file and put its scale on a track.
+///
+/// The scale itself is stored in the song, not the path, so a project
+/// opened on another machine still sounds the way it did. The built-in
+/// instruments follow it; a hosted plug-in keeps its own tuning,
+/// because retuning one needs MTS or note expression and the host does
+/// not send either yet.
+#[tauri::command]
+pub fn load_tuning_file(
+    state: State<AppState>,
+    track_id: String,
+    path: String,
+    root_note: Option<u8>,
+    root_hz: Option<f64>,
+) -> Result<hardwave_midi::scala::Tuning, String> {
+    let source = std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?;
+    let fallback = std::path::Path::new(&path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Tuning");
+    let mut tuning = hardwave_midi::scala::parse_scl(&source, fallback)?;
+    if let Some(note) = root_note {
+        tuning.root_note = note;
+    }
+    if let Some(hz) = root_hz {
+        if hz > 0.0 {
+            tuning.root_hz = hz;
+        }
+    }
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        track.tuning = Some(tuning.clone());
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(tuning)
+}
+
+/// Back to twelve equal.
+#[tauri::command]
+pub fn clear_tuning(state: State<AppState>, track_id: String) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        track.tuning = None;
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// The tuning on a track, or nothing when it is in twelve equal.
+#[tauri::command]
+pub fn get_tuning(
+    state: State<AppState>,
+    track_id: String,
+) -> Option<hardwave_midi::scala::Tuning> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    project.track(&track_id).and_then(|t| t.tuning.clone())
+}
+
+/// Move the scale's anchor: which note it starts on and what that note
+/// sounds at.
+#[tauri::command]
+pub fn set_tuning_root(
+    state: State<AppState>,
+    track_id: String,
+    root_note: u8,
+    root_hz: f64,
+) -> Result<(), String> {
+    if root_hz <= 0.0 {
+        return Err("a root has to have a pitch".into());
+    }
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let tuning = track
+            .tuning
+            .as_mut()
+            .ok_or_else(|| "that track is in twelve equal".to_string())?;
+        tuning.root_note = root_note.min(127);
+        tuning.root_hz = root_hz;
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}

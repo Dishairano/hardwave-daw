@@ -2355,3 +2355,87 @@ fn a_frozen_track_plays_its_render_and_unfreezing_puts_the_part_back() {
         "a frozen track plays the render, not its part"
     );
 }
+
+/// A track can play in a tuning other than twelve equal.
+///
+/// Measured from outside: the same written note comes out at a
+/// different frequency once the scale is on the track.
+#[test]
+fn a_track_in_another_tuning_plays_other_pitches() {
+    use hardwave_midi::scala::Tuning;
+    use hardwave_midi::{MidiClip, MidiNote};
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+
+    let sr = SAMPLE_RATE;
+    let render = |tuning: Option<Tuning>| -> Vec<f32> {
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            let id = project.add_midi_track("Synth".to_string());
+            let mut clip = MidiClip::new("tune-clip".to_string(), "tune".to_string(), 1920);
+            clip.notes.push(MidiNote {
+                start_tick: 0,
+                duration_ticks: 1920,
+                pitch: 69,
+                velocity: 1.0,
+                ..Default::default()
+            });
+            if let Some(track) = project.track_mut(&id) {
+                track.clips.push(ClipPlacement {
+                    content: ClipContent::Midi(MidiClipRef {
+                        id: "tune-clip".to_string(),
+                        clip,
+                    }),
+                    track_id: id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1920,
+                    lane: 0,
+                });
+                track.tuning = tuning;
+            }
+        }
+        let mut out = Vec::new();
+        engine
+            .render_offline(sr, sr as u64 / 2, |block| {
+                out.extend_from_slice(block);
+                true
+            })
+            .expect("offline render");
+        out
+    };
+
+    let energy_at = |samples: &[f32], freq: f32| -> f32 {
+        let n = samples.len().min(16_384);
+        let k = (n as f32 * freq / sr as f32).round();
+        let w = std::f32::consts::TAU * k / n as f32;
+        let coeff = 2.0 * w.cos();
+        let (mut s1, mut s2) = (0.0f32, 0.0f32);
+        for x in samples.iter().take(n).step_by(2) {
+            let s0 = x + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        (s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0).sqrt()
+    };
+
+    // A4 in twelve equal is 440 Hz.
+    let plain = render(None);
+    assert!(
+        energy_at(&plain, 440.0) > energy_at(&plain, 330.0) * 4.0,
+        "without a tuning A4 is 440 Hz"
+    );
+
+    // Five equal steps to the octave, anchored so note 69 sounds at
+    // 330 Hz: the same written note now plays something else.
+    let five = Tuning {
+        name: "five equal".into(),
+        degrees_cents: vec![240.0, 480.0, 720.0, 960.0, 1200.0],
+        root_note: 69,
+        root_hz: 330.0,
+    };
+    let retuned = render(Some(five));
+    assert!(
+        energy_at(&retuned, 330.0) > energy_at(&retuned, 440.0) * 4.0,
+        "with the scale on the track the same note sounds at its root"
+    );
+}

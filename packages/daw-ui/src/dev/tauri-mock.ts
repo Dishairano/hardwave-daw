@@ -169,6 +169,13 @@ const mock: TauriInternals = {
       case 'rename_vca':
       case 'delete_vca':
         return null
+      case 'get_tuning':
+        return null
+      case 'load_tuning_file':
+        return { name: 'Phrygian 12', degrees_cents: [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200], root_note: 60, root_hz: 261.6 }
+      case 'clear_tuning':
+      case 'set_tuning_root':
+        return null
       case 'list_modulations':
         return [
           {

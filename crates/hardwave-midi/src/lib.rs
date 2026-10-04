@@ -7,6 +7,7 @@ pub mod midi_fx;
 pub mod osc;
 pub mod output;
 pub mod recording;
+pub mod scala;
 pub mod smf;
 pub mod theory;
 pub mod velocity;

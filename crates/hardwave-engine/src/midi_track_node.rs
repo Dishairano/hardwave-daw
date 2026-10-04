@@ -166,6 +166,9 @@ pub struct MidiTrackNode {
     /// This block's controller events, kept between blocks so collecting
     /// them does not allocate on the audio thread.
     control_scratch: Vec<hardwave_midi::MidiEvent>,
+    /// What each MIDI note sounds at, when the track is not in twelve
+    /// equal. `None` is twelve equal, which is the plain formula.
+    tuning_table: Option<Box<[f32; 128]>>,
     /// MIDI effects between the input and the instrument. Clip notes are
     /// already through the chain by the time they arrive here; this is
     /// for what is played live.
@@ -267,6 +270,7 @@ impl MidiTrackNode {
             controls: Vec::new(),
             next_control_idx: 0,
             control_scratch: Vec::with_capacity(64),
+            tuning_table: None,
             midi_fx: Vec::new(),
             chase_scratch: Vec::with_capacity(16),
             bend_mul: 1.0,
@@ -386,7 +390,7 @@ impl MidiTrackNode {
         }
         self.voices.push(Voice {
             pitch,
-            freq: pitch_to_freq(pitch) * cents_multiplier(fine_cents),
+            freq: self.freq_of(pitch) * cents_multiplier(fine_cents),
             velocity,
             phase: 0.0,
             stage: EnvStage::Attack,
@@ -448,6 +452,22 @@ impl MidiTrackNode {
     /// transpose effects. An arpeggiator needs a clock of its own to
     /// hold a chord and step through it, so live input passes it by; a
     /// part written into a clip does get arpeggiated.
+    /// Retune the built-in instruments on this track.
+    ///
+    /// A hosted plug-in keeps its own tuning: retuning one needs MTS or
+    /// note expression, neither of which the host sends yet.
+    pub fn set_tuning(&mut self, table: Option<Box<[f32; 128]>>) {
+        self.tuning_table = table;
+    }
+
+    /// What a note sounds at on this track.
+    fn freq_of(&self, pitch: u8) -> f32 {
+        match &self.tuning_table {
+            Some(table) => table[pitch as usize],
+            None => pitch_to_freq(pitch),
+        }
+    }
+
     pub fn set_midi_fx(&mut self, chain: Vec<hardwave_midi::midi_fx::MidiFx>) {
         self.midi_fx = chain;
     }

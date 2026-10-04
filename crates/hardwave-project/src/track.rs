@@ -266,6 +266,14 @@ pub struct Track {
     #[serde(default)]
     pub frozen: bool,
 
+    /// A tuning other than twelve equal for this track's instrument.
+    ///
+    /// Kept as the degrees themselves rather than a path to a file, so
+    /// a song opened on another machine sounds the way it did. `None`
+    /// is twelve equal, which is every project written before this.
+    #[serde(default)]
+    pub tuning: Option<hardwave_midi::scala::Tuning>,
+
     /// MIDI effects between the clips and the instrument.
     ///
     /// An arpeggiator, a chord maker and a scale snapper used to be tools
@@ -310,6 +318,7 @@ impl Track {
             automation_clips: Vec::new(),
             stem_excluded: false,
             midi_route_to: Vec::new(),
+            tuning: None,
             frozen: false,
             midi_fx: Vec::new(),
         }

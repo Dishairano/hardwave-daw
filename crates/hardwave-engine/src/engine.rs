@@ -2314,6 +2314,9 @@ impl EngineCallback {
                 }
                 // Live input goes through the same chain the clips did.
                 midi_node.set_midi_fx(track.midi_fx.clone());
+                // A tuning other than twelve equal, worked out here so
+                // the audio thread only ever reads a table.
+                midi_node.set_tuning(track.tuning.as_ref().map(|t| Box::new(t.table())));
                 midi_node.set_notes(note_regions);
                 midi_node.set_controls(control_regions);
 

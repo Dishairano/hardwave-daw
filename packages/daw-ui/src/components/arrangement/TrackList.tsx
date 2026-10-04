@@ -52,6 +52,9 @@ export function TrackList() {
   // Which tracks are frozen, so the menu offers the right verb and the
   // list can say so.
   const [frozenTracks, setFrozenTracks] = useState<string[]>([])
+  // Which tracks play in something other than twelve equal, by scale
+  // name, so the menu can offer to clear it rather than only set it.
+  const [tunedTracks, setTunedTracks] = useState<Record<string, string>>({})
   useEffect(() => {
     const load = () => {
       invoke<string[]>('list_frozen_tracks')
@@ -62,6 +65,24 @@ export function TrackList() {
     window.addEventListener('daw:tracksChanged', load)
     return () => window.removeEventListener('daw:tracksChanged', load)
   }, [])
+
+  // Tunings, read once per track list: the menu shows the scale's name.
+  const midiTrackIds = audioTracks.filter(t => t.kind === 'Midi').map(t => t.id).join(',')
+  useEffect(() => {
+    const ids = midiTrackIds ? midiTrackIds.split(',') : []
+    let cancelled = false
+    Promise.all(ids.map(id =>
+      invoke<{ name: string } | null>('get_tuning', { trackId: id })
+        .then(t => [id, t?.name] as const)
+        .catch(() => [id, undefined] as const),
+    )).then(pairs => {
+      if (cancelled) return
+      const next: Record<string, string> = {}
+      for (const [id, name] of pairs) if (name) next[id] = name
+      setTunedTracks(next)
+    })
+    return () => { cancelled = true }
+  }, [midiTrackIds])
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
@@ -431,6 +452,43 @@ export function TrackList() {
                 useNotificationStore.getState().push('warning', 'Could not spread the takes', { detail: String(e) })
               }
             }} />
+            {t.kind === 'Midi' && (
+              <TrackMenuItem
+                label={tunedTracks[t.id] ? `Tuning: ${tunedTracks[t.id]} (clear)` : 'Tuning from a Scala file…'}
+                onClick={async () => {
+                  setCtxMenu(null)
+                  const push = useNotificationStore.getState().push
+                  try {
+                    if (tunedTracks[t.id]) {
+                      await invoke('clear_tuning', { trackId: t.id })
+                      setTunedTracks(prev => {
+                        const next = { ...prev }
+                        delete next[t.id]
+                        return next
+                      })
+                      push('info', `"${t.name}" is back in twelve equal`)
+                      return
+                    }
+                    const { open } = await import('@tauri-apps/plugin-dialog')
+                    const picked = await open({
+                      multiple: false,
+                      filters: [{ name: 'Scala tuning', extensions: ['scl'] }],
+                    })
+                    if (typeof picked !== 'string') return
+                    const tuning = await invoke<{ name: string; degrees_cents: number[] }>(
+                      'load_tuning_file',
+                      { trackId: t.id, path: picked, rootNote: null, rootHz: null },
+                    )
+                    setTunedTracks(prev => ({ ...prev, [t.id]: tuning.name }))
+                    push('info', `"${t.name}" plays ${tuning.name}`, {
+                      detail: `${tuning.degrees_cents.length} notes to the repeat. The built-in instruments follow it; a hosted plug-in keeps its own tuning.`,
+                    })
+                  } catch (e) {
+                    push('warning', 'Could not set that tuning', { detail: String(e) })
+                  }
+                }}
+              />
+            )}
             {t.kind === 'Midi' && (
               <TrackMenuItem label="MIDI effects…" onClick={() => {
                 setCtxMenu(null)
