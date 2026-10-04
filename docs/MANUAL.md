@@ -34,6 +34,9 @@ The Recording page shows the round trip the driver reports and lets you
 add your own offset in milliseconds. What you record lands where you
 played it, not where it arrived.
 
+On an interface with more than two ins and outs, the Audio page picks
+which pair you record from and which pair the mix goes out of.
+
 ## 4. Your first sound
 
 1. Add a MIDI track: right-click in the track list and choose the kind.
@@ -131,6 +134,17 @@ across several plug-ins. Each link says the two values the parameter
 travels between, so one knob can open one filter while it closes
 another.
 
+Tools > Modulation is the other half of that: a shape that keeps
+running, wired to a plug-in's knob. Pick the knob, a shape, a rate and
+a depth, and it moves for the whole song without a single automation
+point. The knob's own value becomes the middle of the swing, so
+switching a route on does not jump the sound.
+
+A track whose plug-ins have done their work can be frozen from its
+own menu: the DAW plays a render of it and gives the CPU back, while
+the part, the plug-ins and the automation stay exactly where they are.
+Unfreezing puts the live chain back with nothing lost.
+
 ## 11. Plug-ins
 
 A plug-in is loaded in a throwaway process first, so one that crashes on
@@ -138,11 +152,37 @@ load cannot take the song with it. Once loaded it runs inside the DAW,
 so a plug-in that crashes during playback still can.
 
 Tools > Presets lists every preset you have saved, across every plug-in,
-and loads one into the slot you pick. Presets that ship inside a plug-in
-are not listed: that needs the program list a VST3 publishes, which the
-host does not read yet.
+and loads one into the slot you pick. A VST3's own presets are listed
+there too, once you pick a slot running it. A CLAP's are not: those come
+through a factory the host does not read yet.
 
-## 12. Exporting
+Turning a knob inside a plug-in's own window records automation like any
+other control, as long as automation write is on.
+
+## 12. Your keyboard, your language, your desk
+
+The playlist and the piano roll are drawn on canvases, so they used to
+be mouse-only. Both take focus now. In the playlist the arrows walk the
+tracks and the clips on them, Ctrl with left or right nudges a clip by
+the snap value, Enter opens a pattern and Delete removes a clip. In the
+piano roll Tab walks the notes and Shift with Tab walks back. What the
+keyboard lands on is announced, so a screen reader has something to
+read.
+
+Settings > Appearance picks the language. Anything not translated yet
+stays in English rather than going blank.
+
+Settings > MIDI switches on a Mackie Control or HUI desk: eight faders
+with mute, solo and arm, the transport keys, and bank left and right,
+with the faders and mute lights sent back so a motorised desk lines up
+with the mix. The scribble strips and the LED rings are not driven.
+
+A MIDI track can also read MPE, from its own menu, so a controller can
+bend one note of a chord without bending the rest. And a track can take
+a tuning from a Scala file, which the built-in instruments follow; a
+hosted plug-in keeps its own tuning.
+
+## 13. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -151,7 +191,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 13. When something goes wrong
+## 14. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.
