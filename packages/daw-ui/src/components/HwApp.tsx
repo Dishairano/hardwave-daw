@@ -13,6 +13,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react'
+import { t, useLanguage } from '../i18n'
 import { Browser } from './browser/Browser'
 import { Arrangement } from './arrangement/Arrangement'
 import { ChannelRack } from './channelrack/ChannelRack'
@@ -143,6 +144,8 @@ export function HwTopbar({
   onAction?: (id: ActionId) => void
   onOpenExport?: () => void
 }) {
+  // The top bar carries the menu names, so it follows the language.
+  useLanguage()
   const playing = useTransportStore(s => s.playing)
   const recording = useTransportStore(s => s.recording)
   const looping = useTransportStore(s => s.looping)
@@ -269,14 +272,12 @@ export function HwTopbar({
         <HwTopMenu menus={menus} />
       ) : (
         <div className="fl-menu">
-          <span>File</span>
-          <span>Edit</span>
-          <span>Add</span>
-          <span>Patterns</span>
-          <span>View</span>
-          <span>Options</span>
-          <span>Tools</span>
-          <span>Help</span>
+          {/* The names with nothing behind them, shown in the screenshot
+              harness and before the menus are built. Translated like the
+              real ones so the two never read differently. */}
+          {['File', 'Edit', 'Add', 'Patterns', 'View', 'Options', 'Tools', 'Help'].map(name => (
+            <span key={name}>{t(name)}</span>
+          ))}
         </div>
       )}
       {/* Panel access — FL-style F5/F6/F7/F9 toggles. Active = panel open. */}

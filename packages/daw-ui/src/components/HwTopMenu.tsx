@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { t, useLanguage } from '../i18n'
 
 export interface MenuItem {
   label: string
@@ -19,6 +20,10 @@ interface HwTopMenuProps {
 }
 
 export function HwTopMenu({ menus }: HwTopMenuProps) {
+  // Every menu label passes through the translation on the way to the
+  // screen, so the menus follow the chosen language without each one
+  // being rewritten. Anything with no translation stays English.
+  useLanguage()
   const [openMenu, setOpenMenu] = useState<number | null>(null)
   const [openSubmenu, setOpenSubmenu] = useState<number | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
@@ -63,7 +68,7 @@ export function HwTopMenu({ menus }: HwTopMenuProps) {
             }
           }}
         >
-          {menu.label}
+          {t(menu.label)}
           {openMenu === idx && (
             <div
               className="fl-menu-dropdown"
@@ -123,7 +128,7 @@ function MenuRow({ item, isSubmenuOpen, onEnterSubmenu, onLeaveSubmenu, onClickI
         className={`fl-menu-row${item.disabled ? ' disabled' : ''}${isSubmenuOpen ? ' submenu-open' : ''}`}
         onClick={onClickItem}
       >
-        <span className="lbl">{item.label}</span>
+        <span className="lbl">{t(item.label)}</span>
         {item.shortcut && <span className="kbd">{item.shortcut}</span>}
         {item.submenu && <span className="arrow">▶</span>}
       </div>
@@ -143,7 +148,7 @@ function MenuRow({ item, isSubmenuOpen, onEnterSubmenu, onLeaveSubmenu, onClickI
                   onClickSubmenuItem()
                 }}
               >
-                <span className="lbl">{sub.label}</span>
+                <span className="lbl">{t(sub.label)}</span>
                 {sub.shortcut && <span className="kbd">{sub.shortcut}</span>}
               </div>
             ),

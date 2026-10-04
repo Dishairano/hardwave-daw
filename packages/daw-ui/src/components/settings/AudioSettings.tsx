@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
+// `t` is a loop variable for tabs in this file, so the translation
+// function comes in as `tr`.
+import { t as tr, useLanguage, useLanguageStore, LANGUAGES, type LanguageId } from '../../i18n'
 import { ThemePicker } from './ThemePicker'
 import { ShortcutsPanel } from '../ShortcutsPanel'
 import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
@@ -87,6 +90,7 @@ interface AudioSettingsProps {
 const BUFFER_SIZES = [64, 128, 256, 512, 1024, 2048, 4096]
 
 export function AudioSettings({ onClose }: AudioSettingsProps) {
+  useLanguage()
   const [tab, setTab] = useState<SettingsTab>(loadTab)
   // Search across every page. The rows carry their label in the DOM, so
   // the filter reads what is really on screen instead of a second list
@@ -473,7 +477,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Search settings"
+          placeholder={tr('Search settings')}
           aria-label="Search settings"
           style={{
             marginBottom: 8, padding: '5px 7px', fontSize: 11,
@@ -500,7 +504,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               onMouseEnter={e => { if (!active) e.currentTarget.style.color = hw.textSecondary }}
               onMouseLeave={e => { if (!active) e.currentTarget.style.color = hw.textMuted }}
             >
-              {t.label}
+              {tr(t.label)}
             </button>
           )
         })}
@@ -1360,6 +1364,17 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
           )}
 
           {tab === 'appearance' && (<>
+            {/* A language with no translation for a string shows the
+                English, so a part-finished language is readable rather
+                than full of blanks. */}
+            <SettingRow label="Language">
+              <Select
+                value={useLanguageStore.getState().language}
+                onChange={v => useLanguageStore.getState().setLanguage(v as LanguageId)}
+                options={LANGUAGES.map(l => ({ value: l.id, label: l.label }))}
+              />
+            </SettingRow>
+
             {/* System Settings — General (FL F10 → General page parity) */}
             <SettingRow label="Note naming">
               <Select
@@ -1425,8 +1440,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
           borderTop: `1px solid ${hw.border}`,
           background: 'rgba(255,255,255,0.02)',
         }}>
-          <Btn label="Close" onClick={onClose} />
-          <Btn label={applying ? 'Applying...' : 'Apply'} primary disabled={!hasChanges || applying} onClick={apply} />
+          <Btn label={tr('Close')} onClick={onClose} />
+          <Btn label={applying ? tr('Applying...') : tr('Apply')} primary disabled={!hasChanges || applying} onClick={apply} />
         </div>
       </div>
     </div>
@@ -1447,14 +1462,15 @@ function channelPairOptions(maxChannels: number): { value: string; label: string
 }
 
 function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
+  const shown = tr(label)
   return (
     <div
-      // The settings search reads these, so a row that exists can always
-      // be found by name.
-      data-setting-label={label.toLowerCase()}
+      // The settings search reads what is on screen, so a row is found
+      // by the name the reader sees, translated or not.
+      data-setting-label={`${shown.toLowerCase()} ${label.toLowerCase()}`}
       style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}
     >
-      <span style={{ fontSize: 12, color: hw.textSecondary }}>{label}</span>
+      <span style={{ fontSize: 12, color: hw.textSecondary }}>{shown}</span>
       {children}
     </div>
   )
