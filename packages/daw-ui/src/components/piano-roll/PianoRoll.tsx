@@ -183,6 +183,8 @@ export function PianoRoll() {
   const [pixelsPerTick, setPixelsPerTick] = useState(0.12)
   const [snap, setSnap] = useState(DEFAULT_SNAP)
   const [selectedNotes, setSelectedNotes] = useState<Set<number>>(new Set())
+  /// What the keyboard last landed on, spoken for a screen reader.
+  const [spokenNote, setSpokenNote] = useState('')
   const [tool, setTool] = useState<'draw' | 'select' | 'erase' | 'chord'>('draw')
   const [chordType, setChordType] = useState<keyof typeof CHORD_TYPES>('maj')
   const [chordInversion, setChordInversion] = useState<number>(0)
@@ -1482,6 +1484,36 @@ export function PianoRoll() {
 
     const ctrl = e.ctrlKey || e.metaKey
 
+    // Walk the notes without a mouse. The roll is drawn on a canvas, so
+    // without this there was no way to reach a note from the keyboard
+    // at all, and nothing for a screen reader to read. It sits above
+    // the "nothing selected" guard below, because with nothing selected
+    // there would otherwise be no way to select the first note.
+    if (e.key === 'Tab') {
+      if (notes.length === 0) return
+      consume()
+      const ordered = [...notes].sort(
+        (a, b) => a.startTick - b.startTick || a.pitch - b.pitch,
+      )
+      const current = ordered.findIndex(n => selectedNotes.has(n.index))
+      const step = e.shiftKey ? -1 : 1
+      const next = current < 0
+        ? (step > 0 ? 0 : ordered.length - 1)
+        : (current + step + ordered.length) % ordered.length
+      const note = ordered[next]
+      setSelectedNotes(new Set([note.index]))
+      const bar = Math.floor(note.startTick / (PPQ * 4)) + 1
+      const beat = Math.floor((note.startTick % (PPQ * 4)) / PPQ) + 1
+      setSpokenNote(
+        `${NOTE_NAMES_SHARP[note.pitch % 12]}${Math.floor(note.pitch / 12) - 1}, `
+        + `bar ${bar} beat ${beat}, `
+        + `${Math.round((note.durationTicks / PPQ) * 100) / 100} beats, `
+        + `velocity ${Math.round(note.velocity * 127)}`
+        + `${note.muted ? ', muted' : ''}`,
+      )
+      return
+    }
+
     if (ctrl && e.key.toLowerCase() === 'a') {
       consume()
       setSelectedNotes(new Set(notes.map(n => n.index)))
@@ -1813,6 +1845,14 @@ export function PianoRoll() {
     <div ref={containerRef}
       onMouseEnter={() => { focusedRef.current = true }}
       onMouseLeave={() => { focusedRef.current = false }}
+      onFocusCapture={() => { focusedRef.current = true }}
+      onBlurCapture={(e) => {
+        // Hovering used to be the only way to count as focused, so a
+        // keyboard user could never reach the roll's shortcuts.
+        const root = e.currentTarget as HTMLElement
+        const next = e.relatedTarget as Node | null
+        if (!next || !root.contains(next)) focusedRef.current = false
+      }}
       style={{
         flex: 1, display: 'flex', flexDirection: 'column',
         background: 'rgba(255,255,255,0.02)', backdropFilter: hw.blur.sm, overflow: 'hidden',
@@ -2602,8 +2642,21 @@ export function PianoRoll() {
         />
 
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+          {/* The roll is a canvas, which a screen reader cannot see
+              into, so what the keyboard lands on is said here. */}
+          <div
+            aria-live="polite"
+            style={{
+              position: 'absolute', width: 1, height: 1, overflow: 'hidden',
+              clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap',
+            }}
+          >{spokenNote}</div>
           <canvas
             ref={canvasRef}
+            tabIndex={0}
+            role="application"
+            aria-label="Piano roll. Tab moves to the next note, Shift and Tab to the previous, arrows move the selected note, Delete removes it."
+
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
@@ -2625,7 +2678,7 @@ export function PianoRoll() {
               }
               setNoteCtx(null)
             }}
-            style={{ display: 'block', cursor: tool === 'draw' || tool === 'chord' ? 'crosshair' : tool === 'erase' ? 'not-allowed' : 'default' }}
+            style={{ display: 'block', outline: 'none', cursor: tool === 'draw' || tool === 'chord' ? 'crosshair' : tool === 'erase' ? 'not-allowed' : 'default' }}
           />
           {hoverInfo && (
             <div style={{

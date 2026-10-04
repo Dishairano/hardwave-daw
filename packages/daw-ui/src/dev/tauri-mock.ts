@@ -89,7 +89,7 @@ function synthNotes() {
         start_tick: bar * PPQ * 4,
         duration_ticks: PPQ * 2,
         pitch: p + (bar % 2 === 0 ? 0 : 3),
-        velocity: 96,
+        velocity: 96 / 127,
         channel: 0,
         muted: false,
       })
