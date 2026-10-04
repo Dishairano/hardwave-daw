@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 mod commands;
+mod control_surface;
 mod diagnostics;
 mod frontend_updater;
 mod midi_clock;
@@ -57,6 +58,10 @@ pub struct AppState {
     /// the app never saw those edits: a knob inside a plug-in window
     /// could be heard but not recorded. This one is drained by the app,
     /// which is what lets automation write follow it.
+    #[allow(clippy::type_complexity)]
+    /// The control surface: whether a desk is being listened to, and
+    /// which eight tracks its strips are on.
+    pub control_surface: crate::control_surface::SharedSurface,
     #[allow(clippy::type_complexity)]
     pub slot_gui_edit_logs:
         Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
@@ -137,6 +142,7 @@ pub fn run() {
         export_cancel: Arc::new(AtomicBool::new(false)),
         plugin_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        control_surface: Arc::new(crate::control_surface::ControlSurface::new()),
         slot_gui_edit_logs: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_gain_reduction: Arc::new(Mutex::new(std::collections::HashMap::new())),
         midi_mappings: Arc::clone(&midi_mappings),
@@ -240,6 +246,9 @@ pub fn run() {
             commands::midi::get_midi_fx,
             commands::midi::set_midi_fx,
             commands::midi::preview_midi_fx,
+            commands::midi_input::get_control_surface,
+            commands::midi_input::set_control_surface_enabled,
+            commands::midi_input::set_control_surface_bank,
             commands::midi::load_tuning_file,
             commands::midi::clear_tuning,
             commands::midi::get_tuning,
@@ -539,7 +548,12 @@ pub fn run() {
             // mapped values to the live engine state. Also handles learn-mode
             // capture in the same loop so there's no race with the main
             // meter/transport broadcast thread.
-            midi_map::spawn_dispatcher(Arc::clone(&state.engine), Arc::clone(&state.midi_mappings));
+            midi_map::spawn_dispatcher(
+                Arc::clone(&state.engine),
+                Arc::clone(&state.midi_mappings),
+                Arc::clone(&state.control_surface),
+                Arc::clone(&state.midi_clock.output),
+            );
 
             // MIDI Clock dispatcher: sends 24 PPQN clock ticks and
             // Start/Stop system realtime messages to every open MIDI output

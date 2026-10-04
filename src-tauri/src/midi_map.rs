@@ -134,7 +134,12 @@ impl MidiMappings {
 /// Background worker that drains MIDI events every ~8 ms and applies any
 /// mapped CC values to the live engine state. Handles learn-mode capture in
 /// the same pass so the next CC becomes the new mapping.
-pub fn spawn_dispatcher(engine: Arc<Mutex<DawEngine>>, mappings: Arc<Mutex<MidiMappings>>) {
+pub fn spawn_dispatcher(
+    engine: Arc<Mutex<DawEngine>>,
+    mappings: Arc<Mutex<MidiMappings>>,
+    surface: crate::control_surface::SharedSurface,
+    midi_out: Arc<Mutex<hardwave_midi::output::MidiOutputManager>>,
+) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(8));
         let events = {
@@ -146,6 +151,15 @@ pub fn spawn_dispatcher(engine: Arc<Mutex<DawEngine>>, mappings: Arc<Mutex<MidiM
             continue;
         }
         for ev in events {
+            // A control surface speaks a fixed language rather than
+            // whatever a knob was learned to, so it is read first and
+            // what it claims never reaches the learn path.
+            if surface.is_enabled() {
+                if let Some(action) = crate::control_surface::interpret(&ev) {
+                    apply_surface(&engine, &surface, &midi_out, action);
+                    continue;
+                }
+            }
             let (cc, channel, value) = match ev {
                 MidiEvent::ControlChange {
                     cc, channel, value, ..
@@ -248,5 +262,159 @@ fn apply_cc(engine: &Arc<Mutex<DawEngine>>, target: &MidiMapTarget, value: f32) 
             let eng = engine.lock();
             let _ = eng.try_send_insert_command(cmd);
         }
+    }
+}
+
+/// Act on one message from a control surface.
+fn apply_surface(
+    engine: &Arc<Mutex<DawEngine>>,
+    surface: &crate::control_surface::SharedSurface,
+    midi_out: &Arc<Mutex<hardwave_midi::output::MidiOutputManager>>,
+    action: crate::control_surface::SurfaceAction,
+) {
+    use crate::control_surface as cs;
+    use std::sync::atomic::Ordering;
+
+    let bank = surface.bank.load(Ordering::Relaxed);
+    let track_of = |strip: usize| -> Option<String> {
+        let eng = engine.lock();
+        let project = eng.project.lock();
+        cs::bank_tracks(&project, bank).get(strip).cloned()
+    };
+
+    match action {
+        cs::SurfaceAction::Fader { strip, value } => {
+            let Some(track_id) = track_of(strip) else {
+                return;
+            };
+            let eng = engine.lock();
+            {
+                let mut project = eng.project.lock();
+                if let Some(track) = project.track_mut(&track_id) {
+                    track.volume_db = cs::fader_to_db(value);
+                }
+            }
+            eng.rebuild_graph();
+        }
+        cs::SurfaceAction::MasterFader { value } => {
+            let eng = engine.lock();
+            eng.transport
+                .master_volume_db
+                .store(cs::fader_to_db(value), Ordering::Relaxed);
+        }
+        cs::SurfaceAction::Mute { strip } => {
+            let Some(track_id) = track_of(strip) else {
+                return;
+            };
+            let muted = {
+                let eng = engine.lock();
+                let mut project = eng.project.lock();
+                let Some(track) = project.track_mut(&track_id) else {
+                    return;
+                };
+                track.muted = !track.muted;
+                track.muted
+            };
+            engine.lock().rebuild_graph();
+            // The button's own light, so the desk shows what the mix is
+            // doing rather than what was last pressed.
+            midi_out
+                .lock()
+                .broadcast(&cs::button_feedback(cs::mute_note(strip), muted));
+        }
+        cs::SurfaceAction::Solo { strip } => {
+            let Some(track_id) = track_of(strip) else {
+                return;
+            };
+            {
+                let eng = engine.lock();
+                let mut project = eng.project.lock();
+                if let Some(track) = project.track_mut(&track_id) {
+                    track.soloed = !track.soloed;
+                }
+            }
+            engine.lock().rebuild_graph();
+        }
+        cs::SurfaceAction::Arm { strip } => {
+            let Some(track_id) = track_of(strip) else {
+                return;
+            };
+            {
+                let eng = engine.lock();
+                let mut project = eng.project.lock();
+                if let Some(track) = project.track_mut(&track_id) {
+                    track.armed = !track.armed;
+                }
+            }
+            engine.lock().rebuild_graph();
+        }
+        cs::SurfaceAction::BankLeft | cs::SurfaceAction::BankRight => {
+            let count = {
+                let eng = engine.lock();
+                let project = eng.project.lock();
+                cs::bank_count(&project)
+            };
+            let next = match action {
+                cs::SurfaceAction::BankLeft => bank.saturating_sub(1),
+                _ => (bank + 1).min(count.saturating_sub(1)),
+            };
+            surface.bank.store(next, Ordering::Relaxed);
+            send_bank_state(engine, surface, midi_out);
+        }
+        cs::SurfaceAction::Play => {
+            let eng = engine.lock();
+            eng.transport.playing.store(true, Ordering::Relaxed);
+        }
+        cs::SurfaceAction::Stop => {
+            let eng = engine.lock();
+            eng.transport.playing.store(false, Ordering::Relaxed);
+        }
+        cs::SurfaceAction::Record => {
+            let eng = engine.lock();
+            eng.transport.recording.store(true, Ordering::Relaxed);
+        }
+        cs::SurfaceAction::Rewind => {
+            let eng = engine.lock();
+            eng.transport.set_position(0);
+        }
+        cs::SurfaceAction::Forward => {
+            let eng = engine.lock();
+            let sample_rate = eng.current_sample_rate() as u64;
+            let position = eng.transport.position();
+            eng.transport.set_position(position + sample_rate * 4);
+        }
+    }
+}
+
+/// Send the strips' faders and mute lights for the bank the desk is on.
+///
+/// Without this a motorised fader stays where the hand left it when the
+/// bank changes, which means the desk and the mix disagree about what
+/// is under your fingers.
+pub fn send_bank_state(
+    engine: &Arc<Mutex<DawEngine>>,
+    surface: &crate::control_surface::SharedSurface,
+    midi_out: &Arc<Mutex<hardwave_midi::output::MidiOutputManager>>,
+) {
+    use crate::control_surface as cs;
+    use std::sync::atomic::Ordering;
+
+    let bank = surface.bank.load(Ordering::Relaxed);
+    let strips: Vec<(f32, bool)> = {
+        let eng = engine.lock();
+        let project = eng.project.lock();
+        cs::bank_tracks(&project, bank)
+            .into_iter()
+            .filter_map(|id| {
+                project
+                    .track(&id)
+                    .map(|t| (cs::db_to_fader(t.volume_db), t.muted))
+            })
+            .collect()
+    };
+    let out = midi_out.lock();
+    for (strip, (level, muted)) in strips.iter().enumerate() {
+        out.broadcast(&cs::fader_feedback(strip, *level));
+        out.broadcast(&cs::button_feedback(cs::mute_note(strip), *muted));
     }
 }

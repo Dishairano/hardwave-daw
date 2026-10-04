@@ -150,6 +150,10 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   // Which pair of a multi-channel interface is used. Zero is the first
   // pair, which is what every interface calls its main in and out.
   const [inputOffset, setInputOffset] = useState(0)
+  // A control surface, if one is being listened to.
+  const [surface, setSurface] = useState<{ enabled: boolean; bank: number; bankCount: number }>({
+    enabled: false, bank: 0, bankCount: 1,
+  })
   const [outputOffset, setOutputOffset] = useState(0)
   const [selectedInputChannels, setSelectedInputChannels] = useState(2)
   const [selectedRate, setSelectedRate] = useState(48000)
@@ -206,6 +210,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setInputConfig(inCfg)
       setSelectedDevice(cfg.device)
       setSelectedInput(inCfg.device)
+      invoke<{ enabled: boolean; bank: number; bankCount: number }>('get_control_surface')
+        .then(setSurface)
+        .catch(() => { /* older build or no engine */ })
       invoke<{ input: number; output: number }>('get_channel_offsets')
         .then(o => { setInputOffset(o.input); setOutputOffset(o.output) })
         .catch(() => { /* older build or no engine */ })
@@ -831,6 +838,44 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
           </>)}
 
           {tab === 'midi' && (<>
+            {/* A desk speaks a fixed language rather than whatever a
+                knob was learned to, so it is a switch, not a mapping. */}
+            <SettingRow label="Control surface">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  onClick={() => {
+                    const next = !surface.enabled
+                    setSurface(s => ({ ...s, enabled: next }))
+                    invoke('set_control_surface_enabled', { enabled: next }).catch(() => {})
+                  }}
+                  style={{
+                    padding: '4px 12px', fontSize: 11, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none', cursor: 'pointer',
+                    background: surface.enabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                    color: surface.enabled ? '#fff' : hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >{surface.enabled ? tr('On') : tr('Off')}</button>
+                {surface.enabled && (
+                  <Select
+                    value={String(surface.bank)}
+                    onChange={v => {
+                      const bank = Number(v)
+                      setSurface(s => ({ ...s, bank }))
+                      invoke('set_control_surface_bank', { bank }).catch(() => {})
+                    }}
+                    options={Array.from({ length: Math.max(1, surface.bankCount) }, (_, i) => ({
+                      value: String(i),
+                      label: `${tr('Tracks')} ${i * 8 + 1}-${i * 8 + 8}`,
+                    }))}
+                  />
+                )}
+              </div>
+            </SettingRow>
+            <div style={{ fontSize: 10, color: hw.textFaint, margin: '-4px 0 12px' }}>
+              {tr('Mackie Control and HUI: eight faders with mute, solo and arm, the transport keys, and bank left and right. The scribble strips and the LED rings are not driven.')}
+            </div>
+
             {/* MIDI Inputs */}
             <div style={{
               marginBottom: 10, padding: '8px 12px',

@@ -216,3 +216,72 @@ pub fn inject_midi_event(state: State<AppState>, event: MidiEventDto) {
     let manager = engine.midi_input.lock();
     manager.inject(event.into_event());
 }
+
+/// Whether a control surface is being listened to, and where its
+/// strips sit.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlSurfaceStatus {
+    pub enabled: bool,
+    /// Which bank of eight the strips are on, counting from zero.
+    pub bank: usize,
+    pub bank_count: usize,
+}
+
+#[tauri::command]
+pub fn get_control_surface(state: State<AppState>) -> ControlSurfaceStatus {
+    use std::sync::atomic::Ordering;
+    let bank_count = {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        crate::control_surface::bank_count(&project)
+    };
+    ControlSurfaceStatus {
+        enabled: state.control_surface.is_enabled(),
+        bank: state.control_surface.bank.load(Ordering::Relaxed),
+        bank_count,
+    }
+}
+
+/// Listen to a Mackie Control or HUI desk on the open MIDI inputs.
+///
+/// With it on, pitch bend and the desk's button notes drive the mixer
+/// instead of going through MIDI Learn: eight faders with mute, solo
+/// and arm, the transport keys, and bank left and right. Switching it
+/// on sends the current faders and mute lights out, so a motorised
+/// desk lines up with the mix straight away.
+#[tauri::command]
+pub fn set_control_surface_enabled(state: State<AppState>, enabled: bool) {
+    use std::sync::atomic::Ordering;
+    state
+        .control_surface
+        .enabled
+        .store(enabled, Ordering::Relaxed);
+    if enabled {
+        crate::midi_map::send_bank_state(
+            &state.engine,
+            &state.control_surface,
+            &state.midi_clock.output,
+        );
+    }
+}
+
+/// Put the strips on another eight tracks.
+#[tauri::command]
+pub fn set_control_surface_bank(state: State<AppState>, bank: usize) {
+    use std::sync::atomic::Ordering;
+    let count = {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        crate::control_surface::bank_count(&project)
+    };
+    state
+        .control_surface
+        .bank
+        .store(bank.min(count.saturating_sub(1)), Ordering::Relaxed);
+    crate::midi_map::send_bank_state(
+        &state.engine,
+        &state.control_surface,
+        &state.midi_clock.output,
+    );
+}
