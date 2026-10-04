@@ -35,8 +35,9 @@ use std::sync::Arc;
 use vst3::Steinberg::Vst::{
     BusDirections_, BusInfo, Event, Event_::EventTypes_, IAudioProcessor, IAudioProcessorTrait,
     IComponent, IComponentHandler, IComponentHandlerTrait, IComponentTrait, IEditController,
-    IEditControllerTrait, IEventList, IEventListTrait, IoModes_, MediaTypes_, NoteOffEvent,
-    NoteOnEvent, ParamID, ParamValue, ProcessModes_, ProcessSetup, SymbolicSampleSizes_, ViewType,
+    IEditControllerTrait, IEventList, IEventListTrait, IUnitInfo, IUnitInfoTrait, IoModes_,
+    MediaTypes_, NoteOffEvent, NoteOnEvent, ParamID, ParamValue, ProcessModes_, ProcessSetup,
+    ProgramListInfo, SymbolicSampleSizes_, ViewType,
 };
 use vst3::Steinberg::{
     kResultOk, tresult, FIDString, IBStream, IBStreamTrait, IBStream_::IStreamSeekMode_, IPlugView,
@@ -848,6 +849,79 @@ impl HostedPlugin for Vst3PluginInstance {
 
     fn gui_edit_log(&self) -> Option<crate::types::SharedParamQueue> {
         Some(Arc::clone(&self.inner.gui_edit_log))
+    }
+
+    /// The presets the plug-in ships with.
+    ///
+    /// A VST3 publishes them as a program list on its edit controller.
+    /// The host never asked, which is why the preset browser could show
+    /// only what the user had saved. The first list is the one a plug-in
+    /// with presets uses; the rest are per-unit lists, which only
+    /// multi-timbral instruments have.
+    fn factory_presets(&self) -> Vec<String> {
+        let Some(ctrl) = &self.inner.controller else {
+            return Vec::new();
+        };
+        let Some(units) = ctrl.cast::<IUnitInfo>() else {
+            return Vec::new();
+        };
+        unsafe {
+            if units.getProgramListCount() < 1 {
+                return Vec::new();
+            }
+            let mut info: ProgramListInfo = std::mem::zeroed();
+            if units.getProgramListInfo(0, &mut info) != kResultOk {
+                return Vec::new();
+            }
+            let mut names = Vec::with_capacity(info.programCount.max(0) as usize);
+            for index in 0..info.programCount.max(0) {
+                let mut name: [vst3::Steinberg::char16; 128] = [0; 128];
+                if units.getProgramName(info.id, index, &mut name) == kResultOk {
+                    names.push(wchar_string_to_rust(&name));
+                } else {
+                    names.push(format!("Preset {}", index + 1));
+                }
+            }
+            names
+        }
+    }
+
+    /// Switch to one of them.
+    ///
+    /// A program list is driven by the parameter the plug-in marks as
+    /// its program change, which is the list's own id used as a
+    /// parameter id, normalised over the number of programs.
+    fn load_factory_preset(&mut self, index: usize) -> Result<(), String> {
+        let Some(ctrl) = &self.inner.controller else {
+            return Err("this plug-in has no edit controller".into());
+        };
+        let Some(units) = ctrl.cast::<IUnitInfo>() else {
+            return Err("this plug-in publishes no presets of its own".into());
+        };
+        unsafe {
+            let mut info: ProgramListInfo = std::mem::zeroed();
+            if units.getProgramListCount() < 1
+                || units.getProgramListInfo(0, &mut info) != kResultOk
+            {
+                return Err("this plug-in publishes no presets of its own".into());
+            }
+            let count = info.programCount.max(1) as f64;
+            if index as f64 >= count {
+                return Err("there is no preset at that place".into());
+            }
+            let normalised = if count > 1.0 {
+                index as f64 / (count - 1.0)
+            } else {
+                0.0
+            };
+            ctrl.setParamNormalized(info.id as ParamID, normalised);
+            // The audio side reads program changes through the same
+            // queue a GUI edit uses, so the change is heard on the next
+            // block rather than at the next reload.
+            let mut q = self.inner.pending_params.lock();
+            q.push((info.id as u32, normalised));
+        }
+        Ok(())
     }
 }
 

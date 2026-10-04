@@ -225,6 +225,10 @@ const mock: TauriInternals = {
         return []
       case 'set_midi_routes':
         return null
+      case 'list_factory_presets':
+        return ['Init', 'Hard Screech', 'Sub Bass', 'Reverse Bell']
+      case 'load_factory_preset':
+        return null
       case 'list_all_presets':
         return [
           {

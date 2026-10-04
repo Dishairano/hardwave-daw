@@ -270,3 +270,51 @@ pub fn list_all_presets(app: AppHandle) -> Result<Vec<PresetBank>, String> {
     banks.sort_by_key(|b| b.plugin_id.to_lowercase());
     Ok(banks)
 }
+
+/// The presets that ship inside a plug-in.
+///
+/// The browser could only ever show what the user had saved, because
+/// the host never asked a plug-in what it carries. A VST3 publishes a
+/// program list; a CLAP publishes presets through a factory the host
+/// does not read yet, so a CLAP answers with an empty list.
+///
+/// Read from a throwaway instance, the same way the parameter sheet
+/// reads names, so nothing on the audio thread is disturbed.
+#[tauri::command]
+pub fn list_factory_presets(
+    state: State<AppState>,
+    plugin_id: String,
+) -> Result<Vec<String>, String> {
+    let descriptor = {
+        let engine = state.engine.lock();
+        let scanner = engine.plugin_scanner.lock();
+        scanner
+            .plugins()
+            .iter()
+            .find(|d| d.id == plugin_id)
+            .cloned()
+            .ok_or_else(|| format!("No plug-in with id {plugin_id}"))?
+    };
+    let plugin = crate::commands::plugins::instantiate_plugin(&descriptor)?;
+    Ok(plugin.factory_presets())
+}
+
+/// Play one of a plug-in's own presets in a live slot.
+#[tauri::command]
+pub fn load_factory_preset(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    index: usize,
+) -> Result<(), String> {
+    let cmd = InsertCommand::LoadFactoryPreset {
+        track_id,
+        slot_id,
+        index,
+    };
+    state
+        .engine
+        .lock()
+        .try_send_insert_command(cmd)
+        .map_err(|_| "insert command queue full or engine not started".to_string())
+}

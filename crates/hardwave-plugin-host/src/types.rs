@@ -129,6 +129,18 @@ pub trait HostedPlugin: Send {
     fn gui_edit_log(&self) -> Option<SharedParamQueue> {
         None
     }
+
+    /// The presets that ship inside the plug-in, in the order it lists
+    /// them. Empty when the plug-in publishes none, or when the format
+    /// gives the host no way to ask.
+    fn factory_presets(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Play one of those presets, by its place in `factory_presets`.
+    fn load_factory_preset(&mut self, _index: usize) -> Result<(), String> {
+        Err("this plug-in has no presets of its own that the host can read".into())
+    }
 }
 
 /// Shared queue for GUI → audio parameter edits, used by both VST3 and

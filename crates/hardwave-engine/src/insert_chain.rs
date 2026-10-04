@@ -260,6 +260,15 @@ impl InsertChain {
         }
     }
 
+    /// Switch a slot to one of its own presets.
+    pub fn load_factory_preset(&mut self, slot_id: &str, index: usize) -> bool {
+        if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
+            s.plugin.load_factory_preset(index).is_ok()
+        } else {
+            false
+        }
+    }
+
     pub fn set_parameter(&mut self, slot_id: &str, param_id: u32, value: f64) -> bool {
         if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
             s.plugin.set_parameter_value(param_id, value);
@@ -371,6 +380,13 @@ pub enum InsertCommand {
         slot_id: String,
         bytes: Vec<u8>,
     },
+    /// Switch to one of the presets the plug-in ships with, by its
+    /// place in the list the plug-in publishes.
+    LoadFactoryPreset {
+        track_id: String,
+        slot_id: String,
+        index: usize,
+    },
 }
 
 /// UI-side handle for queueing commands toward the audio thread.
@@ -402,7 +418,8 @@ impl InsertCommand {
             | InsertCommand::SetEnabled { track_id, .. }
             | InsertCommand::SetWet { track_id, .. }
             | InsertCommand::SetParameter { track_id, .. }
-            | InsertCommand::SetState { track_id, .. } => track_id,
+            | InsertCommand::SetState { track_id, .. }
+            | InsertCommand::LoadFactoryPreset { track_id, .. } => track_id,
         }
     }
 }
@@ -560,6 +577,15 @@ impl InsertRouter {
             } => {
                 if let Some(chain) = self.chains.get_mut(&track_id) {
                     chain.set_state(&slot_id, &bytes);
+                }
+            }
+            InsertCommand::LoadFactoryPreset {
+                track_id,
+                slot_id,
+                index,
+            } => {
+                if let Some(chain) = self.chains.get_mut(&track_id) {
+                    chain.load_factory_preset(&slot_id, index);
                 }
             }
         }

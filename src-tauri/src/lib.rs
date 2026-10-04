@@ -243,6 +243,8 @@ pub fn run() {
             commands::macros::set_macro_link_range,
             commands::macros::apply_all_macros,
             commands::plugin_presets::list_all_presets,
+            commands::plugin_presets::list_factory_presets,
+            commands::plugin_presets::load_factory_preset,
             commands::midi::get_midi_fx,
             commands::midi::set_midi_fx,
             commands::midi::preview_midi_fx,

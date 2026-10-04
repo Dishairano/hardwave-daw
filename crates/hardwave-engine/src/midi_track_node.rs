@@ -1194,6 +1194,9 @@ impl AudioNode for MidiTrackNode {
             InsertCommand::SetState { slot_id, bytes, .. } => {
                 self.chain.set_state(&slot_id, &bytes);
             }
+            InsertCommand::LoadFactoryPreset { slot_id, index, .. } => {
+                self.chain.load_factory_preset(&slot_id, index);
+            }
         }
     }
 

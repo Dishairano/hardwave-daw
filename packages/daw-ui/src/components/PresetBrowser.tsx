@@ -34,6 +34,9 @@ interface Row {
   pluginId: string
   pluginName: string
   preset: PresetInfo
+  /// A preset that ships inside the plug-in rather than one you saved.
+  factory?: boolean
+  factoryIndex?: number
 }
 
 export function PresetBrowser({ onClose }: { onClose: () => void }) {
@@ -64,6 +67,18 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
     if (!slots.some(s => s.id === targetSlotId)) setTargetSlotId(slots[0].id)
   }, [slots, targetSlotId])
 
+  // The presets a plug-in ships with, read from the plug-in itself the
+  // first time its slot is picked. Kept per plug-in so switching slots
+  // does not ask again.
+  const [factory, setFactory] = useState<Record<string, string[]>>({})
+  useEffect(() => {
+    const slot = slots.find(s => s.id === targetSlotId)
+    if (!slot || factory[slot.pluginId] !== undefined) return
+    invoke<string[]>('list_factory_presets', { pluginId: slot.pluginId })
+      .then(names => setFactory(prev => ({ ...prev, [slot.pluginId]: names })))
+      .catch(() => setFactory(prev => ({ ...prev, [slot.pluginId]: [] })))
+  }, [slots, targetSlotId, factory])
+
   const rows = useMemo<Row[]>(() => {
     const needle = query.trim().toLowerCase()
     const all: Row[] = []
@@ -77,8 +92,23 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
         all.push({ pluginId: bank.pluginId, pluginName, preset })
       }
     }
+    // The chosen slot's own presets, listed beside the saved ones.
+    const slot = slots.find(s => s.id === targetSlotId)
+    const own = slot ? (factory[slot.pluginId] ?? []) : []
+    for (const [index, name] of own.entries()) {
+      if (needle
+        && !name.toLowerCase().includes(needle)
+        && !(slot?.pluginName ?? '').toLowerCase().includes(needle)) continue
+      all.push({
+        pluginId: slot!.pluginId,
+        pluginName: slot!.pluginName,
+        preset: { id: `factory-${index}`, name, created_at: 0 },
+        factory: true,
+        factoryIndex: index,
+      })
+    }
     return all
-  }, [banks, plugins, query])
+  }, [banks, plugins, query, slots, targetSlotId, factory])
 
   // A preset holds one plug-in's state, so it only means something in a
   // slot running that plug-in. Loading it anywhere else would quietly do
@@ -89,6 +119,17 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
   const load = useCallback(async (row: Row) => {
     if (!targetSlot || !targetTrackId) return
     try {
+      if (row.factory) {
+        await invoke('load_factory_preset', {
+          trackId: targetTrackId,
+          slotId: targetSlot.id,
+          index: row.factoryIndex ?? 0,
+        })
+        useNotificationStore.getState().push('info', `Loaded "${row.preset.name}"`, {
+          detail: `${row.pluginName}'s own preset.`,
+        })
+        return
+      }
       await invoke('load_plugin_preset', {
         trackId: targetTrackId,
         slotId: targetSlot.id,
@@ -206,9 +247,11 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
                   <td style={td()}>{row.preset.name}</td>
                   <td style={{ ...td(), color: hw.textSecondary }}>{row.pluginName}</td>
                   <td style={{ ...td(), color: hw.textFaint }}>
-                    {row.preset.created_at
-                      ? new Date(row.preset.created_at * 1000).toLocaleDateString()
-                      : ''}
+                    {row.factory
+                      ? 'from the plug-in'
+                      : row.preset.created_at
+                        ? new Date(row.preset.created_at * 1000).toLocaleDateString()
+                        : ''}
                   </td>
                   <td style={{ ...td(), textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button
@@ -220,9 +263,13 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
                       style={{ ...btn(canLoad(row)), opacity: canLoad(row) ? 1 : 0.4 }}
                     >Load</button>
                     {' '}
-                    <button onClick={() => { void rename(row) }} style={btn()}>Rename</button>
-                    {' '}
-                    <button onClick={() => { void remove(row) }} style={btn()}>Delete</button>
+                    {/* A preset inside the plug-in is the plug-in's,
+                        not ours: it cannot be renamed or deleted. */}
+                    {!row.factory && (<>
+                      <button onClick={() => { void rename(row) }} style={btn()}>Rename</button>
+                      {' '}
+                      <button onClick={() => { void remove(row) }} style={btn()}>Delete</button>
+                    </>)}
                   </td>
                 </tr>
               ))}
@@ -234,8 +281,9 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
           padding: '6px 12px', fontSize: 9, color: hw.textFaint,
           borderTop: `1px solid ${hw.border}`, background: hw.bgElevated,
         }}>
-          Presets built into a plug-in are not listed. Reading those needs the
-          program list a VST3 publishes, which the host does not read yet.
+          A VST3's own presets are listed once you pick a slot running it.
+          A CLAP's are not: those come through a factory the host does not
+          read yet.
         </div>
       </div>
     </div>
