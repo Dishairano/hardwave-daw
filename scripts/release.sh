@@ -454,6 +454,29 @@ fi
 # `redesign-port-from-master` for the duration of the redesign work, so a
 # hard-coded `master` aborts the release half-way through and leaves the
 # tree committed but unpushed.
+# Builds on the founder's PC run at night only.
+#
+# The gate runs on his own workstation, so a push during the day takes the
+# CPU out from under whatever he is doing. The push waits for the window
+# instead: between 03:00 and 08:00 Amsterdam time. Everything before this
+# point (the local gate, the version bump, the commit) has already run, so
+# the wait costs nothing but wall clock.
+#
+# HW_BUILD_ANYTIME=1 pushes straight away, for the rare release that cannot
+# wait. The gate workflow honours the same switch.
+if [ "${HW_BUILD_ANYTIME:-0}" != "1" ]; then
+  while :; do
+    HOUR=$(TZ=Europe/Amsterdam date +%-H)
+    if [ "$HOUR" -ge 3 ] && [ "$HOUR" -lt 8 ]; then
+      break
+    fi
+    NOW=$(TZ=Europe/Amsterdam date "+%H:%M")
+    echo "release.sh: it is $NOW in Amsterdam. Builds run between 03:00 and 08:00; waiting."
+    sleep 600
+  done
+  echo "release.sh: inside the build window ($(TZ=Europe/Amsterdam date "+%H:%M")); pushing."
+fi
+
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Stage only the files a version bump touches.
 #

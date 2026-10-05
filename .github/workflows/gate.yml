@@ -46,6 +46,14 @@ jobs:
       # Same reason: the test harness otherwise runs one thread per core.
       RUST_TEST_THREADS: 4
     steps:
+      # The PC is the founder's own workstation. Builds run at night only,
+      # between 03:00 and 08:00 his time, so the gate never takes the CPU
+      # while he is working on it. Outside the window the job stops here
+      # rather than building: a gate that did not run must not look like a
+      # gate that passed, so this fails rather than skipping green.
+      - name: Build window
+        run: powershell -NoProfile -ExecutionPolicy Bypass -Command "$h = [int](Get-Date).Hour; if ($env:HW_BUILD_ANYTIME -eq '1') { 'override: building outside the window'; exit 0 }; if ($h -lt 3 -or $h -ge 8) { Write-Host ('It is {0}:00 here. Builds run between 03:00 and 08:00; nothing was built.' -f $h); exit 1 }; ('{0}:00, inside the window' -f $h)"
+
       - uses: actions/checkout@v4
 
       # First run doubles as a machine census: how much this box can take
