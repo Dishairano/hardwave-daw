@@ -1,3 +1,35 @@
 ### Improvements
-- feat(daw): take lanes and comping
+- feat(daw): a plug-in's own presets are in the browser
+- feat(daw): MPE, so one note of a chord can be bent on its own
+- feat(daw): Mackie Control and HUI desks drive the mixer
+- feat(daw): the interface can speak another language, starting with Dutch
+- feat(daw): the piano roll can be used from the keyboard
+- feat(daw): the arrangement can be used from the keyboard
+- feat(daw): microtuning from Scala files
+- feat(daw): a modulation matrix
+- feat(daw): record from and play out of any pair on the interface
+- feat(daw): knobs inside a plug-in window record automation
+- feat(daw): the saturator oversamples too
+- feat(daw): the manual ships with the program
+- feat(daw): theme and shortcuts are settings pages, and settings can be searched
+- feat(daw): send levels follow their automation
+- feat(daw): MIDI effects before the instrument
+- feat(daw): multilink maps a controller in one pass
 - Take lanes and comping. Right-click a track and pick "Spread the takes onto lanes" to see every loop pass side by side instead of stacked. Then click the take you want, set the loop range over the part you want from it, and Edit > "Use the selected take over the loop range" cuts all the passes at both edges and plays your choice over that range. Nothing is deleted, so picking a different take over the same range is one more click. It is one undo step.
+- feat(daw): take lanes and comping
+- MIDI effects before the instrument: an arpeggiator, a chord maker, a scale snapper and transpose, between a track's clips and its synth. The clip keeps the notes you wrote and the chain decides what the synth hears, so an effect switches off again instead of having to be undone.
+- A modulation matrix. Tools > Modulation wires a shape that keeps running to a plug-in's knob: source, rate, centre and depth. The knob's own value becomes the middle of the swing, so switching a route on does not jump the sound.
+- Freeze a track. The DAW plays a render of it and gives the CPU back, while the part, the plug-ins and the automation stay where they are. Unfreezing puts the live chain back with nothing lost.
+- Knobs inside a plug-in's own window record automation now, like any other control.
+- A plug-in's own presets are in the preset browser, beside the ones you saved.
+- Record from and play out of any pair on a multi-channel interface.
+- Microtuning: a MIDI track can take a scale from a Scala file, and the built-in instruments play it.
+- MPE: with it on, a controller can bend one note of a chord without bending the rest.
+- Mackie Control and HUI desks drive the mixer: eight faders with mute, solo and arm, the transport keys and bank left and right, with the faders and mute lights sent back.
+- The playlist and the piano roll can be used from the keyboard, and say out loud what the keyboard is on, so a screen reader has something to read.
+- The interface can speak another language, starting with Dutch. Anything not translated stays English rather than going blank.
+- Theme and keyboard shortcuts are pages of the settings window now, and a search box finds any setting by name.
+- A manual that ships with the program, under Help.
+- Multilink maps a whole controller in one pass, and Ctrl+J, Ctrl+B and Ctrl+I answer the way their tooltips always said.
+- Send levels follow their automation, and a bus with nothing of its own on it no longer swallows everything sent into it.
+- The saturator oversamples, so hard settings stop folding harmonics back down the spectrum.
