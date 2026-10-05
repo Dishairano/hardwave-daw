@@ -183,6 +183,9 @@ pub struct DawEngine {
     /// each graph rebuild. Coarse proxy for "total project latency" until
     /// full PDC lands.
     pub graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
+    /// The threads that share the per-block work. Empty is the audio
+    /// thread alone, which is what a machine with one core wants.
+    worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
 
     /// Folder the current .hwp lives in, set on save and load.
     ///
@@ -327,6 +330,7 @@ impl DawEngine {
             history_group_taken: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             master_tap: master_tap::new_shared(),
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            worker_pool: Arc::new(Mutex::new(None)),
             project_dir: Arc::new(Mutex::new(None)),
             audio_load_permille: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             audio_xruns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -703,6 +707,7 @@ impl DawEngine {
             self.audio_prefs.clone(),
             Arc::clone(&self.record_pass),
             Arc::clone(&self.record_last_pos),
+            Arc::clone(&self.worker_pool),
         );
 
         self.audio_device.start(callback).map_err(|e| e.to_string())
@@ -1205,6 +1210,32 @@ impl DawEngine {
     }
 
     /// Apply new audio settings. Restarts the audio stream if running.
+    /// Share the per-block work across this many threads beside the
+    /// audio thread. Zero puts it back on the audio thread alone.
+    ///
+    /// The threads are started here, on the caller's thread, and the
+    /// audio thread only picks up the handle at its next graph
+    /// rebuild: starting a thread inside the callback is the kind of
+    /// thing that makes a block late.
+    pub fn set_worker_threads(&self, threads: usize) {
+        let pool = if threads == 0 {
+            None
+        } else {
+            Some(Arc::new(crate::parallel::WorkerPool::new(threads)))
+        };
+        *self.worker_pool.lock() = pool;
+        self.rebuild_graph();
+    }
+
+    /// How many threads are set to help, zero when none are.
+    pub fn worker_threads(&self) -> usize {
+        self.worker_pool
+            .lock()
+            .as_ref()
+            .map(|p| p.threads())
+            .unwrap_or(0)
+    }
+
     pub fn set_audio_config(
         &mut self,
         device: Option<String>,
@@ -1476,6 +1507,7 @@ impl DawEngine {
             self.audio_prefs.clone(),
             Arc::clone(&self.record_pass),
             Arc::clone(&self.record_last_pos),
+            Arc::clone(&self.worker_pool),
         );
 
         // Populate insert chains from the project metadata so the export
@@ -1617,6 +1649,11 @@ struct EngineCallback {
     /// Which graph edges carry each send, filled at rebuild so a SendLevel
     /// automation lane can move a send's gain per block.
     send_edges: Vec<SendEdges>,
+    /// The threads that share the per-block work, when the setting asks
+    /// for them. Picked up at rebuild, never started here: starting a
+    /// thread on the audio thread is the kind of thing that makes a
+    /// block late.
+    worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
     /// This block's clicks. A fixed-size array rather than a Vec because it
     /// is filled on the audio thread, which must not allocate.
     click_events: [crate::metronome::ClickEvent; crate::metronome::MAX_CLICKS_PER_BLOCK],
@@ -1738,6 +1775,7 @@ impl EngineCallback {
         audio_prefs: crate::audio_prefs::AudioPrefs,
         record_pass: Arc<std::sync::atomic::AtomicU32>,
         record_last_pos: Arc<std::sync::atomic::AtomicU64>,
+        worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
     ) -> Self {
         let mut cb = Self {
             preview: crate::preview_player::PreviewPlayer::new(preview),
@@ -1745,6 +1783,7 @@ impl EngineCallback {
             record_pass,
             record_last_pos,
             send_edges: Vec::with_capacity(64),
+            worker_pool,
             click_events: [crate::metronome::ClickEvent {
                 frame_offset: 0,
                 downbeat: false,
@@ -2153,6 +2192,12 @@ impl EngineCallback {
 
         self.graph.clear();
         self.send_edges.clear();
+        // Whether the work is shared across cores is a setting, and a
+        // rebuild is where it is picked up. A busy lock means the next
+        // rebuild gets it, which is a block or two later at worst.
+        if let Some(pool) = self.worker_pool.try_lock() {
+            self.graph.set_worker_pool(pool.clone());
+        }
 
         let sample_rate = self.sample_rate as f64;
         let tempo_map = &project.tempo_map;
@@ -3845,6 +3890,9 @@ mod rt_safety_tests {
             crate::audio_prefs::AudioPrefs::new(),
             Arc::new(std::sync::atomic::AtomicU32::new(0)),
             Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
+            // One thread: these tests are about the callback, not about
+            // sharing the work.
+            Arc::new(Mutex::new(None)),
         );
         (cb, cmd_tx)
     }
@@ -4002,6 +4050,9 @@ mod wait_for_input_tests {
             crate::audio_prefs::AudioPrefs::new(),
             Arc::new(std::sync::atomic::AtomicU32::new(0)),
             Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
+            // One thread: these tests are about the callback, not about
+            // sharing the work.
+            Arc::new(Mutex::new(None)),
         );
         (cb, command_tx)
     }

@@ -238,6 +238,13 @@ pub struct AudioGraph {
     /// track as a usability default — see `set_accepts_live_midi`).
     accepts_live_midi: Vec<bool>,
     buffer_size: usize,
+    /// Nodes grouped so that everything in a group can run at the same
+    /// time. Rebuilt with the order, not per block.
+    levels: crate::parallel::Levels,
+    /// The threads that share the work, when more than one core is
+    /// being used. `None` is the plain one-thread path, which is what
+    /// every build did until this existed.
+    pool: Option<std::sync::Arc<crate::parallel::WorkerPool>>,
 }
 
 impl AudioGraph {
@@ -251,6 +258,8 @@ impl AudioGraph {
             scratch: Vec::new(),
             accepts_live_midi: Vec::new(),
             buffer_size,
+            levels: crate::parallel::Levels::default(),
+            pool: None,
         }
     }
 
@@ -410,7 +419,32 @@ impl AudioGraph {
             }
         }
 
+        // Which nodes can run beside each other: a node sits one level
+        // past the highest level of anything feeding it, so two nodes
+        // in a level never have an edge between them.
+        let edges = &self.edges;
+        self.levels = crate::parallel::Levels::build(&order, n, |node| {
+            edges
+                .iter()
+                .filter(|e| e.dest == node)
+                .map(|e| e.source)
+                .collect()
+        });
         self.processing_order = order;
+    }
+
+    /// Share the per-block work across a pool of threads.
+    ///
+    /// `None` puts it back on the audio thread alone, which is what
+    /// every build did before this and what a machine with one core
+    /// should keep doing.
+    pub fn set_worker_pool(&mut self, pool: Option<std::sync::Arc<crate::parallel::WorkerPool>>) {
+        self.pool = pool;
+    }
+
+    /// How many threads are helping, zero when none are.
+    pub fn worker_threads(&self) -> usize {
+        self.pool.as_ref().map(|p| p.threads()).unwrap_or(0)
     }
 
     /// Process the entire graph for one buffer. Called on the audio
@@ -430,6 +464,12 @@ impl AudioGraph {
     /// old per-block `src_vec` clone is gone — the audio thread does zero
     /// heap allocation in steady state.
     pub fn process(&mut self, ctx: &ProcessContext, midi_in: &[hardwave_midi::MidiEvent]) {
+        // More than one core, when a pool is attached and the graph is
+        // wide enough to be worth it.
+        if self.pool.is_some() && !self.levels.is_empty() {
+            self.process_in_parallel(ctx, midi_in);
+            return;
+        }
         // Iterate by index — `processing_order` mutates inside the loop
         // body via no path, so a snapshot clone is unnecessary. (The
         // previous code's `.clone()` was defensive but never load-bearing.)
@@ -522,6 +562,39 @@ impl AudioGraph {
         }
     }
 
+    /// One block, with the levels shared across the pool.
+    ///
+    /// Each node touches only its own scratch, its own output buffer
+    /// and the delay lines of the edges that end at it, and reads the
+    /// output buffers of nodes in earlier levels, which are finished
+    /// before this level starts. That is what makes handing out
+    /// pointers to separate nodes sound.
+    fn process_in_parallel(&mut self, ctx: &ProcessContext, midi_in: &[hardwave_midi::MidiEvent]) {
+        let Some(pool) = self.pool.clone() else {
+            return;
+        };
+        let shared = NodeWork {
+            nodes: self.nodes.as_mut_ptr(),
+            node_count: self.nodes.len(),
+            scratch: self.scratch.as_mut_ptr(),
+            buffers: self.buffers.as_mut_ptr(),
+            edge_delays: self.edge_delays.as_mut_ptr(),
+            edges: &self.edges,
+            accepts_live_midi: &self.accepts_live_midi,
+            buffer_size: self.buffer_size,
+            midi_in,
+            ctx,
+        };
+        let run = |node_id: usize| {
+            // SAFETY: every node id in a level is distinct, and a node
+            // only writes its own slots.
+            unsafe { shared.process_node(node_id) };
+        };
+        for level in &self.levels.levels {
+            pool.run_level(level, &run);
+        }
+    }
+
     /// Get the output buffer of a specific node (e.g., the master node).
     pub fn node_output(&self, node_id: NodeId) -> Option<&[Vec<f32>]> {
         self.buffers.get(node_id).map(|v| v.as_slice())
@@ -585,6 +658,112 @@ impl AudioGraph {
             acc[node_id] = incoming_max.saturating_add(self.nodes[node_id].latency_samples());
         }
         acc.into_iter().max().unwrap_or(0)
+    }
+}
+
+/// One block's worth of shared state, handed to the worker threads.
+///
+/// Raw pointers rather than references because several threads work on
+/// different nodes of the same arrays at once. What keeps that sound is
+/// the level grouping in [`crate::parallel::Levels`]: two nodes in a
+/// level have no edge between them, so no two threads ever touch the
+/// same slot.
+struct NodeWork<'a> {
+    nodes: *mut Box<dyn AudioNode>,
+    node_count: usize,
+    scratch: *mut NodeScratch,
+    buffers: *mut Vec<Vec<f32>>,
+    edge_delays: *mut Option<EdgeDelayLine>,
+    edges: &'a [Edge],
+    accepts_live_midi: &'a [bool],
+    buffer_size: usize,
+    midi_in: &'a [hardwave_midi::MidiEvent],
+    ctx: &'a ProcessContext,
+}
+
+// SAFETY: the nodes handed to different threads are distinct, and the
+// batch does not outlive the block that published it.
+unsafe impl Sync for NodeWork<'_> {}
+unsafe impl Send for NodeWork<'_> {}
+
+impl NodeWork<'_> {
+    /// Gather one node's inputs, run it, and publish its output. The
+    /// same work the single-threaded loop does, written so it can be
+    /// called for several nodes at once.
+    ///
+    /// # Safety
+    ///
+    /// `node_id` must be a node of the level currently being processed,
+    /// and no other thread may be processing the same id.
+    unsafe fn process_node(&self, node_id: usize) {
+        if node_id >= self.node_count {
+            return;
+        }
+        let scratch = unsafe { &mut *self.scratch.add(node_id) };
+        for ch in &mut scratch.ch_bufs {
+            ch.fill(0.0);
+        }
+
+        for (edge_idx, e) in self.edges.iter().enumerate() {
+            if e.dest != node_id {
+                continue;
+            }
+            if e.source >= self.node_count {
+                continue;
+            }
+            // The source is a node of an earlier level, which finished
+            // before this level started.
+            let source_bufs = unsafe { &*self.buffers.add(e.source) };
+            let Some(src) = source_bufs.get(e.source_port) else {
+                continue;
+            };
+            let n = src.len().min(self.buffer_size);
+            let delay = unsafe { &mut *self.edge_delays.add(edge_idx) };
+            let src_slice: &[f32] = if let Some(dl) = delay.as_mut() {
+                dl.process(&src[..n], &mut scratch.delay_scratch[..n]);
+                &scratch.delay_scratch[..n]
+            } else {
+                &src[..n]
+            };
+            if e.dest_port < scratch.ch_bufs.len() {
+                let dest = &mut scratch.ch_bufs[e.dest_port];
+                for (i, s) in src_slice.iter().enumerate() {
+                    if i < dest.len() {
+                        dest[i] += s * e.gain;
+                    }
+                }
+            }
+        }
+
+        scratch.midi_out.clear();
+        let input_refs: [&[f32]; NODE_CHANNELS] = [
+            scratch.ch_bufs[0].as_slice(),
+            scratch.ch_bufs[1].as_slice(),
+            scratch.ch_bufs[2].as_slice(),
+            scratch.ch_bufs[3].as_slice(),
+        ];
+        let midi_empty: [hardwave_midi::MidiEvent; 0] = [];
+        let live: &[hardwave_midi::MidiEvent] = if self
+            .accepts_live_midi
+            .get(node_id)
+            .copied()
+            .unwrap_or(false)
+        {
+            self.midi_in
+        } else {
+            &midi_empty
+        };
+        let node = unsafe { &mut *self.nodes.add(node_id) };
+        node.process(
+            &input_refs,
+            &mut scratch.outputs,
+            live,
+            &mut scratch.midi_out,
+            self.ctx,
+        );
+
+        let buffers = unsafe { &mut *self.buffers.add(node_id) };
+        std::mem::swap(&mut scratch.outputs, buffers);
     }
 }
 

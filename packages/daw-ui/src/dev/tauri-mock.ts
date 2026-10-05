@@ -195,6 +195,10 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'get_worker_threads':
+        return { threads: 0, suggested: 5, cores: 8 }
+      case 'set_worker_threads':
+        return null
       case 'get_control_surface':
         return { enabled: false, bank: 0, bankCount: 3 }
       case 'set_control_surface_enabled':

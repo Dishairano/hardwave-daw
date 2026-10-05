@@ -34,6 +34,10 @@ pub struct AudioPrefs {
     /// First channel of the pair the mix goes out of.
     #[serde(default)]
     pub output_channel_offset: u16,
+    /// Threads sharing the audio work beside the audio thread. Zero is
+    /// the audio thread alone, which is what every build did before.
+    #[serde(default)]
+    pub worker_threads: usize,
 }
 
 fn default_sample_rate() -> u32 {
@@ -98,6 +102,7 @@ impl AudioPrefs {
             input_channels: default_input_channels(),
             input_channel_offset: 0,
             output_channel_offset: 0,
+            worker_threads: 0,
         }
     }
 }

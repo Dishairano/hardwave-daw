@@ -2439,3 +2439,78 @@ fn a_track_in_another_tuning_plays_other_pitches() {
         "with the scale on the track the same note sounds at its root"
     );
 }
+
+/// Sharing the work across cores must not change the music.
+///
+/// The same song is rendered twice, once on the audio thread alone and
+/// once with a pool of workers, and the two have to come out the same
+/// sample for sample. A parallel engine that is merely close is a
+/// parallel engine that is wrong.
+#[test]
+fn a_render_is_the_same_whether_it_uses_one_core_or_several() {
+    use hardwave_midi::{MidiClip, MidiNote};
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+    use hardwave_project::mixer::Send as MixerSend;
+
+    let render = |workers: usize| -> Vec<f32> {
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            // A bus every synth sends into, so the graph has more than
+            // one level and the levels have more than one node.
+            let bus = project.add_audio_track("Bus".into());
+            for (index, pitch) in [60u8, 64, 67, 71, 72, 76].iter().enumerate() {
+                let id = project.add_midi_track(format!("Synth {index}"));
+                let mut clip =
+                    MidiClip::new(format!("clip-{index}"), format!("part {index}"), 1920);
+                clip.notes.push(MidiNote {
+                    start_tick: (index as u64) * 120,
+                    duration_ticks: 960,
+                    pitch: *pitch,
+                    velocity: 0.9,
+                    ..Default::default()
+                });
+                if let Some(track) = project.track_mut(&id) {
+                    track.clips.push(ClipPlacement {
+                        content: ClipContent::Midi(MidiClipRef {
+                            id: format!("clip-{index}"),
+                            clip,
+                        }),
+                        track_id: id.clone(),
+                        position_ticks: 0,
+                        length_ticks: 1920,
+                        lane: 0,
+                    });
+                    track.sends.push(MixerSend {
+                        target: bus.clone(),
+                        gain_db: -6.0,
+                        pre_fader: false,
+                        enabled: true,
+                    });
+                }
+            }
+        }
+        if workers > 0 {
+            engine.set_worker_threads(workers);
+        }
+        let mut out = Vec::new();
+        engine
+            .render_offline(SAMPLE_RATE, SAMPLE_RATE as u64 / 2, |block| {
+                out.extend_from_slice(block);
+                true
+            })
+            .expect("offline render");
+        out
+    };
+
+    let one = render(0);
+    let many = render(3);
+    assert_eq!(one.len(), many.len(), "the renders are different lengths");
+    assert!(
+        one.iter().any(|s| s.abs() > 0.001),
+        "the test song should make a sound"
+    );
+    for (index, (a, b)) in one.iter().zip(many.iter()).enumerate() {
+        assert_eq!(a, b, "sample {index} differs: {a} against {b}");
+    }
+}

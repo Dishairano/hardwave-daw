@@ -125,6 +125,10 @@ pub fn run() {
     engine.set_input_config(prefs.input_device.clone(), prefs.input_channels);
     // Which pair of the interface is recorded from and played out of.
     engine.set_channel_offsets(prefs.input_channel_offset, prefs.output_channel_offset);
+    // Sharing the audio work across cores, if the setting asks for it.
+    if prefs.worker_threads > 0 {
+        engine.set_worker_threads(prefs.worker_threads);
+    }
     #[cfg(target_os = "windows")]
     if prefs.wasapi_exclusive {
         if let Err(e) = engine.set_wasapi_exclusive(true) {
@@ -261,6 +265,8 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::engine::get_worker_threads,
+            commands::engine::set_worker_threads,
             commands::engine::get_channel_offsets,
             commands::engine::set_channel_offsets,
             commands::plugins::drain_plugin_knob_moves,

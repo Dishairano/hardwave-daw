@@ -154,6 +154,10 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [surface, setSurface] = useState<{ enabled: boolean; bank: number; bankCount: number }>({
     enabled: false, bank: 0, bankCount: 1,
   })
+  // How many threads share the audio work.
+  const [workers, setWorkers] = useState<{ threads: number; suggested: number; cores: number }>({
+    threads: 0, suggested: 0, cores: 1,
+  })
   const [outputOffset, setOutputOffset] = useState(0)
   const [selectedInputChannels, setSelectedInputChannels] = useState(2)
   const [selectedRate, setSelectedRate] = useState(48000)
@@ -210,6 +214,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setInputConfig(inCfg)
       setSelectedDevice(cfg.device)
       setSelectedInput(inCfg.device)
+      invoke<{ threads: number; suggested: number; cores: number }>('get_worker_threads')
+        .then(setWorkers)
+        .catch(() => { /* older build or no engine */ })
       invoke<{ enabled: boolean; bank: number; bankCount: number }>('get_control_surface')
         .then(setSurface)
         .catch(() => { /* older build or no engine */ })
@@ -678,6 +685,30 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 ]}
               />
             </SettingRow>
+
+            {/* More than one core. A song where one track costs more
+                than a block's budget cannot play however many cores
+                the machine has, unless the work is shared. */}
+            <SettingRow label="Audio threads">
+              <Select
+                value={String(workers.threads)}
+                onChange={v => {
+                  const threads = Number(v)
+                  setWorkers(w => ({ ...w, threads }))
+                  invoke('set_worker_threads', { threads }).catch(() => {})
+                }}
+                options={[
+                  { value: '0', label: `${tr('One')} (${tr('the audio thread alone')})` },
+                  ...Array.from({ length: Math.max(0, workers.cores - 1) }, (_, i) => ({
+                    value: String(i + 1),
+                    label: `${i + 2} ${tr('threads')}${i + 1 === workers.suggested ? ` (${tr('suggested')})` : ''}`,
+                  })),
+                ]}
+              />
+            </SettingRow>
+            <div style={{ fontSize: 10, color: hw.textFaint, margin: '-4px 0 12px' }}>
+              {tr('Tracks that do not feed each other run at the same time. The render is the same either way; what changes is how much the machine can carry before a block runs late.')}
+            </div>
 
             {/* Which pair of a multi-channel interface. An interface with
                 eight ins was always recorded from the first two, so a

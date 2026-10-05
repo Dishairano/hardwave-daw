@@ -20,6 +20,7 @@ fn persist_audio_prefs(state: &State<AppState>) {
         input_channels,
         input_channel_offset,
         output_channel_offset,
+        worker_threads: engine.worker_threads(),
     };
     drop(engine);
     prefs.save();
@@ -512,5 +513,51 @@ pub fn get_channel_offsets(state: State<AppState>) -> ChannelOffsets {
 #[tauri::command]
 pub fn set_channel_offsets(state: State<AppState>, input: u16, output: u16) {
     state.engine.lock().set_channel_offsets(input, output);
+    persist_audio_prefs(&state);
+}
+
+/// How many threads share the audio work, and how many the machine has.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerThreads {
+    /// Threads helping beside the audio thread. Zero is the audio
+    /// thread alone.
+    pub threads: usize,
+    /// What this machine would use when asked for "as many as it can".
+    pub suggested: usize,
+    pub cores: usize,
+}
+
+#[tauri::command]
+pub fn get_worker_threads(state: State<AppState>) -> WorkerThreads {
+    let engine = state.engine.lock();
+    WorkerThreads {
+        threads: engine.worker_threads(),
+        suggested: hardwave_engine::parallel::default_worker_count(),
+        cores: std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
+    }
+}
+
+/// Share the audio work across more than one core.
+///
+/// A song where one track costs more than a block's budget cannot play
+/// however many cores the machine has, because the graph ran on the
+/// audio thread alone. With threads here, tracks that do not feed each
+/// other run at the same time. The render is the same either way: the
+/// engine's own test checks the two paths produce identical samples.
+///
+/// Zero puts it back on the audio thread alone.
+#[tauri::command]
+pub fn set_worker_threads(state: State<AppState>, threads: usize) {
+    // Beyond the machine's own cores the threads only fight each other.
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    state
+        .engine
+        .lock()
+        .set_worker_threads(threads.min(cores.saturating_sub(1).max(1)));
     persist_audio_prefs(&state);
 }
