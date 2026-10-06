@@ -467,11 +467,14 @@ fi
 if [ "${HW_BUILD_ANYTIME:-0}" != "1" ]; then
   while :; do
     HOUR=$(TZ=Europe/Amsterdam date +%-H)
-    if [ "$HOUR" -ge 3 ] && [ "$HOUR" -lt 8 ]; then
+    # Start only up to 07:30: a gate takes ten minutes or more, and a
+    # push at five to eight would run the build into his morning.
+    MINUTE=$(TZ=Europe/Amsterdam date +%-M)
+    if [ "$HOUR" -ge 3 ] && { [ "$HOUR" -lt 7 ] || { [ "$HOUR" -eq 7 ] && [ "$MINUTE" -le 30 ]; }; }; then
       break
     fi
     NOW=$(TZ=Europe/Amsterdam date "+%H:%M")
-    echo "release.sh: it is $NOW in Amsterdam. Builds run between 03:00 and 08:00; waiting."
+    echo "release.sh: it is $NOW in Amsterdam. Builds start between 03:00 and 07:30; waiting."
     sleep 600
   done
   echo "release.sh: inside the build window ($(TZ=Europe/Amsterdam date "+%H:%M")); pushing."
