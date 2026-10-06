@@ -51,7 +51,13 @@ jobs:
       # while he is working on it. Outside the window the job stops here
       # rather than building: a gate that did not run must not look like a
       # gate that passed, so this fails rather than skipping green.
+      # The founder's machine is the runner, so builds stay in the
+      # night window unless he says otherwise. The override is a
+      # repository variable rather than something only he can set on
+      # the machine, so a release he has asked for can go now.
       - name: Build window
+        env:
+          HW_BUILD_ANYTIME: ${{ vars.HW_BUILD_ANYTIME }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -Command "$h = [int](Get-Date).Hour; if ($env:HW_BUILD_ANYTIME -eq '1') { 'override: building outside the window'; exit 0 }; if ($h -lt 3 -or $h -ge 8) { Write-Host ('It is {0}:00 here. Builds run between 03:00 and 08:00; nothing was built.' -f $h); exit 1 }; ('{0}:00, inside the window' -f $h)"
 
       - uses: actions/checkout@v4
