@@ -327,6 +327,29 @@ function PluginsTab() {
         </div>
       )}
 
+      {/* The Hardwave plug-ins are free in here and paid in every
+          other host, which is worth saying where a producer is
+          looking for plug-ins rather than only on the website. */}
+      {!scanning && !plugins.some(p => (p.vendor || '').toLowerCase().includes('hardwave')) && (
+        <div style={{
+          margin: '6px 8px', padding: 10, fontSize: 10, lineHeight: 1.5,
+          color: hw.textSecondary, background: 'rgba(255,255,255,0.03)',
+          border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
+        }}>
+          The Hardwave plug-ins are free inside this DAW. Install them with the
+          Hardwave Suite and they appear here, unlocked.
+          <button
+            onClick={() => window.open('https://hardwavestudios.com/downloads', '_blank', 'noopener,noreferrer')}
+            style={{
+              display: 'block', marginTop: 8, padding: '4px 10px', fontSize: 10,
+              fontWeight: 600, color: '#fff', background: hw.accent,
+              border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >Get the Suite</button>
+        </div>
+      )}
+
       {plugins.length > 0 && (
         <>
           {favorites.length > 0 && (

@@ -107,6 +107,17 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Our own plug-ins are free inside this DAW and paid in other
+    // hosts, so they have to be able to tell where they are. A
+    // plug-in loads into this process and reads this, and a sandboxed
+    // one inherits it from here, which is the whole mechanism.
+    //
+    // Safety: set before any thread of ours exists, which is the one
+    // time setting an environment variable is sound.
+    unsafe {
+        std::env::set_var("HARDWAVE_HOST", "hardwave-daw");
+    }
+
     // Crash probe: this same binary, re-run with --probe-plugin, loads one
     // plug-in and exits. Handled before anything else starts, so the process
     // that a bad plug-in kills is one holding nothing: no window, no engine,
