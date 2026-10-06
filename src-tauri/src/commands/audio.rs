@@ -1433,6 +1433,9 @@ pub fn audio_clip_to_midi(
             .audio_pool
             .get(&source_path)
             .ok_or_else(|| "that clip's audio is not loaded".to_string())?;
+        // The left side is enough to follow a pitch: both sides of a
+        // take are the same performance, and summing them would blur
+        // anything that was widened.
         let channel = buffer
             .channels
             .first()
@@ -1579,12 +1582,19 @@ pub fn tune_audio_clip(
             .audio_pool
             .get(&source_path)
             .ok_or_else(|| "that clip's audio is not loaded".to_string())?;
-        let channel = buffer
+        if buffer.channels.is_empty() {
+            return Err("that clip has no audio in it".into());
+        }
+        let channels: Vec<Vec<f32>> = buffer
             .channels
-            .first()
-            .ok_or_else(|| "that clip has no audio in it".to_string())?;
-        let from = (source_start as usize).min(channel.len());
-        (channel[from..].to_vec(), sample_rate, name)
+            .iter()
+            .take(2)
+            .map(|channel| {
+                let from = (source_start as usize).min(channel.len());
+                channel[from..].to_vec()
+            })
+            .collect();
+        (channels, sample_rate, name)
     };
 
     let scale = match scale.as_deref() {
@@ -1602,9 +1612,26 @@ pub fn tune_audio_clip(
         sample_rate: sample_rate as f64,
         ..Default::default()
     };
-    let (tuned, corrections) = hardwave_dsp::pitch_correct::tune(&samples, &settings, &tuning);
+    // The pitch is followed on the left side and the same moves are
+    // made to the right: tracking each side on its own would tune a
+    // wide take into two slightly different performances.
+    let (left, corrections) = hardwave_dsp::pitch_correct::tune(&samples[0], &settings, &tuning);
     if corrections.is_empty() {
         return Err("no pitch to follow in that clip".into());
+    }
+    let notes: Vec<hardwave_dsp::audio_to_midi::DetectedNote> = corrections
+        .iter()
+        .map(|c| hardwave_dsp::audio_to_midi::DetectedNote {
+            start_sample: c.start_sample,
+            length_samples: c.length_samples,
+            pitch: c.pitch,
+            velocity: 1.0,
+            cents_off: c.was_off_cents,
+        })
+        .collect();
+    let mut tuned = vec![left];
+    for channel in samples.iter().skip(1) {
+        tuned.push(hardwave_dsp::pitch_correct::tune_notes(channel, &notes, &tuning).0);
     }
 
     // Next to the recordings, as a new file: the take as it was sung
@@ -1626,7 +1653,7 @@ pub fn tune_audio_clip(
     let path = dir.join(format!("{safe}-tuned-{stamp}.wav"));
 
     let spec = hound::WavSpec {
-        channels: 1,
+        channels: tuned.len() as u16,
         sample_rate,
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
@@ -1634,10 +1661,13 @@ pub fn tune_audio_clip(
     {
         let mut writer =
             hound::WavWriter::create(&path, spec).map_err(|e| format!("could not write: {e}"))?;
-        for sample in &tuned {
-            writer
-                .write_sample(*sample)
-                .map_err(|e| format!("could not write: {e}"))?;
+        let frames = tuned.iter().map(|c| c.len()).min().unwrap_or(0);
+        for frame in 0..frames {
+            for channel in &tuned {
+                writer
+                    .write_sample(channel[frame])
+                    .map_err(|e| format!("could not write: {e}"))?;
+            }
         }
         writer
             .finalize()
@@ -1651,12 +1681,17 @@ pub fn tune_audio_clip(
         // Straight into the pool, since the samples are already here:
         // reading the file we just wrote would only prove the disk
         // works.
+        let frames = tuned.first().map(|c| c.len()).unwrap_or(0);
         engine.audio_pool.insert(
             path_text.clone(),
             hardwave_engine::audio_pool::AudioBuffer {
-                channels: vec![tuned.clone(), tuned.clone()],
+                channels: if tuned.len() == 1 {
+                    vec![tuned[0].clone(), tuned[0].clone()]
+                } else {
+                    tuned.clone()
+                },
                 sample_rate,
-                num_frames: tuned.len(),
+                num_frames: frames,
             },
         );
         let mut project = engine.project.lock();
@@ -1751,10 +1786,32 @@ pub fn clip_spectrogram(
         hop: SPECTRAL_HOP,
     };
     let (frames, bins) = hardwave_dsp::spectral_edit::spectrogram(samples, &settings);
+
+    // A three-minute take is seventeen thousand frames of a thousand
+    // bins each. Sent whole that is tens of millions of numbers
+    // through the bridge for a picture 900 pixels wide, so it is
+    // thinned to something a screen can show before it leaves here.
+    const MAX_FRAMES: usize = 1200;
+    const MAX_BINS: usize = 256;
+    let frame_step = frames.len().div_ceil(MAX_FRAMES).max(1);
+    let bin_step = bins.div_ceil(MAX_BINS).max(1);
+    let frames: Vec<Vec<f32>> = frames
+        .iter()
+        .step_by(frame_step)
+        .map(|row| {
+            // The loudest of each group rather than the first: a click
+            // is one bin wide and must not be thinned away.
+            row.chunks(bin_step)
+                .map(|group| group.iter().fold(f32::NEG_INFINITY, |m, v| m.max(*v)))
+                .collect()
+        })
+        .collect();
+    let bins = frames.first().map(|row| row.len()).unwrap_or(0);
+
     Ok(Spectrogram {
         frames,
         bins,
-        hop: SPECTRAL_HOP,
+        hop: SPECTRAL_HOP * frame_step,
         window: SPECTRAL_WINDOW,
         sample_rate,
         length_samples: samples.len(),
@@ -1811,12 +1868,20 @@ pub fn erase_from_clip(
             .audio_pool
             .get(&source_path)
             .ok_or_else(|| "that clip's audio is not loaded".to_string())?;
-        let channel = buffer
+        if buffer.channels.is_empty() {
+            return Err("that clip has no audio in it".into());
+        }
+        // Both sides, so a stereo take does not come back mono.
+        let channels: Vec<Vec<f32>> = buffer
             .channels
-            .first()
-            .ok_or_else(|| "that clip has no audio in it".to_string())?;
-        let from = (source_start as usize).min(channel.len());
-        (channel[from..].to_vec(), sample_rate, name)
+            .iter()
+            .take(2)
+            .map(|channel| {
+                let from = (source_start as usize).min(channel.len());
+                channel[from..].to_vec()
+            })
+            .collect();
+        (channels, sample_rate, name)
     };
 
     let settings = hardwave_dsp::spectral_edit::Settings {
@@ -1834,18 +1899,26 @@ pub fn erase_from_clip(
             strength: p.strength.clamp(0.0, 1.0),
         })
         .collect();
-    let cleaned = hardwave_dsp::spectral_edit::erase(&samples, &patches, &settings);
+    let cleaned: Vec<Vec<f32>> = samples
+        .iter()
+        .map(|channel| hardwave_dsp::spectral_edit::erase(channel, &patches, &settings))
+        .collect();
 
     let path_text = write_derived_wav(&cleaned, sample_rate, &name, "cleaned")?;
     state.engine.lock().snapshot_before_mutation();
     {
         let engine = state.engine.lock();
+        let frames = cleaned.first().map(|c| c.len()).unwrap_or(0);
         engine.audio_pool.insert(
             path_text.clone(),
             hardwave_engine::audio_pool::AudioBuffer {
-                channels: vec![cleaned.clone(), cleaned.clone()],
+                channels: if cleaned.len() == 1 {
+                    vec![cleaned[0].clone(), cleaned[0].clone()]
+                } else {
+                    cleaned.clone()
+                },
                 sample_rate,
-                num_frames: cleaned.len(),
+                num_frames: frames,
             },
         );
         let mut project = engine.project.lock();
@@ -1868,7 +1941,7 @@ pub fn erase_from_clip(
 /// Write audio made from a take to its own file, next to the
 /// recordings, so the take itself is never overwritten.
 fn write_derived_wav(
-    samples: &[f32],
+    channels: &[Vec<f32>],
     sample_rate: u32,
     track_name: &str,
     what: &str,
@@ -1889,17 +1962,20 @@ fn write_derived_wav(
         .unwrap_or(0);
     let path = dir.join(format!("{safe}-{what}-{stamp}.wav"));
     let spec = hound::WavSpec {
-        channels: 1,
+        channels: channels.len().max(1) as u16,
         sample_rate,
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
     let mut writer =
         hound::WavWriter::create(&path, spec).map_err(|e| format!("could not write: {e}"))?;
-    for sample in samples {
-        writer
-            .write_sample(*sample)
-            .map_err(|e| format!("could not write: {e}"))?;
+    let frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
+    for frame in 0..frames {
+        for channel in channels {
+            writer
+                .write_sample(channel[frame])
+                .map_err(|e| format!("could not write: {e}"))?;
+        }
     }
     writer
         .finalize()

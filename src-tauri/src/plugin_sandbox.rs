@@ -191,9 +191,11 @@ impl SandboxedPlugin {
 impl Drop for SandboxedPlugin {
     fn drop(&mut self) {
         let _ = self.to_child.send(ToChild::Shutdown);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        // The thread is not waited for. It owns everything it touches,
+        // and a child that has wedged can leave a grandchild holding
+        // the pipe open, so a read can outlive the kill. Removing a
+        // plug-in must not hang the app while that resolves.
+        self.worker.take();
     }
 }
 
@@ -584,7 +586,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hw-sandbox-quiet-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // Reads its input and says nothing back.
-        let exe = fake_child(&dir, "cat > /dev/null");
+        // exec, so the kill reaches the process holding the pipe
+        // rather than the shell that started it.
+        let exe = fake_child(&dir, "exec cat > /dev/null");
 
         let mut plugin = SandboxedPlugin::start(descriptor(), &exe).expect("start");
         let started = std::time::Instant::now();
