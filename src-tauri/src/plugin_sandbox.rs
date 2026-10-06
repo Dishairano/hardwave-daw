@@ -116,8 +116,19 @@ impl SandboxedPlugin {
     /// `exe` is this program: the child is the same binary with a
     /// switch, so there is nothing else to install or keep in step.
     pub fn start(descriptor: PluginDescriptor, exe: &Path) -> Result<Self, String> {
-        let child = Command::new(exe)
-            .arg("--host-plugin")
+        // A plug-in built for another architecture cannot be loaded by
+        // this process at all, whatever we do with threads, so it goes
+        // to the helper built for that architecture instead. This is
+        // what makes a 32-bit plug-in from 2008 run at all.
+        let (program, first_arg) = match helper_for(&descriptor) {
+            Some(helper) => (helper, None),
+            None => (exe.to_path_buf(), Some("--host-plugin")),
+        };
+        let mut command = Command::new(program);
+        if let Some(flag) = first_arg {
+            command.arg(flag);
+        }
+        let child = command
             .arg(&descriptor.path)
             .arg(&descriptor.id)
             .stdin(Stdio::piped())
@@ -333,6 +344,37 @@ impl HostedPlugin for SandboxedPlugin {
     }
 
     fn set_transport(&mut self, _transport: TransportInfo) {}
+}
+
+/// The helper to run a plug-in this process cannot load itself, if
+/// there is one next to the app.
+///
+/// On Windows that is the 32-bit build, shipped beside the exe. When
+/// the plug-in matches this process, or no helper is installed, the
+/// answer is nothing and the app hosts it in a child of its own.
+fn helper_for(descriptor: &PluginDescriptor) -> Option<std::path::PathBuf> {
+    use hardwave_plugin_host::binary_arch::{plugin_arch, BinaryArch};
+    let arch = plugin_arch(&descriptor.path);
+    if arch.matches_host() {
+        return None;
+    }
+    let beside = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let name = match arch {
+        BinaryArch::X86 => "hardwave-plugin-bridge-x86",
+        BinaryArch::X86_64 => "hardwave-plugin-bridge-x64",
+        BinaryArch::Arm64 => "hardwave-plugin-bridge-arm64",
+        BinaryArch::Unknown => return None,
+    };
+    // Beside the app, and in the `binaries` folder the installer puts
+    // bundled resources in.
+    [
+        beside.join(format!("{name}.exe")),
+        beside.join("binaries").join(format!("{name}.exe")),
+        beside.join(name),
+        beside.join("binaries").join(name),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.is_file())
 }
 
 /// The thread between the audio thread and the child process.

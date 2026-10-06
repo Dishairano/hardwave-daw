@@ -495,7 +495,11 @@ pub(crate) fn instantiate_for_slot(
     descriptor: &PluginDescriptor,
 ) -> Result<Box<dyn HostedPlugin>, String> {
     let sandboxed = sandboxed_plugins.lock().contains(&descriptor.id);
-    if !sandboxed {
+    // A plug-in built for another architecture has no choice: this
+    // process cannot load it, so it goes out to a helper whether or
+    // not the user asked for a sandbox.
+    let foreign = !hardwave_plugin_host::binary_arch::plugin_arch(&descriptor.path).matches_host();
+    if !sandboxed && !foreign {
         return instantiate_plugin(descriptor);
     }
     let exe =

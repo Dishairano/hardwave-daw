@@ -361,6 +361,21 @@ jobs:
           tauriScript: tauri
           args: --target ${{ matrix.target }} --features jack --bundles ${{ matrix.tauri-bundles }}
 
+      # The 32-bit helper. A plug-in that was never rebuilt for 64-bit
+      # cannot be loaded by the app at all; it runs in here instead.
+      # Built before the bundle so the installer can carry it.
+      - name: Build the 32-bit plug-in helper (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          rustup target add i686-pc-windows-msvc
+          # Its own linker setting: the LLVM lld-link we point the
+          # 64-bit build at is configured per target above.
+          cargo build --release --target i686-pc-windows-msvc -p hardwave-plugin-bridge
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item target/i686-pc-windows-msvc/release/hardwave-plugin-bridge.exe `
+            src-tauri/binaries/hardwave-plugin-bridge-x86.exe -Force
+
       - name: Build Tauri app (Windows — with ASIO)
         if: matrix.platform == 'windows-latest'
         uses: tauri-apps/tauri-action@v0

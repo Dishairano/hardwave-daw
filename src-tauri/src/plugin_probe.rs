@@ -188,6 +188,13 @@ fn shared_cache() -> &'static std::sync::Mutex<ProbeCache> {
 /// one binary means the probe can never be missing or a different version
 /// from the app that spawned it.
 pub fn probe_plugin(path: &Path) -> ProbeOutcome {
+    // A plug-in built for another architecture is not broken: this
+    // process simply cannot load it, and it runs in the helper
+    // instead. Probing it here would call a working plug-in a
+    // crasher and hide it from the list for good.
+    if !hardwave_plugin_host::binary_arch::plugin_arch(path).matches_host() {
+        return ProbeOutcome::Ok;
+    }
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {

@@ -1,5 +1,6 @@
 //! Hardwave Plugin Host — scan, load, and run VST3/CLAP plugins.
 
+pub mod binary_arch;
 pub mod bridge_protocol;
 pub mod clap_ffi;
 pub mod clap_instance;

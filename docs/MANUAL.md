@@ -345,7 +345,20 @@ what anyone wants, and the button turns it on. The playhead drives
 the video and never the other way round, so a frame arriving late
 cannot drag the song with it.
 
-## 23. Mixing against a record
+## 23. Old 32-bit plug-ins
+
+Plenty of free plug-ins from the 2000s were never rebuilt for 64-bit,
+and hard dance is full of them. A 64-bit program cannot load a 32-bit
+plug-in at all, so these run in a small helper that ships with the
+DAW and speaks to it over a pipe.
+
+Nothing to switch on: the architecture is read out of the plug-in's
+own header, and one that does not match is sent to the helper. It
+costs one buffer of latency, reported so delay compensation lines the
+track up, and such a plug-in uses the generic parameter sheet rather
+than its own window. A crash in it takes the helper, not the song.
+
+## 24. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -356,7 +369,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 24. Exporting
+## 25. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -365,7 +378,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 25. When something goes wrong
+## 26. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

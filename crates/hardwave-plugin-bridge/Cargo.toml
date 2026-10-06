@@ -1,0 +1,17 @@
+[package]
+name = "hardwave-plugin-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The 32-bit helper. Built for i686 on Windows and shipped next to the
+# app, so a plug-in that was never rebuilt for 64-bit still runs. It
+# holds one plug-in and nothing else, which is also why a crash in it
+# is survivable.
+[[bin]]
+name = "hardwave-plugin-bridge"
+path = "src/main.rs"
+
+[dependencies]
+hardwave-plugin-host = { path = "../hardwave-plugin-host" }
+hardwave-midi = { path = "../hardwave-midi" }

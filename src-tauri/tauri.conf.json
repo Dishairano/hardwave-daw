@@ -44,7 +44,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "test_assets/*"
+      "test_assets/*",
+      "binaries/*"
     ],
     "createUpdaterArtifacts": "v1Compatible",
     "windows": {

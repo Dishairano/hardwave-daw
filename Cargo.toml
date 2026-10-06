@@ -5,6 +5,7 @@ members = [
     "crates/hardwave-audio-io",
     "crates/hardwave-midi",
     "crates/hardwave-plugin-host",
+    "crates/hardwave-plugin-bridge",
     "crates/hardwave-project",
     "crates/hardwave-metering",
     "crates/hardwave-dsp",

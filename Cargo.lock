@@ -2011,6 +2011,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hardwave-plugin-bridge"
+version = "0.259.0"
+dependencies = [
+ "hardwave-midi",
+ "hardwave-plugin-host",
+]
+
+[[package]]
 name = "hardwave-plugin-host"
 version = "0.259.0"
 dependencies = [
