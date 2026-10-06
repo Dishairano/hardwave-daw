@@ -1,0 +1,30 @@
+# The room two DAWs meet in.
+#
+# Small and stateless: rooms live in memory, and a room that empties
+# is forgotten. Nothing here stores a song, so losing this process
+# costs the two people in a room their connection and nothing else.
+
+[Unit]
+Description=Hardwave room service (working on a song together)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hardwave-room-server
+Environment=HARDWAVE_ROOM_PORT=8787
+Environment=HARDWAVE_SITE=https://hardwavestudios.com
+Environment=RUST_LOG=info
+Restart=always
+RestartSec=3
+# It holds no files and needs no privileges.
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

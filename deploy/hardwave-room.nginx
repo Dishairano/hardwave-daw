@@ -1,0 +1,43 @@
+# rooms.hardwavestudios.com -> the room service on loopback.
+#
+# The service speaks plain WebSocket on 127.0.0.1:8787 and never
+# listens on a public address; TLS and the hostname live here, the
+# same arrangement as the plug-in windows.
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name rooms.hardwavestudios.com;
+
+    ssl_certificate     /etc/letsencrypt/live/rooms.hardwavestudios.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/rooms.hardwavestudios.com/privkey.pem;
+
+    location /room {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # A room is open for as long as two people are working. The
+        # default read timeout would cut them off after a minute of
+        # nobody touching anything.
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    location /healthz {
+        proxy_pass http://127.0.0.1:8787;
+    }
+
+    location / {
+        return 404;
+    }
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name rooms.hardwavestudios.com;
+    return 301 https://$host$request_uri;
+}
