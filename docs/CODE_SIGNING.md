@@ -112,6 +112,37 @@ says why until it happens.
 Without this one step everything else is in place and every signing
 call is refused, so it is worth checking it saved.
 
+### De portal in het Nederlands
+
+De portal staat bij ons in het Nederlands en de service heet daar
+Artifact Signing. Dit zijn dezelfde stappen met de labels zoals ze op
+het scherm staan.
+
+| Engels | Nederlands |
+| --- | --- |
+| Subscriptions | Abonnementen |
+| Resource group | Resourcegroep |
+| Region | Regio |
+| Pricing tier | Prijscategorie |
+| Overview | Overzicht |
+| Access control (IAM) | Toegangsbeheer (IAM) |
+| Add > Add role assignment | Toevoegen > Roltoewijzing toevoegen |
+| Role | Rol |
+| Members > Select members | Leden > Leden selecteren |
+| Review + assign | Beoordelen en toewijzen |
+| Identity validations | Identiteitsvalidaties |
+| Certificate profiles | Certificaatprofielen |
+| Create | Maken |
+| Trusted Signing Identity Verifier | Artifact Signing Identity Verifier |
+| Trusted Signing Certificate Profile Signer | Artifact Signing Certificate Profile Signer |
+| App registrations > New registration | App-registraties > Nieuwe registratie |
+| Certificates & secrets > New client secret | Certificaten en geheimen > Nieuw clientgeheim |
+| Application (client) ID | Toepassings-id (client) |
+| Directory (tenant) ID | Map-id (tenant) |
+| Value (of the secret) | Waarde |
+| Owner / User Access Administrator | Eigenaar / Gebruikerstoegangsbeheerder |
+| Digital Signatures (file properties) | Digitale handtekeningen |
+
 ## What has to be set, once
 
 In the repository's settings, under Secrets and variables > Actions:
