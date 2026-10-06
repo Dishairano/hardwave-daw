@@ -66,12 +66,19 @@ impl LiveSlot {
 /// Ordered list of live insert slots for one track.
 #[derive(Default)]
 pub struct InsertChain {
+    /// Where the song is, told to each plug-in before it runs. Without
+    /// it a plug-in can only work in milliseconds, so a stutter drifts
+    /// away from the music and a delay cannot be set in beats.
+    transport: hardwave_plugin_host::types::TransportInfo,
     pub slots: Vec<LiveSlot>,
 }
 
 impl InsertChain {
     pub fn new() -> Self {
-        Self { slots: Vec::new() }
+        Self {
+            transport: hardwave_plugin_host::types::TransportInfo::default(),
+            slots: Vec::new(),
+        }
     }
 
     /// Process a stereo audio block in place through every enabled slot
@@ -85,6 +92,12 @@ impl InsertChain {
     /// `scratch_capacity` is set ≥ block size. The audio thread should
     /// call [`InsertChain::ensure_scratch_capacity`] whenever buffer
     /// size changes.
+    /// Tell the chain where the song is. Called once per block by the
+    /// node that owns it.
+    pub fn set_transport(&mut self, transport: hardwave_plugin_host::types::TransportInfo) {
+        self.transport = transport;
+    }
+
     pub fn process(
         &mut self,
         left: &mut [f32],
@@ -119,6 +132,9 @@ impl InsertChain {
             scratch.channels[0].clear();
             scratch.channels[1].clear();
             scratch.midi_out.clear();
+            // Where the song is, so a plug-in can work in beats rather
+            // than only in milliseconds.
+            slot.plugin.set_transport(self.transport);
             // A slot with a routed sidechain gets a 4-channel input:
             // [main L, main R, sidechain L, sidechain R]. Everything else
             // gets plain stereo, so non-sidechain plug-ins are unaffected.

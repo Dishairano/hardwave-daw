@@ -1011,6 +1011,16 @@ impl AudioNode for TrackNode {
             let (out_left, out_rest) = outputs.split_at_mut(1);
             let out_l = &mut out_left[0];
             let out_r = &mut out_rest[0];
+            // Where the song is, so a plug-in in this chain can work in
+            // beats rather than only in milliseconds.
+            self.chain
+                .set_transport(hardwave_plugin_host::types::TransportInfo {
+                    playing: ctx.playing,
+                    tempo: ctx.tempo,
+                    position_beats: ctx.position_ticks as f64 / hardwave_midi::PPQ as f64,
+                    time_sig: ctx.time_sig,
+                    sample_rate: ctx.sample_rate,
+                });
             self.chain.process(
                 out_l,
                 out_r,

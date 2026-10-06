@@ -176,6 +176,16 @@ impl AudioNode for MasterNode {
         //    take both channels mutably at once.
         if !self.chain.slots.is_empty() {
             let (left, right) = outputs.split_at_mut(1);
+            // Where the song is, so a plug-in in this chain can work in
+            // beats rather than only in milliseconds.
+            self.chain
+                .set_transport(hardwave_plugin_host::types::TransportInfo {
+                    playing: ctx.playing,
+                    tempo: ctx.tempo,
+                    position_beats: ctx.position_ticks as f64 / hardwave_midi::PPQ as f64,
+                    time_sig: ctx.time_sig,
+                    sample_rate: ctx.sample_rate,
+                });
             self.chain.process(
                 &mut left[0],
                 &mut right[0],

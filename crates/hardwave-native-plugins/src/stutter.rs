@@ -19,7 +19,20 @@ const PARAM_MIX: u32 = 0;
 const PARAM_SLICE: u32 = 1; // 30..500 ms
 const PARAM_REPEATS: u32 = 2; // 1..8
 const PARAM_DECAY: u32 = 3; // per-repeat gain 0.5..1.0
-const PARAM_COUNT: u32 = 4;
+const PARAM_SYNC: u32 = 4; // off, or a note value
+const PARAM_COUNT: u32 = 5;
+
+/// Slice lengths in beats, for the tempo-synced side. A bar at four
+/// four is four beats, which is where the long ones come from.
+const SYNC_DIVISIONS: [(f32, &str); 7] = [
+    (0.0, "off"),
+    (2.0, "1/2"),
+    (1.0, "1/4"),
+    (0.5, "1/8"),
+    (0.25, "1/16"),
+    (1.0 / 3.0, "1/8T"),
+    (0.125, "1/32"),
+];
 
 const SLICE_MIN_MS: f32 = 30.0;
 const SLICE_MAX_MS: f32 = 500.0;
@@ -40,6 +53,12 @@ pub struct NativeStutter {
     slice_ms: f32,
     repeats: u32,
     decay: f32,
+    /// Which entry of `SYNC_DIVISIONS` the slice follows. Zero is the
+    /// millisecond slice, which is what this plug-in had before the
+    /// host told it where the song was.
+    sync: usize,
+    /// Where the song is, as the host last said.
+    transport: hardwave_plugin_host::types::TransportInfo,
 }
 
 impl NativeStutter {
@@ -78,11 +97,27 @@ impl NativeStutter {
             slice_ms,
             repeats: 4,
             decay: 0.85,
+            sync: 0,
+            transport: hardwave_plugin_host::types::TransportInfo::default(),
+        }
+    }
+
+    /// How long a slice is, in samples.
+    ///
+    /// Synced, it is a note value at the song's tempo, so the stutter
+    /// lands on the beat rather than drifting past it. Off, it is the
+    /// millisecond setting.
+    fn slice_samples(&self) -> usize {
+        let beats = SYNC_DIVISIONS[self.sync.min(SYNC_DIVISIONS.len() - 1)].0;
+        if beats > 0.0 {
+            (beats as f64 * self.transport.samples_per_beat()).max(1.0) as usize
+        } else {
+            (((self.slice_ms / 1000.0) * self.sample_rate) as usize).max(1)
         }
     }
 
     fn recompute_slice(&mut self) {
-        let len = (((self.slice_ms / 1000.0) * self.sample_rate) as usize).max(1);
+        let len = self.slice_samples();
         self.slice_len = len;
         self.hold_l.resize(len, 0.0);
         self.hold_r.resize(len, 0.0);
@@ -115,6 +150,15 @@ impl HostedPlugin for NativeStutter {
         self.active = false;
     }
 
+    fn set_transport(&mut self, transport: hardwave_plugin_host::types::TransportInfo) {
+        let tempo_changed = (transport.tempo - self.transport.tempo).abs() > 0.001;
+        let rate_changed = (transport.sample_rate - self.transport.sample_rate).abs() > 0.001;
+        self.transport = transport;
+        if self.sync > 0 && (tempo_changed || rate_changed) {
+            self.recompute_slice();
+        }
+    }
+
     fn process(
         &mut self,
         inputs: &[&[f32]],
@@ -135,6 +179,20 @@ impl HostedPlugin for NativeStutter {
             return;
         }
         let mix = self.mix;
+        // Synced: the group starts where the bar does, so the pattern
+        // is in the same place every time round instead of wherever
+        // the last block happened to leave it.
+        if self.sync > 0 && self.transport.playing && self.slice_len > 0 {
+            let group = (self.slice_len * self.repeats.max(1) as usize) as f64;
+            let into_song = self.transport.position_beats * self.transport.samples_per_beat();
+            let into_group = into_song.rem_euclid(group);
+            let slice = self.slice_len as f64;
+            self.slice_in_group = ((into_group / slice) as u32).min(self.repeats.saturating_sub(1));
+            self.pos_in_slice = (into_group % slice) as usize;
+            if self.pos_in_slice >= self.hold_l.len() {
+                self.pos_in_slice = 0;
+            }
+        }
         for i in 0..num_samples {
             let in_l = inputs[0].get(i).copied().unwrap_or(0.0);
             let in_r = inputs[1].get(i).copied().unwrap_or(0.0);
@@ -181,6 +239,7 @@ impl HostedPlugin for NativeStutter {
             ),
             PARAM_REPEATS => ("Repeats", 3.0 / (MAX_REPEATS - 1) as f64, ""),
             PARAM_DECAY => ("Decay", (0.85 - 0.5) / 0.5, ""),
+            PARAM_SYNC => ("Sync", 0.0, "off / 1-2 to 1-32"),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -201,6 +260,7 @@ impl HostedPlugin for NativeStutter {
                 .clamp(0.0, 1.0) as f64,
             PARAM_REPEATS => ((self.repeats - 1) as f32 / (MAX_REPEATS - 1) as f32) as f64,
             PARAM_DECAY => ((self.decay - 0.5) / 0.5).clamp(0.0, 1.0) as f64,
+            PARAM_SYNC => self.sync as f64 / (SYNC_DIVISIONS.len() - 1) as f64,
             _ => 0.0,
         }
     }
@@ -217,6 +277,11 @@ impl HostedPlugin for NativeStutter {
                 self.repeats = 1 + (v * (MAX_REPEATS - 1) as f32).round() as u32;
             }
             PARAM_DECAY => self.decay = 0.5 + v * 0.5,
+            PARAM_SYNC => {
+                let last = SYNC_DIVISIONS.len() - 1;
+                self.sync = (v * last as f32).round() as usize;
+                self.recompute_slice();
+            }
             _ => {}
         }
     }
@@ -323,5 +388,78 @@ mod tests {
         let mut s = NativeStutter::new();
         let (o, _) = run(&mut s, &[0.1, -0.2, 0.3]);
         assert_eq!(o, vec![0.1, -0.2, 0.3]);
+    }
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+    use hardwave_plugin_host::types::TransportInfo;
+
+    fn transport(tempo: f64, position_beats: f64) -> TransportInfo {
+        TransportInfo {
+            playing: true,
+            tempo,
+            position_beats,
+            time_sig: (4, 4),
+            sample_rate: 48_000.0,
+        }
+    }
+
+    #[test]
+    fn a_synced_slice_is_a_note_value_at_the_songs_tempo() {
+        let mut st = NativeStutter::new();
+        st.activate(48_000.0, 512).expect("activate");
+        st.set_transport(transport(120.0, 0.0));
+        // 1/4 at 120 bpm is half a second.
+        st.set_parameter_value(PARAM_SYNC, 2.0 / (SYNC_DIVISIONS.len() - 1) as f64);
+        assert_eq!(st.slice_len, 24_000);
+
+        // The same setting at 140 follows the tempo.
+        st.set_transport(transport(140.0, 0.0));
+        let expected = (48_000.0 * 60.0 / 140.0) as usize;
+        assert!(
+            (st.slice_len as i64 - expected as i64).abs() <= 1,
+            "a quarter at 140 is about {expected} samples, got {}",
+            st.slice_len
+        );
+    }
+
+    #[test]
+    fn with_sync_off_the_slice_is_the_millisecond_setting() {
+        let mut st = NativeStutter::new();
+        st.activate(48_000.0, 512).expect("activate");
+        st.set_transport(transport(120.0, 0.0));
+        st.set_parameter_value(PARAM_SYNC, 0.0);
+        st.set_parameter_value(PARAM_SLICE, 0.0); // 30 ms
+        assert_eq!(st.slice_len, (0.030 * 48_000.0) as usize);
+        // A tempo change leaves a millisecond slice alone.
+        st.set_transport(transport(174.0, 0.0));
+        assert_eq!(st.slice_len, (0.030 * 48_000.0) as usize);
+    }
+
+    #[test]
+    fn a_synced_group_starts_where_the_bar_does() {
+        let mut st = NativeStutter::new();
+        st.activate(48_000.0, 512).expect("activate");
+        st.set_parameter_value(PARAM_SYNC, 2.0 / (SYNC_DIVISIONS.len() - 1) as f64);
+        st.set_parameter_value(PARAM_REPEATS, 1.0 / (MAX_REPEATS - 1) as f64); // 2 repeats
+        st.set_transport(transport(120.0, 0.0));
+
+        let frames = 256;
+        let input: Vec<f32> = (0..frames).map(|n| (n as f32 * 0.01).sin()).collect();
+        let inputs: Vec<&[f32]> = vec![&input, &input];
+        let mut outputs = vec![Vec::new(), Vec::new()];
+
+        // Three beats in: with a quarter-note slice and two repeats the
+        // group is two beats long, so beat three is the start of a
+        // group again, not wherever the last block ended.
+        st.set_transport(transport(120.0, 3.0));
+        st.process(&inputs, &mut outputs, &[], &mut Vec::new(), frames);
+        assert_eq!(st.slice_in_group, 1, "beat three is the second slice");
+
+        st.set_transport(transport(120.0, 4.0));
+        st.process(&inputs, &mut outputs, &[], &mut Vec::new(), frames);
+        assert_eq!(st.slice_in_group, 0, "beat four starts a group");
     }
 }

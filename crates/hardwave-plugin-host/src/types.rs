@@ -141,6 +141,56 @@ pub trait HostedPlugin: Send {
     fn load_factory_preset(&mut self, _index: usize) -> Result<(), String> {
         Err("this plug-in has no presets of its own that the host can read".into())
     }
+
+    /// Where the song is, told to the plug-in before each block.
+    ///
+    /// Without it a plug-in can only work in milliseconds: a stutter
+    /// ran at its own rate and drifted away from the music, and a
+    /// delay could not be set in beats. Plug-ins that do not care
+    /// ignore it.
+    fn set_transport(&mut self, _transport: TransportInfo) {}
+}
+
+/// Where the song is, as the host sees it at the start of a block.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransportInfo {
+    pub playing: bool,
+    /// Beats per minute.
+    pub tempo: f64,
+    /// How far into the song the block starts, in beats.
+    pub position_beats: f64,
+    /// Beats in a bar and what a beat is, as the song's time signature
+    /// says.
+    pub time_sig: (u32, u32),
+    pub sample_rate: f64,
+}
+
+impl Default for TransportInfo {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            tempo: 120.0,
+            position_beats: 0.0,
+            time_sig: (4, 4),
+            sample_rate: 48_000.0,
+        }
+    }
+}
+
+impl TransportInfo {
+    /// How many samples one beat lasts.
+    pub fn samples_per_beat(&self) -> f64 {
+        if self.tempo <= 0.0 {
+            return self.sample_rate;
+        }
+        self.sample_rate * 60.0 / self.tempo
+    }
+
+    /// Where the block starts inside the bar, 0 to 1.
+    pub fn phase_in_bar(&self) -> f64 {
+        let beats_per_bar = (self.time_sig.0.max(1)) as f64;
+        (self.position_beats / beats_per_bar).rem_euclid(1.0)
+    }
 }
 
 /// Shared queue for GUI → audio parameter edits, used by both VST3 and
