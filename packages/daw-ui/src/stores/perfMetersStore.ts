@@ -109,6 +109,26 @@ export function startPerfMeters(): () => void {
       .catch(() => { /* a missed poll is not worth a toast */ })
   }, 100)
 
+  // A sandboxed plug-in whose process has gone. Its slot is already
+  // quiet and the song is still playing, which is only useful if the
+  // app says which plug-in it was. Once each: the command clears what
+  // it hands over.
+  const crashId = window.setInterval(() => {
+    invoke<{ pluginId: string; message: string }[]>('take_sandbox_crashes')
+      .then(rows => {
+        if (rows.length === 0) return
+        void import('./notificationStore').then(({ useNotificationStore }) => {
+          for (const row of rows) {
+            useNotificationStore.getState().push('warning', `${row.pluginId} stopped`, {
+              detail: `${row.message}. Its slot is silent and the song kept playing. `
+                + 'Remove and add it again to bring it back.',
+            })
+          }
+        })
+      })
+      .catch(() => { /* older build or no engine */ })
+  }, 2000)
+
   const memoryId = window.setInterval(pollMemory, 1000)
   pollMemory()
 
@@ -116,6 +136,7 @@ export function startPerfMeters(): () => void {
     window.clearInterval(intervalId)
     window.clearInterval(trackLoadId)
     window.clearInterval(reductionId)
+    window.clearInterval(crashId)
     window.clearInterval(memoryId)
     cleanup = null
   }

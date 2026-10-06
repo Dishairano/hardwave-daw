@@ -123,6 +123,39 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
     if (rect) onOpenPicker(slotIndex, rect)
   }, [insert, onOpenPicker, slotIndex])
 
+  // Whether this plug-in is set to run in a process of its own. Read
+  // per slot rather than held globally: the list is short and the menu
+  // is the only place it is shown.
+  const [sandboxed, setSandboxed] = useState(false)
+  useEffect(() => {
+    if (!menuOpen || !insert) return
+    invoke<string[]>('get_sandboxed_plugins')
+      .then(list => setSandboxed(list.includes(insert.pluginId)))
+      .catch(() => { /* older build or no engine */ })
+  }, [menuOpen, insert])
+
+  const onToggleSandbox = useCallback(() => {
+    if (!insert) return
+    const next = !sandboxed
+    setSandboxed(next)
+    setMenuOpen(false)
+    invoke('set_plugin_sandboxed', { pluginId: insert.pluginId, sandboxed: next })
+      .then(() => {
+        void import('../../../stores/notificationStore').then(({ useNotificationStore }) => {
+          useNotificationStore.getState().push('info',
+            next
+              ? `${insert.pluginName} will run in its own process`
+              : `${insert.pluginName} will run inside the DAW again`,
+            {
+              detail: next
+                ? 'A crash in it cannot take the song with it. It costs one buffer of latency and uses the generic parameter sheet. Takes effect the next time it loads.'
+                : 'Takes effect the next time it loads.',
+            })
+        })
+      })
+      .catch(() => {})
+  }, [insert, sandboxed])
+
   const onRemove = useCallback(() => {
     if (!insert) return
     setMenuOpen(false)
@@ -255,6 +288,16 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
           </button>
           <button role="menuitem" onClick={onShowGui} disabled={!insert}>
             Show GUI
+          </button>
+          <button
+            role="menuitem"
+            onClick={onToggleSandbox}
+            disabled={!insert}
+            title={sandboxed
+              ? 'It runs in a process of its own: a crash cannot take the song with it, at the cost of one buffer of latency.'
+              : 'Run it in a process of its own, so a crash cannot take the song with it. Costs one buffer of latency, and it uses the generic parameter sheet rather than its own window.'}
+          >
+            {sandboxed ? 'Own process: on' : 'Own process: off'}
           </button>
         </div>
       )}

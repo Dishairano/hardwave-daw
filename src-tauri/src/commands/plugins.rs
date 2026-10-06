@@ -30,6 +30,40 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// `load_project`) and the editor path (`open_plugin_editor`). The
 /// editor path may want a *separate* instance from the chain so the
 /// returned Box is intentionally not tied to chain lifecycle.
+/// The descriptor a sandbox child needs, built from what the command
+/// line gave it.
+///
+/// A child is started with a path and an id rather than a scan: it has
+/// one plug-in to load and no reason to walk the disk.
+pub(crate) fn descriptor_for_child(path: &str, id: &str) -> Option<PluginDescriptor> {
+    let path_buf = PathBuf::from(path);
+    if path != "<native>" && !path_buf.exists() {
+        return None;
+    }
+    let format = if path.to_lowercase().ends_with(".clap") {
+        hardwave_plugin_host::types::PluginFormat::Clap
+    } else {
+        hardwave_plugin_host::types::PluginFormat::Vst3
+    };
+    Some(PluginDescriptor {
+        id: id.to_string(),
+        name: path_buf
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(id)
+            .to_string(),
+        vendor: String::new(),
+        version: String::new(),
+        format,
+        path: path_buf,
+        category: hardwave_plugin_host::types::PluginCategory::Effect,
+        num_inputs: 2,
+        num_outputs: 2,
+        has_midi_input: false,
+        has_editor: false,
+    })
+}
+
 pub(crate) fn instantiate_plugin(
     descriptor: &PluginDescriptor,
 ) -> Result<Box<dyn HostedPlugin>, String> {
@@ -235,7 +269,7 @@ pub fn rescan_and_restore_missing_plugins(
     };
 
     for (track_id, slot_id, descriptor, enabled, wet, saved_state) in plan {
-        match instantiate_plugin(&descriptor) {
+        match instantiate_for_slot(&state.sandboxed_plugins, &descriptor) {
             Ok(mut plugin) => {
                 if let Some(bytes) = saved_state {
                     if let Err(e) = plugin.set_state(&bytes) {
@@ -450,6 +484,36 @@ pub fn close_plugin_editor(
     Ok(())
 }
 
+/// Build the plug-in for a slot, in a process of its own when the user
+/// has asked for that one to be sandboxed.
+///
+/// A sandboxed plug-in costs a block of latency, which is why it is a
+/// choice rather than the default: what it buys is that its crash is
+/// its own process's problem and the song keeps playing.
+pub(crate) fn instantiate_for_slot(
+    sandboxed_plugins: &std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
+    descriptor: &PluginDescriptor,
+) -> Result<Box<dyn HostedPlugin>, String> {
+    let sandboxed = sandboxed_plugins.lock().contains(&descriptor.id);
+    if !sandboxed {
+        return instantiate_plugin(descriptor);
+    }
+    let exe =
+        std::env::current_exe().map_err(|e| format!("cannot find our own executable: {e}"))?;
+    match crate::plugin_sandbox::SandboxedPlugin::start(descriptor.clone(), &exe) {
+        Ok(plugin) => Ok(Box::new(plugin)),
+        Err(e) => {
+            // A sandbox that will not start is worth saying out loud,
+            // but it is not a reason to leave the slot empty.
+            log::warn!(
+                "sandbox for {} failed to start: {e}; loading it in-process",
+                descriptor.id
+            );
+            instantiate_plugin(descriptor)
+        }
+    }
+}
+
 #[tauri::command]
 pub fn add_plugin_to_track(
     state: State<AppState>,
@@ -490,7 +554,7 @@ pub fn add_plugin_to_track(
     // holding any locks. VST3 / CLAP loaders may scan the bundle, dlopen
     // the library, or call into platform code — none of that is fast
     // enough to do under a Mutex.
-    let plugin = instantiate_plugin(&descriptor)?;
+    let plugin = instantiate_for_slot(&state.sandboxed_plugins, &descriptor)?;
 
     // Phase 2b: capture the slot's parameter queue (VST3 + CLAP) BEFORE
     // shipping the plug-in to the audio thread. This lets the editor
@@ -890,7 +954,7 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
     };
 
     for (track_id, slot_id, descriptor, enabled, wet, saved_state, sidechain_active) in plan {
-        match instantiate_plugin(&descriptor) {
+        match instantiate_for_slot(&state.sandboxed_plugins, &descriptor) {
             Ok(mut plugin) => {
                 // Restore the persisted state BEFORE the plug-in joins
                 // the audio chain — once it's on the audio thread we
@@ -1054,4 +1118,60 @@ pub fn drain_plugin_knob_moves(state: State<AppState>) -> Vec<PluginKnobMove> {
         }
     }
     moves
+}
+
+/// Which plug-ins run in a process of their own.
+#[tauri::command]
+pub fn get_sandboxed_plugins(state: State<AppState>) -> Vec<String> {
+    let mut list: Vec<String> = state.sandboxed_plugins.lock().iter().cloned().collect();
+    list.sort();
+    list
+}
+
+/// Run this plug-in in a process of its own, or stop doing that.
+///
+/// It takes effect the next time the plug-in is loaded: swapping a
+/// live one for a sandboxed copy mid-playback would drop whatever it
+/// is holding, which is worse than waiting for the next load.
+#[tauri::command]
+pub fn set_plugin_sandboxed(
+    state: State<AppState>,
+    plugin_id: String,
+    sandboxed: bool,
+) -> Result<bool, String> {
+    {
+        let mut list = state.sandboxed_plugins.lock();
+        if sandboxed {
+            list.insert(plugin_id);
+        } else {
+            list.remove(&plugin_id);
+        }
+    }
+    crate::commands::engine::persist_audio_prefs_public(&state);
+    Ok(sandboxed)
+}
+
+/// A plug-in whose own process has gone.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxCrash {
+    pub plugin_id: String,
+    pub message: String,
+}
+
+/// Which sandboxed plug-ins have crashed since the app last asked.
+///
+/// A crash used to close the DAW. Now the slot goes quiet and the song
+/// keeps playing, which is only useful if the app says which plug-in
+/// it was, so this is polled and reported once.
+#[tauri::command]
+pub fn take_sandbox_crashes(_state: State<AppState>) -> Vec<SandboxCrash> {
+    let crashes: Vec<SandboxCrash> = crate::plugin_sandbox::crashed_sandboxes()
+        .into_iter()
+        .map(|(plugin_id, message)| SandboxCrash { plugin_id, message })
+        .collect();
+    if !crashes.is_empty() {
+        crate::plugin_sandbox::clear_crashed_sandboxes();
+    }
+    crashes
 }

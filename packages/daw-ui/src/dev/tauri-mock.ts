@@ -195,6 +195,12 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'get_sandboxed_plugins':
+        return []
+      case 'set_plugin_sandboxed':
+        return true
+      case 'take_sandbox_crashes':
+        return []
       case 'align_track_to':
         return { offsetSamples: 73, offsetMs: 1.52, correlation: 0.97, polarityFlipped: false }
       case 'get_reference':

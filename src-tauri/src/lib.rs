@@ -12,6 +12,7 @@ mod midi_map;
 mod midi_sync;
 mod midi_timecode;
 mod plugin_probe;
+mod plugin_sandbox;
 mod prefs;
 mod process_memory;
 
@@ -65,6 +66,12 @@ pub struct AppState {
     /// The reference track's measured loudness and its name, which the
     /// engine itself has no reason to know.
     pub reference_meta: Arc<Mutex<(f32, String)>>,
+    /// Plug-ins the user has asked to run in a process of their own.
+    pub sandboxed_plugins: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Which live slots are running sandboxed, and whether their
+    /// process has gone, so the mixer can say which plug-in it was.
+    #[allow(clippy::type_complexity)]
+    pub sandbox_health: Arc<Mutex<std::collections::HashMap<(String, String), Option<String>>>>,
     #[allow(clippy::type_complexity)]
     pub slot_gui_edit_logs:
         Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
@@ -99,6 +106,20 @@ pub fn run() {
     // that a bad plug-in kills is one holding nothing: no window, no engine,
     // no project. See plugin_probe.rs.
     let args: Vec<String> = std::env::args().collect();
+    // The sandbox child: this same binary, hosting one plug-in and
+    // answering frames down a pipe. Handled first, for the same reason
+    // the probe is: the process a bad plug-in kills holds nothing else.
+    if let Some(i) = args.iter().position(|a| a == "--host-plugin") {
+        let code = match (args.get(i + 1), args.get(i + 2)) {
+            (Some(path), Some(id)) => plugin_sandbox::run_host_child(path, id),
+            _ => {
+                eprintln!("--host-plugin needs a path and an id");
+                2
+            }
+        };
+        std::process::exit(code);
+    }
+
     if let Some(i) = args.iter().position(|a| a == "--probe-plugin") {
         let code = match args.get(i + 1) {
             Some(path) => plugin_probe::run_probe_child(path),
@@ -154,6 +175,10 @@ pub fn run() {
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
         control_surface: Arc::new(crate::control_surface::ControlSurface::new()),
         reference_meta: Arc::new(Mutex::new((f32::NEG_INFINITY, String::new()))),
+        sandboxed_plugins: Arc::new(Mutex::new(
+            prefs.sandboxed_plugins.iter().cloned().collect(),
+        )),
+        sandbox_health: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_gui_edit_logs: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_gain_reduction: Arc::new(Mutex::new(std::collections::HashMap::new())),
         midi_mappings: Arc::clone(&midi_mappings),
@@ -272,6 +297,9 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::plugins::get_sandboxed_plugins,
+            commands::plugins::take_sandbox_crashes,
+            commands::plugins::set_plugin_sandboxed,
             commands::audio::align_track_to,
             commands::reference::get_reference,
             commands::reference::load_reference,

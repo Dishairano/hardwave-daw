@@ -41,6 +41,13 @@ pub struct AudioPrefs {
     /// Join an Ableton Link session at startup.
     #[serde(default)]
     pub link_enabled: bool,
+    /// Plug-ins to run in a process of their own, by id.
+    ///
+    /// Sandboxing costs a block of latency, so it is a choice per
+    /// plug-in rather than something done to all of them: switch it on
+    /// for the one that keeps falling over.
+    #[serde(default)]
+    pub sandboxed_plugins: Vec<String>,
 }
 
 fn default_sample_rate() -> u32 {
@@ -107,6 +114,7 @@ impl AudioPrefs {
             output_channel_offset: 0,
             worker_threads: 0,
             link_enabled: false,
+            sandboxed_plugins: Vec::new(),
         }
     }
 }

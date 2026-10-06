@@ -6,6 +6,11 @@ use tauri::State;
 /// Snapshot the current engine audio config into a pref struct and write it to
 /// disk. Called from every setter so the on-disk prefs stay aligned with the
 /// running engine state.
+/// The same save, for commands in other modules.
+pub(crate) fn persist_audio_prefs_public(state: &State<AppState>) {
+    persist_audio_prefs(state)
+}
+
 fn persist_audio_prefs(state: &State<AppState>) {
     let engine = state.engine.lock();
     let (output_device, sample_rate, buffer_size) = engine.audio_config();
@@ -22,6 +27,11 @@ fn persist_audio_prefs(state: &State<AppState>) {
         output_channel_offset,
         worker_threads: engine.worker_threads(),
         link_enabled: engine.link_status().0,
+        sandboxed_plugins: {
+            let mut list: Vec<String> = state.sandboxed_plugins.lock().iter().cloned().collect();
+            list.sort();
+            list
+        },
     };
     drop(engine);
     prefs.save();

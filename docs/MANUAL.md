@@ -197,7 +197,19 @@ one of them turned upside down, that is done as well and the message
 says so. If they are not recordings of the same thing, nothing is
 changed.
 
-## 14. Mixing against a record
+## 14. A plug-in in its own process
+
+Right-click a plug-in in the mixer and switch "Own process" on, and it
+is loaded into a process of its own the next time it starts. A crash
+in it then takes that process, not the DAW: the slot goes quiet, the
+song keeps playing, and a message says which plug-in stopped.
+
+It costs one buffer of latency, reported so delay compensation lines
+the track up with the rest, and a sandboxed plug-in uses the generic
+parameter sheet rather than its own window. Leave it off for plug-ins
+that behave, switch it on for the one that keeps falling over.
+
+## 15. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -208,7 +220,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 15. Exporting
+## 16. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -217,7 +229,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 16. When something goes wrong
+## 17. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.
