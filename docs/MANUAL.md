@@ -332,7 +332,20 @@ behind rather than letting you find out later. Sample paths point at
 the machine the project came from, so they are listed rather than
 loaded.
 
-## 22. Mixing against a record
+## 22. Scoring to picture
+
+Tools > Video opens a film or a game capture in a corner of the
+window. It follows the playhead: scrub and the picture scrubs, play
+and it plays, so a hit can be written where the cut is rather than
+where it sounded about right.
+
+"Starts at bar" moves the film against the song. Its own sound is off
+to begin with, because dialogue under a track being written is rarely
+what anyone wants, and the button turns it on. The playhead drives
+the video and never the other way round, so a frame arriving late
+cannot drag the song with it.
+
+## 23. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -343,7 +356,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 23. Exporting
+## 24. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -352,7 +365,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 24. When something goes wrong
+## 25. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

@@ -50,6 +50,17 @@ pub struct ProjectMetadata {
 /// being read as whatever happens to line up.
 pub const FORMAT_VERSION: u32 = 2;
 
+/// A film or a game capture, played in time with the song.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoTrack {
+    pub path: String,
+    /// Where the first frame sits in the song, in ticks.
+    #[serde(default)]
+    pub offset_ticks: u64,
+    #[serde(default)]
+    pub muted: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub version: u32,
@@ -112,6 +123,12 @@ pub struct Project {
     /// together.
     #[serde(default)]
     pub scenes: Vec<String>,
+    /// A video to score to: the file, and where in the song its first
+    /// frame sits. Stored at the end of the struct, like every field
+    /// added after a release, because the save format reads a struct
+    /// by position.
+    #[serde(default)]
+    pub video: Option<VideoTrack>,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a
@@ -170,6 +187,7 @@ impl Default for Project {
             macros: Vec::new(),
             vcas: Vec::new(),
             modulations: Vec::new(),
+            video: None,
             scenes: vec![
                 "Scene 1".to_string(),
                 "Scene 2".to_string(),

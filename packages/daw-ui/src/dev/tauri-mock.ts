@@ -195,6 +195,14 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'get_video':
+        return null
+      case 'set_video':
+        return { path: 'film.mp4', offsetTicks: 0, muted: true }
+      case 'set_video_offset':
+      case 'set_video_muted':
+      case 'clear_video':
+        return null
       case 'import_flp':
         return { bpm: 174, tracks: 9, clips: 46, notes: 612, samples: [], leftBehind: [] }
       case 'get_session_grid':

@@ -593,3 +593,82 @@ pub fn get_count_in_state(state: State<AppState>) -> CountInState {
         total_beats: (total as f64 / samples_per_beat).round() as u32,
     }
 }
+
+/// The video being scored to, if there is one.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoStatus {
+    pub path: String,
+    pub offset_ticks: u64,
+    pub muted: bool,
+}
+
+#[tauri::command]
+pub fn get_video(state: State<AppState>) -> Option<VideoStatus> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    project.video.as_ref().map(|video| VideoStatus {
+        path: video.path.clone(),
+        offset_ticks: video.offset_ticks,
+        muted: video.muted,
+    })
+}
+
+/// Score to a film: the video follows the playhead, so a hit can be
+/// written where the cut is rather than where it sounded about right.
+///
+/// The picture is played by the window rather than decoded here: a
+/// frame on screen is the window's job, and the song's clock is ours.
+#[tauri::command]
+pub fn set_video(
+    state: State<AppState>,
+    path: String,
+    offset_ticks: Option<u64>,
+) -> Result<VideoStatus, String> {
+    if !std::path::Path::new(&path).exists() {
+        return Err("there is no file there".into());
+    }
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    let video = hardwave_project::project::VideoTrack {
+        path: path.clone(),
+        offset_ticks: offset_ticks.unwrap_or(0),
+        muted: true,
+    };
+    project.video = Some(video.clone());
+    Ok(VideoStatus {
+        path: video.path,
+        offset_ticks: video.offset_ticks,
+        muted: video.muted,
+    })
+}
+
+/// Move the film against the song, in ticks.
+#[tauri::command]
+pub fn set_video_offset(state: State<AppState>, offset_ticks: u64) {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    if let Some(video) = project.video.as_mut() {
+        video.offset_ticks = offset_ticks;
+    }
+}
+
+/// Whether the film's own sound is heard. Off by default: the song is
+/// the point, and a film's dialogue under it is rarely what anyone
+/// wants while writing.
+#[tauri::command]
+pub fn set_video_muted(state: State<AppState>, muted: bool) {
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    if let Some(video) = project.video.as_mut() {
+        video.muted = muted;
+    }
+}
+
+#[tauri::command]
+pub fn clear_video(state: State<AppState>) {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    engine.project.lock().video = None;
+}
