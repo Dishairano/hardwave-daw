@@ -21,6 +21,7 @@ import { ManualWindow } from '../components/ManualWindow'
 import { ModulationPanel } from '../components/ModulationPanel'
 import { ReferencePanel } from '../components/ReferencePanel'
 import { ScriptsPanel } from '../components/ScriptsPanel'
+import { SpectralEditor } from '../components/arrangement/SpectralEditor'
 import { Arrangement } from '../components/arrangement/Arrangement'
 import { ChannelRack } from '../components/channelrack/ChannelRack'
 import { PianoRoll } from '../components/piano-roll/PianoRoll'
@@ -241,6 +242,15 @@ function Harness() {
           <HwSecondRow projectName="Untitled" />
           <Arrangement onSetHint={noop} />
           <ScriptsPanel onClose={noop} />
+        </div>
+      )
+    case 'spectral':
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Untitled" />
+          <Arrangement onSetHint={noop} />
+          <SpectralEditor trackId="track-1" clipId="clip-1" onClose={noop} />
         </div>
       )
     case 'modulation':

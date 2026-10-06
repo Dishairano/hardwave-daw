@@ -1686,3 +1686,223 @@ pub fn tune_audio_clip(
         path: path_text,
     })
 }
+
+/// A spectrogram for painting on.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Spectrogram {
+    /// Magnitudes in decibels, one row per frame, lowest bin first.
+    pub frames: Vec<Vec<f32>>,
+    pub bins: usize,
+    pub hop: usize,
+    pub window: usize,
+    pub sample_rate: u32,
+    pub length_samples: usize,
+}
+
+const SPECTRAL_WINDOW: usize = 2048;
+const SPECTRAL_HOP: usize = 512;
+
+/// The spectrogram of an audio clip.
+///
+/// A cough in a take or a creak under a verse is mixed in with
+/// everything else in time, but on a spectrogram it sits in its own
+/// patch, and a patch can be rubbed out.
+#[tauri::command]
+pub fn clip_spectrogram(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+) -> Result<Spectrogram, String> {
+    let engine = state.engine.lock();
+    let sample_rate = engine.current_sample_rate();
+    let (source_path, source_start) = {
+        let project = engine.project.lock();
+        let track = project
+            .track(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let clip = track
+            .clips
+            .iter()
+            .find(|c| match &c.content {
+                hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+                _ => false,
+            })
+            .ok_or_else(|| "that clip is not an audio clip".to_string())?;
+        let hardwave_project::clip::ClipContent::Audio(ac) = &clip.content else {
+            return Err("that clip is not an audio clip".into());
+        };
+        (ac.source_path.clone(), ac.source_start)
+    };
+    let buffer = engine
+        .audio_pool
+        .get(&source_path)
+        .ok_or_else(|| "that clip's audio is not loaded".to_string())?;
+    let channel = buffer
+        .channels
+        .first()
+        .ok_or_else(|| "that clip has no audio in it".to_string())?;
+    let from = (source_start as usize).min(channel.len());
+    let samples = &channel[from..];
+
+    let settings = hardwave_dsp::spectral_edit::Settings {
+        sample_rate: sample_rate as f64,
+        window: SPECTRAL_WINDOW,
+        hop: SPECTRAL_HOP,
+    };
+    let (frames, bins) = hardwave_dsp::spectral_edit::spectrogram(samples, &settings);
+    Ok(Spectrogram {
+        frames,
+        bins,
+        hop: SPECTRAL_HOP,
+        window: SPECTRAL_WINDOW,
+        sample_rate,
+        length_samples: samples.len(),
+    })
+}
+
+/// A patch the user painted out, as it comes from the UI.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaintedPatch {
+    pub start_sample: u64,
+    pub end_sample: u64,
+    pub low_hz: f32,
+    pub high_hz: f32,
+    pub strength: f32,
+}
+
+/// Rub the painted patches out of a clip.
+///
+/// The result is written as a new file and the clip is pointed at it,
+/// so the take as it was recorded is still there.
+#[tauri::command]
+pub fn erase_from_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    patches: Vec<PaintedPatch>,
+) -> Result<String, String> {
+    if patches.is_empty() {
+        return Err("nothing was painted out".into());
+    }
+    let (samples, sample_rate, name) = {
+        let engine = state.engine.lock();
+        let sample_rate = engine.current_sample_rate();
+        let (source_path, source_start, name) = {
+            let project = engine.project.lock();
+            let track = project
+                .track(&track_id)
+                .ok_or_else(|| format!("Track not found: {track_id}"))?;
+            let clip = track
+                .clips
+                .iter()
+                .find(|c| match &c.content {
+                    hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+                    _ => false,
+                })
+                .ok_or_else(|| "that clip is not an audio clip".to_string())?;
+            let hardwave_project::clip::ClipContent::Audio(ac) = &clip.content else {
+                return Err("that clip is not an audio clip".into());
+            };
+            (ac.source_path.clone(), ac.source_start, track.name.clone())
+        };
+        let buffer = engine
+            .audio_pool
+            .get(&source_path)
+            .ok_or_else(|| "that clip's audio is not loaded".to_string())?;
+        let channel = buffer
+            .channels
+            .first()
+            .ok_or_else(|| "that clip has no audio in it".to_string())?;
+        let from = (source_start as usize).min(channel.len());
+        (channel[from..].to_vec(), sample_rate, name)
+    };
+
+    let settings = hardwave_dsp::spectral_edit::Settings {
+        sample_rate: sample_rate as f64,
+        window: SPECTRAL_WINDOW,
+        hop: SPECTRAL_HOP,
+    };
+    let patches: Vec<hardwave_dsp::spectral_edit::Patch> = patches
+        .iter()
+        .map(|p| hardwave_dsp::spectral_edit::Patch {
+            start_sample: p.start_sample,
+            end_sample: p.end_sample,
+            low_hz: p.low_hz.max(0.0),
+            high_hz: p.high_hz.max(p.low_hz),
+            strength: p.strength.clamp(0.0, 1.0),
+        })
+        .collect();
+    let cleaned = hardwave_dsp::spectral_edit::erase(&samples, &patches, &settings);
+
+    let path_text = write_derived_wav(&cleaned, sample_rate, &name, "cleaned")?;
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        engine.audio_pool.insert(
+            path_text.clone(),
+            hardwave_engine::audio_pool::AudioBuffer {
+                channels: vec![cleaned.clone(), cleaned.clone()],
+                sample_rate,
+                num_frames: cleaned.len(),
+            },
+        );
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        for clip in track.clips.iter_mut() {
+            if let hardwave_project::clip::ClipContent::Audio(ac) = &mut clip.content {
+                if ac.id == clip_id {
+                    ac.source_path = path_text.clone();
+                    ac.source_start = 0;
+                }
+            }
+        }
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(path_text)
+}
+
+/// Write audio made from a take to its own file, next to the
+/// recordings, so the take itself is never overwritten.
+fn write_derived_wav(
+    samples: &[f32],
+    sample_rate: u32,
+    track_name: &str,
+    what: &str,
+) -> Result<String, String> {
+    let dir = dirs::audio_dir()
+        .or_else(dirs::document_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Hardwave")
+        .join("Edited");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not make the folder: {e}"))?;
+    let safe: String = track_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("{safe}-{what}-{stamp}.wav"));
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut writer =
+        hound::WavWriter::create(&path, spec).map_err(|e| format!("could not write: {e}"))?;
+    for sample in samples {
+        writer
+            .write_sample(*sample)
+            .map_err(|e| format!("could not write: {e}"))?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| format!("could not finish writing: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}

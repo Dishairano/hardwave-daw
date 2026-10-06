@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { TuneDialog } from './TuneDialog'
+import { SpectralEditor } from './SpectralEditor'
 import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo, FadeCurveKind } from '../../stores/trackStore'
 import { invoke } from '@tauri-apps/api/core'
@@ -172,6 +173,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [tuneTarget, setTuneTarget] = useState<{ trackId: string; clipId: string } | null>(null)
+  const [spectralTarget, setSpectralTarget] = useState<{ trackId: string; clipId: string } | null>(null)
   const [markerCtx, setMarkerCtx] = useState<{ x: number; y: number; markerId: string | null; tick: number } | null>(null)
   const [renamingMarker, setRenamingMarker] = useState<{ id: string; draft: string } | null>(null)
   const {
@@ -2131,6 +2133,11 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           }} />
           {/* Each note moved by its own amount: a singer is sharp on one
               word and flat on the next. */}
+          <MenuItem label="Paint something out…" onClick={() => {
+            const { trackId, clipId } = contextMenu
+            setContextMenu(null)
+            setSpectralTarget({ trackId, clipId })
+          }} />
           <MenuItem label="Tune this take…" onClick={async () => {
             const { trackId, clipId } = contextMenu
             setContextMenu(null)
@@ -2505,6 +2512,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         }}>
           Drop audio files here or add tracks from the toolbar
         </div>
+      )}
+      {spectralTarget && (
+        <SpectralEditor
+          trackId={spectralTarget.trackId}
+          clipId={spectralTarget.clipId}
+          onClose={() => setSpectralTarget(null)}
+        />
       )}
       {tuneTarget && (
         <TuneDialog

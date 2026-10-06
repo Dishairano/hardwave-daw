@@ -37,6 +37,7 @@ pub mod recording;
 pub mod reverb;
 pub mod reverb_extras;
 pub mod sample_classify;
+pub mod spectral_edit;
 pub mod spectrum;
 pub mod stereo;
 pub mod stretch_apply;

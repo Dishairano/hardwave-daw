@@ -214,6 +214,18 @@ const mock: TauriInternals = {
         return true
       case 'take_sandbox_crashes':
         return []
+      case 'clip_spectrogram': {
+        const bins = 256, frames = 220
+        const rows = Array.from({ length: frames }, (_, f) =>
+          Array.from({ length: bins }, (_, b) => {
+            const tone = Math.exp(-Math.pow((b - 18 - (f % 40) * 0.4) / 6, 2)) * 70
+            const noise = Math.random() * 8
+            return -90 + tone + noise
+          }))
+        return { frames: rows, bins, hop: 512, window: 2048, sampleRate: 48000, lengthSamples: frames * 512 }
+      }
+      case 'erase_from_clip':
+        return 'Hardwave/Edited/vocal-cleaned.wav'
       case 'tune_audio_clip':
         return { notes: 9, moved: 7, worstCents: 34.2, path: 'Hardwave/Tuned/vocal-tuned.wav' }
       case 'audio_clip_to_midi':

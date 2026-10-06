@@ -286,7 +286,20 @@ The take keeps its length and its place on the timeline. The tuned
 audio is written as a new file and the clip is pointed at it, so the
 take as it was sung is still there.
 
-## 19. Mixing against a record
+## 19. Painting something out
+
+A cough in a vocal take, a chair creak under a verse, a click in a
+bounce: in time they are mixed in with everything else, but on a
+spectrogram they sit in their own patch. Right-click the clip and
+choose "Paint something out", drag a box around the patch, and it is
+rubbed out.
+
+Strength decides how much goes. Part way is often better than all of
+it, because a hole can be as noticeable as the noise was. The result
+is written as a new file and the clip is pointed at it, so the
+recording is kept.
+
+## 20. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -297,7 +310,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 20. Exporting
+## 21. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -306,7 +319,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 21. When something goes wrong
+## 22. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.
