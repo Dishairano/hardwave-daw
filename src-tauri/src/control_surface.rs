@@ -58,11 +58,22 @@ impl ControlSurface {
 /// own: the desk's protocol is the part that is easy to get wrong.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SurfaceAction {
-    Fader { strip: usize, value: f32 },
-    MasterFader { value: f32 },
-    Mute { strip: usize },
-    Solo { strip: usize },
-    Arm { strip: usize },
+    Fader {
+        strip: usize,
+        value: f32,
+    },
+    MasterFader {
+        value: f32,
+    },
+    Mute {
+        strip: usize,
+    },
+    Solo {
+        strip: usize,
+    },
+    Arm {
+        strip: usize,
+    },
     BankLeft,
     BankRight,
     Play,
@@ -70,6 +81,19 @@ pub enum SurfaceAction {
     Record,
     Rewind,
     Forward,
+    /// Set the tempo. No desk sends this, but a phone running TouchOSC
+    /// does, and it is the same kind of message.
+    Tempo {
+        bpm: f64,
+    },
+    Pan {
+        strip: usize,
+        value: f32,
+    },
+    /// Jump the playhead, in beats from the start.
+    Goto {
+        beats: f64,
+    },
 }
 
 /// Read one MIDI message as a desk message, or nothing when it is not

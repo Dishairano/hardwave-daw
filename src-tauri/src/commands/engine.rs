@@ -27,6 +27,8 @@ fn persist_audio_prefs(state: &State<AppState>) {
         output_channel_offset,
         worker_threads: engine.worker_threads(),
         link_enabled: engine.link_status().0,
+        osc_enabled: state.osc_enabled.load(std::sync::atomic::Ordering::Relaxed),
+        osc_port: *state.osc_port.lock(),
         sandboxed_plugins: {
             let mut list: Vec<String> = state.sandboxed_plugins.lock().iter().cloned().collect();
             list.sort();
@@ -597,4 +599,56 @@ pub fn get_link_status(state: State<AppState>) -> LinkStatus {
 pub fn set_link_enabled(state: State<AppState>, enabled: bool) {
     state.engine.lock().set_link_enabled(enabled);
     persist_audio_prefs(&state);
+}
+
+/// Whether OSC is being listened for, and on which port.
+#[tauri::command]
+pub fn get_osc_status(state: State<AppState>) -> (bool, u16) {
+    (
+        state.osc_enabled.load(std::sync::atomic::Ordering::Relaxed),
+        *state.osc_port.lock(),
+    )
+}
+
+/// Start or stop listening for OSC.
+///
+/// A phone running TouchOSC on the same network becomes a remote:
+/// transport, faders, mutes and the tempo. The port is the one the
+/// layout sends to, 9000 unless it was changed.
+#[tauri::command]
+pub fn set_osc_enabled(
+    state: State<AppState>,
+    enabled: bool,
+    port: Option<u16>,
+) -> Result<(bool, u16), String> {
+    use std::sync::atomic::Ordering;
+
+    let port = match port {
+        Some(p) if p > 0 => p,
+        _ => *state.osc_port.lock(),
+    };
+    let was_on = state.osc_enabled.load(Ordering::Relaxed);
+    // Stopping first, always: a port change means the old thread has to
+    // let go of the socket before the new one can bind it.
+    state.osc_enabled.store(false, Ordering::Relaxed);
+    if was_on {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    *state.osc_port.lock() = port;
+
+    if enabled {
+        state.osc_enabled.store(true, Ordering::Relaxed);
+        if let Err(e) = crate::osc_control::spawn_listener(
+            std::sync::Arc::clone(&state.engine),
+            std::sync::Arc::clone(&state.control_surface),
+            std::sync::Arc::clone(&state.midi_clock.output),
+            std::sync::Arc::clone(&state.osc_enabled),
+            port,
+        ) {
+            state.osc_enabled.store(false, Ordering::Relaxed);
+            return Err(e);
+        }
+    }
+    persist_audio_prefs(&state);
+    Ok((enabled, port))
 }

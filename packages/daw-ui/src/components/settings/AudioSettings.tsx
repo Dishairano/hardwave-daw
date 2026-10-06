@@ -160,6 +160,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   })
   // Ableton Link: whether a session is joined and who else is in it.
   const [link, setLink] = useState<{ enabled: boolean; peers: number }>({ enabled: false, peers: 0 })
+  // OSC: whether we are listening, and on which port.
+  const [osc, setOsc] = useState<{ enabled: boolean; port: number }>({ enabled: false, port: 9000 })
+  const [oscError, setOscError] = useState<string | null>(null)
   const [outputOffset, setOutputOffset] = useState(0)
   const [selectedInputChannels, setSelectedInputChannels] = useState(2)
   const [selectedRate, setSelectedRate] = useState(48000)
@@ -218,6 +221,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setSelectedInput(inCfg.device)
       invoke<{ enabled: boolean; peers: number }>('get_link_status')
         .then(setLink)
+        .catch(() => { /* older build or no engine */ })
+      invoke<[boolean, number]>('get_osc_status')
+        .then(([enabled, port]) => setOsc({ enabled, port }))
         .catch(() => { /* older build or no engine */ })
       invoke<{ threads: number; suggested: number; cores: number }>('get_worker_threads')
         .then(setWorkers)
@@ -896,6 +902,55 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   {link.enabled
                     ? `${link.peers} ${link.peers === 1 ? tr('other app in the session') : tr('other apps in the session')}`
                     : tr('tempo and start-stop shared over the network')}
+                </span>
+              </div>
+            </SettingRow>
+
+            {/* OSC turns a phone or tablet into a remote: transport,
+                faders, mutes, the tempo. The port is the one the layout
+                sends to. */}
+            <SettingRow label="OSC remote">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => {
+                    const next = !osc.enabled
+                    setOscError(null)
+                    invoke<[boolean, number]>('set_osc_enabled', { enabled: next, port: osc.port })
+                      .then(([enabled, port]) => setOsc({ enabled, port }))
+                      .catch(e => { setOscError(String(e)); setOsc(o => ({ ...o, enabled: false })) })
+                  }}
+                  style={{
+                    padding: '4px 12px', fontSize: 11, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none', cursor: 'pointer',
+                    background: osc.enabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                    color: osc.enabled ? '#fff' : hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >{osc.enabled ? tr('On') : tr('Off')}</button>
+                <input
+                  type="number"
+                  value={osc.port}
+                  min={1024}
+                  max={65535}
+                  onChange={e => setOsc(o => ({ ...o, port: Number(e.target.value) || 9000 }))}
+                  onBlur={() => {
+                    if (!osc.enabled) return
+                    invoke<[boolean, number]>('set_osc_enabled', { enabled: true, port: osc.port })
+                      .then(([enabled, port]) => setOsc({ enabled, port }))
+                      .catch(e => setOscError(String(e)))
+                  }}
+                  aria-label={tr('OSC port')}
+                  style={{
+                    width: 72, padding: '3px 6px', fontSize: 11, fontFamily: 'inherit',
+                    background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
+                    border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+                  }}
+                />
+                <span style={{ fontSize: 10, color: oscError ? hw.red : hw.textFaint }}>
+                  {oscError
+                    ?? (osc.enabled
+                      ? tr('listening: /hardwave/play, /hardwave/track/1/volume, /hardwave/tempo')
+                      : tr('drive the DAW from TouchOSC and the like'))}
                 </span>
               </div>
             </SettingRow>

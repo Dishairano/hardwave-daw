@@ -195,6 +195,10 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'get_osc_status':
+        return [false, 9000]
+      case 'set_osc_enabled':
+        return [(args as { enabled?: boolean }).enabled ?? false, (args as { port?: number }).port ?? 9000]
       case 'get_sandboxed_plugins':
         return []
       case 'set_plugin_sandboxed':

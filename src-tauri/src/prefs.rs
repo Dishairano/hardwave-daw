@@ -48,6 +48,12 @@ pub struct AudioPrefs {
     /// for the one that keeps falling over.
     #[serde(default)]
     pub sandboxed_plugins: Vec<String>,
+    /// Listen for OSC, so a phone running TouchOSC can drive the DAW.
+    #[serde(default)]
+    pub osc_enabled: bool,
+    /// The port to listen on. Zero means the default, 9000.
+    #[serde(default)]
+    pub osc_port: u16,
 }
 
 fn default_sample_rate() -> u32 {
@@ -115,6 +121,8 @@ impl AudioPrefs {
             worker_threads: 0,
             link_enabled: false,
             sandboxed_plugins: Vec::new(),
+            osc_enabled: false,
+            osc_port: 0,
         }
     }
 }

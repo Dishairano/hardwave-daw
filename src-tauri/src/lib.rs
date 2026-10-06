@@ -11,6 +11,7 @@ mod midi_clock;
 mod midi_map;
 mod midi_sync;
 mod midi_timecode;
+mod osc_control;
 mod plugin_probe;
 mod plugin_sandbox;
 mod prefs;
@@ -72,6 +73,10 @@ pub struct AppState {
     /// process has gone, so the mixer can say which plug-in it was.
     #[allow(clippy::type_complexity)]
     pub sandbox_health: Arc<Mutex<std::collections::HashMap<(String, String), Option<String>>>>,
+    /// Whether the OSC listener is running. Its thread watches this, so
+    /// switching OSC off stops it without waiting for a packet.
+    pub osc_enabled: Arc<std::sync::atomic::AtomicBool>,
+    pub osc_port: Arc<Mutex<u16>>,
     #[allow(clippy::type_complexity)]
     pub slot_gui_edit_logs:
         Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
@@ -179,6 +184,12 @@ pub fn run() {
             prefs.sandboxed_plugins.iter().cloned().collect(),
         )),
         sandbox_health: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        osc_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        osc_port: Arc::new(Mutex::new(if prefs.osc_port == 0 {
+            osc_control::DEFAULT_PORT
+        } else {
+            prefs.osc_port
+        })),
         slot_gui_edit_logs: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_gain_reduction: Arc::new(Mutex::new(std::collections::HashMap::new())),
         midi_mappings: Arc::clone(&midi_mappings),
@@ -188,6 +199,9 @@ pub fn run() {
         midi_timecode: Arc::clone(&midi_timecode),
         frontend_launch_plan: Arc::new(Mutex::new(None)),
     };
+
+    // Copied out before the setup closure, which outlives `prefs`.
+    let osc_on_at_launch = prefs.osc_enabled;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -297,6 +311,8 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::engine::get_osc_status,
+            commands::engine::set_osc_enabled,
             commands::plugins::get_sandboxed_plugins,
             commands::plugins::take_sandbox_crashes,
             commands::plugins::set_plugin_sandboxed,
@@ -579,7 +595,7 @@ pub fn run() {
             // Diagnostics — session-log location for Help → Export diagnostics
             diagnostics::diagnostics_info,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             log::info!("Hardwave DAW starting");
 
             // Lets the panic hook raise a frontend crash banner.
@@ -613,6 +629,27 @@ pub fn run() {
             // Start/Stop system realtime messages to every open MIDI output
             // whenever the user has enabled clock send in Audio settings.
             midi_clock::spawn_dispatcher(Arc::clone(&state.engine), Arc::clone(&state.midi_clock));
+
+            // OSC, when it was left on. A phone running TouchOSC on the
+            // same network is a remote for the transport and the mixer.
+            if osc_on_at_launch {
+                let port = *state.osc_port.lock();
+                state
+                    .osc_enabled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                if let Err(e) = osc_control::spawn_listener(
+                    Arc::clone(&state.engine),
+                    Arc::clone(&state.control_surface),
+                    Arc::clone(&state.midi_clock.output),
+                    Arc::clone(&state.osc_enabled),
+                    port,
+                ) {
+                    state
+                        .osc_enabled
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                    log::warn!("OSC was on but could not start: {e}");
+                }
+            }
 
             // MIDI Clock sync dispatcher: observes clock ticks from the
             // MIDI input manager and, when sync is enabled, slaves the

@@ -266,6 +266,19 @@ fn apply_cc(engine: &Arc<Mutex<DawEngine>>, target: &MidiMapTarget, value: f32) 
 }
 
 /// Act on one message from a control surface.
+/// The same dispatch, for anything else that speaks a desk's language.
+///
+/// OSC from a phone and MIDI from a desk end up here rather than in two
+/// copies of the same mixer code.
+pub(crate) fn apply_surface_action(
+    engine: &Arc<Mutex<DawEngine>>,
+    surface: &crate::control_surface::SharedSurface,
+    midi_out: &Arc<Mutex<hardwave_midi::output::MidiOutputManager>>,
+    action: crate::control_surface::SurfaceAction,
+) {
+    apply_surface(engine, surface, midi_out, action)
+}
+
 fn apply_surface(
     engine: &Arc<Mutex<DawEngine>>,
     surface: &crate::control_surface::SharedSurface,
@@ -382,6 +395,36 @@ fn apply_surface(
             let sample_rate = eng.current_sample_rate() as u64;
             let position = eng.transport.position();
             eng.transport.set_position(position + sample_rate * 4);
+        }
+        cs::SurfaceAction::Tempo { bpm } => {
+            let bpm = bpm.clamp(20.0, 999.0);
+            let eng = engine.lock();
+            eng.transport.bpm.store(bpm, Ordering::Relaxed);
+            eng.send_command(hardwave_engine::transport::TransportCommand::SetBpm(bpm));
+            let mut project = eng.project.lock();
+            if let Some(entry) = project.tempo_map.entries.get_mut(0) {
+                entry.bpm = bpm;
+            }
+        }
+        cs::SurfaceAction::Pan { strip, value } => {
+            let Some(track_id) = track_of(strip) else {
+                return;
+            };
+            {
+                let eng = engine.lock();
+                let mut project = eng.project.lock();
+                if let Some(track) = project.track_mut(&track_id) {
+                    track.pan = value.clamp(-1.0, 1.0) as f64;
+                }
+            }
+            engine.lock().rebuild_graph();
+        }
+        cs::SurfaceAction::Goto { beats } => {
+            let eng = engine.lock();
+            let sample_rate = eng.current_sample_rate();
+            let bpm = eng.transport.bpm.load(Ordering::Relaxed);
+            let samples = (beats.max(0.0) * 60.0 / bpm * sample_rate as f64) as u64;
+            eng.transport.set_position(samples);
         }
     }
 }

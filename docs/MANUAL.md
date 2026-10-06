@@ -209,7 +209,29 @@ the track up with the rest, and a sandboxed plug-in uses the generic
 parameter sheet rather than its own window. Leave it off for plug-ins
 that behave, switch it on for the one that keeps falling over.
 
-## 15. Mixing against a record
+## 15. A phone as a remote (OSC)
+
+Settings > MIDI has an OSC switch and a port, 9000 unless you change
+it. Point TouchOSC or anything else that speaks OSC at this machine
+and these addresses work:
+
+```
+/hardwave/play          /hardwave/stop        /hardwave/record
+/hardwave/rewind        /hardwave/forward
+/hardwave/tempo         bpm as a float
+/hardwave/goto          beats from the start
+/hardwave/bank/left     /hardwave/bank/right
+/hardwave/master/volume 0 to 1
+/hardwave/track/1/volume  0 to 1, strips count from 1
+/hardwave/track/1/pan     -1 to 1
+/hardwave/track/1/mute    /solo   /arm
+```
+
+Strips follow the same bank of eight as a control surface, so the bank
+buttons move both. An address we do not know is ignored rather than
+guessed at.
+
+## 16. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -220,7 +242,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 16. Exporting
+## 17. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -229,7 +251,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 17. When something goes wrong
+## 18. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.
