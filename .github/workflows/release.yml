@@ -385,6 +385,18 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CPAL_ASIO_DIR: ${{ env.CPAL_ASIO_DIR }}
           LIBCLANG_PATH: ${{ env.LIBCLANG_PATH }}
+          # Azure Trusted Signing. Tauri runs scripts/sign-windows.ps1
+          # on each file it bundles, before the updater signature is
+          # taken, so the bytes the updater signed are the signed ones.
+          # With these unset the script leaves the file alone and the
+          # build still finishes, which is what a fork or a dry run
+          # needs.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Hardwave DAW ${{ github.ref_name }}'
