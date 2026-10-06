@@ -195,6 +195,32 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'get_session_grid':
+        return {
+          scenes: ['Intro', 'Drop', 'Break', 'Outro'],
+          quantiseBeats: 4,
+          rows: [
+            { trackId: 't1', name: 'Kick', playing: 1, pending: -1, slots: [
+              { name: 'kick-intro' }, { name: 'kick-drop' }, null, { name: 'kick-outro' }] },
+            { trackId: 't2', name: 'Bass', playing: 1, pending: -1, slots: [
+              null, { name: 'reese' }, { name: 'sub' }, null] },
+            { trackId: 't3', name: 'Lead', playing: null, pending: 2, slots: [
+              null, { name: 'lead-a' }, { name: 'lead-b' }, null] },
+            { trackId: 't4', name: 'FX', playing: null, pending: -1, slots: [
+              { name: 'riser' }, null, { name: 'impact' }, null] },
+          ],
+        }
+      case 'launch_slot':
+      case 'stop_slot':
+      case 'launch_scene':
+      case 'stop_all_slots':
+      case 'set_session_quantise':
+      case 'clear_session_slot':
+        return null
+      case 'set_session_slot':
+        return 7680
+      case 'add_scene':
+        return 4
       case 'list_scripts':
         return [{ name: 'four kicks', body: '// four kicks\nfor i in 0..4 { add_note("clip", beats(i), 36, 100, beats(0.25)); }\n' }]
       case 'save_script':

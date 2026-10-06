@@ -299,7 +299,26 @@ it, because a hole can be as noticeable as the noise was. The result
 is written as a new file and the clip is pointed at it, so the
 recording is kept.
 
-## 20. Mixing against a record
+## 20. The clip launcher
+
+A timeline is for writing a song down. A grid of loops is for finding
+one, and for playing live. Tools > Clip launcher opens it: a column
+per track, a row per scene.
+
+Click an empty cell to load a loop, click a full one to launch it.
+Launching waits for the next boundary, which is a bar unless you
+change it at the top, so whatever you press lands in time with
+whatever is already going. A scene button launches a whole row at
+once: tracks with a clip in that row start, tracks without one stop,
+which is what makes a row a section. The square under a column stops
+that track at the next boundary, and Stop all stops everything now,
+because a stop button that waits is not a stop button.
+
+Right-click a cell to empty it. A launched clip replaces that track's
+timeline clips while it plays, and an export renders the song as
+written rather than whatever was launched.
+
+## 21. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -310,7 +329,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 21. Exporting
+## 22. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -319,7 +338,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 22. When something goes wrong
+## 23. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

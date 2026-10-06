@@ -24,6 +24,7 @@ pub mod project;
 pub mod reference;
 pub mod scripts;
 pub mod sends;
+pub mod session;
 pub mod sources;
 pub mod timeline_edit;
 pub mod tracks;

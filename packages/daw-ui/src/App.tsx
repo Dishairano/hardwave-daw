@@ -61,6 +61,7 @@ import { ManualWindow } from './components/ManualWindow'
 import { ModulationPanel } from './components/ModulationPanel'
 import { ReferencePanel } from './components/ReferencePanel'
 import { ScriptsPanel } from './components/ScriptsPanel'
+import { SessionView } from './components/SessionView'
 import { PresetBrowser } from './components/PresetBrowser'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
@@ -246,6 +247,7 @@ export function App() {
   const [showModulation, setShowModulation] = useState(false)
   const [showReference, setShowReference] = useState(false)
   const [showScripts, setShowScripts] = useState(false)
+  const [showSession, setShowSession] = useState(false)
   // Local rather than in useAppDialogs: nothing else toggles it, and it has
   // one extra piece of state (whether the report follows a crash).
   const [bugReport, setBugReport] = useState<{ open: boolean; afterCrash: boolean }>({
@@ -2119,6 +2121,7 @@ export function App() {
           { label: 'Loudness meter…', action: () => setShowLoudness(true) },
           { label: 'Reference track…', action: () => setShowReference(true) },
           { label: 'Scripts…', action: () => setShowScripts(true) },
+          { label: 'Clip launcher…', action: () => setShowSession(true) },
           { label: 'Oscilloscope…', action: () => setShowOscilloscope(true) },
           { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },
           { separator: true, label: '' },
@@ -2343,6 +2346,7 @@ export function App() {
       {showModulation && <ModulationPanel onClose={() => setShowModulation(false)} />}
       {showReference && <ReferencePanel onClose={() => setShowReference(false)} />}
       {showScripts && <ScriptsPanel onClose={() => setShowScripts(false)} />}
+      {showSession && <SessionView onClose={() => setShowSession(false)} />}
       {showPresets && <PresetBrowser onClose={() => setShowPresets(false)} />}
       {showMidiMappings && (
         <MidiMappingsPanel

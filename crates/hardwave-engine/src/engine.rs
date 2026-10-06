@@ -179,6 +179,10 @@ pub struct DawEngine {
     pub plugin_scanner: Arc<Mutex<PluginScanner>>,
     pub midi_input: Arc<Mutex<MidiInputManager>>,
     pub audio_pool: AudioPool,
+    /// The clip launcher: which slot each track is playing, and what
+    /// has been asked for. Shared with the audio thread through each
+    /// track's node.
+    pub session: Arc<crate::session::SessionState>,
     /// Critical-path latency in samples, published by the audio thread after
     /// each graph rebuild. Coarse proxy for "total project latency" until
     /// full PDC lands.
@@ -321,6 +325,7 @@ impl DawEngine {
             plugin_scanner: Arc::new(Mutex::new(PluginScanner::new())),
             midi_input: Arc::new(Mutex::new(MidiInputManager::new())),
             audio_pool: AudioPool::new(),
+            session: Arc::new(crate::session::SessionState::new()),
             audio_device: AudioDeviceManager::new(),
             command_tx: tx,
             command_rx: rx,
@@ -723,6 +728,7 @@ impl DawEngine {
             Arc::clone(&self.reference),
             Arc::clone(&self.reference_on),
             Arc::clone(&self.reference_gain_centi_db),
+            Arc::clone(&self.session),
         );
 
         self.audio_device.start(callback).map_err(|e| e.to_string())
@@ -1591,6 +1597,10 @@ impl DawEngine {
             Arc::clone(&self.reference),
             Arc::clone(&self.reference_on),
             Arc::clone(&self.reference_gain_centi_db),
+            // An export plays the song as written, not whatever was
+            // launched when the button was pressed, so the render gets
+            // a grid of its own with nothing in it.
+            Arc::new(crate::session::SessionState::new()),
         );
 
         // Populate insert chains from the project metadata so the export
@@ -1743,6 +1753,9 @@ struct EngineCallback {
     reference: Arc<Mutex<Option<Arc<crate::audio_pool::AudioBuffer>>>>,
     reference_on: Arc<std::sync::atomic::AtomicBool>,
     reference_gain_centi_db: Arc<std::sync::atomic::AtomicI64>,
+    /// The launcher grid, shared with the app so a clip pressed in the
+    /// UI reaches the track node that plays it.
+    session: Arc<crate::session::SessionState>,
     /// This block's clicks. A fixed-size array rather than a Vec because it
     /// is filled on the audio thread, which must not allocate.
     click_events: [crate::metronome::ClickEvent; crate::metronome::MAX_CLICKS_PER_BLOCK],
@@ -1868,6 +1881,7 @@ impl EngineCallback {
         reference: Arc<Mutex<Option<Arc<crate::audio_pool::AudioBuffer>>>>,
         reference_on: Arc<std::sync::atomic::AtomicBool>,
         reference_gain_centi_db: Arc<std::sync::atomic::AtomicI64>,
+        session: Arc<crate::session::SessionState>,
     ) -> Self {
         let mut cb = Self {
             preview: crate::preview_player::PreviewPlayer::new(preview),
@@ -1879,6 +1893,7 @@ impl EngineCallback {
             reference,
             reference_on,
             reference_gain_centi_db,
+            session,
             click_events: [crate::metronome::ClickEvent {
                 frame_offset: 0,
                 downbeat: false,
@@ -2698,6 +2713,37 @@ impl EngineCallback {
             }
 
             node.set_clips(regions);
+
+            // This track's row of the launcher grid. Lengths are in
+            // ticks in the project so they follow the tempo, and in
+            // samples here because the audio thread counts samples.
+            if !track.session_slots.is_empty() {
+                let tempo_map = &project.tempo_map;
+                let samples_per_tick = tempo_map.tick_to_samples(hardwave_midi::PPQ, sample_rate)
+                    as f64
+                    / hardwave_midi::PPQ as f64;
+                let slots: Vec<Option<crate::track_node::SessionClip>> = track
+                    .session_slots
+                    .iter()
+                    .map(|slot| {
+                        slot.as_ref().map(|s| crate::track_node::SessionClip {
+                            source_id: s.source_path.clone(),
+                            source_offset: s.source_start,
+                            length_samples: (s.length_ticks as f64 * samples_per_tick) as u64,
+                            gain: if s.gain_db <= -100.0 {
+                                0.0
+                            } else {
+                                10f64.powf(s.gain_db / 20.0) as f32
+                            },
+                        })
+                    })
+                    .collect();
+                node.set_session_slots(slots);
+                node.set_session(
+                    self.session.track(&track.id),
+                    Arc::clone(&self.session.quantise_beats),
+                );
+            }
 
             let node_id = self.graph.add_node(Box::new(node));
             // Audio tracks accept live MIDI only when explicitly armed
@@ -3994,6 +4040,7 @@ mod rt_safety_tests {
             Arc::new(Mutex::new(None)),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
             Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            Arc::new(crate::session::SessionState::new()),
         );
         (cb, cmd_tx)
     }
@@ -4157,6 +4204,7 @@ mod wait_for_input_tests {
             Arc::new(Mutex::new(None)),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
             Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            Arc::new(crate::session::SessionState::new()),
         );
         (cb, command_tx)
     }

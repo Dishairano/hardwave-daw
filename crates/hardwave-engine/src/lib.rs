@@ -5,6 +5,7 @@ pub mod audio_prefs;
 pub mod engine;
 pub mod graph;
 pub mod input_node;
+pub mod session;
 pub use input_node::CaptureTap;
 pub mod insert_chain;
 pub mod link;

@@ -64,6 +64,18 @@ pub struct TrackMeterState {
     pub cpu_ns: std::sync::atomic::AtomicU64,
 }
 
+/// One clip in the launcher grid.
+#[derive(Debug, Clone)]
+pub struct SessionClip {
+    /// Key into AudioPool.
+    pub source_id: String,
+    /// Where the loop starts inside that audio.
+    pub source_offset: u64,
+    /// How long the loop is, in samples. This is what it wraps at.
+    pub length_samples: u64,
+    pub gain: f32,
+}
+
 /// Description of a clip placed on this track, used by the audio thread.
 /// This is a lightweight copy of the project-level ClipPlacement, pre-resolved
 /// to sample positions so the audio thread doesn't need the tempo map.
@@ -337,6 +349,16 @@ pub struct TrackNode {
     delay_write_pos: usize,
     /// Cached Arc references to audio buffers, refreshed when clips change.
     cached_buffers: Vec<Option<Arc<AudioBuffer>>>,
+    /// The clips in this track's row of the launcher grid, and the
+    /// buffers behind them. A launched slot loops on top of the song
+    /// instead of the timeline clips, which is what a launcher is.
+    session_slots: Vec<Option<SessionClip>>,
+    session_buffers: Vec<Option<Arc<AudioBuffer>>>,
+    /// Which slot this track is playing or has been asked to play.
+    /// Shared with the commands that drive the grid.
+    session: Option<Arc<crate::session::TrackSession>>,
+    /// How a launch is lined up, in beats, read from the grid.
+    session_quantise: Option<Arc<std::sync::atomic::AtomicU32>>,
     /// Shared meter state so the UI can read post-fader peaks without locking.
     meter: Arc<TrackMeterState>,
     /// Smoothed RMS (linear), updated each block.
@@ -391,6 +413,10 @@ impl TrackNode {
             name,
             pool,
             clips: Vec::new(),
+            session_slots: Vec::new(),
+            session_buffers: Vec::new(),
+            session: None,
+            session_quantise: None,
             prefs: crate::audio_prefs::AudioPrefs::new(),
             volume: 1.0,
             pan: 0.0,
@@ -461,6 +487,127 @@ impl TrackNode {
     pub fn set_clips(&mut self, clips: Vec<ClipRegion>) {
         self.cached_buffers = clips.iter().map(|c| self.pool.get(&c.source_id)).collect();
         self.clips = clips;
+    }
+
+    /// Whether the launcher has anything for this track, so the idle
+    /// gate does not skip a track that is about to start.
+    fn session_has_work(&self) -> bool {
+        if self.session_slots.is_empty() {
+            return false;
+        }
+        match &self.session {
+            Some(session) => {
+                session.playing_slot().is_some() || session.pending_slot() != crate::session::NONE
+            }
+            None => false,
+        }
+    }
+
+    /// Play whatever the grid says this track should be playing.
+    ///
+    /// Returns whether a slot is sounding, so the caller knows to leave
+    /// the timeline clips alone. A launch that falls inside this block
+    /// starts at the boundary sample rather than at the block edge,
+    /// which is what keeps two tracks launched together together.
+    fn run_session(
+        &mut self,
+        outputs: &mut [Vec<f32>],
+        buf_size: usize,
+        pos: u64,
+        ctx: &ProcessContext,
+    ) -> bool {
+        use std::sync::atomic::Ordering;
+        let Some(session) = self.session.clone() else {
+            return false;
+        };
+        if self.session_slots.is_empty() {
+            return false;
+        }
+
+        // Anything queued starts, or stops, at the next boundary.
+        let beats = self
+            .session_quantise
+            .as_ref()
+            .map(|q| q.load(Ordering::Relaxed))
+            .unwrap_or(4);
+        let quantise = crate::session::quantise_samples(beats, ctx.tempo, ctx.sample_rate);
+        let pending = session.pending.load(Ordering::Relaxed);
+        if pending != crate::session::NONE {
+            let boundary = crate::session::next_boundary(pos, quantise);
+            if boundary < pos + buf_size as u64 {
+                if pending == crate::session::STOP {
+                    session
+                        .playing
+                        .store(crate::session::NONE, Ordering::Relaxed);
+                } else {
+                    session.playing.store(pending, Ordering::Relaxed);
+                    session.launch_sample.store(boundary, Ordering::Relaxed);
+                }
+                session
+                    .pending
+                    .store(crate::session::NONE, Ordering::Relaxed);
+            }
+        }
+
+        let Some(slot_index) = session.playing_slot() else {
+            return false;
+        };
+        let Some(Some(slot)) = self.session_slots.get(slot_index).cloned() else {
+            return false;
+        };
+        let Some(Some(buffer)) = self.session_buffers.get(slot_index).cloned() else {
+            return false;
+        };
+        let launched_at = session.launch_sample.load(Ordering::Relaxed);
+
+        let channels = buffer.channels.len().min(2);
+        if channels == 0 || slot.length_samples == 0 {
+            return false;
+        }
+        let (out_left, out_rest) = outputs.split_at_mut(1);
+        let out_l = &mut out_left[0];
+        let out_r = &mut out_rest[0];
+
+        for frame in 0..buf_size {
+            let now = pos + frame as u64;
+            let Some(into) =
+                crate::session::position_in_loop(now, launched_at, slot.length_samples)
+            else {
+                continue;
+            };
+            let index = (slot.source_offset + into) as usize;
+            if index >= buffer.num_frames {
+                continue;
+            }
+            let left = buffer.channels[0][index] * slot.gain;
+            let right = if channels > 1 {
+                buffer.channels[1][index] * slot.gain
+            } else {
+                left
+            };
+            out_l[frame] += left;
+            out_r[frame] += right;
+        }
+        true
+    }
+
+    /// Put this track's row of the launcher grid in place.
+    pub fn set_session_slots(&mut self, slots: Vec<Option<SessionClip>>) {
+        self.session_buffers = slots
+            .iter()
+            .map(|slot| slot.as_ref().and_then(|c| self.pool.get(&c.source_id)))
+            .collect();
+        self.session_slots = slots;
+    }
+
+    /// Hand this track the grid state it shares with the UI.
+    pub fn set_session(
+        &mut self,
+        session: Arc<crate::session::TrackSession>,
+        quantise: Arc<std::sync::atomic::AtomicU32>,
+    ) {
+        self.session = Some(session);
+        self.session_quantise = Some(quantise);
     }
 
     /// Replace the automation lane snapshot the audio thread evaluates
@@ -695,6 +842,10 @@ impl AudioNode for TrackNode {
             && self.chain.slots.is_empty()
             && self.automation_lanes.is_empty()
             && !self.receives_input
+            // A track whose only content is in the launcher grid still
+            // has work to do: the gate is about idle tracks, and one
+            // with a clip queued or playing is not idle.
+            && !self.session_has_work()
         {
             // Park the meter at silence so the UI doesn't show stale
             // values from a previous active block.
@@ -824,8 +975,16 @@ impl AudioNode for TrackNode {
 
         let pos = ctx.position_samples;
 
+        // The launcher. A launched slot loops on top of the song and
+        // replaces this track's timeline clips, because a track doing
+        // both at once is nobody's idea of either.
+        let session_playing = self.run_session(outputs, buf_size, pos, ctx);
+
         // Sum all clips that overlap the current buffer window
         for (clip_idx, clip) in self.clips.iter().enumerate() {
+            if session_playing {
+                break;
+            }
             if clip.muted {
                 continue;
             }
@@ -1141,6 +1300,122 @@ mod tests {
             Arc::clone(&meter),
         );
         (node, meter)
+    }
+
+    /// A node with one loop in its grid, and the pool entry behind it.
+    fn node_with_loop(length: usize) -> (TrackNode, Arc<crate::session::TrackSession>) {
+        let pool = AudioPool::new();
+        // A loop that counts up, so where a block came from in the loop
+        // can be read straight off the output.
+        let ramp: Vec<f32> = (0..length)
+            .map(|i| (i + 1) as f32 / length as f32)
+            .collect();
+        pool.insert(
+            "loop".to_string(),
+            crate::audio_pool::AudioBuffer {
+                channels: vec![ramp.clone(), ramp],
+                sample_rate: 48_000,
+                num_frames: length,
+            },
+        );
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), pool, meter);
+        node.set_session_slots(vec![Some(SessionClip {
+            source_id: "loop".to_string(),
+            source_offset: 0,
+            length_samples: length as u64,
+            gain: 1.0,
+        })]);
+        let session = Arc::new(crate::session::TrackSession::new());
+        let quantise = Arc::new(std::sync::atomic::AtomicU32::new(4));
+        node.set_session(Arc::clone(&session), quantise);
+        (node, session)
+    }
+
+    fn block(node: &mut TrackNode, position: u64, size: usize) -> Vec<f32> {
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            position_ticks: 0,
+            buffer_size: size as u32,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: position,
+            playing: true,
+        };
+        let inputs: Vec<&[f32]> = vec![];
+        let mut outputs = vec![vec![0.0f32; size]; 4];
+        node.process(&inputs, &mut outputs, &[], &mut Vec::new(), &ctx);
+        outputs.remove(0)
+    }
+
+    #[test]
+    fn a_launched_clip_waits_for_the_bar_and_then_loops() {
+        // A bar at 120 bpm is 96000 samples.
+        let (mut node, session) = node_with_loop(480);
+        session.queue(0);
+
+        // Half way through a bar: nothing should sound yet.
+        let early = block(&mut node, 48_000, 256);
+        assert!(
+            early.iter().all(|s| *s == 0.0),
+            "a launch must wait for the boundary"
+        );
+
+        // The block the bar line falls in: it starts there, not at the
+        // block edge.
+        let landing = block(&mut node, 95_900, 256);
+        assert!(
+            landing[..100].iter().all(|s| *s == 0.0),
+            "the part of the block before the bar line stays silent"
+        );
+        assert!(
+            landing[100..].iter().any(|s| *s != 0.0),
+            "and the part after it sounds"
+        );
+
+        // A block a loop and a half later: still sounding, because it
+        // loops rather than playing once.
+        let later = block(&mut node, 96_000 + 720, 256);
+        assert!(later.iter().any(|s| *s != 0.0), "the loop should repeat");
+    }
+
+    #[test]
+    fn a_launched_clip_replaces_this_track_s_timeline_clips() {
+        let (mut node, session) = node_with_loop(480);
+        node.set_clips(vec![]);
+        session.queue(0);
+        let _ = block(&mut node, 96_000, 256);
+        assert_eq!(session.playing_slot(), Some(0));
+    }
+
+    #[test]
+    fn stopping_is_also_on_the_bar() {
+        let (mut node, session) = node_with_loop(480);
+        session.queue(0);
+        let _ = block(&mut node, 96_000, 256);
+        session.queue_stop();
+        // Still inside the bar: it keeps playing.
+        let during = block(&mut node, 96_256, 256);
+        assert!(during.iter().any(|s| *s != 0.0), "it stops with the bar");
+        // The next bar line: silent from there.
+        let after = block(&mut node, 192_000, 256);
+        assert!(
+            after.iter().all(|s| *s == 0.0),
+            "it should have stopped at the bar"
+        );
+        assert_eq!(session.playing_slot(), None);
+    }
+
+    #[test]
+    fn with_no_quantise_a_clip_starts_in_the_block_it_was_pressed() {
+        let (mut node, session) = node_with_loop(480);
+        node.set_session(
+            Arc::clone(&session),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        );
+        session.queue(0);
+        let now = block(&mut node, 12_345, 256);
+        assert!(now.iter().any(|s| *s != 0.0), "now means now");
     }
 
     #[test]

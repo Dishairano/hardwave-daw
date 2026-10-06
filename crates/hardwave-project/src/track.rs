@@ -138,6 +138,21 @@ impl KickPatch {
     }
 }
 
+/// One loop in the launcher grid.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionSlot {
+    pub name: String,
+    /// The audio file behind it.
+    pub source_path: String,
+    /// Where the loop starts inside that file, in samples.
+    #[serde(default)]
+    pub source_start: u64,
+    /// How long the loop is, in ticks, so it follows the tempo.
+    pub length_ticks: u64,
+    #[serde(default)]
+    pub gain_db: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
@@ -289,6 +304,12 @@ pub struct Track {
     /// the instrument hears.
     #[serde(default)]
     pub midi_fx: Vec<hardwave_midi::midi_fx::MidiFx>,
+    /// This track's row of the launcher grid: a loop per scene, or
+    /// nothing. Separate from `clips`, which is the timeline: the grid
+    /// is for finding a song and for playing live, the timeline is for
+    /// writing one down.
+    #[serde(default)]
+    pub session_slots: Vec<Option<SessionSlot>>,
 }
 
 impl Track {
@@ -328,6 +349,7 @@ impl Track {
             tuning: None,
             frozen: false,
             midi_fx: Vec::new(),
+            session_slots: Vec::new(),
         }
     }
 

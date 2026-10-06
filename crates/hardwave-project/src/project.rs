@@ -77,6 +77,11 @@ pub struct Project {
     /// any moment — see `arrangement.rs`.
     #[serde(default)]
     pub arrangements: Vec<crate::arrangement::Arrangement>,
+    /// The rows of the launcher grid, by name. A row is a section:
+    /// launch it and every track with a clip in that row starts
+    /// together.
+    #[serde(default)]
+    pub scenes: Vec<String>,
     /// Id of the arrangement currently applied to the live tracks.
     #[serde(default)]
     pub active_arrangement: String,
@@ -165,6 +170,12 @@ impl Default for Project {
             macros: Vec::new(),
             vcas: Vec::new(),
             modulations: Vec::new(),
+            scenes: vec![
+                "Scene 1".to_string(),
+                "Scene 2".to_string(),
+                "Scene 3".to_string(),
+                "Scene 4".to_string(),
+            ],
         }
     }
 }
