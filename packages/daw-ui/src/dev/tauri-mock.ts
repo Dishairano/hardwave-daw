@@ -195,6 +195,15 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'list_scripts':
+        return [{ name: 'four kicks', body: '// four kicks\nfor i in 0..4 { add_note("clip", beats(i), 36, 100, beats(0.25)); }\n' }]
+      case 'save_script':
+      case 'delete_script':
+        return null
+      case 'check_script':
+        return { output: ['four kicks written'], asked: 4, applied: 0 }
+      case 'run_script':
+        return { output: ['four kicks written'], asked: 4, applied: 4 }
       case 'get_osc_status':
         return [false, 9000]
       case 'set_osc_enabled':

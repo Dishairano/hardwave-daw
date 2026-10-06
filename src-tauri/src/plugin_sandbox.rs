@@ -596,6 +596,14 @@ mod tests {
             started.elapsed() < std::time::Duration::from_millis(500),
             "the audio thread must never wait for the child"
         );
+        // Dropping it has to end, too: a child wedged mid-block never
+        // reads a shutdown frame, so it is killed rather than asked.
+        let dropped = std::time::Instant::now();
+        drop(plugin);
+        assert!(
+            dropped.elapsed() < std::time::Duration::from_secs(5),
+            "removing a wedged plug-in must not hang the app"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

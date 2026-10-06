@@ -16,6 +16,7 @@ mod plugin_probe;
 mod plugin_sandbox;
 mod prefs;
 mod process_memory;
+mod scripting;
 
 use hardwave_engine::DawEngine;
 pub use midi_clock::MidiClockState;
@@ -311,6 +312,11 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::scripts::list_scripts,
+            commands::scripts::save_script,
+            commands::scripts::delete_script,
+            commands::scripts::check_script,
+            commands::scripts::run_script,
             commands::engine::get_osc_status,
             commands::engine::set_osc_enabled,
             commands::plugins::get_sandboxed_plugins,

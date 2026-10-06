@@ -57,6 +57,7 @@ shine-rs.workspace = true
 chrono.workspace = true
 vorbis_rs.workspace = true
 trash = "5"
+rhai = { version = "1.26.1", default-features = false, features = ["std", "sync"] }
 
 # Real process memory for the toolbar's MEM meter. The meter used to read the
 # WebView's JS heap, which says nothing about the sample pool, the audio graph

@@ -231,7 +231,34 @@ Strips follow the same bank of eight as a control surface, so the bank
 buttons move both. An address we do not know is ignored rather than
 guessed at.
 
-## 16. Mixing against a record
+## 16. Scripts
+
+Some edits are a loop, not a gesture: forty hats on the off-beat,
+every track down three dB, a clip moved a bar. Tools > Scripts writes
+them once and runs them whenever. A run is one undo step, however
+much it does.
+
+The language is Rhai, which reads like plain Rust. What a script can
+call:
+
+```
+play()  stop()  seek(tick)
+set_volume(track_id, db)   set_pan(track_id, -1..1)
+set_muted(track_id, true)  set_master_volume(db)
+add_note(clip_id, tick, pitch, velocity, length)
+delete_note(clip_id, tick, pitch)
+move_clip(clip_id, tick)   delete_clip(clip_id)
+beats(n)  bars(n)          so you can write beats(2)
+print(text)
+```
+
+Check reads the script and says what it would do without changing
+anything. A command naming something that is not there is skipped and
+counted, so the run says "12 of 16 applied" rather than stopping half
+way. A script cannot reach the disk or the network, and one that
+loops forever is stopped rather than left running.
+
+## 17. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -242,7 +269,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 17. Exporting
+## 18. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -251,7 +278,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 18. When something goes wrong
+## 19. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

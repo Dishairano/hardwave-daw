@@ -20,6 +20,7 @@ import { MidiFxPanel } from '../components/MidiFxPanel'
 import { ManualWindow } from '../components/ManualWindow'
 import { ModulationPanel } from '../components/ModulationPanel'
 import { ReferencePanel } from '../components/ReferencePanel'
+import { ScriptsPanel } from '../components/ScriptsPanel'
 import { Arrangement } from '../components/arrangement/Arrangement'
 import { ChannelRack } from '../components/channelrack/ChannelRack'
 import { PianoRoll } from '../components/piano-roll/PianoRoll'
@@ -231,6 +232,15 @@ function Harness() {
           <HwSecondRow projectName="Untitled" />
           <Arrangement onSetHint={noop} />
           <ReferencePanel onClose={noop} />
+        </div>
+      )
+    case 'scripts':
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Untitled" />
+          <Arrangement onSetHint={noop} />
+          <ScriptsPanel onClose={noop} />
         </div>
       )
     case 'modulation':
