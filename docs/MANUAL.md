@@ -270,7 +270,23 @@ follows the loudest, so it is for a sung line, a bassline or a lead,
 not a mixdown. A clip with no pitch in it says so rather than
 inventing notes.
 
-## 18. Mixing against a record
+## 18. Tuning a take
+
+Right-click an audio clip and choose "Tune this take". Each note is
+moved by its own amount, which is the point: a singer is sharp on one
+word and flat on the next.
+
+Strength decides how far towards the note it goes. Hard dance wants
+all of it; a sung chorus usually does not. A key can be set, so a
+note outside it is pulled to the nearest note of the key rather than
+to the nearest semitone, and "leave alone within" keeps vibrato and a
+human edge by ignoring anything already that close.
+
+The take keeps its length and its place on the timeline. The tuned
+audio is written as a new file and the clip is pointed at it, so the
+take as it was sung is still there.
+
+## 19. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -281,7 +297,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 19. Exporting
+## 20. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -290,7 +306,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 20. When something goes wrong
+## 21. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

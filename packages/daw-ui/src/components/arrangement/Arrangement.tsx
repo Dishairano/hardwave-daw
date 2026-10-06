@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
+import { TuneDialog } from './TuneDialog'
 import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo, FadeCurveKind } from '../../stores/trackStore'
 import { invoke } from '@tauri-apps/api/core'
@@ -170,6 +171,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     setClipFadeCurves, toggleClipReverse, setClipGain, setClipPitch, setClipStretch,
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [tuneTarget, setTuneTarget] = useState<{ trackId: string; clipId: string } | null>(null)
   const [markerCtx, setMarkerCtx] = useState<{ x: number; y: number; markerId: string | null; tick: number } | null>(null)
   const [renamingMarker, setRenamingMarker] = useState<{ id: string; draft: string } | null>(null)
   const {
@@ -2127,6 +2129,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             await toggleClipReverse(contextMenu.trackId, contextMenu.clipId)
             setContextMenu(null)
           }} />
+          {/* Each note moved by its own amount: a singer is sharp on one
+              word and flat on the next. */}
+          <MenuItem label="Tune this take…" onClick={async () => {
+            const { trackId, clipId } = contextMenu
+            setContextMenu(null)
+            setTuneTarget({ trackId, clipId })
+          }} />
           {/* A hummed line is the fastest way to get an idea down and the
               slowest to retype. */}
           <MenuItem label="Turn into notes (audio to MIDI)" onClick={async () => {
@@ -2496,6 +2505,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         }}>
           Drop audio files here or add tracks from the toolbar
         </div>
+      )}
+      {tuneTarget && (
+        <TuneDialog
+          trackId={tuneTarget.trackId}
+          clipId={tuneTarget.clipId}
+          onClose={() => setTuneTarget(null)}
+        />
       )}
     </div>
   )

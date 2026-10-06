@@ -214,6 +214,8 @@ const mock: TauriInternals = {
         return true
       case 'take_sandbox_crashes':
         return []
+      case 'tune_audio_clip':
+        return { notes: 9, moved: 7, worstCents: 34.2, path: 'Hardwave/Tuned/vocal-tuned.wav' }
       case 'audio_clip_to_midi':
         return { trackId: 'track-new', clipId: 'clip-new', noteCount: 12, lowest: 48, highest: 67 }
       case 'align_track_to':

@@ -32,6 +32,7 @@ pub mod onset;
 pub mod oversample;
 pub mod parametric_eq;
 pub mod phase_vocoder;
+pub mod pitch_correct;
 pub mod recording;
 pub mod reverb;
 pub mod reverb_extras;

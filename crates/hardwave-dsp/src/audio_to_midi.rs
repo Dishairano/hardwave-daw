@@ -166,22 +166,26 @@ pub fn transcribe(samples: &[f32], settings: &Settings) -> Vec<DetectedNote> {
     }
 
     let mut notes: Vec<DetectedNote> = Vec::new();
-    let mut current: Option<(u8, u64, usize, f32)> = None; // pitch, start, windows, peak
+    // pitch, start, windows, peak, summed Hz: the average is what says
+    // how far the singer actually sat from the note.
+    let mut current: Option<(u8, u64, usize, f32, f64)> = None;
     let mut pending: Option<(u8, usize)> = None; // a pitch waiting to be believed
 
     let mut position = 0usize;
     while position + window_len <= samples.len() {
         let window = &samples[position..position + window_len];
         let peak = window.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        let heard = window_pitch(window, settings).map(hz_to_note);
+        let hz = window_pitch(window, settings);
+        let heard = hz.map(|f| (hz_to_note(f).0, f));
 
         match heard {
-            Some((pitch, _cents)) => {
+            Some((pitch, frequency)) => {
                 let same_as_current = current.map(|c| c.0) == Some(pitch);
                 if same_as_current {
                     if let Some(c) = current.as_mut() {
                         c.2 += 1;
                         c.3 = c.3.max(peak);
+                        c.4 += frequency;
                     }
                     pending = None;
                 } else {
@@ -193,26 +197,32 @@ pub fn transcribe(samples: &[f32], settings: &Settings) -> Vec<DetectedNote> {
                         _ => Some((pitch, 1)),
                     };
                     if pending.map(|p| p.1).unwrap_or(0) >= settings.stability_windows {
-                        if let Some((p, start, windows, loudest)) = current.take() {
-                            push_note(&mut notes, p, start, windows, hop, window_len, loudest);
+                        if let Some((p, start, windows, loudest, summed)) = current.take() {
+                            push_note(
+                                &mut notes, p, start, windows, hop, window_len, loudest, summed,
+                            );
                         }
-                        current = Some((pitch, position as u64, 1, peak));
+                        current = Some((pitch, position as u64, 1, peak, frequency));
                         pending = None;
                     }
                 }
             }
             None => {
                 // Silence ends a note straight away: a rest is a rest.
-                if let Some((p, start, windows, loudest)) = current.take() {
-                    push_note(&mut notes, p, start, windows, hop, window_len, loudest);
+                if let Some((p, start, windows, loudest, summed)) = current.take() {
+                    push_note(
+                        &mut notes, p, start, windows, hop, window_len, loudest, summed,
+                    );
                 }
                 pending = None;
             }
         }
         position += hop;
     }
-    if let Some((p, start, windows, loudest)) = current.take() {
-        push_note(&mut notes, p, start, windows, hop, window_len, loudest);
+    if let Some((p, start, windows, loudest, summed)) = current.take() {
+        push_note(
+            &mut notes, p, start, windows, hop, window_len, loudest, summed,
+        );
     }
     notes
 }
@@ -226,6 +236,7 @@ fn push_note(
     hop: usize,
     window_len: usize,
     peak: f32,
+    summed_hz: f64,
 ) {
     let length = (windows.saturating_sub(1) * hop + window_len) as u64;
     // A note shorter than a thirty-second at 120 bpm is a glitch in the
@@ -233,12 +244,22 @@ fn push_note(
     if length < (window_len as u64) {
         return;
     }
+    // What was actually sung, against the note it is nearest. A
+    // singer sitting 30 cents flat for a whole note is the thing a
+    // tuner has to know about.
+    let average_hz = summed_hz / windows.max(1) as f64;
+    let exact = 69.0 + 12.0 * (average_hz / 440.0).log2();
+    let cents_off = ((exact - pitch as f64) * 100.0) as f32;
     notes.push(DetectedNote {
         start_sample,
         length_samples: length,
         pitch,
         velocity: peak.clamp(0.0, 1.0),
-        cents_off: 0.0,
+        cents_off: if cents_off.is_finite() {
+            cents_off
+        } else {
+            0.0
+        },
     });
 }
 

@@ -1520,3 +1520,169 @@ pub fn audio_clip_to_midi(
         highest,
     })
 }
+
+/// What tuning a clip did.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TuneResult {
+    /// How many notes were found.
+    pub notes: usize,
+    /// How many were actually moved.
+    pub moved: usize,
+    /// The worst one, in cents, so the message can say how far out the
+    /// take was rather than only that something happened.
+    pub worst_cents: f32,
+    /// The file the tuned audio was written to.
+    pub path: String,
+}
+
+/// Tune a sung line, note by note.
+///
+/// Each note is moved by its own amount, which is the point: a singer
+/// is sharp on one word and flat on the next. The take keeps its
+/// length and its place on the timeline, so nothing downstream moves.
+///
+/// The tuned audio is written next to the recordings as a new file and
+/// the clip is pointed at it, so the original take is still there.
+#[tauri::command]
+pub fn tune_audio_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    strength: Option<f32>,
+    root: Option<u8>,
+    scale: Option<String>,
+    ignore_within_cents: Option<f32>,
+) -> Result<TuneResult, String> {
+    let (samples, sample_rate, name) = {
+        let engine = state.engine.lock();
+        let sample_rate = engine.current_sample_rate();
+        let (source_path, source_start, name) = {
+            let project = engine.project.lock();
+            let track = project
+                .track(&track_id)
+                .ok_or_else(|| format!("Track not found: {track_id}"))?;
+            let clip = track
+                .clips
+                .iter()
+                .find(|c| match &c.content {
+                    hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+                    _ => false,
+                })
+                .ok_or_else(|| "that clip is not an audio clip".to_string())?;
+            let hardwave_project::clip::ClipContent::Audio(ac) = &clip.content else {
+                return Err("that clip is not an audio clip".into());
+            };
+            (ac.source_path.clone(), ac.source_start, track.name.clone())
+        };
+        let buffer = engine
+            .audio_pool
+            .get(&source_path)
+            .ok_or_else(|| "that clip's audio is not loaded".to_string())?;
+        let channel = buffer
+            .channels
+            .first()
+            .ok_or_else(|| "that clip has no audio in it".to_string())?;
+        let from = (source_start as usize).min(channel.len());
+        (channel[from..].to_vec(), sample_rate, name)
+    };
+
+    let scale = match scale.as_deref() {
+        Some("major") => hardwave_dsp::pitch_correct::MAJOR.to_vec(),
+        Some("minor") => hardwave_dsp::pitch_correct::MINOR.to_vec(),
+        _ => hardwave_dsp::pitch_correct::CHROMATIC.to_vec(),
+    };
+    let tuning = hardwave_dsp::pitch_correct::Tuning {
+        strength: strength.unwrap_or(1.0).clamp(0.0, 1.0),
+        root: root.unwrap_or(0).min(11),
+        scale,
+        ignore_within_cents: ignore_within_cents.unwrap_or(0.0).max(0.0),
+    };
+    let settings = hardwave_dsp::audio_to_midi::Settings {
+        sample_rate: sample_rate as f64,
+        ..Default::default()
+    };
+    let (tuned, corrections) = hardwave_dsp::pitch_correct::tune(&samples, &settings, &tuning);
+    if corrections.is_empty() {
+        return Err("no pitch to follow in that clip".into());
+    }
+
+    // Next to the recordings, as a new file: the take as it was sung
+    // is worth keeping.
+    let dir = dirs::audio_dir()
+        .or_else(dirs::document_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Hardwave")
+        .join("Tuned");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not make the folder: {e}"))?;
+    let safe: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("{safe}-tuned-{stamp}.wav"));
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    {
+        let mut writer =
+            hound::WavWriter::create(&path, spec).map_err(|e| format!("could not write: {e}"))?;
+        for sample in &tuned {
+            writer
+                .write_sample(*sample)
+                .map_err(|e| format!("could not write: {e}"))?;
+        }
+        writer
+            .finalize()
+            .map_err(|e| format!("could not finish writing: {e}"))?;
+    }
+
+    let path_text = path.to_string_lossy().into_owned();
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        // Straight into the pool, since the samples are already here:
+        // reading the file we just wrote would only prove the disk
+        // works.
+        engine.audio_pool.insert(
+            path_text.clone(),
+            hardwave_engine::audio_pool::AudioBuffer {
+                channels: vec![tuned.clone(), tuned.clone()],
+                sample_rate,
+                num_frames: tuned.len(),
+            },
+        );
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        for clip in track.clips.iter_mut() {
+            if let hardwave_project::clip::ClipContent::Audio(ac) = &mut clip.content {
+                if ac.id == clip_id {
+                    ac.source_path = path_text.clone();
+                    ac.source_start = 0;
+                }
+            }
+        }
+    }
+    state.engine.lock().rebuild_graph();
+
+    let moved = corrections.iter().filter(|c| c.moved_cents != 0.0).count();
+    let worst = corrections
+        .iter()
+        .map(|c| c.was_off_cents.abs())
+        .fold(0.0f32, f32::max);
+    Ok(TuneResult {
+        notes: corrections.len(),
+        moved,
+        worst_cents: worst,
+        path: path_text,
+    })
+}
