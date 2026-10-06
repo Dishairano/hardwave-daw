@@ -10,6 +10,7 @@ pub mod comping;
 pub mod dev;
 pub mod engine;
 pub mod export;
+pub mod flp;
 pub mod history;
 pub mod macros;
 pub mod midi;

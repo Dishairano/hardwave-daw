@@ -318,7 +318,21 @@ Right-click a cell to empty it. A launched clip replaces that track's
 timeline clips while it plays, and an export renders the song as
 written rather than whatever was launched.
 
-## 21. Mixing against a record
+## 21. Opening an FL Studio project
+
+File > Import FL Studio project reads a .flp. What comes across is
+the arrangement: the tempo, a track per channel that plays something,
+named as it was named in FL, and the notes of every pattern where the
+playlist puts them.
+
+What cannot come across is everything a plug-in holds. FL keeps a
+plug-in's state in its own format, and nothing outside FL can mean
+anything by it, so the message after an import says what was left
+behind rather than letting you find out later. Sample paths point at
+the machine the project came from, so they are listed rather than
+loaded.
+
+## 22. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -329,7 +343,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 22. Exporting
+## 23. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -338,7 +352,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 23. When something goes wrong
+## 24. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

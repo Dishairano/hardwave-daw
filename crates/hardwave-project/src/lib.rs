@@ -7,6 +7,7 @@ pub mod automation_recording;
 pub mod channel_rack;
 pub mod clip;
 pub mod fl_import;
+pub mod flp_parser;
 pub mod lfo;
 pub mod macros;
 pub mod marketplace;

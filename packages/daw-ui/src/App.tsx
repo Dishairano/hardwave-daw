@@ -1926,6 +1926,31 @@ export function App() {
           { label: 'Export audio…', action: handleExportAudio },
           { separator: true, label: '' },
           {
+            label: 'Import FL Studio project…',
+            action: async () => {
+              const push = useNotificationStore.getState().push
+              try {
+                const { open } = await import('@tauri-apps/plugin-dialog')
+                const picked = await open({
+                  multiple: false,
+                  filters: [{ name: 'FL Studio project', extensions: ['flp'] }],
+                })
+                if (typeof picked !== 'string') return
+                const report = await invoke<{
+                  bpm: number; tracks: number; clips: number; notes: number
+                  samples: string[]; leftBehind: string[]
+                }>('import_flp', { path: picked })
+                await useTrackStore.getState().fetchTracks()
+                push('info',
+                  `${report.tracks} tracks, ${report.clips} clips, ${report.notes} notes at ${report.bpm} BPM`, {
+                    detail: report.leftBehind.join('. ') + '.',
+                  })
+              } catch (e) {
+                push('warning', 'Could not open that project', { detail: String(e) })
+              }
+            },
+          },
+          {
             label: 'Import audio file…',
             shortcut: 'Ctrl+I',
             action: async () => {

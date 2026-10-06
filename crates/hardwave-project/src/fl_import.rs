@@ -60,6 +60,14 @@ pub struct FlProject {
     pub time_sig_denominator: u8,
     pub channels: Vec<FlChannel>,
     pub notes: Vec<(u32, Vec<FlNote>)>, // (channel_index, notes)
+    /// The same notes, but kept per pattern as well, which is what
+    /// the playlist needs: a pattern is placed many times, and each
+    /// placement brings its channels' notes with it.
+    #[serde(default)]
+    pub pattern_notes: Vec<(u32, u32, Vec<FlNote>)>, // (pattern, channel, notes)
+    /// Pattern names, for naming the clips they become.
+    #[serde(default)]
+    pub pattern_names: Vec<(u32, String)>,
     pub playlist_clips: Vec<FlPlaylistClip>,
     pub mixer: Vec<FlMixerTrack>,
 }
@@ -324,6 +332,8 @@ mod tests {
                 muted: false,
                 routes_to: Vec::new(),
             }],
+            pattern_notes: Vec::new(),
+            pattern_names: Vec::new(),
         }
     }
 

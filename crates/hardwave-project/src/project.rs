@@ -77,11 +77,6 @@ pub struct Project {
     /// any moment — see `arrangement.rs`.
     #[serde(default)]
     pub arrangements: Vec<crate::arrangement::Arrangement>,
-    /// The rows of the launcher grid, by name. A row is a section:
-    /// launch it and every track with a clip in that row starts
-    /// together.
-    #[serde(default)]
-    pub scenes: Vec<String>,
     /// Id of the arrangement currently applied to the live tracks.
     #[serde(default)]
     pub active_arrangement: String,
@@ -112,6 +107,11 @@ pub struct Project {
     /// Modulation routes: a source that keeps running wired to a knob.
     #[serde(default)]
     pub modulations: Vec<crate::modulation::ModRoute>,
+    /// The rows of the launcher grid, by name. A row is a section:
+    /// launch it and every track with a clip in that row starts
+    /// together.
+    #[serde(default)]
+    pub scenes: Vec<String>,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a

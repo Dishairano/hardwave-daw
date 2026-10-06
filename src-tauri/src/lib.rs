@@ -312,6 +312,7 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::flp::import_flp,
             commands::session::get_session_grid,
             commands::session::launch_slot,
             commands::session::stop_slot,
