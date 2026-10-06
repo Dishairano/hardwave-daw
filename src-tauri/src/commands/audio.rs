@@ -1252,3 +1252,121 @@ mod preview_tempo_tests {
         assert_eq!(bpm_from_name("Screech F.wav"), None);
     }
 }
+
+/// What lining two tracks up found.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlignmentResult {
+    /// How far the target was moved, in samples. Positive means it was
+    /// late and has been pulled forward.
+    pub offset_samples: i64,
+    pub offset_ms: f64,
+    /// How well the two agree once lined up, -1 to 1.
+    pub correlation: f32,
+    /// True when the target was also turned upside down, because the
+    /// two agreed better that way.
+    pub polarity_flipped: bool,
+}
+
+/// Line one track up with another.
+///
+/// A kick recorded with a close mic and a room mic is the same hit
+/// twice, a few milliseconds apart, and mixed together the gap eats
+/// the low end. This measures the gap from the audio itself and takes
+/// it out with the track's own delay, so nothing on the timeline
+/// moves and undoing it is one step.
+///
+/// The first audio clip on each track is what gets compared: that is
+/// the take, and comparing a whole timeline of different parts would
+/// measure nothing.
+#[tauri::command]
+pub fn align_track_to(
+    state: State<AppState>,
+    track_id: String,
+    reference_track_id: String,
+) -> Result<AlignmentResult, String> {
+    if track_id == reference_track_id {
+        return Err("a track is already lined up with itself".into());
+    }
+    let engine = state.engine.lock();
+    let sample_rate = engine.current_sample_rate() as f64;
+
+    let source_of = |id: &str| -> Option<(String, u64)> {
+        let project = engine.project.lock();
+        let track = project.track(id)?;
+        track.clips.iter().find_map(|clip| match &clip.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => {
+                Some((ac.source_path.clone(), ac.source_start))
+            }
+            _ => None,
+        })
+    };
+
+    let (ref_source, ref_start) = source_of(&reference_track_id)
+        .ok_or_else(|| "that track has no audio on it".to_string())?;
+    let (tgt_source, tgt_start) =
+        source_of(&track_id).ok_or_else(|| "this track has no audio on it".to_string())?;
+
+    let ref_buf = engine
+        .audio_pool
+        .get(&ref_source)
+        .ok_or_else(|| "the reference track's audio is not loaded".to_string())?;
+    let tgt_buf = engine
+        .audio_pool
+        .get(&tgt_source)
+        .ok_or_else(|| "this track's audio is not loaded".to_string())?;
+
+    // A couple of seconds from where each take starts is plenty: the
+    // offset between two mics does not change part way through, and
+    // correlating whole files would take long enough to feel broken.
+    let window = (sample_rate * 2.0) as usize;
+    let slice = |buf: &hardwave_engine::AudioBuffer, from: u64| -> Vec<f32> {
+        let channel = buf.channels.first();
+        match channel {
+            Some(ch) => {
+                let from = (from as usize).min(ch.len());
+                let to = (from + window).min(ch.len());
+                ch[from..to].to_vec()
+            }
+            None => Vec::new(),
+        }
+    };
+    let reference = slice(&ref_buf, ref_start);
+    let target = slice(&tgt_buf, tgt_start);
+
+    // Twenty milliseconds covers microphones seven metres apart, and
+    // bounds a mistake: nothing can drag a take across the song.
+    let max_lag = (sample_rate * 0.020) as usize;
+    let found = hardwave_dsp::align::best_offset(&reference, &target, max_lag);
+
+    if found.correlation.abs() < 0.3 {
+        return Err(
+            "these two do not sound like the same take, so there is nothing to line up".into(),
+        );
+    }
+
+    drop(engine);
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        // The delay the track already had is part of the answer: the
+        // measurement compares the audio, not what the mixer is doing
+        // with it.
+        track.delay_samples = found.offset_samples;
+        if found.polarity_flip {
+            track.phase_invert = !track.phase_invert;
+        }
+    }
+    state.engine.lock().rebuild_graph();
+
+    Ok(AlignmentResult {
+        offset_samples: found.offset_samples,
+        offset_ms: found.offset_samples as f64 * 1000.0 / sample_rate,
+        correlation: found.correlation,
+        polarity_flipped: found.polarity_flip,
+    })
+}

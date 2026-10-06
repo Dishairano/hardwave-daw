@@ -195,6 +195,8 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'align_track_to':
+        return { offsetSamples: 73, offsetMs: 1.52, correlation: 0.97, polarityFlipped: false }
       case 'get_reference':
         return { loaded: true, playing: false, gainDb: -2.4, lufs: -8.1, name: 'Rawstyle reference' }
       case 'load_reference':

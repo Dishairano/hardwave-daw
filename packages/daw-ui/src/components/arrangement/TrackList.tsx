@@ -558,6 +558,37 @@ export function TrackList() {
                 }
               }}
             />
+            {t.kind !== 'Midi' && (
+              <TrackMenuItem label="Line up with another track…" onClick={async () => {
+                setCtxMenu(null)
+                const push = useNotificationStore.getState().push
+                const others = audioTracks.filter(x => x.id !== t.id && x.kind !== 'Midi' && x.kind !== 'Master')
+                if (others.length === 0) {
+                  push('info', 'There is no other audio track to line up with')
+                  return
+                }
+                const names = others.map(x => x.name)
+                const picked = window.prompt(
+                  `Line "${t.name}" up with which track?\n\n${names.join('\n')}`,
+                  names[0],
+                )?.trim()
+                const reference = others.find(x => x.name === picked)
+                if (!reference) return
+                try {
+                  const result = await invoke<{
+                    offsetSamples: number; offsetMs: number; correlation: number; polarityFlipped: boolean
+                  }>('align_track_to', { trackId: t.id, referenceTrackId: reference.id })
+                  await useTrackStore.getState().fetchTracks()
+                  push('info', `"${t.name}" lined up with "${reference.name}"`, {
+                    detail: `${result.offsetMs >= 0 ? 'Pulled forward' : 'Pushed back'} `
+                      + `${Math.abs(result.offsetMs).toFixed(2)} ms`
+                      + `${result.polarityFlipped ? ', and turned upside down because the two agreed better that way' : ''}.`,
+                  })
+                } catch (e) {
+                  push('warning', 'Could not line those up', { detail: String(e) })
+                }
+              }} />
+            )}
             <TrackMenuItem label="Bounce to audio" onClick={async () => {
               setCtxMenu(null)
               // Renders this track through its plug-ins, puts the result on

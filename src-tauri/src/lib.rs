@@ -272,6 +272,7 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::audio::align_track_to,
             commands::reference::get_reference,
             commands::reference::load_reference,
             commands::reference::set_reference_playing,

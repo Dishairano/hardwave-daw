@@ -186,7 +186,18 @@ bend one note of a chord without bending the rest. And a track can take
 a tuning from a Scala file, which the built-in instruments follow; a
 hosted plug-in keeps its own tuning.
 
-## 13. Mixing against a record
+## 13. Lining up two recordings
+
+A kick recorded with a close mic and a room mic is the same hit twice,
+a few milliseconds apart, and mixed together the gap eats the low end.
+Right-click the track and choose "Line up with another track": the gap
+is measured from the audio itself and taken out with the track's own
+delay, so nothing on the timeline moves. If the two agree better with
+one of them turned upside down, that is done as well and the message
+says so. If they are not recordings of the same thing, nothing is
+changed.
+
+## 14. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -197,7 +208,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 14. Exporting
+## 15. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -206,7 +217,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 15. When something goes wrong
+## 16. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.
