@@ -30,6 +30,7 @@ uuid.workspace = true
 # `HostedPlugin::open_editor` signature; we depend on it directly so test
 # mocks of the trait can name the type without the path leaking.
 raw-window-handle.workspace = true
+rusty_link = "0.4.9"
 
 
 [dev-dependencies]

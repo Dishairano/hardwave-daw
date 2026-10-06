@@ -158,6 +158,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [workers, setWorkers] = useState<{ threads: number; suggested: number; cores: number }>({
     threads: 0, suggested: 0, cores: 1,
   })
+  // Ableton Link: whether a session is joined and who else is in it.
+  const [link, setLink] = useState<{ enabled: boolean; peers: number }>({ enabled: false, peers: 0 })
   const [outputOffset, setOutputOffset] = useState(0)
   const [selectedInputChannels, setSelectedInputChannels] = useState(2)
   const [selectedRate, setSelectedRate] = useState(48000)
@@ -214,6 +216,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       setInputConfig(inCfg)
       setSelectedDevice(cfg.device)
       setSelectedInput(inCfg.device)
+      invoke<{ enabled: boolean; peers: number }>('get_link_status')
+        .then(setLink)
+        .catch(() => { /* older build or no engine */ })
       invoke<{ threads: number; suggested: number; cores: number }>('get_worker_threads')
         .then(setWorkers)
         .catch(() => { /* older build or no engine */ })
@@ -869,6 +874,32 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
           </>)}
 
           {tab === 'midi' && (<>
+            {/* Link shares a tempo with everything else on the network
+                that speaks it, so it is a switch and a peer count. */}
+            <SettingRow label="Ableton Link">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  onClick={() => {
+                    const next = !link.enabled
+                    setLink(l => ({ ...l, enabled: next }))
+                    invoke('set_link_enabled', { enabled: next }).catch(() => {})
+                  }}
+                  style={{
+                    padding: '4px 12px', fontSize: 11, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none', cursor: 'pointer',
+                    background: link.enabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                    color: link.enabled ? '#fff' : hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >{link.enabled ? tr('On') : tr('Off')}</button>
+                <span style={{ fontSize: 10, color: hw.textFaint }}>
+                  {link.enabled
+                    ? `${link.peers} ${link.peers === 1 ? tr('other app in the session') : tr('other apps in the session')}`
+                    : tr('tempo and start-stop shared over the network')}
+                </span>
+              </div>
+            </SettingRow>
+
             {/* A desk speaks a fixed language rather than whatever a
                 knob was learned to, so it is a switch, not a mapping. */}
             <SettingRow label="Control surface">

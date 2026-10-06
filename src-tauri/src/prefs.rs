@@ -38,6 +38,9 @@ pub struct AudioPrefs {
     /// the audio thread alone, which is what every build did before.
     #[serde(default)]
     pub worker_threads: usize,
+    /// Join an Ableton Link session at startup.
+    #[serde(default)]
+    pub link_enabled: bool,
 }
 
 fn default_sample_rate() -> u32 {
@@ -103,6 +106,7 @@ impl AudioPrefs {
             input_channel_offset: 0,
             output_channel_offset: 0,
             worker_threads: 0,
+            link_enabled: false,
         }
     }
 }

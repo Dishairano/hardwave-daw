@@ -172,6 +172,10 @@ read.
 Settings > Appearance picks the language. Anything not translated yet
 stays in English rather than going blank.
 
+Settings > MIDI also joins an Ableton Link session: the tempo and the
+start and stop are then shared with everything else on the network that
+speaks Link, and the row says how many other apps are in the session.
+
 Settings > MIDI switches on a Mackie Control or HUI desk: eight faders
 with mute, solo and arm, the transport keys, and bank left and right,
 with the faders and mute lights sent back so a motorised desk lines up

@@ -66,6 +66,12 @@ jobs:
       - name: Tool versions
         run: node --version && npm --version
 
+      # Ableton Link builds its C library with cmake. Without it the
+      # build fails deep inside a build script, so it is checked here
+      # where the message can say what to install.
+      - name: cmake
+        run: cmake --version || (echo "cmake is missing. Install it once with: winget install Kitware.CMake" && exit 1)
+
       # Not dtolnay/rust-toolchain: that action shells out to bash, and on
       # this PC `bash` resolves to WSL, which has no distribution installed.
       # rustup is installed directly instead, and rust-toolchain.toml pins

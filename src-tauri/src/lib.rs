@@ -129,6 +129,9 @@ pub fn run() {
     if prefs.worker_threads > 0 {
         engine.set_worker_threads(prefs.worker_threads);
     }
+    if prefs.link_enabled {
+        engine.set_link_enabled(true);
+    }
     #[cfg(target_os = "windows")]
     if prefs.wasapi_exclusive {
         if let Err(e) = engine.set_wasapi_exclusive(true) {
@@ -265,6 +268,8 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::engine::get_link_status,
+            commands::engine::set_link_enabled,
             commands::engine::get_worker_threads,
             commands::engine::set_worker_threads,
             commands::engine::get_channel_offsets,

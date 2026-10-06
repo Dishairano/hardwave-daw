@@ -186,6 +186,8 @@ pub struct DawEngine {
     /// The threads that share the per-block work. Empty is the audio
     /// thread alone, which is what a machine with one core wants.
     worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
+    /// The Ableton Link session, when the setting asks for one.
+    link: Arc<Mutex<Option<crate::link::LinkSession>>>,
 
     /// Folder the current .hwp lives in, set on save and load.
     ///
@@ -331,6 +333,7 @@ impl DawEngine {
             master_tap: master_tap::new_shared(),
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             worker_pool: Arc::new(Mutex::new(None)),
+            link: Arc::new(Mutex::new(None)),
             project_dir: Arc::new(Mutex::new(None)),
             audio_load_permille: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             audio_xruns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -1234,6 +1237,35 @@ impl DawEngine {
             .as_ref()
             .map(|p| p.threads())
             .unwrap_or(0)
+    }
+
+    /// Join or leave an Ableton Link session.
+    ///
+    /// On, the tempo and the start and stop are shared with everything
+    /// else on the network that speaks Link. Off, nothing is sent and
+    /// nothing is listened to.
+    pub fn set_link_enabled(&self, enabled: bool) {
+        let mut slot = self.link.lock();
+        if enabled {
+            if slot.is_none() {
+                let bpm = self
+                    .transport
+                    .bpm
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                *slot = Some(crate::link::LinkSession::start(self.transport.clone(), bpm));
+            }
+        } else {
+            *slot = None;
+        }
+    }
+
+    /// Whether a session is joined, and how many others are in it.
+    pub fn link_status(&self) -> (bool, u64) {
+        let slot = self.link.lock();
+        match slot.as_ref() {
+            Some(session) => (true, session.peers()),
+            None => (false, 0),
+        }
     }
 
     pub fn set_audio_config(

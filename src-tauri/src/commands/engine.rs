@@ -21,6 +21,7 @@ fn persist_audio_prefs(state: &State<AppState>) {
         input_channel_offset,
         output_channel_offset,
         worker_threads: engine.worker_threads(),
+        link_enabled: engine.link_status().0,
     };
     drop(engine);
     prefs.save();
@@ -559,5 +560,31 @@ pub fn set_worker_threads(state: State<AppState>, threads: usize) {
         .engine
         .lock()
         .set_worker_threads(threads.min(cores.saturating_sub(1).max(1)));
+    persist_audio_prefs(&state);
+}
+
+/// Whether an Ableton Link session is joined, and who else is in it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkStatus {
+    pub enabled: bool,
+    pub peers: u64,
+}
+
+#[tauri::command]
+pub fn get_link_status(state: State<AppState>) -> LinkStatus {
+    let (enabled, peers) = state.engine.lock().link_status();
+    LinkStatus { enabled, peers }
+}
+
+/// Share tempo and start-stop with everything else on the network that
+/// speaks Ableton Link.
+///
+/// A laptop running Ableton, a phone running a drum app and a friend
+/// across the table all agree on a tempo through Link. Anything outside
+/// that session has to be nudged by hand all night.
+#[tauri::command]
+pub fn set_link_enabled(state: State<AppState>, enabled: bool) {
+    state.engine.lock().set_link_enabled(enabled);
     persist_audio_prefs(&state);
 }

@@ -195,6 +195,10 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'get_link_status':
+        return { enabled: false, peers: 0 }
+      case 'set_link_enabled':
+        return null
       case 'get_worker_threads':
         return { threads: 0, suggested: 5, cores: 8 }
       case 'set_worker_threads':
