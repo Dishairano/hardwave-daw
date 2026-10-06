@@ -80,9 +80,11 @@ jobs:
       # build fails deep inside a build script, so it is checked here
       # where the message can say what to install.
       - name: cmake
-        # Windows PowerShell, not pwsh: this machine has 5.1 and not 7.
-        shell: powershell
-        run: scripts/ensure-cmake.ps1
+        # Through cmd with the policy bypassed for this one process,
+        # the same way every other PowerShell step on this machine
+        # runs. The machine's own execution policy stays as it is.
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ensure-cmake.ps1
 
       # Not dtolnay/rust-toolchain: that action shells out to bash, and on
       # this PC `bash` resolves to WSL, which has no distribution installed.
