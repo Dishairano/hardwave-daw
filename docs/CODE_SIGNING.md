@@ -42,13 +42,13 @@ Search **Trusted Signing accounts** in the portal, then **Create**.
 | Subscription | the one from step 1 |
 | Resource group | create one, `hardwave-signing` |
 | Account name | `hardwave` |
-| Region | West Europe |
+| Region | North Europe (what we used) |
 | Pricing tier | Basic |
 
 Create it, wait for the deployment, then **Go to resource**. On the
 Overview page there is an **Account URI**, something like
-`https://weu.codesigning.azure.net`. Copy it: that is
-`AZURE_TRUSTED_SIGNING_ENDPOINT`. The account name, `hardwave`, is
+`https://neu.codesigning.azure.net`, which is ours. Copy it: that is
+`AZURE_TRUSTED_SIGNING_ENDPOINT`, already set in the repository. The account name, `hardwave`, is
 `AZURE_TRUSTED_SIGNING_ACCOUNT`.
 
 ### 3. Prove the company is real (the slow bit)
@@ -128,7 +128,7 @@ In the repository's settings, under Secrets and variables > Actions:
 
 | Name | Example |
 | --- | --- |
-| `AZURE_TRUSTED_SIGNING_ENDPOINT` | `https://weu.codesigning.azure.net` |
+| `AZURE_TRUSTED_SIGNING_ENDPOINT` | `https://neu.codesigning.azure.net` (set) |
 | `AZURE_TRUSTED_SIGNING_ACCOUNT` | the Trusted Signing account's name |
 | `AZURE_TRUSTED_SIGNING_PROFILE` | the certificate profile's name |
 
