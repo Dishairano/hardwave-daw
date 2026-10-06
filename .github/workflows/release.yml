@@ -164,8 +164,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Everything, the long tests included: a release is the one place
+      # nothing is skipped for speed.
       - name: cargo test --workspace
-        run: cargo test --workspace
+        run: cargo test --workspace -- --include-ignored
 
   build:
     needs: [frontend, changelog, lint-and-test, ui-tests]

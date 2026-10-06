@@ -124,6 +124,7 @@ fn goertzel_mag(mono: &[f32], freq: f32) -> f64 {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn render_distortion_fx_wav() {
     let (engine, track_id) = build_sine_engine();
 

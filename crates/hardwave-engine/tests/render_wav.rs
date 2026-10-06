@@ -54,6 +54,7 @@ fn goertzel_mag(mono: &[f32], sample_rate: u32, freq: f32) -> f64 {
 /// Writes the rendered WAVs when HW_STRETCH_WAV_DIR is set, so the artefact
 /// quality can be judged by ear as well as by this assertion.
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn stretch_preserves_pitch() {
     let sample_rate = 48_000_u32;
     let render_clip = |stretch: f64| -> Vec<f32> {
@@ -172,6 +173,7 @@ fn stretch_preserves_pitch() {
 /// Together they mix on the master bus — proving multi-track summing, not just
 /// a single passthrough tone.
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn render_demo_wav() {
     let sample_rate = 44_100_u32;
     let duration_seconds = 4.0_f32;
@@ -239,6 +241,7 @@ fn render_demo_wav() {
 /// together. With the bake, the source is pitch-shifted in place, so the clip
 /// keeps sounding for its whole length at the new pitch.
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn pitch_shift_preserves_duration() {
     let sample_rate = 48_000_u32;
     // Source is 2 s long; render 2 s. Under the old path a +12 clip would be
@@ -332,6 +335,7 @@ fn pitch_shift_preserves_duration() {
 /// This asserts that contract from the outside: a stretched clip adds nothing
 /// to the pool until the explicit prebake runs.
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn stretch_bake_is_explicit_and_off_the_audio_thread() {
     let sample_rate = 48_000_u32;
     let engine = DawEngine::new();
@@ -403,6 +407,7 @@ fn stretch_bake_is_explicit_and_off_the_audio_thread() {
 /// lands. Dragging a stretch control fires a rebuild per frame, so repeated
 /// calls must coalesce rather than spawn a bake per frame.
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn async_stretch_bake_lands_and_does_not_stampede() {
     let sample_rate = 48_000_u32;
     let engine = DawEngine::new();
@@ -487,6 +492,7 @@ fn async_stretch_bake_lands_and_does_not_stampede() {
 /// passes on the track muted, so a bounce that ignored clip mute would play
 /// every pass at once.
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn a_recorded_take_comes_back_in_the_bounce_at_its_position() {
     let sr = 48_000_u32;
     let engine = DawEngine::new();
@@ -615,6 +621,7 @@ fn a_recorded_take_comes_back_in_the_bounce_at_its_position() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn render_rate_does_not_detune_audio_clips() {
     let source_rate = 48_000_u32;
     // Build the source at 48k, then render it at several rates.

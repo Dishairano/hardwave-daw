@@ -11,6 +11,7 @@ use hardwave_engine::DawEngine;
 use std::time::Instant;
 
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn engine_renders_with_120_audio_tracks() {
     let engine = DawEngine::new();
     {
@@ -48,6 +49,7 @@ fn engine_renders_with_120_audio_tracks() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn engine_handles_120_midi_tracks() {
     let engine = DawEngine::new();
     {
@@ -71,6 +73,7 @@ fn engine_handles_120_midi_tracks() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn engine_renders_pattern_with_1500_midi_notes() {
     use hardwave_midi::{MidiClip, MidiNote};
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
@@ -139,6 +142,7 @@ fn engine_renders_pattern_with_1500_midi_notes() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn no_cpu_spikes_above_envelope_on_moderate_load() {
     // Moderate-load render — 40 audio tracks, 1 second of output at 48k —
     // times every block and asserts no single block exceeds a generous
@@ -182,6 +186,7 @@ fn no_cpu_spikes_above_envelope_on_moderate_load() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn simulated_long_session_stays_stable_across_many_render_cycles() {
     // Simulates the shape of a multi-hour session: 200 render cycles that
     // each add tracks, render, mutate (volume/pan), render, remove tracks,
@@ -246,6 +251,7 @@ fn simulated_long_session_stays_stable_across_many_render_cycles() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn audio_thread_does_not_block_on_held_project_lock() {
     // Simulate a UI command holding the project mutex for an unusually
     // long stretch (e.g. a slow save). The audio thread should keep
@@ -298,6 +304,7 @@ fn audio_thread_does_not_block_on_held_project_lock() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn track_churn_leaves_baseline_track_count() {
     // Add + remove tracks in a long loop, verifying the project's track
     // count returns to its original baseline after each pair. Catches
@@ -332,6 +339,7 @@ fn track_churn_leaves_baseline_track_count() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
 fn engine_survives_rapid_rebuild_with_many_tracks() {
     // Add tracks one at a time, re-rendering briefly between each addition.
     // Verifies that `rebuild_graph` stays stable as the graph grows and

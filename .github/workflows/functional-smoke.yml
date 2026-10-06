@@ -72,11 +72,43 @@ jobs:
           cargo test \
             --test functional_smoke \
             -p hardwave-engine \
-            -- --nocapture --test-threads=1
+            -- --include-ignored --nocapture --test-threads=1
 
       - name: Run native-plugin render proof
         run: |
           cargo test \
             --test render_fx_wav \
             -p hardwave-native-plugins \
-            -- --nocapture
+            -- --include-ignored --nocapture
+
+  # The long engine tests: 120 tracks, a simulated long session, the
+  # render proofs. They are marked #[ignore] so the founder's PC gate
+  # stays quick, and they run here instead, on GitHub's machines, on
+  # every push. Nothing is skipped; it only moved.
+  long-engine-tests:
+    name: Long engine tests (stress and render)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Stress
+        run: cargo test -p hardwave-engine --test stress -- --include-ignored --test-threads=1
+
+      - name: Render proof
+        run: cargo test -p hardwave-engine --test render_wav -- --include-ignored

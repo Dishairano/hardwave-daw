@@ -10,7 +10,11 @@
 //! ## Status (re-verified 2026-07-19)
 //!
 //! Every test here is PASS-required — a regression means we broke
-//! something that demonstrably works. There are no `#[ignore]`d tests
+//! something that demonstrably works. Every test here is marked
+//! `#[ignore]` only so the founder's PC gate stays fast: the Functional
+//! Smoke workflow runs all of them with `--include-ignored` on every
+//! push, and none of them is skipped for being broken. There are no
+//! ignored-because-failing tests
 //! left: the two former KILLER-watch panics (track FX inserts, and
 //! automation clips/LFO) were re-verified against the engine, found to
 //! be fully wired, and rewritten as real end-to-end coverage.
@@ -33,6 +37,7 @@ const SAMPLE_RATE: u32 = 48_000;
 // ───────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn audio_clip_produces_sound() {
     // PASS-required.
     // A sine clip on an audio track should produce non-silent output.
@@ -62,6 +67,7 @@ fn audio_clip_produces_sound() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn master_volume_attenuates_output() {
     // PASS-required.
     // Lowering master_volume_db should proportionally reduce the peak.
@@ -108,6 +114,7 @@ fn master_volume_attenuates_output() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn mute_silences_track() {
     // PASS-required.
     // Setting track.muted=true must produce silence (or near-silence) in the render.
@@ -148,6 +155,7 @@ fn mute_silences_track() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn solo_silences_other_tracks() {
     // PASS-required.
     // FL Studio / Logic / Ableton convention: when ANY track is soloed,
@@ -208,6 +216,7 @@ fn solo_silences_other_tracks() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn kicksynth_instrument_produces_kick_audio() {
     // PASS-required.
     //
@@ -268,6 +277,7 @@ fn kicksynth_instrument_produces_kick_audio() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn two_tracks_mix_louder_than_one() {
     // PASS-required.
     // Two coherent sine sources at the same frequency must sum at the
@@ -326,6 +336,7 @@ fn two_tracks_mix_louder_than_one() {
 // ───────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn midi_clip_produces_sound() {
     // PASS-required.
     //
@@ -394,6 +405,7 @@ fn midi_clip_produces_sound() {
 /// not be muted at all: MidiClip carried no flag. Muting one must silence it
 /// as completely as deleting it would, or the tool is decoration.
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn a_muted_pattern_clip_is_silent() {
     use hardwave_midi::{MidiClip, MidiNote};
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
@@ -444,6 +456,7 @@ fn a_muted_pattern_clip_is_silent() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn killer_track_insert_modifies_audio() {
     // Was a KILLER-watch panic ("TrackNode does not process track.inserts").
     // FLIPPED GREEN 2026-07-19: the insert chain is fully wired. This now
@@ -608,6 +621,7 @@ fn killer_track_insert_modifies_audio() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn recording_api_captures_samples() {
     // PASS-required.
     //
@@ -665,6 +679,7 @@ fn recording_api_captures_samples() {
 /// back. Passes are split at the loop jump, trimmed to the loop, and placed
 /// at the loop start after the first.
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn loop_recording_splits_and_trims_each_pass() {
     use std::sync::atomic::Ordering;
     let engine = hardwave_engine::DawEngine::new();
@@ -733,6 +748,7 @@ fn loop_recording_splits_and_trims_each_pass() {
 // ───────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn live_midi_noteon_drives_master_output() {
     // PASS-required.
     // Inject a NoteOn into MidiInputManager, render a short window with
@@ -770,6 +786,7 @@ fn live_midi_noteon_drives_master_output() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn live_midi_noteon_audible_with_transport_stopped() {
     // PASS-required.
     // FL Studio / Logic / Ableton convention: a soft synth must
@@ -800,6 +817,7 @@ fn live_midi_noteon_audible_with_transport_stopped() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn armed_audio_track_drains_live_midi() {
     // Beta blocker #5 routing guard.
     //
@@ -839,6 +857,7 @@ fn armed_audio_track_drains_live_midi() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn injected_events_land_in_capture_ring() {
     // PASS-required.
     // The rolling 3-min capture buffer is filled by the audio thread's
@@ -886,6 +905,7 @@ fn injected_events_land_in_capture_ring() {
 /// lane editor, and the engine never applied it: sends are graph edges whose
 /// gain was baked at rebuild time, so the curve did nothing.
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn a_send_level_lane_moves_the_send() {
     use hardwave_project::automation::{
         AutomationLane, AutomationPoint, AutomationTarget, CurveMode,
@@ -1003,6 +1023,7 @@ fn a_send_level_lane_moves_the_send() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn automation_follows_a_tempo_change_instead_of_one_tempo() {
     use hardwave_project::automation::{
         AutomationLane, AutomationPoint, AutomationTarget, CurveMode,
@@ -1097,6 +1118,7 @@ fn automation_follows_a_tempo_change_instead_of_one_tempo() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn automation_lane_silences_track_via_volume() {
     // PASS-required.
     //
@@ -1156,6 +1178,7 @@ fn automation_lane_silences_track_via_volume() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn killer_automation_clips_and_lfo() {
     // Was a KILLER-watch panic ("automation CLIPS + LFO have zero engine
     // callers"). FLIPPED GREEN 2026-07-19: both are wired end-to-end.
@@ -1298,6 +1321,7 @@ fn killer_automation_clips_and_lfo() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn automation_recording_round_trip_is_audible() {
     // Proves the AutomationRecorder data path end-to-end: a simulated live
     // knob sweep captured during "playback" bakes into automation points
@@ -1391,6 +1415,7 @@ fn automation_recording_round_trip_is_audible() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn sidechain_bus_reaches_inserts_in_offline_render() {
     // Exports must sound like playback. A plug-in slot with a
     // `sidechain_source` gets that track's output on input ports 2/3, and
@@ -1542,6 +1567,7 @@ fn sidechain_bus_reaches_inserts_in_offline_render() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn master_bus_insert_processes_the_mix() {
     // The Master track is not audio-bearing, so it gets no TrackNode and never
     // appeared in `track_id_to_node`. Every InsertCommand aimed at the master
@@ -1696,6 +1722,7 @@ fn master_bus_insert_processes_the_mix() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn stem_render_keeps_its_sidechain_key() {
     // Stems used to be rendered by muting every track but the target. A muted
     // TrackNode returns before writing its output ports, so it also stopped
@@ -1846,6 +1873,7 @@ fn stem_render_keeps_its_sidechain_key() {
 }
 
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn plugin_latency_is_compensated() {
     // PDC had all its machinery — per-edge delay lines, a critical-path DP in
     // `finalize_pdc` — but no production node ever returned a non-zero
@@ -2008,6 +2036,7 @@ fn plugin_latency_is_compensated() {
 /// The proof is the target track on its own. Its clip list is empty, so any
 /// sound it makes came down the route.
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn a_routed_track_plays_the_notes_of_the_track_that_feeds_it() {
     use hardwave_midi::{MidiClip, MidiNote};
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
@@ -2070,6 +2099,7 @@ fn a_routed_track_plays_the_notes_of_the_track_that_feeds_it() {
 /// render apart: a note panned hard left has to come out louder on the
 /// left than on the right, and a note with nothing set stays even.
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn a_note_panned_left_is_louder_on_the_left() {
     use hardwave_midi::{MidiClip, MidiNote};
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
@@ -2127,6 +2157,7 @@ fn a_note_panned_left_is_louder_on_the_left() {
 /// the amount the group was pulled down, and silent when the group is
 /// muted.
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn a_vca_group_rides_the_faders_of_its_members() {
     use hardwave_midi::{MidiClip, MidiNote};
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
@@ -2199,6 +2230,7 @@ fn a_vca_group_rides_the_faders_of_its_members() {
 /// most of the bar silent, so the average level drops a long way while
 /// the peak stays where it was.
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn an_arpeggiator_on_the_track_changes_what_the_instrument_plays() {
     use hardwave_midi::midi_fx::{ArpMode, MidiFx};
     use hardwave_midi::{MidiClip, MidiNote};
@@ -2260,6 +2292,7 @@ fn an_arpeggiator_on_the_track_changes_what_the_instrument_plays() {
 /// track's own clip and the render carry different tones, so the tone
 /// that comes out says which path the engine took.
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn a_frozen_track_plays_its_render_and_unfreezing_puts_the_part_back() {
     use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve, FREEZE_LANE};
 
@@ -2361,6 +2394,7 @@ fn a_frozen_track_plays_its_render_and_unfreezing_puts_the_part_back() {
 /// Measured from outside: the same written note comes out at a
 /// different frequency once the scale is on the track.
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn a_track_in_another_tuning_plays_other_pitches() {
     use hardwave_midi::scala::Tuning;
     use hardwave_midi::{MidiClip, MidiNote};
@@ -2447,6 +2481,7 @@ fn a_track_in_another_tuning_plays_other_pitches() {
 /// sample for sample. A parallel engine that is merely close is a
 /// parallel engine that is wrong.
 #[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn a_render_is_the_same_whether_it_uses_one_core_or_several() {
     use hardwave_midi::{MidiClip, MidiNote};
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};

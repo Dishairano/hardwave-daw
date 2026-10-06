@@ -1,5 +1,9 @@
 # Fast gate on the founder's Windows PC.
 #
+# The long engine tests (stress, render proofs, functional smoke) are
+# #[ignore]d and run on GitHub's machines instead, in the Functional Smoke
+# workflow on every push, so this gate is compile time plus seconds.
+#
 # The release gate (fmt + clippy + cargo test --workspace) takes about 15
 # minutes on web01: 2 cores, 3.7 GB RAM shared with the production site, and
 # cold Rust builds must run single-job or the OOM killer takes them. The same
@@ -37,14 +41,17 @@ jobs:
       CARGO_NET_RETRY: 10
       CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
       RUST_BACKTRACE: 1
-      # This runs on the founder's own workstation while he is using it.
-      # Cargo defaults to one rustc per logical core, which pinned all 20
-      # threads of the i9 at 100% and made the machine unusable. Six leaves
-      # most of the CPU for the DAW and still finishes the gate in a few
-      # minutes, since the target directory stays warm between runs.
-      CARGO_BUILD_JOBS: 6
-      # Same reason: the test harness otherwise runs one thread per core.
-      RUST_TEST_THREADS: 4
+      # The gate used to be held to six of the i9's twenty threads so it
+      # could run while the founder worked. It only runs in the night
+      # window now, or when he asks for it, so it takes the whole machine
+      # and is done in a fraction of the time. Cargo and the test harness
+      # both default to one job per core.
+      #
+      # Line tables only, not full debug info: most of a warm build on
+      # Windows is writing and linking debug info nobody reads in a gate,
+      # and backtraces still name the file and line.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       # The PC is the founder's own workstation. Builds run at night only,
       # between 03:00 and 08:00 his time, so the gate never takes the CPU
