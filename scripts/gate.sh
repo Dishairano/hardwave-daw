@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# A workflow file that does not parse fails on GitHub with no log to
+# read, so it is checked here where the message says which line.
+python3 "$(dirname "$0")/check-workflows.py" || exit 1
+
 # Run the release gate once, and record that this exact tree passed it.
 #
 # The gate (fmt + clippy + cargo test --workspace + the frontend checks) is

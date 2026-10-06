@@ -58,7 +58,11 @@ jobs:
       - name: Build window
         env:
           HW_BUILD_ANYTIME: ${{ vars.HW_BUILD_ANYTIME }}
-        run: powershell -NoProfile -ExecutionPolicy Bypass -Command "$h = [int](Get-Date).Hour; if ($env:HW_BUILD_ANYTIME -eq '1') { 'override: building outside the window'; exit 0 }; if ($h -lt 3 -or $h -ge 8) { Write-Host ('It is {0}:00 here. Builds run between 03:00 and 08:00; nothing was built.' -f $h); exit 1 }; ('{0}:00, inside the window' -f $h)"
+        run: >-
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$h = [int](Get-Date).Hour;
+          if ($env:HW_BUILD_ANYTIME -eq '1') { 'building outside the window, by request'; exit 0 };
+          if ($h -lt 3 -or $h -ge 8) { Write-Host ('It is {0}:00 here. Builds run between 03:00 and 08:00; nothing was built.' -f $h); exit 1 };
+          ('{0}:00, inside the window' -f $h)"
 
       - uses: actions/checkout@v4
 
@@ -76,7 +80,9 @@ jobs:
       # build fails deep inside a build script, so it is checked here
       # where the message can say what to install.
       - name: cmake
-        run: cmake --version || (echo "cmake is missing. Install it once with: winget install Kitware.CMake" && exit 1)
+        run: >-
+          cmake --version ||
+          (echo "cmake is missing. Install it once with winget install Kitware.CMake" && exit 1)
 
       # Not dtolnay/rust-toolchain: that action shells out to bash, and on
       # this PC `bash` resolves to WSL, which has no distribution installed.
