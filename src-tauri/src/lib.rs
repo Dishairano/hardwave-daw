@@ -323,6 +323,7 @@ pub fn run() {
             commands::plugins::take_sandbox_crashes,
             commands::plugins::set_plugin_sandboxed,
             commands::audio::align_track_to,
+            commands::audio::audio_clip_to_midi,
             commands::reference::get_reference,
             commands::reference::load_reference,
             commands::reference::set_reference_playing,

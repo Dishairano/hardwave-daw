@@ -258,7 +258,19 @@ counted, so the run says "12 of 16 applied" rather than stopping half
 way. A script cannot reach the disk or the network, and one that
 loops forever is stopped rather than left running.
 
-## 17. Mixing against a record
+## 17. A hummed line into notes
+
+Right-click an audio clip and choose "Turn into notes". The pitch is
+followed and written as a MIDI clip on a new track under the audio,
+at the same place on the timeline, so the two line up and you can
+hear them against each other.
+
+One voice at a time. A chord is several pitches at once and this
+follows the loudest, so it is for a sung line, a bassline or a lead,
+not a mixdown. A clip with no pitch in it says so rather than
+inventing notes.
+
+## 18. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -269,7 +281,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 18. Exporting
+## 19. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -278,7 +290,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 19. When something goes wrong
+## 20. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

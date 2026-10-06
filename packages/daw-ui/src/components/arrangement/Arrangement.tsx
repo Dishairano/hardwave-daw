@@ -2127,6 +2127,25 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             await toggleClipReverse(contextMenu.trackId, contextMenu.clipId)
             setContextMenu(null)
           }} />
+          {/* A hummed line is the fastest way to get an idea down and the
+              slowest to retype. */}
+          <MenuItem label="Turn into notes (audio to MIDI)" onClick={async () => {
+            const { trackId, clipId } = contextMenu
+            setContextMenu(null)
+            try {
+              const result = await invoke<{
+                trackId: string; clipId: string; noteCount: number; lowest: number; highest: number
+              }>('audio_clip_to_midi', { trackId, clipId })
+              await useTrackStore.getState().fetchTracks()
+              useNotificationStore.getState().push('info',
+                `${result.noteCount} ${result.noteCount === 1 ? 'note' : 'notes'} written`, {
+                  detail: `${noteName(result.lowest)} to ${noteName(result.highest)}, on a new track under this one. `
+                    + 'One voice at a time: a chord comes out as whichever note is loudest.',
+                })
+            } catch (e) {
+              useNotificationStore.getState().push('warning', 'Could not follow that', { detail: String(e) })
+            }
+          }} />
           {/* Warping: the engine has always been able to pin a clip's beats
               to the grid and nothing could ask it to. */}
           <MenuItem label="Warp beats to the grid" onClick={async () => {
@@ -2528,4 +2547,10 @@ function spectralColor(b: number): string {
     bl = lerp(120, 245, k)
   }
   return `rgb(${r | 0},${g | 0},${bl | 0})`
+}
+
+/** A MIDI number as a name, so a message can say "C3" rather than 48. */
+function noteName(pitch: number): string {
+  const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+  return `${names[pitch % 12]}${Math.floor(pitch / 12) - 1}`
 }

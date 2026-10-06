@@ -1370,3 +1370,153 @@ pub fn align_track_to(
         polarity_flipped: found.polarity_flip,
     })
 }
+
+/// What a transcription found.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptionResult {
+    pub track_id: String,
+    pub clip_id: String,
+    pub note_count: usize,
+    /// The lowest and highest note heard, as MIDI numbers, so the UI
+    /// can say "C3 to A4" rather than only a count.
+    pub lowest: u8,
+    pub highest: u8,
+}
+
+/// Turn a sung or played line into notes.
+///
+/// A hummed melody is the fastest way to get an idea down and the
+/// slowest to retype. This follows the pitch of an audio clip and
+/// writes a MIDI clip on a new track underneath it, at the same place
+/// on the timeline, so the two line up and can be compared.
+///
+/// One voice at a time: a chord comes out as whichever note is
+/// loudest, which is honest rather than wrong.
+#[tauri::command]
+pub fn audio_clip_to_midi(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+) -> Result<TranscriptionResult, String> {
+    let (samples, position_ticks, sample_rate, bpm) = {
+        let engine = state.engine.lock();
+        let sample_rate = engine.current_sample_rate() as f64;
+        let bpm = engine
+            .transport
+            .bpm
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let (source_path, source_start, length_ticks, position_ticks) = {
+            let project = engine.project.lock();
+            let track = project
+                .track(&track_id)
+                .ok_or_else(|| format!("Track not found: {track_id}"))?;
+            let clip = track
+                .clips
+                .iter()
+                .find(|c| match &c.content {
+                    hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+                    _ => false,
+                })
+                .ok_or_else(|| "that clip is not an audio clip".to_string())?;
+            let hardwave_project::clip::ClipContent::Audio(ac) = &clip.content else {
+                return Err("that clip is not an audio clip".into());
+            };
+            (
+                ac.source_path.clone(),
+                ac.source_start,
+                clip.length_ticks,
+                clip.position_ticks,
+            )
+        };
+        let buffer = engine
+            .audio_pool
+            .get(&source_path)
+            .ok_or_else(|| "that clip's audio is not loaded".to_string())?;
+        let channel = buffer
+            .channels
+            .first()
+            .ok_or_else(|| "that clip has no audio in it".to_string())?;
+        let from = (source_start as usize).min(channel.len());
+        // However long the clip is on the timeline, in samples.
+        let seconds = length_ticks as f64 / hardwave_midi::PPQ as f64 * 60.0 / bpm;
+        let to = (from + (seconds * sample_rate) as usize).min(channel.len());
+        (channel[from..to].to_vec(), position_ticks, sample_rate, bpm)
+    };
+
+    let settings = hardwave_dsp::audio_to_midi::Settings {
+        sample_rate,
+        ..Default::default()
+    };
+    let heard = hardwave_dsp::audio_to_midi::transcribe(&samples, &settings);
+    if heard.is_empty() {
+        return Err("no pitch to follow in that clip".into());
+    }
+
+    let ticks_of = |samples: u64| -> u64 {
+        (samples as f64 / sample_rate * bpm / 60.0 * hardwave_midi::PPQ as f64) as u64
+    };
+    let notes: Vec<hardwave_midi::MidiNote> = heard
+        .iter()
+        .map(|note| hardwave_midi::MidiNote {
+            start_tick: ticks_of(note.start_sample),
+            duration_ticks: ticks_of(note.length_samples).max(1),
+            pitch: note.pitch,
+            velocity: note.velocity.clamp(0.05, 1.0),
+            channel: 0,
+            muted: false,
+            ..Default::default()
+        })
+        .collect();
+    let lowest = notes.iter().map(|n| n.pitch).min().unwrap_or(0);
+    let highest = notes.iter().map(|n| n.pitch).max().unwrap_or(0);
+    let length_ticks = notes
+        .iter()
+        .map(|n| n.start_tick + n.duration_ticks)
+        .max()
+        .unwrap_or(hardwave_midi::PPQ * 4);
+
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let (new_track_id, new_clip_id) = {
+        let mut project = engine.project.lock();
+        let source_name = project
+            .track(&track_id)
+            .map(|t| t.name.clone())
+            .unwrap_or_else(|| "Audio".into());
+        let new_track_id = project.add_midi_track(format!("{source_name} notes"));
+        let clip_ref_id = uuid::Uuid::new_v4().to_string();
+        let mut midi_clip = hardwave_midi::MidiClip::new(
+            uuid::Uuid::new_v4().to_string(),
+            format!("{source_name} notes"),
+            length_ticks,
+        );
+        midi_clip.notes = notes;
+        let placement = hardwave_project::clip::ClipPlacement {
+            content: hardwave_project::clip::ClipContent::Midi(
+                hardwave_project::clip::MidiClipRef {
+                    id: clip_ref_id.clone(),
+                    clip: midi_clip,
+                },
+            ),
+            track_id: new_track_id.clone(),
+            position_ticks,
+            length_ticks,
+            lane: 0,
+        };
+        if let Some(track) = project.track_mut(&new_track_id) {
+            track.clips.push(placement);
+        }
+        (new_track_id, clip_ref_id)
+    };
+    engine.sync_track_meters();
+    engine.rebuild_graph();
+
+    Ok(TranscriptionResult {
+        track_id: new_track_id,
+        clip_id: new_clip_id,
+        note_count: heard.len(),
+        lowest,
+        highest,
+    })
+}

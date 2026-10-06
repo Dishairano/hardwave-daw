@@ -4,6 +4,7 @@ pub mod aiff_reader;
 pub mod align;
 pub mod audio_file;
 pub mod audio_stream;
+pub mod audio_to_midi;
 pub mod auto_eq;
 pub mod biquad;
 pub mod chord_detect;
