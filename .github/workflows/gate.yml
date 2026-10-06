@@ -76,15 +76,16 @@ jobs:
       - name: Tool versions
         run: node --version && npm --version
 
-      # Ableton Link builds its C library with cmake. Without it the
-      # build fails deep inside a build script, so it is checked here
-      # where the message can say what to install.
-      - name: cmake
+      # Ableton Link needs cmake for its C library and libclang for
+      # bindgen. Without either the build fails deep inside a build
+      # script with a backtrace, so both are checked here where the
+      # message can say which one and what to install.
+      - name: Native build tools
         # Through cmd with the policy bypassed for this one process,
         # the same way every other PowerShell step on this machine
         # runs. The machine's own execution policy stays as it is.
         shell: cmd
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ensure-cmake.ps1
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ensure-build-tools.ps1
 
       # Not dtolnay/rust-toolchain: that action shells out to bash, and on
       # this PC `bash` resolves to WSL, which has no distribution installed.
