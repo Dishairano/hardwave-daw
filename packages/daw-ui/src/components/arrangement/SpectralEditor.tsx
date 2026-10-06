@@ -168,6 +168,15 @@ export function SpectralEditor({
             ref={canvasRef}
             width={860}
             height={320}
+            role="application"
+            tabIndex={0}
+            aria-label="Spectrogram. Drag a box around what should be rubbed out. Press Backspace to clear what is painted."
+            onKeyDown={e => {
+              // A keyboard user cannot drag a box, but can at least
+              // undo one and leave without reaching for the mouse.
+              if (e.key === 'Backspace' || e.key === 'Delete') { setBoxes([]); e.preventDefault() }
+              if (e.key === 'Escape') onClose()
+            }}
             onMouseDown={e => { const p = pointIn(e); setDragging({ x0: p.x, y0: p.y, x1: p.x, y1: p.y }) }}
             onMouseMove={e => {
               if (!dragging) return
@@ -199,7 +208,10 @@ export function SpectralEditor({
               {Math.round(strength * 100)}% — part way is often better than a hole
             </span>
             <div style={{ flex: 1 }} />
-            <span style={{ fontSize: 10, color: error ? hw.red : hw.textFaint }}>
+            <span
+              aria-live="polite"
+              style={{ fontSize: 10, color: error ? hw.red : hw.textFaint }}
+            >
               {error ?? `${boxes.length} painted`}
             </span>
             <button onClick={() => setBoxes([])} style={btn()}>Clear</button>

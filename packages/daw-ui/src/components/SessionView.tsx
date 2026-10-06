@@ -119,7 +119,10 @@ export function SessionView({ onClose }: { onClose: () => void }) {
         </div>
 
         <div style={{ overflow: 'auto', padding: 10 }}>
-          <table style={{ borderCollapse: 'separate', borderSpacing: 4, width: '100%' }}>
+          <table
+            aria-label="Clip launcher: a column per track, a row per scene"
+            style={{ borderCollapse: 'separate', borderSpacing: 4, width: '100%' }}
+          >
             <thead>
               <tr>
                 <th style={{ ...headCell(), textAlign: 'left', width: 120 }}>Scene</th>
@@ -153,6 +156,10 @@ export function SessionView({ onClose }: { onClose: () => void }) {
                               .finally(() => void refresh())
                           }}
                           title={slot ? `${slot.name} — right-click to empty` : 'Empty: click to load a loop'}
+                          aria-label={slot
+                            ? `${slot.name} on ${row.name}, ${playing ? 'playing' : waiting ? 'waiting for the boundary' : 'stopped'}`
+                            : `Empty slot on ${row.name}`}
+                          aria-pressed={playing}
                           style={{
                             width: '100%', minWidth: 110, padding: '8px 10px',
                             fontSize: 11, fontFamily: 'inherit', textAlign: 'left',
