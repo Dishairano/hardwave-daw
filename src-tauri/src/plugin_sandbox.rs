@@ -554,8 +554,10 @@ pub fn run_host_child(plugin_path: &str, plugin_id: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use hardwave_plugin_host::types::{PluginCategory, PluginFormat};
 
+    #[cfg(unix)]
     fn descriptor() -> PluginDescriptor {
         PluginDescriptor {
             id: "test.plugin".into(),
@@ -574,6 +576,7 @@ mod tests {
 
     /// Stand in for the child process, so the test exercises the bridge
     /// without needing a real plug-in to crash.
+    #[cfg(unix)]
     fn fake_child(dir: &Path, body: &str) -> std::path::PathBuf {
         let script = dir.join("fake-child.sh");
         std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -585,6 +588,7 @@ mod tests {
         script
     }
 
+    #[cfg(unix)]
     fn block(plugin: &mut SandboxedPlugin, samples: usize) -> Vec<f32> {
         let input = vec![0.5f32; samples];
         let inputs: [&[f32]; 2] = [&input, &input];
