@@ -188,6 +188,12 @@ pub struct DawEngine {
     worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
     /// The Ableton Link session, when the setting asks for one.
     link: Arc<Mutex<Option<crate::link::LinkSession>>>,
+    /// A commercial track to compare the mix against, and how it is
+    /// being played.
+    #[allow(clippy::type_complexity)]
+    reference: Arc<Mutex<Option<Arc<crate::audio_pool::AudioBuffer>>>>,
+    reference_on: Arc<std::sync::atomic::AtomicBool>,
+    reference_gain_centi_db: Arc<std::sync::atomic::AtomicI64>,
 
     /// Folder the current .hwp lives in, set on save and load.
     ///
@@ -334,6 +340,9 @@ impl DawEngine {
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             worker_pool: Arc::new(Mutex::new(None)),
             link: Arc::new(Mutex::new(None)),
+            reference: Arc::new(Mutex::new(None)),
+            reference_on: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            reference_gain_centi_db: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             project_dir: Arc::new(Mutex::new(None)),
             audio_load_permille: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             audio_xruns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -711,6 +720,9 @@ impl DawEngine {
             Arc::clone(&self.record_pass),
             Arc::clone(&self.record_last_pos),
             Arc::clone(&self.worker_pool),
+            Arc::clone(&self.reference),
+            Arc::clone(&self.reference_on),
+            Arc::clone(&self.reference_gain_centi_db),
         );
 
         self.audio_device.start(callback).map_err(|e| e.to_string())
@@ -1244,6 +1256,42 @@ impl DawEngine {
     /// On, the tempo and the start and stop are shared with everything
     /// else on the network that speaks Link. Off, nothing is sent and
     /// nothing is listened to.
+    /// Put a record beside the mix to compare against.
+    ///
+    /// The buffer is whatever the pool holds for `source_id`, so the
+    /// file is loaded the same way a clip's audio is.
+    pub fn set_reference_source(&self, source_id: Option<&str>) {
+        let buffer = source_id.and_then(|id| self.audio_pool.get(id));
+        *self.reference.lock() = buffer;
+    }
+
+    /// Hear the reference instead of the mix.
+    pub fn set_reference_on(&self, on: bool) {
+        self.reference_on
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How much to lift or drop the reference so it sits at the mix's
+    /// loudness. Comparing at different levels compares the levels.
+    pub fn set_reference_gain_db(&self, db: f64) {
+        self.reference_gain_centi_db.store(
+            (db.clamp(-40.0, 40.0) * 100.0) as i64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Whether a reference is loaded, whether it is playing and at what
+    /// gain.
+    pub fn reference_status(&self) -> (bool, bool, f64) {
+        (
+            self.reference.lock().is_some(),
+            self.reference_on.load(std::sync::atomic::Ordering::Relaxed),
+            self.reference_gain_centi_db
+                .load(std::sync::atomic::Ordering::Relaxed) as f64
+                / 100.0,
+        )
+    }
+
     pub fn set_link_enabled(&self, enabled: bool) {
         let mut slot = self.link.lock();
         if enabled {
@@ -1540,6 +1588,9 @@ impl DawEngine {
             Arc::clone(&self.record_pass),
             Arc::clone(&self.record_last_pos),
             Arc::clone(&self.worker_pool),
+            Arc::clone(&self.reference),
+            Arc::clone(&self.reference_on),
+            Arc::clone(&self.reference_gain_centi_db),
         );
 
         // Populate insert chains from the project metadata so the export
@@ -1686,6 +1737,12 @@ struct EngineCallback {
     /// thread on the audio thread is the kind of thing that makes a
     /// block late.
     worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
+    /// The reference track handles, handed to the master node at every
+    /// rebuild so comparing against a record survives one.
+    #[allow(clippy::type_complexity)]
+    reference: Arc<Mutex<Option<Arc<crate::audio_pool::AudioBuffer>>>>,
+    reference_on: Arc<std::sync::atomic::AtomicBool>,
+    reference_gain_centi_db: Arc<std::sync::atomic::AtomicI64>,
     /// This block's clicks. A fixed-size array rather than a Vec because it
     /// is filled on the audio thread, which must not allocate.
     click_events: [crate::metronome::ClickEvent; crate::metronome::MAX_CLICKS_PER_BLOCK],
@@ -1808,6 +1865,9 @@ impl EngineCallback {
         record_pass: Arc<std::sync::atomic::AtomicU32>,
         record_last_pos: Arc<std::sync::atomic::AtomicU64>,
         worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
+        reference: Arc<Mutex<Option<Arc<crate::audio_pool::AudioBuffer>>>>,
+        reference_on: Arc<std::sync::atomic::AtomicBool>,
+        reference_gain_centi_db: Arc<std::sync::atomic::AtomicI64>,
     ) -> Self {
         let mut cb = Self {
             preview: crate::preview_player::PreviewPlayer::new(preview),
@@ -1816,6 +1876,9 @@ impl EngineCallback {
             record_last_pos,
             send_edges: Vec::with_capacity(64),
             worker_pool,
+            reference,
+            reference_on,
+            reference_gain_centi_db,
             click_events: [crate::metronome::ClickEvent {
                 frame_offset: 0,
                 downbeat: false,
@@ -2652,9 +2715,12 @@ impl EngineCallback {
             .iter()
             .find(|t| matches!(t.kind, hardwave_project::track::TrackKind::Master))
             .map(|t| t.id.clone());
-        let master_node = MasterNode::new(
+        let master_node = MasterNode::new_with_reference(
             Arc::clone(&self.transport.master_volume_db),
             master_track_id.clone(),
+            Arc::clone(&self.reference),
+            Arc::clone(&self.reference_on),
+            Arc::clone(&self.reference_gain_centi_db),
         );
         let master_id = self.graph.add_node(Box::new(master_node));
         self.master_id = Some(master_id);
@@ -3925,6 +3991,9 @@ mod rt_safety_tests {
             // One thread: these tests are about the callback, not about
             // sharing the work.
             Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicI64::new(0)),
         );
         (cb, cmd_tx)
     }
@@ -4085,6 +4154,9 @@ mod wait_for_input_tests {
             // One thread: these tests are about the callback, not about
             // sharing the work.
             Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicI64::new(0)),
         );
         (cb, command_tx)
     }

@@ -62,6 +62,9 @@ pub struct AppState {
     /// The control surface: whether a desk is being listened to, and
     /// which eight tracks its strips are on.
     pub control_surface: crate::control_surface::SharedSurface,
+    /// The reference track's measured loudness and its name, which the
+    /// engine itself has no reason to know.
+    pub reference_meta: Arc<Mutex<(f32, String)>>,
     #[allow(clippy::type_complexity)]
     pub slot_gui_edit_logs:
         Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
@@ -150,6 +153,7 @@ pub fn run() {
         plugin_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
         control_surface: Arc::new(crate::control_surface::ControlSurface::new()),
+        reference_meta: Arc::new(Mutex::new((f32::NEG_INFINITY, String::new()))),
         slot_gui_edit_logs: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_gain_reduction: Arc::new(Mutex::new(std::collections::HashMap::new())),
         midi_mappings: Arc::clone(&midi_mappings),
@@ -268,6 +272,12 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::reference::get_reference,
+            commands::reference::load_reference,
+            commands::reference::set_reference_playing,
+            commands::reference::match_reference_loudness,
+            commands::reference::set_reference_gain,
+            commands::reference::clear_reference,
             commands::engine::get_link_status,
             commands::engine::set_link_enabled,
             commands::engine::get_worker_threads,

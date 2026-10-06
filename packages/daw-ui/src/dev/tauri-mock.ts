@@ -195,6 +195,16 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'get_reference':
+        return { loaded: true, playing: false, gainDb: -2.4, lufs: -8.1, name: 'Rawstyle reference' }
+      case 'load_reference':
+        return { loaded: true, playing: false, gainDb: 0, lufs: -8.1, name: 'Rawstyle reference' }
+      case 'set_reference_playing':
+      case 'set_reference_gain':
+      case 'clear_reference':
+        return null
+      case 'match_reference_loudness':
+        return -2.4
       case 'get_link_status':
         return { enabled: false, peers: 0 }
       case 'set_link_enabled':

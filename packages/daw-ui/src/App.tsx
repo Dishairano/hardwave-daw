@@ -59,6 +59,7 @@ import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappings
 import { MacroPanel } from './components/MacroPanel'
 import { ManualWindow } from './components/ManualWindow'
 import { ModulationPanel } from './components/ModulationPanel'
+import { ReferencePanel } from './components/ReferencePanel'
 import { PresetBrowser } from './components/PresetBrowser'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
@@ -242,6 +243,7 @@ export function App() {
   const [showPresets, setShowPresets] = useState(false)
   const [showManual, setShowManual] = useState(false)
   const [showModulation, setShowModulation] = useState(false)
+  const [showReference, setShowReference] = useState(false)
   // Local rather than in useAppDialogs: nothing else toggles it, and it has
   // one extra piece of state (whether the report follows a crash).
   const [bugReport, setBugReport] = useState<{ open: boolean; afterCrash: boolean }>({
@@ -2113,6 +2115,7 @@ export function App() {
           { label: 'Recall mixer snapshot…', action: () => { void recallMixerSnapshot() } },
           { separator: true, label: '' },
           { label: 'Loudness meter…', action: () => setShowLoudness(true) },
+          { label: 'Reference track…', action: () => setShowReference(true) },
           { label: 'Oscilloscope…', action: () => setShowOscilloscope(true) },
           { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },
           { separator: true, label: '' },
@@ -2335,6 +2338,7 @@ export function App() {
       {showMacros && <MacroPanel onClose={() => setShowMacros(false)} />}
       {showManual && <ManualWindow onClose={() => setShowManual(false)} />}
       {showModulation && <ModulationPanel onClose={() => setShowModulation(false)} />}
+      {showReference && <ReferencePanel onClose={() => setShowReference(false)} />}
       {showPresets && <PresetBrowser onClose={() => setShowPresets(false)} />}
       {showMidiMappings && (
         <MidiMappingsPanel

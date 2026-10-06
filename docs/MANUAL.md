@@ -186,7 +186,18 @@ bend one note of a chord without bending the rest. And a track can take
 a tuning from a Scala file, which the built-in instruments follow; a
 hosted plug-in keeps its own tuning.
 
-## 13. Exporting
+## 13. Mixing against a record
+
+Tools > Reference track loads a commercial track and plays it instead
+of your mix, past the master chain and the master fader, so what you
+hear is the record itself. "Match loudness" puts it at the loudness
+your mix is measuring, because louder always sounds better and
+comparing at two levels compares the levels rather than the mixes.
+
+The reference follows the playhead, so moving in the song moves in the
+record.
+
+## 14. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -195,7 +206,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 14. When something goes wrong
+## 15. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

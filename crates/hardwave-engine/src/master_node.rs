@@ -8,7 +8,8 @@
 
 use crate::graph::{AudioNode, ProcessContext};
 use atomic_float::AtomicF64;
-use std::sync::atomic::Ordering;
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 
 pub struct MasterNode {
@@ -26,11 +27,46 @@ pub struct MasterNode {
     /// any other — without it the master's plug-ins would be dropped every
     /// time the graph rebuilt.
     track_id: Option<String>,
+    /// A commercial track to compare the mix against.
+    ///
+    /// Mixing against a reference means switching between your own mix
+    /// and a record you trust, at the same loudness, so the difference
+    /// you hear is the mix rather than the level. With it on, the
+    /// reference replaces the mix: it does not go through the master
+    /// chain or the master fader, because either would change what is
+    /// being compared.
+    reference: Arc<Mutex<Option<Arc<crate::audio_pool::AudioBuffer>>>>,
+    /// The copy the audio thread is using, so a block never waits on
+    /// the lock above.
+    reference_cached: Option<Arc<crate::audio_pool::AudioBuffer>>,
+    reference_on: Arc<AtomicBool>,
+    /// Gain put on the reference so it sits at the mix's loudness, in
+    /// decibels, as hundredths so it fits an atomic.
+    reference_gain_centi_db: Arc<AtomicI64>,
 }
 
 impl MasterNode {
+    #[allow(clippy::type_complexity)]
+    pub fn new_with_reference(
+        volume_db: Arc<AtomicF64>,
+        track_id: Option<String>,
+        reference: Arc<Mutex<Option<Arc<crate::audio_pool::AudioBuffer>>>>,
+        reference_on: Arc<AtomicBool>,
+        reference_gain_centi_db: Arc<AtomicI64>,
+    ) -> Self {
+        let mut node = Self::new(volume_db, track_id);
+        node.reference = reference;
+        node.reference_on = reference_on;
+        node.reference_gain_centi_db = reference_gain_centi_db;
+        node
+    }
+
     pub fn new(volume_db: Arc<AtomicF64>, track_id: Option<String>) -> Self {
         Self {
+            reference: Arc::new(Mutex::new(None)),
+            reference_cached: None,
+            reference_on: Arc::new(AtomicBool::new(false)),
+            reference_gain_centi_db: Arc::new(AtomicI64::new(0)),
             volume_db,
             chain: crate::insert_chain::InsertChain::new(),
             chain_scratch: crate::insert_chain::Scratch::default(),
@@ -170,6 +206,53 @@ impl AudioNode for MasterNode {
                 .and_then(|ch| ch.get(i))
                 .copied()
                 .unwrap_or(0.0);
+        }
+
+        // 1b. Reference track. When it is on, this is what comes out:
+        //     not the mix, not the master chain, not the master fader,
+        //     because any of those would change what is being compared.
+        if self.reference_on.load(Ordering::Relaxed) {
+            if let Some(buffer) = self.reference.try_lock() {
+                self.reference_cached = buffer.clone();
+            }
+            if let Some(buffer) = self.reference_cached.clone() {
+                let db = self.reference_gain_centi_db.load(Ordering::Relaxed) as f32 / 100.0;
+                let gain = if db <= -100.0 {
+                    0.0
+                } else {
+                    10.0_f32.powf(db / 20.0)
+                };
+                // The reference follows the playhead, so moving in the
+                // song moves in the record too.
+                let start = ctx.position_samples as usize;
+                let (left, right) = outputs.split_at_mut(1);
+                for (frame, (out_l, out_r)) in left[0]
+                    .iter_mut()
+                    .zip(right[0].iter_mut())
+                    .take(buf_size)
+                    .enumerate()
+                {
+                    let index = start + frame;
+                    let (l, r) = if index < buffer.num_frames {
+                        (
+                            buffer.channels.first().map_or(0.0, |c| c[index]),
+                            buffer
+                                .channels
+                                .get(1)
+                                .or_else(|| buffer.channels.first())
+                                .map_or(0.0, |c| c[index]),
+                        )
+                    } else {
+                        // Past the end of the record: silence rather
+                        // than the mix, so it is obvious the reference
+                        // has run out.
+                        (0.0, 0.0)
+                    };
+                    *out_l = l * gain;
+                    *out_r = r * gain;
+                }
+                return;
+            }
         }
 
         // 2. Master insert chain, pre-fader. Split the borrow so the chain can

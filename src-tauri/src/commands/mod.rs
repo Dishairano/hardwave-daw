@@ -21,6 +21,7 @@ pub mod modulation;
 pub mod plugin_presets;
 pub mod plugins;
 pub mod project;
+pub mod reference;
 pub mod sends;
 pub mod sources;
 pub mod timeline_edit;
