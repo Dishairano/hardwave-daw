@@ -16,6 +16,9 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// A stand-in for the site: it says who a token belongs to and
 /// whether that account has Pro, which is all the service asks.
+///
+/// Tokens beginning with `pro-` have a subscription, so one site can
+/// answer for a paying host and a free guest in the same test.
 async fn fake_site(subscribed: bool) -> SocketAddr {
     let app = Router::new()
         .route(
@@ -35,7 +38,16 @@ async fn fake_site(subscribed: bool) -> SocketAddr {
         )
         .route(
             "/api/subscription",
-            get(move || async move { Json(serde_json::json!({ "hasSubscription": subscribed })) }),
+            get(move |headers: axum::http::HeaderMap| async move {
+                let token = headers
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .trim_start_matches("Bearer ");
+                Json(serde_json::json!({
+                    "hasSubscription": subscribed || token.starts_with("pro-"),
+                }))
+            }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -121,7 +133,30 @@ async fn two_people_hear_each_other_and_not_themselves() {
 }
 
 #[tokio::test]
-async fn without_pro_the_door_stays_shut() {
+async fn a_guest_without_pro_can_still_join_a_paid_room() {
+    // Only tokens starting with pro- have a subscription here, so the
+    // host pays and the guest does not.
+    let site = fake_site(false).await;
+    let service = start_service(site).await;
+
+    let (_host, hello) = connect(service, "token=pro-host").await;
+    assert_eq!(hello["type"], "joined", "{hello}");
+    let room = hello["room_id"].as_str().unwrap().to_string();
+    let code = hello["invite_code"].as_str().unwrap().to_string();
+
+    let (_guest, joined) = connect(
+        service,
+        &format!("token=free-guest&room={room}&code={code}"),
+    )
+    .await;
+    assert_eq!(
+        joined["type"], "joined",
+        "one subscription brings a second producer in: {joined}"
+    );
+}
+
+#[tokio::test]
+async fn opening_a_room_without_pro_is_refused() {
     let site = fake_site(false).await;
     let service = start_service(site).await;
 

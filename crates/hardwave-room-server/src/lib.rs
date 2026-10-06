@@ -116,9 +116,20 @@ async fn handle(socket: WebSocket, query: JoinQuery, rooms: Rooms) {
         Out(String),
     }
 
+    let mut return_refused: Option<String> = None;
     let admission = {
         let mut map = rooms.rooms.lock();
         let session = if query.room.is_empty() {
+            // Opening a room is the paid half. A guest joining one
+            // needs an account and nothing else, which is how one
+            // subscription brings a second producer into the DAW.
+            if !who.subscribed {
+                return_refused = Some(
+                    "opening a room to work together is part of Hardwave Pro. \
+                     Joining someone else's room is free."
+                        .to_string(),
+                );
+            }
             let live = LiveRoom::open(
                 who.user_id.clone(),
                 std::time::SystemTime::now()
@@ -136,9 +147,10 @@ async fn handle(socket: WebSocket, query: JoinQuery, rooms: Rooms) {
         };
         drop(map);
 
-        match session {
-            None => Admission::Out("that room is not open any more".into()),
-            Some(session) => {
+        match (return_refused.take(), session) {
+            (Some(reason), _) => Admission::Out(reason),
+            (None, None) => Admission::Out("that room is not open any more".into()),
+            (None, Some(session)) => {
                 let mut guard = session.lock();
                 // Opening a room needs no code of its own: the host
                 // already has it, and is about to read it out to the
@@ -152,15 +164,17 @@ async fn handle(socket: WebSocket, query: JoinQuery, rooms: Rooms) {
                     who.user_id.clone(),
                     who.display_name.clone(),
                     &code,
-                    who.subscribed,
+                    // Signed in is enough to join; the host pays.
+                    true,
                 ) {
                     Err(refusal) => Admission::Out(
                         match refusal {
                             JoinRefusal::Full => "there are already two people in that room",
                             JoinRefusal::WrongCode => "that invite code does not match",
                             JoinRefusal::NotSubscribed => {
-                                "working together on a song is part of Hardwave Pro"
+                                "opening a room to work together is part of Hardwave Pro"
                             }
+                            JoinRefusal::NotSignedIn => "sign in to join a room",
                         }
                         .to_string(),
                     ),

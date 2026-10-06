@@ -28,9 +28,13 @@ pub enum JoinRefusal {
     Full,
     /// The invite code does not match this room.
     WrongCode,
-    /// Working together is a Pro feature, and this is where that is
-    /// checked: the one place a client cannot edit around.
+    /// Opening a room is a Pro feature, and this is where that is
+    /// checked: the one place a client cannot edit around. Joining
+    /// one is not: a guest needs an account, not a subscription.
     NotSubscribed,
+    /// A guest with no account at all. Joining is free, but not
+    /// anonymous: the other person should see who is in their song.
+    NotSignedIn,
 }
 
 /// What the service should do after handing the room a message.
@@ -71,6 +75,8 @@ pub struct LiveRoom {
 }
 
 impl LiveRoom {
+    /// Open a room. The caller has already checked that this account
+    /// has Pro: hosting is the paid half of working together.
     pub fn open(host_user_id: impl Into<String>, created_at_unix: i64) -> Self {
         let host_user_id = host_user_id.into();
         let mut room = Room::new(host_user_id.clone(), created_at_unix);
@@ -94,21 +100,26 @@ impl LiveRoom {
 
     /// Let someone in, or say why not.
     ///
-    /// `subscribed` is the server's answer about this account, not the
-    /// client's. Working together is the paid feature, so this is the
-    /// gate that matters.
+    /// The person who opens the room pays; the person they invite
+    /// does not. One Pro subscription brings a second producer into
+    /// the DAW, which is the point of the whole thing: the guest sees
+    /// what Pro is for from the inside, and can only host once they
+    /// have their own.
+    ///
+    /// `subscribed` is the server's answer about this account, never
+    /// the client's.
     pub fn join(
         &mut self,
         user_id: impl Into<String>,
         display_name: impl Into<String>,
         code: &str,
-        subscribed: bool,
+        signed_in: bool,
     ) -> Result<(), JoinRefusal> {
         if code != self.invite_code {
             return Err(JoinRefusal::WrongCode);
         }
-        if !subscribed {
-            return Err(JoinRefusal::NotSubscribed);
+        if !signed_in {
+            return Err(JoinRefusal::NotSignedIn);
         }
         let user_id = user_id.into();
         // Coming back after a drop is not a new person.
@@ -256,12 +267,22 @@ mod tests {
     }
 
     #[test]
-    fn working_together_is_checked_here_and_not_on_the_client() {
+    fn a_guest_needs_an_account_but_not_a_subscription() {
+        let mut live = room();
+        let code = live.invite_code.clone();
+        // Signed in, no Pro: in. The host is paying for this room.
+        assert_eq!(live.join("guest-1", "Guest", &code, true), Ok(()));
+        assert_eq!(live.room.members.len(), 2);
+    }
+
+    #[test]
+    fn nobody_joins_anonymously() {
         let mut live = room();
         let code = live.invite_code.clone();
         assert_eq!(
-            live.join("guest-1", "Guest", &code, false),
-            Err(JoinRefusal::NotSubscribed)
+            live.join("", "", &code, false),
+            Err(JoinRefusal::NotSignedIn),
+            "the other person should see who is in their song"
         );
     }
 
