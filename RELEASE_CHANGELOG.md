@@ -1,5 +1,7 @@
 ### Improvements
 - The audio work can be shared across cores. A song where one track costs more than a block's budget could not play however many cores the machine had, because the graph ran on the audio thread alone. Tracks that do not feed each other run at the same time now. Settings > Audio picks how many threads; it starts at one until you have tried it on your machine, and the render is the same either way.
 - Ableton Link. Settings > MIDI joins a session and says how many other apps are in it; the tempo and the start and stop are shared both ways with everything on the network that speaks Link.
+- Plug-ins are told where the song is. The stutter follows it: a Sync setting picks a note value, the slice follows the tempo, and a group starts where the bar does instead of drifting past it.
+- Mix against a record. Tools > Reference track loads a commercial track, measures its loudness, and plays it instead of your mix past the master chain and the master fader. Match loudness puts it where your mix sits, because comparing at two levels compares the levels.
 - internal: nodes are grouped into levels so two nodes that run together can never have an edge between them, and a pool of threads stays alive between blocks; the engine test renders the same song on one core and on four and compares every sample.
-- internal: builds on the Windows gate machine run between 03:00 and 08:00 only, guarded in release.sh and in the workflow.
+- internal: builds on the Windows gate machine start between 03:00 and 07:30 only, guarded in release.sh and in the workflow.
