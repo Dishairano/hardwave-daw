@@ -627,6 +627,17 @@ pub fn set_track_volume(state: State<AppState>, track_id: String, volume_db: f64
         }
     }
     engine.rebuild_graph();
+    drop(engine);
+    state
+        .collab
+        .send(hardwave_project::multiplayer::SyncKind::Mixer(
+            hardwave_project::multiplayer::MixerSync {
+                track_id,
+                volume_db: Some(volume_db as f32),
+                pan: None,
+                muted: None,
+            },
+        ));
 }
 
 #[tauri::command]
@@ -644,6 +655,17 @@ pub fn set_track_pan(state: State<AppState>, track_id: String, pan: f64) {
         }
     }
     engine.rebuild_graph();
+    drop(engine);
+    state
+        .collab
+        .send(hardwave_project::multiplayer::SyncKind::Mixer(
+            hardwave_project::multiplayer::MixerSync {
+                track_id,
+                volume_db: None,
+                pan: Some(pan as f32),
+                muted: None,
+            },
+        ));
 }
 
 #[tauri::command]

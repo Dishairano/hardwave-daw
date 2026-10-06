@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
+mod collab;
 mod commands;
 mod control_surface;
 mod diagnostics;
@@ -76,6 +77,9 @@ pub struct AppState {
     pub sandbox_health: Arc<Mutex<std::collections::HashMap<(String, String), Option<String>>>>,
     /// Whether the OSC listener is running. Its thread watches this, so
     /// switching OSC off stops it without waiting for a packet.
+    /// Working on a song with someone else: the room, and what has
+    /// crossed it.
+    pub collab: Arc<crate::collab::Collab>,
     pub osc_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub osc_port: Arc<Mutex<u16>>,
     #[allow(clippy::type_complexity)]
@@ -196,6 +200,7 @@ pub fn run() {
             prefs.sandboxed_plugins.iter().cloned().collect(),
         )),
         sandbox_health: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        collab: Arc::new(crate::collab::Collab::default()),
         osc_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         osc_port: Arc::new(Mutex::new(if prefs.osc_port == 0 {
             osc_control::DEFAULT_PORT
@@ -323,6 +328,9 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::collab::start_collab,
+            commands::collab::stop_collab,
+            commands::collab::collab_status,
             commands::flp::import_flp,
             commands::transport::get_video,
             commands::transport::set_video,

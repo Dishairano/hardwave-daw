@@ -358,7 +358,21 @@ costs one buffer of latency, reported so delay compensation lines the
 track up, and such a plug-in uses the generic parameter sheet rather
 than its own window. A crash in it takes the helper, not the song.
 
-## 24. Mixing against a record
+## 24. Working on a song together
+
+Tools > Work together opens a room and gives you a code. Read it out
+to the other person; they type it in and you are both in the same
+song. What crosses the network is the edits, not the audio, so you
+each hear your own machine at full quality and a bad connection
+costs a late edit rather than a dropout. The playhead is shared, so
+"listen to this bit" means the same bar on both screens.
+
+Opening a room is part of Hardwave Pro. Joining one is free: you
+need an account so the other person can see who is in their song,
+and nothing more. Both of you need the plug-ins the song uses; ours
+are free inside this DAW, so that part takes care of itself.
+
+## 25. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -369,7 +383,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 25. Exporting
+## 26. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -378,7 +392,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 26. When something goes wrong
+## 27. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

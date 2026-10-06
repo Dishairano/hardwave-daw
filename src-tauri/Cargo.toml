@@ -46,7 +46,7 @@ semver = "1"
 regex = { version = "1", default-features = false, features = ["std"] }
 zip = { version = "4", default-features = false, features = ["deflate"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util"] }
-futures-util = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 url = "2"
 
 hound.workspace = true
@@ -58,6 +58,7 @@ chrono.workspace = true
 vorbis_rs.workspace = true
 trash = "5"
 rhai = { version = "1.26.1", default-features = false, features = ["std", "sync"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 # Real process memory for the toolbar's MEM meter. The meter used to read the
 # WebView's JS heap, which says nothing about the sample pool, the audio graph

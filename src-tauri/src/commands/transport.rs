@@ -38,6 +38,11 @@ pub fn play(state: State<AppState>) {
         engine.transport.playing.store(true, Ordering::Relaxed);
     }
     engine.send_command(TransportCommand::Play);
+    state
+        .collab
+        .send(hardwave_project::multiplayer::SyncKind::Transport(
+            hardwave_project::multiplayer::TransportSync::Play,
+        ));
 }
 
 /// Toggle FL-style "wait for input" — with it on, Play/Record park the
@@ -278,6 +283,20 @@ pub fn set_position(state: State<AppState>, position: u64) {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
     engine.transport.set_position(position);
+    // The other person's playhead goes where yours does, so "listen
+    // to this bit" means the same bar on both screens.
+    {
+        let bpm = engine.transport.bpm.load(Ordering::Relaxed);
+        let sample_rate = engine.current_sample_rate() as f64;
+        let beats = position as f64 / sample_rate * bpm / 60.0;
+        state
+            .collab
+            .send(hardwave_project::multiplayer::SyncKind::Transport(
+                hardwave_project::multiplayer::TransportSync::Seek {
+                    tick: (beats * hardwave_midi::PPQ as f64) as u64,
+                },
+            ));
+    }
     // Also queue for the audio thread so double-stop logic stays consistent.
     engine.send_command(TransportCommand::SetPosition(position));
 

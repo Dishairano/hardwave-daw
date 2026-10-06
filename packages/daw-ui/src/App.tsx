@@ -63,6 +63,7 @@ import { ReferencePanel } from './components/ReferencePanel'
 import { ScriptsPanel } from './components/ScriptsPanel'
 import { SessionView } from './components/SessionView'
 import { VideoWindow } from './components/VideoWindow'
+import { CollabPanel } from './components/CollabPanel'
 import { PresetBrowser } from './components/PresetBrowser'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
@@ -250,6 +251,7 @@ export function App() {
   const [showScripts, setShowScripts] = useState(false)
   const [showSession, setShowSession] = useState(false)
   const [showVideo, setShowVideo] = useState(false)
+  const [showCollab, setShowCollab] = useState(false)
   // Local rather than in useAppDialogs: nothing else toggles it, and it has
   // one extra piece of state (whether the report follows a crash).
   const [bugReport, setBugReport] = useState<{ open: boolean; afterCrash: boolean }>({
@@ -2150,6 +2152,7 @@ export function App() {
           { label: 'Scripts…', action: () => setShowScripts(true) },
           { label: 'Clip launcher…', action: () => setShowSession(true) },
           { label: 'Video…', action: () => setShowVideo(true) },
+          { label: 'Work together…', action: () => setShowCollab(true) },
           { label: 'Oscilloscope…', action: () => setShowOscilloscope(true) },
           { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },
           { separator: true, label: '' },
@@ -2376,6 +2379,7 @@ export function App() {
       {showScripts && <ScriptsPanel onClose={() => setShowScripts(false)} />}
       {showSession && <SessionView onClose={() => setShowSession(false)} />}
       {showVideo && <VideoWindow onClose={() => setShowVideo(false)} />}
+      {showCollab && <CollabPanel onClose={() => setShowCollab(false)} />}
       {showPresets && <PresetBrowser onClose={() => setShowPresets(false)} />}
       {showMidiMappings && (
         <MidiMappingsPanel
