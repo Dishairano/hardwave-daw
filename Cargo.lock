@@ -2053,6 +2053,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hardwave-room"
+version = "0.259.0"
+dependencies = [
+ "hardwave-project",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

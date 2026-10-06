@@ -1,0 +1,411 @@
+//! The rules of a room: who may join, what gets passed on, and what a
+//! reconnecting peer has missed.
+//!
+//! Deliberately away from the socket. A room is a small state machine
+//! and the awkward cases, a second person arriving, a guest editing
+//! when the host said they may not, someone coming back after their
+//! wifi dropped, are cheaper to settle in tests than over a network.
+//!
+//! Nothing here opens a connection or reads a clock. The service
+//! around it does that and calls in.
+
+use hardwave_project::multiplayer::{Permission, Room, RoomMember, SyncKind, SyncMessage};
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+
+/// How many messages a room keeps so a peer that drops can catch up.
+///
+/// A few minutes of hard editing. Past that, catching up message by
+/// message is slower than being sent the project again, which is what
+/// the service does instead.
+pub const REPLAY_DEPTH: usize = 512;
+
+/// Why someone was not let in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JoinRefusal {
+    /// Two people is the room. A third is told so rather than being
+    /// dropped into a session that was not built for them.
+    Full,
+    /// The invite code does not match this room.
+    WrongCode,
+    /// Working together is a Pro feature, and this is where that is
+    /// checked: the one place a client cannot edit around.
+    NotSubscribed,
+}
+
+/// What the service should do after handing the room a message.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Relay {
+    /// Send it on to the other person.
+    pub forward: bool,
+    /// Why it was not forwarded, for the log and for the sender.
+    pub refused: Option<&'static str>,
+}
+
+impl Relay {
+    fn pass() -> Self {
+        Self {
+            forward: true,
+            refused: None,
+        }
+    }
+    fn stop(why: &'static str) -> Self {
+        Self {
+            forward: false,
+            refused: Some(why),
+        }
+    }
+}
+
+/// A live room: the members, the invite code, and what has been said
+/// recently.
+#[derive(Debug, Clone)]
+pub struct LiveRoom {
+    pub room: Room,
+    pub invite_code: String,
+    /// The last messages, oldest first, for a peer catching up.
+    history: VecDeque<SyncMessage>,
+    /// The highest logical clock the room has seen, so a reconnecting
+    /// peer can say where it got to.
+    pub highest_clock: u64,
+}
+
+impl LiveRoom {
+    pub fn open(host_user_id: impl Into<String>, created_at_unix: i64) -> Self {
+        let host_user_id = host_user_id.into();
+        let mut room = Room::new(host_user_id.clone(), created_at_unix);
+        // Room::new records who the host is but puts nobody in the
+        // room. The host is in their own room.
+        room.add_member(RoomMember {
+            user_id: host_user_id,
+            display_name: String::new(),
+            avatar_hint: String::new(),
+            permission: Permission::Host,
+            presence: hardwave_project::multiplayer::Presence::default(),
+        });
+        let invite_code = room.invite_code.clone();
+        Self {
+            room,
+            invite_code,
+            history: VecDeque::with_capacity(REPLAY_DEPTH),
+            highest_clock: 0,
+        }
+    }
+
+    /// Let someone in, or say why not.
+    ///
+    /// `subscribed` is the server's answer about this account, not the
+    /// client's. Working together is the paid feature, so this is the
+    /// gate that matters.
+    pub fn join(
+        &mut self,
+        user_id: impl Into<String>,
+        display_name: impl Into<String>,
+        code: &str,
+        subscribed: bool,
+    ) -> Result<(), JoinRefusal> {
+        if code != self.invite_code {
+            return Err(JoinRefusal::WrongCode);
+        }
+        if !subscribed {
+            return Err(JoinRefusal::NotSubscribed);
+        }
+        let user_id = user_id.into();
+        // Coming back after a drop is not a new person.
+        if self.room.member(&user_id).is_some() {
+            return Ok(());
+        }
+        if self.room.members.len() >= 2 {
+            return Err(JoinRefusal::Full);
+        }
+        self.room.add_member(RoomMember {
+            user_id,
+            display_name: display_name.into(),
+            avatar_hint: String::new(),
+            // A guest can edit. Watching only is a choice the host
+            // makes afterwards, not the default: two people in a room
+            // are there to work.
+            permission: Permission::Editor,
+            presence: hardwave_project::multiplayer::Presence::default(),
+        });
+        Ok(())
+    }
+
+    pub fn leave(&mut self, user_id: &str) -> bool {
+        self.room.remove_member(user_id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.room.members.is_empty()
+    }
+
+    /// Decide what happens to a message, and remember it.
+    pub fn handle(&mut self, message: &SyncMessage) -> Relay {
+        let Some(member) = self.room.member(&message.sender_user_id) else {
+            return Relay::stop("you are not in this room");
+        };
+        let permission = member.permission;
+        let is_host = self
+            .room
+            .host()
+            .map(|host| host.user_id == message.sender_user_id)
+            .unwrap_or(false);
+
+        let relay = match &message.kind {
+            // A heartbeat is between the peer and the service.
+            SyncKind::Heartbeat => Relay::stop("heartbeat"),
+            // Only the host may change who can do what, or remove
+            // someone. A guest asking is refused rather than ignored,
+            // so the client can say why nothing happened.
+            SyncKind::PermissionChange { .. } | SyncKind::Kick { .. } => {
+                if is_host {
+                    Relay::pass()
+                } else {
+                    Relay::stop("only the host can do that")
+                }
+            }
+            // Watching is watching: presence and chat always pass.
+            SyncKind::PresenceUpdate(_) | SyncKind::Chat { .. } => Relay::pass(),
+            // Everything that changes the song needs edit rights.
+            _ => {
+                if permission.can_edit() {
+                    Relay::pass()
+                } else {
+                    Relay::stop("you are listening, not editing")
+                }
+            }
+        };
+
+        if relay.forward {
+            self.remember(message.clone());
+        }
+        relay
+    }
+
+    fn remember(&mut self, message: SyncMessage) {
+        self.highest_clock = self.highest_clock.max(message.logical_clock);
+        if self.history.len() == REPLAY_DEPTH {
+            self.history.pop_front();
+        }
+        self.history.push_back(message);
+    }
+
+    /// What a peer has missed since the clock it last saw.
+    ///
+    /// `None` means it fell too far behind for the history to help and
+    /// should be sent the project instead, which is honest: replaying
+    /// five hundred edits is slower than starting again.
+    pub fn catch_up(&self, since_clock: u64) -> Option<Vec<SyncMessage>> {
+        let oldest = self.history.front().map(|m| m.logical_clock).unwrap_or(0);
+        if since_clock + 1 < oldest {
+            return None;
+        }
+        Some(
+            self.history
+                .iter()
+                .filter(|m| m.logical_clock > since_clock)
+                .cloned()
+                .collect(),
+        )
+    }
+
+    pub fn history_len(&self) -> usize {
+        self.history.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hardwave_project::multiplayer::{MixerSync, Presence, TransportSync};
+
+    fn room() -> LiveRoom {
+        LiveRoom::open("host-1", 1_760_000_000)
+    }
+
+    fn edit(from: &str, clock: u64) -> SyncMessage {
+        SyncMessage {
+            sender_user_id: from.into(),
+            logical_clock: clock,
+            kind: SyncKind::Mixer(MixerSync {
+                track_id: "t1".into(),
+                volume_db: Some(-3.0),
+                pan: None,
+                muted: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_host_is_in_the_room_and_a_guest_can_join_with_the_code() {
+        let mut live = room();
+        let code = live.invite_code.clone();
+        assert!(live.room.member("host-1").is_some(), "the host is a member");
+        assert_eq!(live.join("guest-1", "Guest", &code, true), Ok(()));
+        assert_eq!(live.room.members.len(), 2);
+    }
+
+    #[test]
+    fn the_wrong_code_does_not_get_in() {
+        let mut live = room();
+        assert_eq!(
+            live.join("guest-1", "Guest", "NOT-THE-CODE", true),
+            Err(JoinRefusal::WrongCode)
+        );
+        assert_eq!(live.room.members.len(), 1);
+    }
+
+    #[test]
+    fn working_together_is_checked_here_and_not_on_the_client() {
+        let mut live = room();
+        let code = live.invite_code.clone();
+        assert_eq!(
+            live.join("guest-1", "Guest", &code, false),
+            Err(JoinRefusal::NotSubscribed)
+        );
+    }
+
+    #[test]
+    fn a_third_person_is_told_the_room_is_full() {
+        let mut live = room();
+        let code = live.invite_code.clone();
+        live.join("guest-1", "One", &code, true).unwrap();
+        assert_eq!(
+            live.join("guest-2", "Two", &code, true),
+            Err(JoinRefusal::Full)
+        );
+    }
+
+    #[test]
+    fn coming_back_after_a_drop_is_not_a_new_person() {
+        let mut live = room();
+        let code = live.invite_code.clone();
+        live.join("guest-1", "One", &code, true).unwrap();
+        assert_eq!(live.join("guest-1", "One", &code, true), Ok(()));
+        assert_eq!(live.room.members.len(), 2, "still two, not three");
+    }
+
+    #[test]
+    fn an_edit_from_someone_outside_the_room_goes_nowhere() {
+        let mut live = room();
+        let relay = live.handle(&edit("a-stranger", 1));
+        assert!(!relay.forward);
+        assert_eq!(relay.refused, Some("you are not in this room"));
+        assert_eq!(live.history_len(), 0);
+    }
+
+    #[test]
+    fn a_listener_cannot_change_the_song_but_can_still_talk() {
+        let mut live = room();
+        let code = live.invite_code.clone();
+        live.join("guest-1", "One", &code, true).unwrap();
+        live.room.member_mut("guest-1").unwrap().permission = Permission::Viewer;
+
+        let refused = live.handle(&edit("guest-1", 1));
+        assert!(!refused.forward);
+        assert_eq!(refused.refused, Some("you are listening, not editing"));
+
+        let chat = live.handle(&SyncMessage {
+            sender_user_id: "guest-1".into(),
+            logical_clock: 2,
+            kind: SyncKind::Chat {
+                body: "that kick is too long".into(),
+            },
+        });
+        assert!(chat.forward);
+    }
+
+    #[test]
+    fn only_the_host_can_change_permissions_or_remove_someone() {
+        let mut live = room();
+        let code = live.invite_code.clone();
+        live.join("guest-1", "One", &code, true).unwrap();
+
+        let by_guest = live.handle(&SyncMessage {
+            sender_user_id: "guest-1".into(),
+            logical_clock: 1,
+            kind: SyncKind::Kick {
+                target_user_id: "host-1".into(),
+            },
+        });
+        assert!(!by_guest.forward);
+        assert_eq!(by_guest.refused, Some("only the host can do that"));
+
+        let by_host = live.handle(&SyncMessage {
+            sender_user_id: "host-1".into(),
+            logical_clock: 2,
+            kind: SyncKind::Kick {
+                target_user_id: "guest-1".into(),
+            },
+        });
+        assert!(by_host.forward);
+    }
+
+    #[test]
+    fn a_heartbeat_is_not_passed_on() {
+        let mut live = room();
+        let relay = live.handle(&SyncMessage {
+            sender_user_id: "host-1".into(),
+            logical_clock: 1,
+            kind: SyncKind::Heartbeat,
+        });
+        assert!(!relay.forward);
+        assert_eq!(live.history_len(), 0, "and it is not remembered either");
+    }
+
+    #[test]
+    fn catching_up_returns_what_was_missed_and_nothing_else() {
+        let mut live = room();
+        for clock in 1..=5 {
+            live.handle(&edit("host-1", clock));
+        }
+        let missed = live.catch_up(3).expect("the history still reaches back");
+        assert_eq!(missed.len(), 2);
+        assert_eq!(missed[0].logical_clock, 4);
+        assert_eq!(live.highest_clock, 5);
+    }
+
+    #[test]
+    fn falling_too_far_behind_is_said_plainly() {
+        let mut live = room();
+        for clock in 1..=(REPLAY_DEPTH as u64 + 50) {
+            live.handle(&edit("host-1", clock));
+        }
+        assert_eq!(live.history_len(), REPLAY_DEPTH);
+        assert!(
+            live.catch_up(1).is_none(),
+            "replaying everything is slower than sending the project again"
+        );
+        assert!(live.catch_up(REPLAY_DEPTH as u64 + 40).is_some());
+    }
+
+    #[test]
+    fn presence_passes_without_touching_the_song() {
+        let mut live = room();
+        let relay = live.handle(&SyncMessage {
+            sender_user_id: "host-1".into(),
+            logical_clock: 1,
+            kind: SyncKind::PresenceUpdate(Presence::default()),
+        });
+        assert!(relay.forward);
+    }
+
+    #[test]
+    fn the_transport_passes_like_any_other_edit() {
+        let mut live = room();
+        let relay = live.handle(&SyncMessage {
+            sender_user_id: "host-1".into(),
+            logical_clock: 1,
+            kind: SyncKind::Transport(TransportSync::Seek { tick: 960 }),
+        });
+        assert!(relay.forward);
+    }
+
+    #[test]
+    fn an_empty_room_says_so_so_the_service_can_close_it() {
+        let mut live = room();
+        assert!(!live.is_empty());
+        live.leave("host-1");
+        assert!(live.is_empty());
+    }
+}
