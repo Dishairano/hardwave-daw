@@ -186,6 +186,21 @@ async fn a_wrong_code_does_not_get_in() {
 }
 
 #[tokio::test]
+async fn connecting_without_signing_in_is_told_why() {
+    let site = fake_site(true).await;
+    let service = start_service(site).await;
+
+    // No token at all: the answer is a sentence, not a 400 from the
+    // query parser, because this is what an unsigned-in DAW does.
+    let (_socket, refused) = connect(service, "").await;
+    assert_eq!(refused["type"], "refused");
+    assert!(
+        refused["reason"].as_str().unwrap().contains("sign in"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
 async fn a_room_that_was_never_opened_is_said_so() {
     let site = fake_site(true).await;
     let service = start_service(site).await;

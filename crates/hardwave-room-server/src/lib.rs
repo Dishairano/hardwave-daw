@@ -29,6 +29,9 @@ pub mod account;
 #[derive(Debug, Deserialize)]
 struct JoinQuery {
     /// The account token the plug-ins and the DAW already share.
+    /// Optional here so a connection without one is answered with a
+    /// reason rather than a bare 400 from the query parser.
+    #[serde(default)]
     token: String,
     /// The room to open or to join. Empty means "open a new one".
     #[serde(default)]
