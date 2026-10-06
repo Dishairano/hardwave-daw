@@ -80,7 +80,8 @@ jobs:
       # build fails deep inside a build script, so it is checked here
       # where the message can say what to install.
       - name: cmake
-        shell: pwsh
+        # Windows PowerShell, not pwsh: this machine has 5.1 and not 7.
+        shell: powershell
         run: scripts/ensure-cmake.ps1
 
       # Not dtolnay/rust-toolchain: that action shells out to bash, and on
