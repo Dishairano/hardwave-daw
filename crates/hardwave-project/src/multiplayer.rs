@@ -176,6 +176,14 @@ pub enum SyncKind {
     },
     /// Kick member (host-only).
     Kick { target_user_id: String },
+    /// "Send me the song." A guest who joins a room usually does not
+    /// have the project yet, and one edit at a time will never build
+    /// it for them.
+    ProjectRequest,
+    /// The song itself, as the bytes a .hwp file holds. The one
+    /// moment the whole project crosses the network rather than one
+    /// edit at a time.
+    ProjectOffer { name: String, blob: Vec<u8> },
     /// Heartbeat — keep the connection alive without a state edit.
     Heartbeat,
 }

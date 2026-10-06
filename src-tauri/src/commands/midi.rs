@@ -432,6 +432,22 @@ pub fn add_midi_note(
                 };
                 mc.clip.notes.push(note);
                 let idx = mc.clip.notes.len() - 1;
+                // The other person gets the same note where you put
+                // it. Writing the same hit twice is one hit on their
+                // side, so two people on one pattern is safe.
+                state
+                    .collab
+                    .send(hardwave_project::multiplayer::SyncKind::Note(
+                        hardwave_project::multiplayer::NoteSync {
+                            clip_id: clip_id.clone(),
+                            operation: hardwave_project::multiplayer::NoteOp::Insert {
+                                tick: start_tick,
+                                pitch,
+                                velocity: (velocity.unwrap_or(0.8) * 127.0) as u8,
+                                length_ticks: duration_ticks,
+                            },
+                        },
+                    ));
                 return Ok(idx);
             }
         }
@@ -528,7 +544,18 @@ pub fn delete_midi_note(
                 if note_index >= mc.clip.notes.len() {
                     return Err(format!("Note index out of range: {}", note_index));
                 }
-                mc.clip.notes.remove(note_index);
+                let gone = mc.clip.notes.remove(note_index);
+                state
+                    .collab
+                    .send(hardwave_project::multiplayer::SyncKind::Note(
+                        hardwave_project::multiplayer::NoteSync {
+                            clip_id: clip_id.clone(),
+                            operation: hardwave_project::multiplayer::NoteOp::Delete {
+                                tick: gone.start_tick,
+                                pitch: gone.pitch,
+                            },
+                        },
+                    ));
                 return Ok(());
             }
         }

@@ -331,6 +331,7 @@ pub fn run() {
             commands::collab::start_collab,
             commands::collab::stop_collab,
             commands::collab::collab_status,
+            commands::collab::request_project,
             commands::flp::import_flp,
             commands::transport::get_video,
             commands::transport::set_video,

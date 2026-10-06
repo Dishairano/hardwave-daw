@@ -123,12 +123,64 @@ pub async fn start_collab(
     })
 }
 
+/// Answer "send me the song" with the song, and take one when it
+/// arrives.
+///
+/// This is the one moment the whole project crosses the network. The
+/// audio files do not travel with it: a clip whose sample the other
+/// machine does not have reads as missing there, exactly as it does
+/// when a project is copied between machines by hand.
+fn handle_project(
+    engine: &Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
+    collab: &Arc<crate::collab::Collab>,
+    message: &SyncMessage,
+) -> bool {
+    use hardwave_project::multiplayer::SyncKind;
+    match &message.kind {
+        SyncKind::ProjectRequest => {
+            let (name, blob) = {
+                let engine_guard = engine.lock();
+                let project = engine_guard.project.lock();
+                match project.to_bytes() {
+                    Ok(blob) => (project.metadata.name.clone(), blob),
+                    Err(e) => {
+                        log::warn!("could not pack the song to send: {e}");
+                        return true;
+                    }
+                }
+            };
+            collab.send(SyncKind::ProjectOffer { name, blob });
+            true
+        }
+        SyncKind::ProjectOffer { name, blob } => {
+            match hardwave_project::Project::from_bytes(blob) {
+                Ok(incoming) => {
+                    let engine_guard = engine.lock();
+                    engine_guard.snapshot_before_mutation();
+                    *engine_guard.project.lock() = incoming;
+                    engine_guard.sync_track_meters();
+                    engine_guard.rebuild_graph();
+                    log::info!("took the song \"{name}\" from the other side");
+                }
+                Err(e) => log::warn!("could not read the song they sent: {e}"),
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Apply one message and do what it asks of the transport.
 fn apply_one(
     engine: &Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
     collab: &Arc<crate::collab::Collab>,
     message: &SyncMessage,
 ) {
+    // The song itself is not an edit, and it is handled before the
+    // engine lock is taken because packing or unpacking it is slow.
+    if handle_project(engine, collab, message) {
+        return;
+    }
     let engine_guard = engine.lock();
     let transport = {
         let mut project = engine_guard.project.lock();
@@ -163,4 +215,19 @@ pub fn stop_collab(state: State<AppState>) {
 #[tauri::command]
 pub fn collab_status(state: State<AppState>) -> crate::collab::CollabStatus {
     state.collab.status()
+}
+
+/// Ask the other side for the song.
+///
+/// A guest who joins a room usually does not have the project, and
+/// one edit at a time will never build it for them.
+#[tauri::command]
+pub fn request_project(state: State<AppState>) -> Result<(), String> {
+    if !state.collab.status().connected {
+        return Err("you are not in a room".into());
+    }
+    state
+        .collab
+        .send(hardwave_project::multiplayer::SyncKind::ProjectRequest);
+    Ok(())
 }

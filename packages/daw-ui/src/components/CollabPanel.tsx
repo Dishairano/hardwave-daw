@@ -136,9 +136,20 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
                   Room {status?.roomId}. {status?.sent ?? 0} sent, {status?.received ?? 0} received.
                 </div>
               </div>
-              <button onClick={() => void leave()} style={{ ...btn(), alignSelf: 'flex-start' }}>
-                Leave the room
-              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => {
+                    invoke('request_project')
+                      .then(() => useNotificationStore.getState().push('info', 'Asked them for the song', {
+                        detail: 'It replaces what is open here when it arrives. The audio files do not travel with it.',
+                      }))
+                      .catch(e => setError(String(e)))
+                  }}
+                  title="Replaces the song open here with theirs"
+                  style={btn()}
+                >Get the song from them</button>
+                <button onClick={() => void leave()} style={btn()}>Leave the room</button>
+              </div>
             </>
           ) : (
             <>

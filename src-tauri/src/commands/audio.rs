@@ -793,6 +793,17 @@ pub fn move_clip(
     clip.position_ticks = new_position_ticks;
     drop(project);
     engine.rebuild_graph();
+    state
+        .collab
+        .send(hardwave_project::multiplayer::SyncKind::Clip(
+            hardwave_project::multiplayer::ClipSync {
+                track_id: track_id.clone(),
+                operation: hardwave_project::multiplayer::ClipOp::Move {
+                    clip_id: clip_id.clone(),
+                    new_start_tick: new_position_ticks,
+                },
+            },
+        ));
     Ok(())
 }
 

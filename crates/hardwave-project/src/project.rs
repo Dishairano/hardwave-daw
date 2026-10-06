@@ -265,6 +265,34 @@ impl Project {
         write_atomic(path, &compressed)
     }
 
+    /// The same bytes `save` writes, without a file.
+    ///
+    /// Working on a song together means the other person needs the
+    /// song, and sending it is the one moment where the whole project
+    /// crosses the network rather than one edit at a time.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let mut copy = self.clone();
+        copy.version = FORMAT_VERSION;
+        let data = rmp_serde::to_vec_named(&copy)?;
+        Ok(zstd::encode_all(data.as_slice(), 3)?)
+    }
+
+    /// Read what `to_bytes` wrote.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+        let data = zstd::decode_all(bytes)?;
+        let mut project: Project = rmp_serde::from_slice(&data)?;
+        if project.version > FORMAT_VERSION {
+            return Err(format!(
+                "That song was made by a newer version of Hardwave DAW \
+                 (project format {}, this build reads up to {}).",
+                project.version, FORMAT_VERSION
+            )
+            .into());
+        }
+        project.migrate();
+        Ok(project)
+    }
+
     /// Load project from a .hwp file.
     ///
     /// Accepts both shapes: the named-field format written from format 2 on,
@@ -379,6 +407,22 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_song_survives_being_sent_to_the_other_person() {
+        let mut project = Project::default();
+        let track = project.add_midi_track("Kick".into());
+        project.track_mut(&track).unwrap().volume_db = -4.5;
+        project.scenes.push("Drop".into());
+
+        let bytes = project.to_bytes().expect("to bytes");
+        let back = Project::from_bytes(&bytes).expect("and back");
+
+        assert_eq!(back.tracks.len(), project.tracks.len());
+        assert_eq!(back.track(&track).unwrap().volume_db, -4.5);
+        assert!(back.scenes.contains(&"Drop".to_string()));
+        assert_eq!(back.version, FORMAT_VERSION);
+    }
 
     #[test]
     fn timeline_state_round_trips_and_defaults_on_legacy_projects() {

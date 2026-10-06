@@ -177,6 +177,17 @@ impl LiveRoom {
             }
             // Watching is watching: presence and chat always pass.
             SyncKind::PresenceUpdate(_) | SyncKind::Chat { .. } => Relay::pass(),
+            // Asking for the song, and answering with it. A guest who
+            // cannot edit may still ask, because they need the song
+            // to hear anything at all.
+            SyncKind::ProjectRequest => Relay::pass(),
+            // The song itself is not remembered: it is megabytes, and
+            // a peer catching up wants the edits since, not a copy of
+            // a file it already has.
+            SyncKind::ProjectOffer { .. } => Relay {
+                forward: true,
+                refused: None,
+            },
             // Everything that changes the song needs edit rights.
             _ => {
                 if permission.can_edit() {
@@ -187,7 +198,7 @@ impl LiveRoom {
             }
         };
 
-        if relay.forward {
+        if relay.forward && !matches!(message.kind, SyncKind::ProjectOffer { .. }) {
             self.remember(message.clone());
         }
         relay
@@ -360,6 +371,39 @@ mod tests {
             },
         });
         assert!(by_host.forward);
+    }
+
+    #[test]
+    fn the_song_itself_passes_but_is_not_kept_in_the_history() {
+        let mut live = room();
+        let relay = live.handle(&SyncMessage {
+            sender_user_id: "host-1".into(),
+            logical_clock: 1,
+            kind: SyncKind::ProjectOffer {
+                name: "Untitled".into(),
+                blob: vec![0u8; 4096],
+            },
+        });
+        assert!(relay.forward, "the other side needs the song");
+        assert_eq!(
+            live.history_len(),
+            0,
+            "a copy of the file is not what a reconnecting peer wants"
+        );
+    }
+
+    #[test]
+    fn a_listener_may_still_ask_for_the_song() {
+        let mut live = room();
+        let code = live.invite_code.clone();
+        live.join("guest-1", "One", &code, true).unwrap();
+        live.room.member_mut("guest-1").unwrap().permission = Permission::Viewer;
+        let relay = live.handle(&SyncMessage {
+            sender_user_id: "guest-1".into(),
+            logical_clock: 1,
+            kind: SyncKind::ProjectRequest,
+        });
+        assert!(relay.forward, "without the song they hear nothing at all");
     }
 
     #[test]

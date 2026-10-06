@@ -372,6 +372,12 @@ need an account so the other person can see who is in their song,
 and nothing more. Both of you need the plug-ins the song uses; ours
 are free inside this DAW, so that part takes care of itself.
 
+If you do not have the song yet, press "Get the song from them" and
+it is sent over once. That replaces what is open on your side. The
+audio files do not travel with it, so a clip whose sample you do not
+have reads as missing, exactly as it does when a project is copied
+between machines by hand.
+
 ## 25. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
