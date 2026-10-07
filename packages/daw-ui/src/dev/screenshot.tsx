@@ -24,6 +24,7 @@ import { ScriptsPanel } from '../components/ScriptsPanel'
 import { SpectralEditor } from '../components/arrangement/SpectralEditor'
 import { SessionView } from '../components/SessionView'
 import { CollabPanel } from '../components/CollabPanel'
+import { useCollabStore } from '../stores/collabStore'
 import { Arrangement } from '../components/arrangement/Arrangement'
 import { ChannelRack } from '../components/channelrack/ChannelRack'
 import { PianoRoll } from '../components/piano-roll/PianoRoll'
@@ -246,6 +247,22 @@ function Harness() {
           <ScriptsPanel onClose={noop} />
         </div>
       )
+    case 'presence': {
+      // The arrangement as one person sees it while the other works
+      // at bar 5.
+      useCollabStore.setState({
+        connected: true,
+        members: ['Dishaion', 'Alex'],
+        peer: { name: 'Alex', tick: 4 * 4 * 960, trackIndex: 2, panel: 'Arrangement' },
+      })
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Untitled" />
+          <Arrangement onSetHint={noop} />
+        </div>
+      )
+    }
     case 'collab':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>

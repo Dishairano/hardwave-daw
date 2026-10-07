@@ -372,6 +372,11 @@ need an account so the other person can see who is in their song,
 and nothing more. Both of you need the plug-ins the song uses; ours
 are free inside this DAW, so that part takes care of itself.
 
+The panel shows who is in the room, and the arrangement shows where
+the other person is working: a dashed violet line with their name on
+the ruler, wherever they last clicked. The red line is still the
+playhead, and the two are never the same colour on purpose.
+
 If you do not have the song yet, press "Get the song from them" and
 it is sent over once. That replaces what is open on your side. The
 audio files do not travel with it, so a clip whose sample you do not

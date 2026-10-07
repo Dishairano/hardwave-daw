@@ -332,6 +332,7 @@ pub fn run() {
             commands::collab::stop_collab,
             commands::collab::collab_status,
             commands::collab::request_project,
+            commands::collab::share_presence,
             commands::flp::import_flp,
             commands::transport::get_video,
             commands::transport::set_video,

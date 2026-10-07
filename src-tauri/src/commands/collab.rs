@@ -176,10 +176,18 @@ fn apply_one(
     collab: &Arc<crate::collab::Collab>,
     message: &SyncMessage,
 ) {
-    // Who is in the room changes the panel, not the song.
-    if let hardwave_project::multiplayer::SyncKind::MembersChanged { names } = &message.kind {
-        collab.set_members(names.clone());
-        return;
+    // Who is in the room, and where the other person is, change what
+    // is drawn, not the song.
+    match &message.kind {
+        hardwave_project::multiplayer::SyncKind::MembersChanged { names } => {
+            collab.set_members(names.clone());
+            return;
+        }
+        hardwave_project::multiplayer::SyncKind::PresenceUpdate(presence) => {
+            collab.set_peer(presence);
+            return;
+        }
+        _ => {}
     }
     // The song itself is not an edit, and it is handled before the
     // engine lock is taken because packing or unpacking it is slow.
@@ -235,4 +243,27 @@ pub fn request_project(state: State<AppState>) -> Result<(), String> {
         .collab
         .send(hardwave_project::multiplayer::SyncKind::ProjectRequest);
     Ok(())
+}
+
+/// Tell the other person where you are working.
+///
+/// Called by the window when you click in the arrangement or open the
+/// piano roll, at most a few times a second. Nothing is sent when you
+/// are not in a room.
+#[tauri::command]
+pub fn share_presence(state: State<AppState>, tick: u64, track_index: Option<u32>, panel: String) {
+    use hardwave_project::multiplayer::{Panel, Presence, SyncKind};
+    let active_panel = match panel.as_str() {
+        "pianoroll" => Panel::PianoRoll,
+        "mixer" => Panel::Mixer,
+        "channelrack" => Panel::ChannelRack,
+        "browser" => Panel::Browser,
+        _ => Panel::Arrangement,
+    };
+    state.collab.send(SyncKind::PresenceUpdate(Presence {
+        active_panel,
+        cursor_tick: tick,
+        cursor_track_index: track_index,
+        last_heartbeat_ms: 0,
+    }));
 }

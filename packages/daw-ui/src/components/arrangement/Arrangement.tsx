@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { TuneDialog } from './TuneDialog'
+import { useCollabStore } from '../../stores/collabStore'
 import { SpectralEditor } from './SpectralEditor'
 import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo, FadeCurveKind } from '../../stores/trackStore'
@@ -173,6 +174,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [tuneTarget, setTuneTarget] = useState<{ trackId: string; clipId: string } | null>(null)
+  // Where the other person in the room is working, drawn as a line of
+  // its own so it cannot be mistaken for the playhead.
+  const peer = useCollabStore(s => s.peer)
   const [spectralTarget, setSpectralTarget] = useState<{ trackId: string; clipId: string } | null>(null)
   const [markerCtx, setMarkerCtx] = useState<{ x: number; y: number; markerId: string | null; tick: number } | null>(null)
   const [renamingMarker, setRenamingMarker] = useState<{ id: string; draft: string } | null>(null)
@@ -607,6 +611,35 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.fill()
     }
 
+    // The other person in the room: a violet line where they last
+    // clicked, with their name on the ruler, so "look at bar 33" needs
+    // no saying. Violet because red is the playhead and the two must
+    // never be confused.
+    if (peer) {
+      const peerSecs = (peer.tick / PPQ) * (60 / Math.max(1, bpm))
+      const peerX = Math.floor(peerSecs * PIXELS_PER_SECOND - scrollOffset) + 0.5
+      if (peerX >= 0 && peerX <= w) {
+        ctx.strokeStyle = 'rgba(168,85,247,0.85)'
+        ctx.lineWidth = 1
+        ctx.setLineDash([4, 3])
+        ctx.beginPath()
+        ctx.moveTo(peerX, RULER_HEIGHT)
+        ctx.lineTo(peerX, h)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.font = '600 10px Inter, system-ui, sans-serif'
+        const label = peer.name
+        const width = ctx.measureText(label).width + 10
+        // To the left of the line, so the bar number that starts at the
+        // line stays readable; flipped to the right near the left edge.
+        const labelX = peerX - width >= 0 ? peerX - width : peerX
+        ctx.fillStyle = 'rgba(168,85,247,0.95)'
+        ctx.fillRect(labelX, 3, width, RULER_HEIGHT - 6)
+        ctx.fillStyle = '#fff'
+        ctx.fillText(label, labelX + 5, RULER_HEIGHT - 8)
+      }
+    }
+
     // Markers on ruler — colored flag + label. Tempo/time-sig markers render as
     // pill badges rather than flags so they read as metadata, not navigation points.
     for (const m of markers) {
@@ -697,7 +730,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, sections, meterSegments])
+  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, sections, meterSegments, peer])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -984,6 +1017,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const mouseY = e.clientY - rect.top
     const scrollOffset = getScrollOffset()
 
+    // Where you are working, for the other person in the room. Does
+    // nothing when there is no room.
+    {
+      const secs = (mouseX + scrollOffset) / PIXELS_PER_SECOND
+      const tick = secs * (Math.max(1, bpm) / 60) * PPQ
+      const row = mouseY > RULER_HEIGHT && trackHeight > 0
+        ? Math.floor((mouseY - RULER_HEIGHT + verticalScroll) / trackHeight)
+        : null
+      useCollabStore.getState().share(tick, row, 'arrangement')
+    }
+
     // Clicking the ruler strip seeks the transport (and enables scrubbing while held).
     if (mouseY < RULER_HEIGHT) {
       // Ctrl/⌘ + drag in the ruler → define a loop region. Pick this
@@ -1221,7 +1265,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
       // No forceRender — pending state is invisible until promoted.
     }
-  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm, horizontalZoom, setHorizontalZoom, trackRowAt, paintClipAt, onSetHint])
+  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm, horizontalZoom, setHorizontalZoom, trackRowAt, paintClipAt, onSetHint, trackHeight, verticalScroll])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     // Right-mouse-button pan takes priority over any other drag mode.

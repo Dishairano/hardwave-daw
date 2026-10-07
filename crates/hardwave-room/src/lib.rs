@@ -202,7 +202,15 @@ impl LiveRoom {
             }
         };
 
-        if relay.forward && !matches!(message.kind, SyncKind::ProjectOffer { .. }) {
+        // Remembered for a peer catching up: edits, not where someone's
+        // cursor was a minute ago, and not a copy of the whole song.
+        // Presence moves several times a second and would push the real
+        // edits out of the history in no time.
+        let worth_replaying = !matches!(
+            message.kind,
+            SyncKind::ProjectOffer { .. } | SyncKind::PresenceUpdate(_)
+        );
+        if relay.forward && worth_replaying {
             self.remember(message.clone());
         }
         relay
@@ -502,6 +510,11 @@ mod tests {
             kind: SyncKind::PresenceUpdate(Presence::default()),
         });
         assert!(relay.forward);
+        assert_eq!(
+            live.history_len(),
+            0,
+            "where a cursor was is not worth replaying, and it would push real edits out"
+        );
     }
 
     #[test]

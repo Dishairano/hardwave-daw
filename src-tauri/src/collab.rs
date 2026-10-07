@@ -37,6 +37,20 @@ pub struct CollabStatus {
     pub sent: u64,
     /// Who is in the room, host first, as the room last said.
     pub members: Vec<String>,
+    /// Where the other person is working, as they last said.
+    pub peer: Option<PeerCursor>,
+}
+
+/// Where the other person is in the song.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerCursor {
+    pub name: String,
+    pub tick: u64,
+    pub track_index: Option<u32>,
+    /// Which window they have in front of them, so "they are in the
+    /// piano roll" can be said rather than guessed.
+    pub panel: String,
 }
 
 /// The live session, or nothing when this DAW is on its own.
@@ -99,6 +113,7 @@ impl Collab {
         let mut status = self.status.lock();
         status.connected = true;
         status.members = Vec::new();
+        status.peer = None;
         status.room_id = room_id.to_string();
         status.invite_code = invite_code.to_string();
         status.hosting = hosting;
@@ -108,6 +123,25 @@ impl Collab {
     /// The room says who is in it now.
     pub fn set_members(&self, names: Vec<String>) {
         self.status.lock().members = names;
+    }
+
+    /// The other person moved. With two in a room the other person is
+    /// whoever this side is not: the guest if this side opened the
+    /// room, the host otherwise.
+    pub fn set_peer(&self, presence: &hardwave_project::multiplayer::Presence) {
+        let mut status = self.status.lock();
+        let name = if status.hosting {
+            status.members.get(1).cloned()
+        } else {
+            status.members.first().cloned()
+        }
+        .unwrap_or_else(|| "The other person".to_string());
+        status.peer = Some(PeerCursor {
+            name,
+            tick: presence.cursor_tick,
+            track_index: presence.cursor_track_index,
+            panel: format!("{:?}", presence.active_panel),
+        });
     }
 
     pub fn stop(&self, why: &str) {

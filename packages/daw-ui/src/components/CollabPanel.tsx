@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTrackStore } from '../stores/trackStore'
 import { useNotificationStore } from '../stores/notificationStore'
+import { useCollabStore } from '../stores/collabStore'
 
 /**
  * Working on a song with someone else.
@@ -57,6 +58,7 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
     try {
       const joined = await invoke<Joined>('start_collab', {})
       setStatus(s => s && { ...s, connected: true, inviteCode: joined.inviteCode, hosting: true })
+      useCollabStore.getState().start()
       useNotificationStore.getState().push('info', 'Room open', {
         detail: `Read this out: ${joined.inviteCode}`,
       })
@@ -72,6 +74,7 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
     setBusy(true); setError(null)
     try {
       const joined = await invoke<Joined>('start_collab', { room: room.trim(), code: code.trim() })
+      useCollabStore.getState().start()
       await useTrackStore.getState().fetchTracks()
       useNotificationStore.getState().push('info', 'You are in the room', {
         detail: joined.caughtUp
@@ -88,6 +91,7 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
 
   const leave = useCallback(async () => {
     try { await invoke('stop_collab') } catch { /* already gone */ }
+    useCollabStore.getState().stop()
     void refresh()
   }, [refresh])
 
