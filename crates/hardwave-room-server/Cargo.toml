@@ -18,13 +18,13 @@ path = "src/lib.rs"
 [dependencies]
 hardwave-room = { path = "../hardwave-room" }
 hardwave-project = { path = "../hardwave-project" }
+hardwave-account = { path = "../hardwave-account" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
 parking_lot = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

@@ -393,7 +393,21 @@ audio files do not travel with it, so a clip whose sample you do not
 have reads as missing, exactly as it does when a project is copied
 between machines by hand.
 
-## 25. Songs in Workspace
+## 25. Stems (Pro)
+
+Right-click an audio clip and choose Separate stems to split it into
+drums, bass, vocals and the rest. Each part lands on its own track
+under the clip, in the same place and trimmed the same way, and the
+clip is muted, so playback sounds the same until you change
+something. The parts are kept in a folder beside the song.
+
+The clip's audio is separated on our server, one song at a time, so
+it needs Hardwave Pro and an internet connection. The window says
+where you are in the line; a whole song takes a few minutes, and you
+can keep working while it runs. The audio is deleted from the server
+within a day.
+
+## 26. Songs in Workspace
 
 File > Save to Workspace saves the open song, collects the samples it
 uses into a folder beside it, and puts the whole folder in your
@@ -406,7 +420,7 @@ the samples beside it, so it plays as it did on the machine that saved
 it. You sign in once, in any Hardwave plug-in; the DAW uses the same
 sign-in.
 
-## 26. Mixing against a record
+## 27. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -417,7 +431,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 27. Exporting
+## 28. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -426,7 +440,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 28. When something goes wrong
+## 29. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

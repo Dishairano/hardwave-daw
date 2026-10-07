@@ -23,7 +23,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
-pub mod account;
+pub use hardwave_account as account;
 
 /// How the DAW asks to be let in.
 #[derive(Debug, Deserialize)]
@@ -90,7 +90,12 @@ async fn handle(socket: WebSocket, query: JoinQuery, rooms: Rooms) {
 
     // Who is this, and may they? The site answers both; nothing the
     // client sends about itself is believed.
-    let who = match account::identify(&rooms.site, &query.token).await {
+    let checked = if query.token.trim().is_empty() {
+        Err("sign in to work on a song together".to_string())
+    } else {
+        account::identify(&rooms.site, &query.token).await
+    };
+    let who = match checked {
         Ok(who) => who,
         Err(reason) => {
             let _ = sender

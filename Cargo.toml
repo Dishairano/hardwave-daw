@@ -9,6 +9,8 @@ members = [
     "crates/hardwave-project",
     "crates/hardwave-room",
     "crates/hardwave-room-server",
+    "crates/hardwave-account",
+    "crates/hardwave-stems-server",
     "crates/hardwave-metering",
     "crates/hardwave-dsp",
     "crates/hardwave-native-plugins",

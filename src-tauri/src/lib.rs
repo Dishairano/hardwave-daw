@@ -18,6 +18,7 @@ mod plugin_sandbox;
 mod prefs;
 mod process_memory;
 mod scripting;
+mod stems_client;
 mod workspace_cloud;
 
 use hardwave_engine::DawEngine;
@@ -330,6 +331,9 @@ pub fn run() {
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
             commands::starter::create_starter_song,
+            commands::stems::separate_stems,
+            commands::stems::stop_stems,
+            commands::stems::stems_service,
             commands::load_test::run_load_test,
             commands::load_test::open_load_test_song,
             commands::cloud::save_to_workspace,

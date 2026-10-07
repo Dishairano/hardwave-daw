@@ -1,0 +1,13 @@
+[package]
+name = "hardwave-account"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Who a token belongs to and whether they have Pro, asked of the site.
+# Shared by the services the DAW talks to, so every one of them checks
+# an account the same way.
+
+[dependencies]
+serde = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

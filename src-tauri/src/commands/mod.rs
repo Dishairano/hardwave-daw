@@ -31,6 +31,7 @@ pub mod sends;
 pub mod session;
 pub mod sources;
 pub mod starter;
+pub mod stems;
 pub mod timeline_edit;
 pub mod tracks;
 pub mod transport;

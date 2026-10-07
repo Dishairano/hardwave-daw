@@ -7,7 +7,7 @@ use tauri::State;
 /// twice. Returns an empty string when the file cannot be read: the hash is
 /// there to help find a file that moved later, and failing to compute it must
 /// never block the import itself.
-fn hash_source_file(path: &Path) -> String {
+pub(crate) fn hash_source_file(path: &Path) -> String {
     use sha2::{Digest, Sha256};
     let Ok(mut file) = std::fs::File::open(path) else {
         return String::new();

@@ -1,0 +1,44 @@
+# Stem separation: the queue and the separator it runs.
+#
+# It shares HQ with the plug-in windows, so it is the one that gives
+# way. It runs at the lowest CPU and disk priority and may use at most
+# 1.5 GB of memory, so a separation slows down when the machine is
+# busy rather than the windows doing so, and a song that would need
+# more memory fails on its own instead of pushing anything else out.
+# The separator goes through a song in half-minute chunks, which keeps
+# it near 1.25 GB however long the song is.
+
+[Unit]
+Description=Hardwave stem separation (Pro)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hardwave-stems-server
+Environment=HARDWAVE_STEMS_PORT=8789
+Environment=HARDWAVE_SITE=https://hardwavestudios.com
+Environment="STEMS_COMMAND=/opt/hardwave-stems/venv/bin/python /opt/hardwave-stems/separate.py"
+Environment=STEMS_DIR=/var/lib/hardwave-stems
+Environment=STEMS_THREADS=2
+# The model is on disk already; it is never fetched while running.
+Environment=HF_HOME=/opt/hardwave-stems/models
+Environment=HF_HUB_OFFLINE=1
+Environment=RUST_LOG=info
+Restart=always
+RestartSec=3
+DynamicUser=yes
+StateDirectory=hardwave-stems
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+Nice=19
+CPUWeight=10
+IOSchedulingClass=idle
+MemoryHigh=1300M
+MemoryMax=1500M
+
+[Install]
+WantedBy=multi-user.target

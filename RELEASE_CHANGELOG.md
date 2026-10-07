@@ -3,6 +3,7 @@
 - Ableton Link. Settings > MIDI joins a session and says how many other apps are in it; the tempo and the start and stop are shared both ways with everything on the network that speaks Link.
 - Plug-ins are told where the song is. The stutter follows it: a Sync setting picks a note value, the slice follows the tempo, and a group starts where the bar does instead of drifting past it.
 - Mix against a record. Tools > Reference track loads a commercial track, measures its loudness, and plays it instead of your mix past the master chain and the master fader. Match loudness puts it where your mix sits, because comparing at two levels compares the levels.
+- Stems (Pro). Right-click an audio clip and choose Separate stems: drums, bass, vocals and the rest land on four tracks under it, lined up with the clip, which is muted.
 - Performance test. Tools > Performance test measures how many tracks your PC can play at your buffer size, and what switching on multi-core audio would add.
 - Starter songs. File > New project starts a hardstyle, rawstyle, frenchcore or uptempo song with a tuned kick, an offbeat bass and the sections marked, so pressing play makes a sound straight away.
 - Songs in Workspace. File > Save to Workspace puts the open song and the samples it uses in your Workspace, and File > Open from Workspace brings it back on any machine, samples beside it. Saving again only sends what changed.

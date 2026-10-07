@@ -27,6 +27,7 @@ import { CollabPanel } from '../components/CollabPanel'
 import { WorkspaceSongs } from '../components/WorkspaceSongs'
 import { TemplateDialog } from '../components/TemplateDialog'
 import { PerformanceTest } from '../components/PerformanceTest'
+import { StemsDialog } from '../components/arrangement/StemsDialog'
 import { useCollabStore } from '../stores/collabStore'
 import { Arrangement } from '../components/arrangement/Arrangement'
 import { ChannelRack } from '../components/channelrack/ChannelRack'
@@ -266,6 +267,15 @@ function Harness() {
         </div>
       )
     }
+    case 'stems':
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Raw Drop" />
+          <Arrangement onSetHint={noop} />
+          <StemsDialog trackId="t" clipId="c" clipName="Vocal bounce" onClose={noop} />
+        </div>
+      )
     case 'perftest':
       // Press Start the way a person would, so the shot shows a result.
       setTimeout(() => {

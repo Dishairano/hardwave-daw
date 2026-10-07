@@ -1,0 +1,33 @@
+[package]
+name = "hardwave-stems-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The queue behind stem separation. It takes a song from a DAW whose
+# account has Pro, runs the separator on it one song at a time, and
+# hands the four parts back. The separating itself is a separate
+# program (services/stems/separate.py); this is the door and the line.
+
+[[bin]]
+name = "hardwave-stems-server"
+path = "src/main.rs"
+
+[lib]
+name = "hardwave_stems_server"
+path = "src/lib.rs"
+
+[dependencies]
+hardwave-account = { path = "../hardwave-account" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "process", "fs", "io-util"] }
+tokio-util = { version = "0.7", features = ["io"] }
+axum = "0.8"
+parking_lot = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }

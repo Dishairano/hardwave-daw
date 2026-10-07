@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { TuneDialog } from './TuneDialog'
+import { StemsDialog } from './StemsDialog'
 import { useCollabStore } from '../../stores/collabStore'
 import { SpectralEditor } from './SpectralEditor'
 import { listen } from '@tauri-apps/api/event'
@@ -174,6 +175,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [tuneTarget, setTuneTarget] = useState<{ trackId: string; clipId: string } | null>(null)
+  const [stemsTarget, setStemsTarget] = useState<{ trackId: string; clipId: string; name: string } | null>(null)
   // Where the other person in the room is working, drawn as a line of
   // its own so it cannot be mistaken for the playhead.
   const peer = useCollabStore(s => s.peer)
@@ -2187,6 +2189,11 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             setContextMenu(null)
             setTuneTarget({ trackId, clipId })
           }} />
+          <MenuItem label="Separate stems (Pro)…" onClick={() => {
+            const { trackId, clipId } = contextMenu
+            setContextMenu(null)
+            setStemsTarget({ trackId, clipId, name: menuClip?.name ?? 'Clip' })
+          }} />
           {/* A hummed line is the fastest way to get an idea down and the
               slowest to retype. */}
           <MenuItem label="Turn into notes (audio to MIDI)" onClick={async () => {
@@ -2569,6 +2576,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           trackId={tuneTarget.trackId}
           clipId={tuneTarget.clipId}
           onClose={() => setTuneTarget(null)}
+        />
+      )}
+      {stemsTarget && (
+        <StemsDialog
+          trackId={stemsTarget.trackId}
+          clipId={stemsTarget.clipId}
+          clipName={stemsTarget.name}
+          onClose={() => setStemsTarget(null)}
         />
       )}
     </div>

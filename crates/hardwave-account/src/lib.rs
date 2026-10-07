@@ -2,8 +2,11 @@
 //!
 //! The DAW holds the same account token the plug-in windows use. The
 //! site is the only thing that knows whether it is valid and whether
-//! that account has Pro, so the service asks it rather than deciding
-//! for itself. Nothing the client says about itself is believed.
+//! that account has Pro, so a service asks it rather than deciding for
+//! itself. Nothing the client says about itself is believed.
+//!
+//! Every service the DAW talks to checks an account through here: the
+//! room two producers meet in, and the stem separation queue.
 
 use serde::Deserialize;
 
@@ -41,7 +44,7 @@ pub fn site_from_environment() -> String {
 /// Ask the site who this token belongs to and whether they have Pro.
 pub async fn identify(site: &str, token: &str) -> Result<Who, String> {
     if token.trim().is_empty() {
-        return Err("sign in to work on a song together".into());
+        return Err("sign in first".into());
     }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
