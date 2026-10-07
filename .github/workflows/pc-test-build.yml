@@ -1,0 +1,94 @@
+name: PC Test Build
+run-name: PC test build · ${{ github.ref_name }}
+
+# A test installer built on the founder's own PC, when he asks for one.
+#
+# The PC keeps its build folder between runs, so after the first build
+# only what changed is compiled again: a small change is a minute or two
+# instead of twenty on GitHub's machines. The installer lands on the PC
+# itself, in C:\Hardwave Test Builds.
+#
+# Started by hand only (workflow_dispatch), never by a push: the
+# founder's machine builds when he says so. Nothing here uses the
+# updater signing key; a test build is not an update.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pc-test-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: [self-hosted, Windows, hardwave-daw]
+    timeout-minutes: 60
+    # cmd: the PC has no pwsh and refuses unsigned PowerShell scripts, so
+    # PowerShell runs per command with the policy bypassed for that one
+    # process only, the same way the gate does it.
+    defaults:
+      run:
+        shell: cmd
+    env:
+      CARGO_NET_RETRY: 10
+      CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+      # Fast test-build settings: no link-time optimisation, parallel
+      # code generation, and incremental compilation so the next build
+      # reuses this one.
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '256'
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: '2'
+      CARGO_PROFILE_RELEASE_INCREMENTAL: 'true'
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link.exe
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The build folder stays, so the next build is incremental.
+          clean: false
+
+      - name: Native build tools
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ensure-build-tools.ps1
+
+      - name: Put cargo on PATH
+        run: echo %USERPROFILE%\.cargo\bin>>%GITHUB_PATH%
+
+      - name: Toolchain
+        run: rustup show && rustc -V
+
+      # The ASIO SDK, fetched once and kept, and only used when it is the
+      # exact file whose hash is recorded here.
+      - name: ASIO SDK
+        run: >-
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop';
+          $root = Join-Path $env:RUNNER_TOOL_CACHE 'asiosdk-2.3.4';
+          if (-not (Test-Path (Join-Path $root 'ASIOSDK'))) {
+            New-Item -ItemType Directory -Force -Path $root | Out-Null;
+            $zip = Join-Path $env:RUNNER_TEMP 'asiosdk.zip';
+            Invoke-WebRequest -Uri 'https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip' -OutFile $zip -UseBasicParsing;
+            $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash;
+            if ($hash -ne 'D5EBF0C20DD2C5F43771FD0C1418F4B361BF52434EE670097CFA6B3A335E2ECA') { throw ('ASIO SDK is not the expected file: ' + $hash) };
+            Expand-Archive -Path $zip -DestinationPath $root -Force };
+          ('CPAL_ASIO_DIR=' + (Join-Path $root 'ASIOSDK')) | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8"
+
+      - name: Frontend
+        working-directory: packages/daw-ui
+        run: npm ci && npm run build
+
+      - name: Build the installer
+        working-directory: src-tauri
+        run: npx --yes @tauri-apps/cli@2.11.5 build --target x86_64-pc-windows-msvc --features asio --bundles nsis --config tauri.unsigned.conf.json
+
+      - name: Put it where the founder can find it
+        run: >-
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop';
+          $dir = 'C:\Hardwave Test Builds';
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null;
+          $exe = Get-ChildItem -Path '..\target\x86_64-pc-windows-msvc\release\bundle\nsis','target\x86_64-pc-windows-msvc\release\bundle\nsis' -Filter '*_x64-setup.exe' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1;
+          if (-not $exe) { throw 'no installer was built' };
+          $name = 'Hardwave DAW test ' + (Get-Date -Format 'yyyy-MM-dd HHmm') + '.exe';
+          Copy-Item $exe.FullName (Join-Path $dir $name);
+          Copy-Item $exe.FullName (Join-Path $dir 'Hardwave DAW test (latest).exe') -Force;
+          Write-Host ('Ready: ' + (Join-Path $dir $name))"
