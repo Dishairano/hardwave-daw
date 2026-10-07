@@ -117,10 +117,12 @@ jobs:
         # Move this forward deliberately, together with the tauri crate.
         run: npm install -g @tauri-apps/cli@2.11.5
 
+      # Test builds never see the updater signing key: they are not
+      # updates, so they carry no updater signature, and a test lane is
+      # not a place for the key that every installed DAW trusts.
       - name: Build Windows installer (nsis only)
         shell: bash
-        env:
-        run: tauri build --target x86_64-pc-windows-msvc --features asio --bundles nsis
+        run: tauri build --target x86_64-pc-windows-msvc --features asio --bundles nsis --config src-tauri/tauri.unsigned.conf.json
 
       - name: Publish to rolling fast-build prerelease (stable URL)
         shell: bash
