@@ -8,12 +8,17 @@ run-name: PC test build · ${{ github.ref_name }}
 # instead of twenty on GitHub's machines. The installer lands on the PC
 # itself, in C:\Hardwave Test Builds.
 #
-# Started by hand only (workflow_dispatch), never by a push: the
-# founder's machine builds when he says so. Nothing here uses the
-# updater signing key; a test build is not an update.
+# Started only on request, never by an ordinary push: the founder's
+# machine builds when he says so. A pc-test-* tag starts it (a workflow
+# that is not on the default branch cannot be dispatched by hand). Only
+# people with write access can push one. Nothing here uses the updater
+# signing key; a test build is not an update.
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'pc-test-*'
 
 permissions:
   contents: read
