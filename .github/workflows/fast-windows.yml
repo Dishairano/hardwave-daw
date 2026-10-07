@@ -82,6 +82,9 @@ jobs:
           if sccache --start-server 2>/dev/null; then
             echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
             echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            # If GitHub's cache service goes down mid-build, compile
+            # without it instead of failing the build (2026-10-07).
+            echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> $GITHUB_ENV
             echo "sccache available"
           else
             echo "sccache unavailable, building without cache"
