@@ -103,7 +103,7 @@ fn sections() -> Vec<Section> {
         .collect()
 }
 
-fn note(start: u64, length: u64, pitch: u8, velocity: f32) -> hardwave_midi::MidiNote {
+pub(super) fn note(start: u64, length: u64, pitch: u8, velocity: f32) -> hardwave_midi::MidiNote {
     hardwave_midi::MidiNote {
         start_tick: start,
         duration_ticks: length.max(1),
@@ -144,7 +144,7 @@ fn offbeat_bass(bars: u64, pitch: u8) -> Vec<hardwave_midi::MidiNote> {
         .collect()
 }
 
-fn midi_clip(
+pub(super) fn midi_clip(
     track_id: &str,
     name: &str,
     at: u64,

@@ -1489,6 +1489,71 @@ impl DawEngine {
             return Ok(());
         }
 
+        let buffer_size: usize = 1024;
+        let mut callback = self.offline_callback(
+            sample_rate,
+            buffer_size,
+            start_samples,
+            instantiate,
+            prepare,
+        );
+
+        let mut buf = vec![0.0_f32; buffer_size * 2];
+        let mut remaining = total_samples;
+        while remaining > 0 {
+            let frames = remaining.min(buffer_size as u64) as usize;
+            let slice = &mut buf[..frames * 2];
+            slice.fill(0.0);
+            callback.process(slice, frames, 2);
+            if !on_block(slice) {
+                break;
+            }
+            remaining -= frames as u64;
+        }
+
+        Ok(())
+    }
+
+    /// How long each block of the project takes to compute, block by
+    /// block, at a given buffer size.
+    ///
+    /// It runs the same callback playback runs, on the calling thread
+    /// and the engine's worker pool, as fast as it can rather than in
+    /// time with a sound card. A block that takes longer than its own
+    /// length in time is one a sound card would have played late, which
+    /// is what a crackle is. The performance test reads these to find
+    /// how much a machine can play.
+    pub fn measure_block_times(
+        &self,
+        sample_rate: u32,
+        buffer_size: usize,
+        total_samples: u64,
+        instantiate: Option<OfflineInsertFactory<'_>>,
+    ) -> Vec<std::time::Duration> {
+        let buffer_size = buffer_size.max(16);
+        let mut callback = self.offline_callback(sample_rate, buffer_size, 0, instantiate, |_| {});
+        let mut buf = vec![0.0_f32; buffer_size * 2];
+        let blocks = total_samples.div_ceil(buffer_size as u64) as usize;
+        let mut times = Vec::with_capacity(blocks);
+        for _ in 0..blocks {
+            buf.fill(0.0);
+            let started = std::time::Instant::now();
+            callback.process(&mut buf, buffer_size, 2);
+            times.push(started.elapsed());
+        }
+        times
+    }
+
+    /// A private callback over a snapshot of the project, for renders
+    /// that happen beside playback rather than through the sound card.
+    fn offline_callback(
+        &self,
+        sample_rate: u32,
+        buffer_size: usize,
+        start_samples: u64,
+        instantiate: Option<OfflineInsertFactory<'_>>,
+        prepare: impl FnOnce(&mut Project),
+    ) -> EngineCallback {
         // Bake stretch variants before rendering. The offline callback's
         // rebuild only looks them up, so without this an export would fall
         // back to varispeed and not match playback. Safe here — an export
@@ -1540,7 +1605,6 @@ impl DawEngine {
         let track_meters: TrackMeterMap = Arc::new(Mutex::new(HashMap::new()));
         let input_consumer: SharedInputConsumer = Arc::new(Mutex::new(None));
 
-        let buffer_size: usize = 1024;
         // Offline render — use a private, discardable tap so we don't mix
         // offline samples into the live UI visualization stream.
         let offline_tap = master_tap::new_shared();
@@ -1609,21 +1673,7 @@ impl DawEngine {
         if let Some(inst) = instantiate {
             callback.hydrate_offline_inserts(inst);
         }
-
-        let mut buf = vec![0.0_f32; buffer_size * 2];
-        let mut remaining = total_samples;
-        while remaining > 0 {
-            let frames = remaining.min(buffer_size as u64) as usize;
-            let slice = &mut buf[..frames * 2];
-            slice.fill(0.0);
-            callback.process(slice, frames, 2);
-            if !on_block(slice) {
-                break;
-            }
-            remaining -= frames as u64;
-        }
-
-        Ok(())
+        callback
     }
 }
 

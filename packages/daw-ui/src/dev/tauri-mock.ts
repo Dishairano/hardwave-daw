@@ -195,6 +195,22 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'run_load_test': {
+        const step = (tracks: number, p99Ms: number, run: string) => ({
+          tracks, p99Ms, worstMs: p99Ms * 1.3, meanMs: p99Ms * 0.6, budgetMs: 5.33, passed: p99Ms <= 5.33 * 0.7, run,
+        })
+        return {
+          sampleRate: 48000, bufferSize: 256, budgetMs: 5.33, threads: 0, tracks: 44, beyondTest: false,
+          multicore: { threads: 5, tracks: 192, beyondTest: false },
+          steps: [
+            step(8, 0.62, 'now'), step(16, 1.2, 'now'), step(32, 2.5, 'now'), step(64, 5.1, 'now'),
+            step(48, 3.8, 'now'), step(40, 3.2, 'now'), step(44, 3.6, 'now'),
+            step(8, 0.3, 'multicore'), step(16, 0.5, 'multicore'), step(32, 0.9, 'multicore'),
+            step(64, 1.6, 'multicore'), step(128, 2.9, 'multicore'), step(256, 5.6, 'multicore'),
+            step(192, 3.6, 'multicore'), step(224, 4.4, 'multicore'),
+          ],
+        }
+      }
       case 'create_starter_song':
         return { genre: 'Hardstyle', bpm: 150, sections: [
           { name: 'Intro', startTick: 0, bars: 16 }, { name: 'Build', startTick: 61440, bars: 8 },

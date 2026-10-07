@@ -430,6 +430,11 @@ CPU back.
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.
+- **It crackles**: Tools > Performance test measures how many tracks
+  this PC can play at your buffer size, in about a minute, without
+  touching your song. If multi-core audio is off it also measures
+  with it on, and offers to switch it on. A larger buffer gives every
+  block more time, at the cost of a little delay when you play live.
 - **A plug-in window is blank**: the DAW writes a log next to your
   projects. Help > Report a bug attaches it.
 - **A sample is missing**: the DAW offers to relink it, and it can find

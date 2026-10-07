@@ -26,6 +26,7 @@ import { SessionView } from '../components/SessionView'
 import { CollabPanel } from '../components/CollabPanel'
 import { WorkspaceSongs } from '../components/WorkspaceSongs'
 import { TemplateDialog } from '../components/TemplateDialog'
+import { PerformanceTest } from '../components/PerformanceTest'
 import { useCollabStore } from '../stores/collabStore'
 import { Arrangement } from '../components/arrangement/Arrangement'
 import { ChannelRack } from '../components/channelrack/ChannelRack'
@@ -265,6 +266,21 @@ function Harness() {
         </div>
       )
     }
+    case 'perftest':
+      // Press Start the way a person would, so the shot shows a result.
+      setTimeout(() => {
+        const start = [...document.querySelectorAll('button')].find(b => b.textContent === 'Start the test')
+        start?.click()
+        setTimeout(() => document.querySelector('details')?.setAttribute('open', ''), 100)
+      }, 300)
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Raw Drop" />
+          <Arrangement onSetHint={noop} />
+          <PerformanceTest onClose={noop} onOpenTestSong={noop} />
+        </div>
+      )
     case 'newproject':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>

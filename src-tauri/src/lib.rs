@@ -330,6 +330,8 @@ pub fn run() {
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
             commands::starter::create_starter_song,
+            commands::load_test::run_load_test,
+            commands::load_test::open_load_test_song,
             commands::cloud::save_to_workspace,
             commands::cloud::list_workspace_songs,
             commands::cloud::open_from_workspace,

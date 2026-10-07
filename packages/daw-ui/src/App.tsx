@@ -65,6 +65,7 @@ import { SessionView } from './components/SessionView'
 import { VideoWindow } from './components/VideoWindow'
 import { CollabPanel } from './components/CollabPanel'
 import { WorkspaceSongs } from './components/WorkspaceSongs'
+import { PerformanceTest } from './components/PerformanceTest'
 import { PresetBrowser } from './components/PresetBrowser'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
@@ -254,6 +255,7 @@ export function App() {
   const [showVideo, setShowVideo] = useState(false)
   const [showCollab, setShowCollab] = useState(false)
   const [showWorkspaceSongs, setShowWorkspaceSongs] = useState(false)
+  const [showPerformanceTest, setShowPerformanceTest] = useState(false)
   // Local rather than in useAppDialogs: nothing else toggles it, and it has
   // one extra piece of state (whether the report follows a crash).
   const [bugReport, setBugReport] = useState<{ open: boolean; afterCrash: boolean }>({
@@ -2198,6 +2200,7 @@ export function App() {
           { label: 'Clip launcher…', action: () => setShowSession(true) },
           { label: 'Video…', action: () => setShowVideo(true) },
           { label: 'Work together…', action: () => setShowCollab(true) },
+          { label: 'Performance test…', action: () => setShowPerformanceTest(true) },
           { label: 'Oscilloscope…', action: () => setShowOscilloscope(true) },
           { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },
           { separator: true, label: '' },
@@ -2426,6 +2429,19 @@ export function App() {
       {showVideo && <VideoWindow onClose={() => setShowVideo(false)} />}
       {showCollab && <CollabPanel onClose={() => setShowCollab(false)} />}
       {showWorkspaceSongs && <WorkspaceSongs onClose={() => setShowWorkspaceSongs(false)} />}
+      {showPerformanceTest && (
+        <PerformanceTest
+          onClose={() => setShowPerformanceTest(false)}
+          onOpenTestSong={async (tracks) => {
+            if (!(await confirmDiscardIfDirty('Save changes before opening the test song'))) return
+            setShowPerformanceTest(false)
+            await newProject()
+            await invoke('open_load_test_song', { tracks })
+            await fetchTracks()
+            useProjectStore.setState({ projectName: `${tracks} test tracks` })
+          }}
+        />
+      )}
       {showPresets && <PresetBrowser onClose={() => setShowPresets(false)} />}
       {showMidiMappings && (
         <MidiMappingsPanel
