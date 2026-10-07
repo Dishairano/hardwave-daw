@@ -325,7 +325,11 @@ pub fn open_load_test_song(state: State<AppState>, tracks: usize) -> Result<usiz
     }
     for id in ids {
         for plugin_id in TEST_CHAIN {
-            super::plugins::add_plugin_to_track(state.clone(), id.clone(), plugin_id.to_string())?;
+            super::plugins::add_plugin_to_track_quietly(
+                state.clone(),
+                id.clone(),
+                plugin_id.to_string(),
+            )?;
         }
     }
     Ok(tracks)

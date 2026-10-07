@@ -135,18 +135,23 @@ pub(crate) fn instantiate_plugin(
     }
 }
 
+/// Off the main thread: a sync command runs on the window's own thread, so
+/// a scan of a full plug-in folder froze the window until it ended.
 #[tauri::command]
-pub fn scan_plugins(app: AppHandle, state: State<AppState>) -> Vec<PluginDescriptor> {
-    // Hold the ENGINE lock only long enough to clone the scanner Arc.
-    // The old code kept it for the whole directory walk — a 30s scan of
-    // a big plugin folder stalled every engine command (transport,
-    // params) issued meanwhile. The scanner's own mutex still
-    // serializes concurrent scans, which is the intent.
+pub async fn scan_plugins(app: AppHandle) -> Result<Vec<PluginDescriptor>, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_plugins_blocking(app))
+        .await
+        .map_err(|e| format!("plug-in scan stopped: {e}"))
+}
+
+fn scan_plugins_blocking(app: AppHandle) -> Vec<PluginDescriptor> {
+    // Hold the ENGINE lock only long enough to clone the scanner Arc, and
+    // the scanner's own lock only at the start and end of the scan.
     let scanner_arc = {
+        let state = app.state::<AppState>();
         let engine = state.engine.lock();
         std::sync::Arc::clone(&engine.plugin_scanner)
     };
-    let mut scanner = scanner_arc.lock();
     let emitter = app.clone();
     let progress: hardwave_plugin_host::scanner::ScanProgress = Box::new(move |count, label| {
         let _ = emitter.emit(
@@ -154,13 +159,13 @@ pub fn scan_plugins(app: AppHandle, state: State<AppState>) -> Vec<PluginDescrip
             serde_json::json!({ "count": count, "current": label }),
         );
     });
-    let result = scanner.scan_with_progress(Some(progress)).to_vec();
+    let result = hardwave_plugin_host::PluginScanner::scan_shared(&scanner_arc, Some(progress));
     let _ = app.emit(
         "daw:pluginScanComplete",
         serde_json::json!({ "count": result.len() }),
     );
     if let Some(path) = hardwave_plugin_host::PluginScanner::default_cache_path() {
-        if let Err(e) = scanner.save_cache_to_disk(&path) {
+        if let Err(e) = scanner_arc.lock().save_cache_to_disk(&path) {
             log::warn!("Failed to persist plugin cache: {e}");
         }
     }
@@ -234,7 +239,7 @@ pub fn rescan_and_restore_missing_plugins(
         return Ok(Vec::new());
     }
 
-    scan_plugins(app, state.clone());
+    scan_plugins_blocking(app.clone());
 
     // Collect restore plan under the locks, instantiate outside them
     // (same discipline as hydrate_chains_from_project).
@@ -380,94 +385,146 @@ pub fn plugin_cache_path() -> Option<String> {
 /// platform type unsupported), the Tauri window is closed and an
 /// error is returned.
 #[tauri::command]
-pub fn open_plugin_editor(
+pub async fn open_plugin_editor(
     app: AppHandle,
-    state: State<'_, AppState>,
     plugin_id: String,
     window_label: String,
     track_id: Option<String>,
     slot_id: Option<String>,
 ) -> Result<String, String> {
-    let engine = state.engine.lock();
-    let scanner = engine.plugin_scanner.lock();
-    let descriptor = scanner
-        .find(&plugin_id)
-        .ok_or_else(|| format!("Plugin not found: {}", plugin_id))?
-        .clone();
-    drop(scanner);
-    drop(engine);
-
-    // If the caller provided (track_id, slot_id) and we have a
-    // registered chain queue for that slot, build the editor instance
-    // with the chain's `pending_params` Arc so GUI knob movements land
-    // in the same queue the audio chain drains. Otherwise fall back to
-    // an isolated editor instance (knob movements stay GUI-only).
-    let shared_queue = match (track_id.as_deref(), slot_id.as_deref()) {
-        (Some(t), Some(s)) => state
-            .slot_param_queues
-            .lock()
-            .get(&(t.to_string(), s.to_string()))
-            .cloned(),
-        _ => None,
-    };
-
-    // The window needs the plug-in in this process; only one the probe
-    // passed and the person has not sandboxed gets there.
-    may_load_in_process(&descriptor)?;
-    let mut hosted: Box<dyn HostedPlugin> = match descriptor.format {
-        PluginFormat::Vst3 => {
-            let inst = if let Some(queue) = shared_queue {
-                Vst3PluginInstance::load_with_shared_pending(descriptor.clone(), queue)
-            } else {
-                Vst3PluginInstance::load(descriptor.clone())
-            };
-            Box::new(inst.map_err(|e| e.to_string())?)
-        }
-        PluginFormat::Clap => {
-            let inst = if let Some(queue) = shared_queue {
-                ClapPluginInstance::load_with_shared_pending(descriptor.clone(), queue)
-            } else {
-                ClapPluginInstance::load(descriptor.clone())
-            };
-            Box::new(inst.map_err(|e| e.to_string())?)
-        }
-    };
-
-    // If the same window label is already open (user clicked "Open
-    // Plugin GUI" twice on the same slot), focus the existing window
-    // instead of erroring on duplicate label.
+    // A second click on Show GUI brings the open window forward. This was
+    // checked after a whole new plug-in instance had been loaded, which
+    // was then thrown away.
     if let Some(existing) = app.get_webview_window(&window_label) {
         let _ = existing.show();
         let _ = existing.set_focus();
         return Ok(window_label);
     }
 
+    let (descriptor, shared_queue) = {
+        let state = app.state::<AppState>();
+        let descriptor = {
+            let engine = state.engine.lock();
+            let scanner = engine.plugin_scanner.lock();
+            scanner
+                .find(&plugin_id)
+                .ok_or_else(|| format!("Plugin not found: {}", plugin_id))?
+                .clone()
+        };
+        // With the slot's chain queue, knob moves in the window reach the
+        // audio chain; without one the window is on its own.
+        let shared_queue = match (track_id.as_deref(), slot_id.as_deref()) {
+            (Some(t), Some(s)) => state
+                .slot_param_queues
+                .lock()
+                .get(&(t.to_string(), s.to_string()))
+                .cloned(),
+            _ => None,
+        };
+        (descriptor, shared_queue)
+    };
+
+    // The window needs the plug-in in this process; only one the probe
+    // passed and the person has not sandboxed gets there.
+    may_load_in_process(&descriptor)?;
+
+    // Built here, from an async command, like the panel windows. As a sync
+    // command this ran inside WebView2's own message callback: a window
+    // made there never started its page, and a plug-in whose editor is a
+    // WebView2 (every Hardwave plug-in) waited on it for ever. Show GUI did
+    // nothing.
     let url = tauri::WebviewUrl::App("about:blank".into());
     let editor_window = tauri::WebviewWindowBuilder::new(&app, &window_label, url)
-        .title(format!("{} — Plugin Editor", descriptor.name))
+        .title(descriptor.name.clone())
         .inner_size(600.0, 400.0)
         .resizable(true)
         .always_on_top(true)
         .build()
         .map_err(|e| format!("Failed to open editor window: {e}"))?;
 
-    let handle = editor_window
-        .window_handle()
-        .map_err(|e| format!("window handle unavailable: {e}"))?;
-    let raw = handle.as_raw();
-
-    if !hosted.open_editor(raw) {
+    // The plug-in and its GUI on the main thread, where a plug-in GUI has
+    // to live, posted to it rather than run inside a callback.
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    {
+        let app = app.clone();
+        let window = editor_window.clone();
+        let label = window_label.clone();
+        let descriptor = descriptor.clone();
+        app.clone()
+            .run_on_main_thread(move || {
+                let attach = || -> Result<(), String> {
+                    let mut hosted: Box<dyn HostedPlugin> = match descriptor.format {
+                        PluginFormat::Vst3 => Box::new(
+                            match shared_queue {
+                                Some(queue) => Vst3PluginInstance::load_with_shared_pending(
+                                    descriptor.clone(),
+                                    queue,
+                                ),
+                                None => Vst3PluginInstance::load(descriptor.clone()),
+                            }
+                            .map_err(|e| e.to_string())?,
+                        ),
+                        PluginFormat::Clap => Box::new(
+                            match shared_queue {
+                                Some(queue) => ClapPluginInstance::load_with_shared_pending(
+                                    descriptor.clone(),
+                                    queue,
+                                ),
+                                None => ClapPluginInstance::load(descriptor.clone()),
+                            }
+                            .map_err(|e| e.to_string())?,
+                        ),
+                    };
+                    let handle = window
+                        .window_handle()
+                        .map_err(|e| format!("window handle unavailable: {e}"))?;
+                    if !hosted.open_editor(handle.as_raw()) {
+                        return Err(format!(
+                            "{} has no window this host can show",
+                            descriptor.name
+                        ));
+                    }
+                    // The window takes the size the editor asks for, not
+                    // a fixed 600 by 400 that cut most editors off.
+                    if let Some((w, h)) = hosted.editor_size() {
+                        let _ = window.set_size(tauri::PhysicalSize::new(w, h));
+                    }
+                    app.state::<AppState>()
+                        .plugin_editors
+                        .lock()
+                        .insert(label.clone(), hosted);
+                    Ok(())
+                };
+                let _ = tx.send(attach());
+            })
+            .map_err(|e| format!("could not reach the main thread: {e}"))?;
+    }
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        rx.recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|_| Err("the plug-in took too long to open its window".into()))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("editor open stopped: {e}")));
+    if let Err(e) = outcome {
         let _ = editor_window.close();
-        return Err(format!(
-            "{} rejected the floating-window handle (platform type unsupported or plugin has no editor)",
-            descriptor.name
-        ));
+        return Err(e);
     }
 
-    state
-        .plugin_editors
-        .lock()
-        .insert(window_label.clone(), hosted);
+    // Closing the window closes the plug-in's GUI with it. Nothing did
+    // this before, so the app kept a GUI attached to a window that was gone.
+    {
+        let app = app.clone();
+        let label = window_label.clone();
+        editor_window.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(mut hosted) =
+                    app.state::<AppState>().plugin_editors.lock().remove(&label)
+                {
+                    hosted.close_editor();
+                }
+            }
+        });
+    }
     Ok(window_label)
 }
 
@@ -575,8 +632,7 @@ pub(crate) fn instantiate_for_slot(
         })
 }
 
-#[tauri::command]
-pub fn add_plugin_to_track(
+pub(crate) fn add_plugin_to_track_quietly(
     state: State<AppState>,
     track_id: String,
     plugin_id: String,
@@ -615,7 +671,19 @@ pub fn add_plugin_to_track(
     // holding any locks. VST3 / CLAP loaders may scan the bundle, dlopen
     // the library, or call into platform code — none of that is fast
     // enough to do under a Mutex.
-    let plugin = instantiate_for_slot(&state.sandboxed_plugins, &descriptor)?;
+    // A plug-in that fails to load takes its slot back out: the slot was
+    // left in the project with nothing behind it, an empty insert that
+    // came back with every save.
+    let plugin = match instantiate_for_slot(&state.sandboxed_plugins, &descriptor) {
+        Ok(plugin) => plugin,
+        Err(e) => {
+            let engine = state.engine.lock();
+            if let Some(track) = engine.project.lock().track_mut(&track_id) {
+                track.inserts.retain(|slot| slot.id != slot_id);
+            }
+            return Err(e);
+        }
+    };
 
     // Phase 2b: capture the slot's parameter queue (VST3 + CLAP) BEFORE
     // shipping the plug-in to the audio thread. This lets the editor
@@ -670,8 +738,7 @@ pub fn add_plugin_to_track(
     Ok(slot_id)
 }
 
-#[tauri::command]
-pub fn remove_plugin_from_track(
+fn remove_plugin_from_track_body(
     state: State<AppState>,
     track_id: String,
     slot_id: String,
@@ -695,8 +762,7 @@ pub fn remove_plugin_from_track(
     Ok(())
 }
 
-#[tauri::command]
-pub fn set_insert_enabled(
+fn set_insert_enabled_body(
     state: State<AppState>,
     track_id: String,
     slot_id: String,
@@ -725,8 +791,7 @@ pub fn set_insert_enabled(
     Ok(())
 }
 
-#[tauri::command]
-pub fn reorder_insert(
+fn reorder_insert_body(
     state: State<AppState>,
     track_id: String,
     slot_id: String,
@@ -762,8 +827,7 @@ pub fn reorder_insert(
     Ok(())
 }
 
-#[tauri::command]
-pub fn set_insert_wet(
+fn set_insert_wet_body(
     state: State<AppState>,
     track_id: String,
     slot_id: String,
@@ -1056,8 +1120,7 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub fn set_plugin_sidechain_source(
+fn set_plugin_sidechain_source_body(
     state: State<AppState>,
     track_id: String,
     slot_id: String,
@@ -1090,8 +1153,7 @@ pub fn set_plugin_sidechain_source(
     Ok(())
 }
 
-#[tauri::command]
-pub fn set_fx_chain_bypassed(
+fn set_fx_chain_bypassed_body(
     state: State<AppState>,
     track_id: String,
     bypassed: bool,
@@ -1235,4 +1297,119 @@ pub fn take_sandbox_crashes(_state: State<AppState>) -> Vec<SandboxCrash> {
         crate::plugin_sandbox::clear_crashed_sandboxes();
     }
     crashes
+}
+
+/// Every window holds its own copy of the track list. A plug-in added in
+/// the detached mixer did not show in the main window (or the other way
+/// round) until that window happened to reload, which looked like the
+/// plug-in moving between channels. Each change to a channel's inserts now
+/// says which channel, to every window, and each reloads that channel.
+fn tell_windows_track_changed(app: &AppHandle, track_id: &str) {
+    let _ = app.emit(
+        "daw:trackChanged",
+        serde_json::json!({ "trackId": track_id }),
+    );
+}
+
+#[tauri::command]
+pub fn add_plugin_to_track(
+    app: AppHandle,
+    state: State<AppState>,
+    track_id: String,
+    plugin_id: String,
+) -> Result<String, String> {
+    let result = add_plugin_to_track_quietly(state, track_id.clone(), plugin_id);
+    if result.is_ok() {
+        tell_windows_track_changed(&app, &track_id);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn remove_plugin_from_track(
+    app: AppHandle,
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+) -> Result<(), String> {
+    let result = remove_plugin_from_track_body(state, track_id.clone(), slot_id);
+    if result.is_ok() {
+        tell_windows_track_changed(&app, &track_id);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn set_insert_enabled(
+    app: AppHandle,
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let result = set_insert_enabled_body(state, track_id.clone(), slot_id, enabled);
+    if result.is_ok() {
+        tell_windows_track_changed(&app, &track_id);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn reorder_insert(
+    app: AppHandle,
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    new_index: usize,
+) -> Result<(), String> {
+    let result = reorder_insert_body(state, track_id.clone(), slot_id, new_index);
+    if result.is_ok() {
+        tell_windows_track_changed(&app, &track_id);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn set_insert_wet(
+    app: AppHandle,
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    wet: f32,
+) -> Result<(), String> {
+    let result = set_insert_wet_body(state, track_id.clone(), slot_id, wet);
+    if result.is_ok() {
+        tell_windows_track_changed(&app, &track_id);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn set_plugin_sidechain_source(
+    app: AppHandle,
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    source_track_id: Option<String>,
+) -> Result<(), String> {
+    let result =
+        set_plugin_sidechain_source_body(state, track_id.clone(), slot_id, source_track_id);
+    if result.is_ok() {
+        tell_windows_track_changed(&app, &track_id);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn set_fx_chain_bypassed(
+    app: AppHandle,
+    state: State<AppState>,
+    track_id: String,
+    bypassed: bool,
+) -> Result<(), String> {
+    let result = set_fx_chain_bypassed_body(state, track_id.clone(), bypassed);
+    if result.is_ok() {
+        tell_windows_track_changed(&app, &track_id);
+    }
+    result
 }

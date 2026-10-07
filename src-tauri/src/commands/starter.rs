@@ -307,7 +307,7 @@ pub fn create_starter_song(
     // A limiter on the master, so a starter at full kick volume does
     // not clip the moment it plays.
     if let Some(master) = master_id {
-        let _ = crate::commands::plugins::add_plugin_to_track(
+        let _ = crate::commands::plugins::add_plugin_to_track_quietly(
             state,
             master,
             hardwave_native_plugins::NativeLimiter::ID.to_string(),

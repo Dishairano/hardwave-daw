@@ -612,6 +612,16 @@ impl HostedPlugin for ClapPluginInstance {
         true
     }
 
+    fn editor_size(&self) -> Option<(u32, u32)> {
+        if !self.gui_open {
+            return None;
+        }
+        let gui = self.gui_ext()?;
+        let (mut w, mut h) = (0u32, 0u32);
+        let ok = unsafe { ((*gui).get_size)(self.plugin, &mut w, &mut h) };
+        (ok && w > 0 && h > 0).then_some((w, h))
+    }
+
     fn close_editor(&mut self) {
         if !self.gui_open {
             return;

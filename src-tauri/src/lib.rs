@@ -173,6 +173,15 @@ pub fn run() {
         std::process::exit(code);
     }
 
+    // The same for a VST3 that does not list its classes in a file.
+    if child_mode == Some("--describe-vst3") {
+        let code = match args.get(2) {
+            Some(path) => plugin_describe::run_describe_vst3_child(path),
+            None => 2,
+        };
+        std::process::exit(code);
+    }
+
     if child_mode == Some("--probe-plugin") {
         let code = match args.get(2) {
             Some(path) => plugin_probe::run_probe_child(path),
@@ -210,6 +219,12 @@ pub fn run() {
         .lock()
         .set_clap_describer(std::sync::Arc::new(
             plugin_describe::describe_out_of_process,
+        ));
+    engine
+        .plugin_scanner
+        .lock()
+        .set_vst3_describer(std::sync::Arc::new(
+            plugin_describe::describe_vst3_out_of_process,
         ));
     if prefs.worker_threads > 0 {
         engine.set_worker_threads(prefs.worker_threads);
@@ -800,19 +815,16 @@ pub fn run() {
                         // on while plug-in folders are walked.
                         let scanner_arc =
                             std::sync::Arc::clone(&engine_for_scan.lock().plugin_scanner);
-                        let mut scanner = scanner_arc.lock();
-                        // Register native plugins before scanning external
-                        // paths so `find(id)` resolves them as well.
-                        scanner
+                        // The built-ins first, so they resolve at once;
+                        // the scanner keeps them through every rescan.
+                        scanner_arc
+                            .lock()
                             .register_natives(hardwave_native_plugins::native_plugin_descriptors());
-                        scanner.scan();
-                        // Re-register after scan — `scan()` clears the cache
-                        // before rebuilding from disk, so natives must be
-                        // reapplied to remain discoverable.
-                        scanner
-                            .register_natives(hardwave_native_plugins::native_plugin_descriptors());
+                        // Not under the scanner's lock: the cached list
+                        // keeps answering while the folders are walked.
+                        hardwave_plugin_host::PluginScanner::scan_shared(&scanner_arc, None);
                         if let Some(ref path) = cache_path {
-                            if let Err(e) = scanner.save_cache_to_disk(path) {
+                            if let Err(e) = scanner_arc.lock().save_cache_to_disk(path) {
                                 log::warn!("Failed to save plugin cache: {e}");
                             }
                         }

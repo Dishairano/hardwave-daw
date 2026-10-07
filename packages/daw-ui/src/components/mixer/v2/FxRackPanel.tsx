@@ -1,3 +1,5 @@
+import { useTrackStore } from '../../../stores/trackStore'
+import { useNotificationStore } from '../../../stores/notificationStore'
 import { memo, Suspense, lazy, useCallback, useState } from 'react'
 import { useMixerSelectionStore } from '../../../stores/mixerSelectionStore'
 import { useTrackById } from '../../../stores/trackStore'
@@ -81,14 +83,18 @@ export const FxRackPanel = memo(function FxRackPanel() {
         closeAll()
         return
       }
-      // Optimistic UX: mark used + close immediately. The audio thread
-      // load happens behind the scenes; trackStore.fetchTracks() will
-      // pull in the new InsertInfo on the next tick.
+      // Close at once; the slot shows when the plug-in has loaded. Nothing
+      // polled for it before, so it only appeared once another window
+      // reloaded the track list. The backend also tells other windows.
       usePluginFavoritesStore.getState().markUsed(pluginId)
       const targetTrackId = track.id
       closeAll()
       invoke('add_plugin_to_track', { trackId: targetTrackId, pluginId })
-        .catch((e) => console.error('add_plugin_to_track failed', e))
+        .then(() => useTrackStore.getState().refreshTrack(targetTrackId))
+        .catch((e) => {
+          console.error('add_plugin_to_track failed', e)
+          useNotificationStore.getState().push('error', `The plug-in did not load: ${String(e)}`)
+        })
     },
     [track, closeAll],
   )

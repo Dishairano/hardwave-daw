@@ -11,6 +11,7 @@ import './dev/tauri-mock'
 import { App } from './App'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { PanelWindow } from './PanelWindow'
+import { listenForTrackChanges } from './stores/trackStore'
 import './fonts'
 import './mockup.css'
 
@@ -19,6 +20,9 @@ import './mockup.css'
 // (window.__HW_PANEL__), set by an initialization script BEFORE the page
 // loads. This avoids putting anything in the URL, which can break asset
 // resolution → blank white window. Fall back to hash/query for older builds.
+// Every window, main or detached, follows channel changes made in another.
+listenForTrackChanges()
+
 const injected = (window as unknown as { __HW_PANEL__?: { panel?: string; params?: string } }).__HW_PANEL__
 const rawFallback = window.location.hash.startsWith('#')
   ? window.location.hash.slice(1)

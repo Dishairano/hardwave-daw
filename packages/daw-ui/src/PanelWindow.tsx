@@ -10,6 +10,7 @@
  * persist through the shared backend; instant cross-window refresh of *other*
  * windows is a follow-up.
  */
+import { useMixerSelectionStore } from './stores/mixerSelectionStore'
 import React, { useEffect, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { emit } from '@tauri-apps/api/event'
@@ -46,14 +47,34 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
         if (trackId && clipId) {
           useTrackStore.setState({ activeMidiTrackId: trackId, activeMidiClipId: clipId } as never)
         }
+        if (panel === 'mixer' && trackId) useMixerSelectionStore.getState().selectTrack(trackId)
       })
       .catch(() => { /* backend may be mid-init */ })
       .finally(() => setReady(true))
-  }, [params])
+  }, [params, panel])
+
+  // However this window closes (Dock, ×, or the OS), the main window gets
+  // its inline copy back, on the channel this one had selected. Closing
+  // with × or the OS left the main window with no mixer at all.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    getCurrentWindow()
+      .onCloseRequested(async () => {
+        try { await emit('daw:dockPanel', dockPayload()) } catch { /* noop */ }
+      })
+      .then((u) => { unlisten = u })
+      .catch(() => { /* not in Tauri */ })
+    return () => { if (unlisten) unlisten() }
+  }, [panel])
+
+  const dockPayload = () => ({
+    panel,
+    trackId: panel === 'mixer' ? useMixerSelectionStore.getState().selectedTrackId : null,
+  })
 
   const dock = async () => {
     // Tell the main window to re-show its inline copy, then close this window.
-    try { await emit('daw:dockPanel', { panel }) } catch { /* noop */ }
+    try { await emit('daw:dockPanel', dockPayload()) } catch { /* noop */ }
     try { await getCurrentWindow().close() } catch { /* noop */ }
   }
 

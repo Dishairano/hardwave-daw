@@ -1,3 +1,5 @@
+import { useMixerSelectionStore } from './stores/mixerSelectionStore'
+import { useSendStore } from './stores/sendStore'
 import React, { Suspense, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { SplashScreen } from './components/SplashScreen'
 import { HwApp } from './components/HwApp'
@@ -668,7 +670,16 @@ export function App() {
     window.addEventListener('daw:redockPanel', onRedock)
     let unlisten: (() => void) | undefined
     import('@tauri-apps/api/event').then(({ listen }) => {
-      listen<{ panel: string }>('daw:dockPanel', (ev) => setters[ev.payload.panel]?.(true))
+      listen<{ panel: string; trackId?: string | null }>('daw:dockPanel', (ev) => {
+        setters[ev.payload.panel]?.(true)
+        if (ev.payload.panel === 'mixer') {
+          // This window's copy of the mixer was idle while the other one
+          // was used: reload it, and keep the channel that was selected.
+          useTrackStore.getState().fetchTracks()
+          useSendStore.getState().fetchAll().catch(() => { /* noop */ })
+          if (ev.payload.trackId) useMixerSelectionStore.getState().selectTrack(ev.payload.trackId)
+        }
+      })
         .then((u) => { unlisten = u })
         .catch(() => { /* not in Tauri */ })
     }).catch(() => { /* noop */ })

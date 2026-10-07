@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { useNotificationStore } from '../../../stores/notificationStore'
 import { Knob } from '../../primitives/Knob'
 import type { InsertInfo } from '../../../stores/trackStore'
 import { usePerfMetersStore } from '../../../stores/perfMetersStore'
@@ -159,9 +160,10 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
   const onRemove = useCallback(() => {
     if (!insert) return
     setMenuOpen(false)
-    invoke('remove_plugin_from_track', { trackId, slotId: insert.id }).catch(
-      (e) => console.error('remove_plugin_from_track failed', e),
-    )
+    invoke('remove_plugin_from_track', { trackId, slotId: insert.id }).catch((e) => {
+      console.error('remove_plugin_from_track failed', e)
+      useNotificationStore.getState().push('error', `Could not remove ${insert.pluginName}: ${String(e)}`)
+    })
   }, [insert, trackId])
 
   const onShowGui = useCallback(() => {
@@ -175,7 +177,11 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
       windowLabel,
       trackId,
       slotId: insert.id,
-    }).catch((e) => console.error('open_plugin_editor failed', e))
+    }).catch((e) => {
+      // Said on screen: a refusal used to look like nothing happening.
+      console.error('open_plugin_editor failed', e)
+      useNotificationStore.getState().push('error', `Could not open ${insert.pluginName}: ${String(e)}`)
+    })
   }, [insert, trackId])
 
   const idxLabel = String(slotIndex + 1).padStart(2, '0')

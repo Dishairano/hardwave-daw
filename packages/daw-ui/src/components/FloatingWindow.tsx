@@ -1,3 +1,4 @@
+import { useMixerSelectionStore } from '../stores/mixerSelectionStore'
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { hw } from '../theme'
@@ -164,6 +165,11 @@ export function DetachButton({ panelId, title }: { panelId: PanelId; title?: str
         if (s.activeMidiTrackId && s.activeMidiClipId) {
           params = `trackId=${encodeURIComponent(s.activeMidiTrackId)}&clipId=${encodeURIComponent(s.activeMidiClipId)}`
         }
+      }
+      if (panelId === 'mixer') {
+        // The detached mixer opens on the channel selected here.
+        const sel = useMixerSelectionStore.getState().selectedTrackId
+        if (sel) params = `trackId=${encodeURIComponent(sel)}`
       }
       await invoke('open_panel_window', { panel: panelId, params })
     } catch (e) {

@@ -1143,3 +1143,20 @@ export const useTrackIds = () =>
 /// master). Useful for splitting the mixer's insert column from buses.
 export const useTrackIdsByKind = (kind: string) =>
   useTrackStore((s) => s.tracks.filter((t) => t.kind === kind).map((t) => t.id))
+
+// The backend says which channel changed when a window adds, removes or
+// switches an insert, so every window (the main one and any detached
+// mixer) reloads that channel instead of showing a stale copy.
+let listeningForTrackChanges = false
+export function listenForTrackChanges(): void {
+  if (listeningForTrackChanges) return
+  listeningForTrackChanges = true
+  import('@tauri-apps/api/event')
+    .then(({ listen }) =>
+      listen<{ trackId: string }>('daw:trackChanged', (ev) => {
+        const id = ev.payload?.trackId
+        if (id) useTrackStore.getState().refreshTrack(id).catch(() => { /* next fetch catches up */ })
+      }),
+    )
+    .catch(() => { listeningForTrackChanges = false })
+}

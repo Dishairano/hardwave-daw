@@ -78,14 +78,27 @@ export function ChannelRack() {
   const openChannelInstrument = useCallback((ch: TrackInfo) => {
     const inst = channelInstrumentSlot(ch)
     if (!inst) return
-    invoke('open_plugin_editor', { trackId: ch.id, slotId: inst.id })
-      .catch(e => console.error('open_plugin_editor failed', e))
+    // The command needs the plug-in and a window name; without them every
+    // click here failed before it started.
+    invoke('open_plugin_editor', {
+      pluginId: inst.pluginId,
+      windowLabel: `plugin-editor:${ch.id}:${inst.id}`,
+      trackId: ch.id,
+      slotId: inst.id,
+    }).catch(e => {
+      console.error('open_plugin_editor failed', e)
+      void import('../../stores/notificationStore').then(({ useNotificationStore }) =>
+        useNotificationStore.getState().push('error', `Could not open ${inst.pluginName}: ${String(e)}`))
+    })
   }, [channelInstrumentSlot])
   // Channels are decoupled from playlist inserts. The 500 pre-allocated
   // `insert-NNN` tracks are mixer/playlist slots, not channels — they
   // don't belong in the Channel Rack. Channels start empty; the user
   // creates them via the [+] button.
-  const allChannels = tracks.filter(t => t.kind !== 'Master' && !t.id.startsWith('insert-'))
+  // Instrument tracks are channels wherever they sit: a starter song puts
+  // its instruments on the first playlist rows, and they belong here too.
+  const allChannels = tracks.filter(t =>
+    t.kind !== 'Master' && (!t.id.startsWith('insert-') || (t.kind || '').toLowerCase() === 'midi'))
   const folderByTrack = new Map<string, TrackFolder>()
   for (const f of folders) for (const tid of f.trackIds) folderByTrack.set(tid, f)
   const channels = allChannels.filter(t => {

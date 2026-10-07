@@ -20,10 +20,22 @@ const MOST_OUTPUT: u64 = 1024 * 1024;
 /// What a CLAP library contains, read by a child process, or nothing
 /// when the child crashed, hung or said something unreadable.
 pub fn describe_out_of_process(library: &Path) -> Option<Vec<ReadDescriptor>> {
+    serde_json::from_slice(&run_child("--describe-clap", library)?).ok()
+}
+
+/// The classes in a VST3 bundle with no moduleinfo.json, read the same way.
+pub fn describe_vst3_out_of_process(
+    bundle: &Path,
+) -> Option<Vec<hardwave_plugin_host::vst3::Vst3ClassSummary>> {
+    serde_json::from_slice(&run_child("--describe-vst3", bundle)?).ok()
+}
+
+/// Run this binary with `switch` on one library and return what it printed.
+fn run_child(switch: &str, library: &Path) -> Option<Vec<u8>> {
     use std::process::{Command, Stdio};
     let exe = std::env::current_exe().ok()?;
     let mut child = Command::new(&exe)
-        .arg("--describe-clap")
+        .arg(switch)
         .arg(library)
         .current_dir(exe.parent().unwrap_or(Path::new(".")))
         .stdin(Stdio::null())
@@ -59,8 +71,7 @@ pub fn describe_out_of_process(library: &Path) -> Option<Vec<ReadDescriptor>> {
             }
         }
     }
-    let bytes = reader.join().ok()?;
-    serde_json::from_slice(&bytes).ok()
+    reader.join().ok()
 }
 
 /// The child: load one library, print what it contains, exit.
@@ -73,6 +84,19 @@ pub fn run_describe_child(library: &str) -> i32 {
     };
     let list = hardwave_plugin_host::clap_ffi::read_clap_descriptors(Path::new(library))
         .unwrap_or_default();
+    match serde_json::to_vec(&list) {
+        Ok(json) if out.write_all(&json).is_ok() => 0,
+        _ => 3,
+    }
+}
+
+/// The VST3 child: ask one module's factory what it contains, print it, exit.
+pub fn run_describe_vst3_child(bundle: &str) -> i32 {
+    let mut out = match hardwave_plugin_host::bridge_child::private_stdout() {
+        Ok(out) => out,
+        Err(_) => return 4,
+    };
+    let list = hardwave_plugin_host::vst3::read_vst3_classes(Path::new(bundle)).unwrap_or_default();
     match serde_json::to_vec(&list) {
         Ok(json) if out.write_all(&json).is_ok() => 0,
         _ => 3,

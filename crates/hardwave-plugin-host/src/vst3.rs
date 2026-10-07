@@ -475,6 +475,94 @@ impl Drop for Vst3Inner {
     }
 }
 
+/// One audio class a VST3 module declares, as its factory reports it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Vst3ClassSummary {
+    pub name: String,
+    pub vendor: String,
+    pub version: String,
+    pub sub_categories: Vec<String>,
+}
+
+/// List the audio classes in a VST3 module by asking its factory. This
+/// loads the module and runs its code, so only the describe child calls
+/// it; the DAW reaches it through the scanner's describer. Bundles that
+/// ship a moduleinfo.json never need it. Many (every nih-plug build among
+/// them) do not, and were listed under their file name with vendor
+/// "Unknown".
+pub fn read_vst3_classes(bundle_path: &Path) -> Result<Vec<Vst3ClassSummary>, String> {
+    use vst3::Steinberg::{IPluginFactory2, IPluginFactory2Trait, PClassInfo2, PFactoryInfo};
+    let binary = resolve_vst3_binary(bundle_path)
+        .ok_or_else(|| format!("no VST3 binary in {}", bundle_path.display()))?;
+    let library = unsafe { crate::load_plugin_library(&binary) }
+        .map_err(|e| format!("dlopen {}: {e}", binary.display()))?;
+    let get_factory: libloading::Symbol<GetPluginFactoryFn> =
+        unsafe { library.get(b"GetPluginFactory\0") }
+            .map_err(|_| format!("{}: GetPluginFactory missing", binary.display()))?;
+    let factory = unsafe { ComPtr::<IPluginFactory>::from_raw(get_factory()) }
+        .ok_or_else(|| format!("{}: null factory", binary.display()))?;
+
+    let mut factory_info: PFactoryInfo = unsafe { std::mem::zeroed() };
+    let factory_vendor = if unsafe { factory.getFactoryInfo(&mut factory_info) } == kResultOk {
+        class_info_name_to_string(&factory_info.vendor)
+    } else {
+        String::new()
+    };
+    let factory2 = factory.cast::<IPluginFactory2>();
+    let mut classes = Vec::new();
+    for i in 0..unsafe { factory.countClasses() }.max(0) {
+        let summary = match factory2.as_ref() {
+            Some(f2) => {
+                let mut info: PClassInfo2 = unsafe { std::mem::zeroed() };
+                if unsafe { f2.getClassInfo2(i, &mut info) } != kResultOk {
+                    continue;
+                }
+                if class_info_name_to_string(&info.category) != "Audio Module Class" {
+                    continue;
+                }
+                Vst3ClassSummary {
+                    name: class_info_name_to_string(&info.name),
+                    vendor: class_info_name_to_string(&info.vendor),
+                    version: class_info_name_to_string(&info.version),
+                    sub_categories: class_info_name_to_string(&info.subCategories)
+                        .split('|')
+                        .filter(|c| !c.is_empty())
+                        .map(str::to_string)
+                        .collect(),
+                }
+            }
+            None => {
+                let mut info: PClassInfo = unsafe { std::mem::zeroed() };
+                if unsafe { factory.getClassInfo(i, &mut info) } != kResultOk {
+                    continue;
+                }
+                if class_info_name_to_string(&info.category) != "Audio Module Class" {
+                    continue;
+                }
+                Vst3ClassSummary {
+                    name: class_info_name_to_string(&info.name),
+                    vendor: String::new(),
+                    version: String::new(),
+                    sub_categories: Vec::new(),
+                }
+            }
+        };
+        let vendor = if summary.vendor.is_empty() {
+            factory_vendor.clone()
+        } else {
+            summary.vendor.clone()
+        };
+        classes.push(Vst3ClassSummary { vendor, ..summary });
+    }
+    // The factory first, then the module it came from. The child exits
+    // straight after, so the module is left loaded rather than unloaded
+    // under a plug-in that may not expect it.
+    drop(factory2);
+    drop(factory);
+    std::mem::forget(library);
+    Ok(classes)
+}
+
 fn class_info_name_to_string(bytes: &[vst3::Steinberg::char8]) -> String {
     let null_pos = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
     let slice: Vec<u8> = bytes[..null_pos].iter().map(|&c| c as u8).collect();
@@ -830,6 +918,17 @@ impl HostedPlugin for Vst3PluginInstance {
         }
         inner.plug_view = Some(view);
         true
+    }
+
+    fn editor_size(&self) -> Option<(u32, u32)> {
+        let inner: &Vst3Inner = &self.inner;
+        let view = inner.plug_view.as_ref()?;
+        let mut rect: vst3::Steinberg::ViewRect = unsafe { std::mem::zeroed() };
+        if unsafe { view.getSize(&mut rect) } != kResultOk {
+            return None;
+        }
+        let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+        (w > 0 && h > 0).then_some((w as u32, h as u32))
     }
 
     fn close_editor(&mut self) {

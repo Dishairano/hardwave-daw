@@ -101,6 +101,12 @@ pub trait HostedPlugin: Send {
     fn close_editor(&mut self);
     fn has_editor(&self) -> bool;
 
+    /// The size the open editor asks for, in pixels, so its window can fit
+    /// it. None when no editor is open or the plug-in does not say.
+    fn editor_size(&self) -> Option<(u32, u32)> {
+        None
+    }
+
     /// Returns the shared parameter queue used by the plug-in's GUI to
     /// emit knob movements.
     ///

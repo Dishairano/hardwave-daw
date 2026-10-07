@@ -55,9 +55,14 @@ export const MixerPanelV2 = memo(function MixerPanelV2() {
   const selectTrack = useMixerSelectionStore((s) => s.selectTrack)
   // Seed the selection with master on first mount + on project load so
   // the FX rack always has a sensible target.
+  // The channel selected elsewhere in the app comes first: always starting
+  // on Master put plug-ins on the master that were meant for a channel.
   useEffect(() => {
-    if (!selectedId && masterId) selectTrack(masterId)
-  }, [masterId, selectedId, selectTrack])
+    if (selectedId && tracks.some((t) => t.id === selectedId)) return
+    const appSelected = useTrackStore.getState().selectedTrackId
+    const start = appSelected && tracks.some((t) => t.id === appSelected) ? appSelected : masterId
+    if (start) selectTrack(start)
+  }, [masterId, selectedId, selectTrack, tracks])
 
   const onSelect = useCallback((id: string) => selectTrack(id), [selectTrack])
 
