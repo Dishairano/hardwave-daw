@@ -2615,3 +2615,66 @@ fn a_track_routed_to_an_empty_bus_is_heard() {
     let peak = out.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
     assert!(peak > 0.05, "the routed track went silent: peak {peak}");
 }
+
+/// A prepared render needs nothing from the engine: it still plays after
+/// the engine is gone. Exports rely on this to let go of the engine's lock
+/// while they render, which kept the window frozen until the file was done.
+#[test]
+fn a_prepared_render_runs_without_the_engine() {
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve};
+
+    let sr = 48_000_u32;
+    let frames = sr as usize / 4;
+    let ch: Vec<f32> = (0..frames)
+        .map(|n| (std::f32::consts::TAU * 220.0 * n as f32 / sr as f32).sin() * 0.5)
+        .collect();
+    let engine = hardwave_engine::DawEngine::new();
+    engine.audio_pool.insert(
+        "tone".to_string(),
+        hardwave_engine::AudioBuffer {
+            channels: vec![ch.clone(), ch],
+            sample_rate: sr,
+            num_frames: frames,
+        },
+    );
+    {
+        let mut project = engine.project.lock();
+        let track_id = project.add_audio_track("Tone".into());
+        if let Some(track) = project.track_mut(&track_id) {
+            track.clips.push(ClipPlacement {
+                content: ClipContent::Audio(AudioClip {
+                    id: "clip".into(),
+                    name: "tone".into(),
+                    source_path: "tone".into(),
+                    source_hash: String::new(),
+                    source_start: 0,
+                    source_end: frames as u64,
+                    gain_db: 0.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
+                    muted: false,
+                    reversed: false,
+                    pitch_semitones: 0.0,
+                    stretch_ratio: 1.0,
+                    warp_markers: Vec::new(),
+                    fade_in_curve: FadeCurve::Linear,
+                    fade_out_curve: FadeCurve::Linear,
+                    source_file: String::new(),
+                }),
+                track_id: track_id.clone(),
+                position_ticks: 0,
+                length_ticks: 1_000_000,
+                lane: 0,
+            });
+        }
+    }
+    engine.rebuild_graph();
+    let render = engine.prepare_offline_render(sr, 0, None, |_| {});
+    drop(engine);
+    let mut peak = 0.0_f32;
+    render.run(frames as u64, |block| {
+        peak = block.iter().fold(peak, |m, s| m.max(s.abs()));
+        true
+    });
+    assert!(peak > 0.05, "the render played nothing: peak {peak}");
+}

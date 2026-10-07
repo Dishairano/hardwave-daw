@@ -34,6 +34,8 @@ interface ProjectState {
   projectName: string
   dirty: boolean
   recentProjects: string[]
+  /** While a song opens: what it is doing and how far it is. */
+  opening: { name: string; stage: string; done: number; total: number } | null
 
   newProject: () => Promise<void>
   saveProject: (path?: string) => Promise<void>
@@ -46,6 +48,7 @@ interface ProjectState {
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
+  opening: null,
   filePath: null,
   projectName: 'Untitled',
   dirty: false,
@@ -83,7 +86,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadProject: async (path: string) => {
-    await invoke('load_project', { path })
+    // The open runs off the window's thread now, so the window stays alive
+    // and can say how far it is.
+    const openingName = path.split(/[\\/]/).pop()?.replace('.hwp', '') || 'song'
+    set({ opening: { name: openingName, stage: 'file', done: 0, total: 0 } })
+    let stopListening: (() => void) | undefined
+    try {
+      const { listen } = await import('@tauri-apps/api/event')
+      stopListening = await listen<{ stage: string; done: number; total: number }>(
+        'project-load-progress',
+        (ev) => set({ opening: { name: openingName, ...ev.payload } }),
+      )
+    } catch { /* outside Tauri */ }
+    try {
+      await invoke('load_project', { path })
+    } finally {
+      stopListening?.()
+      set({ opening: null })
+    }
     const rackState = await invoke<string | null>('get_channel_rack_state')
     usePatternStore.getState().hydrate(rackState)
     hydrateTimelineState(await invoke<string | null>('get_timeline_state'))

@@ -272,18 +272,36 @@ pub struct TrackLoad {
 /// What share of each block every track is taking.
 #[tauri::command]
 pub fn get_track_load(state: State<AppState>) -> Vec<TrackLoad> {
-    state
-        .engine
-        .lock()
+    // Polled from the window's own thread twice a second: never wait on
+    // the engine for it. Busy means no reading this time.
+    let Some(engine) = state.engine.try_lock_for(METER_POLL_WAIT) else {
+        return Vec::new();
+    };
+    engine
         .track_cpu_percent()
         .into_iter()
         .map(|(track_id, percent)| TrackLoad { track_id, percent })
         .collect()
 }
 
+/// How long a meter poll may wait for the engine before it gives up.
+const METER_POLL_WAIT: std::time::Duration = std::time::Duration::from_millis(15);
+
+/// The last load reading, answered while the engine is busy.
+static LAST_AUDIO_LOAD: parking_lot::Mutex<(f32, u32)> = parking_lot::const_mutex((0.0, 0));
+
 #[tauri::command]
 pub fn get_audio_load(state: State<AppState>) -> AudioLoad {
-    let (load_pct, xruns) = state.engine.lock().audio_load();
+    // Five times a second from the window's own thread. A busy engine used
+    // to stop the window here; it gets the last reading instead.
+    let (load_pct, xruns) = match state.engine.try_lock_for(METER_POLL_WAIT) {
+        Some(engine) => {
+            let reading = engine.audio_load();
+            *LAST_AUDIO_LOAD.lock() = reading;
+            reading
+        }
+        None => *LAST_AUDIO_LOAD.lock(),
+    };
     AudioLoad { load_pct, xruns }
 }
 

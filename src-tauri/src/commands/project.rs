@@ -4,7 +4,7 @@ use hardwave_project::tempo::{TempoEntry, TempoRamp};
 use hardwave_project::Project;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Serialize)]
 pub struct ProjectInfo {
@@ -91,15 +91,70 @@ pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> 
     result
 }
 
+/// Open a song. Off the window's thread: as a sync command the whole open
+/// (reading the file, decoding every sample, loading every plug-in) ran on
+/// it, under the engine's lock, and the window said Not Responding until it
+/// was done. The audio is now read without the lock, the song swapped in
+/// under a short one, and the plug-ins created on the main thread as a
+/// posted task. `project-load-progress` follows along.
 #[tauri::command]
-pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> {
+pub async fn load_project(app: AppHandle, path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || load_project_blocking(&app, path))
+        .await
+        .map_err(|e| format!("opening stopped: {e}"))?
+}
+
+/// One song opens at a time.
+static OPENING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct OpeningDone;
+impl Drop for OpeningDone {
+    fn drop(&mut self) {
+        OPENING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LoadProgress {
+    stage: &'static str,
+    done: usize,
+    total: usize,
+}
+
+fn load_project_blocking(app: &AppHandle, path: String) -> Result<(), String> {
     use std::sync::atomic::Ordering;
+    if OPENING.swap(true, Ordering::SeqCst) {
+        return Err("A song is already opening.".into());
+    }
+    let _done = OpeningDone;
+    let state = app.state::<AppState>();
+
     let project_file = PathBuf::from(&path);
     let loaded = Project::load(&project_file).map_err(|e| e.to_string())?;
-    let engine = state.engine.lock();
-    // Before rehydrating: a collected project stores its samples relative to
-    // this folder, so without it they cannot be found.
-    engine.set_project_dir(project_file.parent().map(|p| p.to_path_buf()));
+    let project_dir = project_file.parent().map(|p| p.to_path_buf());
+
+    // The audio first, without the engine. A collected project stores its
+    // samples relative to its folder, so the loader is given that folder.
+    let loader = state.engine.lock().audio_source_loader(project_dir.clone());
+    let missing_audio = loader.load_sources_of(&loaded, |done, total| {
+        let _ = app.emit(
+            "project-load-progress",
+            LoadProgress {
+                stage: "audio",
+                done,
+                total,
+            },
+        );
+    });
+    if !missing_audio.is_empty() {
+        log::warn!(
+            "load_project: {} audio source(s) missing on disk: {:?}",
+            missing_audio.len(),
+            missing_audio
+        );
+    }
+
     let new_bpm = loaded
         .tempo_map
         .entries
@@ -108,36 +163,57 @@ pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> 
         .unwrap_or(140.0);
     let mapping_blob = loaded.midi_mappings.clone();
     {
-        let mut project = engine.project.lock();
-        *project = loaded;
+        let engine = state.engine.lock();
+        engine.set_project_dir(project_dir);
+        {
+            let mut project = engine.project.lock();
+            *project = loaded;
+        }
+        engine.transport.bpm.store(new_bpm, Ordering::Relaxed);
+        engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
+        // Without this a project written in 7/8 opened in 4/4 until playback
+        // started, because only the tempo was taken from the loaded map.
+        apply_project_time_signature(&engine);
+        engine.reset_history();
+        engine.rebuild_graph();
+        // The master's fader is the master level.
+        let master = engine
+            .project
+            .lock()
+            .tracks
+            .iter()
+            .find(|t| matches!(t.kind, hardwave_project::TrackKind::Master))
+            .map(|t| t.id.clone());
+        if let Some(master) = master {
+            engine.apply_track_mix(&master);
+        }
     }
-    engine.transport.bpm.store(new_bpm, Ordering::Relaxed);
-    engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
-    // Without this a project written in 7/8 opened in 4/4 until playback
-    // started, because only the tempo was taken from the loaded map.
-    apply_project_time_signature(&engine);
-    engine.reset_history();
-    // Re-load every referenced audio source into the pool BEFORE the graph
-    // rebuild — the pool only fills at import time, so without this every
-    // project reopened after an app restart played silent audio clips.
-    let missing_audio = engine.rehydrate_audio_pool();
-    if !missing_audio.is_empty() {
-        log::warn!(
-            "load_project: {} audio source(s) missing on disk: {:?}",
-            missing_audio.len(),
-            missing_audio
-        );
-    }
-    engine.rebuild_graph();
-    drop(engine);
 
-    // Rehydrate plug-in chains for every PluginSlot in the loaded
-    // project. Done after rebuild_graph so the freshly-built TrackNodes
-    // are reachable by the dispatcher; failures (missing plug-in,
-    // queue full) are logged and the project still opens — the user
-    // surfaces them via `find_missing_plugins`.
-    if let Err(e) = crate::commands::plugins::hydrate_chains_from_project(&state) {
-        log::warn!("load_project: chain hydration failed: {e}");
+    // Plug-ins for every slot, created on the main thread where plug-ins
+    // expect to be made, as a posted task rather than inside the window's
+    // own callback. Failures (missing plug-in, queue full) are logged and
+    // the song still opens; `find_missing_plugins` names them.
+    let _ = app.emit(
+        "project-load-progress",
+        LoadProgress {
+            stage: "plugins",
+            done: 0,
+            total: 1,
+        },
+    );
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    let for_main = app.clone();
+    app.run_on_main_thread(move || {
+        let state = for_main.state::<AppState>();
+        let _ = tx.send(crate::commands::plugins::hydrate_chains_from_project(
+            &state,
+        ));
+    })
+    .map_err(|e| format!("could not reach the main thread: {e}"))?;
+    match rx.recv() {
+        Ok(Err(e)) => log::warn!("load_project: chain hydration failed: {e}"),
+        Err(_) => log::warn!("load_project: chain hydration did not report back"),
+        Ok(Ok(())) => {}
     }
 
     {
@@ -161,6 +237,14 @@ pub fn load_project(state: State<AppState>, path: String) -> Result<(), String> 
     // can be pushed. Without this a song opens with its macro knobs where
     // they were left but the plug-ins at whatever the preset says.
     crate::commands::macros::apply_all_macros(state);
+    let _ = app.emit(
+        "project-load-progress",
+        LoadProgress {
+            stage: "done",
+            done: 1,
+            total: 1,
+        },
+    );
     Ok(())
 }
 

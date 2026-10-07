@@ -26,7 +26,7 @@ pub mod transport;
 
 pub use audio_pool::{AudioBuffer, AudioPool};
 pub use audio_prefs::AudioPrefs;
-pub use engine::DawEngine;
+pub use engine::{AudioSourceLoader, DawEngine, OfflineRender};
 pub use graph::{AudioGraph, AudioNode, NodeId, ProcessContext};
 pub use master_node::MasterNode;
 pub use master_tap::{MasterTap, SharedMasterTap};

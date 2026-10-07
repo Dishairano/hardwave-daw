@@ -1,5 +1,5 @@
 use crate::AppState;
-use hardwave_engine::DawEngine;
+use hardwave_engine::{DawEngine, OfflineRender};
 use hardwave_project::Project;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use std::fs::{self, File};
@@ -30,6 +30,30 @@ fn build_offline_insert_factory(
             .get(plugin_id)
             .and_then(|d| super::plugins::load_hosted(d).ok())
     }
+}
+
+/// Prepare a render under the engine's lock, let go of the lock, then
+/// render and write. The render has its own copy of everything; holding
+/// the lock through it froze every window command until the file was done.
+#[allow(clippy::too_many_arguments)]
+fn render_unlocked<F>(
+    engine: parking_lot::MutexGuard<'_, DawEngine>,
+    out_path: &Path,
+    fmt: RenderFormat,
+    total_samples: u64,
+    start_samples: u64,
+    cancel: &Arc<AtomicBool>,
+    on_progress: F,
+    prepare: impl FnOnce(&mut Project),
+) -> Result<bool, String>
+where
+    F: FnMut(u64, u64),
+{
+    let factory = build_offline_insert_factory(&engine);
+    let render =
+        engine.prepare_offline_render(fmt.sample_rate, start_samples, Some(&factory), prepare);
+    drop(engine);
+    write_render(render, out_path, fmt, total_samples, cancel, on_progress)
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -410,14 +434,12 @@ fn write_flac_from_buffer(
 /// (2.6 GB for a 4-hour session at 48k stereo f32) are acceptable for desktop.
 #[allow(clippy::too_many_arguments)]
 fn write_render_flac<F>(
-    engine: &DawEngine,
+    render: OfflineRender,
     out_path: &Path,
     fmt: RenderFormat,
     total_samples: u64,
-    start_samples: u64,
     cancel: &Arc<AtomicBool>,
     mut on_progress: F,
-    prepare: impl FnOnce(&mut Project),
 ) -> Result<bool, String>
 where
     F: FnMut(u64, u64),
@@ -425,23 +447,16 @@ where
     let capacity = (total_samples as usize).saturating_mul(2);
     let mut buffer: Vec<f32> = Vec::with_capacity(capacity);
 
-    engine.render_offline_with(
-        fmt.sample_rate,
-        total_samples,
-        start_samples,
-        Some(&build_offline_insert_factory(engine)),
-        prepare,
-        |block| {
-            if cancel.load(Ordering::Relaxed) {
-                return false;
-            }
-            buffer.extend_from_slice(block);
-            // Reserve ~85% of progress for render; encode is the final 15%.
-            let frames = (buffer.len() / 2) as u64;
-            on_progress((frames * 85) / 100, total_samples);
-            true
-        },
-    )?;
+    render.run(total_samples, |block| {
+        if cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        buffer.extend_from_slice(block);
+        // Reserve ~85% of progress for render; encode is the final 15%.
+        let frames = (buffer.len() / 2) as u64;
+        on_progress((frames * 85) / 100, total_samples);
+        true
+    });
 
     if cancel.load(Ordering::Relaxed) {
         return Ok(false);
@@ -653,14 +668,12 @@ fn write_mp3_vbr_from_buffer(
 /// MP3 render path: buffer full render, normalize, then hand off to shine.
 #[allow(clippy::too_many_arguments)]
 fn write_render_mp3<F>(
-    engine: &DawEngine,
+    render: OfflineRender,
     out_path: &Path,
     fmt: RenderFormat,
     total_samples: u64,
-    start_samples: u64,
     cancel: &Arc<AtomicBool>,
     mut on_progress: F,
-    prepare: impl FnOnce(&mut Project),
 ) -> Result<bool, String>
 where
     F: FnMut(u64, u64),
@@ -668,22 +681,15 @@ where
     let capacity = (total_samples as usize).saturating_mul(2);
     let mut buffer: Vec<f32> = Vec::with_capacity(capacity);
 
-    engine.render_offline_with(
-        fmt.sample_rate,
-        total_samples,
-        start_samples,
-        Some(&build_offline_insert_factory(engine)),
-        prepare,
-        |block| {
-            if cancel.load(Ordering::Relaxed) {
-                return false;
-            }
-            buffer.extend_from_slice(block);
-            let frames = (buffer.len() / 2) as u64;
-            on_progress((frames * 85) / 100, total_samples);
-            true
-        },
-    )?;
+    render.run(total_samples, |block| {
+        if cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        buffer.extend_from_slice(block);
+        let frames = (buffer.len() / 2) as u64;
+        on_progress((frames * 85) / 100, total_samples);
+        true
+    });
 
     if cancel.load(Ordering::Relaxed) {
         return Ok(false);
@@ -809,14 +815,12 @@ fn write_ogg_from_buffer(
 /// OGG Vorbis render path: buffer full render, normalize, hand off to vorbis_rs.
 #[allow(clippy::too_many_arguments)]
 fn write_render_ogg<F>(
-    engine: &DawEngine,
+    render: OfflineRender,
     out_path: &Path,
     fmt: RenderFormat,
     total_samples: u64,
-    start_samples: u64,
     cancel: &Arc<AtomicBool>,
     mut on_progress: F,
-    prepare: impl FnOnce(&mut Project),
 ) -> Result<bool, String>
 where
     F: FnMut(u64, u64),
@@ -824,22 +828,15 @@ where
     let capacity = (total_samples as usize).saturating_mul(2);
     let mut buffer: Vec<f32> = Vec::with_capacity(capacity);
 
-    engine.render_offline_with(
-        fmt.sample_rate,
-        total_samples,
-        start_samples,
-        Some(&build_offline_insert_factory(engine)),
-        prepare,
-        |block| {
-            if cancel.load(Ordering::Relaxed) {
-                return false;
-            }
-            buffer.extend_from_slice(block);
-            let frames = (buffer.len() / 2) as u64;
-            on_progress((frames * 85) / 100, total_samples);
-            true
-        },
-    )?;
+    render.run(total_samples, |block| {
+        if cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        buffer.extend_from_slice(block);
+        let frames = (buffer.len() / 2) as u64;
+        on_progress((frames * 85) / 100, total_samples);
+        true
+    });
 
     if cancel.load(Ordering::Relaxed) {
         return Ok(false);
@@ -896,55 +893,26 @@ where
 /// completion, `Ok(false)` when the caller requested cancellation mid-render.
 #[allow(clippy::too_many_arguments)]
 fn write_render<F>(
-    engine: &DawEngine,
+    render: OfflineRender,
     out_path: &Path,
     fmt: RenderFormat,
     total_samples: u64,
-    start_samples: u64,
     cancel: &Arc<AtomicBool>,
     mut on_progress: F,
-    prepare: impl FnOnce(&mut Project),
 ) -> Result<bool, String>
 where
     F: FnMut(u64, u64),
 {
     if is_flac_path(out_path) {
-        return write_render_flac(
-            engine,
-            out_path,
-            fmt,
-            total_samples,
-            start_samples,
-            cancel,
-            on_progress,
-            prepare,
-        );
+        return write_render_flac(render, out_path, fmt, total_samples, cancel, on_progress);
     }
 
     if is_mp3_path(out_path) {
-        return write_render_mp3(
-            engine,
-            out_path,
-            fmt,
-            total_samples,
-            start_samples,
-            cancel,
-            on_progress,
-            prepare,
-        );
+        return write_render_mp3(render, out_path, fmt, total_samples, cancel, on_progress);
     }
 
     if is_ogg_path(out_path) {
-        return write_render_ogg(
-            engine,
-            out_path,
-            fmt,
-            total_samples,
-            start_samples,
-            cancel,
-            on_progress,
-            prepare,
-        );
+        return write_render_ogg(render, out_path, fmt, total_samples, cancel, on_progress);
     }
 
     let spec = spec_for(fmt.bit_depth, fmt.sample_rate);
@@ -958,34 +926,27 @@ where
             let mut dither = DitherState::new();
             let mut written_frames: u64 = 0;
 
-            engine.render_offline_with(
-                fmt.sample_rate,
-                total_samples,
-                start_samples,
-                Some(&build_offline_insert_factory(engine)),
-                prepare,
-                |block| {
-                    if wav_err.is_some() || cancel.load(Ordering::Relaxed) {
+            render.run(total_samples, |block| {
+                if wav_err.is_some() || cancel.load(Ordering::Relaxed) {
+                    return false;
+                }
+                for (i, &s) in block.iter().enumerate() {
+                    if let Err(e) = write_sample_dithered(
+                        &mut wav,
+                        s,
+                        fmt.bit_depth,
+                        fmt.dither,
+                        &mut dither,
+                        i & 1,
+                    ) {
+                        wav_err = Some(format!("wav write: {e}"));
                         return false;
                     }
-                    for (i, &s) in block.iter().enumerate() {
-                        if let Err(e) = write_sample_dithered(
-                            &mut wav,
-                            s,
-                            fmt.bit_depth,
-                            fmt.dither,
-                            &mut dither,
-                            i & 1,
-                        ) {
-                            wav_err = Some(format!("wav write: {e}"));
-                            return false;
-                        }
-                    }
-                    written_frames += (block.len() / 2) as u64;
-                    on_progress(written_frames, total_samples);
-                    true
-                },
-            )?;
+                }
+                written_frames += (block.len() / 2) as u64;
+                on_progress(written_frames, total_samples);
+                true
+            });
 
             if let Some(e) = wav_err {
                 return Err(e);
@@ -1000,29 +961,22 @@ where
             let mut buffer: Vec<f32> = Vec::with_capacity(capacity);
             let mut peak: f32 = 0.0;
 
-            engine.render_offline_with(
-                fmt.sample_rate,
-                total_samples,
-                start_samples,
-                Some(&build_offline_insert_factory(engine)),
-                prepare,
-                |block| {
-                    if cancel.load(Ordering::Relaxed) {
-                        return false;
+            render.run(total_samples, |block| {
+                if cancel.load(Ordering::Relaxed) {
+                    return false;
+                }
+                for &s in block {
+                    let a = s.abs();
+                    if a > peak {
+                        peak = a;
                     }
-                    for &s in block {
-                        let a = s.abs();
-                        if a > peak {
-                            peak = a;
-                        }
-                        buffer.push(s);
-                    }
-                    // Reserve half of progress for render, half for write.
-                    let frames = (buffer.len() / 2) as u64;
-                    on_progress(frames / 2, total_samples);
-                    true
-                },
-            )?;
+                    buffer.push(s);
+                }
+                // Reserve half of progress for render, half for write.
+                let frames = (buffer.len() / 2) as u64;
+                on_progress(frames / 2, total_samples);
+                true
+            });
 
             if cancel.load(Ordering::Relaxed) {
                 return Ok(false);
@@ -1067,22 +1021,15 @@ where
             let capacity = (total_samples as usize).saturating_mul(2);
             let mut buffer: Vec<f32> = Vec::with_capacity(capacity);
 
-            engine.render_offline_with(
-                fmt.sample_rate,
-                total_samples,
-                start_samples,
-                Some(&build_offline_insert_factory(engine)),
-                prepare,
-                |block| {
-                    if cancel.load(Ordering::Relaxed) {
-                        return false;
-                    }
-                    buffer.extend_from_slice(block);
-                    let frames = (buffer.len() / 2) as u64;
-                    on_progress(frames / 2, total_samples);
-                    true
-                },
-            )?;
+            render.run(total_samples, |block| {
+                if cancel.load(Ordering::Relaxed) {
+                    return false;
+                }
+                buffer.extend_from_slice(block);
+                let frames = (buffer.len() / 2) as u64;
+                on_progress(frames / 2, total_samples);
+                true
+            });
 
             if cancel.load(Ordering::Relaxed) {
                 return Ok(false);
@@ -1195,8 +1142,8 @@ pub async fn export_project_wav(
 
         let mut last_pct: i32 = -1;
         let app_for_progress = app.clone();
-        let completed = write_render(
-            &engine_guard,
+        let completed = render_unlocked(
+            engine_guard,
             Path::new(&out_path),
             fmt,
             total_samples,
@@ -1338,8 +1285,8 @@ pub async fn consolidate_track_range(
             };
 
             let target = track_id.clone();
-            let completed = write_render(
-                &engine_guard,
+            let completed = render_unlocked(
+                engine_guard,
                 &out_path,
                 fmt,
                 total_samples,
@@ -1383,7 +1330,7 @@ pub async fn consolidate_track_range(
             });
         }
     }
-    crate::commands::audio::import_audio_file(
+    crate::commands::audio::import_audio_file_blocking(
         state.clone(),
         source_track_id.clone(),
         path.clone(),
@@ -1466,8 +1413,8 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
             };
 
             let target = track_id.clone();
-            let completed = write_render(
-                &engine_guard,
+            let completed = render_unlocked(
+                engine_guard,
                 &out_path,
                 fmt,
                 total_samples,
@@ -1502,7 +1449,7 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
         let mut project = engine.project.lock();
         project.add_audio_track(format!("{track_name} (bounced)"))
     };
-    crate::commands::audio::import_audio_file(
+    crate::commands::audio::import_audio_file_blocking(
         state.clone(),
         new_track_id.clone(),
         path.clone(),
@@ -1593,6 +1540,8 @@ pub async fn export_project_stems(
             if track_infos.is_empty() {
                 return Err("No tracks to export.".into());
             }
+            // Each stem takes the lock only while it is prepared.
+            drop(engine_guard);
 
             let project_slug = sanitize_filename(&project_name);
             let mut files: Vec<String> = Vec::new();
@@ -1618,8 +1567,8 @@ pub async fn export_project_stems(
                 let label = track_name.clone();
                 let idx = render_idx;
 
-                let completed = write_render(
-                    &engine_guard,
+                let completed = render_unlocked(
+                    engine.lock(),
                     &stem_path,
                     fmt,
                     total_samples,
@@ -1682,8 +1631,8 @@ pub async fn export_project_stems(
                 let app_for_progress = app.clone();
                 let idx = render_idx;
 
-                let completed = write_render(
-                    &engine_guard,
+                let completed = render_unlocked(
+                    engine.lock(),
                     &master_path,
                     fmt,
                     total_samples,
@@ -1813,8 +1762,8 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
         };
 
         let target = track_id.clone();
-        let completed = write_render(
-            &engine_guard,
+        let completed = render_unlocked(
+            engine_guard,
             &out_path,
             fmt,
             total_samples,
@@ -1842,7 +1791,7 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
     // Placing the render and flipping the switch are one undo step.
     let state: State<AppState> = app.state();
     state.engine.lock().snapshot_before_mutation();
-    let clip = crate::commands::audio::import_audio_file(
+    let clip = crate::commands::audio::import_audio_file_blocking(
         state.clone(),
         source_track_id.clone(),
         rendered.clone(),

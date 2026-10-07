@@ -374,6 +374,12 @@ impl DawEngine {
         &self,
         timeout: std::time::Duration,
     ) -> Option<std::collections::HashMap<(String, String), Vec<u8>>> {
+        // With no audio thread nothing answers: say so at once instead of
+        // waiting out the timeout, which cost every export and every step of
+        // the performance test half a second.
+        if !self.is_running() {
+            return None;
+        }
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         {
             let mut slot = self.pending_state_snapshot.lock();
@@ -729,7 +735,9 @@ impl DawEngine {
             self.audio_prefs.clone(),
             Arc::clone(&self.record_pass),
             Arc::clone(&self.record_last_pos),
-            Arc::clone(&self.worker_pool),
+            // Not the live pool: it serves one caller at a time, and an
+            // export running beside playback wrote into the same batch.
+            Arc::new(Mutex::new(None)),
             Arc::clone(&self.reference),
             Arc::clone(&self.reference_on),
             Arc::clone(&self.reference_gain_centi_db),
@@ -1073,58 +1081,25 @@ impl DawEngine {
     /// the source paths that failed to load (missing/unreadable files) so the
     /// UI can surface them like missing plugins; the project still opens.
     pub fn rehydrate_audio_pool(&self) -> Vec<String> {
-        use hardwave_project::clip::ClipContent;
-        // (pool id, file on disk). The id is what clips play through; the
-        // file is where the audio has to be read from. They are different
-        // strings, which is exactly what this used to get wrong: it fed the
-        // pool id to the filesystem and tried to open a file named after a
-        // hash, so every source "went missing" on reload.
-        let paths: Vec<(String, String)> = {
-            let project = self.project.lock();
-            let mut set = std::collections::BTreeSet::new();
-            let mut collect = |content: &ClipContent| {
-                if let ClipContent::Audio(ac) = content {
-                    // Projects written before `source_file` existed carry the
-                    // path in `source_path` (the shape the engine's own tests
-                    // build), so fall back to it rather than dropping them.
-                    let file = if ac.source_file.is_empty() {
-                        ac.source_path.clone()
-                    } else {
-                        ac.source_file.clone()
-                    };
-                    set.insert((ac.source_path.clone(), file));
-                }
-            };
-            for track in &project.tracks {
-                for clip in &track.clips {
-                    collect(&clip.content);
-                }
-            }
-            for arrangement in &project.arrangements {
-                for timeline in arrangement.timelines.values() {
-                    for clip in &timeline.clips {
-                        collect(&clip.content);
-                    }
-                }
-            }
-            set.into_iter().collect()
-        };
-        let mut missing = Vec::new();
-        for (source_id, file) in paths {
-            // Skip sources already resident (e.g. loading a project into a
-            // session that imported the same file) — insert would clone-churn.
-            if self.audio_pool.get(&source_id).is_some() {
-                continue;
-            }
-            let loaded = self
-                .resolve_source_file(&file)
-                .and_then(|resolved| self.load_audio_file_as(&resolved, &source_id).map(|_| ()));
-            if let Err(e) = loaded {
-                log::warn!("rehydrate_audio_pool: '{file}' was not loaded: {e}");
-                missing.push(file);
-            }
+        let project = self.project.lock().clone();
+        self.audio_source_loader(self.project_dir())
+            .load_sources_of(&project, |_, _| {})
+    }
+
+    /// What reading a project's audio needs from the engine, taken now, so
+    /// the reading can run without the engine's lock. Opening a song decoded
+    /// every sample under that lock on the window's own thread, and the
+    /// window stopped responding until the last one was read.
+    pub fn audio_source_loader(
+        &self,
+        project_dir: Option<std::path::PathBuf>,
+    ) -> AudioSourceLoader {
+        AudioSourceLoader {
+            pool: self.audio_pool.clone(),
+            target_sr: self.audio_device.sample_rate,
+            project_dir,
+            trusted: self.trusted_servers.lock().clone(),
         }
-        missing
     }
 
     /// Ensure every non-master track in the project has an entry in the
@@ -1569,35 +1544,41 @@ impl DawEngine {
         start_samples: u64,
         instantiate: Option<OfflineInsertFactory<'_>>,
         prepare: impl FnOnce(&mut Project),
-        mut on_block: impl FnMut(&[f32]) -> bool,
+        on_block: impl FnMut(&[f32]) -> bool,
     ) -> Result<(), String> {
         if total_samples == 0 {
             return Ok(());
         }
-
-        let buffer_size: usize = 1024;
-        let mut callback = self.offline_callback(
-            sample_rate,
-            buffer_size,
-            start_samples,
-            instantiate,
-            prepare,
-        );
-
-        let mut buf = vec![0.0_f32; buffer_size * 2];
-        let mut remaining = total_samples;
-        while remaining > 0 {
-            let frames = remaining.min(buffer_size as u64) as usize;
-            let slice = &mut buf[..frames * 2];
-            slice.fill(0.0);
-            callback.process(slice, frames, 2);
-            if !on_block(slice) {
-                break;
-            }
-            remaining -= frames as u64;
-        }
-
+        self.prepare_offline_render(sample_rate, start_samples, instantiate, prepare)
+            .run(total_samples, on_block);
         Ok(())
+    }
+
+    /// Everything a render needs, taken from the engine now: a copy of the
+    /// project, its plug-ins and its audio. The render itself
+    /// ([`OfflineRender::run`]) needs nothing from the engine, so callers can
+    /// let go of the engine's lock before running it. An export used to hold
+    /// that lock for the whole render, and every window command that touched
+    /// the engine (the load meters poll it several times a second) waited
+    /// behind it: the app stopped responding until the export ended.
+    pub fn prepare_offline_render(
+        &self,
+        sample_rate: u32,
+        start_samples: u64,
+        instantiate: Option<OfflineInsertFactory<'_>>,
+        prepare: impl FnOnce(&mut Project),
+    ) -> OfflineRender {
+        let buffer_size: usize = 1024;
+        OfflineRender {
+            callback: self.offline_callback(
+                sample_rate,
+                buffer_size,
+                start_samples,
+                instantiate,
+                prepare,
+            ),
+            buffer_size,
+        }
     }
 
     /// How long each block of the project takes to compute, block by
@@ -1760,6 +1741,120 @@ impl DawEngine {
             callback.hydrate_offline_inserts(inst);
         }
         callback
+    }
+}
+
+/// Reads a project's audio into the shared pool without the engine; see
+/// [`DawEngine::audio_source_loader`].
+pub struct AudioSourceLoader {
+    pool: AudioPool,
+    target_sr: u32,
+    project_dir: Option<std::path::PathBuf>,
+    trusted: Vec<String>,
+}
+
+impl AudioSourceLoader {
+    /// Load every audio file the project's clips play that the pool does
+    /// not hold yet. `progress(done, total)` follows along. Returns the
+    /// files that could not be loaded.
+    pub fn load_sources_of(
+        &self,
+        project: &Project,
+        mut progress: impl FnMut(usize, usize),
+    ) -> Vec<String> {
+        use hardwave_project::clip::ClipContent;
+        // (pool id, file on disk). The id is what clips play through; the
+        // file is where the audio has to be read from. They are different
+        // strings: feeding the pool id to the filesystem made every source
+        // "go missing" on reload.
+        let mut set = std::collections::BTreeSet::new();
+        let mut collect = |content: &ClipContent| {
+            if let ClipContent::Audio(ac) = content {
+                // Projects written before `source_file` existed carry the
+                // path in `source_path`, so fall back to it.
+                let file = if ac.source_file.is_empty() {
+                    ac.source_path.clone()
+                } else {
+                    ac.source_file.clone()
+                };
+                set.insert((ac.source_path.clone(), file));
+            }
+        };
+        for track in &project.tracks {
+            for clip in &track.clips {
+                collect(&clip.content);
+            }
+        }
+        for arrangement in &project.arrangements {
+            for timeline in arrangement.timelines.values() {
+                for clip in &timeline.clips {
+                    collect(&clip.content);
+                }
+            }
+        }
+        // Sources already resident (a sample shared with the song open
+        // before) are not read again.
+        let wanted: Vec<(String, String)> = set
+            .into_iter()
+            .filter(|(id, _)| self.pool.get(id).is_none())
+            .collect();
+        let total = wanted.len();
+        let mut missing = Vec::new();
+        for (done, (source_id, file)) in wanted.into_iter().enumerate() {
+            progress(done, total);
+            let loaded =
+                crate::source_paths::check(&file, self.project_dir.as_deref(), &self.trusted)
+                    .map_err(|why| why.to_string())
+                    .and_then(|path| {
+                        hardwave_dsp::AudioFileReader::read_resampled(&path, Some(self.target_sr))
+                            .map_err(|e| e.to_string())
+                    });
+            match loaded {
+                Ok((info, channels)) => {
+                    let num_frames = channels.first().map(|c| c.len()).unwrap_or(0);
+                    self.pool.insert(
+                        source_id,
+                        AudioBuffer {
+                            channels,
+                            sample_rate: info.sample_rate,
+                            num_frames,
+                        },
+                    );
+                }
+                Err(e) => {
+                    log::warn!("audio source '{file}' was not loaded: {e}");
+                    missing.push(file);
+                }
+            }
+        }
+        progress(total, total);
+        missing
+    }
+}
+
+/// A render prepared by [`DawEngine::prepare_offline_render`], holding its
+/// own copy of everything, so it runs without the engine.
+pub struct OfflineRender {
+    callback: EngineCallback,
+    buffer_size: usize,
+}
+
+impl OfflineRender {
+    /// Render `total_samples` frames, handing each interleaved stereo block
+    /// to `on_block`; it returns false to stop early.
+    pub fn run(mut self, total_samples: u64, mut on_block: impl FnMut(&[f32]) -> bool) {
+        let mut buf = vec![0.0_f32; self.buffer_size * 2];
+        let mut remaining = total_samples;
+        while remaining > 0 {
+            let frames = remaining.min(self.buffer_size as u64) as usize;
+            let slice = &mut buf[..frames * 2];
+            slice.fill(0.0);
+            self.callback.process(slice, frames, 2);
+            if !on_block(slice) {
+                break;
+            }
+            remaining -= frames as u64;
+        }
     }
 }
 

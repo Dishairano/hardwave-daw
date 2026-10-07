@@ -34,9 +34,24 @@ pub struct ImportedClip {
     length_ticks: u64,
 }
 
-/// Import an audio file onto a track at a given position (in ticks).
+/// Import an audio file onto a track at a given position (in ticks). Off
+/// the window's thread: a long file decoded there froze the window.
 #[tauri::command]
-pub fn import_audio_file(
+pub async fn import_audio_file(
+    app: tauri::AppHandle,
+    track_id: String,
+    file_path: String,
+    position_ticks: Option<u64>,
+) -> Result<ImportedClip, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        import_audio_file_blocking(app.state::<AppState>(), track_id, file_path, position_ticks)
+    })
+    .await
+    .map_err(|e| format!("import stopped: {e}"))?
+}
+
+pub(crate) fn import_audio_file_blocking(
     state: State<AppState>,
     track_id: String,
     file_path: String,
