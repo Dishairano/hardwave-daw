@@ -537,6 +537,31 @@ if [ "${HW_GATE_ON_PC:-0}" = "1" ]; then
   echo "release.sh: PC gate green on ${RELEASE_SHA:0:7}"
 fi
 
+# The security gate (.github/workflows/security.yml) must be green on the
+# exact commit being tagged: known vulnerabilities in what we ship,
+# licences, and secrets in the history. It runs on GitHub's machines in
+# a few minutes, so this waits for it rather than trusting an older run.
+echo "release.sh: waiting for the Security run on ${RELEASE_COMMIT:0:7}..."
+SECURITY_OK=0
+for _ in $(seq 1 60); do
+  STATUS=$(gh run list --workflow Security --limit 20 \
+    --json headSha,status,conclusion \
+    --jq "[.[] | select(.headSha == \"$RELEASE_COMMIT\")] | first | \"\(.status) \(.conclusion // \"pending\")\"" 2>/dev/null || echo "")
+  case "$STATUS" in
+    "completed success") SECURITY_OK=1; break ;;
+    "completed "*)
+      echo "release.sh: the security gate FAILED on this commit ($STATUS). Nothing was tagged." >&2
+      exit 1 ;;
+    *) printf '.'; sleep 20 ;;
+  esac
+done
+echo
+if [ "$SECURITY_OK" != "1" ]; then
+  echo "release.sh: the security gate did not finish in time. Nothing was tagged." >&2
+  exit 1
+fi
+echo "release.sh: security gate green on ${RELEASE_COMMIT:0:7}"
+
 # Tag the release — every release is a full v* build (fires release.yml
 # across Windows / Mac / Linux and advances the auto-updater feed).
 TAG_NAME="v$NEW_VERSION"

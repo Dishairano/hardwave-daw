@@ -1,0 +1,72 @@
+# What the security gate allows into the build.
+#
+# Checked on every push by .github/workflows/security.yml, and before
+# any release. A known vulnerability in anything we ship fails the
+# build; there is no "warn" for those. An exception below needs a
+# reason that says why the flaw cannot be reached from outside, and is
+# looked at again whenever the crate that brings it in updates.
+
+[graph]
+all-features = true
+
+[advisories]
+# Vulnerabilities and yanked crates always fail.
+yanked = "deny"
+# Unmaintained crates fail when we depend on them ourselves. Ones that
+# come in under Tauri or GTK are reported but cannot be replaced from
+# here; they go when the framework moves on.
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+# Licences that let us ship a closed-source, sold product.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+# Our own crates are not published; their licence is ours to set.
+[licenses.private]
+ignore = true
+
+# Copyleft that is in the build today and needs the founder's decision.
+# They are allowed here so the gate checks everything else, and listed
+# in the security audit as an open legal question, not a solved one.
+[[licenses.exceptions]]
+# Ableton Link. The SDK is GPL-2.0-or-later unless Ableton grants a
+# commercial licence; shipping it in a closed-source DAW needs that
+# licence or Link removed.
+crate = "rusty_link"
+allow = ["GPL-2.0-or-later"]
+
+[[licenses.exceptions]]
+# MP3 export (shine). LGPL: allowed in a closed-source program if
+# people can swap in their own build of the library, which a statically
+# linked Rust binary does not offer as it stands.
+crate = "shine-rs"
+allow = ["LGPL-2.0"]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# Code comes from crates.io and nowhere else, unless listed here with
+# the reason.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = []

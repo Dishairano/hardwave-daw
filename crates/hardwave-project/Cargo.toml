@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "hardwave-project"
 version.workspace = true
 edition.workspace = true

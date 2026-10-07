@@ -17,7 +17,7 @@ export default defineConfig({
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
     target: 'esnext',
-    minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
+    minify: !process.env.TAURI_DEBUG,
     sourcemap: !!process.env.TAURI_DEBUG,
     // Push known-heavy / rarely-needed features into their own chunks so
     // the initial JS payload stays under ~400 KB gzipped. Vite emits each

@@ -35,7 +35,10 @@ async function waitForServer(url, ms = 30000) {
   throw new Error('vite dev server did not come up in time')
 }
 
-const vite = spawn('npm', ['run', 'dev'], { cwd: process.cwd(), stdio: 'inherit' })
+// Its own process group, so stopping it stops vite too and not only the
+// npm wrapper: a vite left behind keeps the port and serves stale code to
+// every later run.
+const vite = spawn('npm', ['run', 'dev'], { cwd: process.cwd(), stdio: 'inherit', detached: true })
 let browser
 try {
   await waitForServer(BASE)
@@ -71,10 +74,11 @@ try {
     await sleep(2200) // let async loads + canvas redraw settle
     await page.screenshot({ path: out, scale: 'device' })
     console.log(`screenshot → ${out}${errors.length ? `  (${errors.length} page errors)` : ''}`)
+    if (process.env.SHOT_ERRORS) for (const e of errors) console.log('  page error: ' + e.slice(0, 300))
     for (const e of errors.slice(0, 6)) console.log('    ! ' + e)
     await page.close()
   }
 } finally {
   if (browser) await browser.close()
-  vite.kill('SIGTERM')
+  try { process.kill(-vite.pid, 'SIGTERM') } catch { vite.kill('SIGTERM') }
 }
