@@ -12,6 +12,9 @@
  * Replaces `MainLayout` from App.tsx. The CSS lives in `../mockup.css`.
  */
 
+import { useTrackFolderStore } from '../stores/trackFolderStore'
+import { usePlaylistScrollStore } from '../stores/playlistScrollStore'
+import { playlistTracks } from './arrangement/playlistRows'
 import React, { useState, useCallback, useEffect, useMemo } from 'react'
 import { t, useLanguage } from '../i18n'
 import { Browser } from './browser/Browser'
@@ -1280,13 +1283,22 @@ function HwPlaylistTools() {
 // rows so the totals line up.
 const PLAYLIST_TOTAL_SLOTS = 500
 
-function HwPlaylistTracks() {
+export function HwPlaylistTracks() {
   const allTracks = useTrackStore(s => s.tracks)
-  // Playlist sidebar shows ONLY the pre-allocated inserts. Channels
-  // (non-insert tracks created via Channel Rack [+] or audio drop)
-  // belong in the Channel Rack panel, not here. Master always stays
-  // out — it lives in the mixer.
-  const tracks = allTracks.filter(t => t.kind !== 'Master' && t.id.startsWith('insert-'))
+  const folders = useTrackFolderStore(s => s.folders)
+  // The same tracks, in the same order, as the grid beside it draws. This
+  // listed only the numbered inserts while the grid drew every track, so
+  // the names and the clips drifted apart.
+  const tracks = useMemo(() => playlistTracks(allTracks, folders), [allTracks, folders])
+  // Scrolls with the grid; a wheel over the names scrolls both.
+  const scrollY = usePlaylistScrollStore(s => s.y)
+  const onWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey || e.shiftKey) return
+    let dy = e.deltaY
+    if (e.deltaMode === 1) dy *= 16
+    else if (e.deltaMode === 2) dy *= 400
+    usePlaylistScrollStore.getState().scrollBy(dy)
+  }
   const toggleArm = useTrackStore(s => s.toggleArm)
   const addAutomationLane = useTrackStore(s => s.addAutomationLane)
   const createAutomationClip = useTrackStore(s => s.createAutomationClip)
@@ -1297,9 +1309,9 @@ function HwPlaylistTracks() {
   // on a kick_synth-voiced track.
   const [kickEditorTrack, setKickEditorTrack] = useState<string | null>(null)
   return (
-    <div className="fl-pl-tracks">
+    <div className="fl-pl-tracks" onWheel={onWheel}>
       <div className="fl-pl-tracks-head">TRACKS</div>
-      <div className="fl-pl-tracks-list">
+      <div className="fl-pl-tracks-list" style={{ transform: `translateY(${-scrollY}px)` }}>
         {tracks.flatMap((t) => {
           const isMidi = (t.kind || '').toLowerCase() === 'midi'
           const row = (

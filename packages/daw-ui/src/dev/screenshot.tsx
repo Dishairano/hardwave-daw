@@ -14,7 +14,8 @@ import '../mockup.css' // the real top bar uses the fl-* classes from here
 
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { HwTopbar, HwSecondRow } from '../components/HwApp'
+import { HwTopbar, HwSecondRow, HwPlaylistTracks } from '../components/HwApp'
+import { usePlaylistScrollStore } from '../stores/playlistScrollStore'
 import { MacroPanel } from '../components/MacroPanel'
 import { PresetBrowser } from '../components/PresetBrowser'
 import { MidiFxPanel } from '../components/MidiFxPanel'
@@ -413,6 +414,28 @@ function Harness() {
             actions={<DetachButton panelId="settings" />} onClose={noop}>
             <AudioSettings onClose={noop} />
           </FloatingWindow>
+        </div>
+      )
+    }
+    case 'playlistnames': {
+      // The playlist as the app lays it out: names beside the grid, so
+      // their rows can be checked against each other. &scrolly=N scrolls.
+      const y = Number(new URLSearchParams(location.search).get('scrolly') || 0)
+      if (y) setTimeout(() => usePlaylistScrollStore.getState().setY(y), 600)
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Untitled" />
+          <div className="fl-playlist" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <div className="fl-pl-body" style={{ ['--row-h' as never]: '56px' }}>
+              <HwPlaylistTracks />
+              <div className="fl-pl-grid">
+                <div className="fl-pl-canvas">
+                  <Arrangement onSetHint={noop} />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )
     }

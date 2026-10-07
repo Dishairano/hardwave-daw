@@ -1,4 +1,6 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { usePlaylistScrollStore } from '../../stores/playlistScrollStore'
+import { playlistRowLayout, playlistTracks } from './playlistRows'
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { TuneDialog } from './TuneDialog'
 import { StemsDialog } from './StemsDialog'
 import { useCollabStore } from '../../stores/collabStore'
@@ -128,7 +130,12 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   /// `0..(content_height - viewport_height)` in the wheel handler.
   /// All canvas draws and hit-tests subtract this from their logical
   /// Y so the visual band of tracks slides up under the ruler.
-  const [verticalScroll, setVerticalScroll] = useState(0)
+  // Shared with the track name column, which scrolls with it.
+  const verticalScroll = usePlaylistScrollStore(s => s.y)
+  const setVerticalScroll = useCallback((next: number | ((v: number) => number)) => {
+    const store = usePlaylistScrollStore.getState()
+    store.setY(typeof next === 'function' ? next(store.y) : next)
+  }, [])
   // Horizontal pan, in pixels. Until this existed the arrangement's scroll
   // position was recomputed from the playhead on every draw, so
   // follow-playhead wasn't a mode — it was the only behaviour, and the
@@ -200,9 +207,26 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const ungroupClipAction = useClipGroupStore(s => s.ungroupClip)
 
   const folders = useTrackFolderStore(s => s.folders)
-  const hiddenTrackIds = new Set<string>()
-  for (const f of folders) if (f.collapsed) for (const tid of f.trackIds) hiddenTrackIds.add(tid)
-  const audioTracks = tracks.filter(t => t.kind !== 'Master' && !hiddenTrackIds.has(t.id))
+  const audioTracks = useMemo(() => playlistTracks(tracks, folders), [tracks, folders])
+  // Rows: each track, then a row per automation lane or clip under it, the
+  // way the name column lays them out.
+  const rows = useMemo(() => playlistRowLayout(audioTracks), [audioTracks])
+  const contentH = rows.total * trackHeight
+  // Tell the name column how far the playlist can scroll, so a wheel over
+  // the names stops where the grid stops.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const publish = () => {
+      const viewportH = container.clientHeight - RULER_HEIGHT
+      usePlaylistScrollStore.getState().setMax(Math.max(0, contentH - viewportH))
+    }
+    publish()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(publish)
+    ro.observe(container)
+    return () => ro.disconnect()
+  }, [contentH])
   const PIXELS_PER_SECOND = PIXELS_PER_SECOND_BASE * horizontalZoom
   const beatsPerSecond = bpm / 60
   const pixelsPerBeat = PIXELS_PER_SECOND / beatsPerSecond
@@ -230,7 +254,6 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const container = containerRef.current
       if (!container) return
       const viewportH = container.clientHeight - RULER_HEIGHT
-      const contentH = audioTracks.length * trackHeight
       const maxScroll = Math.max(0, contentH - viewportH)
       setVerticalScroll((v) => Math.max(0, Math.min(maxScroll, v - dy)))
     },
@@ -462,7 +485,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // the bottom or top of the viewport are skipped at the for-loop
     // boundaries below for the trivial paint-cost win.
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * trackHeight - verticalScroll
+      const y = RULER_HEIGHT + rows.rowOf[i] * trackHeight - verticalScroll
       // Cull tracks that fall entirely outside the visible viewport.
       if (y + trackHeight < RULER_HEIGHT) continue
       if (y > h) break
@@ -481,7 +504,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     // Crossfade overlay — shade any overlap between adjacent clips on the same track.
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * trackHeight - verticalScroll
+      const y = RULER_HEIGHT + rows.rowOf[i] * trackHeight - verticalScroll
       if (y + trackHeight < RULER_HEIGHT) continue
       if (y > h) break
       const clips = [...audioTracks[i].clips].sort((a, b) => a.position_ticks - b.position_ticks)
@@ -927,9 +950,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
    * several rows above the one under the cursor.
    */
   const trackRowAt = useCallback((mouseY: number) => {
-    const index = Math.floor((mouseY + verticalScroll - RULER_HEIGHT) / trackHeight)
-    return index >= 0 ? audioTracks[index] : undefined
-  }, [audioTracks, trackHeight, verticalScroll])
+    const row = Math.floor((mouseY + verticalScroll - RULER_HEIGHT) / trackHeight)
+    const owner = row >= 0 ? rows.ownerOf[row] : undefined
+    return owner === undefined ? undefined : audioTracks[owner]
+  }, [audioTracks, rows, trackHeight, verticalScroll])
 
   /**
    * Drop one copy of the armed picker clip in a grid slot.
@@ -965,7 +989,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   } | null => {
     const logicalY = mouseY + verticalScroll
     for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + i * trackHeight
+      const y = RULER_HEIGHT + rows.rowOf[i] * trackHeight
       if (logicalY < y + 2 || logicalY > y + trackHeight - 2) continue
       const track = audioTracks[i]
       for (const clip of track.clips) {
@@ -990,7 +1014,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
     return null
-  }, [audioTracks, pixelsPerTick, trackHeight, verticalScroll])
+  }, [audioTracks, rows, pixelsPerTick, trackHeight, verticalScroll])
 
   const getScrollOffset = useCallback(() => {
     if (!followPlayhead) return scrollX
@@ -1281,8 +1305,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const container = containerRef.current
       if (container) {
         const viewportH = container.clientHeight - RULER_HEIGHT
-        const contentH = audioTracks.length * trackHeight
-        const maxScroll = Math.max(0, contentH - viewportH)
+          const maxScroll = Math.max(0, contentH - viewportH)
         const next = Math.max(0, Math.min(maxScroll, rp.startVerticalScroll - dy))
         setVerticalScroll(next)
       }
@@ -1442,10 +1465,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // backend command also enforces this with a hard error.
       // Skip the ruler band so a near-top mouseY does not register as
       // track index -1 / 0 incorrectly.
-      const trackIdx = mouseY >= RULER_HEIGHT
-        ? Math.floor((mouseY - RULER_HEIGHT) / trackHeight)
-        : -1
-      const targetTrack = trackIdx >= 0 ? audioTracks[trackIdx] : undefined
+      // Through trackRowAt, so a scrolled playlist moves the clip to the
+      // row under the pointer and not one several rows above it.
+      const targetTrack = mouseY >= RULER_HEIGHT ? trackRowAt(mouseY) : undefined
       const sourceTrack = audioTracks.find(t => t.id === drag.trackId)
       const canMoveAcross =
         targetTrack &&
@@ -1547,7 +1569,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const y2 = Math.max(drag.startMouseY, drag.currentMouseY) + verticalScroll
       const picked: string[] = []
       for (let i = 0; i < audioTracks.length; i++) {
-        const y = RULER_HEIGHT + i * trackHeight
+        const y = RULER_HEIGHT + rows.rowOf[i] * trackHeight
         if (y + trackHeight < y1 || y > y2) continue
         for (const clip of audioTracks[i].clips) {
           const cx = clip.position_ticks * pixelsPerTick - scrollOffset
@@ -1589,7 +1611,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
     dragRef.current = null
     forceRender(n => n + 1)
-  }, [audioTracks, pixelsPerTick, trackHeight, getScrollOffset, commitClipDrag])
+  }, [audioTracks, rows, pixelsPerTick, trackHeight, getScrollOffset, commitClipDrag])
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect()
@@ -1670,8 +1692,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     const state = useTrackStore.getState()
     const audio = state.tracks.filter(t => t.kind === 'Audio')
-    const idx = Math.max(0, Math.floor((mouseY - RULER_HEIGHT) / trackHeight))
-    const dropped = audioTracks[idx]
+    const dropped = trackRowAt(Math.max(RULER_HEIGHT, mouseY))
     let trackId: string | null = null
     if (dropped && dropped.kind === 'Audio') {
       trackId = dropped.id
@@ -1694,7 +1715,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     } catch (err) {
       console.error('browser drop import failed:', path, err)
     }
-  }, [audioTracks, pixelsPerTick, trackHeight, getScrollOffset, applySnap])
+  }, [audioTracks, pixelsPerTick, trackHeight, getScrollOffset, applySnap, trackRowAt])
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     // Ctrl+Shift+Wheel: vertical zoom (change track height)
@@ -1721,7 +1742,6 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const container = containerRef.current
     if (!container) return
     const viewportH = container.clientHeight - RULER_HEIGHT
-    const contentH = audioTracks.length * trackHeight
     // Shift+wheel, or a trackpad's horizontal axis, pans the timeline.
     // Panning by hand takes over from follow-playhead, the same way dragging a
     // scrollbar does in every other DAW; the toolbar toggle puts it back.

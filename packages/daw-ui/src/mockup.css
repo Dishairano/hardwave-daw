@@ -1009,9 +1009,17 @@
   position: sticky;
   left: 0;
   z-index: 2;
+  /* The list is moved up by the playlist's scroll; clip it under the
+     head. Sideways stays visible: automation lanes reach out over the
+     grid. */
+  overflow-y: clip;
+  overflow-x: visible;
 }
+/* As tall as the grid's ruler band (RULER_HEIGHT in Arrangement.tsx), so
+   the first name sits level with the first row. At 28 px every name sat
+   6 px below its row. */
 .fl-pl-tracks-head {
-  height: 28px;
+  height: 22px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
