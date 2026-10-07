@@ -297,8 +297,7 @@ pub fn read_active_version(cache_root: &Path) -> Option<String> {
 }
 
 fn manifest_url() -> String {
-    std::env::var("HARDWAVE_FRONTEND_MANIFEST_URL")
-        .unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string())
+    crate::endpoints::service_url("HARDWAVE_FRONTEND_MANIFEST_URL", DEFAULT_MANIFEST_URL)
 }
 
 fn cache_root(app: &AppHandle) -> Result<PathBuf, String> {

@@ -14,8 +14,10 @@ use std::time::Duration;
 pub const STEMS: [&str; 4] = ["drums", "bass", "other", "vocals"];
 
 pub fn base_url() -> String {
-    std::env::var("HARDWAVE_STEMS_URL")
-        .unwrap_or_else(|_| "https://rooms.hardwavestudios.com/stems".to_string())
+    crate::endpoints::service_url(
+        "HARDWAVE_STEMS_URL",
+        "https://rooms.hardwavestudios.com/stems",
+    )
 }
 
 #[derive(Debug, Clone, Deserialize)]

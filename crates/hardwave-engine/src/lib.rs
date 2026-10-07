@@ -6,6 +6,7 @@ pub mod engine;
 pub mod graph;
 pub mod input_node;
 pub mod session;
+pub mod source_paths;
 pub use input_node::CaptureTap;
 pub mod insert_chain;
 pub mod link;

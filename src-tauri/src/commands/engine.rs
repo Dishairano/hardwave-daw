@@ -34,6 +34,7 @@ fn persist_audio_prefs(state: &State<AppState>) {
             list.sort();
             list
         },
+        trusted_sample_servers: engine.trusted_servers(),
     };
     drop(engine);
     prefs.save();

@@ -54,6 +54,10 @@ pub struct AudioPrefs {
     /// The port to listen on. Zero means the default, 9000.
     #[serde(default)]
     pub osc_port: u16,
+    /// Network servers the person picked samples from; a project may
+    /// only make the DAW open files on these.
+    #[serde(default)]
+    pub trusted_sample_servers: Vec<String>,
 }
 
 fn default_sample_rate() -> u32 {
@@ -123,6 +127,7 @@ impl AudioPrefs {
             sandboxed_plugins: Vec::new(),
             osc_enabled: false,
             osc_port: 0,
+            trusted_sample_servers: Vec::new(),
         }
     }
 }

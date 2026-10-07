@@ -43,6 +43,12 @@ pub fn import_audio_file(
     position_ticks: Option<u64>,
 ) -> Result<ImportedClip, String> {
     state.engine.lock().snapshot_before_mutation();
+    // Imported by the person, so a network server it is on is one they
+    // use for samples, and projects using it may load from it.
+    if hardwave_engine::source_paths::network_server(&file_path).is_some() {
+        state.engine.lock().trust_network_location(&file_path);
+        crate::commands::engine::persist_audio_prefs_public(&state);
+    }
     let path = PathBuf::from(&file_path);
     let file_name = path
         .file_stem()

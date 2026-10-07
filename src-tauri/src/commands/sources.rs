@@ -80,7 +80,10 @@ pub fn list_missing_sources(state: State<AppState>) -> Vec<MissingSource> {
     let resolve = |file: &str| state.engine.lock().resolve_source_file(file);
     project_sources(&state)
         .into_iter()
-        .filter(|(_, (file, _, _))| !resolve(file).is_file())
+        // A path the project may not use counts as missing without being
+        // touched: checking a stranger's network path would already be
+        // the connection the rules exist to prevent.
+        .filter(|(_, (file, _, _))| !resolve(file).is_ok_and(|p| p.is_file()))
         .map(|(source_id, (file, hash, clip_count))| MissingSource {
             name: Path::new(&file)
                 .file_name()
@@ -105,6 +108,10 @@ pub fn relink_source(
     source_id: String,
     new_path: String,
 ) -> Result<usize, String> {
+    // Picked by the person, so its network server, if it is on one, is
+    // one they use for samples.
+    state.engine.lock().trust_network_location(&new_path);
+    crate::commands::engine::persist_audio_prefs_public(&state);
     let path = PathBuf::from(&new_path);
     if !path.is_file() {
         return Err(format!("{new_path} is not a file"));
@@ -290,7 +297,22 @@ pub fn collect_project_samples(
     let mut taken: Vec<String> = Vec::new();
 
     for (source_id, (file, _hash, _count)) in sources {
-        let resolved = state.engine.lock().resolve_source_file(&file);
+        // Only audio the song really plays: a path the rules refuse, or a
+        // file that never decoded as audio, is not copied, so a project
+        // cannot use Collect to gather other files into its folder.
+        let playable = state.engine.lock().audio_pool.contains(&source_id);
+        let resolved = match state.engine.lock().resolve_source_file(&file) {
+            Ok(resolved) if playable => resolved,
+            _ => {
+                missing.push(
+                    Path::new(&file)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or(file.clone()),
+                );
+                continue;
+            }
+        };
         if !resolved.is_file() {
             missing.push(
                 Path::new(&file)
@@ -502,5 +524,92 @@ mod tests {
         let index = index_audio_files(&[dir.path().to_string_lossy().into_owned()]);
 
         assert!(pick_match(&index, &missing("kick.wav", "")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod untrusted_projects {
+    //! A project from someone else, opened on this machine.
+
+    use hardwave_engine::DawEngine;
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement};
+    use std::path::PathBuf;
+
+    fn wav() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_assets/pink_noise_-12dbfs_10s.wav")
+    }
+
+    fn clip(id: &str, file: &str) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: id.into(),
+                name: id.into(),
+                source_path: format!("pool-{id}"),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: 1000,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                warp_markers: Vec::new(),
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                source_file: file.into(),
+            }),
+            track_id: "t".into(),
+            position_ticks: 0,
+            length_ticks: 960,
+            lane: 0,
+        }
+    }
+
+    #[test]
+    fn opening_it_loads_its_own_samples_and_nothing_else() {
+        let root = std::env::temp_dir().join(format!("hw-untrusted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let song = root.join("Song");
+        std::fs::create_dir_all(song.join("Song Samples")).unwrap();
+        std::fs::copy(wav(), song.join("Song Samples/Kick.wav")).unwrap();
+        // Real audio, but outside the song's folder.
+        std::fs::copy(wav(), root.join("private.wav")).unwrap();
+        // Not audio at all, beside the song.
+        std::fs::write(song.join("notes.txt"), b"private").unwrap();
+
+        let engine = DawEngine::new();
+        engine.set_project_dir(Some(song.clone()));
+        {
+            let mut project = engine.project.lock();
+            let track = project.add_audio_track("Loop".into());
+            let t = project.track_mut(&track).unwrap();
+            t.clips.push(clip("own", "Song Samples/Kick.wav"));
+            t.clips.push(clip("escape", "../private.wav"));
+            t.clips.push(clip("text", "notes.txt"));
+            t.clips
+                .push(clip("share", r"\\attacker.example\share\kick.wav"));
+        }
+        let missing = engine.rehydrate_audio_pool();
+
+        assert!(
+            engine.audio_pool.contains("pool-own"),
+            "the song's own sample loads"
+        );
+        for refused in [
+            "../private.wav",
+            "notes.txt",
+            r"\\attacker.example\share\kick.wav",
+        ] {
+            assert!(
+                missing.iter().any(|m| m == refused),
+                "{refused} was opened: {missing:?}"
+            );
+        }
+        for id in ["pool-escape", "pool-text", "pool-share"] {
+            assert!(!engine.audio_pool.contains(id), "{id} reached the pool");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

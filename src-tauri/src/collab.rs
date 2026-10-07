@@ -183,11 +183,10 @@ pub fn load_token() -> Option<String> {
         .filter(|token| !token.is_empty())
 }
 
-/// Where the room service lives. Ours, unless a tester points it
-/// somewhere else.
+/// Where the room service lives: ours, or in a development build
+/// wherever HARDWAVE_ROOM_URL points.
 pub fn service_url() -> String {
-    std::env::var("HARDWAVE_ROOM_URL")
-        .unwrap_or_else(|_| "wss://rooms.hardwavestudios.com/room".to_string())
+    crate::endpoints::service_url("HARDWAVE_ROOM_URL", "wss://rooms.hardwavestudios.com/room")
 }
 
 /// Build the URL for opening or joining a room.

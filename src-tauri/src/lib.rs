@@ -7,6 +7,7 @@ mod collab;
 mod commands;
 mod control_surface;
 mod diagnostics;
+mod endpoints;
 mod frontend_updater;
 mod midi_clock;
 mod midi_map;
@@ -176,6 +177,7 @@ pub fn run() {
     // Which pair of the interface is recorded from and played out of.
     engine.set_channel_offsets(prefs.input_channel_offset, prefs.output_channel_offset);
     // Sharing the audio work across cores, if the setting asks for it.
+    engine.set_trusted_servers(prefs.trusted_sample_servers.clone());
     if prefs.worker_threads > 0 {
         engine.set_worker_threads(prefs.worker_threads);
     }

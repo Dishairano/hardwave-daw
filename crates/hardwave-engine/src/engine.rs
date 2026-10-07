@@ -206,6 +206,10 @@ pub struct DawEngine {
     /// open: an absolute path only describes where the audio was on the
     /// machine that imported it.
     project_dir: Arc<Mutex<Option<std::path::PathBuf>>>,
+    /// Network servers the person has picked samples from on this
+    /// machine. A project may only make the DAW open files on these;
+    /// see `source_paths`.
+    trusted_servers: Mutex<Vec<String>>,
 
     /// How much of each audio block's time budget the engine actually spends,
     /// in per mille, written by the audio thread after every block.
@@ -349,6 +353,7 @@ impl DawEngine {
             reference_on: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reference_gain_centi_db: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             project_dir: Arc::new(Mutex::new(None)),
+            trusted_servers: Mutex::new(Vec::new()),
             audio_load_permille: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             audio_xruns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             metronome: crate::metronome::MetronomeSettings::new(),
@@ -965,20 +970,49 @@ impl DawEngine {
         self.project_dir.lock().clone()
     }
 
-    /// Absolute location of a clip's audio.
+    /// Absolute location of a clip's audio, or why a project may not
+    /// make the DAW open it.
     ///
     /// A collected project stores its samples relative to the .hwp, so the
     /// whole folder can be moved or zipped and still open. An imported sample
-    /// that lives elsewhere on disk keeps its absolute path.
-    pub fn resolve_source_file(&self, file: &str) -> std::path::PathBuf {
-        let path = std::path::Path::new(file);
-        if path.is_absolute() {
-            return path.to_path_buf();
+    /// that lives elsewhere on disk keeps its absolute path. What a project
+    /// may name is decided in `source_paths`: audio files only, inside the
+    /// project folder when relative, and no strangers' network servers.
+    pub fn resolve_source_file(&self, file: &str) -> Result<std::path::PathBuf, String> {
+        let dir = self.project_dir();
+        let trusted = self.trusted_servers.lock().clone();
+        crate::source_paths::check(file, dir.as_deref(), &trusted).map_err(|why| why.to_string())
+    }
+
+    /// Where the project's video really is, under the same rules.
+    pub fn resolve_video_file(&self, file: &str) -> Result<std::path::PathBuf, String> {
+        let dir = self.project_dir();
+        let trusted = self.trusted_servers.lock().clone();
+        crate::source_paths::check_video(file, dir.as_deref(), &trusted)
+            .map_err(|why| why.to_string())
+    }
+
+    /// The person picked a file on a network server themselves: samples
+    /// on that server may load from projects from now on.
+    pub fn trust_network_location(&self, path: &str) {
+        if let Some(server) = crate::source_paths::network_server(path) {
+            let mut trusted = self.trusted_servers.lock();
+            if !trusted.contains(&server) {
+                trusted.push(server);
+            }
         }
-        match self.project_dir() {
-            Some(dir) => dir.join(path),
-            None => path.to_path_buf(),
-        }
+    }
+
+    /// Servers trusted so far, to keep in the preferences.
+    pub fn trusted_servers(&self) -> Vec<String> {
+        self.trusted_servers.lock().clone()
+    }
+
+    pub fn set_trusted_servers(&self, servers: Vec<String>) {
+        *self.trusted_servers.lock() = servers
+            .into_iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
     }
 
     /// Re-load every audio source referenced by the current project into the
@@ -1032,9 +1066,11 @@ impl DawEngine {
             if self.audio_pool.get(&source_id).is_some() {
                 continue;
             }
-            let resolved = self.resolve_source_file(&file);
-            if let Err(e) = self.load_audio_file_as(&resolved, &source_id) {
-                log::warn!("rehydrate_audio_pool: '{file}' failed to load: {e}");
+            let loaded = self
+                .resolve_source_file(&file)
+                .and_then(|resolved| self.load_audio_file_as(&resolved, &source_id).map(|_| ()));
+            if let Err(e) = loaded {
+                log::warn!("rehydrate_audio_pool: '{file}' was not loaded: {e}");
                 missing.push(file);
             }
         }

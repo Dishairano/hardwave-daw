@@ -104,21 +104,34 @@ pub async fn open_from_workspace(file_id: u64) -> Result<String, String> {
         .ok_or_else(|| "that song is no longer in your Workspace".to_string())?
         .clone();
 
-    let local_root = workspace_cloud::local_copy_dir(&project.folder_path);
+    let local_root = workspace_cloud::local_copy_dir(&project.folder_path)
+        .ok_or_else(|| "that song's folder name cannot be used on this machine".to_string())?;
+    // Every file is placed by this machine, inside the song's folder,
+    // or not at all: a name that would land anywhere else stops the
+    // whole download before anything is written.
+    let mut plan = Vec::new();
     for file in files
         .iter()
-        .filter(|f| f.folder_path.starts_with(&project.folder_path))
+        .filter(|f| workspace_cloud::within_folder(&f.folder_path, &project.folder_path))
     {
-        let relative = file
-            .folder_path
-            .trim_start_matches(&project.folder_path)
-            .trim_start_matches('/');
-        let target = local_root.join(relative).join(&file.name);
-        client.download(home.id, file.id, &target).await?;
+        let target = workspace_cloud::local_path_for(&local_root, &project.folder_path, file)
+            .ok_or_else(|| {
+                format!(
+                    "\"{}\" has a name this machine cannot safely use; nothing was downloaded",
+                    file.name
+                )
+            })?;
+        plan.push((file, target));
+    }
+    for (file, target) in plan {
+        client.download(home.id, file, &target).await?;
     }
 
     // Opened by the window, the same way any song is opened, so the
     // channel rack, the timeline and the recent list all follow.
+    if !workspace_cloud::safe_segment(&project.name) {
+        return Err("that song's name cannot be used on this machine".into());
+    }
     Ok(local_root
         .join(&project.name)
         .to_string_lossy()

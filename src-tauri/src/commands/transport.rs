@@ -625,9 +625,18 @@ pub struct VideoStatus {
 #[tauri::command]
 pub fn get_video(state: State<AppState>) -> Option<VideoStatus> {
     let engine = state.engine.lock();
-    let project = engine.project.lock();
-    project.video.as_ref().map(|video| VideoStatus {
-        path: video.path.clone(),
+    let video = engine.project.lock().video.clone()?;
+    // The window opens whatever path this returns, so a project's video
+    // goes through the same rules as its samples.
+    let path = match engine.resolve_video_file(&video.path) {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(why) => {
+            log::warn!("the project's video was not opened: {why}");
+            return None;
+        }
+    };
+    Some(VideoStatus {
+        path,
         offset_ticks: video.offset_ticks,
         muted: video.muted,
     })
@@ -644,6 +653,9 @@ pub fn set_video(
     path: String,
     offset_ticks: Option<u64>,
 ) -> Result<VideoStatus, String> {
+    // Chosen by the person, so its network server is one they use.
+    state.engine.lock().trust_network_location(&path);
+    crate::commands::engine::persist_audio_prefs_public(&state);
     if !std::path::Path::new(&path).exists() {
         return Err("there is no file there".into());
     }
