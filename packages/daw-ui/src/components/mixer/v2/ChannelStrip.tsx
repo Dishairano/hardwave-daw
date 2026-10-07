@@ -1,4 +1,5 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useMemo } from 'react'
+import { useSendStore, type SendInfo } from '../../../stores/sendStore'
 import { usePerfMetersStore } from '../../../stores/perfMetersStore'
 import { Knob } from '../../primitives/Knob'
 import { Fader } from '../../primitives/Fader'
@@ -24,6 +25,8 @@ import {
   useAutomationWriteStore,
 } from '../../../stores/automationWriteStore'
 
+
+const NO_SENDS: SendInfo[] = []
 export interface ChannelStripProps {
   trackId: string
   /** Numeric position (1-based) shown in the s-num header. Master uses 'M'. */
@@ -67,6 +70,17 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const soloed = useTrackSoloed(trackId)
   const armed = useTrackArmed(trackId)
   const showWidthKnob = useMixerSettingsStore((s) => s.showWidthKnob)
+  // Where this channel goes, and its sends as the dots under it. The dots
+  // were a fixed pattern before: every strip showed one send it did not have.
+  const outputName = useTrackStore((s) => {
+    const bus = s.tracksById[trackId]?.outputBus
+    return bus ? (s.tracksById[bus]?.name ?? null) : null
+  })
+  const sends = useSendStore((s) => s.byTrack[trackId] ?? NO_SENDS)
+  const sendDots = useMemo(
+    () => sends.slice(0, 5).map((x) => (x.enabled ? (x.preFader ? 'pre' : 'post') : false) as false | 'pre' | 'post'),
+    [sends],
+  )
 
   // ---- volume ----
   // Each drag also streams into automation when a write mode is on. The
@@ -75,6 +89,8 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const onVolChange = useCallback(
     (db: number) => {
       useTrackStore.getState().setVolumeLocal(trackId, db)
+      // Heard while dragging, not only on release.
+      useTrackStore.getState().sendLiveMix(trackId)
       useAutomationWriteStore
         .getState()
         .writeSample(trackId, { kind: 'track_volume' }, normalizeVolumeDb(db))
@@ -93,6 +109,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const onPanChange = useCallback(
     (next: number) => {
       useTrackStore.getState().setPanLocal(trackId, next)
+      useTrackStore.getState().sendLiveMix(trackId)
       useAutomationWriteStore
         .getState()
         .writeSample(trackId, { kind: 'track_pan' }, normalizePan(next))
@@ -110,8 +127,14 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   // ---- width (mapped to stereoSeparation 0..2 backend command) ----
   const onWidthChange = useCallback(
     (next: number) => {
-      // Knob value range is the underlying separation (0..2). Direct apply
-      // — keep the gesture snappy. Tauri command does its own clamp.
+      // Heard while turning; one undo step when the turn ends.
+      useTrackStore.getState().setWidthLocal(trackId, next)
+      useTrackStore.getState().sendLiveMix(trackId)
+    },
+    [trackId],
+  )
+  const onWidthCommit = useCallback(
+    (next: number) => {
       useTrackStore.getState().setTrackStereoSeparation(trackId, next).catch(console.error)
     },
     [trackId],
@@ -222,7 +245,10 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
         </div>
       )}
 
-      <div className="mx-s-knob-row">
+      {/* The master has no pan or width of its own: the knobs did nothing
+          there, so they are not shown. The row keeps its height so the
+          faders still line up. */}
+      <div className="mx-s-knob-row" style={kind === 'Master' ? { visibility: 'hidden' } : undefined}>
         <div className="mx-knob-cell">
           <Knob
             value={pan}
@@ -245,6 +271,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
               defaultValue={1}
               kind="width"
               onChange={onWidthChange}
+              onChangeEnd={onWidthCommit}
               title="Width"
             />
             <span className="mx-klabel">WIDTH</span>
@@ -269,7 +296,15 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
         {volumeDb <= -60 ? '-∞' : volumeDb.toFixed(1)} dB
       </div>
 
-      <SendsDots sends={[false, 'post', false, false, false]} />
+      {kind !== 'Master' && (
+        <div
+          className={'mx-s-out' + (outputName ? ' routed' : '')}
+          title={`Goes to ${outputName ?? 'Master'}. Change it under Output in the FX rack.`}
+        >
+          → {outputName ?? 'Master'}
+        </div>
+      )}
+      <SendsDots sends={sendDots} />
     </div>
   )
 })

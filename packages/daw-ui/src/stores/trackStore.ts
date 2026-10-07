@@ -12,6 +12,10 @@ import { useHistoryStore } from './historyStore'
  * command inside the group pushed its own label and the list showed several
  * steps where undo would take back all of them at once.
  */
+// Tracks whose live mix is waiting for the next frame, and that frame.
+const liveMixPending = new Set<string>()
+let liveMixFrame: number | null = null
+
 let historyGroupOpen = false
 
 async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: string): Promise<T> {
@@ -213,6 +217,12 @@ interface TrackState {
   setVolumeLocal: (id: string, db: number) => void
   /// Same idea as setVolumeLocal but for pan.
   setPanLocal: (id: string, pan: number) => void
+  /// Same idea for width (stereo separation 0..2).
+  setWidthLocal: (id: string, separation: number) => void
+  /// Send a track's fader, pan and width to the engine as they are in the
+  /// store right now, so a move is heard while it happens. Batched to one
+  /// call per frame; no undo step, no project write (commit does those).
+  sendLiveMix: (id: string) => void
   /// Persist a track's final post-drag volume to the backend in one IPC.
   /// Triggers fetchTracks once at the end. Call this on pointerup after
   /// a drag that used setVolumeLocal.
@@ -529,6 +539,38 @@ export const useTrackStore = create<TrackState>((set, get) => ({
         : s.tracksById
       return { tracks, tracksById }
     })
+  },
+  setWidthLocal: (id, separation) => {
+    const sep = Math.max(0, Math.min(2, separation))
+    set((s) => {
+      const tracks = s.tracks.map((t) => (t.id === id ? { ...t, stereoSeparation: sep } : t))
+      const tracksById = s.tracksById[id]
+        ? { ...s.tracksById, [id]: { ...s.tracksById[id], stereoSeparation: sep } }
+        : s.tracksById
+      return { tracks, tracksById }
+    })
+  },
+  sendLiveMix: (id) => {
+    liveMixPending.add(id)
+    if (liveMixFrame !== null) return
+    const flush = () => {
+      liveMixFrame = null
+      const ids = [...liveMixPending]
+      liveMixPending.clear()
+      for (const trackId of ids) {
+        const t = get().tracksById[trackId]
+        if (!t) continue
+        invoke('set_track_mix_live', {
+          trackId,
+          volumeDb: t.volume_db,
+          pan: t.pan,
+          width: t.stereoSeparation ?? 1,
+        }).catch(() => { /* the commit on release still lands */ })
+      }
+    }
+    liveMixFrame = typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame(flush)
+      : (setTimeout(flush, 16) as unknown as number)
   },
   commitVolume: async (id, db) => {
     const name = get().tracks.find((t) => t.id === id)?.name ?? 'track'

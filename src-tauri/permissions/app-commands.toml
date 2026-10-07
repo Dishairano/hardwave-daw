@@ -188,6 +188,7 @@ permissions = [
   "allow-set-track-phase-invert",
   "allow-set-track-swap-lr",
   "allow-set-track-stereo-separation",
+  "allow-set-track-mix-live",
   "allow-set-track-delay-samples",
   "allow-set-track-pitch-semitones",
   "allow-set-track-fine-tune-cents",

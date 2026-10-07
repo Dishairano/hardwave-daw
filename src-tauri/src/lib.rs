@@ -455,6 +455,7 @@ pub fn run() {
             commands::tracks::set_track_phase_invert,
             commands::tracks::set_track_swap_lr,
             commands::tracks::set_track_stereo_separation,
+            commands::tracks::set_track_mix_live,
             commands::tracks::set_track_delay_samples,
             commands::tracks::set_track_pitch_semitones,
             commands::tracks::set_track_fine_tune_cents,

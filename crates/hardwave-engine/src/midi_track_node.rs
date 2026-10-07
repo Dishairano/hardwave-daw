@@ -207,6 +207,10 @@ pub struct MidiTrackNode {
     /// the mixer panel can drive the same atomics.
     volume: f32,
     pan: f32,
+    /// Mid/side width: 0 mono, 1 as played, 2 wide.
+    stereo_separation: f32,
+    width_applied: f32,
+    gain_ramp: crate::track_node::GainRamp,
     muted: bool,
     soloed: bool,
     /// Shared meter state (post-fader peak + RMS). Same struct that the UI
@@ -296,6 +300,9 @@ impl MidiTrackNode {
             voices: Vec::new(),
             volume: 1.0,
             pan: 0.0,
+            stereo_separation: 1.0,
+            width_applied: 1.0,
+            gain_ramp: crate::track_node::GainRamp::default(),
             muted: false,
             soloed: false,
             meter,
@@ -594,6 +601,10 @@ impl MidiTrackNode {
     pub fn set_volume_db(&mut self, db: f64) {
         self.volume = 10.0_f64.powf(db / 20.0) as f32;
     }
+    pub fn set_stereo_separation(&mut self, sep: f64) {
+        self.stereo_separation = sep.clamp(0.0, 2.0) as f32;
+    }
+
     pub fn set_pan(&mut self, pan: f64) {
         self.pan = pan.clamp(-1.0, 1.0) as f32;
     }
@@ -680,6 +691,12 @@ impl AudioNode for MidiTrackNode {
     ) {
         // Per-track load, published on every exit from this block.
         let _cpu = crate::track_node::CpuTimer::new(&self.meter);
+        // The mixer's live fader, pan and width, as for audio tracks.
+        if let Some((volume, pan, width)) = self.meter.live_mix() {
+            self.volume = volume;
+            self.pan = pan;
+            self.stereo_separation = width;
+        }
         // Defensive: zero outputs first so we never leak undefined data.
         for buf in outputs.iter_mut() {
             for s in buf.iter_mut() {
@@ -1115,21 +1132,36 @@ impl AudioNode for MidiTrackNode {
             }
         }
 
-        // Apply fader + pan and compute meters on the post-FX signal.
-        for i in 0..block_size {
-            let dry_l = outputs.first().map(|b| b[i]).unwrap_or(0.0);
-            let dry_r = outputs.get(1).map(|b| b[i]).unwrap_or(dry_l);
-            let l = dry_l * self.volume * pan_l;
-            let r = dry_r * self.volume * pan_r;
-            if let Some(buf) = outputs.get_mut(0) {
-                buf[i] = l;
+        // Width, fader and pan, ramped from the last block, then meters on
+        // the post-FX signal.
+        if outputs.len() >= 2 {
+            let (first, rest) = outputs.split_at_mut(1);
+            let n = block_size.min(first[0].len()).min(rest[0].len());
+            let start = self.width_applied;
+            self.width_applied = self.stereo_separation;
+            crate::track_node::apply_width(
+                &mut first[0][..n],
+                &mut rest[0][..n],
+                start,
+                self.stereo_separation,
+            );
+            let (g0, g1) = self
+                .gain_ramp
+                .step((self.volume * pan_l, self.volume * pan_r));
+            crate::track_node::apply_ramped(&mut first[0][..n], &mut rest[0][..n], g0, g1);
+            for i in 0..n {
+                let (l, r) = (first[0][i], rest[0][i]);
+                peak_l = peak_l.max(l.abs());
+                peak_r = peak_r.max(r.abs());
+                energy_acc += (l * l + r * r) * 0.5;
             }
-            if let Some(buf) = outputs.get_mut(1) {
-                buf[i] = r;
+        } else if let Some(buf) = outputs.get_mut(0) {
+            for s in buf.iter_mut().take(block_size) {
+                *s *= self.volume * pan_l;
+                peak_l = peak_l.max(s.abs());
+                energy_acc += *s * *s;
             }
-            peak_l = peak_l.max(l.abs());
-            peak_r = peak_r.max(r.abs());
-            energy_acc += (l * l + r * r) * 0.5;
+            peak_r = peak_l;
         }
 
         // Update meters — same atomics the audio TrackNode writes to, so

@@ -2549,3 +2549,69 @@ fn a_render_is_the_same_whether_it_uses_one_core_or_several() {
         assert_eq!(a, b, "sample {index} differs: {a} against {b}");
     }
 }
+
+/// A track routed to another track (its output, not a send) has to be
+/// heard through that track even when the bus has nothing of its own on
+/// it. The bus took the idle path and the routed track went silent.
+#[test]
+fn a_track_routed_to_an_empty_bus_is_heard() {
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve};
+
+    let sr = 48_000_u32;
+    let frames = sr as usize / 4;
+    let ch: Vec<f32> = (0..frames)
+        .map(|n| (std::f32::consts::TAU * 220.0 * n as f32 / sr as f32).sin() * 0.5)
+        .collect();
+    let engine = hardwave_engine::DawEngine::new();
+    engine.audio_pool.insert(
+        "tone".to_string(),
+        hardwave_engine::AudioBuffer {
+            channels: vec![ch.clone(), ch],
+            sample_rate: sr,
+            num_frames: frames,
+        },
+    );
+    {
+        let mut project = engine.project.lock();
+        let bus_id = project.add_audio_track("Bus".into());
+        let track_id = project.add_audio_track("Source".into());
+        if let Some(track) = project.track_mut(&track_id) {
+            track.clips.push(ClipPlacement {
+                content: ClipContent::Audio(AudioClip {
+                    id: "clip".into(),
+                    name: "tone".into(),
+                    source_path: "tone".into(),
+                    source_hash: String::new(),
+                    source_start: 0,
+                    source_end: frames as u64,
+                    gain_db: 0.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
+                    muted: false,
+                    reversed: false,
+                    pitch_semitones: 0.0,
+                    stretch_ratio: 1.0,
+                    warp_markers: Vec::new(),
+                    fade_in_curve: FadeCurve::Linear,
+                    fade_out_curve: FadeCurve::Linear,
+                    source_file: String::new(),
+                }),
+                track_id: track_id.clone(),
+                position_ticks: 0,
+                length_ticks: 1_000_000,
+                lane: 0,
+            });
+            track.output_bus = Some(bus_id.clone());
+        }
+    }
+    engine.rebuild_graph();
+    let mut out = Vec::new();
+    engine
+        .render_offline(sr, frames as u64, |block| {
+            out.extend_from_slice(block);
+            true
+        })
+        .expect("offline render");
+    let peak = out.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+    assert!(peak > 0.05, "the routed track went silent: peak {peak}");
+}

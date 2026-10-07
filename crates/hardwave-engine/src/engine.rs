@@ -992,6 +992,56 @@ impl DawEngine {
             .map_err(|why| why.to_string())
     }
 
+    /// Play a track at this fader, pan and width from the next block on,
+    /// without rebuilding the graph or touching the project. What the
+    /// mixer sends while a fader is being dragged; the project is written
+    /// once, when the drag ends. The master's fader is the master volume.
+    pub fn set_live_mix(&self, track_id: &str, volume_db: f64, pan: f64, width: f64) {
+        if !(volume_db.is_finite() && pan.is_finite() && width.is_finite()) {
+            return;
+        }
+        let (is_master, vca_db) = {
+            let project = self.project.lock();
+            let is_master = project
+                .tracks
+                .iter()
+                .any(|t| t.id == track_id && matches!(t.kind, hardwave_project::TrackKind::Master));
+            (
+                is_master,
+                hardwave_project::vca::offset_for(&project.vcas, track_id).0,
+            )
+        };
+        if is_master {
+            self.transport.master_volume_db.store(
+                volume_db.clamp(-200.0, 24.0),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            return;
+        }
+        if let Some(meter) = self.track_meters.lock().get(track_id) {
+            meter.set_mix(
+                db_to_linear_f32(volume_db.clamp(-200.0, 24.0) + vca_db),
+                pan.clamp(-1.0, 1.0) as f32,
+                width.clamp(0.0, 2.0) as f32,
+            );
+        }
+    }
+
+    /// Play a track's fader, pan and width as the project now has them.
+    pub fn apply_track_mix(&self, track_id: &str) {
+        let values = {
+            let project = self.project.lock();
+            project
+                .tracks
+                .iter()
+                .find(|t| t.id == track_id)
+                .map(|t| (t.volume_db, t.pan, t.stereo_separation))
+        };
+        if let Some((volume_db, pan, width)) = values {
+            self.set_live_mix(track_id, volume_db, pan, width);
+        }
+    }
+
     /// The person picked a file on a network server themselves: samples
     /// on that server may load from projects from now on.
     pub fn trust_network_location(&self, path: &str) {
@@ -1711,6 +1761,11 @@ impl DawEngine {
         }
         callback
     }
+}
+
+/// Decibels to a linear gain, as the track nodes use it.
+fn db_to_linear_f32(db: f64) -> f32 {
+    10.0_f64.powf(db / 20.0) as f32
 }
 
 impl Default for DawEngine {
@@ -2463,6 +2518,13 @@ impl EngineCallback {
                     hardwave_project::vca::offset_for(&project.vcas, &track.id);
                 midi_node.set_volume_db(track.volume_db + vca_gain_db);
                 midi_node.set_pan(track.pan);
+                midi_node.set_stereo_separation(track.stereo_separation);
+                // The live mix starts from what the project says.
+                meter.set_mix(
+                    db_to_linear_f32(track.volume_db + vca_gain_db),
+                    track.pan as f32,
+                    track.stereo_separation as f32,
+                );
                 let effective_mute_midi =
                     track.muted || vca_muted || (any_soloed && !track.soloed && !track.solo_safe);
                 midi_node.set_muted(effective_mute_midi);
@@ -2617,6 +2679,14 @@ impl EngineCallback {
             node.set_phase_invert(track.phase_invert);
             node.set_swap_lr(track.swap_lr);
             node.set_stereo_separation(track.stereo_separation);
+            // The live mix starts from what the project says.
+            if let Some(meter) = meters.get(&track.id) {
+                meter.set_mix(
+                    db_to_linear_f32(track.volume_db + vca_gain_db),
+                    track.pan as f32,
+                    track.stereo_separation as f32,
+                );
+            }
             node.set_delay_samples(track.delay_samples);
             let filter_kind = crate::track_node::TrackFilterType::parse(&track.filter_type);
             node.set_filter(
@@ -2880,6 +2950,9 @@ impl EngineCallback {
         // cycles) silently fall back to master — the command layer already
         // rejects bad values, but the engine is defensive to keep audio
         // flowing even if a legacy project carries stale routing.
+        // Tracks another track's output lands on. They are buses, and are
+        // told so below together with the send targets.
+        let mut bus_targets: Vec<String> = Vec::new();
         for track in &project.tracks {
             if !track.kind.is_audio_bearing() {
                 continue;
@@ -2917,10 +2990,12 @@ impl EngineCallback {
                             .find(|t| t.id == next)
                             .and_then(|t| t.output_bus.as_deref());
                     }
-                    if cycle {
-                        master_id
-                    } else {
-                        track_id_to_node.get(bus_id).copied().unwrap_or(master_id)
+                    match track_id_to_node.get(bus_id).copied() {
+                        Some(node) if !cycle => {
+                            bus_targets.push(bus_id.clone());
+                            node
+                        }
+                        _ => master_id,
                     }
                 }
                 _ => master_id,
@@ -2989,8 +3064,11 @@ impl EngineCallback {
         // send amount applied as per-edge gain.
         // Tracks that something routes into. A bus with nothing of its own on
         // it still has to mix what reaches it.
+        // A track routed to another track's output counts the same way:
+        // without it, a bus that only had tracks routed to it (no sends, no
+        // clips of its own) took the idle path and played nothing.
         let mut receives_input: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+            bus_targets.into_iter().collect();
         for track in &project.tracks {
             // An excluded track's sends are dropped too, so a stem carries only
             // the target's own send tail rather than everyone else's.

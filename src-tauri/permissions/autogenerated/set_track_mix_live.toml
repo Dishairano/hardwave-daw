@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-track-mix-live"
+description = "Enables the set_track_mix_live command without any pre-configured scope."
+commands.allow = ["set_track_mix_live"]
+
+[[permission]]
+identifier = "deny-set-track-mix-live"
+description = "Denies the set_track_mix_live command without any pre-configured scope."
+commands.deny = ["set_track_mix_live"]

@@ -62,6 +62,101 @@ pub struct TrackMeterState {
     /// running average. The CPU meter says the load is high and cannot say
     /// which track is causing it; this can.
     pub cpu_ns: std::sync::atomic::AtomicU64,
+    /// The fader, pan and width as the mixer has them right now, read by
+    /// the node at the start of every block. A move in the mixer reaches
+    /// the sound within one block, without the graph being rebuilt.
+    pub mix_volume: AtomicF32,
+    pub mix_pan: AtomicF32,
+    pub mix_width: AtomicF32,
+    /// False until the engine has written the three above for this track;
+    /// before that the node keeps the values it was built with.
+    pub mix_set: std::sync::atomic::AtomicBool,
+}
+
+impl TrackMeterState {
+    /// Set the mix the node plays at: linear volume, pan -1..1, width 0..2.
+    pub fn set_mix(&self, volume_linear: f32, pan: f32, width: f32) {
+        use std::sync::atomic::Ordering::{Relaxed, Release};
+        let finite = |v: f32, d: f32| if v.is_finite() { v } else { d };
+        self.mix_volume
+            .store(finite(volume_linear, 0.0).max(0.0), Relaxed);
+        self.mix_pan
+            .store(finite(pan, 0.0).clamp(-1.0, 1.0), Relaxed);
+        self.mix_width
+            .store(finite(width, 1.0).clamp(0.0, 2.0), Relaxed);
+        self.mix_set.store(true, Release);
+    }
+
+    /// The live mix, once the engine has set one.
+    pub fn live_mix(&self) -> Option<(f32, f32, f32)> {
+        use std::sync::atomic::Ordering::{Acquire, Relaxed};
+        if !self.mix_set.load(Acquire) {
+            return None;
+        }
+        Some((
+            self.mix_volume.load(Relaxed),
+            self.mix_pan.load(Relaxed),
+            self.mix_width.load(Relaxed),
+        ))
+    }
+}
+
+/// Gains from one block to the next, ramped across the block so a fader
+/// moving while the song plays does not click.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct GainRamp {
+    last: Option<(f32, f32)>,
+}
+
+impl GainRamp {
+    /// Start and end gains for this block, remembering the end for the next.
+    pub(crate) fn step(&mut self, target: (f32, f32)) -> ((f32, f32), (f32, f32)) {
+        let start = self.last.unwrap_or(target);
+        self.last = Some(target);
+        (start, target)
+    }
+}
+
+/// Apply ramped left/right gains to a block.
+pub(crate) fn apply_ramped(
+    left: &mut [f32],
+    right: &mut [f32],
+    start: (f32, f32),
+    end: (f32, f32),
+) {
+    let n = left.len().min(right.len());
+    if n == 0 {
+        return;
+    }
+    if start == end {
+        for (l, r) in left.iter_mut().zip(right.iter_mut()).take(n) {
+            *l *= end.0;
+            *r *= end.1;
+        }
+        return;
+    }
+    let step = 1.0 / n as f32;
+    for (i, (l, r)) in left.iter_mut().zip(right.iter_mut()).take(n).enumerate() {
+        let t = (i + 1) as f32 * step;
+        *l *= start.0 + (end.0 - start.0) * t;
+        *r *= start.1 + (end.1 - start.1) * t;
+    }
+}
+
+/// Mid/side width, ramped from one block's value to the next.
+pub(crate) fn apply_width(left: &mut [f32], right: &mut [f32], start: f32, end: f32) {
+    if (start - 1.0).abs() < 1e-4 && (end - 1.0).abs() < 1e-4 {
+        return;
+    }
+    let n = left.len().min(right.len());
+    let step = 1.0 / n.max(1) as f32;
+    for (i, (l, r)) in left.iter_mut().zip(right.iter_mut()).take(n).enumerate() {
+        let sep = start + (end - start) * (i + 1) as f32 * step;
+        let mid = (*l + *r) * 0.5;
+        let side = (*l - *r) * 0.5;
+        *l = mid + side * sep;
+        *r = mid - side * sep;
+    }
 }
 
 /// One clip in the launcher grid.
@@ -341,6 +436,9 @@ pub struct TrackNode {
     prefs: crate::audio_prefs::AudioPrefs,
     /// 0.0 = mono, 1.0 = normal, >1.0 = widened.
     stereo_separation: f32,
+    /// What the last block used, so the next ramps from it.
+    width_applied: f32,
+    gain_ramp: GainRamp,
     /// Positive = delay, negative = advance. Bounded against delay_capacity.
     delay_samples: i32,
     /// Delay line for the left/right channels (ring buffer, zero-initialized).
@@ -425,6 +523,8 @@ impl TrackNode {
             phase_invert: false,
             swap_lr: false,
             stereo_separation: 1.0,
+            width_applied: 1.0,
+            gain_ramp: GainRamp::default(),
             delay_samples: 0,
             delay_buf_l: vec![0.0; TRACK_DELAY_CAPACITY],
             delay_buf_r: vec![0.0; TRACK_DELAY_CAPACITY],
@@ -803,6 +903,19 @@ impl AudioNode for TrackNode {
         // reason the whole-block CPU meter can do it on this thread. The
         // guard publishes on every exit, including the early ones.
         let _cpu = CpuTimer::new(&self.meter);
+        // The mixer's live fader, pan and width. Automation, where a lane
+        // or clip drives them, still overrides below.
+        if let Some((volume, pan, width)) = self.meter.live_mix() {
+            if volume != self.static_volume {
+                self.static_volume = volume;
+                self.volume = volume;
+            }
+            if pan != self.static_pan {
+                self.static_pan = pan;
+                self.pan = pan;
+            }
+            self.stereo_separation = width;
+        }
         let buf_size = ctx.buffer_size as usize;
 
         // Ensure outputs are sized. Channels 0/1 carry post-fader L/R; 2/3
@@ -1123,19 +1236,17 @@ impl AudioNode for TrackNode {
             }
         }
 
-        if (self.stereo_separation - 1.0).abs() > 1e-4 {
-            let sep = self.stereo_separation;
+        {
+            let start = self.width_applied;
+            let end = self.stereo_separation;
+            self.width_applied = end;
             let (out_left, out_rest) = outputs.split_at_mut(1);
-            let out_l = &mut out_left[0];
-            let out_r = &mut out_rest[0];
-            for frame in 0..buf_size {
-                let l = out_l[frame];
-                let r = out_r[frame];
-                let mid = (l + r) * 0.5;
-                let side = (l - r) * 0.5;
-                out_l[frame] = mid + side * sep;
-                out_r[frame] = mid - side * sep;
-            }
+            apply_width(
+                &mut out_left[0][..buf_size],
+                &mut out_rest[0][..buf_size],
+                start,
+                end,
+            );
         }
 
         // Per-channel biquad filter stage. Applied pre-fader so metering and
@@ -1219,6 +1330,13 @@ impl AudioNode for TrackNode {
         let vol = self.volume;
 
         let (out_left, out_rest) = outputs.split_at_mut(1);
+        let (start, end) = self.gain_ramp.step((vol * pan_l, vol * pan_r));
+        apply_ramped(
+            &mut out_left[0][..buf_size],
+            &mut out_rest[0][..buf_size],
+            start,
+            end,
+        );
         let mut peak_l = 0.0_f32;
         let mut peak_r = 0.0_f32;
         let mut sum_sq = 0.0_f64;
@@ -1227,8 +1345,6 @@ impl AudioNode for TrackNode {
             .zip(out_rest[0].iter_mut())
             .take(buf_size)
         {
-            *l *= vol * pan_l;
-            *r *= vol * pan_r;
             peak_l = peak_l.max(l.abs());
             peak_r = peak_r.max(r.abs());
             let mono = (*l + *r) * 0.5;
@@ -1346,6 +1462,54 @@ mod tests {
         let mut outputs = vec![vec![0.0f32; size]; 4];
         node.process(&inputs, &mut outputs, &[], &mut Vec::new(), &ctx);
         outputs.remove(0)
+    }
+
+    #[test]
+    fn a_fader_move_is_heard_on_the_next_blocks_without_a_rebuild() {
+        let (mut node, session) = node_with_loop(480);
+        session.queue(0);
+        let peak = |b: &[f32]| b.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        // Past the bar line, so the loop sounds.
+        let before = peak(&block(&mut node, 96_000, 256));
+        assert!(before > 0.0);
+        // The mixer halves the fader while it plays.
+        let meter = Arc::clone(&node.meter);
+        meter.set_mix(0.5, 0.0, 1.0);
+        let _ramping = block(&mut node, 96_256, 256);
+        // The loop is 480 samples, so two loops on the same part of it
+        // plays the same samples as the first block, at the new level.
+        let _ = block(&mut node, 96_512, 256);
+        let after = peak(&block(&mut node, 96_960, 256));
+        assert!(
+            (after / before - 0.5).abs() < 0.05,
+            "half the fader, half the level: {before} then {after}"
+        );
+    }
+
+    #[test]
+    fn width_zero_makes_the_track_mono() {
+        let (mut node, session) = node_with_loop(480);
+        session.queue(0);
+        let _ = block(&mut node, 96_000, 256);
+        Arc::clone(&node.meter).set_mix(1.0, 1.0, 0.0);
+        let _ = block(&mut node, 96_256, 256);
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            position_ticks: 0,
+            buffer_size: 256,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: 96_512,
+            playing: true,
+        };
+        let mut outputs = vec![vec![0.0f32; 256]; 4];
+        node.process(&[], &mut outputs, &[], &mut Vec::new(), &ctx);
+        // Hard right pan after mono: the left side is silent.
+        assert!(
+            outputs[0].iter().all(|s| s.abs() < 1e-6),
+            "panned hard right"
+        );
+        assert!(outputs[1].iter().any(|s| s.abs() > 0.0));
     }
 
     #[test]

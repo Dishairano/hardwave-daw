@@ -620,6 +620,10 @@ pub fn set_track_instrument(
 
 #[tauri::command]
 pub fn set_track_volume(state: State<AppState>, track_id: String, volume_db: f64) {
+    if !volume_db.is_finite() {
+        return;
+    }
+    let volume_db = volume_db.clamp(-200.0, 24.0);
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
@@ -628,7 +632,9 @@ pub fn set_track_volume(state: State<AppState>, track_id: String, volume_db: f64
             track.volume_db = volume_db;
         }
     }
-    engine.rebuild_graph();
+    // Straight to the node, not a graph rebuild: rebuilding tore down
+    // every track and cut held notes for a fader move.
+    engine.apply_track_mix(&track_id);
     drop(engine);
     state
         .collab
@@ -656,7 +662,7 @@ pub fn set_track_pan(state: State<AppState>, track_id: String, pan: f64) {
             track.pan = pan;
         }
     }
-    engine.rebuild_graph();
+    engine.apply_track_mix(&track_id);
     drop(engine);
     state
         .collab
@@ -986,7 +992,24 @@ pub fn set_track_stereo_separation(
             track.stereo_separation = separation;
         }
     }
-    engine.rebuild_graph();
+    engine.apply_track_mix(&track_id);
+}
+
+/// The mixer while a fader, pan or width control is being moved: heard
+/// from the next block, with no undo step and no project write. The
+/// matching set_track_* call when the move ends records it.
+#[tauri::command]
+pub fn set_track_mix_live(
+    state: State<AppState>,
+    track_id: String,
+    volume_db: f64,
+    pan: f64,
+    width: f64,
+) {
+    state
+        .engine
+        .lock()
+        .set_live_mix(&track_id, volume_db, pan, width);
 }
 
 #[tauri::command]

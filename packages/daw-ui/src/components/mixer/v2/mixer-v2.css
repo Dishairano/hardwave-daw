@@ -495,7 +495,7 @@
 }
 .mx-fx-route {
   display: grid;
-  grid-template-columns: 18px 1fr 60px 40px;
+  grid-template-columns: 14px minmax(0, 1fr) 72px 50px 30px 14px;
   align-items: center;
   gap: 8px;
   padding: 4px 6px;
@@ -506,6 +506,10 @@
 .mx-fx-route-arr {
   width: 0;
   height: 0;
+  padding: 0;
+  background: transparent;
+  border-right: 0;
+  cursor: pointer;
   border-left: 8px solid var(--mx-dim);
   border-top: 5px solid transparent;
   border-bottom: 5px solid transparent;
@@ -540,6 +544,44 @@
 .mx-fx-route.on .mx-fx-route-pp { color: var(--mx-green); }
 .mx-fx-route.on.rev .mx-fx-route-pp { color: var(--mx-blue); }
 .mx-fx-route-pp:hover { color: #fff; }
+.mx-fx-route-gain {
+  width: 100%;
+  accent-color: var(--mx-green);
+  height: 12px;
+}
+.mx-fx-route.rev .mx-fx-route-gain { accent-color: var(--mx-blue); }
+.mx-fx-route-x {
+  background: transparent;
+  border: 0;
+  color: var(--mx-dim);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+}
+.mx-fx-route-x:hover { color: #fff; }
+.mx-fx-route-select {
+  width: 100%;
+  background: #0a0a0d;
+  color: #fff;
+  border: 1px solid var(--mx-line);
+  font-size: 11px;
+  padding: 4px 6px;
+  font-family: inherit;
+}
+.mx-fx-route-select:focus { outline: 1px solid var(--mx-green); }
+/* Where a strip's sound goes, under its level. */
+.mx-s-out {
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  text-align: center;
+  color: var(--mx-muted);
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mx-s-out.routed { color: var(--mx-green); }
 
 /* ---- slots column ---- */
 .mx-fx-slots {
