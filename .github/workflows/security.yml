@@ -9,6 +9,10 @@ run-name: Security · ${{ github.ref_name }}
 #   and sources, per deny.toml. A vulnerability fails; there is no warn.
 # - UI dependencies: npm audit on the lockfile, including build tools.
 # - Secrets: gitleaks over the whole history.
+# - Fuzzing: every reader of outside input (songs, FL files, audio
+#   headers, plug-in state and bridge, OSC, room messages, sample
+#   paths) fed generated input; anything that panics, hangs or runs out
+#   of memory fails. A minute per target on a push, ten every Monday.
 #
 # It runs on GitHub's machines, never the founder's PC, with a read-only
 # token and actions pinned to a commit, so a moved tag upstream cannot
@@ -91,3 +95,42 @@ jobs:
           && tar xzf gitleaks.tgz gitleaks
       - name: Scan every commit
         run: ./gitleaks git --redact --no-banner --exit-code 1 .
+
+  fuzz:
+    name: Fuzz the readers of outside input
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nightly Rust (libFuzzer needs it)
+        run: rustup toolchain install nightly --profile minimal
+      - name: Fetch cargo-fuzz, checked against its published hash
+        run: >-
+          curl -sSLo cargo-fuzz.tgz https://github.com/rust-fuzz/cargo-fuzz/releases/download/0.13.2/cargo-fuzz-0.13.2-x86_64-unknown-linux-musl.tar.gz
+          && echo "b5b704018b63e0f151c17a057ac53b5111e1db545d1b9f72fee79f08a545931c  cargo-fuzz.tgz" | sha256sum -c -
+          && mkdir -p cargo-fuzz-bin && tar xzf cargo-fuzz.tgz -C cargo-fuzz-bin
+          && install -m755 "$(find cargo-fuzz-bin -name cargo-fuzz -type f | head -1)" "$HOME/.cargo/bin/cargo-fuzz"
+      - name: Build the targets
+        working-directory: fuzz
+        run: cargo +nightly fuzz build -O --target x86_64-unknown-linux-gnu
+      - name: Run every target
+        working-directory: fuzz
+        env:
+          SECONDS_EACH: ${{ github.event_name == 'schedule' && '600' || '60' }}
+        run: |
+          set -e
+          for target in $(cargo +nightly fuzz list); do
+            echo "::group::$target"
+            cargo +nightly fuzz run -O --target x86_64-unknown-linux-gnu "$target" -- \
+              -max_total_time="$SECONDS_EACH" -rss_limit_mb=2048 -timeout=10
+            echo "::endgroup::"
+          done
+      - name: Keep what broke it
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-crashes
+          path: fuzz/artifacts
+          retention-days: 30

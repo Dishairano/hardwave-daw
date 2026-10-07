@@ -1,0 +1,91 @@
+[package]
+name = "hardwave-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Coverage-guided fuzzing of everything the DAW reads from outside:
+# songs, FL Studio files, audio headers, plug-in state, the plug-in
+# bridge, OSC, and room messages. Run by .github/workflows/security.yml
+# on GitHub's machines with nightly Rust:
+#
+#   cargo +nightly fuzz run <target> -- -max_total_time=60
+#
+# A target passes when nothing it is fed can panic, hang or exhaust
+# memory. Kept out of the main workspace: it needs nightly and libFuzzer.
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+hardwave-project = { path = "../crates/hardwave-project" }
+hardwave-room = { path = "../crates/hardwave-room" }
+hardwave-dsp = { path = "../crates/hardwave-dsp" }
+hardwave-midi = { path = "../crates/hardwave-midi" }
+hardwave-native-plugins = { path = "../crates/hardwave-native-plugins" }
+hardwave-plugin-host = { path = "../crates/hardwave-plugin-host" }
+hardwave-engine = { path = "../crates/hardwave-engine" }
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "project_bytes"
+path = "fuzz_targets/project_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "flp"
+path = "fuzz_targets/flp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aiff"
+path = "fuzz_targets/aiff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sampler_state"
+path = "fuzz_targets/sampler_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bridge_frame"
+path = "fuzz_targets/bridge_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "osc"
+path = "fuzz_targets/osc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "room_messages"
+path = "fuzz_targets/room_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "source_paths"
+path = "fuzz_targets/source_paths.rs"
+test = false
+doc = false
+bench = false
