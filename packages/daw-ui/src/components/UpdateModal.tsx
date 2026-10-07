@@ -180,14 +180,11 @@ export function UpdateModal({
               <span style={{ fontSize: 11, color: hw.red }}>{error}</span>
             </div>
             {/*
-              Defensive: only render the link when the URL is plain
-              `https://`. The manifest is fetched over HTTPS and signed
-              by CI, but a compromised or misconfigured publish step
-              could in theory ship a `javascript:` URI; gating here
-              keeps that out of the DOM regardless. `http://` is also
-              rejected so a downgrade attack can't sneak past either.
+              The link comes from the frontend manifest, which is fetched
+              over HTTPS but not signed. It is shown only when it points
+              at our own release pages (see isOurReleasePage).
             */}
-            {releaseUrl && releaseUrl.startsWith('https://') && (
+            {releaseUrl && isOurReleasePage(releaseUrl) && (
               <a
                 href={releaseUrl}
                 target="_blank"
@@ -302,4 +299,20 @@ function formatChangelog(text: string): string {
     .filter(Boolean)
   const items = lines.slice(0, 4)
   return items.map(l => `\u2022 ${l}`).join('\n')
+}
+
+/**
+ * The manifest that supplies this link is not signed, so the link is
+ * only shown when it points at our own release pages. Anything else,
+ * however it arrived, is not offered as "the download".
+ */
+function isOurReleasePage(url: string): boolean {
+  try {
+    const u = new URL(url)
+    if (u.protocol !== 'https:') return false
+    if (u.hostname === 'github.com') return u.pathname.startsWith('/Dishairano/hardwave-daw/releases')
+    return u.hostname === 'hardwavestudios.com' || u.hostname === 'www.hardwavestudios.com'
+  } catch {
+    return false
+  }
 }

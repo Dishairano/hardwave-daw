@@ -80,28 +80,26 @@ async fn fetch_latest_version() -> Result<LatestVersion, String> {
                 if let Some(v) = body.get("version").and_then(|v| v.as_str()) {
                     return Ok(LatestVersion {
                         version: v.trim_start_matches('v').to_string(),
-                        notes: body.get("notes").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        pub_date: body.get("pub_date").and_then(|v| v.as_str()).map(str::to_string),
+                        notes: body
+                            .get("notes")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        pub_date: body
+                            .get("pub_date")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
                     });
                 }
             }
         }
     }
 
-    // Fallback: GitHub API. We use `/releases?per_page=1` instead of
-    // `/releases/latest` because GitHub's "latest" endpoint silently
-    // skips every release marked as prerelease — and our CI marks
-    // every build as prerelease while the redesign port is in flight
-    // (see `prerelease: true` in .github/workflows/release.yml). With
-    // /releases/latest the launcher would resolve to the last stable
-    // release (v0.2.11 from before the mockup port), download it, and
-    // present the user with a UI that looks completely outdated
-    // because it predates every redesign commit. /releases?per_page=1
-    // returns the most recently published release regardless of
-    // prerelease status, which matches what the user actually expects
-    // from "install the latest version".
-    let releases: serde_json::Value = client
-        .get("https://api.github.com/repos/Dishairano/hardwave-daw/releases?per_page=1")
+    // Fallback: GitHub API, the latest full release. Release candidates
+    // are tagged with a dash and published as prereleases, which this
+    // endpoint leaves out on purpose: they are for testers.
+    let gh: serde_json::Value = client
+        .get("https://api.github.com/repos/Dishairano/hardwave-daw/releases/latest")
         .send()
         .await
         .map_err(|e| format!("GitHub API request failed: {e}"))?
@@ -111,16 +109,15 @@ async fn fetch_latest_version() -> Result<LatestVersion, String> {
         .await
         .map_err(|e| format!("Parsing GitHub response failed: {e}"))?;
 
-    let gh = releases
-        .as_array()
-        .and_then(|arr| arr.first())
-        .ok_or("GitHub returned no releases for this repo")?;
     let tag = gh
         .get("tag_name")
         .and_then(|v| v.as_str())
         .ok_or("GitHub release missing tag_name")?;
     let body = gh.get("body").and_then(|v| v.as_str()).unwrap_or("");
-    let pub_date = gh.get("published_at").and_then(|v| v.as_str()).map(str::to_string);
+    let pub_date = gh
+        .get("published_at")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
 
     Ok(LatestVersion {
         version: tag.trim_start_matches('v').to_string(),
@@ -132,9 +129,7 @@ async fn fetch_latest_version() -> Result<LatestVersion, String> {
 /// Returns the default per-user install directory.
 #[tauri::command]
 fn default_install_dir() -> String {
-    install::default_install_dir()
-        .to_string_lossy()
-        .to_string()
+    install::default_install_dir().to_string_lossy().to_string()
 }
 
 /// Starts the full install pipeline. Emits `install://progress` events.

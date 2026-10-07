@@ -7,6 +7,7 @@
 //! download, one branded window, full DAW installed at the end.
 
 use crate::{InstallOptions, InstallProgress};
+use base64::Engine as _;
 use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -57,6 +58,30 @@ fn emit(app: &AppHandle, phase: &str, percent: u32, message: &str) {
     );
 }
 
+/// The public half of the key every Hardwave DAW update is signed with,
+/// the same one the DAW's own updater trusts (src-tauri/tauri.conf.json;
+/// a test keeps the two equal). The launcher runs what it downloads, so
+/// it runs nothing that this key did not sign.
+const UPDATER_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYxQkQ4NkQyQTVCOUE0OApSV1JJbWxzcWJkZ2JEMGZPOHU0ZTVMeEtQMERwQTlxTEJYaDkxTGpNZVQzYkRSSlJHNUhsVnhJMgo=";
+
+/// Whether `data` carries Hardwave's signature, given the `.sig` file
+/// published beside it.
+fn signed_by_hardwave(data: &[u8], sig_file: &str) -> Result<(), String> {
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let key_text = String::from_utf8(b64.decode(UPDATER_PUBKEY).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let key = minisign_verify::PublicKey::decode(&key_text).map_err(|e| e.to_string())?;
+    let sig_text = String::from_utf8(
+        b64.decode(sig_file.trim())
+            .map_err(|_| "the signature file is damaged".to_string())?,
+    )
+    .map_err(|_| "the signature file is damaged".to_string())?;
+    let signature = minisign_verify::Signature::decode(&sig_text)
+        .map_err(|_| "the signature file is damaged".to_string())?;
+    key.verify(data, &signature, true)
+        .map_err(|_| "the download is not signed by Hardwave".to_string())
+}
+
 /// Pretty installer asset suffix per platform. CI uploads with these
 /// patterns to every release (see `.github/workflows/release.yml`).
 fn target_asset_filter() -> &'static str {
@@ -81,31 +106,49 @@ pub async fn run(
 ) -> Result<String, String> {
     let install_dir = PathBuf::from(&opts.install_dir);
 
-    // 1. Resolve the latest release's platform-specific installer URL.
+    // 1. Resolve the latest release's platform-specific installer URL,
+    //    and its signature.
     emit(&app, "downloading", 0, "Finding latest Hardwave DAW…");
-    let download_url = resolve_download_url().await?;
+    let (download_url, signature_url) = resolve_download_url().await?;
 
     // 2. Prepare install dir (NSIS will create its own subtree on
     // Windows — directory just needs to exist).
     std::fs::create_dir_all(&install_dir)
         .map_err(|e| format!("Cannot create install directory: {e}"))?;
 
-    // 3. Download the platform installer to a temp location.
-    let temp_dir = std::env::temp_dir().join("hardwave-daw-installer");
-    std::fs::create_dir_all(&temp_dir)
+    // 3. Download the platform installer into a fresh folder of its own,
+    //    which nothing else on the machine could have prepared, and
+    //    check its signature before it may run.
+    let temp_dir = tempfile::Builder::new()
+        .prefix("hardwave-daw-installer-")
+        .tempdir()
         .map_err(|e| format!("Cannot create temp directory: {e}"))?;
-    let installer_path = temp_dir.join(format!("hardwave-daw-installer{}", installer_suffix()));
+    let installer_path = temp_dir
+        .path()
+        .join(format!("hardwave-daw-installer{}", installer_suffix()));
     download_with_progress(&app, &cancel, &download_url, &installer_path).await?;
 
     if cancel.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_file(&installer_path);
         return Err("Install cancelled".into());
     }
+
+    emit(&app, "downloading", 68, "Checking the download…");
+    let signature = fetch_text(&signature_url).await?;
+    let bytes = tokio::fs::read(&installer_path)
+        .await
+        .map_err(|e| format!("Cannot read the download: {e}"))?;
+    if let Err(why) = signed_by_hardwave(&bytes, &signature) {
+        return Err(format!(
+            "The download could not be verified ({why}), so nothing was installed. \
+             Try again, or download from https://hardwavestudios.com/daw"
+        ));
+    }
+    drop(bytes);
 
     // 4. Run the platform installer silently.
     emit(&app, "installing", 70, "Installing Hardwave DAW…");
     let exe_path = run_platform_installer(&installer_path, &install_dir, &app).await?;
-    let _ = std::fs::remove_file(&installer_path);
+    drop(temp_dir);
 
     // NSIS handles its own desktop / start-menu shortcuts on Windows;
     // we honour the user's checkbox by trusting NSIS defaults rather
@@ -254,9 +297,7 @@ async fn run_platform_installer(
             }
         }
         let app_src = app_src.ok_or("No .app inside mounted .dmg")?;
-        let app_name = app_src
-            .file_name()
-            .ok_or("Bad .app name on mounted .dmg")?;
+        let app_name = app_src.file_name().ok_or("Bad .app name on mounted .dmg")?;
         let app_dst = install_dir.join(app_name);
         // rsync keeps perms / symlinks / extended attrs that fs::copy_dir loses.
         let copy = std::process::Command::new("rsync")
@@ -304,21 +345,17 @@ async fn run_platform_installer(
 /// Hardwave DAW GitHub release. The asset filter lives in
 /// `target_asset_filter()` and matches the suffix the DAW's release.yml
 /// uploads.
-async fn resolve_download_url() -> Result<String, String> {
+async fn resolve_download_url() -> Result<(String, String), String> {
     let client = reqwest::Client::builder()
         .user_agent("HardwaveDawInstaller/0.1")
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| e.to_string())?;
 
-    // See lib.rs::fetch_latest_version for the rationale: GitHub's
-    // /releases/latest skips prereleases, but every CI build is
-    // currently tagged prerelease. Use /releases?per_page=1 to get
-    // the most recently published release regardless of prerelease
-    // status — otherwise the launcher resolves to v0.2.11's assets,
-    // which predate the entire redesign port.
-    let releases: serde_json::Value = client
-        .get("https://api.github.com/repos/Dishairano/hardwave-daw/releases?per_page=1")
+    // The latest full release only: a release candidate is for testers
+    // and carries a dash in its tag, which GitHub marks as prerelease.
+    let gh: serde_json::Value = client
+        .get("https://api.github.com/repos/Dishairano/hardwave-daw/releases/latest")
         .send()
         .await
         .map_err(|e| format!("GitHub API failed: {e}"))?
@@ -328,31 +365,48 @@ async fn resolve_download_url() -> Result<String, String> {
         .await
         .map_err(|e| format!("GitHub API parse failed: {e}"))?;
 
-    let gh = releases
-        .as_array()
-        .and_then(|arr| arr.first())
-        .ok_or("GitHub returned no releases for this repo")?;
     let assets = gh
         .get("assets")
         .and_then(|v| v.as_array())
         .ok_or("No assets on latest release")?;
     let suffix = target_asset_filter();
-
-    for a in assets {
-        if let Some(name) = a.get("name").and_then(|v| v.as_str()) {
-            if name.ends_with(suffix) {
-                if let Some(url) = a.get("browser_download_url").and_then(|v| v.as_str()) {
-                    return Ok(url.to_string());
-                }
+    let url_of = |wanted: &dyn Fn(&str) -> bool| {
+        assets.iter().find_map(|a| {
+            let name = a.get("name")?.as_str()?;
+            if wanted(name) {
+                a.get("browser_download_url")?.as_str().map(str::to_string)
+            } else {
+                None
             }
-        }
+        })
+    };
+    let installer = url_of(&|name| name.ends_with(suffix));
+    let signature = url_of(&|name| name.ends_with(&format!("{suffix}.sig")));
+    match (installer, signature) {
+        (Some(installer), Some(signature)) => Ok((installer, signature)),
+        _ => Err(format!(
+            "Could not find a signed installer ending in {suffix} on the latest Hardwave DAW release. \
+             Please re-run the installer, or download manually from \
+             https://github.com/Dishairano/hardwave-daw/releases/latest"
+        )),
     }
+}
 
-    Err(format!(
-        "Could not find an asset ending in {suffix} on the latest Hardwave DAW release. \
-         Please re-run the installer, or download manually from \
-         https://github.com/Dishairano/hardwave-daw/releases/latest"
-    ))
+async fn fetch_text(url: &str) -> Result<String, String> {
+    reqwest::Client::builder()
+        .user_agent("HardwaveDawInstaller/0.1")
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Could not fetch the signature: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Could not fetch the signature: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("Could not fetch the signature: {e}"))
 }
 
 async fn download_with_progress(
@@ -425,5 +479,44 @@ fn human_bytes(n: u64) -> String {
         format!("{n} B")
     } else {
         format!("{val:.1} {}", UNITS[unit])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_launcher_trusts_the_same_key_as_the_daw() {
+        let conf = include_str!("../../../src-tauri/tauri.conf.json");
+        let conf: serde_json::Value = serde_json::from_str(conf).unwrap();
+        assert_eq!(
+            conf["plugins"]["updater"]["pubkey"].as_str(),
+            Some(UPDATER_PUBKEY)
+        );
+    }
+
+    /// Run by hand with a published installer and its .sig:
+    /// HW_INSTALLER=... HW_INSTALLER_SIG=... cargo test -- --ignored
+    #[test]
+    #[ignore = "needs a published installer on disk"]
+    fn a_published_installer_verifies() {
+        let data = std::fs::read(std::env::var("HW_INSTALLER").unwrap()).unwrap();
+        let sig = std::fs::read_to_string(std::env::var("HW_INSTALLER_SIG").unwrap()).unwrap();
+        signed_by_hardwave(&data, &sig).unwrap();
+        let mut tampered = data.clone();
+        tampered[1000] ^= 1;
+        assert!(
+            signed_by_hardwave(&tampered, &sig).is_err(),
+            "one changed byte is refused"
+        );
+    }
+
+    #[test]
+    fn anything_not_signed_by_hardwave_is_refused() {
+        assert!(signed_by_hardwave(b"some installer", "not a signature").is_err());
+        // A well-formed signature from some other key.
+        let other = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIG1pbmlzaWduIHNlY3JldCBrZXkKUlVReGM3UXhLV0JCMktJanZhUmdOcU5sOWVvQkhwZkZ1T2ZGbWJYV3RSR1NIUURHVXJrN3lHaVpPa2RGRWxZRXdSbG1Pd01aU3FFZkhvMTJ4bmtodkFKWXJvVEJCcDdNYmdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzAwMDAwMDAwCWZpbGU6eC5leGUKK3l0bXlKK3Z6dGV0d0RyUFpZTnRIRkRBQjVacTdIS0N2Y2c1VjVzTVVHb1lQSU1oMzBUdWZ0OVhlQjlVc0RhWkxrb2hhQ1h3d3VJaG9BdTRJUkFmQ0E9PQo=";
+        assert!(signed_by_hardwave(b"some installer", other).is_err());
     }
 }

@@ -20,8 +20,8 @@ const INSTALL_KEY_PATH: &str = r"Software\Hardwave Studios\Hardwave Suite";
 /// `Hardwave Suite Uninstaller.exe` so the UninstallString is stable.
 pub fn register_uninstaller(install_dir: &Path, suite_exe: &Path) -> Result<(), String> {
     // 1. Copy self as the uninstaller binary
-    let current_exe = std::env::current_exe()
-        .map_err(|e| format!("Cannot find installer exe: {e}"))?;
+    let current_exe =
+        std::env::current_exe().map_err(|e| format!("Cannot find installer exe: {e}"))?;
     let uninstaller_path = install_dir.join("Hardwave Suite Uninstaller.exe");
     if current_exe != uninstaller_path {
         std::fs::copy(&current_exe, &uninstaller_path)
@@ -39,11 +39,7 @@ pub fn register_uninstaller(install_dir: &Path, suite_exe: &Path) -> Result<(), 
     let uninstall_cmd = format!("\"{}\" --uninstall", uninstaller_path.display());
 
     set_str(&uninstall_key, "DisplayName", "Hardwave Suite")?;
-    set_str(
-        &uninstall_key,
-        "Publisher",
-        "Hardwave Studios",
-    )?;
+    set_str(&uninstall_key, "Publisher", "Hardwave Studios")?;
     set_str(
         &uninstall_key,
         "DisplayIcon",
@@ -115,10 +111,7 @@ fn schedule_delayed_cleanup(dir: &Path) {
     const DETACHED_PROCESS: u32 = 0x00000008;
 
     let dir_str = dir.to_string_lossy().to_string();
-    let cmd = format!(
-        "timeout /t 2 /nobreak > nul & rmdir /s /q \"{}\"",
-        dir_str
-    );
+    let cmd = format!("timeout /t 2 /nobreak > nul & rmdir /s /q \"{}\"", dir_str);
     let _ = std::process::Command::new("cmd.exe")
         .args(["/C", &cmd])
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)

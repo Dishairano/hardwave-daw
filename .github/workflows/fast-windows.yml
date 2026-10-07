@@ -30,11 +30,14 @@ concurrency:
   group: fast-windows
   cancel-in-progress: true
 
+# Read-only, except the one job that publishes the test build.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   fast-windows:
+    permissions:
+      contents: write
     runs-on: windows-latest
     env:
       CARGO_INCREMENTAL: 0
@@ -43,9 +46,8 @@ jobs:
       RUST_BACKTRACE: 1
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
 
@@ -57,21 +59,21 @@ jobs:
           npm run build
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
           targets: x86_64-pc-windows-msvc
 
       # Same shared-key as the release matrix so this lane REUSES the release
       # build's warm cache instead of compiling cold.
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
           shared-key: x86_64-pc-windows-msvc
           cache-on-failure: true
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
+        uses: mozilla-actions/sccache-action@054db53350805f83040bf3e6e9b8cf5a139aa7c9 # v0.0.7
         continue-on-error: true
 
       - name: Configure sccache
@@ -118,8 +120,6 @@ jobs:
       - name: Build Windows installer (nsis only)
         shell: bash
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: tauri build --target x86_64-pc-windows-msvc --features asio --bundles nsis
 
       - name: Publish to rolling fast-build prerelease (stable URL)
@@ -143,7 +143,7 @@ jobs:
 
       # Belt-and-braces: also attach as a workflow artifact.
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Hardwave.DAW_fast_x64-setup
           path: Hardwave.DAW_fast_x64-setup.exe

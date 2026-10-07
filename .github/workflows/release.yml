@@ -9,17 +9,18 @@ on:
     tags:
       - 'v*'
 
+# Read-only unless a job says otherwise. Only the build job, which
+# publishes the release, may write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
@@ -36,7 +37,7 @@ jobs:
           npm run build
 
       - name: Upload frontend artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: frontend-dist
           path: packages/daw-ui/dist
@@ -49,10 +50,9 @@ jobs:
   ui-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
@@ -67,7 +67,7 @@ jobs:
 
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: playwright-failures
           path: packages/daw-ui/test-results
@@ -78,9 +78,19 @@ jobs:
     outputs:
       body: ${{ steps.changelog.outputs.body }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+
+      # A tag name is text someone typed. It is checked against the one
+      # shape a release tag has before anything uses it, and scripts read
+      # it from the environment, never pasted into the script itself.
+      - name: The tag is a release tag
+        run: |
+          if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ]]; then
+            echo "::error::'$GITHUB_REF_NAME' is not a release tag (vX.Y.Z or vX.Y.Z-rcN)"
+            exit 1
+          fi
 
       - name: Generate changelog from tag annotation
         id: changelog
@@ -94,13 +104,13 @@ jobs:
           if [ -f RELEASE_CHANGELOG.md ]; then
             TAG_MSG=$(cat RELEASE_CHANGELOG.md)
           else
-            TAG_MSG=$(git tag -l --format='%(contents)' "${{ github.ref_name }}" 2>/dev/null || echo "")
+            TAG_MSG=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" 2>/dev/null || echo "")
           fi
-          if [ -z "$TAG_MSG" ] || [ "$TAG_MSG" = "${{ github.ref_name }}" ]; then
+          if [ -z "$TAG_MSG" ] || [ "$TAG_MSG" = "$GITHUB_REF_NAME" ]; then
             # Fallback: generate from commits since previous tag
-            PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || echo "")
+            PREV_TAG=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
             if [ -n "$PREV_TAG" ]; then
-              TAG_MSG=$(git log "${PREV_TAG}..${{ github.ref_name }}" --pretty=format:"- %s" --no-merges | grep -v "^- Release\|^- v[0-9]" || echo "- Bug fixes and improvements")
+              TAG_MSG=$(git log "${PREV_TAG}..${GITHUB_REF_NAME}" --pretty=format:"- %s" --no-merges | grep -v "^- Release\|^- v[0-9]" || echo "- Bug fixes and improvements")
             else
               TAG_MSG="- Bug fixes and improvements"
             fi
@@ -120,15 +130,14 @@ jobs:
     name: Lint & Test (Linux)
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
           components: rustfmt, clippy
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
           shared-key: release-lint-and-test
@@ -170,6 +179,9 @@ jobs:
         run: cargo test --workspace -- --include-ignored
 
   build:
+    # Publishes the release, so it alone may write.
+    permissions:
+      contents: write
     needs: [frontend, changelog, lint-and-test, ui-tests]
     strategy:
       fail-fast: false
@@ -211,42 +223,31 @@ jobs:
     steps:
       # Full history: the launcher step below compares this tag against the
       # previous one to decide whether it has to be rebuilt at all.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Download frontend artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: frontend-dist
           path: packages/daw-ui/dist
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
           shared-key: ${{ matrix.target }}
           cache-on-failure: true
 
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-        continue-on-error: true
-
-      - name: Configure sccache
-        run: |
-          if sccache --start-server 2>/dev/null; then
-            echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-            echo "sccache available"
-          else
-            echo "sccache unavailable, building without cache"
-          fi
-        shell: bash
+      # No compiler cache wrapper here: a release build has the updater
+      # signing key in its environment, and nothing that is not needed to
+      # build should run beside it.
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -341,15 +342,19 @@ jobs:
           if gh release view "$TAG_NAME" --repo "$REPO_NAME" >/dev/null 2>&1; then
             echo "release $TAG_NAME already exists; skipping create"
           else
+            # A tag with a dash (v1.2.3-rc1) is a prerelease: the updater
+            # and the launcher only ever install releases without one.
+            PRE=""
+            case "$TAG_NAME" in *-*) PRE="--prerelease" ;; esac
             gh release create "$TAG_NAME" \
               --repo "$REPO_NAME" \
               --title "Hardwave DAW $TAG_NAME" \
-              --notes "$RELEASE_BODY"
+              --notes "$RELEASE_BODY" $PRE
           fi
 
       - name: Build Tauri app (Linux — with JACK)
         if: matrix.platform == 'ubuntu-22.04'
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -359,7 +364,7 @@ jobs:
           releaseName: 'Hardwave DAW ${{ github.ref_name }}'
           releaseBody: ${{ needs.changelog.outputs.body }}
           releaseDraft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           tauriScript: tauri
           args: --target ${{ matrix.target }} --features jack --bundles ${{ matrix.tauri-bundles }}
 
@@ -380,7 +385,7 @@ jobs:
 
       - name: Build Tauri app (Windows — with ASIO)
         if: matrix.platform == 'windows-latest'
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -404,7 +409,7 @@ jobs:
           releaseName: 'Hardwave DAW ${{ github.ref_name }}'
           releaseBody: ${{ needs.changelog.outputs.body }}
           releaseDraft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           tauriScript: tauri
           args: --target ${{ matrix.target }} --features asio --bundles ${{ matrix.tauri-bundles }}
 
@@ -415,34 +420,12 @@ jobs:
       # asset list reads cleanly. The launcher downloads the main DAW
       # NSIS .exe at install time and runs it silently — the user only
       # ever interacts with the branded GUI.
-      # The launcher is a SECOND Tauri app, so building it costs as much as
-      # the DAW itself, and it changes perhaps once a month. v0.218.0 spent
-      # 25 minutes on it because a toolchain pin invalidated its cache, for a
-      # binary identical to the one already published. Rebuild it only when
-      # its own files changed; otherwise carry the last published one across,
-      # so every release still offers the same downloads.
-      - name: Has the launcher changed?
-        if: matrix.platform == 'windows-latest'
-        id: launcher
-        shell: bash
-        run: |
-          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
-          if [ -z "$PREV" ]; then
-            echo "no previous tag: building"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if git diff --name-only "$PREV" "${GITHUB_REF_NAME}" -- installer/ | grep -q .; then
-            echo "installer/ changed since $PREV: building"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "installer/ untouched since $PREV: reusing the published launcher"
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "prev=$PREV" >> "$GITHUB_OUTPUT"
-          fi
-
+      # Rebuilt every release. Carrying the last published one forward
+      # saved minutes but meant one tampered download could ride into
+      # every later release; the launcher runs installers on people's
+      # machines, so it is always built from this commit.
       - name: Build Hardwave DAW launcher installer (Windows)
-        if: matrix.platform == 'windows-latest' && steps.launcher.outputs.changed == 'true'
+        if: matrix.platform == 'windows-latest'
         shell: bash
         working-directory: installer
         run: |
@@ -450,7 +433,7 @@ jobs:
           npm run tauri:build -- --no-bundle
 
       - name: Stage HardwaveDAW-Setup.exe
-        if: matrix.platform == 'windows-latest' && steps.launcher.outputs.changed == 'true'
+        if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           $installerExe = Get-ChildItem -Path installer/src-tauri/target/release -Filter "hardwave-daw-installer.exe" -File | Select-Object -First 1
@@ -458,44 +441,34 @@ jobs:
           Copy-Item $installerExe.FullName "HardwaveDAW-Setup.exe"
           Get-Item HardwaveDAW-Setup.exe | Select-Object Name,Length
 
-      # Unchanged: fetch the one already published so this release is not
-      # missing a download. A failure here is loud on purpose, because a
-      # release without the launcher breaks the website's download link.
-      - name: Reuse the published HardwaveDAW-Setup.exe
-        if: matrix.platform == 'windows-latest' && steps.launcher.outputs.changed == 'false'
-        shell: bash
+      # Built with --no-bundle, so Tauri's signing never sees it: signed
+      # here, with the same script and the same rule (a release that
+      # cannot be signed stops).
+      - name: Sign HardwaveDAW-Setup.exe
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # Walk back through releases: the previous tag may itself have
-          # reused it, and a failed release may carry nothing at all.
-          found=""
-          for tag in $(gh release list --limit 15 --json tagName --jq '.[].tagName'); do
-            if gh release download "$tag" -p HardwaveDAW-Setup.exe -O HardwaveDAW-Setup.exe 2>/dev/null; then
-              found="$tag"
-              break
-            fi
-          done
-          if [ -z "$found" ]; then
-            echo "::error::no published HardwaveDAW-Setup.exe to reuse; run the release again after touching installer/"
-            exit 1
-          fi
-          echo "reused the launcher from $found"
-          ls -l HardwaveDAW-Setup.exe
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: ./scripts/sign-windows.ps1 HardwaveDAW-Setup.exe
 
       - name: Upload HardwaveDAW-Setup.exe to release
         if: matrix.platform == 'windows-latest'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           tag_name: ${{ github.ref_name }}
           files: |
             HardwaveDAW-Setup.exe
 
       - name: Build Tauri app (macOS)
         if: matrix.platform == 'macos-latest'
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -511,7 +484,7 @@ jobs:
           releaseName: 'Hardwave DAW ${{ github.ref_name }}'
           releaseBody: ${{ needs.changelog.outputs.body }}
           releaseDraft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           tauriScript: tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.tauri-bundles }}
 
@@ -521,7 +494,7 @@ jobs:
     if: success()
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 

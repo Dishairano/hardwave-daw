@@ -26,6 +26,9 @@ concurrency:
   group: gate-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   gate:
     runs-on: [self-hosted, Windows, hardwave-daw]
@@ -71,8 +74,7 @@ jobs:
           if ($h -lt 3 -or $h -ge 8) { Write-Host ('It is {0}:00 here. Builds run between 03:00 and 08:00; nothing was built.' -f $h); exit 1 };
           ('{0}:00, inside the window' -f $h)"
 
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # First run doubles as a machine census: how much this box can take
       # (build jobs, whether it can host heavier work later).
       # -ExecutionPolicy Bypass applies to this one process only, so the
