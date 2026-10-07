@@ -39,6 +39,19 @@ pub struct CollabStatus {
     pub members: Vec<String>,
     /// Where the other person is working, as they last said.
     pub peer: Option<PeerCursor>,
+    /// A guest with the right code is waiting for this side, the host,
+    /// to say yes.
+    pub join_request: Option<JoinAsk>,
+    /// This side has the right code and is waiting for the host.
+    pub waiting_for_host: bool,
+}
+
+/// Someone asking to come into the room.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinAsk {
+    pub request_id: String,
+    pub name: String,
 }
 
 /// Where the other person is in the song.
@@ -65,6 +78,17 @@ pub struct Collab {
     /// Set while a message from the other side is being applied, so
     /// the edit it causes is not sent straight back to them.
     applying: AtomicBool,
+    /// The host let someone in, which is agreeing to send them the song
+    /// when they ask. Without it a request for the song is ignored.
+    song_consent: AtomicBool,
+    /// This side asked for the song. A song that arrives without being
+    /// asked for is not opened.
+    awaiting_song: AtomicBool,
+    /// Which connection is current. Messages from an older one, still
+    /// arriving after a stop, are dropped.
+    generation: AtomicU64,
+    /// The connection's tasks, so leaving really ends them.
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl Collab {
@@ -98,15 +122,19 @@ impl Collab {
         }
     }
 
-    /// A room is open: remember what it is and where to send.
+    /// A room is open: remember what it is and where to send. Returns
+    /// the generation the new connection's messages must carry.
     pub fn begin(
         &self,
         room_id: &str,
         invite_code: &str,
         hosting: bool,
         outbox: mpsc::UnboundedSender<SyncMessage>,
-    ) {
+    ) -> u64 {
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self.outbox.lock() = Some(outbox);
+        self.song_consent.store(false, Ordering::SeqCst);
+        self.awaiting_song.store(false, Ordering::SeqCst);
         self.running.store(true, Ordering::Relaxed);
         self.received.store(0, Ordering::Relaxed);
         self.sent.store(0, Ordering::Relaxed);
@@ -118,6 +146,87 @@ impl Collab {
         status.invite_code = invite_code.to_string();
         status.hosting = hosting;
         status.message = String::new();
+        status.join_request = None;
+        status.waiting_for_host = false;
+        generation
+    }
+
+    /// Whether a message belongs to the connection that is open now.
+    pub fn is_current(&self, generation: u64) -> bool {
+        self.running.load(Ordering::SeqCst) && self.generation.load(Ordering::SeqCst) == generation
+    }
+
+    /// Keep the connection's tasks, so `stop` can end them.
+    pub fn hold(&self, task: tokio::task::JoinHandle<()>) {
+        self.tasks.lock().push(task);
+    }
+
+    /// Send something that is not an edit (an answer, a heartbeat): it
+    /// goes out even while an incoming message is being applied.
+    pub fn send_control(&self, kind: SyncKind) {
+        if !self.running.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Some(outbox) = self.outbox.lock().clone() {
+            let _ = outbox.send(SyncMessage {
+                sender_user_id: String::new(),
+                logical_clock: self.clock.lock().tick(),
+                kind,
+            });
+        }
+    }
+
+    pub fn set_waiting(&self, waiting: bool) {
+        self.status.lock().waiting_for_host = waiting;
+    }
+
+    /// Someone wants in; only the host is asked.
+    pub fn set_join_request(&self, request_id: String, name: String) {
+        let mut status = self.status.lock();
+        if status.hosting {
+            status.join_request = Some(JoinAsk { request_id, name });
+        }
+    }
+
+    /// The host's answer. Letting someone in is also agreeing to send
+    /// them the song when they ask for it.
+    pub fn answer_join(&self, request_id: &str, admit: bool) -> Result<(), String> {
+        let pending = self.status.lock().join_request.take();
+        match pending {
+            Some(ask) if ask.request_id == request_id => {
+                if admit {
+                    self.song_consent.store(true, Ordering::SeqCst);
+                }
+                self.send_control(SyncKind::JoinAnswer {
+                    request_id: request_id.to_string(),
+                    admit,
+                });
+                Ok(())
+            }
+            _ => Err("nobody is waiting to come in".into()),
+        }
+    }
+
+    pub fn new_code(&self, invite_code: String) {
+        let mut status = self.status.lock();
+        status.invite_code = invite_code;
+        status.message =
+            "The invite code changed. Send the new one if someone still has to join.".into();
+    }
+
+    pub fn expect_song(&self) {
+        self.awaiting_song.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether a song that arrived was asked for; asking counts once.
+    pub fn take_song_expectation(&self) -> bool {
+        self.awaiting_song.swap(false, Ordering::SeqCst)
+    }
+
+    /// Whether this side may send its song: it is the host and it let
+    /// the other person in.
+    pub fn may_send_song(&self) -> bool {
+        self.status.lock().hosting && self.song_consent.load(Ordering::SeqCst)
     }
 
     /// The room says who is in it now.
@@ -144,11 +253,21 @@ impl Collab {
         });
     }
 
+    /// Leave the room: the connection's tasks end, the socket closes,
+    /// and nothing that was still on its way is applied.
     pub fn stop(&self, why: &str) {
-        self.running.store(false, Ordering::Relaxed);
+        self.running.store(false, Ordering::SeqCst);
+        self.generation.fetch_add(1, Ordering::SeqCst);
         *self.outbox.lock() = None;
+        for task in self.tasks.lock().drain(..) {
+            task.abort();
+        }
+        self.song_consent.store(false, Ordering::SeqCst);
+        self.awaiting_song.store(false, Ordering::SeqCst);
         let mut status = self.status.lock();
         status.connected = false;
+        status.join_request = None;
+        status.waiting_for_host = false;
         status.message = why.to_string();
     }
 }
@@ -189,19 +308,13 @@ pub fn service_url() -> String {
     crate::endpoints::service_url("HARDWAVE_ROOM_URL", "wss://rooms.hardwavestudios.com/room")
 }
 
-/// Build the URL for opening or joining a room.
-pub fn join_url(token: &str, room: &str, code: &str, since: u64) -> String {
-    let mut url = format!(
-        "{}?token={}&since={}",
-        service_url(),
-        urlencode(token),
-        since
-    );
+/// Build the URL for opening or joining a room. Neither the account
+/// token nor the invite code is in it: addresses end up in logs, so
+/// both go in headers.
+pub fn join_url(room: &str, since: u64) -> String {
+    let mut url = format!("{}?since={}", service_url(), since);
     if !room.is_empty() {
         url.push_str(&format!("&room={}", urlencode(room)));
-    }
-    if !code.is_empty() {
-        url.push_str(&format!("&code={}", urlencode(code)));
     }
     url
 }
@@ -222,10 +335,48 @@ fn urlencode(value: &str) -> String {
     out
 }
 
+/// The song as it is sent to the other person: the same song, with
+/// where its files sit on this machine reduced to their names. The
+/// other machine cannot use this one's paths anyway, and they say
+/// things about this machine (an account name, a folder layout) that
+/// are not the other person's business.
+pub fn prepared_for_sending(project: &hardwave_project::Project) -> hardwave_project::Project {
+    use hardwave_project::clip::ClipContent;
+    let mut copy = project.clone();
+    let reduce = |path: &mut String| {
+        if std::path::Path::new(path.as_str()).is_absolute() || path.starts_with("\\\\") {
+            if let Some(name) = std::path::Path::new(path.as_str()).file_name() {
+                *path = name.to_string_lossy().into_owned();
+            }
+        }
+    };
+    let clean = |clips: &mut Vec<hardwave_project::clip::ClipPlacement>| {
+        for placement in clips {
+            if let ClipContent::Audio(a) = &mut placement.content {
+                reduce(&mut a.source_file);
+            }
+        }
+    };
+    for track in &mut copy.tracks {
+        clean(&mut track.clips);
+    }
+    for arrangement in &mut copy.arrangements {
+        for timeline in arrangement.timelines.values_mut() {
+            clean(&mut timeline.clips);
+        }
+    }
+    if let Some(video) = &mut copy.video {
+        reduce(&mut video.path);
+    }
+    copy
+}
+
 /// What the service says first.
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Hello {
+    /// The code was right and the host is being asked.
+    Waiting,
     Joined {
         room_id: String,
         invite_code: String,
@@ -311,13 +462,89 @@ mod tests {
     }
 
     #[test]
-    fn the_url_carries_what_the_service_asks_for() {
-        std::env::set_var("HARDWAVE_ROOM_URL", "ws://127.0.0.1:8787/room");
-        let url = join_url("tok en/1", "room-5", "ABC-123", 42);
-        assert!(url.starts_with("ws://127.0.0.1:8787/room?token=tok%20en%2F1&since=42"));
-        assert!(url.contains("&room=room-5"));
-        assert!(url.contains("&code=ABC-123"));
-        std::env::remove_var("HARDWAVE_ROOM_URL");
+    fn the_url_carries_the_room_but_never_the_token_or_the_code() {
+        let url = join_url("K7QM2XPA", 42);
+        assert!(url.contains("?since=42"));
+        assert!(url.contains("&room=K7QM2XPA"));
+        assert!(!url.contains("token") && !url.contains("code"), "{url}");
+    }
+
+    #[test]
+    fn the_song_is_sent_without_this_machines_paths() {
+        use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement};
+        let mut project = hardwave_project::Project::default();
+        let id = project.add_audio_track("Vox".into());
+        let clip = |file: &str| ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: "c".into(),
+                name: "c".into(),
+                source_path: "p".into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: 1,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                warp_markers: Vec::new(),
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                source_file: file.into(),
+            }),
+            track_id: id.clone(),
+            position_ticks: 0,
+            length_ticks: 1,
+            lane: 0,
+        };
+        let t = project.track_mut(&id).unwrap();
+        t.clips.push(clip("/home/dishaion/Secret Project/vox.wav"));
+        t.clips.push(clip("Song Samples/kick.wav"));
+        let sent = prepared_for_sending(&project);
+        let files: Vec<String> = sent
+            .track(&id)
+            .unwrap()
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Audio(a) => a.source_file.clone(),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(
+            files,
+            vec!["vox.wav".to_string(), "Song Samples/kick.wav".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_song_nobody_asked_for_is_not_taken_and_asking_counts_once() {
+        let collab = Collab::default();
+        assert!(!collab.take_song_expectation());
+        collab.expect_song();
+        assert!(collab.take_song_expectation());
+        assert!(!collab.take_song_expectation());
+    }
+
+    #[test]
+    fn the_song_is_only_sent_after_the_host_let_someone_in() {
+        let collab = Collab::default();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        collab.begin("r", "CODE", true, tx);
+        assert!(!collab.may_send_song());
+        collab.set_join_request("req-1".into(), "Alex".into());
+        assert!(collab.answer_join("someone-else", true).is_err());
+        collab.set_join_request("req-1".into(), "Alex".into());
+        collab.answer_join("req-1", true).unwrap();
+        assert!(collab.may_send_song());
+        assert!(matches!(
+            rx.try_recv().unwrap().kind,
+            SyncKind::JoinAnswer { admit: true, .. }
+        ));
+        collab.stop("left");
+        assert!(!collab.may_send_song(), "leaving takes the consent back");
     }
 
     #[test]

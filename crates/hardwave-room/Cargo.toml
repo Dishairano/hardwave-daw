@@ -12,3 +12,4 @@ license.workspace = true
 hardwave-project = { path = "../hardwave-project" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }

@@ -89,6 +89,7 @@ import { startTimelineSync } from './stores/timelineState'
 import { useTrackStore } from './stores/trackStore'
 import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
+import { useCollabStore } from './stores/collabStore'
 import { invokeOrToast } from './api/invoke'
 import { BugReportDialog } from './components/BugReportDialog'
 import { useShortcutsStore } from './stores/shortcutsStore'
@@ -254,6 +255,10 @@ export function App() {
   const [showSession, setShowSession] = useState(false)
   const [showVideo, setShowVideo] = useState(false)
   const [showCollab, setShowCollab] = useState(false)
+  // Someone wants into the room: the host is asked even with the
+  // window closed, because nobody comes in without that answer.
+  const pendingJoin = useCollabStore(s => s.joinRequest)
+  useEffect(() => { if (pendingJoin) setShowCollab(true) }, [pendingJoin])
   const [showWorkspaceSongs, setShowWorkspaceSongs] = useState(false)
   const [showPerformanceTest, setShowPerformanceTest] = useState(false)
   // Local rather than in useAppDialogs: nothing else toggles it, and it has

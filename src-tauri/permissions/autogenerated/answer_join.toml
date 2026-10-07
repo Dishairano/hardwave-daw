@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-answer-join"
+description = "Enables the answer_join command without any pre-configured scope."
+commands.allow = ["answer_join"]
+
+[[permission]]
+identifier = "deny-answer-join"
+description = "Denies the answer_join command without any pre-configured scope."
+commands.deny = ["answer_join"]

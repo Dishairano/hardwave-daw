@@ -3,6 +3,10 @@
 # Small and stateless: rooms live in memory, and a room that empties
 # is forgotten. Nothing here stores a song, so losing this process
 # costs the two people in a room their connection and nothing else.
+#
+# It needs nothing from the machine but a port on loopback and a way
+# out to hardwavestudios.com to check accounts, so everything else is
+# taken away.
 
 [Unit]
 Description=Hardwave room service (working on a song together)
@@ -17,14 +21,36 @@ Environment=HARDWAVE_SITE=https://hardwavestudios.com
 Environment=RUST_LOG=info
 Restart=always
 RestartSec=3
-# It holds no files and needs no privileges.
+
 DynamicUser=yes
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-NoNewPrivileges=yes
-RestrictAddressFamilies=AF_INET AF_INET6
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 MemoryMax=256M
+TasksMax=256
+LimitNOFILE=4096
 
 [Install]
 WantedBy=multi-user.target

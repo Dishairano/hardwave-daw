@@ -26,13 +26,15 @@ pub struct CollabJoined {
 /// Open a room, or join one with a code.
 ///
 /// Opening needs Pro and joining does not: the service decides that,
-/// not this side.
+/// not this side. A guest with the right code still waits until the
+/// host says yes.
 #[tauri::command]
 pub async fn start_collab(
     state: State<'_, AppState>,
     room: Option<String>,
     code: Option<String>,
 ) -> Result<CollabJoined, String> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let token = crate::collab::load_token().ok_or_else(|| {
         "sign in first. Opening any Hardwave plug-in and signing in there is enough: \
          every Hardwave program on this machine shares one sign-in."
@@ -43,28 +45,69 @@ pub async fn start_collab(
 
     let engine = Arc::clone(&state.engine);
     let collab = Arc::clone(&state.collab);
-    let url = crate::collab::join_url(&token, &room, &code, 0);
+    // Leaving whatever room this DAW was in before.
+    collab.stop("");
 
-    let (socket, _) = tokio_tungstenite::connect_async(&url)
+    let mut request = crate::collab::join_url(&room, 0)
+        .into_client_request()
+        .map_err(|e| format!("could not reach the room service: {e}"))?;
+    if !code.trim().is_empty() {
+        request.headers_mut().insert(
+            "x-invite-code",
+            code.trim()
+                .parse()
+                .map_err(|_| "that code has characters a code never has".to_string())?,
+        );
+    }
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {token}")
+            .parse()
+            .map_err(|_| "the sign-in on this machine is damaged; sign in again".to_string())?,
+    );
+    // The songs that cross a room are capped by the service too; this
+    // side refuses anything larger before reading it.
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+        max_message_size: Some(hardwave_room_limits::MAX_MESSAGE),
+        max_frame_size: Some(hardwave_room_limits::MAX_MESSAGE),
+        ..Default::default()
+    };
+    let (socket, _) = tokio_tungstenite::connect_async_with_config(request, Some(config), false)
         .await
         .map_err(|e| format!("could not reach the room service: {e}"))?;
     let (mut writer, mut reader) = socket.split();
 
-    // The service answers first: in, or why not.
-    let hello = reader
-        .next()
-        .await
-        .ok_or_else(|| "the room service said nothing".to_string())?
-        .map_err(|e| format!("the room service dropped out: {e}"))?;
-    let hello: crate::collab::Hello = serde_json::from_str(
-        hello
-            .to_text()
-            .map_err(|_| "the room service sent something unreadable".to_string())?,
-    )
-    .map_err(|e| format!("the room service sent something unreadable: {e}"))?;
-
-    let (room_id, invite_code, missed, caught_up) = match hello {
+    // The service answers first: in, waiting for the host, or why not.
+    async fn hello(
+        reader: &mut futures_util::stream::SplitStream<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+        >,
+    ) -> Result<crate::collab::Hello, String> {
+        let message = reader
+            .next()
+            .await
+            .ok_or_else(|| "the room service said nothing".to_string())?
+            .map_err(|e| format!("the room service dropped out: {e}"))?;
+        serde_json::from_str(
+            message
+                .to_text()
+                .map_err(|_| "the room service sent something unreadable".to_string())?,
+        )
+        .map_err(|e| format!("the room service sent something unreadable: {e}"))
+    }
+    let mut first = hello(&mut reader).await?;
+    if matches!(first, crate::collab::Hello::Waiting) {
+        collab.set_waiting(true);
+        first = tokio::time::timeout(std::time::Duration::from_secs(150), hello(&mut reader))
+            .await
+            .map_err(|_| "the host did not answer".to_string())??;
+        collab.set_waiting(false);
+    }
+    let (room_id, invite_code, missed, caught_up) = match first {
         crate::collab::Hello::Refused { reason } => return Err(reason),
+        crate::collab::Hello::Waiting => return Err("the room service lost track of you".into()),
         crate::collab::Hello::Joined {
             room_id,
             invite_code,
@@ -73,17 +116,17 @@ pub async fn start_collab(
         } => (room_id, invite_code, missed, caught_up),
     };
 
+    let (outbox, mut to_send) = mpsc::unbounded_channel::<SyncMessage>();
+    let generation = collab.begin(&room_id, &invite_code, room.is_empty(), outbox);
+
     // Whatever was missed, before anything new arrives.
     for message in &missed {
-        apply_one(&engine, &collab, message);
+        apply_one(&engine, &collab, message, generation);
     }
-
-    let (outbox, mut to_send) = mpsc::unbounded_channel::<SyncMessage>();
-    collab.begin(&room_id, &invite_code, room.is_empty(), outbox);
 
     // Out: what this person does.
     let collab_for_writer = Arc::clone(&collab);
-    tokio::spawn(async move {
+    collab.hold(tokio::spawn(async move {
         while let Some(message) = to_send.recv().await {
             let Ok(text) = serde_json::to_string(&message) else {
                 continue;
@@ -93,17 +136,23 @@ pub async fn start_collab(
                 .await
                 .is_err()
             {
-                collab_for_writer.stop("the connection closed");
+                if collab_for_writer.is_current(generation) {
+                    collab_for_writer.stop("the connection closed");
+                }
                 break;
             }
         }
-    });
+        let _ = writer.close().await;
+    }));
 
     // In: what the other person does.
     let collab_for_reader = Arc::clone(&collab);
     let engine_for_reader = Arc::clone(&engine);
-    tokio::spawn(async move {
+    collab.hold(tokio::spawn(async move {
         while let Some(Ok(message)) = reader.next().await {
+            if !collab_for_reader.is_current(generation) {
+                break;
+            }
             let Ok(text) = message.into_text() else {
                 continue;
             };
@@ -111,10 +160,26 @@ pub async fn start_collab(
             let Ok(parsed) = serde_json::from_str::<SyncMessage>(text) else {
                 continue;
             };
-            apply_one(&engine_for_reader, &collab_for_reader, &parsed);
+            apply_one(&engine_for_reader, &collab_for_reader, &parsed, generation);
         }
-        collab_for_reader.stop("the other side left");
-    });
+        if collab_for_reader.is_current(generation) {
+            collab_for_reader.stop("the other side left");
+        }
+    }));
+
+    // A heartbeat, so the service knows a quiet room is still open.
+    let collab_for_heartbeat = Arc::clone(&collab);
+    collab.hold(tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            if !collab_for_heartbeat.is_current(generation) {
+                break;
+            }
+            collab_for_heartbeat.send_control(hardwave_project::multiplayer::SyncKind::Heartbeat);
+        }
+    }));
 
     Ok(CollabJoined {
         room_id,
@@ -123,8 +188,15 @@ pub async fn start_collab(
     })
 }
 
+/// Limits this side keeps whatever the service does.
+mod hardwave_room_limits {
+    /// The largest message read from the room: the largest song plus
+    /// its envelope.
+    pub const MAX_MESSAGE: usize = 16 * 1024 * 1024 + 64 * 1024;
+}
+
 /// Answer "send me the song" with the song, and take one when it
-/// arrives.
+/// arrives, each only when it was agreed to.
 ///
 /// This is the one moment the whole project crosses the network. The
 /// audio files do not travel with it: a clip whose sample the other
@@ -138,10 +210,17 @@ fn handle_project(
     use hardwave_project::multiplayer::SyncKind;
     match &message.kind {
         SyncKind::ProjectRequest => {
+            // Only the host sends, and only to someone it let in.
+            if !collab.may_send_song() {
+                log::info!(
+                    "the other side asked for the song; this side has not agreed to send it"
+                );
+                return true;
+            }
             let (name, blob) = {
                 let engine_guard = engine.lock();
                 let project = engine_guard.project.lock();
-                match project.to_bytes() {
+                match crate::collab::prepared_for_sending(&project).to_bytes() {
                     Ok(blob) => (project.metadata.name.clone(), blob),
                     Err(e) => {
                         log::warn!("could not pack the song to send: {e}");
@@ -149,10 +228,15 @@ fn handle_project(
                     }
                 }
             };
-            collab.send(SyncKind::ProjectOffer { name, blob });
+            collab.send_control(SyncKind::ProjectOffer { name, blob });
             true
         }
         SyncKind::ProjectOffer { name, blob } => {
+            // Only a song this side asked for replaces what is open.
+            if !collab.take_song_expectation() {
+                log::warn!("a song arrived that was not asked for; it was not opened");
+                return true;
+            }
             match hardwave_project::Project::from_bytes(blob) {
                 Ok(incoming) => {
                     let engine_guard = engine.lock();
@@ -175,18 +259,40 @@ fn apply_one(
     engine: &Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
     collab: &Arc<crate::collab::Collab>,
     message: &SyncMessage,
+    generation: u64,
 ) {
-    // Who is in the room, and where the other person is, change what
-    // is drawn, not the song.
+    use hardwave_project::multiplayer::SyncKind;
+    if !collab.is_current(generation) {
+        return;
+    }
+    // Who is in the room, who wants in, and where the other person is
+    // change what is drawn, not the song.
     match &message.kind {
-        hardwave_project::multiplayer::SyncKind::MembersChanged { names } => {
+        SyncKind::MembersChanged { names } => {
             collab.set_members(names.clone());
             return;
         }
-        hardwave_project::multiplayer::SyncKind::PresenceUpdate(presence) => {
+        SyncKind::PresenceUpdate(presence) => {
             collab.set_peer(presence);
             return;
         }
+        SyncKind::JoinRequest { request_id, name } => {
+            collab.set_join_request(request_id.clone(), name.clone());
+            return;
+        }
+        SyncKind::CodeChanged { invite_code } => {
+            collab.new_code(invite_code.clone());
+            return;
+        }
+        SyncKind::Kick { .. } => {
+            collab.stop("the host removed you from the room");
+            return;
+        }
+        SyncKind::JoinAnswer { .. }
+        | SyncKind::Heartbeat
+        | SyncKind::VoiceFrame { .. }
+        | SyncKind::HistorySnapshot { .. }
+        | SyncKind::PermissionChange { .. } => return,
         _ => {}
     }
     // The song itself is not an edit, and it is handled before the
@@ -239,10 +345,19 @@ pub fn request_project(state: State<AppState>) -> Result<(), String> {
     if !state.collab.status().connected {
         return Err("you are not in a room".into());
     }
+    // Only a song asked for is opened when it arrives.
+    state.collab.expect_song();
     state
         .collab
-        .send(hardwave_project::multiplayer::SyncKind::ProjectRequest);
+        .send_control(hardwave_project::multiplayer::SyncKind::ProjectRequest);
     Ok(())
+}
+
+/// The host's answer to someone waiting to come in. Letting them in
+/// also agrees to send them the song when they ask for it.
+#[tauri::command]
+pub fn answer_join(state: State<AppState>, request_id: String, admit: bool) -> Result<(), String> {
+    state.collab.answer_join(&request_id, admit)
 }
 
 /// Tell the other person where you are working.

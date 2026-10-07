@@ -4,6 +4,12 @@
 # listens on a public address; TLS and the hostname live here, the
 # same arrangement as the plug-in windows.
 
+# Per address: a few joins a minute and a handful of open connections
+# is more than two people working ever need, and far less than someone
+# hammering the service.
+limit_req_zone $binary_remote_addr zone=hw_rooms:10m rate=30r/m;
+limit_conn_zone $binary_remote_addr zone=hw_rooms_conn:10m;
+
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
@@ -15,10 +21,21 @@ server {
     ssl_certificate     /etc/letsencrypt/live/rooms.hardwavestudios.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/rooms.hardwavestudios.com/privkey.pem;
 
-    # Rooms are closed until the security fixes from the 2026-10-07
-    # audit are in. nginx answers here; nothing reaches the service.
+    # The account token and the invite code arrive in headers, so what
+    # is logged here is only the room's name.
     location /room {
-        return 503;
+        limit_req zone=hw_rooms burst=20 nodelay;
+        limit_conn hw_rooms_conn 8;
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # The service closes a connection that says nothing for 90
+        # seconds; the DAW sends a heartbeat every 30.
+        proxy_read_timeout 5m;
+        proxy_send_timeout 5m;
     }
 
     location /healthz {

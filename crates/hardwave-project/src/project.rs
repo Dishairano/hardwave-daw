@@ -279,7 +279,7 @@ impl Project {
 
     /// Read what `to_bytes` wrote.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-        let data = zstd::decode_all(bytes)?;
+        let data = decompress_capped(bytes)?;
         let mut project: Project = rmp_serde::from_slice(&data)?;
         if project.version > FORMAT_VERSION {
             return Err(format!(
@@ -290,6 +290,7 @@ impl Project {
             .into());
         }
         project.migrate();
+        project.make_safe()?;
         Ok(project)
     }
 
@@ -300,8 +301,11 @@ impl Project {
     /// refused by name rather than decoded into something that looks right
     /// and is not.
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        if std::fs::metadata(path)?.len() > MAX_FILE_BYTES {
+            return Err("That file is far larger than any song; it was not opened.".into());
+        }
         let compressed = std::fs::read(path)?;
-        let data = zstd::decode_all(compressed.as_slice())?;
+        let data = decompress_capped(&compressed)?;
         let mut project: Project = rmp_serde::from_slice(&data)?;
         if project.version > FORMAT_VERSION {
             return Err(format!(
@@ -313,6 +317,7 @@ impl Project {
             .into());
         }
         project.migrate();
+        project.make_safe()?;
         Ok(project)
     }
 
@@ -401,6 +406,49 @@ impl Project {
         self.plugin_states
             .retain(|e| e.plugin_instance_id != plugin_instance_id);
         self.plugin_states.len() != before
+    }
+}
+
+/// The largest .hwp opened at all.
+pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+/// The most a project may expand to when it is unpacked. A few
+/// kilobytes of zstd can claim to hold gigabytes; past this it is not
+/// a song.
+pub const MAX_DECODED_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Unpack a project, stopping at `MAX_DECODED_BYTES` rather than
+/// trusting what the data claims to expand to.
+fn decompress_capped(bytes: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    decompress_within(bytes, MAX_DECODED_BYTES)
+}
+
+fn decompress_within(bytes: &[u8], cap: u64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use std::io::Read;
+    let decoder = zstd::stream::read::Decoder::new(bytes)?;
+    let mut data = Vec::new();
+    decoder.take(cap + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > cap {
+        return Err(
+            "That song unpacks to more than any song could hold; it was not opened.".into(),
+        );
+    }
+    Ok(data)
+}
+
+#[cfg(test)]
+mod decompress_tests {
+    use super::*;
+
+    #[test]
+    fn a_small_file_that_unpacks_to_far_too_much_is_refused() {
+        // Four megabytes of nothing packs into a few hundred bytes.
+        let bomb = zstd::encode_all(vec![0u8; 4 * 1024 * 1024].as_slice(), 19).unwrap();
+        assert!(bomb.len() < 4096, "{}", bomb.len());
+        assert!(decompress_within(&bomb, 1024 * 1024).is_err());
+        assert_eq!(
+            decompress_within(&bomb, 8 * 1024 * 1024).unwrap().len(),
+            4 * 1024 * 1024
+        );
     }
 }
 

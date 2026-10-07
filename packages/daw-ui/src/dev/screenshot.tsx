@@ -310,6 +310,21 @@ function Harness() {
           <WorkspaceSongs onClose={noop} />
         </div>
       )
+    case 'collabhost':
+      // The host, with someone at the door.
+      ;(globalThis as { __hwCollabStatus?: unknown }).__hwCollabStatus = {
+        connected: true, roomId: 'K7QM2XPA', inviteCode: 'R4T8WQ2NMZ', hosting: true, message: '',
+        received: 0, sent: 0, members: ['Dishaion'], peer: null,
+        joinRequest: { requestId: 'r1', name: 'Alex' }, waitingForHost: false,
+      }
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Raw Drop" />
+          <Arrangement onSetHint={noop} />
+          <CollabPanel onClose={noop} />
+        </div>
+      )
     case 'collab':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>

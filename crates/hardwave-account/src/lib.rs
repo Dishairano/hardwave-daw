@@ -82,9 +82,11 @@ pub async fn identify(site: &str, token: &str) -> Result<Who, String> {
         });
 
     Ok(Who {
+        // Never the email address: the name is shown to the other
+        // person in a room, and an address is not theirs to see.
         display_name: me
             .display_name
-            .or(me.email)
+            .filter(|n| !n.trim().is_empty())
             .unwrap_or_else(|| "A producer".into()),
         user_id,
         subscribed: subscription.has_subscription,

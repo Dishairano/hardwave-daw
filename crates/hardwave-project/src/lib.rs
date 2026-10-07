@@ -17,6 +17,7 @@ pub mod multiplayer;
 pub mod multiplayer_apply;
 pub mod project;
 pub mod recording_session;
+pub mod sanitize;
 pub mod scripting_api;
 pub mod sidechain_routing;
 pub mod tempo;

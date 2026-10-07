@@ -21,6 +21,8 @@ interface CollabState {
   connected: boolean
   peer: PeerCursor | null
   members: string[]
+  /** Someone waiting for this side, the host, to let them in. */
+  joinRequest: { requestId: string; name: string } | null
   start: () => void
   stop: () => void
   /** Tell the other person where you are, at most four times a second. */
@@ -34,12 +36,23 @@ export const useCollabStore = create<CollabState>((set, get) => ({
   connected: false,
   peer: null,
   members: [],
+  joinRequest: null,
   start: () => {
     if (timer) return
     const poll = () => {
-      invoke<{ connected: boolean; peer: PeerCursor | null; members: string[] }>('collab_status')
+      invoke<{
+        connected: boolean
+        peer: PeerCursor | null
+        members: string[]
+        joinRequest: { requestId: string; name: string } | null
+      }>('collab_status')
         .then(status => {
-          set({ connected: status.connected, peer: status.peer, members: status.members })
+          set({
+            connected: status.connected,
+            peer: status.peer,
+            members: status.members,
+            joinRequest: status.joinRequest ?? null,
+          })
           if (!status.connected) get().stop()
         })
         .catch(() => { /* no engine in the browser preview */ })
@@ -50,7 +63,7 @@ export const useCollabStore = create<CollabState>((set, get) => ({
   stop: () => {
     if (timer) clearInterval(timer)
     timer = null
-    set({ connected: false, peer: null, members: [] })
+    set({ connected: false, peer: null, members: [], joinRequest: null })
   },
   share: (tick, trackIndex, panel) => {
     if (!get().connected) return

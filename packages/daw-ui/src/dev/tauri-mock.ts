@@ -227,9 +227,11 @@ const mock: TauriInternals = {
       case 'save_to_workspace':
         return { workspace: 'Dishaion', folder: '/Hardwave DAW/Raw Drop', sent: 3, unchanged: 6, missing: [] }
       case 'collab_status':
-        return { connected: false, roomId: '', inviteCode: '', hosting: false, message: '', received: 0, sent: 0, members: [], peer: null }
+        // A screenshot scene can put the room in a state of its own.
+        return (globalThis as { __hwCollabStatus?: unknown }).__hwCollabStatus
+          ?? { connected: false, roomId: '', inviteCode: '', hosting: false, message: '', received: 0, sent: 0, members: [], peer: null, joinRequest: null, waitingForHost: false }
       case 'start_collab':
-        return { roomId: 'room-1760000000', inviteCode: 'HW-4K2-9QX', caughtUp: true }
+        return { roomId: 'K7QM2XPA', inviteCode: 'R4T8WQ2NMZ', caughtUp: true }
       case 'share_presence':
       case 'request_project':
       case 'stop_collab':

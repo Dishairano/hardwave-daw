@@ -116,6 +116,7 @@ permissions = [
   "allow-stop-collab",
   "allow-collab-status",
   "allow-request-project",
+  "allow-answer-join",
   "allow-share-presence",
   "allow-import-flp",
   "allow-get-video",

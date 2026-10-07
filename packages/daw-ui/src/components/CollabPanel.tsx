@@ -14,7 +14,8 @@ import { useCollabStore } from '../stores/collabStore'
  * costs a late edit rather than a dropout.
  *
  * Opening a room is part of Pro. Joining one is free, which is how
- * one subscription brings a second producer in.
+ * one subscription brings a second producer in. Nobody comes in on the
+ * code alone: the host is asked, by name, every time.
  */
 
 interface CollabStatus {
@@ -26,6 +27,8 @@ interface CollabStatus {
   received: number
   sent: number
   members: string[]
+  joinRequest: { requestId: string; name: string } | null
+  waitingForHost: boolean
 }
 
 interface Joined {
@@ -89,6 +92,25 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
     }
   }, [room, code, refresh])
 
+  const answer = useCallback(async (admit: boolean) => {
+    const ask = status?.joinRequest
+    if (!ask) return
+    try {
+      await invoke('answer_join', { requestId: ask.requestId, admit })
+    } catch (e) {
+      setError(String(e))
+    }
+    void refresh()
+  }, [status, refresh])
+
+  const copyInvite = useCallback(async () => {
+    if (!status) return
+    try {
+      await navigator.clipboard.writeText(`Room ${status.roomId}, code ${status.inviteCode}`)
+      useNotificationStore.getState().push('info', 'Invite copied')
+    } catch { /* clipboard refused; it is on screen */ }
+  }, [status])
+
   const leave = useCallback(async () => {
     try { await invoke('stop_collab') } catch { /* already gone */ }
     useCollabStore.getState().stop()
@@ -126,19 +148,51 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
         <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {connected ? (
             <>
+              {status?.joinRequest && (
+                <div role="alertdialog" aria-label="Someone wants to join" style={{
+                  padding: 12, borderRadius: hw.radius.md,
+                  background: 'rgba(220,38,38,0.08)', border: `1px solid ${hw.accent}`,
+                }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>
+                    {status.joinRequest.name} wants to join
+                  </div>
+                  <div style={{ fontSize: 10, color: hw.textFaint, marginTop: 4, lineHeight: 1.5 }}>
+                    They have your code. Letting them in also sends them a copy of this song when
+                    they ask for it; the audio files stay here.
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                    <button onClick={() => void answer(true)} style={{ ...btn(), background: hw.accent, color: '#fff' }}>
+                      Let them in
+                    </button>
+                    <button onClick={() => void answer(false)} style={btn()}>No</button>
+                  </div>
+                </div>
+              )}
               <div style={{
                 padding: 12, borderRadius: hw.radius.md,
                 background: 'rgba(255,255,255,0.04)', border: `1px solid ${hw.border}`,
               }}>
                 <div style={{ fontSize: 10, color: hw.textFaint }}>
-                  {status?.hosting ? 'Your room. Read this out:' : 'In their room, code:'}
+                  {status?.hosting ? 'Your room. Send both to the other person:' : 'In their room:'}
                 </div>
-                <div style={{
-                  fontSize: 20, fontWeight: 700, letterSpacing: '0.08em',
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', marginTop: 4,
-                }}>{status?.inviteCode || '—'}</div>
+                <div style={{ display: 'flex', gap: 18, marginTop: 4, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontSize: 9, color: hw.textFaint }}>Room</div>
+                    <div style={codeStyle()}>{status?.roomId || '-'}</div>
+                  </div>
+                  {status?.hosting && (
+                    <div>
+                      <div style={{ fontSize: 9, color: hw.textFaint }}>Code</div>
+                      <div style={codeStyle()}>{status?.inviteCode || '-'}</div>
+                    </div>
+                  )}
+                  {status?.hosting && (
+                    <button onClick={() => void copyInvite()} style={{ ...btn(), alignSelf: 'center' }}>Copy invite</button>
+                  )}
+                </div>
                 <div style={{ fontSize: 10, color: hw.textFaint, marginTop: 6 }}>
-                  Room {status?.roomId}. {status?.sent ?? 0} sent, {status?.received ?? 0} received.
+                  {status?.sent ?? 0} sent, {status?.received ?? 0} received.
+                  {status?.hosting && ' You are asked before anyone comes in.'}
                 </div>
                 <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }} aria-live="polite">
                   {(status?.members ?? []).length <= 1 && (
@@ -160,7 +214,7 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button
+                {!status?.hosting && <button
                   onClick={() => {
                     invoke('request_project')
                       .then(() => useNotificationStore.getState().push('info', 'Asked them for the song', {
@@ -170,7 +224,7 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
                   }}
                   title="Replaces the song open here with theirs"
                   style={btn()}
-                >Get the song from them</button>
+                >Get the song from them</button>}
                 <button onClick={() => void leave()} style={btn()}>Leave the room</button>
               </div>
             </>
@@ -196,7 +250,7 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
                 <div style={{ display: 'flex', gap: 6 }}>
                   <input
                     value={room}
-                    onChange={e => setRoom(e.target.value)}
+                    onChange={e => setRoom(e.target.value.toUpperCase())}
                     placeholder="room"
                     aria-label="Room"
                     style={input()}
@@ -208,10 +262,17 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
                     aria-label="Invite code"
                     style={{ ...input(), letterSpacing: '0.08em' }}
                   />
-                  <button onClick={() => void join()} disabled={busy || !code.trim()} style={btn()}>
-                    Join
+                  <button onClick={() => void join()} disabled={busy || !code.trim() || !room.trim()} style={btn()}>
+                    {busy ? 'Waiting…' : 'Join'}
                   </button>
                 </div>
+                {busy && (
+                  <div style={{ fontSize: 10, color: hw.textFaint, lineHeight: 1.5 }} aria-live="polite">
+                    {status?.waitingForHost
+                      ? 'The code is right. Waiting for the host to let you in.'
+                      : 'Checking the room…'}
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -232,6 +293,13 @@ function btn(): React.CSSProperties {
     padding: '4px 10px', fontSize: 11, fontWeight: 600,
     background: 'rgba(255,255,255,0.08)', color: hw.textSecondary,
     border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer', fontFamily: 'inherit',
+  }
+}
+
+function codeStyle(): React.CSSProperties {
+  return {
+    fontSize: 18, fontWeight: 700, letterSpacing: '0.08em',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
   }
 }
 

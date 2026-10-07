@@ -85,9 +85,12 @@ pub struct Room {
 impl Room {
     pub fn new(host_user_id: impl Into<String>, created_at_unix: i64) -> Self {
         let host = host_user_id.into();
-        let room_id = format!("room-{}", created_at_unix);
+        // Both are drawn from the operating system's random source.
+        // They used to be derived from the time the room opened, which
+        // anyone could work out.
+        let room_id = new_room_id();
         Self {
-            invite_code: generate_invite_code(&room_id),
+            invite_code: new_invite_code(),
             room_id,
             host_user_id: host,
             members: Vec::new(),
@@ -122,21 +125,50 @@ impl Room {
     }
 }
 
-/// Generate a short human-readable invite code from a room id. FNV-
-/// 1a hash mapped into Base32 for copy-pasteability.
-pub fn generate_invite_code(seed: &str) -> String {
-    let mut hash: u64 = 0xCBF29CE484222325;
-    for b in seed.bytes() {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x100000001B3);
+/// The characters an invite code is made of: no 0/O or 1/I, so it
+/// can be read out over a call without spelling it.
+const CODE_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+/// Ten characters of 32 is 50 bits: guessing one, even at the rate the
+/// service allows nobody, takes longer than any room stays open.
+pub const INVITE_CODE_LEN: usize = 10;
+
+/// A room's name: eight characters, short enough to read out, random
+/// so nobody can work out which rooms are open.
+pub fn new_room_id() -> String {
+    random_chars(8)
+}
+
+/// A fresh invite code from the operating system's random source.
+pub fn new_invite_code() -> String {
+    random_chars(INVITE_CODE_LEN)
+}
+
+fn random_chars(len: usize) -> String {
+    debug_assert!(len * 5 <= 64);
+    let random = uuid::Uuid::new_v4();
+    let bytes = random.as_bytes();
+    // 128 random bits less the 6 a v4 id fixes; the first 8 bytes are
+    // all random, which is 64 bits for 50 needed.
+    let mut bits = u64::from_le_bytes(bytes[..8].try_into().expect("8 bytes"));
+    (0..len)
+        .map(|_| {
+            let c = CODE_ALPHABET[(bits & 0x1F) as usize] as char;
+            bits >>= 5;
+            c
+        })
+        .collect()
+}
+
+/// Compare a code someone typed with the room's, taking the same time
+/// however many characters are right, so the comparison itself says
+/// nothing about how close a guess was.
+pub fn codes_match(typed: &str, actual: &str) -> bool {
+    let typed = typed.trim().to_ascii_uppercase();
+    let (a, b) = (typed.as_bytes(), actual.as_bytes());
+    if a.len() != b.len() {
+        return false;
     }
-    const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I
-    let mut out = String::with_capacity(8);
-    for i in 0..8 {
-        let idx = ((hash >> (i * 5)) & 0x1F) as usize;
-        out.push(ALPHABET[idx % ALPHABET.len()] as char);
-    }
-    out
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Wire-protocol envelope — everything the DAW sends / receives
@@ -190,6 +222,15 @@ pub enum SyncKind {
     MembersChanged { names: Vec<String> },
     /// Heartbeat — keep the connection alive without a state edit.
     Heartbeat,
+    /// Sent by the room to the host: someone with the right code wants
+    /// in. Nobody joins until the host says yes, so a code that got
+    /// out is not enough on its own.
+    JoinRequest { request_id: String, name: String },
+    /// The host's answer to a JoinRequest.
+    JoinAnswer { request_id: String, admit: bool },
+    /// Sent by the room to the host when too many wrong codes were
+    /// tried: the old code no longer works, and this is the new one.
+    CodeChanged { invite_code: String },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -385,13 +426,31 @@ mod tests {
     }
 
     #[test]
-    fn invite_code_is_deterministic_per_room() {
-        let a = generate_invite_code("room-1");
-        let b = generate_invite_code("room-1");
-        assert_eq!(a, b);
-        assert_eq!(a.len(), 8);
-        let c = generate_invite_code("room-2");
-        assert_ne!(a, c);
+    fn rooms_and_codes_cannot_be_worked_out() {
+        let a = Room::new("host", 1_760_000_000);
+        let b = Room::new("host", 1_760_000_000);
+        assert_ne!(
+            a.room_id, b.room_id,
+            "same host, same second, different room"
+        );
+        assert_ne!(a.invite_code, b.invite_code);
+        assert_eq!(a.invite_code.len(), INVITE_CODE_LEN);
+        assert!(a.invite_code.bytes().all(|c| CODE_ALPHABET.contains(&c)));
+        let many: std::collections::HashSet<String> =
+            (0..2000).map(|_| new_invite_code()).collect();
+        assert_eq!(many.len(), 2000, "no repeats in two thousand codes");
+    }
+
+    #[test]
+    fn a_code_matches_only_itself() {
+        assert!(
+            codes_match("abcdefghjk", "ABCDEFGHJK"),
+            "typed in lower case is fine"
+        );
+        assert!(codes_match(" ABCDEFGHJK ", "ABCDEFGHJK"));
+        assert!(!codes_match("ABCDEFGHJ", "ABCDEFGHJK"));
+        assert!(!codes_match("ABCDEFGHJL", "ABCDEFGHJK"));
+        assert!(!codes_match("", "ABCDEFGHJK"));
     }
 
     #[test]
