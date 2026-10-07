@@ -25,6 +25,7 @@ import { SpectralEditor } from '../components/arrangement/SpectralEditor'
 import { SessionView } from '../components/SessionView'
 import { CollabPanel } from '../components/CollabPanel'
 import { WorkspaceSongs } from '../components/WorkspaceSongs'
+import { TemplateDialog } from '../components/TemplateDialog'
 import { useCollabStore } from '../stores/collabStore'
 import { Arrangement } from '../components/arrangement/Arrangement'
 import { ChannelRack } from '../components/channelrack/ChannelRack'
@@ -264,6 +265,15 @@ function Harness() {
         </div>
       )
     }
+    case 'newproject':
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
+          <HwSecondRow projectName="Untitled" />
+          <Arrangement onSetHint={noop} />
+          <TemplateDialog onPick={noop} onCancel={noop} />
+        </div>
+      )
     case 'workspace':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>

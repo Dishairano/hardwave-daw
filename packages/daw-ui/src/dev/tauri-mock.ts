@@ -195,6 +195,12 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'create_starter_song':
+        return { genre: 'Hardstyle', bpm: 150, sections: [
+          { name: 'Intro', startTick: 0, bars: 16 }, { name: 'Build', startTick: 61440, bars: 8 },
+          { name: 'Drop', startTick: 92160, bars: 16 }, { name: 'Break', startTick: 153600, bars: 16 },
+          { name: 'Drop 2', startTick: 215040, bars: 16 }, { name: 'Outro', startTick: 276480, bars: 8 },
+        ] }
       case 'list_workspace_songs':
         return [
           { name: 'Raw Drop', fileId: 11, folder: '/Hardwave DAW/Raw Drop', updatedAt: '2026-10-07T01:12:00Z', files: 9 },

@@ -531,7 +531,9 @@ pub fn list_kick_presets() -> Vec<String> {
         .collect()
 }
 
-fn layer_to_patch(l: &hardwave_dsp::kick_synth::Layer) -> hardwave_project::track::KickLayerPatch {
+pub(crate) fn layer_to_patch(
+    l: &hardwave_dsp::kick_synth::Layer,
+) -> hardwave_project::track::KickLayerPatch {
     use hardwave_dsp::kick_synth::LayerWaveform;
     let waveform = match l.waveform {
         LayerWaveform::Sine => "sine",

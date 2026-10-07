@@ -4,7 +4,8 @@ import { hw } from '../theme'
 import { useUserTemplateStore } from '../stores/userTemplateStore'
 
 export type BuiltInTemplateId = 'blank' | 'beat4' | 'vocal' | 'mixing'
-export type TemplateId = BuiltInTemplateId | `user:${string}`
+export type StarterId = 'hardstyle' | 'rawstyle' | 'frenchcore' | 'uptempo'
+export type TemplateId = BuiltInTemplateId | `user:${string}` | `starter:${StarterId}`
 
 interface TemplateDef {
   id: BuiltInTemplateId
@@ -15,9 +16,22 @@ interface TemplateDef {
 
 export const TEMPLATES: TemplateDef[] = [
   { id: 'blank', title: 'Blank', subtitle: 'Empty project', detail: 'Start from scratch with no tracks.' },
-  { id: 'beat4', title: '4-Track Beat', subtitle: 'Drums + bass', detail: 'Kick, Snare, Hi-Hat, Bass — ready for beat-making.' },
-  { id: 'vocal', title: 'Vocal Session', subtitle: 'Lead + backing + FX', detail: 'Vocal, Backing Vocals, FX Return — ready for tracking.' },
+  { id: 'beat4', title: '4-Track Beat', subtitle: 'Drums + bass', detail: 'Kick, Snare, Hi-Hat and Bass, ready for beat-making.' },
+  { id: 'vocal', title: 'Vocal Session', subtitle: 'Lead + backing + FX', detail: 'Vocal, Backing Vocals and an FX Return, ready for tracking.' },
   { id: 'mixing', title: 'Mixing', subtitle: '8 tracks, pre-routed', detail: 'Eight audio tracks, Bus A/B return sends, Master.' },
+]
+
+/**
+ * Starter songs: the right tempo, a kick from the built-in kick synth
+ * already tuned for the style, an offbeat bass and the usual sections.
+ * Pressing play makes a sound straight away; everything in them is
+ * meant to be replaced.
+ */
+export const STARTERS: { id: StarterId; title: string; bpm: number; detail: string }[] = [
+  { id: 'hardstyle', title: 'Hardstyle', bpm: 150, detail: 'Punchy kick, offbeat reverse bass, intro to second drop.' },
+  { id: 'rawstyle', title: 'Rawstyle', bpm: 150, detail: 'Long raw kick tail, room for a screech in the drop.' },
+  { id: 'frenchcore', title: 'Frenchcore', bpm: 195, detail: 'Short punchy kick at speed, bass on the offbeat.' },
+  { id: 'uptempo', title: 'Uptempo', bpm: 200, detail: 'Tight kick at 200, built to be pushed harder.' },
 ]
 
 interface Props {
@@ -77,13 +91,56 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
           Choose a template to start from.
         </div>
 
+        <div style={{
+          fontSize: 10, fontWeight: 600, color: hw.textFaint,
+          textTransform: 'uppercase', letterSpacing: 0.6, margin: '0 0 8px',
+        }}>
+          Start from a song
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
+          {STARTERS.map((t, i) => {
+            const id = `starter:${t.id}` as const
+            const active = hover === id
+            return (
+              <button
+                key={id}
+                ref={i === 0 ? firstBtn : undefined}
+                onMouseEnter={() => setHover(id)}
+                onMouseLeave={() => setHover(null)}
+                onClick={() => onPick(id)}
+                style={{
+                  textAlign: 'left',
+                  padding: '12px 14px',
+                  background: active ? hw.bgElevated : hw.bgSurface,
+                  border: `1px solid ${active ? hw.accent : hw.border}`,
+                  borderRadius: hw.radius.md,
+                  color: hw.textPrimary,
+                  cursor: 'pointer',
+                  transition: 'border-color 0.1s, background 0.1s',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{t.title}</span>
+                  <span style={{ fontSize: 11, color: hw.textMuted }}>{t.bpm} BPM</span>
+                </div>
+                <div style={{ fontSize: 11, color: hw.textSecondary, lineHeight: 1.4 }}>{t.detail}</div>
+              </button>
+            )
+          })}
+        </div>
+
+        <div style={{
+          fontSize: 10, fontWeight: 600, color: hw.textFaint,
+          textTransform: 'uppercase', letterSpacing: 0.6, margin: '0 0 8px',
+        }}>
+          Or an empty layout
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-          {TEMPLATES.map((t, i) => {
+          {TEMPLATES.map((t) => {
             const active = hover === t.id
             return (
               <button
                 key={t.id}
-                ref={i === 0 ? firstBtn : undefined}
                 onMouseEnter={() => setHover(t.id)}
                 onMouseLeave={() => setHover(null)}
                 onClick={() => onPick(t.id)}

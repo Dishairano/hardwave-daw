@@ -39,6 +39,16 @@ which pair you record from and which pair the mix goes out of.
 
 ## 4. Your first sound
 
+The quickest way in is a starter song. File > New project offers four:
+hardstyle and rawstyle at 150 BPM, frenchcore at 195, uptempo at 200.
+Each has a kick from the built-in kick synth tuned for the style, an
+offbeat bass in the drops, markers for intro, build, drop, break,
+second drop and outro, empty tracks for a lead, a screech, atmos,
+vocals and FX, and a limiter on the master. Press space and it plays.
+Everything in it is there to be replaced.
+
+To start from nothing instead:
+
 1. Add a MIDI track: right-click in the track list and choose the kind.
 2. Open the piano roll with F7 and draw a note.
 3. Press space.

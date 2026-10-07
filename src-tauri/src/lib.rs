@@ -329,6 +329,7 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::starter::create_starter_song,
             commands::cloud::save_to_workspace,
             commands::cloud::list_workspace_songs,
             commands::cloud::open_from_workspace,

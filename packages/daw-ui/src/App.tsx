@@ -1285,6 +1285,23 @@ export function App() {
   const applyTemplate = useCallback(async (id: TemplateId) => {
     const ts = useTrackStore.getState()
     if (id === 'blank') return
+    if (id.startsWith('starter:')) {
+      // A song that plays straight away: the engine builds the tracks
+      // and clips, the window puts the sections on the ruler.
+      const genreId = id.slice('starter:'.length)
+      const song = await invoke<{ genre: string; bpm: number; sections: { name: string; startTick: number; bars: number }[] }>(
+        'create_starter_song', { genreId },
+      )
+      await useTransportStore.getState().setBpm(song.bpm)
+      const markers = useMarkerStore.getState()
+      for (const section of song.sections) markers.addMarker(section.startTick, section.name)
+      await ts.fetchTracks()
+      useProjectStore.setState({ projectName: `${song.genre} starter`, dirty: true })
+      useNotificationStore.getState().push('info', `${song.genre} starter at ${song.bpm} BPM`, {
+        detail: 'Press play. The kick, the bass and the sections are there to be replaced, not kept.',
+      })
+      return
+    }
     if (id === 'beat4') {
       await ts.addAudioTrack('Kick')
       await ts.addAudioTrack('Snare')
@@ -2462,7 +2479,7 @@ export function App() {
           onOpenProject={handleOpenProject}
           onOpenSampleProject={async () => {
             await newProject()
-            await applyTemplate('beat4')
+            await applyTemplate('starter:hardstyle')
           }}
           onOpenAudioSettings={() => setShowAudioSettings(true)}
           onDismiss={dismissWelcome}

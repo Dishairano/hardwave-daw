@@ -90,9 +90,9 @@ export function WelcomeScreen({
             <button
               onClick={() => { onOpenSampleProject(); dismiss() }}
               style={actionBtn(false)}
-              title="Opens a 4-track beat template so you can explore the DAW right away"
+              title="A hardstyle song at 150 BPM with a kick that plays straight away. New project offers rawstyle, frenchcore and uptempo too."
             >
-              Try sample project
+              Start from a hardstyle song
             </button>
             <button
               onClick={() => { onOpenAudioSettings() }}
