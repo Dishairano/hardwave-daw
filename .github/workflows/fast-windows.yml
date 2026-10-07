@@ -123,8 +123,16 @@ jobs:
       # Test builds never see the updater signing key: they are not
       # updates, so they carry no updater signature, and a test lane is
       # not a place for the key that every installed DAW trusts.
+      # A test build trades a little audio speed for build speed: no
+      # link-time optimisation and parallel code generation, which is
+      # where most of a release build's time goes. Releases keep the
+      # full release profile.
       - name: Build Windows installer (nsis only)
         shell: bash
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
         run: tauri build --target x86_64-pc-windows-msvc --features asio --bundles nsis --config src-tauri/tauri.unsigned.conf.json
 
       - name: Publish to rolling fast-build prerelease (stable URL)
