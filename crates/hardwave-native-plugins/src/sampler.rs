@@ -64,8 +64,17 @@ impl SampleData {
         let sample_rate = u32::from_le_bytes(b[1..5].try_into().ok()?);
         let nch = u32::from_le_bytes(b[5..9].try_into().ok()?) as usize;
         let nfr = u32::from_le_bytes(b[9..13].try_into().ok()?) as usize;
-        let need = 13 + nch * nfr * 4;
-        if nch == 0 || b.len() < need {
+        // The counts come from the saved state, which came from a file.
+        // A sample has a handful of channels and what the bytes actually
+        // hold; anything else is refused before memory is asked for.
+        if nch == 0 || nch > 8 {
+            return None;
+        }
+        let need = nch
+            .checked_mul(nfr)
+            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| n.checked_add(13))?;
+        if b.len() != need {
             return None;
         }
         let mut channels = Vec::with_capacity(nch);
@@ -398,6 +407,26 @@ pub fn encode_sample_state(sample_rate: u32, base_note: u8, channels: Vec<Vec<f3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_state_that_lies_about_its_size_is_refused() {
+        let mut lie = vec![60u8];
+        lie.extend_from_slice(&48_000u32.to_le_bytes());
+        lie.extend_from_slice(&u32::MAX.to_le_bytes());
+        lie.extend_from_slice(&0u32.to_le_bytes());
+        assert!(
+            SampleData::from_bytes(&lie).is_none(),
+            "channels past any sample"
+        );
+        let mut wrap = vec![60u8];
+        wrap.extend_from_slice(&48_000u32.to_le_bytes());
+        wrap.extend_from_slice(&2u32.to_le_bytes());
+        wrap.extend_from_slice(&(1u32 << 31).to_le_bytes());
+        assert!(
+            SampleData::from_bytes(&wrap).is_none(),
+            "frames the bytes do not hold"
+        );
+    }
 
     fn dc_sample() -> Vec<u8> {
         // 100 frames of DC = 0.5, stereo, base note 60.

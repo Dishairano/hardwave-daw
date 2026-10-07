@@ -481,6 +481,9 @@ impl MidiTrackNode {
 
     /// What a note sounds at on this track.
     fn freq_of(&self, pitch: u8) -> f32 {
+        // MIDI pitches stop at 127; a higher one from a damaged file must
+        // not index past the table on the audio thread.
+        let pitch = pitch.min(127);
         match &self.tuning_table {
             Some(table) => table[pitch as usize],
             None => pitch_to_freq(pitch),

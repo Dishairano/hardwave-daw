@@ -172,6 +172,11 @@ fn apply(state: &State<AppState>, command: &ScriptCommand, touched_project: &mut
                 .set_position((beats * 60.0 / bpm * sample_rate) as u64);
             true
         }
+        // A script can compute NaN (sqrt of a negative, a zero divided by
+        // zero), and clamp lets NaN through: such a value changes nothing.
+        ScriptCommand::SetMasterVolume { db } if !db.is_finite() => false,
+        ScriptCommand::SetTrackVolume { db, .. } if !db.is_finite() => false,
+        ScriptCommand::SetTrackPan { pan, .. } if !pan.is_finite() => false,
         ScriptCommand::SetMasterVolume { db } => {
             engine
                 .transport

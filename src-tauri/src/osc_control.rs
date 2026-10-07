@@ -50,6 +50,11 @@ pub fn interpret(message: &OscMessage) -> Option<SurfaceAction> {
     let address = message.address.trim_end_matches('/');
     let rest = address.strip_prefix("/hardwave/")?;
     let value = value_of(message);
+    // A value that is not a number is not a fader position; NaN passes
+    // straight through clamp and would reach the mix.
+    if !value.is_finite() {
+        return None;
+    }
     // A button sends 1.0 on press and 0.0 on release. Acting on both
     // would toggle twice and end up where it started.
     let pressed = value >= 0.5;
@@ -107,6 +112,21 @@ pub fn interpret(message: &OscMessage) -> Option<SurfaceAction> {
 /// effect without waiting for a packet that may never come. A packet
 /// that does not parse is dropped: anything can send to a UDP port, and
 /// a stray one should not reach the mixer.
+/// Whether a sender is on this machine or the local network: loopback,
+/// a private range, or link-local. The internet never drives the DAW.
+pub fn from_the_local_network(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                // Unique local (fc00::/7) and link-local (fe80::/10).
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_private() || v4.is_loopback())
+        }
+    }
+}
+
 pub fn spawn_listener(
     engine: std::sync::Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
     surface: crate::control_surface::SharedSurface,
@@ -127,12 +147,29 @@ pub fn spawn_listener(
         .name("hardwave-osc".into())
         .spawn(move || {
             let mut buffer = [0u8; 4096];
+            // The controller this session answers to; switching OSC off
+            // and on again lets another one pair.
+            let mut paired: Option<std::net::IpAddr> = None;
             while enabled.load(Ordering::Relaxed) {
-                let read = match socket.recv_from(&mut buffer) {
-                    Ok((read, _from)) => read,
+                let (read, from) = match socket.recv_from(&mut buffer) {
+                    Ok(received) => received,
                     // A timeout is the normal case: nothing was sent.
                     Err(_) => continue,
                 };
+                // Only the local network, and only the first device that
+                // spoke: anyone else on the same Wi-Fi, or anything from
+                // the internet, is not a desk this person set up.
+                if !from_the_local_network(from.ip()) {
+                    continue;
+                }
+                match paired {
+                    None => {
+                        paired = Some(from.ip());
+                        log::info!("OSC: paired with the first controller that spoke");
+                    }
+                    Some(ip) if ip != from.ip() => continue,
+                    Some(_) => {}
+                }
                 let Ok(message) = OscMessage::from_bytes(&buffer[..read]) else {
                     continue;
                 };
@@ -151,6 +188,41 @@ mod tests {
 
     fn float(address: &str, value: f32) -> OscMessage {
         OscMessage::new(address).push_float(value)
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_number_moves_nothing() {
+        assert_eq!(interpret(&float("/hardwave/master/volume", f32::NAN)), None);
+        assert_eq!(
+            interpret(&float("/hardwave/track/1/volume", f32::INFINITY)),
+            None
+        );
+    }
+
+    #[test]
+    fn only_the_local_network_may_drive_the_daw() {
+        use std::net::IpAddr;
+        for ok in [
+            "127.0.0.1",
+            "192.168.1.20",
+            "10.0.0.5",
+            "172.16.3.4",
+            "169.254.1.1",
+            "::1",
+            "fe80::1",
+            "fd00::5",
+        ] {
+            assert!(
+                from_the_local_network(ok.parse::<IpAddr>().unwrap()),
+                "{ok}"
+            );
+        }
+        for no in ["8.8.8.8", "178.104.2.34", "2a01:4f8::1", "100.64.0.1"] {
+            assert!(
+                !from_the_local_network(no.parse::<IpAddr>().unwrap()),
+                "{no}"
+            );
+        }
     }
 
     #[test]

@@ -18,6 +18,10 @@ use std::sync::{Arc, Mutex};
 /// by the person using it, so this is a mistake guard rather than a
 /// sandbox: a typo in a loop should not need the task manager.
 const MAX_OPERATIONS: u64 = 2_000_000;
+/// The most a script may ask for in one run, and print. A song edit
+/// needs far fewer; past this a script is looping, not editing.
+const MAX_COMMANDS: usize = 10_000;
+const MAX_LINES: usize = 1_000;
 
 /// What a script did.
 #[derive(Debug, Default)]
@@ -42,6 +46,14 @@ pub fn run(source: &str) -> Result<ScriptRun, String> {
     // A script has no business reading the disk or the network, and
     // Rhai's own modules are the only way in.
     engine.set_max_modules(0);
+    // Nor taking the machine's memory: a string doubled forty times is
+    // a terabyte, and Rhai sets no limit of its own. These are far past
+    // anything a script that edits a song needs.
+    engine.set_max_string_size(64 * 1024);
+    engine.set_max_array_size(10_000);
+    engine.set_max_map_size(10_000);
+    engine.set_max_call_levels(64);
+    engine.set_max_expr_depths(64, 32);
 
     {
         let printed = Arc::clone(&printed);
@@ -55,7 +67,9 @@ pub fn run(source: &str) -> Result<ScriptRun, String> {
         let printed = Arc::clone(&printed);
         engine.on_debug(move |text, _source, position| {
             if let Ok(mut lines) = printed.lock() {
-                lines.push(format!("{position}: {text}"));
+                if lines.len() < MAX_LINES {
+                    lines.push(format!("{position}: {text}"));
+                }
             }
         });
     }
@@ -67,7 +81,9 @@ pub fn run(source: &str) -> Result<ScriptRun, String> {
             let collected = Arc::clone(&collected);
             engine.register_fn($name, move || {
                 if let Ok(mut list) = collected.lock() {
-                    list.push($build);
+                    if list.len() < MAX_COMMANDS {
+                        list.push($build);
+                    }
                 }
             });
         }};
@@ -75,7 +91,9 @@ pub fn run(source: &str) -> Result<ScriptRun, String> {
             let collected = Arc::clone(&collected);
             engine.register_fn($name, move |$($arg : $ty),+| {
                 if let Ok(mut list) = collected.lock() {
-                    list.push($build);
+                    if list.len() < MAX_COMMANDS {
+                        list.push($build);
+                    }
                 }
             });
         }};
@@ -162,6 +180,18 @@ pub fn run(source: &str) -> Result<ScriptRun, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_script_cannot_take_the_machines_memory() {
+        let started = std::time::Instant::now();
+        let doubled = run("let s = \"x\"; loop { s += s; }");
+        assert!(doubled.is_err(), "a string that doubles forever is stopped");
+        let piled = run("let a = []; loop { a.push(1); }");
+        assert!(piled.is_err());
+        let chatty = run("for i in 0..100000 { play(); print(i); }").unwrap();
+        assert!(chatty.commands.len() <= MAX_COMMANDS);
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    }
 
     #[test]
     fn a_script_collects_the_commands_it_asks_for() {

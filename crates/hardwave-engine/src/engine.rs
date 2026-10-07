@@ -3540,6 +3540,12 @@ impl AudioCallback for EngineCallback {
             self.sample_rate as f64,
         );
 
+        // The last thing before the sound card: nothing broken reaches the
+        // speakers, whatever produced it (a plug-in, a script, a value from
+        // a file or the network).
+        let written = (num_frames * 2).min(output.len());
+        guard_output(&mut output[..written]);
+
         // Advance transport only when playing — input-monitoring alone must
         // not move the playhead.
         if playing {
@@ -3547,6 +3553,56 @@ impl AudioCallback for EngineCallback {
         }
 
         self.publish_audio_load(block_started, num_frames);
+    }
+}
+
+/// Past this the block is not music but a fault: +18 dBFS.
+const OUTPUT_CEILING: f32 = 8.0;
+
+/// Make a block safe to send to speakers and headphones.
+///
+/// A sample that is not a number, or infinite, silences the whole block:
+/// some drivers turn NaN into full-scale noise, which is a hearing risk
+/// and can damage speakers. Finite samples beyond +18 dBFS are held there;
+/// a mix that hot is a fault, and a float export a little over 0 dBFS
+/// passes untouched. Returns whether anything had to be changed.
+pub fn guard_output(block: &mut [f32]) -> bool {
+    if block.iter().any(|s| !s.is_finite()) {
+        block.fill(0.0);
+        return true;
+    }
+    let mut changed = false;
+    for s in block.iter_mut() {
+        if s.abs() > OUTPUT_CEILING {
+            *s = s.signum() * OUTPUT_CEILING;
+            changed = true;
+        }
+    }
+    changed
+}
+
+#[cfg(test)]
+mod output_guard_tests {
+    use super::guard_output;
+
+    #[test]
+    fn a_broken_sample_silences_the_block_instead_of_reaching_the_speakers() {
+        let mut block = vec![0.5, -0.5, f32::NAN, 0.1];
+        assert!(guard_output(&mut block));
+        assert!(block.iter().all(|s| *s == 0.0));
+        let mut block = vec![0.5, f32::INFINITY];
+        assert!(guard_output(&mut block));
+        assert!(block.iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn a_runaway_level_is_held_and_ordinary_audio_is_untouched() {
+        let mut block = vec![1.2, -0.9, 1e30, -1e30];
+        assert!(guard_output(&mut block));
+        assert_eq!(block, vec![1.2, -0.9, 8.0, -8.0]);
+        let mut fine = vec![0.99, -1.05, 0.0];
+        assert!(!guard_output(&mut fine));
+        assert_eq!(fine, vec![0.99, -1.05, 0.0]);
     }
 }
 

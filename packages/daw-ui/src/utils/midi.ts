@@ -141,8 +141,9 @@ export function decodeMidi(buf: ArrayBuffer): SmfImport {
         const l = r.vlq()
         r.bytes(l)
       } else if (type === 0x90) {
-        const pitch = r.u8()
-        const vel = r.u8()
+        // Data bytes are seven bits; a file that sets the eighth is damaged.
+        const pitch = r.u8() & 0x7F
+        const vel = r.u8() & 0x7F
         if (vel === 0) {
           const open = openNotes.get(pitch)
           if (open) {
@@ -153,7 +154,7 @@ export function decodeMidi(buf: ArrayBuffer): SmfImport {
           openNotes.set(pitch, { start: tick, vel })
         }
       } else if (type === 0x80) {
-        const pitch = r.u8()
+        const pitch = r.u8() & 0x7F
         r.u8()
         const open = openNotes.get(pitch)
         if (open) {

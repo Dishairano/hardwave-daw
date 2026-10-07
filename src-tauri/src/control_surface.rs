@@ -196,7 +196,13 @@ pub fn bank_count(project: &Project) -> usize {
 /// The curve matches the one MIDI Learn uses for a track fader, so the
 /// desk and a learned knob move a fader the same distance.
 pub fn fader_to_db(value: f32) -> f64 {
-    -60.0 + value.clamp(0.0, 1.0) as f64 * 60.0
+    // clamp keeps NaN as NaN; a broken value is the fader at the bottom.
+    let value = if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    -60.0 + value as f64 * 60.0
 }
 
 /// The reverse, for sending a fader back to the desk.

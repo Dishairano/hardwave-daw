@@ -411,6 +411,16 @@ pub fn add_midi_note(
     duration_ticks: u64,
     velocity: Option<f32>,
 ) -> Result<usize, String> {
+    // A MIDI note is 0 to 127, and a velocity a number from 0 to 1,
+    // whatever the window sent.
+    let pitch = pitch.min(127);
+    let velocity = velocity.map(|v| {
+        if v.is_finite() {
+            v.clamp(0.0, 1.0)
+        } else {
+            0.8
+        }
+    });
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();

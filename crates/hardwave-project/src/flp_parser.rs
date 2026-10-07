@@ -141,14 +141,16 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     // The header holds the file's own resolution, which is what every
     // tick in it is counted in.
     let ppq = u16_at(bytes, 8 + 4).max(1) as u64;
-    let mut i = 8 + header_len;
-    if bytes.get(i..i + 4) != Some(b"FLdt") {
+    // Every length here is the file's word for it, so every step is
+    // checked: a short or lying file is "not an .flp", never a crash.
+    let mut i = 8usize.checked_add(header_len).ok_or(FlpError::NotAnFlp)?;
+    if bytes.get(i..i.saturating_add(4)) != Some(b"FLdt") {
         return Err(FlpError::NotAnFlp);
     }
     let body_len = u32_at(bytes, i + 4) as usize;
     i += 8;
-    let end = (i + body_len).min(bytes.len());
-    let body = &bytes[i..end];
+    let end = i.saturating_add(body_len).min(bytes.len());
+    let body = bytes.get(i..end).ok_or(FlpError::NotAnFlp)?;
 
     let mut project = FlProject {
         bpm: 140.0,
@@ -277,6 +279,20 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_that_ends_where_the_body_should_start_is_refused_not_a_crash() {
+        let mut short = b"FLhd".to_vec();
+        short.extend_from_slice(&4u32.to_le_bytes());
+        short.extend_from_slice(&[0, 0, 0, 0]);
+        short.extend_from_slice(b"FLdt");
+        assert_eq!(short.len(), 16);
+        assert!(parse(&short).is_err());
+        let mut huge_header = b"FLhd".to_vec();
+        huge_header.extend_from_slice(&u32::MAX.to_le_bytes());
+        huge_header.extend_from_slice(&[0u8; 8]);
+        assert!(parse(&huge_header).is_err());
+    }
 
     /// Build a small `.flp` by hand, the same way FL writes one, so
     /// the reader is tested against the format rather than against a

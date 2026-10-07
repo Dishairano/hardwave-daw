@@ -36,6 +36,31 @@ pub fn import_flp(state: State<AppState>, path: String) -> Result<FlpImportRepor
     let bytes = std::fs::read(&path).map_err(|e| format!("could not read that file: {e}"))?;
     let fl = hardwave_project::flp_parser::parse(&bytes).map_err(|e| e.to_string())?;
 
+    // A playlist copies a pattern's notes into every placement, so a
+    // small file can ask for billions of notes. Counted before anything
+    // is made: past what any song holds, nothing is imported.
+    let mut notes_per_pattern: std::collections::HashMap<u32, usize> =
+        std::collections::HashMap::new();
+    for (pattern, _, notes) in &fl.pattern_notes {
+        *notes_per_pattern.entry(*pattern).or_default() += notes.len();
+    }
+    let mut would_make = 0usize;
+    for clip in &fl.playlist_clips {
+        if let hardwave_project::fl_import::FlClipContent::Pattern { pattern_index } = &clip.content
+        {
+            would_make = would_make
+                .saturating_add(notes_per_pattern.get(pattern_index).copied().unwrap_or(0));
+        }
+    }
+    if would_make > hardwave_project::sanitize::MAX_NOTES
+        || fl.playlist_clips.len() > hardwave_project::sanitize::MAX_CLIPS
+        || fl.channels.len() > hardwave_project::sanitize::MAX_TRACKS
+    {
+        return Err(
+            "that FL project expands to more than any song holds; it was not imported".into(),
+        );
+    }
+
     let mut report = FlpImportReport {
         bpm: fl.bpm,
         tracks: 0,

@@ -34,6 +34,9 @@ const DEFAULT_COMMAND_CAPACITY: usize = 256;
 /// pressuring the audio thread.
 const DEFAULT_GRAVEYARD_CAPACITY: usize = 64;
 
+/// The longest delay a chain may report; see `latency_samples`.
+pub const MAX_PLUGIN_LATENCY: u32 = 192_000 * 10;
+
 /// Live, audio-thread-owned representation of a single insert slot.
 /// `slot_id` matches the `PluginSlot::id` from the project model so the
 /// audio chain can be reconciled against `track.inserts` after edits.
@@ -263,8 +266,12 @@ impl InsertChain {
         self.slots
             .iter()
             .filter(|s| s.enabled)
-            .map(|s| s.plugin.latency_samples())
+            // A plug-in's own word for its delay. The engine allocates a
+            // delay line that long, so it is held to what any real
+            // lookahead needs: ten seconds at 192 kHz.
+            .map(|s| s.plugin.latency_samples().min(MAX_PLUGIN_LATENCY))
             .fold(0u32, |acc, l| acc.saturating_add(l))
+            .min(MAX_PLUGIN_LATENCY)
     }
 
     pub fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) -> bool {

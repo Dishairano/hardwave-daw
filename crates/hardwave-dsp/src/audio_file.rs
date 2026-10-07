@@ -32,6 +32,54 @@ pub struct AudioFileInfo {
     pub duration_secs: f64,
 }
 
+/// The sample rates a file may claim. Real audio is 8 kHz to 384 kHz; a
+/// file that says otherwise is damaged or made to hurt (a resampler set
+/// up for four billion hertz asks for gigabytes before reading a sample).
+pub const MIN_SAMPLE_RATE: u32 = 8_000;
+pub const MAX_SAMPLE_RATE: u32 = 384_000;
+/// The most channels a file may have.
+pub const MAX_CHANNELS: usize = 32;
+/// The most samples (frames times channels) one file may decode to:
+/// two gigabytes of audio, past any sample anyone imports.
+pub const MAX_DECODED_SAMPLES: usize = 512 * 1024 * 1024;
+
+fn check_rate(rate: u32) -> Result<(), AudioFileError> {
+    if (MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&rate) {
+        Ok(())
+    } else {
+        Err(AudioFileError::UnsupportedFormat(format!(
+            "a sample rate of {rate} Hz is not one audio uses"
+        )))
+    }
+}
+
+/// What a decoder produced, made safe to hand to the engine: channel
+/// count and rate in range, and every channel the same length, which
+/// everything downstream indexes by.
+fn settle(
+    info: AudioFileInfo,
+    mut channels: Vec<Vec<f32>>,
+) -> Result<(AudioFileInfo, Vec<Vec<f32>>), AudioFileError> {
+    check_rate(info.sample_rate)?;
+    if channels.is_empty() || channels.len() > MAX_CHANNELS {
+        return Err(AudioFileError::UnsupportedFormat(format!(
+            "{} channels is not something the DAW plays",
+            channels.len()
+        )));
+    }
+    let frames = channels.iter().map(Vec::len).min().unwrap_or(0);
+    for ch in &mut channels {
+        ch.truncate(frames);
+    }
+    let info = AudioFileInfo {
+        channels: channels.len() as u16,
+        total_frames: frames as u64,
+        duration_secs: frames as f64 / info.sample_rate as f64,
+        ..info
+    };
+    Ok((info, channels))
+}
+
 /// Offline resample a set of deinterleaved f32 channels from `src_sr` to
 /// `dst_sr` using rubato's FFT fixed-in converter. Used both by
 /// `AudioFileReader::read_resampled` at load time and by the engine when the
@@ -46,6 +94,8 @@ pub fn resample_channels(
     if channels.is_empty() {
         return Ok(Vec::new());
     }
+    check_rate(src_sr)?;
+    check_rate(dst_sr)?;
     if src_sr == dst_sr {
         return Ok(channels.to_vec());
     }
@@ -128,10 +178,15 @@ impl AudioFileReader {
 
     pub fn read(path: &Path) -> Result<(AudioFileInfo, Vec<Vec<f32>>), AudioFileError> {
         // symphonia 0.5 lacks AIFF — dispatch to our own reader.
-        if crate::aiff_reader::looks_like_aiff(path) {
-            return crate::aiff_reader::read_aiff(path);
-        }
+        let (info, channels) = if crate::aiff_reader::looks_like_aiff(path) {
+            crate::aiff_reader::read_aiff(path)?
+        } else {
+            Self::read_with_symphonia(path)?
+        };
+        settle(info, channels)
+    }
 
+    fn read_with_symphonia(path: &Path) -> Result<(AudioFileInfo, Vec<Vec<f32>>), AudioFileError> {
         let file = std::fs::File::open(path)
             .map_err(|_| AudioFileError::NotFound(path.display().to_string()))?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -157,11 +212,17 @@ impl AudioFileReader {
             .ok_or_else(|| AudioFileError::Decode("No audio track found".into()))?;
 
         let sample_rate = track.codec_params.sample_rate.unwrap_or(48000);
+        check_rate(sample_rate)?;
         let channels = track
             .codec_params
             .channels
             .map(|c| c.count() as u16)
             .unwrap_or(2);
+        if channels == 0 || channels as usize > MAX_CHANNELS {
+            return Err(AudioFileError::UnsupportedFormat(format!(
+                "{channels} channels is not something the DAW plays"
+            )));
+        }
         let total_frames = track.codec_params.n_frames.unwrap_or(0);
         let duration_secs = total_frames as f64 / sample_rate as f64;
 
@@ -178,7 +239,13 @@ impl AudioFileReader {
 
         let mut channel_buffers: Vec<Vec<f32>> = (0..channels).map(|_| Vec::new()).collect();
 
+        let mut decoded_samples = 0usize;
         loop {
+            if decoded_samples > MAX_DECODED_SAMPLES {
+                return Err(AudioFileError::UnsupportedFormat(
+                    "that file decodes to more audio than any sample holds".into(),
+                ));
+            }
             let packet = match format.next_packet() {
                 Ok(p) => p,
                 Err(symphonia::core::errors::Error::IoError(ref e))
@@ -193,6 +260,11 @@ impl AudioFileReader {
                 Ok(d) => d,
                 Err(_) => continue,
             };
+            decoded_samples = decoded_samples.saturating_add(
+                decoded
+                    .frames()
+                    .saturating_mul(decoded.spec().channels.count()),
+            );
 
             match decoded {
                 AudioBufferRef::F32(buf) => {
@@ -224,5 +296,60 @@ impl AudioFileReader {
         }
 
         Ok((info, channel_buffers))
+    }
+}
+
+#[cfg(test)]
+mod hostile_files {
+    use super::*;
+
+    /// A WAV file whose header says what it likes.
+    fn wav(rate: u32, channels: u16, frames: u32) -> Vec<u8> {
+        let data_len = frames * channels as u32 * 2;
+        let mut b = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36 + data_len).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&channels.to_le_bytes());
+        b.extend_from_slice(&rate.to_le_bytes());
+        b.extend_from_slice(&(rate.wrapping_mul(channels as u32 * 2)).to_le_bytes());
+        b.extend_from_slice(&(channels * 2).to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&data_len.to_le_bytes());
+        b.resize(b.len() + data_len as usize, 0);
+        b
+    }
+
+    fn read(bytes: &[u8]) -> Result<(AudioFileInfo, Vec<Vec<f32>>), AudioFileError> {
+        let path = std::env::temp_dir().join(format!(
+            "hw-hostile-{}-{}.wav",
+            std::process::id(),
+            bytes.len()
+        ));
+        std::fs::write(&path, bytes).unwrap();
+        let out = AudioFileReader::read(&path);
+        let _ = std::fs::remove_file(&path);
+        out
+    }
+
+    #[test]
+    fn an_ordinary_file_still_reads() {
+        let (info, ch) = read(&wav(48_000, 2, 480)).unwrap();
+        assert_eq!(
+            (info.sample_rate, info.channels, ch[0].len()),
+            (48_000, 2, 480)
+        );
+    }
+
+    #[test]
+    fn a_rate_no_audio_uses_is_refused_before_any_work() {
+        let started = std::time::Instant::now();
+        assert!(read(&wav(4_294_967_291, 2, 16)).is_err());
+        assert!(read(&wav(1, 1, 16)).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(resample_channels(&[vec![0.0; 16]], 4_294_967_291, 48_000).is_err());
     }
 }

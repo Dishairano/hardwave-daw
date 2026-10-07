@@ -523,9 +523,11 @@ fn enumerate_parameters(controller: &Option<ComPtr<IEditController>>) -> Vec<Par
     let Some(ctrl) = controller else {
         return Vec::new();
     };
-    let count = unsafe { ctrl.getParameterCount() };
-    let mut out = Vec::with_capacity(count.max(0) as usize);
-    for i in 0..count.max(0) {
+    // The plug-in's own count, held to something a plug-in could have;
+    // the vector grows as parameters are actually read.
+    let count = unsafe { ctrl.getParameterCount() }.clamp(0, 100_000);
+    let mut out = Vec::with_capacity(count.min(4096) as usize);
+    for i in 0..count {
         let mut info: vst3::Steinberg::Vst::ParameterInfo = unsafe { std::mem::zeroed() };
         let res = unsafe { ctrl.getParameterInfo(i, &mut info) };
         if res != kResultOk {
@@ -873,8 +875,9 @@ impl HostedPlugin for Vst3PluginInstance {
             if units.getProgramListInfo(0, &mut info) != kResultOk {
                 return Vec::new();
             }
-            let mut names = Vec::with_capacity(info.programCount.max(0) as usize);
-            for index in 0..info.programCount.max(0) {
+            let programs = info.programCount.clamp(0, 10_000);
+            let mut names = Vec::with_capacity(programs.min(1024) as usize);
+            for index in 0..programs {
                 let mut name: [vst3::Steinberg::char16; 128] = [0; 128];
                 if units.getProgramName(info.id, index, &mut name) == kResultOk {
                     names.push(wchar_string_to_rust(&name));
