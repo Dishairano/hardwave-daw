@@ -1,6 +1,7 @@
 //! Hardwave Plugin Host — scan, load, and run VST3/CLAP plugins.
 
 pub mod binary_arch;
+pub mod bridge_child;
 pub mod bridge_protocol;
 pub mod clap_ffi;
 pub mod clap_instance;
@@ -51,4 +52,39 @@ pub fn probe_load(path: &std::path::Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Load a plug-in's library.
+///
+/// On Windows the library's own dependencies are looked for beside it
+/// and in the system folders, never in the current folder or along the
+/// PATH: a DLL dropped next to wherever the DAW was started from, or in
+/// a folder on the PATH, must not be loaded into it in place of the real
+/// one. That is also where plug-ins that ship their own DLLs keep them.
+///
+/// # Safety
+/// Loading a library runs its initialisation code; the caller accepts
+/// that for a plug-in it has decided to host.
+pub unsafe fn load_plugin_library(
+    path: &std::path::Path,
+) -> Result<libloading::Library, libloading::Error> {
+    #[cfg(windows)]
+    {
+        use libloading::os::windows::{
+            Library, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+        };
+        // Safety: as the function's own contract.
+        unsafe {
+            Library::load_with_flags(
+                path,
+                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            )
+        }
+        .map(libloading::Library::from)
+    }
+    #[cfg(not(windows))]
+    {
+        // Safety: as the function's own contract.
+        unsafe { libloading::Library::new(path) }
+    }
 }

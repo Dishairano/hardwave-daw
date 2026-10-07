@@ -417,6 +417,7 @@ pub struct ClapHostParams {
 // Scan-time metadata readers (unchanged from prior release)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReadDescriptor {
     pub id: String,
     pub name: String,
@@ -457,7 +458,7 @@ unsafe fn read_features(ptr: *const *const c_char) -> Vec<String> {
 /// Load a `.clap` shared library and read every plugin descriptor it exposes.
 pub fn read_clap_descriptors(library_path: &Path) -> Option<Vec<ReadDescriptor>> {
     unsafe {
-        let lib = libloading::Library::new(library_path).ok()?;
+        let lib = crate::load_plugin_library(library_path).ok()?;
         let entry: libloading::Symbol<*const ClapPluginEntry> = lib.get(b"clap_entry\0").ok()?;
         let entry = *entry;
         if entry.is_null() {

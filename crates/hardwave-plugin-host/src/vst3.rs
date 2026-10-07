@@ -244,7 +244,7 @@ impl Vst3PluginInstance {
         );
 
         // 1. dlopen the binary.
-        let library = unsafe { libloading::Library::new(&binary) }
+        let library = unsafe { crate::load_plugin_library(&binary) }
             .map_err(|e| format!("dlopen {}: {e}", binary.display()))?;
 
         // 2. Resolve GetPluginFactory.

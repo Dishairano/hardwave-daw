@@ -14,6 +14,7 @@ mod midi_map;
 mod midi_sync;
 mod midi_timecode;
 mod osc_control;
+mod plugin_describe;
 mod plugin_probe;
 mod plugin_sandbox;
 mod prefs;
@@ -132,12 +133,28 @@ pub fn run() {
     // plug-in and exits. Handled before anything else starts, so the process
     // that a bad plug-in kills is one holding nothing: no window, no engine,
     // no project. See plugin_probe.rs.
+    // Take the folder the DAW was started from out of the places Windows
+    // looks for DLLs, for this process and the children it starts, so a
+    // DLL left next to a downloaded song cannot be loaded in place of the
+    // real one.
+    #[cfg(windows)]
+    // Safety: a documented call with an empty string, before any thread
+    // of ours exists.
+    unsafe {
+        let empty: [u16; 1] = [0];
+        windows_sys::Win32::System::LibraryLoader::SetDllDirectoryW(empty.as_ptr());
+    }
+
     let args: Vec<String> = std::env::args().collect();
+    // The child modes are only ever the first argument, which is how
+    // the DAW itself starts them; a switch anywhere else is a file name
+    // or a mistake, not a request to load a library.
+    let child_mode = args.get(1).map(String::as_str);
     // The sandbox child: this same binary, hosting one plug-in and
     // answering frames down a pipe. Handled first, for the same reason
     // the probe is: the process a bad plug-in kills holds nothing else.
-    if let Some(i) = args.iter().position(|a| a == "--host-plugin") {
-        let code = match (args.get(i + 1), args.get(i + 2)) {
+    if child_mode == Some("--host-plugin") {
+        let code = match (args.get(2), args.get(3)) {
             (Some(path), Some(id)) => plugin_sandbox::run_host_child(path, id),
             _ => {
                 eprintln!("--host-plugin needs a path and an id");
@@ -147,8 +164,17 @@ pub fn run() {
         std::process::exit(code);
     }
 
-    if let Some(i) = args.iter().position(|a| a == "--probe-plugin") {
-        let code = match args.get(i + 1) {
+    // Reading what a CLAP contains, which means running it: in a child.
+    if child_mode == Some("--describe-clap") {
+        let code = match args.get(2) {
+            Some(path) => plugin_describe::run_describe_child(path),
+            None => 2,
+        };
+        std::process::exit(code);
+    }
+
+    if child_mode == Some("--probe-plugin") {
+        let code = match args.get(2) {
             Some(path) => plugin_probe::run_probe_child(path),
             None => {
                 eprintln!("--probe-plugin needs a path");
@@ -178,6 +204,13 @@ pub fn run() {
     engine.set_channel_offsets(prefs.input_channel_offset, prefs.output_channel_offset);
     // Sharing the audio work across cores, if the setting asks for it.
     engine.set_trusted_servers(prefs.trusted_sample_servers.clone());
+    // CLAP libraries are read in a child process, never in this one.
+    engine
+        .plugin_scanner
+        .lock()
+        .set_clap_describer(std::sync::Arc::new(
+            plugin_describe::describe_out_of_process,
+        ));
     if prefs.worker_threads > 0 {
         engine.set_worker_threads(prefs.worker_threads);
     }
@@ -203,9 +236,9 @@ pub fn run() {
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
         control_surface: Arc::new(crate::control_surface::ControlSurface::new()),
         reference_meta: Arc::new(Mutex::new((f32::NEG_INFINITY, String::new()))),
-        sandboxed_plugins: Arc::new(Mutex::new(
+        sandboxed_plugins: commands::plugins::sandboxed_set(
             prefs.sandboxed_plugins.iter().cloned().collect(),
-        )),
+        ),
         sandbox_health: Arc::new(Mutex::new(std::collections::HashMap::new())),
         collab: Arc::new(crate::collab::Collab::default()),
         osc_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -761,8 +794,12 @@ pub fn run() {
                         }
                     }
                     {
-                        let eng = engine_for_scan.lock();
-                        let mut scanner = eng.plugin_scanner.lock();
+                        // Only the scanner is held for the scan, not the
+                        // engine: playback and every other command carry
+                        // on while plug-in folders are walked.
+                        let scanner_arc =
+                            std::sync::Arc::clone(&engine_for_scan.lock().plugin_scanner);
+                        let mut scanner = scanner_arc.lock();
                         // Register native plugins before scanning external
                         // paths so `find(id)` resolves them as well.
                         scanner

@@ -295,7 +295,7 @@ pub fn list_factory_presets(
             .cloned()
             .ok_or_else(|| format!("No plug-in with id {plugin_id}"))?
     };
-    let plugin = crate::commands::plugins::instantiate_plugin(&descriptor)?;
+    let plugin = crate::commands::plugins::load_hosted(&descriptor)?;
     Ok(plugin.factory_presets())
 }
 

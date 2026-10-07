@@ -213,8 +213,10 @@ fn run_probe_command(exe: &Path, plugin: &Path, timeout: Duration) -> ProbeOutco
         .arg("--probe-plugin")
         .arg(plugin)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        // Nobody reads them: a plug-in that logs more than a pipe holds
+        // would block, time out, and be refused for being "hung".
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
     {
         Ok(c) => c,

@@ -10,7 +10,7 @@
 //! It speaks the frames in `bridge_protocol`: audio in, audio out,
 //! parameter moves, state. Nothing else lives in this process.
 
-use std::io::{stdin, stdout, BufReader, BufWriter};
+use std::io::{stdin, BufWriter};
 
 use hardwave_plugin_host::bridge_protocol::*;
 use hardwave_plugin_host::types::{HostedPlugin, PluginCategory, PluginDescriptor, PluginFormat};
@@ -63,68 +63,23 @@ fn load(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlugin>, String> 
 }
 
 fn run(path: &str, id: &str) -> i32 {
+    // Frames get a private copy of stdout before any plug-in code runs;
+    // what the plug-in prints goes nowhere.
+    let frames_out = match hardwave_plugin_host::bridge_child::private_stdout() {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("hardwave-plugin-bridge: no stream for frames: {e}");
+            return 4;
+        }
+    };
     let descriptor = descriptor(path, id);
     let mut plugin = match load(&descriptor) {
         Ok(plugin) => plugin,
         Err(e) => {
-            let mut out = BufWriter::new(stdout());
+            let mut out = BufWriter::new(frames_out);
             let _ = Frame::new(RES_ERROR, e.as_bytes().to_vec()).write(&mut out);
             return 3;
         }
     };
-
-    let mut reader = BufReader::new(stdin());
-    let mut writer = BufWriter::new(stdout());
-    let mut left = vec![0.0f32; 4096];
-    let mut right = vec![0.0f32; 4096];
-    let mut outputs = vec![Vec::new(), Vec::new()];
-
-    // The host going away, or the stream ending, ends this process
-    // too: there is nothing here without it.
-    while let Ok(Some(frame)) = Frame::read(&mut reader) {
-        match frame.kind {
-            REQ_SHUTDOWN => break,
-            REQ_ACTIVATE => {
-                if let Some((sample_rate, max_block)) = frame.read_activate() {
-                    let block = if max_block == 0 { 4096 } else { max_block };
-                    if left.len() < block as usize {
-                        left.resize(block as usize, 0.0);
-                        right.resize(block as usize, 0.0);
-                    }
-                    let _ = plugin.activate(sample_rate, block);
-                }
-                let _ = Frame::new(RES_OK, Vec::new()).write(&mut writer);
-            }
-            REQ_SET_PARAM => {
-                if let Some((id, value)) = frame.read_set_param() {
-                    plugin.set_parameter_value(id, value);
-                }
-            }
-            REQ_SET_STATE => {
-                let _ = plugin.set_state(&frame.payload);
-            }
-            REQ_GET_STATE => {
-                let _ = Frame::new(RES_STATE, plugin.get_state()).write(&mut writer);
-            }
-            REQ_AUDIO => {
-                let frames = frame.payload.len() / 8;
-                if left.len() < frames {
-                    left.resize(frames, 0.0);
-                    right.resize(frames, 0.0);
-                }
-                frame.read_audio(&mut left[..frames], &mut right[..frames]);
-                let inputs: [&[f32]; 2] = [&left[..frames], &right[..frames]];
-                plugin.process(&inputs, &mut outputs, &[], &mut Vec::new(), frames);
-                let out_l = outputs.first().map(|c| c.as_slice()).unwrap_or(&[]);
-                let out_r = outputs.get(1).map(|c| c.as_slice()).unwrap_or(out_l);
-                let mut reply = Frame::audio(out_l, out_r);
-                reply.kind = RES_AUDIO;
-                if reply.write(&mut writer).is_err() {
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    0
+    hardwave_plugin_host::bridge_child::serve(plugin.as_mut(), stdin(), frames_out)
 }

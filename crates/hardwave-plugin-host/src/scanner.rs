@@ -51,7 +51,18 @@ struct ModuleClass {
     sub_categories: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+/// Reads the plug-ins a CLAP library declares. Reading them means
+/// loading the library and running its code, so the DAW hands the
+/// scanner one that does it in a separate process; without one, the
+/// scanner names a CLAP by its file and never loads it.
+pub type ClapDescriber =
+    std::sync::Arc<dyn Fn(&Path) -> Option<Vec<crate::clap_ffi::ReadDescriptor>> + Send + Sync>;
+
+/// How deep the scan follows folders inside a plug-in folder. Real
+/// vendor layouts are a few levels; a loop of links is not.
+const MAX_SCAN_DEPTH: usize = 8;
+
+#[derive(Clone)]
 pub struct PluginScanner {
     pub vst3_paths: Vec<PathBuf>,
     pub clap_paths: Vec<PathBuf>,
@@ -60,6 +71,17 @@ pub struct PluginScanner {
     pub blocklist: HashSet<String>,
     cache: Vec<PluginDescriptor>,
     last_diff: ScanDiff,
+    clap_describer: Option<ClapDescriber>,
+}
+
+impl std::fmt::Debug for PluginScanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginScanner")
+            .field("vst3_paths", &self.vst3_paths)
+            .field("clap_paths", &self.clap_paths)
+            .field("plugins", &self.cache.len())
+            .finish()
+    }
 }
 
 impl PluginScanner {
@@ -72,7 +94,13 @@ impl PluginScanner {
             blocklist: HashSet::new(),
             cache: Vec::new(),
             last_diff: ScanDiff::default(),
+            clap_describer: None,
         }
+    }
+
+    /// How CLAP libraries are read; see [`ClapDescriber`].
+    pub fn set_clap_describer(&mut self, describer: ClapDescriber) {
+        self.clap_describer = Some(describer);
     }
 
     /// Default path for the cache file.
@@ -143,7 +171,8 @@ impl PluginScanner {
                 if let Some(cb) = progress.as_mut() {
                     cb(self.cache.len(), &path.display().to_string());
                 }
-                self.scan_vst3_dir(path, progress.as_mut());
+                let mut seen = HashSet::new();
+                self.scan_vst3_dir(path, progress.as_mut(), 0, &mut seen);
             }
         }
 
@@ -152,7 +181,8 @@ impl PluginScanner {
                 if let Some(cb) = progress.as_mut() {
                     cb(self.cache.len(), &path.display().to_string());
                 }
-                self.scan_clap_dir(path, progress.as_mut());
+                let mut seen = HashSet::new();
+                self.scan_clap_dir(path, progress.as_mut(), 0, &mut seen);
             }
         }
 
@@ -215,7 +245,16 @@ impl PluginScanner {
         }
     }
 
-    fn scan_vst3_dir(&mut self, dir: &Path, mut progress: Option<&mut ScanProgress>) {
+    fn scan_vst3_dir(
+        &mut self,
+        dir: &Path,
+        mut progress: Option<&mut ScanProgress>,
+        depth: usize,
+        seen: &mut HashSet<PathBuf>,
+    ) {
+        if !first_visit(dir, depth, seen) {
+            return;
+        }
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return,
@@ -242,12 +281,21 @@ impl PluginScanner {
                 // legitimately contain unrelated .vst3-named resources.
             } else if path.is_dir() {
                 // Scan nested non-bundle directories (e.g. vendor subfolders).
-                self.scan_vst3_dir(&path, progress.as_deref_mut());
+                self.scan_vst3_dir(&path, progress.as_deref_mut(), depth + 1, seen);
             }
         }
     }
 
-    fn scan_clap_dir(&mut self, dir: &Path, mut progress: Option<&mut ScanProgress>) {
+    fn scan_clap_dir(
+        &mut self,
+        dir: &Path,
+        mut progress: Option<&mut ScanProgress>,
+        depth: usize,
+        seen: &mut HashSet<PathBuf>,
+    ) {
+        if !first_visit(dir, depth, seen) {
+            return;
+        }
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return,
@@ -262,11 +310,13 @@ impl PluginScanner {
                 if let Some(cb) = progress.as_deref_mut() {
                     cb(self.cache.len(), &path.display().to_string());
                 }
-                for d in parse_clap_library(&path) {
+                // Read through the describer, so whatever the library does
+                // when it loads happens in another process.
+                for d in parse_clap_library(&path, self.clap_describer.as_ref()) {
                     self.cache.push(d);
                 }
             } else if path.is_dir() {
-                self.scan_clap_dir(&path, progress.as_deref_mut());
+                self.scan_clap_dir(&path, progress.as_deref_mut(), depth + 1, seen);
             }
         }
     }
@@ -283,18 +333,35 @@ pub fn describe_vst3(bundle_path: &Path) -> Vec<PluginDescriptor> {
     parse_vst3_bundle(bundle_path)
 }
 
+/// Describe a CLAP by loading it here, in this process. Only for the
+/// processes that exist to take that risk: the crash probe and the
+/// describe child. The DAW itself goes through its describer.
 pub fn describe_clap(library_path: &Path) -> Vec<PluginDescriptor> {
-    parse_clap_library(library_path)
+    let here: ClapDescriber = std::sync::Arc::new(crate::clap_ffi::read_clap_descriptors);
+    parse_clap_library(library_path, Some(&here))
 }
 
-fn parse_clap_library(library_path: &Path) -> Vec<PluginDescriptor> {
+/// Whether to walk into a folder: not too deep, and not one already
+/// walked through another link.
+fn first_visit(dir: &Path, depth: usize, seen: &mut HashSet<PathBuf>) -> bool {
+    if depth > MAX_SCAN_DEPTH {
+        return false;
+    }
+    let real = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    seen.insert(real)
+}
+
+fn parse_clap_library(
+    library_path: &Path,
+    describer: Option<&ClapDescriber>,
+) -> Vec<PluginDescriptor> {
     let fallback_name = library_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Unknown")
         .to_string();
 
-    match crate::clap_ffi::read_clap_descriptors(library_path) {
+    match describer.and_then(|describe| describe(library_path)) {
         Some(list) if !list.is_empty() => list
             .into_iter()
             .map(|d| {
@@ -784,5 +851,50 @@ mod tests {
             classify_vst3(&v("Fx|Dynamics")),
             (PluginCategory::Effect, false)
         );
+    }
+}
+
+#[cfg(test)]
+mod hostile_folders {
+    use super::*;
+
+    fn scanner_for(dir: &Path) -> PluginScanner {
+        let mut s = PluginScanner::new();
+        s.vst3_paths = vec![dir.to_path_buf()];
+        s.clap_paths = vec![dir.to_path_buf()];
+        s
+    }
+
+    #[test]
+    fn a_clap_is_listed_by_name_without_being_loaded_when_nothing_may_read_it() {
+        let dir = std::env::temp_dir().join(format!("hw-scan-clap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Not a library at all: loading it would fail, but it must not
+        // even be tried in this process.
+        std::fs::write(dir.join("Trap.clap"), b"not a library").unwrap();
+        let mut scanner = scanner_for(&dir);
+        let found = scanner.scan().to_vec();
+        let trap = found
+            .iter()
+            .find(|d| d.path.ends_with("Trap.clap"))
+            .expect("listed");
+        assert_eq!(trap.name, "Trap");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_loop_of_links_does_not_hang_the_scan() {
+        let dir = std::env::temp_dir().join(format!("hw-scan-loop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::os::unix::fs::symlink(&dir, dir.join("a").join("back")).unwrap();
+        std::os::unix::fs::symlink(dir.join("a"), dir.join("again")).unwrap();
+        let started = std::time::Instant::now();
+        let mut scanner = scanner_for(&dir);
+        scanner.scan();
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

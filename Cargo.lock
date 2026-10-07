@@ -2095,6 +2095,7 @@ version = "0.259.0"
 dependencies = [
  "dirs 5.0.1",
  "hardwave-midi",
+ "libc",
  "libloading 0.8.9",
  "log",
  "parking_lot",

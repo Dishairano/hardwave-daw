@@ -28,7 +28,7 @@ fn build_offline_insert_factory(
     move |plugin_id: &str| {
         descriptors
             .get(plugin_id)
-            .and_then(|d| super::plugins::instantiate_plugin(d).ok())
+            .and_then(|d| super::plugins::load_hosted(d).ok())
     }
 }
 

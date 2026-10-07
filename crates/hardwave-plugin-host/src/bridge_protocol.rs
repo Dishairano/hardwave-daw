@@ -30,6 +30,12 @@ pub const RES_ERROR: u32 = 104;
 /// allocating on it would be the crash we are trying to avoid.
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
+/// Every frame starts with this. A plug-in that prints to the stream,
+/// or a stream that slipped, shows up as a frame without it, which ends
+/// the connection there and then, instead of being read as a length and
+/// waited on.
+pub const FRAME_MAGIC: u32 = 0x4857_4652; // "HWFR"
+
 /// One message: what it is, and its bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
@@ -110,6 +116,7 @@ impl Frame {
     }
 
     pub fn write(&self, out: &mut impl Write) -> std::io::Result<()> {
+        out.write_all(&FRAME_MAGIC.to_le_bytes())?;
         out.write_all(&self.kind.to_le_bytes())?;
         out.write_all(&(self.payload.len() as u32).to_le_bytes())?;
         out.write_all(&self.payload)?;
@@ -119,14 +126,21 @@ impl Frame {
     /// Read one frame. An end of stream is `Ok(None)`, which is how a
     /// child that has gone away is noticed.
     pub fn read(input: &mut impl Read) -> std::io::Result<Option<Frame>> {
-        let mut header = [0u8; 8];
+        let mut header = [0u8; 12];
         match input.read_exact(&mut header) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
             Err(e) => return Err(e),
         }
-        let kind = u32::from_le_bytes(header[0..4].try_into().unwrap());
-        let len = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+        let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
+        if magic != FRAME_MAGIC {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "something other than a frame arrived on the stream",
+            ));
+        }
+        let kind = u32::from_le_bytes(header[4..8].try_into().unwrap());
+        let len = u32::from_le_bytes(header[8..12].try_into().unwrap()) as usize;
         if len > MAX_FRAME_BYTES {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -214,8 +228,17 @@ mod tests {
     }
 
     #[test]
+    fn printed_text_in_the_stream_ends_it_instead_of_being_waited_on() {
+        let mut bytes = b"Loading presets...\n".to_vec();
+        Frame::new(RES_OK, Vec::new()).write(&mut bytes).unwrap();
+        let mut cursor = bytes.as_slice();
+        assert!(Frame::read(&mut cursor).is_err());
+    }
+
+    #[test]
     fn a_frame_claiming_to_be_enormous_is_refused() {
         let mut bytes = Vec::new();
+        bytes.extend_from_slice(&FRAME_MAGIC.to_le_bytes());
         bytes.extend_from_slice(&REQ_AUDIO.to_le_bytes());
         bytes.extend_from_slice(&(MAX_FRAME_BYTES as u32 + 1).to_le_bytes());
         let mut cursor = bytes.as_slice();

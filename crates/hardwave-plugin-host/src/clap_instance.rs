@@ -98,7 +98,7 @@ impl ClapPluginInstance {
         if !path.exists() {
             return Err(format!("CLAP binary not found: {}", path.display()));
         }
-        let lib = unsafe { libloading::Library::new(&path) }
+        let lib = unsafe { crate::load_plugin_library(&path) }
             .map_err(|e| format!("dlopen {}: {e}", path.display()))?;
         let entry_sym: libloading::Symbol<*const ClapPluginEntry> = unsafe {
             lib.get(b"clap_entry\0")

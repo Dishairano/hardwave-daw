@@ -17,7 +17,7 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError};
 use std::sync::{mpsc, Arc, Mutex};
 
 use hardwave_plugin_host::bridge_protocol::*;
@@ -31,6 +31,10 @@ use raw_window_handle::RawWindowHandle;
 /// child that is merely slow should recover rather than be declared
 /// dead.
 const BLOCK_DEADLINE: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long a plug-in may take to activate before it counts as hung.
+const ACTIVATE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+/// Messages waiting for the child at most; past this, blocks are dropped.
+const TO_CHILD_DEPTH: usize = 8;
 
 /// Every sandbox started in this run, so the app can say which
 /// plug-in's process went and when.
@@ -81,6 +85,10 @@ pub fn clear_crashed_sandboxes() {
 enum ToChild {
     Audio(Vec<f32>, Vec<f32>),
     Param(u32, f64),
+    /// Its own message rather than a parameter with a reserved id: a
+    /// plug-in whose parameter happened to have that id re-activated
+    /// itself at a sample rate of whatever the knob said.
+    Activate(f64, u32),
     State(Vec<u8>),
     Shutdown,
 }
@@ -95,7 +103,9 @@ enum FromChild {
 /// ordinary one.
 pub struct SandboxedPlugin {
     descriptor: PluginDescriptor,
-    to_child: Sender<ToChild>,
+    /// Bounded: a child that stops keeping up has blocks dropped rather
+    /// than piling up in memory behind it.
+    to_child: SyncSender<ToChild>,
     from_child: Receiver<FromChild>,
     /// Blocks that came back and have not been played yet. One deep in
     /// steady state: that is the latency this costs.
@@ -137,7 +147,7 @@ impl SandboxedPlugin {
             .spawn()
             .map_err(|e| format!("could not start the plug-in process: {e}"))?;
 
-        let (to_tx, to_rx) = mpsc::channel::<ToChild>();
+        let (to_tx, to_rx) = mpsc::sync_channel::<ToChild>(TO_CHILD_DEPTH);
         let (from_tx, from_rx) = mpsc::channel::<FromChild>();
         let crashed = Arc::new(AtomicBool::new(false));
         let crash_message = Arc::new(Mutex::new(None));
@@ -201,7 +211,10 @@ impl SandboxedPlugin {
 
 impl Drop for SandboxedPlugin {
     fn drop(&mut self) {
-        let _ = self.to_child.send(ToChild::Shutdown);
+        // try_send: the queue may be full of a wedged child's blocks, and
+        // dropping the sender ends the bridge thread (which kills the
+        // child) whether or not this arrives.
+        let _ = self.to_child.try_send(ToChild::Shutdown);
         // The thread is not waited for. It owns everything it touches,
         // and a child that has wedged can leave a grandchild holding
         // the pipe open, so a read can outlive the kill. Removing a
@@ -218,8 +231,8 @@ impl HostedPlugin for SandboxedPlugin {
     fn activate(&mut self, sample_rate: f64, max_block: u32) -> Result<(), String> {
         self.block_size.store(max_block, Ordering::Relaxed);
         self.to_child
-            .send(ToChild::Param(u32::MAX, sample_rate))
-            .map_err(|_| "the plug-in's process is gone".to_string())?;
+            .try_send(ToChild::Activate(sample_rate, max_block))
+            .map_err(|_| "the plug-in's process is not answering".to_string())?;
         Ok(())
     }
 
@@ -253,9 +266,11 @@ impl HostedPlugin for SandboxedPlugin {
         // Hand this block over and take whatever came back. The audio
         // thread never waits on the child: that is the one block of
         // latency this costs, and it is reported below.
+        // Never waits: a full queue means the child is behind, and the
+        // block is dropped rather than queued without end.
         let _ = self
             .to_child
-            .send(ToChild::Audio(left.to_vec(), right.to_vec()));
+            .try_send(ToChild::Audio(left.to_vec(), right.to_vec()));
         loop {
             match self.from_child.try_recv() {
                 Ok(FromChild::Audio(l, r)) => self.pending.push_back((l, r)),
@@ -301,7 +316,7 @@ impl HostedPlugin for SandboxedPlugin {
             Some(slot) => slot.1 = value,
             None => self.param_cache.push((id, value)),
         }
-        let _ = self.to_child.send(ToChild::Param(id, value));
+        let _ = self.to_child.try_send(ToChild::Param(id, value));
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -315,8 +330,8 @@ impl HostedPlugin for SandboxedPlugin {
     fn set_state(&mut self, bytes: &[u8]) -> Result<(), String> {
         self.state_cache = bytes.to_vec();
         self.to_child
-            .send(ToChild::State(bytes.to_vec()))
-            .map_err(|_| "the plug-in's process is gone".to_string())
+            .try_send(ToChild::State(bytes.to_vec()))
+            .map_err(|_| "the plug-in's process is not answering".to_string())
     }
 
     fn latency_samples(&self) -> u32 {
@@ -378,6 +393,10 @@ fn helper_for(descriptor: &PluginDescriptor) -> Option<std::path::PathBuf> {
 }
 
 /// The thread between the audio thread and the child process.
+///
+/// Reading from the child happens on a thread of its own, so this one
+/// only ever waits with a deadline: a child that hangs is noticed and
+/// killed, rather than holding this thread (and its queue) forever.
 fn bridge_loop(
     mut child: Child,
     to_rx: Receiver<ToChild>,
@@ -394,7 +413,19 @@ fn bridge_loop(
         return;
     };
     let mut writer = BufWriter::new(stdin);
-    let mut reader = BufReader::new(stdout);
+    let (frames_tx, frames) = mpsc::sync_channel::<std::io::Result<Option<Frame>>>(4);
+    let _ = std::thread::Builder::new()
+        .name("hardwave-plugin-bridge-read".into())
+        .spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let frame = Frame::read(&mut reader);
+                let last = !matches!(frame, Ok(Some(_)));
+                if frames_tx.send(frame).is_err() || last {
+                    break;
+                }
+            }
+        });
 
     let fail = |message: String| {
         crashed.store(true, Ordering::Relaxed);
@@ -404,68 +435,74 @@ fn bridge_loop(
         let _ = from_tx.send(FromChild::Crashed(message));
     };
 
+    // The next frame of a kind, within a deadline; anything else that
+    // arrives on the way is skipped.
+    let wait_for = |kind: u32, within: std::time::Duration| -> Result<Frame, String> {
+        let deadline = std::time::Instant::now() + within;
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match frames.recv_timeout(left) {
+                Ok(Ok(Some(frame))) if frame.kind == kind => return Ok(frame),
+                Ok(Ok(Some(frame))) if frame.kind == RES_ERROR => {
+                    return Err(format!(
+                        "the plug-in reported: {}",
+                        String::from_utf8_lossy(&frame.payload)
+                    ))
+                }
+                Ok(Ok(Some(_))) => continue,
+                Ok(Ok(None)) => return Err("the plug-in's process closed".into()),
+                Ok(Err(e)) => return Err(format!("the plug-in's process went wrong: {e}")),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err("the plug-in stopped answering".into())
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err("the plug-in's process closed".into())
+                }
+            }
+        }
+    };
+
     // The channel closing means the plug-in was removed: the child
     // goes with it.
     while let Ok(job) = to_rx.recv() {
-        match job {
+        let written = match &job {
             ToChild::Shutdown => {
                 let _ = Frame::new(REQ_SHUTDOWN, Vec::new()).write(&mut writer);
                 break;
             }
-            ToChild::Param(id, value) => {
-                // Sample rate rides in on the reserved id, because
-                // activate and a parameter move are the same shape.
-                let frame = if id == u32::MAX {
-                    Frame::activate(value, 0)
-                } else {
-                    Frame::set_param(id, value)
-                };
-                if frame.write(&mut writer).is_err() {
-                    fail("the plug-in's process stopped answering".into());
+            ToChild::Param(id, value) => Frame::set_param(*id, *value).write(&mut writer),
+            ToChild::Activate(rate, block) => Frame::activate(*rate, *block).write(&mut writer),
+            ToChild::State(bytes) => Frame::new(REQ_SET_STATE, bytes.clone()).write(&mut writer),
+            ToChild::Audio(left, right) => Frame::audio(left, right).write(&mut writer),
+        };
+        if written.is_err() {
+            fail("the plug-in's process stopped answering".into());
+            break;
+        }
+        match job {
+            ToChild::Activate(..) => {
+                // Its answer is consumed here, so the next block's answer
+                // is the next block's, not this one.
+                if let Err(why) = wait_for(RES_OK, ACTIVATE_DEADLINE) {
+                    fail(why);
                     break;
                 }
             }
-            ToChild::State(bytes) => {
-                if Frame::new(REQ_SET_STATE, bytes).write(&mut writer).is_err() {
-                    fail("the plug-in's process stopped answering".into());
-                    break;
-                }
-            }
-            ToChild::Audio(left, right) => {
-                if Frame::audio(&left, &right).write(&mut writer).is_err() {
-                    fail("the plug-in's process stopped answering".into());
-                    break;
-                }
-                let deadline = std::time::Instant::now() + BLOCK_DEADLINE;
-                match Frame::read(&mut reader) {
-                    Ok(Some(frame)) if frame.kind == RES_AUDIO => {
-                        let mut out_l = vec![0.0f32; left.len()];
-                        let mut out_r = vec![0.0f32; right.len()];
-                        frame.read_audio(&mut out_l, &mut out_r);
-                        if from_tx.send(FromChild::Audio(out_l, out_r)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(Some(frame)) if frame.kind == RES_ERROR => {
-                        let message = String::from_utf8_lossy(&frame.payload).to_string();
-                        fail(format!("the plug-in reported: {message}"));
-                        break;
-                    }
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
-                        fail("the plug-in's process closed".into());
-                        break;
-                    }
-                    Err(e) => {
-                        fail(format!("the plug-in's process went wrong: {e}"));
+            ToChild::Audio(left, right) => match wait_for(RES_AUDIO, BLOCK_DEADLINE) {
+                Ok(frame) => {
+                    let mut out_l = vec![0.0f32; left.len()];
+                    let mut out_r = vec![0.0f32; right.len()];
+                    frame.read_audio(&mut out_l, &mut out_r);
+                    if from_tx.send(FromChild::Audio(out_l, out_r)).is_err() {
                         break;
                     }
                 }
-                if std::time::Instant::now() > deadline {
-                    fail("the plug-in took too long over a block".into());
+                Err(why) => {
+                    fail(why);
                     break;
                 }
-            }
+            },
+            _ => {}
         }
     }
 
@@ -478,8 +515,15 @@ fn bridge_loop(
 /// Nothing else lives in this process. When the plug-in takes it down,
 /// what dies is a process holding one plug-in, and the DAW carries on.
 pub fn run_host_child(plugin_path: &str, plugin_id: &str) -> i32 {
-    use std::io::{stdin, stdout};
-
+    // Frames get a private copy of stdout before any plug-in code runs;
+    // what the plug-in prints goes nowhere instead of into a frame.
+    let frames_out = match hardwave_plugin_host::bridge_child::private_stdout() {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("--host-plugin: no stream for frames: {e}");
+            return 4;
+        }
+    };
     let descriptor = match crate::commands::plugins::descriptor_for_child(plugin_path, plugin_id) {
         Some(d) => d,
         None => {
@@ -494,61 +538,7 @@ pub fn run_host_child(plugin_path: &str, plugin_id: &str) -> i32 {
             return 3;
         }
     };
-
-    let mut reader = BufReader::new(stdin());
-    let mut writer = BufWriter::new(stdout());
-    let mut left = vec![0.0f32; 4096];
-    let mut right = vec![0.0f32; 4096];
-    let mut outputs = vec![Vec::new(), Vec::new()];
-
-    loop {
-        let frame = match Frame::read(&mut reader) {
-            Ok(Some(f)) => f,
-            Ok(None) => break,
-            Err(_) => break,
-        };
-        match frame.kind {
-            REQ_SHUTDOWN => break,
-            REQ_ACTIVATE => {
-                if let Some((sample_rate, max_block)) = frame.read_activate() {
-                    let block = if max_block == 0 { 4096 } else { max_block };
-                    let _ = plugin.activate(sample_rate, block);
-                }
-                let _ = Frame::new(RES_OK, Vec::new()).write(&mut writer);
-            }
-            REQ_SET_PARAM => {
-                if let Some((id, value)) = frame.read_set_param() {
-                    plugin.set_parameter_value(id, value);
-                }
-            }
-            REQ_SET_STATE => {
-                let _ = plugin.set_state(&frame.payload);
-            }
-            REQ_GET_STATE => {
-                let _ = Frame::new(RES_STATE, plugin.get_state()).write(&mut writer);
-            }
-            REQ_AUDIO => {
-                let frames = frame.payload.len() / 8;
-                if left.len() < frames {
-                    left.resize(frames, 0.0);
-                    right.resize(frames, 0.0);
-                }
-                frame.read_audio(&mut left[..frames], &mut right[..frames]);
-                let inputs: [&[f32]; 2] = [&left[..frames], &right[..frames]];
-                let mut midi_out = Vec::new();
-                plugin.process(&inputs, &mut outputs, &[], &mut midi_out, frames);
-                let out_l = outputs.first().map(|c| c.as_slice()).unwrap_or(&[]);
-                let out_r = outputs.get(1).map(|c| c.as_slice()).unwrap_or(out_l);
-                let mut reply = Frame::audio(out_l, out_r);
-                reply.kind = RES_AUDIO;
-                if reply.write(&mut writer).is_err() {
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    0
+    hardwave_plugin_host::bridge_child::serve(plugin.as_mut(), std::io::stdin(), frames_out)
 }
 
 #[cfg(test)]
@@ -654,6 +644,43 @@ mod tests {
             dropped.elapsed() < std::time::Duration::from_secs(5),
             "removing a wedged plug-in must not hang the app"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_that_prints_into_the_stream_is_stopped_not_waited_on() {
+        let dir = std::env::temp_dir().join(format!("hw-sandbox-chatty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Text where a frame should be, then silence: the old bridge read
+        // the text as a length and waited for megabytes that never came.
+        let exe = fake_child(&dir, "echo 'Loading 4000 presets...'; exec cat > /dev/null");
+        let mut plugin = SandboxedPlugin::start(descriptor(), &exe).expect("start");
+        let started = std::time::Instant::now();
+        while !plugin.has_crashed() && started.elapsed() < std::time::Duration::from_secs(5) {
+            let _ = block(&mut plugin, 128);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(plugin.has_crashed(), "a garbled stream ends the plug-in");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_cannot_keep_up_does_not_fill_memory() {
+        let dir = std::env::temp_dir().join(format!("hw-sandbox-slow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = fake_child(&dir, "exec sleep 30");
+        let mut plugin = SandboxedPlugin::start(descriptor(), &exe).expect("start");
+        // Thousands of blocks at a child that never reads: the queue to
+        // it is bounded, so this returns at once and holds a handful.
+        let started = std::time::Instant::now();
+        for _ in 0..5_000 {
+            let _ = block(&mut plugin, 512);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        drop(plugin);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

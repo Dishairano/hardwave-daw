@@ -68,6 +68,7 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_System_LibraryLoader",
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
 ] }

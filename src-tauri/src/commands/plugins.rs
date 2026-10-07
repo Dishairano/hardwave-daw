@@ -411,6 +411,9 @@ pub fn open_plugin_editor(
         _ => None,
     };
 
+    // The window needs the plug-in in this process; only one the probe
+    // passed and the person has not sandboxed gets there.
+    may_load_in_process(&descriptor)?;
     let mut hosted: Box<dyn HostedPlugin> = match descriptor.format {
         PluginFormat::Vst3 => {
             let inst = if let Some(queue) = shared_queue {
@@ -484,6 +487,61 @@ pub fn close_plugin_editor(
     Ok(())
 }
 
+/// The plug-ins the person chose to run sandboxed, shared with the
+/// paths that load plug-ins without the app state at hand (export).
+static SANDBOXED: std::sync::OnceLock<
+    std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
+> = std::sync::OnceLock::new();
+
+/// Make the sandboxed set, once, and keep it where every loader finds it.
+pub(crate) fn sandboxed_set(
+    initial: std::collections::HashSet<String>,
+) -> std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<String>>> {
+    std::sync::Arc::clone(
+        SANDBOXED.get_or_init(|| std::sync::Arc::new(parking_lot::Mutex::new(initial))),
+    )
+}
+
+/// Load a plug-in for any purpose (a slot, the parameter sheet, presets,
+/// an export), honouring the crash probe and the sandbox choice. The one
+/// way in: nothing loads a third-party plug-in around it.
+pub(crate) fn load_hosted(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlugin>, String> {
+    let sandboxed = sandboxed_set(Default::default());
+    instantiate_for_slot(&sandboxed, descriptor)
+}
+
+/// Whether this plug-in may be loaded into the DAW's own process: not
+/// refused by the probe, not sandboxed by choice, built for this
+/// architecture. Its own window needs that, because a window cannot be
+/// handed between processes here.
+pub(crate) fn may_load_in_process(descriptor: &PluginDescriptor) -> Result<(), String> {
+    if descriptor.path == std::path::Path::new("<native>") {
+        return Ok(());
+    }
+    if sandboxed_set(Default::default())
+        .lock()
+        .contains(&descriptor.id)
+    {
+        return Err(format!(
+            "{} runs in its own process, so its own window is not available; its parameters are",
+            descriptor.name
+        ));
+    }
+    if !hardwave_plugin_host::binary_arch::plugin_arch(&descriptor.path).matches_host() {
+        return Err(format!(
+            "{} is built for another kind of computer and runs in a helper, so its own window is not available",
+            descriptor.name
+        ));
+    }
+    let verdict = crate::plugin_probe::verdict_for(&descriptor.path);
+    if !verdict.is_safe_to_load() {
+        return Err(verdict
+            .message(&descriptor.name)
+            .unwrap_or_else(|| format!("{} could not be loaded", descriptor.name)));
+    }
+    Ok(())
+}
+
 /// Build the plug-in for a slot, in a process of its own when the user
 /// has asked for that one to be sandboxed.
 ///
@@ -504,18 +562,17 @@ pub(crate) fn instantiate_for_slot(
     }
     let exe =
         std::env::current_exe().map_err(|e| format!("cannot find our own executable: {e}"))?;
-    match crate::plugin_sandbox::SandboxedPlugin::start(descriptor.clone(), &exe) {
-        Ok(plugin) => Ok(Box::new(plugin)),
-        Err(e) => {
-            // A sandbox that will not start is worth saying out loud,
-            // but it is not a reason to leave the slot empty.
-            log::warn!(
-                "sandbox for {} failed to start: {e}; loading it in-process",
-                descriptor.id
-            );
-            instantiate_plugin(descriptor)
-        }
-    }
+    // No falling back to this process: the person sandboxed this plug-in
+    // because it crashes, and a sandbox that will not start does not
+    // change that. The slot says why it is empty instead.
+    crate::plugin_sandbox::SandboxedPlugin::start(descriptor.clone(), &exe)
+        .map(|plugin| Box::new(plugin) as Box<dyn HostedPlugin>)
+        .map_err(|e| {
+            format!(
+                "{} could not start in its own process: {e}",
+                descriptor.name
+            )
+        })
 }
 
 #[tauri::command]
@@ -810,7 +867,7 @@ pub fn get_plugin_parameters(
     };
     drop(engine);
 
-    let plugin = instantiate_plugin(&descriptor)?;
+    let plugin = load_hosted(&descriptor)?;
     let count = plugin.get_parameter_count();
     let mut out = Vec::with_capacity(count as usize);
     for i in 0..count {
