@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-track-fine-tune-cents"
+description = "Enables the set_track_fine_tune_cents command without any pre-configured scope."
+commands.allow = ["set_track_fine_tune_cents"]
+
+[[permission]]
+identifier = "deny-set-track-fine-tune-cents"
+description = "Denies the set_track_fine_tune_cents command without any pre-configured scope."
+commands.deny = ["set_track_fine_tune_cents"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-flp"
+description = "Enables the import_flp command without any pre-configured scope."
+commands.allow = ["import_flp"]
+
+[[permission]]
+identifier = "deny-import-flp"
+description = "Denies the import_flp command without any pre-configured scope."
+commands.deny = ["import_flp"]

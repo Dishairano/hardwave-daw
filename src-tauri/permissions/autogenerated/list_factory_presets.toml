@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-factory-presets"
+description = "Enables the list_factory_presets command without any pre-configured scope."
+commands.allow = ["list_factory_presets"]
+
+[[permission]]
+identifier = "deny-list-factory-presets"
+description = "Denies the list_factory_presets command without any pre-configured scope."
+commands.deny = ["list_factory_presets"]

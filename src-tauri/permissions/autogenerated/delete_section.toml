@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-section"
+description = "Enables the delete_section command without any pre-configured scope."
+commands.allow = ["delete_section"]
+
+[[permission]]
+identifier = "deny-delete-section"
+description = "Denies the delete_section command without any pre-configured scope."
+commands.deny = ["delete_section"]

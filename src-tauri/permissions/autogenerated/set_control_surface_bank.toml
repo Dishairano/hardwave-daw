@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-control-surface-bank"
+description = "Enables the set_control_surface_bank command without any pre-configured scope."
+commands.allow = ["set_control_surface_bank"]
+
+[[permission]]
+identifier = "deny-set-control-surface-bank"
+description = "Denies the set_control_surface_bank command without any pre-configured scope."
+commands.deny = ["set_control_surface_bank"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-process-memory"
+description = "Enables the process_memory command without any pre-configured scope."
+commands.allow = ["process_memory"]
+
+[[permission]]
+identifier = "deny-process-memory"
+description = "Denies the process_memory command without any pre-configured scope."
+commands.deny = ["process_memory"]

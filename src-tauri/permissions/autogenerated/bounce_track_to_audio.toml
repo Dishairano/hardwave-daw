@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bounce-track-to-audio"
+description = "Enables the bounce_track_to_audio command without any pre-configured scope."
+commands.allow = ["bounce_track_to_audio"]
+
+[[permission]]
+identifier = "deny-bounce-track-to-audio"
+description = "Denies the bounce_track_to_audio command without any pre-configured scope."
+commands.deny = ["bounce_track_to_audio"]

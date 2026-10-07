@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-plugin-to-track"
+description = "Enables the add_plugin_to_track command without any pre-configured scope."
+commands.allow = ["add_plugin_to_track"]
+
+[[permission]]
+identifier = "deny-add-plugin-to-track"
+description = "Denies the add_plugin_to_track command without any pre-configured scope."
+commands.deny = ["add_plugin_to_track"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-close-panel-window"
+description = "Enables the close_panel_window command without any pre-configured scope."
+commands.allow = ["close_panel_window"]
+
+[[permission]]
+identifier = "deny-close-panel-window"
+description = "Denies the close_panel_window command without any pre-configured scope."
+commands.deny = ["close_panel_window"]

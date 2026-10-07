@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-sandboxed-plugins"
+description = "Enables the get_sandboxed_plugins command without any pre-configured scope."
+commands.allow = ["get_sandboxed_plugins"]
+
+[[permission]]
+identifier = "deny-get-sandboxed-plugins"
+description = "Denies the get_sandboxed_plugins command without any pre-configured scope."
+commands.deny = ["get_sandboxed_plugins"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stop-stems"
+description = "Enables the stop_stems command without any pre-configured scope."
+commands.allow = ["stop_stems"]
+
+[[permission]]
+identifier = "deny-stop-stems"
+description = "Denies the stop_stems command without any pre-configured scope."
+commands.deny = ["stop_stems"]

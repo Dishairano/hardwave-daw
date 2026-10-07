@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-send-pre-fader"
+description = "Enables the set_send_pre_fader command without any pre-configured scope."
+commands.allow = ["set_send_pre_fader"]
+
+[[permission]]
+identifier = "deny-set-send-pre-fader"
+description = "Denies the set_send_pre_fader command without any pre-configured scope."
+commands.deny = ["set_send_pre_fader"]

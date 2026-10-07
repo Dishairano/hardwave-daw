@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-frozen-tracks"
+description = "Enables the list_frozen_tracks command without any pre-configured scope."
+commands.allow = ["list_frozen_tracks"]
+
+[[permission]]
+identifier = "deny-list-frozen-tracks"
+description = "Denies the list_frozen_tracks command without any pre-configured scope."
+commands.deny = ["list_frozen_tracks"]

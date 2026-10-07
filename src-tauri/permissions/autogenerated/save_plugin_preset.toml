@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-plugin-preset"
+description = "Enables the save_plugin_preset command without any pre-configured scope."
+commands.allow = ["save_plugin_preset"]
+
+[[permission]]
+identifier = "deny-save-plugin-preset"
+description = "Denies the save_plugin_preset command without any pre-configured scope."
+commands.deny = ["save_plugin_preset"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-midi-routes"
+description = "Enables the set_midi_routes command without any pre-configured scope."
+commands.allow = ["set_midi_routes"]
+
+[[permission]]
+identifier = "deny-set-midi-routes"
+description = "Denies the set_midi_routes command without any pre-configured scope."
+commands.deny = ["set_midi_routes"]

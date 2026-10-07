@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-automation-clip-point"
+description = "Enables the add_automation_clip_point command without any pre-configured scope."
+commands.allow = ["add_automation_clip_point"]
+
+[[permission]]
+identifier = "deny-add-automation-clip-point"
+description = "Denies the add_automation_clip_point command without any pre-configured scope."
+commands.deny = ["add_automation_clip_point"]

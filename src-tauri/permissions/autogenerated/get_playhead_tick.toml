@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-playhead-tick"
+description = "Enables the get_playhead_tick command without any pre-configured scope."
+commands.allow = ["get_playhead_tick"]
+
+[[permission]]
+identifier = "deny-get-playhead-tick"
+description = "Denies the get_playhead_tick command without any pre-configured scope."
+commands.deny = ["get_playhead_tick"]

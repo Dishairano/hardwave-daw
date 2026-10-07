@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-wait-for-input"
+description = "Enables the set_wait_for_input command without any pre-configured scope."
+commands.allow = ["set_wait_for_input"]
+
+[[permission]]
+identifier = "deny-set-wait-for-input"
+description = "Denies the set_wait_for_input command without any pre-configured scope."
+commands.deny = ["set_wait_for_input"]

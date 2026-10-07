@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-move-automation-point"
+description = "Enables the move_automation_point command without any pre-configured scope."
+commands.allow = ["move_automation_point"]
+
+[[permission]]
+identifier = "deny-move-automation-point"
+description = "Denies the move_automation_point command without any pre-configured scope."
+commands.deny = ["move_automation_point"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-reference-gain"
+description = "Enables the set_reference_gain command without any pre-configured scope."
+commands.allow = ["set_reference_gain"]
+
+[[permission]]
+identifier = "deny-set-reference-gain"
+description = "Denies the set_reference_gain command without any pre-configured scope."
+commands.deny = ["set_reference_gain"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-autosave-save"
+description = "Enables the autosave_save command without any pre-configured scope."
+commands.allow = ["autosave_save"]
+
+[[permission]]
+identifier = "deny-autosave-save"
+description = "Denies the autosave_save command without any pre-configured scope."
+commands.deny = ["autosave_save"]

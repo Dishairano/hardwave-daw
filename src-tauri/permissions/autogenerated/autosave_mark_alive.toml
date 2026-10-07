@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-autosave-mark-alive"
+description = "Enables the autosave_mark_alive command without any pre-configured scope."
+commands.allow = ["autosave_mark_alive"]
+
+[[permission]]
+identifier = "deny-autosave-mark-alive"
+description = "Denies the autosave_mark_alive command without any pre-configured scope."
+commands.deny = ["autosave_mark_alive"]

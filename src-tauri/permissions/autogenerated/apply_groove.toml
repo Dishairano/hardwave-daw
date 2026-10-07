@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-apply-groove"
+description = "Enables the apply_groove command without any pre-configured scope."
+commands.allow = ["apply_groove"]
+
+[[permission]]
+identifier = "deny-apply-groove"
+description = "Denies the apply_groove command without any pre-configured scope."
+commands.deny = ["apply_groove"]

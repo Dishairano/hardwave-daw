@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-macro-link"
+description = "Enables the add_macro_link command without any pre-configured scope."
+commands.allow = ["add_macro_link"]
+
+[[permission]]
+identifier = "deny-add-macro-link"
+description = "Denies the add_macro_link command without any pre-configured scope."
+commands.deny = ["add_macro_link"]

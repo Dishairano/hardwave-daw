@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-audio-hosts"
+description = "Enables the list_audio_hosts command without any pre-configured scope."
+commands.allow = ["list_audio_hosts"]
+
+[[permission]]
+identifier = "deny-list-audio-hosts"
+description = "Denies the list_audio_hosts command without any pre-configured scope."
+commands.deny = ["list_audio_hosts"]

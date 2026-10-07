@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-frontend-update-check-and-apply"
+description = "Enables the frontend_update_check_and_apply command without any pre-configured scope."
+commands.allow = ["frontend_update_check_and_apply"]
+
+[[permission]]
+identifier = "deny-frontend-update-check-and-apply"
+description = "Denies the frontend_update_check_and_apply command without any pre-configured scope."
+commands.deny = ["frontend_update_check_and_apply"]

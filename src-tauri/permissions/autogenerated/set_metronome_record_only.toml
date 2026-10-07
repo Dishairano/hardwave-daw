@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-metronome-record-only"
+description = "Enables the set_metronome_record_only command without any pre-configured scope."
+commands.allow = ["set_metronome_record_only"]
+
+[[permission]]
+identifier = "deny-set-metronome-record-only"
+description = "Denies the set_metronome_record_only command without any pre-configured scope."
+commands.deny = ["set_metronome_record_only"]

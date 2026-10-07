@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-fx-chain-bypassed"
+description = "Enables the set_fx_chain_bypassed command without any pre-configured scope."
+commands.allow = ["set_fx_chain_bypassed"]
+
+[[permission]]
+identifier = "deny-set-fx-chain-bypassed"
+description = "Denies the set_fx_chain_bypassed command without any pre-configured scope."
+commands.deny = ["set_fx_chain_bypassed"]

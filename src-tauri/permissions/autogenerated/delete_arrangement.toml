@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-arrangement"
+description = "Enables the delete_arrangement command without any pre-configured scope."
+commands.allow = ["delete_arrangement"]
+
+[[permission]]
+identifier = "deny-delete-arrangement"
+description = "Denies the delete_arrangement command without any pre-configured scope."
+commands.deny = ["delete_arrangement"]

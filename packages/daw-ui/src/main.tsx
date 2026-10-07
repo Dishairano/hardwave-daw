@@ -11,6 +11,7 @@ import './dev/tauri-mock'
 import { App } from './App'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { PanelWindow } from './PanelWindow'
+import './fonts'
 import './mockup.css'
 
 // A detached panel window (open_panel_window command) loads a plain

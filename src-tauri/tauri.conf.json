@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/nicegram/nicegram-tauri/v2/crates/tauri-utils/schema.json",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hardwave DAW",
   "version": "0.259.0",
   "identifier": "com.hardwave.daw",
@@ -23,14 +23,56 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "font-src": "'self' data:",
+        "img-src": "'self' asset: http://asset.localhost data: blob:",
+        "media-src": "'self' asset: http://asset.localhost data: blob:",
+        "connect-src": "ipc: http://ipc.localhost asset: http://asset.localhost data: blob: https://hardwavestudios.com",
+        "frame-src": "https://suite.hardwavestudios.com",
+        "worker-src": "'self' blob:",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'none'"
+      },
       "assetProtocol": {
         "enable": true,
         "scope": {
-          "allow": ["**"],
-          "requireLiteralLeadingDot": false
+          "allow": [
+            "**/*.wav",
+            "**/*.WAV",
+            "**/*.mp3",
+            "**/*.MP3",
+            "**/*.flac",
+            "**/*.FLAC",
+            "**/*.aiff",
+            "**/*.AIFF",
+            "**/*.aif",
+            "**/*.AIF",
+            "**/*.ogg",
+            "**/*.OGG",
+            "**/*.m4a",
+            "**/*.M4A",
+            "**/*.mp4",
+            "**/*.MP4",
+            "**/*.webm",
+            "**/*.WEBM",
+            "**/*.mov",
+            "**/*.MOV",
+            "**/*.m4v",
+            "**/*.M4V",
+            "**/*.mkv",
+            "**/*.MKV"
+          ],
+          "deny": [],
+          "requireLiteralLeadingDot": true
         }
-      }
+      },
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ]
     }
   },
   "bundle": {

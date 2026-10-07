@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-midi-note"
+description = "Enables the add_midi_note command without any pre-configured scope."
+commands.allow = ["add_midi_note"]
+
+[[permission]]
+identifier = "deny-add-midi-note"
+description = "Denies the add_midi_note command without any pre-configured scope."
+commands.deny = ["add_midi_note"]

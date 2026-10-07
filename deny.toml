@@ -47,8 +47,9 @@ ignore = true
 # in the security audit as an open legal question, not a solved one.
 [[licenses.exceptions]]
 # Ableton Link. The SDK is GPL-2.0-or-later unless Ableton grants a
-# commercial licence; shipping it in a closed-source DAW needs that
-# licence or Link removed.
+# commercial licence. 2026-10-07: the founder has Ableton's permission
+# by phone, through a contact in their legal team; the written
+# confirmation belongs with the company's licence records.
 crate = "rusty_link"
 allow = ["GPL-2.0-or-later"]
 

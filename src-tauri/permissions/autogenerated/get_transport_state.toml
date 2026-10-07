@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-transport-state"
+description = "Enables the get_transport_state command without any pre-configured scope."
+commands.allow = ["get_transport_state"]
+
+[[permission]]
+identifier = "deny-get-transport-state"
+description = "Denies the get_transport_state command without any pre-configured scope."
+commands.deny = ["get_transport_state"]

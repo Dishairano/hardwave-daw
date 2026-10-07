@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-automation-touch-begin"
+description = "Enables the automation_touch_begin command without any pre-configured scope."
+commands.allow = ["automation_touch_begin"]
+
+[[permission]]
+identifier = "deny-automation-touch-begin"
+description = "Denies the automation_touch_begin command without any pre-configured scope."
+commands.deny = ["automation_touch_begin"]

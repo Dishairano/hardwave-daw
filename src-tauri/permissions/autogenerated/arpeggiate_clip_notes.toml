@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-arpeggiate-clip-notes"
+description = "Enables the arpeggiate_clip_notes command without any pre-configured scope."
+commands.allow = ["arpeggiate_clip_notes"]
+
+[[permission]]
+identifier = "deny-arpeggiate-clip-notes"
+description = "Denies the arpeggiate_clip_notes command without any pre-configured scope."
+commands.deny = ["arpeggiate_clip_notes"]

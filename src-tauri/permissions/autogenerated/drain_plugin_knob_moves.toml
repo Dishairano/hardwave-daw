@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-drain-plugin-knob-moves"
+description = "Enables the drain_plugin_knob_moves command without any pre-configured scope."
+commands.allow = ["drain_plugin_knob_moves"]
+
+[[permission]]
+identifier = "deny-drain-plugin-knob-moves"
+description = "Denies the drain_plugin_knob_moves command without any pre-configured scope."
+commands.deny = ["drain_plugin_knob_moves"]

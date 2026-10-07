@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-request-project"
+description = "Enables the request_project command without any pre-configured scope."
+commands.allow = ["request_project"]
+
+[[permission]]
+identifier = "deny-request-project"
+description = "Denies the request_project command without any pre-configured scope."
+commands.deny = ["request_project"]

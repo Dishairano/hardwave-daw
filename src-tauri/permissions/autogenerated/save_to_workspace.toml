@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-to-workspace"
+description = "Enables the save_to_workspace command without any pre-configured scope."
+commands.allow = ["save_to_workspace"]
+
+[[permission]]
+identifier = "deny-save-to-workspace"
+description = "Denies the save_to_workspace command without any pre-configured scope."
+commands.deny = ["save_to_workspace"]

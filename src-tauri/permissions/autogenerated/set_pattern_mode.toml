@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-pattern-mode"
+description = "Enables the set_pattern_mode command without any pre-configured scope."
+commands.allow = ["set_pattern_mode"]
+
+[[permission]]
+identifier = "deny-set-pattern-mode"
+description = "Denies the set_pattern_mode command without any pre-configured scope."
+commands.deny = ["set_pattern_mode"]

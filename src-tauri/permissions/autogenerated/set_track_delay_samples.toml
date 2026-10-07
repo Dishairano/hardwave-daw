@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-track-delay-samples"
+description = "Enables the set_track_delay_samples command without any pre-configured scope."
+commands.allow = ["set_track_delay_samples"]
+
+[[permission]]
+identifier = "deny-set-track-delay-samples"
+description = "Denies the set_track_delay_samples command without any pre-configured scope."
+commands.deny = ["set_track_delay_samples"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-switch-arrangement"
+description = "Enables the switch_arrangement command without any pre-configured scope."
+commands.allow = ["switch_arrangement"]
+
+[[permission]]
+identifier = "deny-switch-arrangement"
+description = "Denies the switch_arrangement command without any pre-configured scope."
+commands.deny = ["switch_arrangement"]

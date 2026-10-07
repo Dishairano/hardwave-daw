@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-remove-macro-link"
+description = "Enables the remove_macro_link command without any pre-configured scope."
+commands.allow = ["remove_macro_link"]
+
+[[permission]]
+identifier = "deny-remove-macro-link"
+description = "Denies the remove_macro_link command without any pre-configured scope."
+commands.deny = ["remove_macro_link"]

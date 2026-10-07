@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-match-reference-loudness"
+description = "Enables the match_reference_loudness command without any pre-configured scope."
+commands.allow = ["match_reference_loudness"]
+
+[[permission]]
+identifier = "deny-match-reference-loudness"
+description = "Denies the match_reference_loudness command without any pre-configured scope."
+commands.deny = ["match_reference_loudness"]

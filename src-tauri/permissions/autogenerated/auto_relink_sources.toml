@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-auto-relink-sources"
+description = "Enables the auto_relink_sources command without any pre-configured scope."
+commands.allow = ["auto_relink_sources"]
+
+[[permission]]
+identifier = "deny-auto-relink-sources"
+description = "Denies the auto_relink_sources command without any pre-configured scope."
+commands.deny = ["auto_relink_sources"]

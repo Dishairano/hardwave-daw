@@ -56,6 +56,26 @@ jobs:
         working-directory: packages/daw-ui
         run: npm audit --audit-level=moderate
 
+  ui-content-policy:
+    name: App window content policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      - name: Build the UI
+        working-directory: packages/daw-ui
+        run: npm ci && npm run build
+      - name: Browser for the check
+        working-directory: packages/daw-ui
+        run: npx playwright install --with-deps chromium
+      - name: Load the build under the app's policy; anything blocked fails
+        working-directory: packages/daw-ui
+        run: npm run check:csp
+
   secrets:
     name: Secrets in history (gitleaks)
     runs-on: ubuntu-latest

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-midi-mtc-enabled"
+description = "Enables the set_midi_mtc_enabled command without any pre-configured scope."
+commands.allow = ["set_midi_mtc_enabled"]
+
+[[permission]]
+identifier = "deny-set-midi-mtc-enabled"
+description = "Denies the set_midi_mtc_enabled command without any pre-configured scope."
+commands.deny = ["set_midi_mtc_enabled"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clip-spectrogram"
+description = "Enables the clip_spectrogram command without any pre-configured scope."
+commands.allow = ["clip_spectrogram"]
+
+[[permission]]
+identifier = "deny-clip-spectrogram"
+description = "Denies the clip_spectrogram command without any pre-configured scope."
+commands.deny = ["clip_spectrogram"]

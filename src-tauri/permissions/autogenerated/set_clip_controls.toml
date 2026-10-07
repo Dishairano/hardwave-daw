@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-clip-controls"
+description = "Enables the set_clip_controls command without any pre-configured scope."
+commands.allow = ["set_clip_controls"]
+
+[[permission]]
+identifier = "deny-set-clip-controls"
+description = "Denies the set_clip_controls command without any pre-configured scope."
+commands.deny = ["set_clip_controls"]

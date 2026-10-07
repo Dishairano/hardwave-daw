@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-session-grid"
+description = "Enables the get_session_grid command without any pre-configured scope."
+commands.allow = ["get_session_grid"]
+
+[[permission]]
+identifier = "deny-get-session-grid"
+description = "Denies the get_session_grid command without any pre-configured scope."
+commands.deny = ["get_session_grid"]

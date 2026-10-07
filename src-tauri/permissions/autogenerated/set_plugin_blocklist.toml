@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-plugin-blocklist"
+description = "Enables the set_plugin_blocklist command without any pre-configured scope."
+commands.allow = ["set_plugin_blocklist"]
+
+[[permission]]
+identifier = "deny-set-plugin-blocklist"
+description = "Denies the set_plugin_blocklist command without any pre-configured scope."
+commands.deny = ["set_plugin_blocklist"]

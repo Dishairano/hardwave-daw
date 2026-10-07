@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reset-kick-patch"
+description = "Enables the reset_kick_patch command without any pre-configured scope."
+commands.allow = ["reset_kick_patch"]
+
+[[permission]]
+identifier = "deny-reset-kick-patch"
+description = "Denies the reset_kick_patch command without any pre-configured scope."
+commands.deny = ["reset_kick_patch"]

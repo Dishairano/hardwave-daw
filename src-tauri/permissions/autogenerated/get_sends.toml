@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-sends"
+description = "Enables the get_sends command without any pre-configured scope."
+commands.allow = ["get_sends"]
+
+[[permission]]
+identifier = "deny-get-sends"
+description = "Denies the get_sends command without any pre-configured scope."
+commands.deny = ["get_sends"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-metronome-volume"
+description = "Enables the set_metronome_volume command without any pre-configured scope."
+commands.allow = ["set_metronome_volume"]
+
+[[permission]]
+identifier = "deny-set-metronome-volume"
+description = "Denies the set_metronome_volume command without any pre-configured scope."
+commands.deny = ["set_metronome_volume"]

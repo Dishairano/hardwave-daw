@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-sends"
+description = "Enables the list_sends command without any pre-configured scope."
+commands.allow = ["list_sends"]
+
+[[permission]]
+identifier = "deny-list-sends"
+description = "Denies the list_sends command without any pre-configured scope."
+commands.deny = ["list_sends"]

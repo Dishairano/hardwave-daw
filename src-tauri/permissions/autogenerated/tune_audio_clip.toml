@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tune-audio-clip"
+description = "Enables the tune_audio_clip command without any pre-configured scope."
+commands.allow = ["tune_audio_clip"]
+
+[[permission]]
+identifier = "deny-tune-audio-clip"
+description = "Denies the tune_audio_clip command without any pre-configured scope."
+commands.deny = ["tune_audio_clip"]

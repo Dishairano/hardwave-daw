@@ -18,7 +18,10 @@ mod plugin_sandbox;
 mod prefs;
 mod process_memory;
 mod scripting;
+#[cfg(test)]
+mod security_tests;
 mod stems_client;
+mod window_guard;
 mod workspace_cloud;
 
 use hardwave_engine::DawEngine;
@@ -227,6 +230,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
+        // Before any window loads: nothing but our own pages in them.
+        .plugin(window_guard::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             // Transport

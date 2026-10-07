@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-modulations"
+description = "Enables the list_modulations command without any pre-configured scope."
+commands.allow = ["list_modulations"]
+
+[[permission]]
+identifier = "deny-list-modulations"
+description = "Denies the list_modulations command without any pre-configured scope."
+commands.deny = ["list_modulations"]

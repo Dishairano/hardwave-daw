@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-launch-scene"
+description = "Enables the launch_scene command without any pre-configured scope."
+commands.allow = ["launch_scene"]
+
+[[permission]]
+identifier = "deny-launch-scene"
+description = "Denies the launch_scene command without any pre-configured scope."
+commands.deny = ["launch_scene"]

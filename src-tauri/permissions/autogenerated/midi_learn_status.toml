@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-midi-learn-status"
+description = "Enables the midi_learn_status command without any pre-configured scope."
+commands.allow = ["midi_learn_status"]
+
+[[permission]]
+identifier = "deny-midi-learn-status"
+description = "Denies the midi_learn_status command without any pre-configured scope."
+commands.deny = ["midi_learn_status"]

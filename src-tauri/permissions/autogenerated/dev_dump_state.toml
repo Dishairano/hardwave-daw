@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dev-dump-state"
+description = "Enables the dev_dump_state command without any pre-configured scope."
+commands.allow = ["dev_dump_state"]
+
+[[permission]]
+identifier = "deny-dev-dump-state"
+description = "Denies the dev_dump_state command without any pre-configured scope."
+commands.deny = ["dev_dump_state"]

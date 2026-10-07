@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reset-project-working-time"
+description = "Enables the reset_project_working_time command without any pre-configured scope."
+commands.allow = ["reset_project_working_time"]
+
+[[permission]]
+identifier = "deny-reset-project-working-time"
+description = "Denies the reset_project_working_time command without any pre-configured scope."
+commands.deny = ["reset_project_working_time"]

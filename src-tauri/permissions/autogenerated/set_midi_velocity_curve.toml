@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-midi-velocity-curve"
+description = "Enables the set_midi_velocity_curve command without any pre-configured scope."
+commands.allow = ["set_midi_velocity_curve"]
+
+[[permission]]
+identifier = "deny-set-midi-velocity-curve"
+description = "Denies the set_midi_velocity_curve command without any pre-configured scope."
+commands.deny = ["set_midi_velocity_curve"]

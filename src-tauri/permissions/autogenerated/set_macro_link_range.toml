@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-macro-link-range"
+description = "Enables the set_macro_link_range command without any pre-configured scope."
+commands.allow = ["set_macro_link_range"]
+
+[[permission]]
+identifier = "deny-set-macro-link-range"
+description = "Denies the set_macro_link_range command without any pre-configured scope."
+commands.deny = ["set_macro_link_range"]

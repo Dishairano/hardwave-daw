@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-track-filter-type"
+description = "Enables the set_track_filter_type command without any pre-configured scope."
+commands.allow = ["set_track_filter_type"]
+
+[[permission]]
+identifier = "deny-set-track-filter-type"
+description = "Denies the set_track_filter_type command without any pre-configured scope."
+commands.deny = ["set_track_filter_type"]

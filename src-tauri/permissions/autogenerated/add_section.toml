@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-section"
+description = "Enables the add_section command without any pre-configured scope."
+commands.allow = ["add_section"]
+
+[[permission]]
+identifier = "deny-add-section"
+description = "Denies the add_section command without any pre-configured scope."
+commands.deny = ["add_section"]

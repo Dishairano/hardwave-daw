@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-close-plugin-editor"
+description = "Enables the close_plugin_editor command without any pre-configured scope."
+commands.allow = ["close_plugin_editor"]
+
+[[permission]]
+identifier = "deny-close-plugin-editor"
+description = "Denies the close_plugin_editor command without any pre-configured scope."
+commands.deny = ["close_plugin_editor"]

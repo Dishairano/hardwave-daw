@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-automation-lane-visible"
+description = "Enables the set_automation_lane_visible command without any pre-configured scope."
+commands.allow = ["set_automation_lane_visible"]
+
+[[permission]]
+identifier = "deny-set-automation-lane-visible"
+description = "Denies the set_automation_lane_visible command without any pre-configured scope."
+commands.deny = ["set_automation_lane_visible"]

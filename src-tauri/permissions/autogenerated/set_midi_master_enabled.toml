@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-midi-master-enabled"
+description = "Enables the set_midi_master_enabled command without any pre-configured scope."
+commands.allow = ["set_midi_master_enabled"]
+
+[[permission]]
+identifier = "deny-set-midi-master-enabled"
+description = "Denies the set_midi_master_enabled command without any pre-configured scope."
+commands.deny = ["set_midi_master_enabled"]

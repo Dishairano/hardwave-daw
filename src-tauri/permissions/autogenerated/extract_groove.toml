@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-extract-groove"
+description = "Enables the extract_groove command without any pre-configured scope."
+commands.allow = ["extract_groove"]
+
+[[permission]]
+identifier = "deny-extract-groove"
+description = "Denies the extract_groove command without any pre-configured scope."
+commands.deny = ["extract_groove"]

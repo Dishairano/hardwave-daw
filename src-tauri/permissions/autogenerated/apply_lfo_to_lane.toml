@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-apply-lfo-to-lane"
+description = "Enables the apply_lfo_to_lane command without any pre-configured scope."
+commands.allow = ["apply_lfo_to_lane"]
+
+[[permission]]
+identifier = "deny-apply-lfo-to-lane"
+description = "Denies the apply_lfo_to_lane command without any pre-configured scope."
+commands.deny = ["apply_lfo_to_lane"]

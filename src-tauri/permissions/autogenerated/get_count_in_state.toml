@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-count-in-state"
+description = "Enables the get_count_in_state command without any pre-configured scope."
+commands.allow = ["get_count_in_state"]
+
+[[permission]]
+identifier = "deny-get-count-in-state"
+description = "Denies the get_count_in_state command without any pre-configured scope."
+commands.deny = ["get_count_in_state"]

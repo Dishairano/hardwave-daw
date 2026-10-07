@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-wasapi-exclusive"
+description = "Enables the set_wasapi_exclusive command without any pre-configured scope."
+commands.allow = ["set_wasapi_exclusive"]
+
+[[permission]]
+identifier = "deny-set-wasapi-exclusive"
+description = "Denies the set_wasapi_exclusive command without any pre-configured scope."
+commands.deny = ["set_wasapi_exclusive"]

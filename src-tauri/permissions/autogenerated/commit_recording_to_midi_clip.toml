@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-commit-recording-to-midi-clip"
+description = "Enables the commit_recording_to_midi_clip command without any pre-configured scope."
+commands.allow = ["commit_recording_to_midi_clip"]
+
+[[permission]]
+identifier = "deny-commit-recording-to-midi-clip"
+description = "Denies the commit_recording_to_midi_clip command without any pre-configured scope."
+commands.deny = ["commit_recording_to_midi_clip"]

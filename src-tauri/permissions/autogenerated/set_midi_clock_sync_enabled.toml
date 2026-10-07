@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-midi-clock-sync-enabled"
+description = "Enables the set_midi_clock_sync_enabled command without any pre-configured scope."
+commands.allow = ["set_midi_clock_sync_enabled"]
+
+[[permission]]
+identifier = "deny-set-midi-clock-sync-enabled"
+description = "Denies the set_midi_clock_sync_enabled command without any pre-configured scope."
+commands.deny = ["set_midi_clock_sync_enabled"]

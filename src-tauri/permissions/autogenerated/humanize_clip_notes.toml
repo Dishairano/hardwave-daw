@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-humanize-clip-notes"
+description = "Enables the humanize_clip_notes command without any pre-configured scope."
+commands.allow = ["humanize_clip_notes"]
+
+[[permission]]
+identifier = "deny-humanize-clip-notes"
+description = "Denies the humanize_clip_notes command without any pre-configured scope."
+commands.deny = ["humanize_clip_notes"]

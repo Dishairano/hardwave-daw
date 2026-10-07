@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-exclusive-solo"
+description = "Enables the set_exclusive_solo command without any pre-configured scope."
+commands.allow = ["set_exclusive_solo"]
+
+[[permission]]
+identifier = "deny-set-exclusive-solo"
+description = "Denies the set_exclusive_solo command without any pre-configured scope."
+commands.deny = ["set_exclusive_solo"]

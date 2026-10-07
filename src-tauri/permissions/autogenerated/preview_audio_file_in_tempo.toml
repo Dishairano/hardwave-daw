@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-audio-file-in-tempo"
+description = "Enables the preview_audio_file_in_tempo command without any pre-configured scope."
+commands.allow = ["preview_audio_file_in_tempo"]
+
+[[permission]]
+identifier = "deny-preview-audio-file-in-tempo"
+description = "Denies the preview_audio_file_in_tempo command without any pre-configured scope."
+commands.deny = ["preview_audio_file_in_tempo"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-video"
+description = "Enables the clear_video command without any pre-configured scope."
+commands.allow = ["clear_video"]
+
+[[permission]]
+identifier = "deny-clear-video"
+description = "Denies the clear_video command without any pre-configured scope."
+commands.deny = ["clear_video"]

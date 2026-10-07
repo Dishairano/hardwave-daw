@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-control-surface-enabled"
+description = "Enables the set_control_surface_enabled command without any pre-configured scope."
+commands.allow = ["set_control_surface_enabled"]
+
+[[permission]]
+identifier = "deny-set-control-surface-enabled"
+description = "Denies the set_control_surface_enabled command without any pre-configured scope."
+commands.deny = ["set_control_surface_enabled"]

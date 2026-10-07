@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-macro-value"
+description = "Enables the set_macro_value command without any pre-configured scope."
+commands.allow = ["set_macro_value"]
+
+[[permission]]
+identifier = "deny-set-macro-value"
+description = "Denies the set_macro_value command without any pre-configured scope."
+commands.deny = ["set_macro_value"]

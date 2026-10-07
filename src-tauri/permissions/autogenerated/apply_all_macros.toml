@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-apply-all-macros"
+description = "Enables the apply_all_macros command without any pre-configured scope."
+commands.allow = ["apply_all_macros"]
+
+[[permission]]
+identifier = "deny-apply-all-macros"
+description = "Denies the apply_all_macros command without any pre-configured scope."
+commands.deny = ["apply_all_macros"]

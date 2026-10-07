@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-strum-clip-notes"
+description = "Enables the strum_clip_notes command without any pre-configured scope."
+commands.allow = ["strum_clip_notes"]
+
+[[permission]]
+identifier = "deny-strum-clip-notes"
+description = "Denies the strum_clip_notes command without any pre-configured scope."
+commands.deny = ["strum_clip_notes"]

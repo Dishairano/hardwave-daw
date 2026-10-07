@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-modulation"
+description = "Enables the set_modulation command without any pre-configured scope."
+commands.allow = ["set_modulation"]
+
+[[permission]]
+identifier = "deny-set-modulation"
+description = "Denies the set_modulation command without any pre-configured scope."
+commands.deny = ["set_modulation"]

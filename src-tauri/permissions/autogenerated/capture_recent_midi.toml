@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-recent-midi"
+description = "Enables the capture_recent_midi command without any pre-configured scope."
+commands.allow = ["capture_recent_midi"]
+
+[[permission]]
+identifier = "deny-capture-recent-midi"
+description = "Denies the capture_recent_midi command without any pre-configured scope."
+commands.deny = ["capture_recent_midi"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-comp-take-range"
+description = "Enables the comp_take_range command without any pre-configured scope."
+commands.allow = ["comp_take_range"]
+
+[[permission]]
+identifier = "deny-comp-take-range"
+description = "Denies the comp_take_range command without any pre-configured scope."
+commands.deny = ["comp_take_range"]

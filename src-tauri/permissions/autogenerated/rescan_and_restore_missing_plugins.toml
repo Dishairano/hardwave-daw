@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rescan-and-restore-missing-plugins"
+description = "Enables the rescan_and_restore_missing_plugins command without any pre-configured scope."
+commands.allow = ["rescan_and_restore_missing_plugins"]
+
+[[permission]]
+identifier = "deny-rescan-and-restore-missing-plugins"
+description = "Denies the rescan_and_restore_missing_plugins command without any pre-configured scope."
+commands.deny = ["rescan_and_restore_missing_plugins"]

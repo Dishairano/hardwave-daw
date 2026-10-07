@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-unfreeze-track"
+description = "Enables the unfreeze_track command without any pre-configured scope."
+commands.allow = ["unfreeze_track"]
+
+[[permission]]
+identifier = "deny-unfreeze-track"
+description = "Denies the unfreeze_track command without any pre-configured scope."
+commands.deny = ["unfreeze_track"]

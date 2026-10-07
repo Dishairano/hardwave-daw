@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-automation-point-curve"
+description = "Enables the set_automation_point_curve command without any pre-configured scope."
+commands.allow = ["set_automation_point_curve"]
+
+[[permission]]
+identifier = "deny-set-automation-point-curve"
+description = "Denies the set_automation_point_curve command without any pre-configured scope."
+commands.deny = ["set_automation_point_curve"]

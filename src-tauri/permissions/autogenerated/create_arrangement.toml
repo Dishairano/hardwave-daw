@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-arrangement"
+description = "Enables the create_arrangement command without any pre-configured scope."
+commands.allow = ["create_arrangement"]
+
+[[permission]]
+identifier = "deny-create-arrangement"
+description = "Denies the create_arrangement command without any pre-configured scope."
+commands.deny = ["create_arrangement"]

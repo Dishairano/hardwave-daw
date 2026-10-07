@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-midi-output"
+description = "Enables the open_midi_output command without any pre-configured scope."
+commands.allow = ["open_midi_output"]
+
+[[permission]]
+identifier = "deny-open-midi-output"
+description = "Denies the open_midi_output command without any pre-configured scope."
+commands.deny = ["open_midi_output"]

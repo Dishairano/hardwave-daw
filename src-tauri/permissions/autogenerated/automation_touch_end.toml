@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-automation-touch-end"
+description = "Enables the automation_touch_end command without any pre-configured scope."
+commands.allow = ["automation_touch_end"]
+
+[[permission]]
+identifier = "deny-automation-touch-end"
+description = "Denies the automation_touch_end command without any pre-configured scope."
+commands.deny = ["automation_touch_end"]

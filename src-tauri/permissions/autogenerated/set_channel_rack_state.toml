@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-channel-rack-state"
+description = "Enables the set_channel_rack_state command without any pre-configured scope."
+commands.allow = ["set_channel_rack_state"]
+
+[[permission]]
+identifier = "deny-set-channel-rack-state"
+description = "Denies the set_channel_rack_state command without any pre-configured scope."
+commands.deny = ["set_channel_rack_state"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-generate-melody-in-clip"
+description = "Enables the generate_melody_in_clip command without any pre-configured scope."
+commands.allow = ["generate_melody_in_clip"]
+
+[[permission]]
+identifier = "deny-generate-melody-in-clip"
+description = "Denies the generate_melody_in_clip command without any pre-configured scope."
+commands.deny = ["generate_melody_in_clip"]

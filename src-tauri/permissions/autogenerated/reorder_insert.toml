@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reorder-insert"
+description = "Enables the reorder_insert command without any pre-configured scope."
+commands.allow = ["reorder_insert"]
+
+[[permission]]
+identifier = "deny-reorder-insert"
+description = "Denies the reorder_insert command without any pre-configured scope."
+commands.deny = ["reorder_insert"]

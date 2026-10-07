@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dev-resolve-test-asset"
+description = "Enables the dev_resolve_test_asset command without any pre-configured scope."
+commands.allow = ["dev_resolve_test_asset"]
+
+[[permission]]
+identifier = "deny-dev-resolve-test-asset"
+description = "Denies the dev_resolve_test_asset command without any pre-configured scope."
+commands.deny = ["dev_resolve_test_asset"]

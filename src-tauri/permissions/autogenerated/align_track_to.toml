@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-align-track-to"
+description = "Enables the align_track_to command without any pre-configured scope."
+commands.allow = ["align_track_to"]
+
+[[permission]]
+identifier = "deny-align-track-to"
+description = "Denies the align_track_to command without any pre-configured scope."
+commands.deny = ["align_track_to"]

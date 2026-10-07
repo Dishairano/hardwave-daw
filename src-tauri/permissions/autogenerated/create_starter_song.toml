@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-starter-song"
+description = "Enables the create_starter_song command without any pre-configured scope."
+commands.allow = ["create_starter_song"]
+
+[[permission]]
+identifier = "deny-create-starter-song"
+description = "Denies the create_starter_song command without any pre-configured scope."
+commands.deny = ["create_starter_song"]

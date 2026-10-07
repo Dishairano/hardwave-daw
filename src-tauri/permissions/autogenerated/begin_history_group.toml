@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-begin-history-group"
+description = "Enables the begin_history_group command without any pre-configured scope."
+commands.allow = ["begin_history_group"]
+
+[[permission]]
+identifier = "deny-begin-history-group"
+description = "Denies the begin_history_group command without any pre-configured scope."
+commands.deny = ["begin_history_group"]

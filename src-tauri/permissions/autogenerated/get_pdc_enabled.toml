@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-pdc-enabled"
+description = "Enables the get_pdc_enabled command without any pre-configured scope."
+commands.allow = ["get_pdc_enabled"]
+
+[[permission]]
+identifier = "deny-get-pdc-enabled"
+description = "Denies the get_pdc_enabled command without any pre-configured scope."
+commands.deny = ["get_pdc_enabled"]

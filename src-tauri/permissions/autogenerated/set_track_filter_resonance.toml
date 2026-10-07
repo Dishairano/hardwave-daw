@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-track-filter-resonance"
+description = "Enables the set_track_filter_resonance command without any pre-configured scope."
+commands.allow = ["set_track_filter_resonance"]
+
+[[permission]]
+identifier = "deny-set-track-filter-resonance"
+description = "Denies the set_track_filter_resonance command without any pre-configured scope."
+commands.deny = ["set_track_filter_resonance"]

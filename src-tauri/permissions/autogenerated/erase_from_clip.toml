@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-erase-from-clip"
+description = "Enables the erase_from_clip command without any pre-configured scope."
+commands.allow = ["erase_from_clip"]
+
+[[permission]]
+identifier = "deny-erase-from-clip"
+description = "Denies the erase_from_clip command without any pre-configured scope."
+commands.deny = ["erase_from_clip"]

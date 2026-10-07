@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-input-meter"
+description = "Enables the get_input_meter command without any pre-configured scope."
+commands.allow = ["get_input_meter"]
+
+[[permission]]
+identifier = "deny-get-input-meter"
+description = "Denies the get_input_meter command without any pre-configured scope."
+commands.deny = ["get_input_meter"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-midi-capture"
+description = "Enables the clear_midi_capture command without any pre-configured scope."
+commands.allow = ["clear_midi_capture"]
+
+[[permission]]
+identifier = "deny-clear-midi-capture"
+description = "Denies the clear_midi_capture command without any pre-configured scope."
+commands.deny = ["clear_midi_capture"]

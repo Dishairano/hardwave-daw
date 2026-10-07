@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-insert-time"
+description = "Enables the insert_time command without any pre-configured scope."
+commands.allow = ["insert_time"]
+
+[[permission]]
+identifier = "deny-insert-time"
+description = "Denies the insert_time command without any pre-configured scope."
+commands.deny = ["insert_time"]

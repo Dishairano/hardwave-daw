@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-autosave-clear-alive"
+description = "Enables the autosave_clear_alive command without any pre-configured scope."
+commands.allow = ["autosave_clear_alive"]
+
+[[permission]]
+identifier = "deny-autosave-clear-alive"
+description = "Denies the autosave_clear_alive command without any pre-configured scope."
+commands.deny = ["autosave_clear_alive"]

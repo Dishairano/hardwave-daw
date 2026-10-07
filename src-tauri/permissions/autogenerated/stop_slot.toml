@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stop-slot"
+description = "Enables the stop_slot command without any pre-configured scope."
+commands.allow = ["stop_slot"]
+
+[[permission]]
+identifier = "deny-stop-slot"
+description = "Denies the stop_slot command without any pre-configured scope."
+commands.deny = ["stop_slot"]

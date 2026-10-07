@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-load-test-song"
+description = "Enables the open_load_test_song command without any pre-configured scope."
+commands.allow = ["open_load_test_song"]
+
+[[permission]]
+identifier = "deny-open-load-test-song"
+description = "Denies the open_load_test_song command without any pre-configured scope."
+commands.deny = ["open_load_test_song"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-toggle-solo-safe"
+description = "Enables the toggle_solo_safe command without any pre-configured scope."
+commands.allow = ["toggle_solo_safe"]
+
+[[permission]]
+identifier = "deny-toggle-solo-safe"
+description = "Denies the toggle_solo_safe command without any pre-configured scope."
+commands.deny = ["toggle_solo_safe"]

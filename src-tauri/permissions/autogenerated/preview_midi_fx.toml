@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-midi-fx"
+description = "Enables the preview_midi_fx command without any pre-configured scope."
+commands.allow = ["preview_midi_fx"]
+
+[[permission]]
+identifier = "deny-preview-midi-fx"
+description = "Denies the preview_midi_fx command without any pre-configured scope."
+commands.deny = ["preview_midi_fx"]

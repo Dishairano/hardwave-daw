@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-midi-mappings"
+description = "Enables the clear_midi_mappings command without any pre-configured scope."
+commands.allow = ["clear_midi_mappings"]
+
+[[permission]]
+identifier = "deny-clear-midi-mappings"
+description = "Denies the clear_midi_mappings command without any pre-configured scope."
+commands.deny = ["clear_midi_mappings"]

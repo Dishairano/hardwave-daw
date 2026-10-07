@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-insert-wet"
+description = "Enables the set_insert_wet command without any pre-configured scope."
+commands.allow = ["set_insert_wet"]
+
+[[permission]]
+identifier = "deny-set-insert-wet"
+description = "Denies the set_insert_wet command without any pre-configured scope."
+commands.deny = ["set_insert_wet"]

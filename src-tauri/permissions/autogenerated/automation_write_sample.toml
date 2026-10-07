@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-automation-write-sample"
+description = "Enables the automation_write_sample command without any pre-configured scope."
+commands.allow = ["automation_write_sample"]
+
+[[permission]]
+identifier = "deny-automation-write-sample"
+description = "Denies the automation_write_sample command without any pre-configured scope."
+commands.deny = ["automation_write_sample"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dev-force-device-error"
+description = "Enables the dev_force_device_error command without any pre-configured scope."
+commands.allow = ["dev_force_device_error"]
+
+[[permission]]
+identifier = "deny-dev-force-device-error"
+description = "Denies the dev_force_device_error command without any pre-configured scope."
+commands.deny = ["dev_force_device_error"]

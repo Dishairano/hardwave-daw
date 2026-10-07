@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-automation-clips"
+description = "Enables the list_automation_clips command without any pre-configured scope."
+commands.allow = ["list_automation_clips"]
+
+[[permission]]
+identifier = "deny-list-automation-clips"
+description = "Denies the list_automation_clips command without any pre-configured scope."
+commands.deny = ["list_automation_clips"]

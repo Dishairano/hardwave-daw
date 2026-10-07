@@ -127,9 +127,13 @@ export function Roadmap({ onClose }: RoadmapProps) {
       </div>
 
       {/* Iframe */}
+      {/* A page from our site, in the app window. Sandboxed: it can run,
+          but it cannot navigate the window it sits in or open new ones. */}
       <iframe
         ref={iframeRef}
         src={ROADMAP_URL}
+        sandbox="allow-scripts allow-same-origin"
+        referrerPolicy="no-referrer"
         style={{
           flex: 1, border: 'none', background: 'transparent',
           pointerEvents: dragging ? 'none' : 'auto',

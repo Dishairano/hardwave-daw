@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-consolidate-track-range"
+description = "Enables the consolidate_track_range command without any pre-configured scope."
+commands.allow = ["consolidate_track_range"]
+
+[[permission]]
+identifier = "deny-consolidate-track-range"
+description = "Denies the consolidate_track_range command without any pre-configured scope."
+commands.deny = ["consolidate_track_range"]

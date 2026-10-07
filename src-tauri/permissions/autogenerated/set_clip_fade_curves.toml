@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-clip-fade-curves"
+description = "Enables the set_clip_fade_curves command without any pre-configured scope."
+commands.allow = ["set_clip_fade_curves"]
+
+[[permission]]
+identifier = "deny-set-clip-fade-curves"
+description = "Denies the set_clip_fade_curves command without any pre-configured scope."
+commands.deny = ["set_clip_fade_curves"]

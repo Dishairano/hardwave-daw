@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-tempo-entry"
+description = "Enables the add_tempo_entry command without any pre-configured scope."
+commands.allow = ["add_tempo_entry"]
+
+[[permission]]
+identifier = "deny-add-tempo-entry"
+description = "Denies the add_tempo_entry command without any pre-configured scope."
+commands.deny = ["add_tempo_entry"]

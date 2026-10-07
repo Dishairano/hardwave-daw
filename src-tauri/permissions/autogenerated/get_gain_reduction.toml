@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-gain-reduction"
+description = "Enables the get_gain_reduction command without any pre-configured scope."
+commands.allow = ["get_gain_reduction"]
+
+[[permission]]
+identifier = "deny-get-gain-reduction"
+description = "Denies the get_gain_reduction command without any pre-configured scope."
+commands.deny = ["get_gain_reduction"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-apply-kick-preset"
+description = "Enables the apply_kick_preset command without any pre-configured scope."
+commands.allow = ["apply_kick_preset"]
+
+[[permission]]
+identifier = "deny-apply-kick-preset"
+description = "Denies the apply_kick_preset command without any pre-configured scope."
+commands.deny = ["apply_kick_preset"]

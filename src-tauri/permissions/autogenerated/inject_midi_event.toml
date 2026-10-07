@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-inject-midi-event"
+description = "Enables the inject_midi_event command without any pre-configured scope."
+commands.allow = ["inject_midi_event"]
+
+[[permission]]
+identifier = "deny-inject-midi-event"
+description = "Denies the inject_midi_event command without any pre-configured scope."
+commands.deny = ["inject_midi_event"]

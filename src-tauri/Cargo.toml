@@ -73,6 +73,9 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# The mock runtime, so a test can call commands the way a page does and
+# prove which pages may.
+tauri = { workspace = true, features = ["test"] }
 axum = "0.8"
 tempfile = "3"
 

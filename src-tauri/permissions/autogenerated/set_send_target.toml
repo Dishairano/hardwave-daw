@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-send-target"
+description = "Enables the set_send_target command without any pre-configured scope."
+commands.allow = ["set_send_target"]
+
+[[permission]]
+identifier = "deny-set-send-target"
+description = "Denies the set_send_target command without any pre-configured scope."
+commands.deny = ["set_send_target"]

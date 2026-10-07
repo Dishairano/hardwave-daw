@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-tuning"
+description = "Enables the get_tuning command without any pre-configured scope."
+commands.allow = ["get_tuning"]
+
+[[permission]]
+identifier = "deny-get-tuning"
+description = "Denies the get_tuning command without any pre-configured scope."
+commands.deny = ["get_tuning"]

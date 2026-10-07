@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-version-contract-state"
+description = "Enables the version_contract_state command without any pre-configured scope."
+commands.allow = ["version_contract_state"]
+
+[[permission]]
+identifier = "deny-version-contract-state"
+description = "Denies the version_contract_state command without any pre-configured scope."
+commands.deny = ["version_contract_state"]

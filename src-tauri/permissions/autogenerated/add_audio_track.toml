@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-audio-track"
+description = "Enables the add_audio_track command without any pre-configured scope."
+commands.allow = ["add_audio_track"]
+
+[[permission]]
+identifier = "deny-add-audio-track"
+description = "Denies the add_audio_track command without any pre-configured scope."
+commands.deny = ["add_audio_track"]

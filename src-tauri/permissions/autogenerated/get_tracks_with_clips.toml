@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-tracks-with-clips"
+description = "Enables the get_tracks_with_clips command without any pre-configured scope."
+commands.allow = ["get_tracks_with_clips"]
+
+[[permission]]
+identifier = "deny-get-tracks-with-clips"
+description = "Denies the get_tracks_with_clips command without any pre-configured scope."
+commands.deny = ["get_tracks_with_clips"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-plugin-preset"
+description = "Enables the delete_plugin_preset command without any pre-configured scope."
+commands.allow = ["delete_plugin_preset"]
+
+[[permission]]
+identifier = "deny-delete-plugin-preset"
+description = "Denies the delete_plugin_preset command without any pre-configured scope."
+commands.deny = ["delete_plugin_preset"]

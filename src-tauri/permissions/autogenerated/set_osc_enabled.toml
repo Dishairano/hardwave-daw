@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-osc-enabled"
+description = "Enables the set_osc_enabled command without any pre-configured scope."
+commands.allow = ["set_osc_enabled"]
+
+[[permission]]
+identifier = "deny-set-osc-enabled"
+description = "Denies the set_osc_enabled command without any pre-configured scope."
+commands.deny = ["set_osc_enabled"]

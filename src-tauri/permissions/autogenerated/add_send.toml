@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-send"
+description = "Enables the add_send command without any pre-configured scope."
+commands.allow = ["add_send"]
+
+[[permission]]
+identifier = "deny-add-send"
+description = "Denies the add_send command without any pre-configured scope."
+commands.deny = ["add_send"]

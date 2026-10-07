@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-tempo-entries"
+description = "Enables the get_tempo_entries command without any pre-configured scope."
+commands.allow = ["get_tempo_entries"]
+
+[[permission]]
+identifier = "deny-get-tempo-entries"
+description = "Denies the get_tempo_entries command without any pre-configured scope."
+commands.deny = ["get_tempo_entries"]

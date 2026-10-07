@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-track-output-bus"
+description = "Enables the set_track_output_bus command without any pre-configured scope."
+commands.allow = ["set_track_output_bus"]
+
+[[permission]]
+identifier = "deny-set-track-output-bus"
+description = "Denies the set_track_output_bus command without any pre-configured scope."
+commands.deny = ["set_track_output_bus"]

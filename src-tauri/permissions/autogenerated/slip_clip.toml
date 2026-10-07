@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-slip-clip"
+description = "Enables the slip_clip command without any pre-configured scope."
+commands.allow = ["slip_clip"]
+
+[[permission]]
+identifier = "deny-slip-clip"
+description = "Denies the slip_clip command without any pre-configured scope."
+commands.deny = ["slip_clip"]

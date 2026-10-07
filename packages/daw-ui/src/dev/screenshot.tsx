@@ -9,6 +9,7 @@
  * production bundle (index.html → main.tsx) never imports this.
  */
 import './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
+import '../fonts'
 import '../mockup.css' // the real top bar uses the fl-* classes from here
 
 import React from 'react'

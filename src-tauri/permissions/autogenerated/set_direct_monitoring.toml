@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-direct-monitoring"
+description = "Enables the set_direct_monitoring command without any pre-configured scope."
+commands.allow = ["set_direct_monitoring"]
+
+[[permission]]
+identifier = "deny-set-direct-monitoring"
+description = "Denies the set_direct_monitoring command without any pre-configured scope."
+commands.deny = ["set_direct_monitoring"]

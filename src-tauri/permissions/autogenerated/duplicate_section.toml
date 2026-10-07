@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-duplicate-section"
+description = "Enables the duplicate_section command without any pre-configured scope."
+commands.allow = ["duplicate_section"]
+
+[[permission]]
+identifier = "deny-duplicate-section"
+description = "Denies the duplicate_section command without any pre-configured scope."
+commands.deny = ["duplicate_section"]

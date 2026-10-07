@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-midi-note"
+description = "Enables the delete_midi_note command without any pre-configured scope."
+commands.allow = ["delete_midi_note"]
+
+[[permission]]
+identifier = "deny-delete-midi-note"
+description = "Denies the delete_midi_note command without any pre-configured scope."
+commands.deny = ["delete_midi_note"]

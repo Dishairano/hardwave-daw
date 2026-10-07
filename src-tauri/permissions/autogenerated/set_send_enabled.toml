@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-send-enabled"
+description = "Enables the set_send_enabled command without any pre-configured scope."
+commands.allow = ["set_send_enabled"]
+
+[[permission]]
+identifier = "deny-set-send-enabled"
+description = "Denies the set_send_enabled command without any pre-configured scope."
+commands.deny = ["set_send_enabled"]

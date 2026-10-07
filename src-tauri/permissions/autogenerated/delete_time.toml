@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-time"
+description = "Enables the delete_time command without any pre-configured scope."
+commands.allow = ["delete_time"]
+
+[[permission]]
+identifier = "deny-delete-time"
+description = "Denies the delete_time command without any pre-configured scope."
+commands.deny = ["delete_time"]

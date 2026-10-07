@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-load-sampler"
+description = "Enables the load_sampler command without any pre-configured scope."
+commands.allow = ["load_sampler"]
+
+[[permission]]
+identifier = "deny-load-sampler"
+description = "Denies the load_sampler command without any pre-configured scope."
+commands.deny = ["load_sampler"]

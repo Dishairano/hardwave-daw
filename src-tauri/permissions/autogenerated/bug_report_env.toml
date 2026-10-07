@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bug-report-env"
+description = "Enables the bug_report_env command without any pre-configured scope."
+commands.allow = ["bug_report_env"]
+
+[[permission]]
+identifier = "deny-bug-report-env"
+description = "Denies the bug_report_env command without any pre-configured scope."
+commands.deny = ["bug_report_env"]

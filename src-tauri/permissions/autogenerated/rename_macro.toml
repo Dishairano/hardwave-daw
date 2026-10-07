@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rename-macro"
+description = "Enables the rename_macro command without any pre-configured scope."
+commands.allow = ["rename_macro"]
+
+[[permission]]
+identifier = "deny-rename-macro"
+description = "Denies the rename_macro command without any pre-configured scope."
+commands.deny = ["rename_macro"]

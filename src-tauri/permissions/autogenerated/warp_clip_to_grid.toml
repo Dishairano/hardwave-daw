@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-warp-clip-to-grid"
+description = "Enables the warp_clip_to_grid command without any pre-configured scope."
+commands.allow = ["warp_clip_to_grid"]
+
+[[permission]]
+identifier = "deny-warp-clip-to-grid"
+description = "Denies the warp_clip_to_grid command without any pre-configured scope."
+commands.deny = ["warp_clip_to_grid"]

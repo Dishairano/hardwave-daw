@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-osc-status"
+description = "Enables the get_osc_status command without any pre-configured scope."
+commands.allow = ["get_osc_status"]
+
+[[permission]]
+identifier = "deny-get-osc-status"
+description = "Denies the get_osc_status command without any pre-configured scope."
+commands.deny = ["get_osc_status"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-record-offset-ms"
+description = "Enables the set_record_offset_ms command without any pre-configured scope."
+commands.allow = ["set_record_offset_ms"]
+
+[[permission]]
+identifier = "deny-set-record-offset-ms"
+description = "Denies the set_record_offset_ms command without any pre-configured scope."
+commands.deny = ["set_record_offset_ms"]

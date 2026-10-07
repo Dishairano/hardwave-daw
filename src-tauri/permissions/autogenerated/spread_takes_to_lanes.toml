@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-spread-takes-to-lanes"
+description = "Enables the spread_takes_to_lanes command without any pre-configured scope."
+commands.allow = ["spread_takes_to_lanes"]
+
+[[permission]]
+identifier = "deny-spread-takes-to-lanes"
+description = "Denies the spread_takes_to_lanes command without any pre-configured scope."
+commands.deny = ["spread_takes_to_lanes"]

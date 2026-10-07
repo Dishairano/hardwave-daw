@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-remove-plugin-from-track"
+description = "Enables the remove_plugin_from_track command without any pre-configured scope."
+commands.allow = ["remove_plugin_from_track"]
+
+[[permission]]
+identifier = "deny-remove-plugin-from-track"
+description = "Denies the remove_plugin_from_track command without any pre-configured scope."
+commands.deny = ["remove_plugin_from_track"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-midi-notes"
+description = "Enables the get_midi_notes command without any pre-configured scope."
+commands.allow = ["get_midi_notes"]
+
+[[permission]]
+identifier = "deny-get-midi-notes"
+description = "Denies the get_midi_notes command without any pre-configured scope."
+commands.deny = ["get_midi_notes"]

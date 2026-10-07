@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-kick-drive"
+description = "Enables the set_kick_drive command without any pre-configured scope."
+commands.allow = ["set_kick_drive"]
+
+[[permission]]
+identifier = "deny-set-kick-drive"
+description = "Denies the set_kick_drive command without any pre-configured scope."
+commands.deny = ["set_kick_drive"]

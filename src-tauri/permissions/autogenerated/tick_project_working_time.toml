@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tick-project-working-time"
+description = "Enables the tick_project_working_time command without any pre-configured scope."
+commands.allow = ["tick_project_working_time"]
+
+[[permission]]
+identifier = "deny-tick-project-working-time"
+description = "Denies the tick_project_working_time command without any pre-configured scope."
+commands.deny = ["tick_project_working_time"]

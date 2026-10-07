@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-recall-mixer-snapshot"
+description = "Enables the recall_mixer_snapshot command without any pre-configured scope."
+commands.allow = ["recall_mixer_snapshot"]
+
+[[permission]]
+identifier = "deny-recall-mixer-snapshot"
+description = "Denies the recall_mixer_snapshot command without any pre-configured scope."
+commands.deny = ["recall_mixer_snapshot"]

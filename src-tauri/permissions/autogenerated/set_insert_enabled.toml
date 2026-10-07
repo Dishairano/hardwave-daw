@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-insert-enabled"
+description = "Enables the set_insert_enabled command without any pre-configured scope."
+commands.allow = ["set_insert_enabled"]
+
+[[permission]]
+identifier = "deny-set-insert-enabled"
+description = "Denies the set_insert_enabled command without any pre-configured scope."
+commands.deny = ["set_insert_enabled"]

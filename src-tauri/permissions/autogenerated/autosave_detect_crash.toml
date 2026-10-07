@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-autosave-detect-crash"
+description = "Enables the autosave_detect_crash command without any pre-configured scope."
+commands.allow = ["autosave_detect_crash"]
+
+[[permission]]
+identifier = "deny-autosave-detect-crash"
+description = "Denies the autosave_detect_crash command without any pre-configured scope."
+commands.deny = ["autosave_detect_crash"]
