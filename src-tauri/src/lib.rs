@@ -18,6 +18,7 @@ mod plugin_sandbox;
 mod prefs;
 mod process_memory;
 mod scripting;
+mod workspace_cloud;
 
 use hardwave_engine::DawEngine;
 pub use midi_clock::MidiClockState;
@@ -328,6 +329,9 @@ pub fn run() {
             commands::modulation::add_modulation,
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
+            commands::cloud::save_to_workspace,
+            commands::cloud::list_workspace_songs,
+            commands::cloud::open_from_workspace,
             commands::collab::start_collab,
             commands::collab::stop_collab,
             commands::collab::collab_status,

@@ -383,7 +383,20 @@ audio files do not travel with it, so a clip whose sample you do not
 have reads as missing, exactly as it does when a project is copied
 between machines by hand.
 
-## 25. Mixing against a record
+## 25. Songs in Workspace
+
+File > Save to Workspace saves the open song, collects the samples it
+uses into a folder beside it, and puts the whole folder in your
+Workspace under "Hardwave DAW". Saving the same song again only sends
+what changed; Workspace keeps the earlier versions.
+
+File > Open from Workspace lists the songs there. Opening one brings
+the folder down to Documents/Hardwave/From Workspace and opens it, with
+the samples beside it, so it plays as it did on the machine that saved
+it. You sign in once, in any Hardwave plug-in; the DAW uses the same
+sign-in.
+
+## 26. Mixing against a record
 
 Tools > Reference track loads a commercial track and plays it instead
 of your mix, past the master chain and the master fader, so what you
@@ -394,7 +407,7 @@ comparing at two levels compares the levels rather than the mixes.
 The reference follows the playhead, so moving in the song moves in the
 record.
 
-## 26. Exporting
+## 27. Exporting
 
 File > Export renders the song to WAV or MP3, with the same plug-in
 settings and sidechain routing as playback. You can render stems, one
@@ -403,7 +416,7 @@ file per track, and each stem keeps its own sidechain key.
 Bounce a single track to audio from the track's menu when you want its
 CPU back.
 
-## 27. When something goes wrong
+## 28. When something goes wrong
 
 - **The audio stops**: the banner offers a retry. Check the device is
   still there in Settings > Audio.

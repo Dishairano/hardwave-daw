@@ -195,6 +195,15 @@ const mock: TauriInternals = {
       case 'set_modulation':
       case 'delete_modulation':
         return null
+      case 'list_workspace_songs':
+        return [
+          { name: 'Raw Drop', fileId: 11, folder: '/Hardwave DAW/Raw Drop', updatedAt: '2026-10-07T01:12:00Z', files: 9 },
+          { name: 'Hardstyle Idea 3', fileId: 7, folder: '/Hardwave DAW/Hardstyle Idea 3', updatedAt: '2026-10-02T18:40:00Z', files: 14 },
+        ]
+      case 'open_from_workspace':
+        return '/home/user/Documents/Hardwave/From Workspace/Raw Drop/Raw Drop.hwp'
+      case 'save_to_workspace':
+        return { workspace: 'Dishaion', folder: '/Hardwave DAW/Raw Drop', sent: 3, unchanged: 6, missing: [] }
       case 'collab_status':
         return { connected: false, roomId: '', inviteCode: '', hosting: false, message: '', received: 0, sent: 0, members: [], peer: null }
       case 'start_collab':

@@ -64,6 +64,7 @@ import { ScriptsPanel } from './components/ScriptsPanel'
 import { SessionView } from './components/SessionView'
 import { VideoWindow } from './components/VideoWindow'
 import { CollabPanel } from './components/CollabPanel'
+import { WorkspaceSongs } from './components/WorkspaceSongs'
 import { PresetBrowser } from './components/PresetBrowser'
 import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
@@ -252,6 +253,7 @@ export function App() {
   const [showSession, setShowSession] = useState(false)
   const [showVideo, setShowVideo] = useState(false)
   const [showCollab, setShowCollab] = useState(false)
+  const [showWorkspaceSongs, setShowWorkspaceSongs] = useState(false)
   // Local rather than in useAppDialogs: nothing else toggles it, and it has
   // one extra piece of state (whether the report follows a crash).
   const [bugReport, setBugReport] = useState<{ open: boolean; afterCrash: boolean }>({
@@ -1921,6 +1923,32 @@ export function App() {
           { label: 'Save as…', shortcut: 'Ctrl+Shift+S', action: handleSaveProjectAs },
           { label: 'Save new version', action: handleSaveNewVersion },
           { label: 'Save as template…', action: handleSaveAsTemplate },
+          { separator: true, label: '' },
+          {
+            label: 'Save to Workspace',
+            action: async () => {
+              const push = useNotificationStore.getState().push
+              try {
+                // Saved to disk first, so there is a project file and a
+                // folder beside it for the samples to be collected into.
+                await saveProject()
+                const path = useProjectStore.getState().filePath
+                if (!path) return
+                const result = await invoke<{
+                  workspace: string; folder: string; sent: number; unchanged: number; missing: string[]
+                }>('save_to_workspace', { projectPath: path })
+                push('info', `Saved to ${result.workspace}`, {
+                  detail: `${result.folder}: ${result.sent} sent, ${result.unchanged} already there.`
+                    + (result.missing.length > 0
+                      ? ` ${result.missing.length} sample${result.missing.length === 1 ? '' : 's'} could not be found to send.`
+                      : ''),
+                })
+              } catch (e) {
+                push('warning', 'Could not save to Workspace', { detail: String(e) })
+              }
+            },
+          },
+          { label: 'Open from Workspace…', action: () => setShowWorkspaceSongs(true) },
           { label: 'Collect samples into project folder', action: handleCollectSamples },
           { separator: true, label: '' },
           { label: 'Revert to last backup', action: handleRevertToBackup },
@@ -2380,6 +2408,7 @@ export function App() {
       {showSession && <SessionView onClose={() => setShowSession(false)} />}
       {showVideo && <VideoWindow onClose={() => setShowVideo(false)} />}
       {showCollab && <CollabPanel onClose={() => setShowCollab(false)} />}
+      {showWorkspaceSongs && <WorkspaceSongs onClose={() => setShowWorkspaceSongs(false)} />}
       {showPresets && <PresetBrowser onClose={() => setShowPresets(false)} />}
       {showMidiMappings && (
         <MidiMappingsPanel

@@ -72,6 +72,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+axum = "0.8"
 tempfile = "3"
 
 [lib]

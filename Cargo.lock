@@ -1958,6 +1958,7 @@ dependencies = [
 name = "hardwave-daw"
 version = "0.259.0"
 dependencies = [
+ "axum",
  "chrono",
  "dirs 5.0.1",
  "env_logger",
