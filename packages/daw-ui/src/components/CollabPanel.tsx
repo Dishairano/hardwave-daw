@@ -24,6 +24,7 @@ interface CollabStatus {
   message: string
   received: number
   sent: number
+  members: string[]
 }
 
 interface Joined {
@@ -134,6 +135,24 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
                 }}>{status?.inviteCode || '—'}</div>
                 <div style={{ fontSize: 10, color: hw.textFaint, marginTop: 6 }}>
                   Room {status?.roomId}. {status?.sent ?? 0} sent, {status?.received ?? 0} received.
+                </div>
+                <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }} aria-live="polite">
+                  {(status?.members ?? []).length <= 1 && (
+                    <span style={{ fontSize: 11, color: hw.textFaint }}>
+                      Waiting for the other person to come in.
+                    </span>
+                  )}
+                  {(status?.members ?? []).length > 1 && (status?.members ?? []).map((name, i) => (
+                    <span
+                      key={name + i}
+                      style={{
+                        fontSize: 11, padding: '3px 8px', borderRadius: 999,
+                        background: i === 0 ? hw.accent : 'rgba(255,255,255,0.08)',
+                        color: i === 0 ? '#fff' : hw.textPrimary,
+                      }}
+                      title={i === 0 ? 'Opened the room' : 'Joined'}
+                    >{name}</span>
+                  ))}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>

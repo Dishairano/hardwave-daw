@@ -184,6 +184,10 @@ pub enum SyncKind {
     /// moment the whole project crosses the network rather than one
     /// edit at a time.
     ProjectOffer { name: String, blob: Vec<u8> },
+    /// Who is in the room now, sent by the service whenever someone
+    /// arrives or leaves. Without it the person who opened the room
+    /// cannot tell whether the other one has actually come in.
+    MembersChanged { names: Vec<String> },
     /// Heartbeat — keep the connection alive without a state edit.
     Heartbeat,
 }

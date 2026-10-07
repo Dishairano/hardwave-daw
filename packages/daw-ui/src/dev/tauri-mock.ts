@@ -196,7 +196,7 @@ const mock: TauriInternals = {
       case 'delete_modulation':
         return null
       case 'collab_status':
-        return { connected: false, roomId: '', inviteCode: '', hosting: false, message: '', received: 0, sent: 0 }
+        return { connected: false, roomId: '', inviteCode: '', hosting: false, message: '', received: 0, sent: 0, members: [] }
       case 'start_collab':
         return { roomId: 'room-1760000000', inviteCode: 'HW-4K2-9QX', caughtUp: true }
       case 'request_project':

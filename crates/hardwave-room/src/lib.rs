@@ -177,6 +177,10 @@ impl LiveRoom {
             }
             // Watching is watching: presence and chat always pass.
             SyncKind::PresenceUpdate(_) | SyncKind::Chat { .. } => Relay::pass(),
+            // Only the service says who is in the room. A peer sending
+            // one is either confused or lying, and either way the other
+            // side should not see it.
+            SyncKind::MembersChanged { .. } => Relay::stop("only the room says who is in it"),
             // Asking for the song, and answering with it. A guest who
             // cannot edit may still ask, because they need the song
             // to hear anything at all.
@@ -229,6 +233,26 @@ impl LiveRoom {
                 .cloned()
                 .collect(),
         )
+    }
+
+    /// The names of everyone in the room, host first.
+    pub fn member_names(&self) -> Vec<String> {
+        let host = self.room.host_user_id.clone();
+        let mut names: Vec<(bool, String)> = self
+            .room
+            .members
+            .iter()
+            .map(|m| {
+                let name = if m.display_name.is_empty() {
+                    m.user_id.clone()
+                } else {
+                    m.display_name.clone()
+                };
+                (m.user_id != host, name)
+            })
+            .collect();
+        names.sort();
+        names.into_iter().map(|(_, name)| name).collect()
     }
 
     pub fn history_len(&self) -> usize {
@@ -404,6 +428,31 @@ mod tests {
             kind: SyncKind::ProjectRequest,
         });
         assert!(relay.forward, "without the song they hear nothing at all");
+    }
+
+    #[test]
+    fn the_member_list_names_the_host_first() {
+        let mut live = room();
+        live.room.member_mut("host-1").unwrap().display_name = "Dishaion".into();
+        let code = live.invite_code.clone();
+        live.join("guest-1", "Alex", &code, true).unwrap();
+        assert_eq!(
+            live.member_names(),
+            vec!["Dishaion".to_string(), "Alex".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_peer_cannot_claim_who_is_in_the_room() {
+        let mut live = room();
+        let relay = live.handle(&SyncMessage {
+            sender_user_id: "host-1".into(),
+            logical_clock: 1,
+            kind: SyncKind::MembersChanged {
+                names: vec!["someone else".into()],
+            },
+        });
+        assert!(!relay.forward);
     }
 
     #[test]

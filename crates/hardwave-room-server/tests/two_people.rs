@@ -83,6 +83,23 @@ async fn connect(service: SocketAddr, query: &str) -> (Socket, serde_json::Value
     (socket, serde_json::from_str(&text).expect("hello is json"))
 }
 
+/// The next message that is not the room saying who is in it, or
+/// nothing within the time given.
+async fn next_edit(socket: &mut Socket, within: std::time::Duration) -> Option<SyncMessage> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let frame = tokio::time::timeout(left, socket.next())
+            .await
+            .ok()??
+            .ok()?;
+        let message: SyncMessage = serde_json::from_str(&frame.into_text().ok()?).ok()?;
+        if !matches!(message.kind, SyncKind::MembersChanged { .. }) {
+            return Some(message);
+        }
+    }
+}
+
 fn an_edit() -> SyncMessage {
     SyncMessage {
         sender_user_id: "whoever".into(),
@@ -115,21 +132,22 @@ async fn two_people_hear_each_other_and_not_themselves() {
         .await
         .unwrap();
 
-    let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), guest.next())
+    let message = next_edit(&mut guest, std::time::Duration::from_secs(5))
         .await
-        .expect("the guest should hear it")
-        .expect("a message")
-        .expect("not an error");
-    let message: SyncMessage = serde_json::from_str(&arrived.into_text().unwrap()).unwrap();
+        .expect("the guest should hear it");
     assert_eq!(
         message.sender_user_id, "host-1",
         "the sender is who the socket says, not who the message claimed"
     );
     assert!(matches!(message.kind, SyncKind::Mixer(_)));
 
-    // And it does not come back to the person who sent it.
-    let echo = tokio::time::timeout(std::time::Duration::from_millis(400), host.next()).await;
-    assert!(echo.is_err(), "an edit must not echo to its sender");
+    // And it does not come back to the person who sent it. The room
+    // telling the host who is in it is fine; the edit itself is not.
+    let echo = next_edit(&mut host, std::time::Duration::from_millis(400)).await;
+    assert!(
+        echo.is_none(),
+        "an edit must not echo to its sender: {echo:?}"
+    );
 }
 
 #[tokio::test]
@@ -183,6 +201,43 @@ async fn a_wrong_code_does_not_get_in() {
     .await;
     assert_eq!(refused["type"], "refused");
     assert!(refused["reason"].as_str().unwrap().contains("invite code"));
+}
+
+#[tokio::test]
+async fn the_host_hears_when_the_guest_comes_in() {
+    let site = fake_site(true).await;
+    let service = start_service(site).await;
+
+    let (mut host, hello) = connect(service, "token=host-1").await;
+    let room = hello["room_id"].as_str().unwrap().to_string();
+    let code = hello["invite_code"].as_str().unwrap().to_string();
+
+    // The host's own arrival is announced to the host first.
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), host.next())
+        .await
+        .expect("the host hears the room")
+        .unwrap()
+        .unwrap();
+    let first: SyncMessage = serde_json::from_str(&first.into_text().unwrap()).unwrap();
+    assert!(matches!(first.kind, SyncKind::MembersChanged { ref names } if names.len() == 1));
+
+    let (_guest, _) = connect(service, &format!("token=guest-1&room={room}&code={code}")).await;
+
+    let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), host.next())
+        .await
+        .expect("the host should hear the guest arrive")
+        .unwrap()
+        .unwrap();
+    let message: SyncMessage = serde_json::from_str(&arrived.into_text().unwrap()).unwrap();
+    match message.kind {
+        SyncKind::MembersChanged { names } => {
+            assert_eq!(
+                names,
+                vec!["User host-1".to_string(), "User guest-1".to_string()]
+            );
+        }
+        other => panic!("expected the member list, got {other:?}"),
+    }
 }
 
 #[tokio::test]

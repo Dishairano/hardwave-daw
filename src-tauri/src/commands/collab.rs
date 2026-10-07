@@ -176,6 +176,11 @@ fn apply_one(
     collab: &Arc<crate::collab::Collab>,
     message: &SyncMessage,
 ) {
+    // Who is in the room changes the panel, not the song.
+    if let hardwave_project::multiplayer::SyncKind::MembersChanged { names } = &message.kind {
+        collab.set_members(names.clone());
+        return;
+    }
     // The song itself is not an edit, and it is handled before the
     // engine lock is taken because packing or unpacking it is slow.
     if handle_project(engine, collab, message) {

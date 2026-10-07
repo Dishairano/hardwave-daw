@@ -35,6 +35,8 @@ pub struct CollabStatus {
     /// show that something is actually happening.
     pub received: u64,
     pub sent: u64,
+    /// Who is in the room, host first, as the room last said.
+    pub members: Vec<String>,
 }
 
 /// The live session, or nothing when this DAW is on its own.
@@ -96,10 +98,16 @@ impl Collab {
         self.sent.store(0, Ordering::Relaxed);
         let mut status = self.status.lock();
         status.connected = true;
+        status.members = Vec::new();
         status.room_id = room_id.to_string();
         status.invite_code = invite_code.to_string();
         status.hosting = hosting;
         status.message = String::new();
+    }
+
+    /// The room says who is in it now.
+    pub fn set_members(&self, names: Vec<String>) {
+        self.status.lock().members = names;
     }
 
     pub fn stop(&self, why: &str) {

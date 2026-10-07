@@ -140,6 +140,10 @@ async fn handle(socket: WebSocket, query: JoinQuery, rooms: Rooms) {
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0),
             );
+            let mut live = live;
+            if let Some(host) = live.room.member_mut(&who.user_id) {
+                host.display_name = who.display_name.clone();
+            }
             let id = live.room.room_id.clone();
             let (chatter, _) = broadcast::channel(256);
             let session = Arc::new(Mutex::new(Session { live, chatter }));
@@ -184,6 +188,7 @@ async fn handle(socket: WebSocket, query: JoinQuery, rooms: Rooms) {
                     Ok(()) => {
                         let missed = guard.live.catch_up(query.since);
                         let inbox = guard.chatter.subscribe();
+                        announce_members(&guard);
                         let room_id = guard.live.room.room_id.clone();
                         let invite_code = guard.live.invite_code.clone();
                         drop(guard);
@@ -287,11 +292,29 @@ async fn handle(socket: WebSocket, query: JoinQuery, rooms: Rooms) {
     let mut guard = session.lock();
     guard.live.leave(&who.user_id);
     let empty = guard.live.is_empty();
+    if !empty {
+        announce_members(&guard);
+    }
     drop(guard);
     if empty {
         map.remove(&room_id);
         tracing::info!("room {room_id} closed");
     }
+}
+
+/// Tell everyone in the room who is in it.
+///
+/// Sent as coming from the room itself rather than from a person, so
+/// every peer receives it, the one who just arrived included.
+fn announce_members(session: &Session) {
+    let message = SyncMessage {
+        sender_user_id: "room".to_string(),
+        logical_clock: session.live.highest_clock,
+        kind: hardwave_project::multiplayer::SyncKind::MembersChanged {
+            names: session.live.member_names(),
+        },
+    };
+    let _ = session.chatter.send(("room".to_string(), message));
 }
 
 /// The service, without a port of its own, so a test can drive it
