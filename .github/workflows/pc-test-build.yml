@@ -63,20 +63,9 @@ jobs:
       - name: Toolchain
         run: rustup show && rustc -V
 
-      # The ASIO SDK, fetched once and kept, and only used when it is the
-      # exact file whose hash is recorded here.
+      # Fetched once, kept, and only used if it is the recorded file.
       - name: ASIO SDK
-        run: >-
-          powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop';
-          $root = Join-Path $env:RUNNER_TOOL_CACHE 'asiosdk-2.3.4';
-          if (-not (Test-Path (Join-Path $root 'ASIOSDK'))) {
-            New-Item -ItemType Directory -Force -Path $root | Out-Null;
-            $zip = Join-Path $env:RUNNER_TEMP 'asiosdk.zip';
-            Invoke-WebRequest -Uri 'https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip' -OutFile $zip -UseBasicParsing;
-            $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash;
-            if ($hash -ne 'D5EBF0C20DD2C5F43771FD0C1418F4B361BF52434EE670097CFA6B3A335E2ECA') { throw ('ASIO SDK is not the expected file: ' + $hash) };
-            Expand-Archive -Path $zip -DestinationPath $root -Force };
-          ('CPAL_ASIO_DIR=' + (Join-Path $root 'ASIOSDK')) | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8"
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\fetch-asio-sdk.ps1
 
       - name: Frontend
         working-directory: packages/daw-ui
@@ -87,13 +76,4 @@ jobs:
         run: npx --yes @tauri-apps/cli@2.11.5 build --target x86_64-pc-windows-msvc --features asio --bundles nsis --config tauri.unsigned.conf.json
 
       - name: Put it where the founder can find it
-        run: >-
-          powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop';
-          $dir = 'C:\Hardwave Test Builds';
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null;
-          $exe = Get-ChildItem -Path '..\target\x86_64-pc-windows-msvc\release\bundle\nsis','target\x86_64-pc-windows-msvc\release\bundle\nsis' -Filter '*_x64-setup.exe' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1;
-          if (-not $exe) { throw 'no installer was built' };
-          $name = 'Hardwave DAW test ' + (Get-Date -Format 'yyyy-MM-dd HHmm') + '.exe';
-          Copy-Item $exe.FullName (Join-Path $dir $name);
-          Copy-Item $exe.FullName (Join-Path $dir 'Hardwave DAW test (latest).exe') -Force;
-          Write-Host ('Ready: ' + (Join-Path $dir $name))"
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect-test-installer.ps1
