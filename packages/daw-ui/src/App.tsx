@@ -1299,7 +1299,8 @@ export function App() {
       const song = await invoke<{ genre: string; bpm: number; sections: { name: string; startTick: number; bars: number }[] }>(
         'create_starter_song', { genreId },
       )
-      await useTransportStore.getState().setBpm(song.bpm)
+      // The engine already set the tempo; setting it again here was a
+      // second undo step that made the first Ctrl+Z appear to do nothing.
       const markers = useMarkerStore.getState()
       for (const section of song.sections) markers.addMarker(section.startTick, section.name)
       await ts.fetchTracks()

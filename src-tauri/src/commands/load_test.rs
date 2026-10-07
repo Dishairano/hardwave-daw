@@ -165,7 +165,8 @@ pub(crate) fn add_test_tracks(
     let bars = 8u64;
     let mut ids = Vec::with_capacity(count);
     for i in 0..count {
-        let id = project.add_midi_track(format!("Test {}", i + 1));
+        // On the playlist's own rows, so the test song can be looked at.
+        let id = super::starter::claim_row(project, i + 1, &format!("Test {}", i + 1), true);
         let shift = ((i % 3) as i8 - 1) * 12;
         let mut notes = Vec::new();
         for bar in 0..bars {

@@ -174,7 +174,7 @@ fn build_into(project: &mut hardwave_project::Project, genre: &Genre, plan: &[Se
     let at = |name: &str| plan.iter().find(|s| s.name == name).cloned();
     // The kick: the built-in kick synth with the genre's preset,
     // playing everywhere except the break.
-    let kick = project.add_midi_track("Kick".into());
+    let kick = claim_row(project, 1, "Kick", true);
     let layers = hardwave_dsp::kick_synth::preset_layers(genre.kick_preset);
     if let Some(track) = project.track_mut(&kick) {
         track.instrument = NativeInstrument::KickSynth;
@@ -204,7 +204,7 @@ fn build_into(project: &mut hardwave_project::Project, genre: &Genre, plan: &[Se
     }
 
     // The offbeat bass, in the drops only.
-    let bass = project.add_midi_track("Bass".into());
+    let bass = claim_row(project, 2, "Bass", true);
     if let Some(track) = project.track_mut(&bass) {
         track.instrument = NativeInstrument::BuiltinSaw;
         track.volume_db = -8.0;
@@ -223,11 +223,42 @@ fn build_into(project: &mut hardwave_project::Project, genre: &Genre, plan: &[Se
 
     // Empty places for the parts every song needs, so the next
     // step is obvious.
-    for name in ["Lead", "Screech", "Atmos"] {
-        project.add_midi_track(name.into());
+    for (row, name) in [(3, "Lead"), (4, "Screech"), (5, "Atmos")] {
+        claim_row(project, row, name, true);
     }
-    for name in ["Vocals", "FX"] {
-        project.add_audio_track(name.into());
+    for (row, name) in [(6, "Vocals"), (7, "FX")] {
+        claim_row(project, row, name, false);
+    }
+}
+
+/// Take over playlist row `row` for a starter part.
+///
+/// A new project's playlist is its numbered insert rows; the name
+/// column and the playlist draw those. A track added after them sat
+/// five hundred rows down, where nobody would see it: the song played
+/// and the playlist looked empty. So a starter part replaces the empty
+/// insert at its row, keeping the row's id and place, as the kind of
+/// track it needs to be (an instrument plays MIDI, a vocal row audio).
+pub(crate) fn claim_row(
+    project: &mut hardwave_project::Project,
+    row: usize,
+    name: &str,
+    instrument: bool,
+) -> String {
+    use hardwave_project::track::Track;
+    let id = format!("insert-{row:03}");
+    let fresh = if instrument {
+        Track::new_midi(id.clone(), name.to_string())
+    } else {
+        Track::new_audio(id.clone(), name.to_string())
+    };
+    match project.tracks.iter_mut().find(|t| t.id == id) {
+        Some(slot) => {
+            *slot = fresh;
+            id
+        }
+        None if instrument => project.add_midi_track(name.to_string()),
+        None => project.add_audio_track(name.to_string()),
     }
 }
 
@@ -375,6 +406,37 @@ mod tests {
         assert!(
             peak > 0.05,
             "pressing play has to make a sound: peak {peak}"
+        );
+    }
+
+    #[test]
+    fn the_starter_fills_the_first_playlist_rows() {
+        let mut project = hardwave_project::Project::default();
+        build_into(&mut project, &genre("hardstyle").unwrap(), &sections());
+        let names: Vec<(&str, &str)> = project
+            .tracks
+            .iter()
+            .filter(|t| t.id.starts_with("insert-"))
+            .take(7)
+            .map(|t| (t.id.as_str(), t.name.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("insert-001", "Kick"),
+                ("insert-002", "Bass"),
+                ("insert-003", "Lead"),
+                ("insert-004", "Screech"),
+                ("insert-005", "Atmos"),
+                ("insert-006", "Vocals"),
+                ("insert-007", "FX"),
+            ]
+        );
+        assert!(!project.track("insert-001").unwrap().clips.is_empty());
+        assert_eq!(
+            project.tracks.len(),
+            hardwave_project::project::DEFAULT_INSERT_COUNT + 1,
+            "no rows added past the end, where nobody sees them"
         );
     }
 
