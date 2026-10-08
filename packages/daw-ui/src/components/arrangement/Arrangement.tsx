@@ -10,6 +10,7 @@ import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo, FadeCurveKind } from '../../stores/trackStore'
 import { invoke } from '@tauri-apps/api/core'
 import { useTransportStore, snapToTicks } from '../../stores/transportStore'
+import { useShallow } from 'zustand/react/shallow'
 import { useMarkerStore } from '../../stores/markerStore'
 import { useClipGroupStore } from '../../stores/clipGroupStore'
 import { useTrackFolderStore } from '../../stores/trackFolderStore'
@@ -120,6 +121,35 @@ interface ArrangementProps {
   onSetHint?: (text: string) => void
 }
 
+// The playhead: bright red, a sharp 1px line over a glow (mockup style),
+// with a caret at the top. PLAYHEAD_HALF puts the line on the position.
+const PLAYHEAD_HALF = 5
+const PLAYHEAD_STYLE: React.CSSProperties = {
+  position: 'absolute', top: 0, left: 0, bottom: 0, width: PLAYHEAD_HALF * 2 + 1,
+  pointerEvents: 'none', willChange: 'transform', display: 'none',
+}
+const PLAYHEAD_GLOW: React.CSSProperties = {
+  position: 'absolute', top: 0, bottom: 0, left: PLAYHEAD_HALF - 2, width: 5, background: 'rgba(239,68,68,0.20)',
+}
+const PLAYHEAD_LINE: React.CSSProperties = {
+  position: 'absolute', top: 0, bottom: 0, left: PLAYHEAD_HALF, width: 1, background: '#EF4444',
+}
+const PLAYHEAD_CARET: React.CSSProperties = {
+  position: 'absolute', top: 0, left: 0, width: 0, height: 0,
+  borderLeft: `${PLAYHEAD_HALF}px solid transparent`, borderRight: `${PLAYHEAD_HALF + 1}px solid transparent`,
+  borderTop: '8px solid #EF4444',
+}
+
+/** Size a canvas's backing store for a CSS size; false when it already was. */
+function fitCanvas(canvas: HTMLCanvasElement, w: number, h: number, dpr: number): boolean {
+  const pw = Math.round(w * dpr)
+  const ph = Math.round(h * dpr)
+  if (canvas.width === pw && canvas.height === ph) return false
+  canvas.width = pw
+  canvas.height = ph
+  return true
+}
+
 export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -190,13 +220,25 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const [spectralTarget, setSpectralTarget] = useState<{ trackId: string; clipId: string } | null>(null)
   const [markerCtx, setMarkerCtx] = useState<{ x: number; y: number; markerId: string | null; tick: number } | null>(null)
   const [renamingMarker, setRenamingMarker] = useState<{ id: string; draft: string } | null>(null)
+  // Only what the arrangement draws from. The playhead moves 30 times a
+  // second while playing; it is drawn on a canvas of its own (below), so
+  // the arrangement neither re-renders nor redraws every clip for it.
   const {
-    positionSamples, playing, bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
+    bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
     setLoop, toggleLoop,
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
     clipColorOverrides, editCursorTicks, setEditCursor, setClipColor,
     punchEnabled, punchInTicks, punchOutTicks, setPunchIn, setPunchOut, clearPunch, setPunchRangeFromLoop,
-  } = useTransportStore()
+  } = useTransportStore(useShallow((s) => ({
+    bpm: s.bpm, sampleRate: s.sampleRate, setPosition: s.setPosition, looping: s.looping,
+    loopStart: s.loopStart, loopEnd: s.loopEnd, setLoop: s.setLoop, toggleLoop: s.toggleLoop,
+    trackHeight: s.trackHeight, setTrackHeight: s.setTrackHeight, snapValue: s.snapValue,
+    snapEnabled: s.snapEnabled, horizontalZoom: s.horizontalZoom, setHorizontalZoom: s.setHorizontalZoom,
+    clipColorOverrides: s.clipColorOverrides, editCursorTicks: s.editCursorTicks,
+    setEditCursor: s.setEditCursor, setClipColor: s.setClipColor, punchEnabled: s.punchEnabled,
+    punchInTicks: s.punchInTicks, punchOutTicks: s.punchOutTicks, setPunchIn: s.setPunchIn,
+    setPunchOut: s.setPunchOut, clearPunch: s.clearPunch, setPunchRangeFromLoop: s.setPunchRangeFromLoop,
+  })))
   const { markers, addMarker, addTempoMarker, addTimeSigMarker, removeMarker, updateMarker, jumpToNext, jumpToPrev } = useMarkerStore()
   // Bar layout from the project's tempo map, so a signature change part-way
   // through the song moves the bar lines and the bar numbers with it.
@@ -285,22 +327,29 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
   }, [tracks, horizontalZoom])
 
-  // Draw
+  // Draw. Kept in a ref so following the playhead can redraw without a
+  // React render; the effect below re-makes it when what it draws changes.
+  const drawMainRef = useRef<() => void>(() => {})
+  const drawPlayheadRef = useRef<() => void>(() => {})
   useEffect(() => {
+   const draw = () => {
     const canvas = canvasRef.current
     const container = containerRef.current
     if (!canvas || !container) return
 
     const dpr = window.devicePixelRatio || 1
     const rect = container.getBoundingClientRect()
-    canvas.width = rect.width * dpr
-    canvas.height = rect.height * dpr
-    canvas.style.width = `${rect.width}px`
-    canvas.style.height = `${rect.height}px`
+    // Resizing a canvas reallocates it, so only when the size changed.
+    if (fitCanvas(canvas, rect.width, rect.height, dpr)) {
+      canvas.style.width = `${rect.width}px`
+      canvas.style.height = `${rect.height}px`
+    }
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    ctx.scale(dpr, dpr)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, rect.width, rect.height)
+    const { positionSamples } = useTransportStore.getState()
 
     const w = rect.width
     const h = rect.height
@@ -610,33 +659,6 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.stroke()
     }
 
-    // Playhead — bright red, sharper 1px stroke with glow underlay (mockup style)
-    const playheadX = Math.floor(playheadSecs * PIXELS_PER_SECOND - scrollOffset) + 0.5
-    if (playing || positionSamples > 0) {
-      // Glow underneath the sharp line
-      ctx.strokeStyle = 'rgba(239,68,68,0.20)'
-      ctx.lineWidth = 5
-      ctx.beginPath()
-      ctx.moveTo(playheadX, 0)
-      ctx.lineTo(playheadX, h)
-      ctx.stroke()
-
-      ctx.strokeStyle = '#EF4444'
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(playheadX, 0)
-      ctx.lineTo(playheadX, h)
-      ctx.stroke()
-
-      ctx.fillStyle = '#EF4444'
-      ctx.beginPath()
-      ctx.moveTo(playheadX - 5, 0)
-      ctx.lineTo(playheadX + 5, 0)
-      ctx.lineTo(playheadX, 8)
-      ctx.closePath()
-      ctx.fill()
-    }
-
     // The other person in the room: a violet line where they last
     // clicked, with their name on the ruler, so "look at bar 33" needs
     // no saying. Violet because red is the playhead and the two must
@@ -756,7 +778,51 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
 
-  }, [tracks, positionSamples, playing, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, sections, meterSegments, peer])
+   }
+   drawMainRef.current = draw
+   draw()
+   drawPlayheadRef.current()
+  }, [tracks, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, sections, meterSegments, peer])
+
+  // The playhead: one element over the arrangement, moved with a
+  // transform straight from the transport store. No React render, no
+  // repaint: the compositor slides it, and the clips underneath are left
+  // alone unless the view follows the playhead.
+  const playheadRef = useRef<HTMLDivElement>(null)
+  const followRef = useRef(followPlayhead)
+  followRef.current = followPlayhead
+  const viewRef = useRef({ pps: PIXELS_PER_SECOND, scrollX })
+  viewRef.current = { pps: PIXELS_PER_SECOND, scrollX }
+  useEffect(() => {
+    drawPlayheadRef.current = () => {
+      const el = playheadRef.current
+      const container = containerRef.current
+      if (!el || !container) return
+      const { positionSamples, playing, sampleRate: sr } = useTransportStore.getState()
+      const w = container.clientWidth
+      const { pps, scrollX: sx } = viewRef.current
+      const secs = sr > 0 ? positionSamples / sr : 0
+      const offset = followRef.current ? Math.max(0, secs * pps - w * 0.25) : sx
+      const x = Math.floor(secs * pps - offset)
+      const show = (playing || positionSamples > 0) && x >= -6 && x <= w + 6
+      el.style.display = show ? 'block' : 'none'
+      if (show) el.style.transform = `translate3d(${x - PLAYHEAD_HALF}px, 0, 0)`
+    }
+    drawPlayheadRef.current()
+    // A new size clears the canvas, so redraw it.
+    const container = containerRef.current
+    const ro = typeof ResizeObserver !== 'undefined' && container
+      ? new ResizeObserver(() => { drawMainRef.current(); drawPlayheadRef.current() })
+      : null
+    if (ro && container) ro.observe(container)
+    const unsubscribe = useTransportStore.subscribe((st, prev) => {
+      if (st.positionSamples === prev.positionSamples && st.playing === prev.playing) return
+      // Following scrolls the whole view, so the clips move too.
+      if (followRef.current && st.positionSamples !== prev.positionSamples) drawMainRef.current()
+      drawPlayheadRef.current()
+    })
+    return () => { unsubscribe(); ro?.disconnect() }
+  }, [])
 
   function drawClip(
     ctx: CanvasRenderingContext2D,
@@ -1019,11 +1085,12 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
   const getScrollOffset = useCallback(() => {
     if (!followPlayhead) return scrollX
+    const { positionSamples } = useTransportStore.getState()
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const container = containerRef.current
     const w = container ? container.getBoundingClientRect().width : 800
     return Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
-  }, [positionSamples, sampleRate, followPlayhead, scrollX])
+  }, [sampleRate, followPlayhead, scrollX])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 2) {
@@ -1885,6 +1952,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
       const sr = sampleRate || 48000
+      const { positionSamples } = useTransportStore.getState()
       const playheadTicks = Math.round((positionSamples / sr) * (bpm / 60) * PPQ)
       if (e.altKey && e.code === 'ArrowRight') {
         e.preventDefault()
@@ -1907,7 +1975,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [positionSamples, sampleRate, bpm, jumpToNext, jumpToPrev, addMarker, setPosition])
+  }, [sampleRate, bpm, jumpToNext, jumpToPrev, addMarker, setPosition])
 
   // Drag-and-drop
   const [dropHighlight, setDropHighlight] = useState(false)
@@ -2142,6 +2210,11 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         onContextMenu={handleContextMenu}
         onWheel={handleWheel}
       />
+      <div ref={playheadRef} aria-hidden style={PLAYHEAD_STYLE}>
+        <div style={PLAYHEAD_GLOW} />
+        <div style={PLAYHEAD_LINE} />
+        <div style={PLAYHEAD_CARET} />
+      </div>
       {dragRef.current && dragRef.current.mode === 'rubber' && (() => {
         const d = dragRef.current
         const x = Math.min(d.startMouseX, d.currentMouseX)
@@ -2185,6 +2258,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           }} />
           <MenuItem label="Split at playhead (S)" onClick={async () => {
             const sr = sampleRate || 48000
+            const { positionSamples } = useTransportStore.getState()
             const atTicks = Math.round((positionSamples / sr) * (bpm / 60) * 960)
             try { await splitClip(contextMenu.trackId, contextMenu.clipId, atTicks) } catch {}
             setContextMenu(null)

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { noteBackendEvent } from '../services/frameStats'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useMetronomeStore } from './metronomeStore'
@@ -615,6 +616,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
       loopStart: number
       loopEnd: number
     }>('daw:transport', (event) => {
+      noteBackendEvent()
       set({
         positionSamples: event.payload.position,
         playing: event.payload.playing,

@@ -115,6 +115,13 @@ function mockDirectory(path: string) {
   return []
 }
 
+/** Listeners the app registered, so the perf harness can play the part of
+ *  the backend: `window.__hwMockEmit('daw:transport', {...})`. */
+const mockListeners = new Map<string, Array<(e: { event: string; id: number; payload: unknown }) => void>>()
+;(window as unknown as { __hwMockEmit?: (event: string, payload: unknown) => void }).__hwMockEmit = (event, payload) => {
+  for (const h of mockListeners.get(event) ?? []) h({ event, id: 0, payload })
+}
+
 const mock: TauriInternals = {
   transformCallback: (cb) => cb,
   unregisterCallback: () => {},
@@ -608,8 +615,12 @@ const mock: TauriInternals = {
       case 'get_midi_activity':
         return { open_ports: [], ms_since_last_event: null }
       // Event plugin — let listeners register harmlessly.
-      case 'plugin:event|listen':
+      case 'plugin:event|listen': {
+        const ev = String(args?.event ?? '')
+        const handler = args?.handler as ((e: { event: string; id: number; payload: unknown }) => void) | undefined
+        if (handler) mockListeners.set(ev, [...(mockListeners.get(ev) ?? []), handler])
         return 0
+      }
       case 'plugin:event|unlisten':
         return null
       default:

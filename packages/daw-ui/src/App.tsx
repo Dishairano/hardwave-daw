@@ -59,6 +59,7 @@ import {
   useAutosavePrefsStore,
 } from './stores/autosavePrefsStore'
 import { useGeneralPrefsStore } from './stores/generalPrefsStore'
+import { FpsMeter } from './components/FpsMeter'
 import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappingsPanel'
 import { MacroPanel } from './components/MacroPanel'
 import { ManualWindow } from './components/ManualWindow'
@@ -159,9 +160,11 @@ function shortenRecentPath(p: string): string {
 }
 
 export function App() {
-  const { startListening } = useTransportStore()
-  const { fetchTracks } = useTrackStore()
-  const { newProject, saveProject, loadProject } = useProjectStore()
+  const startListening = useTransportStore(s => s.startListening)
+  const fetchTracks = useTrackStore(s => s.fetchTracks)
+  const newProject = useProjectStore(s => s.newProject)
+  const saveProject = useProjectStore(s => s.saveProject)
+  const loadProject = useProjectStore(s => s.loadProject)
   const recentProjects = useProjectStore(s => s.recentProjects)
   const uiScaleMode = useUiPreferencesStore(s => s.mode)
   const setUiScaleMode = useUiPreferencesStore(s => s.setUiScaleMode)
@@ -181,6 +184,7 @@ export function App() {
   // adds `.hw-high-vis` for the a11y contrast layer.
   const animationsEnabled = useGeneralPrefsStore((s) => s.animationsEnabled)
   const highVisibility = useGeneralPrefsStore((s) => s.highVisibility)
+  const showFpsMeter = useGeneralPrefsStore((s) => s.showFpsMeter)
   useEffect(() => {
     document.documentElement.classList.toggle('hw-no-animations', !animationsEnabled)
     document.documentElement.classList.toggle('hw-high-vis', highVisibility)
@@ -1891,6 +1895,7 @@ export function App() {
         // own that the settings window knew nothing about.
         case 'toggleShortcutsPanel':  focusSettingsTab('shortcuts'); setShowAudioSettings(true); return
         case 'toggleTouchController': toggleTouchController(); return
+        case 'toggleFpsMeter':        useGeneralPrefsStore.getState().toggleFpsMeter(); return
         case 'toggleTypingKeyboard': {
           useTypingKeyboardStore.getState().toggle()
           return
@@ -2226,6 +2231,11 @@ export function App() {
           { label: 'Video…', action: () => setShowVideo(true) },
           { label: 'Work together…', action: () => setShowCollab(true) },
           { label: 'Performance test…', action: () => setShowPerformanceTest(true) },
+          {
+            label: `${showFpsMeter ? '✓ ' : '   '}Show FPS meter`,
+            shortcut: 'Ctrl+Shift+F',
+            action: () => useGeneralPrefsStore.getState().toggleFpsMeter(),
+          },
           { label: 'Oscilloscope…', action: () => setShowOscilloscope(true) },
           { label: 'Spectrum analyzer…', action: () => setShowSpectrum(true) },
           { separator: true, label: '' },
@@ -2334,7 +2344,7 @@ export function App() {
     ]
   }, [
     recentProjects, showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer, pdcEnabled,
-    uiScaleMode, setUiScaleMode,
+    uiScaleMode, setUiScaleMode, showFpsMeter,
     handleNewProject, handleOpenProject, handleSaveProject, handleSaveProjectAs, handleSaveAsTemplate,
     handleExportAudio, handleOpenRecent, handleAddAutomationTrack, cutSelection, pasteAtPlayhead, duplicateSelection,
   ])
@@ -2538,6 +2548,7 @@ export function App() {
       <NotificationHost />
       <OpeningOverlay />
       <PluginPanelHost />
+      <FpsMeter />
       <MetronomeScheduler />
 
       {/* Update modal — same pattern as Hardwave Suite */}

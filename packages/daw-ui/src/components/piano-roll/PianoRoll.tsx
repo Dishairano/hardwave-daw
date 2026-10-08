@@ -1819,23 +1819,28 @@ export function PianoRoll() {
     setScrollY(Math.max(0, (TOTAL_NOTES - 1 - centerPitch) * newNh - h / 2))
   }, [notes, selectedNotes])
 
-  const transportPosition = useTransportStore(s => s.positionSamples)
-  const transportBpm = useTransportStore(s => s.bpm)
-  const transportSr = useTransportStore(s => s.sampleRate)
-
+  // Follow the playhead a page at a time. Read from the store as it moves
+  // rather than subscribed to: the roll re-rendered 30 times a second
+  // while playing, whether it was following or not.
   useEffect(() => {
     if (!followPlayhead) return
-    const sr = transportSr || 48000
-    const samplesPerTick = (sr * 60) / (transportBpm * PPQ)
-    const playheadTick = transportPosition / samplesPerTick
-    const container = containerRef.current
-    if (!container) return
-    const w = container.getBoundingClientRect().width - KEYBOARD_WIDTH
-    const x = playheadTick * pixelsPerTick - scrollX
-    if (x < 40 || x > w - 40) {
-      setScrollX(Math.max(0, playheadTick * pixelsPerTick - w / 3))
+    const follow = (st: { positionSamples: number; bpm: number; sampleRate: number }) => {
+      const sr = st.sampleRate || 48000
+      const samplesPerTick = (sr * 60) / (st.bpm * PPQ)
+      const playheadTick = st.positionSamples / samplesPerTick
+      const container = containerRef.current
+      if (!container) return
+      const w = container.clientWidth - KEYBOARD_WIDTH
+      const x = playheadTick * pixelsPerTick - scrollX
+      if (x < 40 || x > w - 40) {
+        setScrollX(Math.max(0, playheadTick * pixelsPerTick - w / 3))
+      }
     }
-  }, [followPlayhead, pixelsPerTick, scrollX, transportPosition, transportBpm, transportSr])
+    follow(useTransportStore.getState())
+    return useTransportStore.subscribe((st, prev) => {
+      if (st.positionSamples !== prev.positionSamples) follow(st)
+    })
+  }, [followPlayhead, pixelsPerTick, scrollX])
 
   const emptyHint = !activeTrackId || !activeClipId
     ? 'Select a MIDI track or double-click a MIDI clip to edit notes.'

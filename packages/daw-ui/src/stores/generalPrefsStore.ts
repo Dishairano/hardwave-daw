@@ -35,12 +35,15 @@ interface GeneralPrefsState {
    *  timecode. Bars for music, the other two for picture and sound design,
    *  which had no way to read the timeline at all. */
   rulerUnits: 'bars' | 'time' | 'timecode'
+  /** The FPS meter overlay (Tools > Show FPS meter, Ctrl+Shift+F). */
+  showFpsMeter: boolean
 
   setNoteNaming: (n: NoteNamingConvention) => void
   setAnimationsEnabled: (v: boolean) => void
   setHighVisibility: (v: boolean) => void
   setFollowPlayhead: (v: boolean) => void
   setRulerUnits: (v: 'bars' | 'time' | 'timecode') => void
+  toggleFpsMeter: () => void
 }
 
 export const useGeneralPrefsStore = create<GeneralPrefsState>()(
@@ -51,11 +54,13 @@ export const useGeneralPrefsStore = create<GeneralPrefsState>()(
       highVisibility: false,
       followPlayhead: false,
       rulerUnits: 'bars',
+      showFpsMeter: false,
       setNoteNaming: (noteNaming) => set({ noteNaming }),
       setAnimationsEnabled: (animationsEnabled) => set({ animationsEnabled }),
       setHighVisibility: (highVisibility) => set({ highVisibility }),
       setFollowPlayhead: (followPlayhead) => set({ followPlayhead }),
       setRulerUnits: (rulerUnits) => set({ rulerUnits }),
+      toggleFpsMeter: () => set((s) => ({ showFpsMeter: !s.showFpsMeter })),
     }),
     { name: 'hw-general-prefs' },
   ),

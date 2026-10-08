@@ -12,7 +12,8 @@ export function Inspector() {
     tracks, selectedTrackId, selectedClipId, setVolume, setPan, removeTrack,
     setClipGain, setClipFades, toggleClipReverse, setClipPitch, setClipStretch,
   } = useTrackStore()
-  const { clipColorOverrides, setClipColor } = useTransportStore()
+  const clipColorOverrides = useTransportStore(s => s.clipColorOverrides)
+  const setClipColor = useTransportStore(s => s.setClipColor)
   const track = tracks.find(t => t.id === selectedTrackId)
   const clipOwner = selectedClipId
     ? tracks.find(t => t.clips.some(c => c.id === selectedClipId)) || null

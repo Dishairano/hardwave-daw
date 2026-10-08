@@ -18,7 +18,7 @@ export type ActionId =
   | 'panicStop' | 'toggleMetronome'
   | 'togglePlaylist' | 'toggleChannelRack' | 'togglePianoRoll'
   | 'toggleBrowser' | 'toggleMixer' | 'toggleShortcutsPanel'
-  | 'toggleTouchController' | 'toggleTypingKeyboard'
+  | 'toggleTouchController' | 'toggleTypingKeyboard' | 'toggleFpsMeter'
   | 'toggleMidiSettings' | 'toggleSongInfo' | 'closeAllWindows'
   | 'toggleMultilink' | 'toggleBlendRecord' | 'toggleWaitForInput'
   | 'cycleWindows' | 'toggleMaxMinPlaylist'
@@ -85,6 +85,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'toggleShortcutsPanel', label: 'Toggle this shortcuts panel', category: 'Panels' },
   { id: 'toggleTouchController', label: 'Toggle Touch Controller',   category: 'Panels' },
   { id: 'toggleTypingKeyboard', label: 'Toggle typing keyboard',     category: 'Panels' },
+  { id: 'toggleFpsMeter',       label: 'Show FPS meter',             category: 'Panels' },
   { id: 'toggleMidiSettings',   label: 'Toggle MIDI settings',       category: 'Panels' },
   { id: 'toggleMultilink',      label: 'Multilink (map a controller in one pass)', category: 'Recording' },
   { id: 'toggleBlendRecord',    label: 'Blend record',               category: 'Recording' },
@@ -133,6 +134,7 @@ export const DEFAULTS: Record<ActionId, Binding> = {
   toggleShortcutsPanel: { code: 'Slash', shift: true },
   toggleTouchController: { code: 'F7', alt: true },
   toggleTypingKeyboard:  { code: 'KeyT', ctrl: true },
+  toggleFpsMeter:        { code: 'KeyF', ctrl: true, shift: true },
   toggleMidiSettings:    { code: 'F10' },
   // The three recording toggles carry the FL letters their tooltips have
   // always named: J for multilink, B for blend, I for wait-for-input.

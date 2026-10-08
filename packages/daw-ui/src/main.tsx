@@ -1,3 +1,6 @@
+// First: the FPS meter counts renders through a hook react-dom looks for
+// as it loads.
+import './services/commitCounter'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 

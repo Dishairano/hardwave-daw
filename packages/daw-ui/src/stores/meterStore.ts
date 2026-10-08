@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { listen } from '@tauri-apps/api/event'
+import { noteBackendEvent } from '../services/frameStats'
 
 interface MeterSnapshot {
   peak_db: number
@@ -42,11 +43,13 @@ export const useMeterStore = create<MeterState>((set) => ({
 
   startListening: () => {
     listen<MeterSnapshot>('daw:meters', (event) => {
+      noteBackendEvent()
       set({ master: event.payload })
     })
     listen<Array<{ id: string; peakL: number; peakR: number; rms: number; autoVolumeDb?: number | null; autoPan?: number | null }>>(
       'daw:trackMeters',
       (event) => {
+        noteBackendEvent()
         // Preserve object identity for unchanged tracks so the
         // per-track selector hooks (Object.is compare) skip re-renders.
         // With transport stopped every meter idles at the floor — this

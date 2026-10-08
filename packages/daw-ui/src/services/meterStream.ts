@@ -32,6 +32,10 @@ interface MeterRegistration {
   minDb: number
   maxDb: number
   lastPaintedFill: number
+  /** The canvas's CSS size, kept by a ResizeObserver. Reading clientWidth
+   *  in the paint loop forced a layout every frame the page had changed. */
+  cssW: number
+  cssH: number
 }
 
 const META = new WeakMap<HTMLCanvasElement, MeterRegistration>()
@@ -46,6 +50,21 @@ const GRADIENT_STOPS: Array<[number, string]> = [
   [0.92, '#ff2d4f'],
   [1.0, '#ff2d4f'],
 ]
+
+let resizeObserver: ResizeObserver | null = null
+function sizes(): ResizeObserver | null {
+  if (resizeObserver || typeof ResizeObserver === 'undefined') return resizeObserver
+  resizeObserver = new ResizeObserver((entries) => {
+    for (const e of entries) {
+      const reg = META.get(e.target as HTMLCanvasElement)
+      if (!reg) continue
+      reg.cssW = e.contentRect.width
+      reg.cssH = e.contentRect.height
+      reg.lastPaintedFill = -1
+    }
+  })
+  return resizeObserver
+}
 
 function clamp(v: number, lo: number, hi: number): number {
   if (v < lo) return lo
@@ -67,8 +86,8 @@ function paintCanvas(canvas: HTMLCanvasElement, reg: MeterRegistration, fillPct:
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   const dpr = window.devicePixelRatio || 1
-  const cssW = canvas.clientWidth
-  const cssH = canvas.clientHeight
+  const cssW = reg.cssW
+  const cssH = reg.cssH
   // Resize the canvas backing store when its visible size changes.
   const wantW = Math.max(1, Math.round(cssW * dpr))
   const wantH = Math.max(1, Math.round(cssH * dpr))
@@ -117,13 +136,18 @@ export function registerMeter(
   minDb = -60,
   maxDb = 6,
 ): void {
-  META.set(canvas, { trackId, channel, minDb, maxDb, lastPaintedFill: -1 })
+  META.set(canvas, {
+    trackId, channel, minDb, maxDb, lastPaintedFill: -1,
+    cssW: canvas.clientWidth, cssH: canvas.clientHeight,
+  })
   ACTIVE.add(canvas)
+  sizes()?.observe(canvas)
   if (rafId == null) rafId = requestAnimationFrame(tick)
 }
 
 export function unregisterMeter(canvas: HTMLCanvasElement): void {
   ACTIVE.delete(canvas)
   META.delete(canvas)
+  sizes()?.unobserve(canvas)
   // The tick loop self-terminates next frame when ACTIVE is empty.
 }

@@ -111,6 +111,14 @@ function useTransportClock() {
   }
 }
 
+/** The playhead clock. Its own component: the time changes 30 times a
+ *  second while playing, and only this text has to follow it, not the
+ *  whole top bar. */
+function HwClockText() {
+  const { minSec } = useTransportClock()
+  return <>{minSec}</>
+}
+
 // ─── Top bar (fl-topbar) — Ship 1 of the Toolbar FL-parity port ────────────
 //
 // Mockup approved 2026-05-13. Layout follows
@@ -181,8 +189,6 @@ export function HwTopbar({
   const toggleTypingKbd = useTypingKeyboardStore(s => s.toggle)
   const precountBars = useMetronomeStore(s => s.precountBars)
   const setPrecountBars = useMetronomeStore(s => s.setPrecountBars)
-
-  const { minSec } = useTransportClock()
 
   const patterns = usePatternStore(s => s.patterns)
   const activeId = usePatternStore(s => s.activeId)
@@ -477,7 +483,7 @@ export function HwTopbar({
       <div className="fl-clock" title="Playhead position">
         <div className="fl-clock-stack red">
           <small>MIN : SEC</small>
-          <b>{minSec}</b>
+          <b><HwClockText /></b>
         </div>
       </div>
 
@@ -970,6 +976,17 @@ function SaveAsButton({ onClick }: { onClick: () => void }) {
 
 // ─── Second row: hint + status pills ─────────────────────────────────────────
 
+/** Whether the playhead is on a beat or a bar start, for the sync LED.
+ *  On a beat is within 5 % of a beat either side of it. */
+function syncLedState(s: { playing: boolean; positionSamples: number; sampleRate: number; bpm: number; timeSigNumerator: number }): '' | ' on-beat' | ' on-bar' {
+  if (!s.playing || s.sampleRate <= 0 || s.bpm <= 0) return ''
+  const beats = (s.positionSamples / s.sampleRate) * s.bpm / 60
+  const frac = beats - Math.floor(beats)
+  if (frac >= 0.05 && frac <= 0.95) return ''
+  const beat = Math.round(beats)
+  return beat % Math.max(1, s.timeSigNumerator) === 0 ? ' on-bar' : ' on-beat'
+}
+
 export function HwSecondRow({ projectName }: { projectName: string }) {
   // Live hover info, fed by the delegated listener in HwApp.
   const hint = useHoverInfoStore(s => s.info)
@@ -981,22 +998,11 @@ export function HwSecondRow({ projectName }: { projectName: string }) {
   // error / clock / sync), the live hint string in the middle,
   // and a SYNC LED on the right that pulses on bar / beat starts.
   const recording = useTransportStore(s => s.recording)
-  const playing = useTransportStore(s => s.playing)
   const tsNum = useTransportStore(s => s.timeSigNumerator)
   const tsDen = useTransportStore(s => s.timeSigDenominator)
-  const positionSamples = useTransportStore(s => s.positionSamples)
-  const sampleRate = useTransportStore(s => s.sampleRate)
-  const bpm = useTransportStore(s => s.bpm)
-
-  // Compute whether the playhead just crossed a beat boundary so the
-  // sync LED can blink in time. Beats-per-second = bpm/60; a beat
-  // boundary is when (positionSamples / sampleRate / beatsPerSec) is
-  // within one frame of an integer.
-  const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
-  const beats = bpm > 0 ? (seconds * bpm / 60) : 0
-  const beatFrac = beats - Math.floor(beats)
-  const onBeat = playing && (beatFrac < 0.05 || beatFrac > 0.95)
-  const onBar = playing && onBeat && Math.floor(beats) % Math.max(1, tsNum) === 0
+  // Only the LED's state, not the playhead: the row re-renders when the
+  // LED changes, a few times a beat, instead of on every position tick.
+  const led = useTransportStore(syncLedState)
 
   const defaultHint = `${projectName}  ·  Hover anything for live info`
 
@@ -1041,7 +1047,7 @@ export function HwSecondRow({ projectName }: { projectName: string }) {
         {hint || defaultHint}
       </span>
       <div className="fl-hint-sync" title="Transport sync (pulses on beat / bar starts)">
-        <span className={`led${onBar ? ' on-bar' : onBeat ? ' on-beat' : ''}`} />
+        <span className={`led${led}`} />
         <span className="label">SYNC</span>
       </div>
       <div className="fl-hint-tsig" title={`Time signature ${tsNum}/${tsDen}`}>{tsNum}/{tsDen}</div>
