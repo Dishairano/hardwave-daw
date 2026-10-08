@@ -1471,6 +1471,7 @@ mod tests {
         node.push_offline_slot(
             crate::insert_chain::LiveSlot {
                 param_ranges: Vec::new(),
+                levels: Default::default(),
                 slot_id: "s".into(),
                 plugin: Box::new(Silencer(desc)),
                 enabled: true,
@@ -1588,6 +1589,7 @@ mod tests {
         node.push_offline_slot(
             crate::insert_chain::LiveSlot {
                 param_ranges: Vec::new(),
+                levels: Default::default(),
                 slot_id: "inst".into(),
                 plugin: Box::new(ToneGen {
                     desc,

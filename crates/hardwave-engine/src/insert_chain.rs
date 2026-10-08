@@ -61,6 +61,38 @@ pub struct LiveSlot {
     /// thread). Automation and controllers move parameters 0..1; a
     /// parameter whose own range is, say, 20..20000 Hz was set to 0.5 Hz.
     pub param_ranges: Vec<(u32, f64, f64)>,
+    /// The level going into and coming out of this slot, for the IN and
+    /// OUT meters of the plug-in's window.
+    pub levels: std::sync::Arc<SlotLevels>,
+}
+
+/// Peak levels in and out of one slot since the window last read them
+/// (linear, 0 = silence). The audio thread raises them; the reader takes
+/// and clears them, so a peak between two reads is never lost.
+#[derive(Default)]
+pub struct SlotLevels {
+    pub in_l: atomic_float::AtomicF32,
+    pub in_r: atomic_float::AtomicF32,
+    pub out_l: atomic_float::AtomicF32,
+    pub out_r: atomic_float::AtomicF32,
+}
+
+impl SlotLevels {
+    fn raise(cell: &atomic_float::AtomicF32, block: &[f32]) {
+        let peak = block.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        cell.fetch_max(peak, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// [in L, in R, out L, out R] since the last call, then cleared.
+    pub fn take(&self) -> [f32; 4] {
+        use std::sync::atomic::Ordering::Relaxed;
+        [
+            self.in_l.swap(0.0, Relaxed),
+            self.in_r.swap(0.0, Relaxed),
+            self.out_l.swap(0.0, Relaxed),
+            self.out_r.swap(0.0, Relaxed),
+        ]
+    }
 }
 
 impl LiveSlot {
@@ -149,6 +181,8 @@ impl InsertChain {
             scratch.channels[0].clear();
             scratch.channels[1].clear();
             scratch.midi_out.clear();
+            SlotLevels::raise(&slot.levels.in_l, &left[..n]);
+            SlotLevels::raise(&slot.levels.in_r, &right[..n]);
             // Where the song is, so a plug-in can work in beats rather
             // than only in milliseconds.
             slot.plugin.set_transport(self.transport);
@@ -205,6 +239,8 @@ impl InsertChain {
             {
                 *r = dry * *r + wet * *s;
             }
+            SlotLevels::raise(&slot.levels.out_l, &left[..n]);
+            SlotLevels::raise(&slot.levels.out_r, &right[..n]);
         }
     }
 
@@ -886,6 +922,7 @@ mod tests {
         let plugin: Box<dyn HostedPlugin> = Box::new(GainPlugin::new(gain, counter.clone()));
         let slot = LiveSlot {
             param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
+            levels: Default::default(),
             slot_id: id.into(),
             plugin,
             enabled,
@@ -992,6 +1029,7 @@ mod tests {
             .push_slot(
                 LiveSlot {
                     param_ranges: Vec::new(),
+                    levels: Default::default(),
                     slot_id: "sc".into(),
                     plugin: Box::new(ChannelSpyPlugin::new(active_seen.clone())),
                     enabled: true,
@@ -1008,6 +1046,7 @@ mod tests {
             .push_slot(
                 LiveSlot {
                     param_ranges: Vec::new(),
+                    levels: Default::default(),
                     slot_id: "plain".into(),
                     plugin: Box::new(ChannelSpyPlugin::new(plain_seen.clone())),
                     enabled: true,
@@ -1056,6 +1095,7 @@ mod tests {
             .push_slot(
                 LiveSlot {
                     param_ranges: Vec::new(),
+                    levels: Default::default(),
                     slot_id: "sink".into(),
                     plugin: Box::new(MidiSinkPlugin::new(seen.clone())),
                     enabled: true,
@@ -1110,6 +1150,7 @@ mod tests {
             .push_slot(
                 LiveSlot {
                     param_ranges: Vec::new(),
+                    levels: Default::default(),
                     slot_id: "sink".into(),
                     plugin: Box::new(MidiSinkPlugin::new(seen.clone())),
                     enabled: false,
@@ -1397,5 +1438,24 @@ mod tests {
         // The plain call still takes the value as given.
         chain.set_parameter("g", 0, 1.5);
         assert!((chain.slots[0].plugin.get_parameter_value(0) - 1.5).abs() < 1e-9);
+    }
+
+    /// The plug-in window's IN and OUT meters read what went into and came
+    /// out of the slot. A gain of 2 on a 0.5 signal: in 0.5, out 1.0.
+    #[test]
+    fn a_slot_meters_its_input_and_output() {
+        let mut chain = InsertChain::new();
+        let (slot, _) = make_gain_slot("g", 2.0, true);
+        let levels = std::sync::Arc::clone(&slot.levels);
+        chain.slots.push(slot);
+        let mut left = vec![0.5_f32; 256];
+        let mut right = vec![0.25_f32; 256];
+        let mut scratch = Scratch::default();
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[], None);
+        let [in_l, in_r, out_l, out_r] = levels.take();
+        assert!((in_l - 0.5).abs() < 1e-6 && (in_r - 0.25).abs() < 1e-6);
+        assert!((out_l - 1.0).abs() < 1e-6 && (out_r - 0.5).abs() < 1e-6);
+        // Read once, then clear until the next block.
+        assert_eq!(levels.take(), [0.0; 4]);
     }
 }

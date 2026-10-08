@@ -207,6 +207,7 @@ permissions = [
   "allow-set-send-enabled",
   "allow-create-return-with-send",
   "allow-scan-plugins",
+  "allow-get-slot-levels",
   "allow-retry-blocked-plugin",
   "allow-get-plugins",
   "allow-get-last-scan-diff",

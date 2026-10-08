@@ -300,10 +300,17 @@ pub fn rescan_and_restore_missing_plugins(
                     (track_id.clone(), slot_id.clone()),
                     gain_reduction_db.clone(),
                 );
+                let slot_levels =
+                    std::sync::Arc::<hardwave_engine::insert_chain::SlotLevels>::default();
+                state
+                    .slot_levels
+                    .lock()
+                    .insert((track_id.clone(), slot_id.clone()), slot_levels.clone());
                 let cmd = InsertCommand::Add {
                     track_id,
                     slot: LiveSlot {
                         param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
+                        levels: slot_levels.clone(),
                         slot_id,
                         plugin,
                         enabled,
@@ -823,10 +830,16 @@ pub(crate) fn add_plugin_without_undo_step(
         (track_id.clone(), slot_id.clone()),
         gain_reduction_db.clone(),
     );
+    let slot_levels = std::sync::Arc::<hardwave_engine::insert_chain::SlotLevels>::default();
+    state
+        .slot_levels
+        .lock()
+        .insert((track_id.clone(), slot_id.clone()), slot_levels.clone());
     let cmd = InsertCommand::Add {
         track_id: track_id.clone(),
         slot: LiveSlot {
             param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
+            levels: slot_levels.clone(),
             slot_id: slot_id.clone(),
             plugin,
             enabled: true,
@@ -1285,10 +1298,17 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
                     (track_id.clone(), slot_id.clone()),
                     gain_reduction_db.clone(),
                 );
+                let slot_levels =
+                    std::sync::Arc::<hardwave_engine::insert_chain::SlotLevels>::default();
+                state
+                    .slot_levels
+                    .lock()
+                    .insert((track_id.clone(), slot_id.clone()), slot_levels.clone());
                 let cmd = InsertCommand::Add {
                     track_id,
                     slot: LiveSlot {
                         param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
+                        levels: slot_levels.clone(),
                         slot_id,
                         plugin,
                         enabled,
@@ -1600,4 +1620,16 @@ pub fn set_fx_chain_bypassed(
         tell_windows_track_changed(&app, &track_id);
     }
     result
+}
+
+/// The peak levels in and out of a slot since the last call: [in L, in R,
+/// out L, out R], linear. The plug-in window's IN and OUT meters read it.
+#[tauri::command]
+pub fn get_slot_levels(state: State<AppState>, track_id: String, slot_id: String) -> [f32; 4] {
+    state
+        .slot_levels
+        .lock()
+        .get(&(track_id, slot_id))
+        .map(|levels| levels.take())
+        .unwrap_or([0.0; 4])
 }

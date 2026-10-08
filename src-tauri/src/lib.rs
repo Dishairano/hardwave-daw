@@ -95,6 +95,16 @@ pub struct AppState {
         Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
     /// Where each insert publishes its gain reduction, keyed by track and
     /// slot. Compressors and limiters worked this out every sample and
+    /// Peak levels in and out of each slot, for the plug-in window's meters.
+    #[allow(clippy::type_complexity)]
+    pub slot_levels: Arc<
+        Mutex<
+            std::collections::HashMap<
+                (String, String),
+                Arc<hardwave_engine::insert_chain::SlotLevels>,
+            >,
+        >,
+    >,
     /// threw it away; the mixer can show it now.
     #[allow(clippy::type_complexity)]
     pub slot_gain_reduction: Arc<
@@ -265,6 +275,7 @@ pub fn run() {
         })),
         slot_gui_edit_logs: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_gain_reduction: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        slot_levels: Arc::new(Mutex::new(std::collections::HashMap::new())),
         midi_mappings: Arc::clone(&midi_mappings),
         automation_write: Arc::new(commands::automation_write::AutomationWriteSessions::new()),
         midi_clock: Arc::clone(&midi_clock),
@@ -492,6 +503,7 @@ pub fn run() {
             commands::sends::create_return_with_send,
             // Plugins
             commands::plugins::scan_plugins,
+            commands::plugins::get_slot_levels,
             commands::plugins::retry_blocked_plugin,
             commands::plugins::get_plugins,
             commands::plugins::get_last_scan_diff,

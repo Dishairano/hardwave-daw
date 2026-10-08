@@ -2400,6 +2400,7 @@ impl EngineCallback {
             if let Some(node) = self.graph.node_mut(node_id) {
                 let slot = crate::insert_chain::LiveSlot {
                     param_ranges: crate::insert_chain::LiveSlot::ranges_of(plugin.as_ref()),
+                    levels: Default::default(),
                     slot_id,
                     plugin,
                     enabled,
