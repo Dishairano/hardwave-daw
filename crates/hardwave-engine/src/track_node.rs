@@ -49,7 +49,6 @@ impl Drop for CpuTimer {
 
 /// Post-fader meter state shared between the audio thread and the UI thread.
 /// Using atomics so the audio thread never allocates or locks.
-#[derive(Default)]
 pub struct TrackMeterState {
     /// Post-fader peak in dB (last processed block, no hold/decay — UI smooths).
     pub peak_db_l: AtomicF32,
@@ -77,6 +76,27 @@ pub struct TrackMeterState {
     pub auto_volume: AtomicF32,
     pub auto_pan: AtomicF32,
     pub auto_on: std::sync::atomic::AtomicU8,
+}
+
+/// Meters start at silence. They started at 0 dB, so a song just opened
+/// showed every strip full until its track first played a block.
+impl Default for TrackMeterState {
+    fn default() -> Self {
+        Self {
+            peak_db_l: AtomicF32::new(-120.0),
+            peak_db_r: AtomicF32::new(-120.0),
+            rms_db: AtomicF32::new(-120.0),
+            pre_fader_peak_db: AtomicF32::new(-120.0),
+            cpu_ns: Default::default(),
+            mix_volume: Default::default(),
+            mix_pan: Default::default(),
+            mix_width: Default::default(),
+            mix_set: Default::default(),
+            auto_volume: Default::default(),
+            auto_pan: Default::default(),
+            auto_on: Default::default(),
+        }
+    }
 }
 
 impl TrackMeterState {

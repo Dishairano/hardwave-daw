@@ -2007,6 +2007,10 @@ struct EngineCallback {
     /// When false AND the transport isn't playing, we can short-circuit the
     /// graph and emit silence to save CPU.
     has_monitored_input: bool,
+    /// The meters were set to silence after the transport stopped. The
+    /// graph does not run while stopped, so without this every meter kept
+    /// showing the last block it played.
+    meters_parked: bool,
     /// Shared with `DawEngine.capture`. Forwarded into the InputNode each
     /// rebuild so the recording tap survives graph rebuilds.
     capture: Arc<CaptureTap>,
@@ -2149,6 +2153,36 @@ fn smooth_load(previous: u32, reading: u32) -> u32 {
 }
 
 impl EngineCallback {
+    /// Show silence on every meter once the transport stops. Tries again
+    /// on the next block when the UI holds the meter map.
+    fn park_meters(&mut self) {
+        use std::sync::atomic::Ordering;
+        if self.meters_parked {
+            return;
+        }
+        let Some(meters) = self.track_meters.try_lock() else {
+            return;
+        };
+        for m in meters.values() {
+            m.peak_db_l.store(-120.0, Ordering::Relaxed);
+            m.peak_db_r.store(-120.0, Ordering::Relaxed);
+            m.rms_db.store(-120.0, Ordering::Relaxed);
+            m.pre_fader_peak_db.store(-120.0, Ordering::Relaxed);
+        }
+        drop(meters);
+        let silent = MeterSnapshot {
+            peak_db: -120.0,
+            peak_hold_db: self.meter.peak_hold_db(),
+            true_peak_db: -120.0,
+            rms_db: -120.0,
+            lufs_m: None,
+            lufs_s: None,
+            lufs_i: self.meter.lufs_i(),
+            clipped: self.meter.clipped(),
+        };
+        self.meters_parked = self.meter_producer.push(silent).is_ok();
+    }
+
     /// Publish how much of this block's budget the engine used.
     ///
     /// The budget is the wall-clock time the block represents: at 48 kHz a
@@ -2245,6 +2279,7 @@ impl EngineCallback {
             needs_rebuild: true,
             master_id: None,
             has_monitored_input: false,
+            meters_parked: false,
             capture,
             graph_latency_samples,
             insert_command_rx,
@@ -3581,8 +3616,10 @@ impl AudioCallback for EngineCallback {
         // the graph can only produce silence — skip processing to save CPU.
         if !playing && !self.has_monitored_input {
             output.fill(0.0);
+            self.park_meters();
             return;
         }
+        self.meters_parked = false;
 
         // Tempo-map following: when the project has multi-entry tempo automation,
         // look up the current BPM for the playhead and push it into the transport
@@ -4540,6 +4577,22 @@ mod rt_safety_tests {
         // Lock released — next block completes the rebuild.
         cb.process(&mut out, 256, 2);
         assert!(!cb.needs_rebuild, "rebuild should run once the lock frees");
+    }
+
+    #[test]
+    fn meters_fall_to_silence_when_the_transport_stops() {
+        use std::sync::atomic::Ordering;
+        let project_arc = Arc::new(Mutex::new(Project::default()));
+        let (mut cb, _cmd_tx) = make_callback(Arc::clone(&project_arc));
+        let m = Arc::new(crate::track_node::TrackMeterState::default());
+        m.peak_db_l.store(-3.0, Ordering::Relaxed);
+        m.peak_db_r.store(-1.0, Ordering::Relaxed);
+        cb.track_meters.lock().insert("t".into(), Arc::clone(&m));
+        assert!(!cb.transport.is_playing());
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        assert_eq!(m.peak_db_l.load(Ordering::Relaxed), -120.0);
+        assert_eq!(m.peak_db_r.load(Ordering::Relaxed), -120.0);
     }
 
     #[test]
