@@ -64,6 +64,7 @@ permissions = [
   "allow-set-kick-drive",
   "allow-add-automation-track",
   "allow-remove-track",
+  "allow-duplicate-track",
   "allow-set-track-volume",
   "allow-set-track-pan",
   "allow-toggle-mute",

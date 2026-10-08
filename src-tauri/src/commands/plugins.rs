@@ -1252,8 +1252,17 @@ pub fn load_sampler(
     Ok(())
 }
 
-#[allow(clippy::type_complexity)]
 pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
+    hydrate_chains(state, None)
+}
+
+/// Load the plug-ins of one track into the engine (a cloned channel).
+pub fn hydrate_track_chain(state: &AppState, track_id: &str) -> Result<(), String> {
+    hydrate_chains(state, Some(track_id))
+}
+
+#[allow(clippy::type_complexity)]
+fn hydrate_chains(state: &AppState, only_track: Option<&str>) -> Result<(), String> {
     // Snapshot what we need under the locks, then drop them before we
     // start instantiating plug-ins (slow VST3 / CLAP loads). We also
     // collect any saved plug-in state chunks here so we can restore
@@ -1273,7 +1282,11 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
         let project = engine.project.lock();
         let scanner = engine.plugin_scanner.lock();
         let mut acc = Vec::new();
-        for track in &project.tracks {
+        for track in project
+            .tracks
+            .iter()
+            .filter(|t| only_track.is_none_or(|id| t.id == id))
+        {
             for slot in &track.inserts {
                 if let Some(descriptor) = scanner.find(&slot.plugin_id) {
                     let saved_state = project

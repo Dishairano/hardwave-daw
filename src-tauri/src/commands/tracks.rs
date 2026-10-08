@@ -1232,3 +1232,91 @@ pub fn set_midi_routes(
     state.engine.lock().rebuild_graph();
     Ok(())
 }
+
+/// Clone a channel, as FL's "Clone selected": its settings, clips,
+/// plug-ins with their current state, sends and automation, as a new track
+/// right after it. Plug-in slots, clips, lanes and automation clips get
+/// new ids, and automation that drove a plug-in of the original drives the
+/// same plug-in of the clone. Returns the clone's id.
+#[tauri::command]
+pub fn duplicate_track(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    track_id: String,
+) -> Result<String, String> {
+    use hardwave_project::automation::AutomationTarget;
+    use hardwave_project::clip::ClipContent;
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let fresh = || uuid::Uuid::new_v4().to_string();
+    // The plug-ins' state as they play now, not as last saved.
+    let live = state
+        .engine
+        .lock()
+        .snapshot_plugin_states(std::time::Duration::from_millis(300))
+        .unwrap_or_default();
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let index = project
+            .tracks
+            .iter()
+            .position(|t| t.id == track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let mut copy = project.tracks[index].clone();
+        copy.id = new_id.clone();
+        copy.name = format!("{} #2", copy.name);
+        copy.armed = false;
+        copy.frozen = false;
+        let mut slot_ids = std::collections::HashMap::new();
+        let mut states = Vec::new();
+        for slot in copy.inserts.iter_mut() {
+            let old = std::mem::replace(&mut slot.id, fresh());
+            let bytes = live
+                .get(&(track_id.clone(), old.clone()))
+                .cloned()
+                .or_else(|| project.plugin_state(&old).map(|e| e.chunk.clone()))
+                .or_else(|| slot.state.clone());
+            if let Some(bytes) = bytes {
+                slot.state = Some(bytes.clone());
+                states.push((slot.id.clone(), bytes));
+            }
+            slot_ids.insert(old, slot.id.clone());
+        }
+        let remap = |target: &mut AutomationTarget| {
+            if let AutomationTarget::PluginParam { slot_id, .. } = target {
+                if let Some(new) = slot_ids.get(slot_id) {
+                    *slot_id = new.clone();
+                }
+            }
+        };
+        for clip in copy.clips.iter_mut() {
+            clip.track_id = new_id.clone();
+            match &mut clip.content {
+                ClipContent::Audio(a) => a.id = fresh(),
+                ClipContent::Midi(m) => m.id = fresh(),
+            }
+        }
+        for lane in copy.automation_lanes.iter_mut() {
+            lane.id = fresh();
+            remap(&mut lane.target);
+        }
+        for clip in copy.automation_clips.iter_mut() {
+            clip.id = fresh();
+            remap(&mut clip.target);
+            remap(&mut clip.lane.target);
+        }
+        for (slot_id, bytes) in states {
+            project.set_plugin_state(slot_id, "unknown", bytes);
+        }
+        project.tracks.insert(index + 1, copy);
+    }
+    {
+        let engine = state.engine.lock();
+        engine.sync_track_meters();
+        engine.rebuild_graph();
+    }
+    crate::commands::plugins::hydrate_track_chain(&state, &new_id)?;
+    crate::commands::plugins::tell_windows_track_changed(&app, &new_id);
+    Ok(new_id)
+}

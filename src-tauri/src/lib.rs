@@ -358,6 +358,7 @@ pub fn run() {
             commands::tracks::set_kick_drive,
             commands::tracks::add_automation_track,
             commands::tracks::remove_track,
+            commands::tracks::duplicate_track,
             commands::tracks::set_track_volume,
             commands::tracks::set_track_pan,
             commands::tracks::toggle_mute,
