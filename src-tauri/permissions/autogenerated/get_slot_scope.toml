@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-slot-scope"
+description = "Enables the get_slot_scope command without any pre-configured scope."
+commands.allow = ["get_slot_scope"]
+
+[[permission]]
+identifier = "deny-get-slot-scope"
+description = "Denies the get_slot_scope command without any pre-configured scope."
+commands.deny = ["get_slot_scope"]

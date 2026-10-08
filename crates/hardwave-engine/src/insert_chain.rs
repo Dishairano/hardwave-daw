@@ -69,15 +69,74 @@ pub struct LiveSlot {
 /// Peak levels in and out of one slot since the window last read them
 /// (linear, 0 = silence). The audio thread raises them; the reader takes
 /// and clears them, so a peak between two reads is never lost.
-#[derive(Default)]
+///
+/// While a window shows the slot's stereo field it also keeps the last
+/// `SCOPE_LEN` output frames (every `SCOPE_STEP`th), for a goniometer.
 pub struct SlotLevels {
     pub in_l: atomic_float::AtomicF32,
     pub in_r: atomic_float::AtomicF32,
     pub out_l: atomic_float::AtomicF32,
     pub out_r: atomic_float::AtomicF32,
+    /// Blocks left to record the scope for; a reader tops it up, so the
+    /// scope stops by itself once no window asks for it.
+    scope_blocks: std::sync::atomic::AtomicU32,
+    /// (left, right) as two f32 bit patterns in one word.
+    scope: Box<[std::sync::atomic::AtomicU64]>,
+    scope_pos: std::sync::atomic::AtomicUsize,
+}
+
+pub const SCOPE_LEN: usize = 256;
+const SCOPE_STEP: usize = 4;
+
+impl Default for SlotLevels {
+    fn default() -> Self {
+        Self {
+            in_l: Default::default(),
+            in_r: Default::default(),
+            out_l: Default::default(),
+            out_r: Default::default(),
+            scope_blocks: Default::default(),
+            scope: (0..SCOPE_LEN)
+                .map(|_| std::sync::atomic::AtomicU64::new(0))
+                .collect(),
+            scope_pos: Default::default(),
+        }
+    }
 }
 
 impl SlotLevels {
+    /// Record output frames into the scope if a window asked for it.
+    fn record_scope(&self, left: &[f32], right: &[f32]) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let left_blocks = self.scope_blocks.load(Relaxed);
+        if left_blocks == 0 {
+            return;
+        }
+        self.scope_blocks.store(left_blocks - 1, Relaxed);
+        let mut pos = self.scope_pos.load(Relaxed);
+        for (l, r) in left.iter().zip(right.iter()).step_by(SCOPE_STEP) {
+            let word = (u64::from(l.to_bits()) << 32) | u64::from(r.to_bits());
+            self.scope[pos % SCOPE_LEN].store(word, Relaxed);
+            pos = pos.wrapping_add(1);
+        }
+        self.scope_pos.store(pos, Relaxed);
+    }
+
+    /// The last `SCOPE_LEN` output frames, oldest first, as [l, r, l, r, ..],
+    /// and keep recording for about the next two seconds.
+    pub fn scope(&self) -> Vec<f32> {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.scope_blocks.store(400, Relaxed);
+        let pos = self.scope_pos.load(Relaxed);
+        let mut out = Vec::with_capacity(SCOPE_LEN * 2);
+        for k in 0..SCOPE_LEN {
+            let word = self.scope[(pos + k) % SCOPE_LEN].load(Relaxed);
+            out.push(f32::from_bits((word >> 32) as u32));
+            out.push(f32::from_bits(word as u32));
+        }
+        out
+    }
+
     fn raise(cell: &atomic_float::AtomicF32, block: &[f32]) {
         let peak = block.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
         cell.fetch_max(peak, std::sync::atomic::Ordering::Relaxed);
@@ -241,6 +300,7 @@ impl InsertChain {
             }
             SlotLevels::raise(&slot.levels.out_l, &left[..n]);
             SlotLevels::raise(&slot.levels.out_r, &right[..n]);
+            slot.levels.record_scope(&left[..n], &right[..n]);
         }
     }
 
@@ -1457,5 +1517,29 @@ mod tests {
         assert!((out_l - 1.0).abs() < 1e-6 && (out_r - 0.5).abs() < 1e-6);
         // Read once, then clear until the next block.
         assert_eq!(levels.take(), [0.0; 4]);
+    }
+
+    /// The scope only records while a window reads it, and gives back the
+    /// frames that came out of the slot.
+    #[test]
+    fn the_scope_records_only_while_read() {
+        let mut chain = InsertChain::new();
+        let (slot, _) = make_gain_slot("g", 1.0, true);
+        let levels = std::sync::Arc::clone(&slot.levels);
+        chain.slots.push(slot);
+        let mut scratch = Scratch::default();
+        let mut left = vec![0.5_f32; 256];
+        let mut right = vec![-0.25_f32; 256];
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[], None);
+        assert!(
+            levels.scope().iter().all(|v| *v == 0.0),
+            "nothing before a read"
+        );
+        let mut left = vec![0.5_f32; 4096];
+        let mut right = vec![-0.25_f32; 4096];
+        chain.process(&mut left, &mut right, 4096, &mut scratch, &[], None);
+        let frames = levels.scope();
+        assert_eq!(frames.len(), SCOPE_LEN * 2);
+        assert_eq!((frames[0], frames[1]), (0.5, -0.25));
     }
 }

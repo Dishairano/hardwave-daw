@@ -1633,3 +1633,16 @@ pub fn get_slot_levels(state: State<AppState>, track_id: String, slot_id: String
         .map(|levels| levels.take())
         .unwrap_or([0.0; 4])
 }
+
+/// The last output frames of a slot as [l, r, l, r, ..], for the stereo
+/// field in a plug-in's window. Reading it keeps the slot recording for a
+/// couple of seconds; nothing is recorded while no window asks.
+#[tauri::command]
+pub fn get_slot_scope(state: State<AppState>, track_id: String, slot_id: String) -> Vec<f32> {
+    state
+        .slot_levels
+        .lock()
+        .get(&(track_id, slot_id))
+        .map(|levels| levels.scope())
+        .unwrap_or_default()
+}

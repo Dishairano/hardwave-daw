@@ -504,6 +504,7 @@ pub fn run() {
             // Plugins
             commands::plugins::scan_plugins,
             commands::plugins::get_slot_levels,
+            commands::plugins::get_slot_scope,
             commands::plugins::retry_blocked_plugin,
             commands::plugins::get_plugins,
             commands::plugins::get_last_scan_diff,
