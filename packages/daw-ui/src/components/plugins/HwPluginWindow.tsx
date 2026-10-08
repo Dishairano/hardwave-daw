@@ -447,14 +447,20 @@ function RowView({ ctx, r }: { ctx: Ctx; r: Row }) {
 
 function KnobFor({ ctx, name, big }: { ctx: Ctx; name: string; big?: boolean }) {
   const q = ctx.view.par(name)
+  // Callbacks that stay the same while values change, so moving one knob
+  // redraws that knob and not every other one in the window.
+  const viewRef = useRef(ctx.view)
+  viewRef.current = ctx.view
+  const { setParam, openMenu } = ctx
+  const onSet = useCallback((v: number) => { if (q) setParam(q, v) }, [setParam, q])
+  const denorm = useCallback((t: number) => (q ? viewRef.current.denorm(q, t) : t), [q])
+  const onMenu = useCallback((e: React.MouseEvent) => { if (q) openMenu(e, q) }, [openMenu, q])
   if (!q) return null
-  // A parameter that picks one of a few reads better as pills.
   return (
     <Knob
       q={q} big={big} t={ctx.view.norm(q)} text={ctx.view.text(q)} col={ctx.fam}
       auto={ctx.automated.has(q.id)}
-      onSet={(v) => ctx.setParam(q, v)} denorm={(t) => ctx.view.denorm(q, t)}
-      onMenu={(e) => ctx.openMenu(e, q)}
+      onSet={onSet} denorm={denorm} onMenu={onMenu}
     />
   )
 }
