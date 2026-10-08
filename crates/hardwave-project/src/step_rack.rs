@@ -21,6 +21,9 @@ type Rows = HashMap<String, Vec<f64>>;
 #[derive(Debug, Clone, Default, Deserialize)]
 struct PatternJson {
     id: String,
+    /// This pattern's own length in steps, when set.
+    #[serde(default)]
+    length: Option<u32>,
     #[serde(default)]
     steps: Rows,
     #[serde(default, rename = "panSteps")]
@@ -58,6 +61,18 @@ struct RackJson {
     length: Option<u32>,
 }
 
+/// A pattern with no length of its own lasts whole bars, up to its last step.
+fn auto_length(p: &PatternJson) -> u32 {
+    let last = p
+        .steps
+        .values()
+        .filter_map(|row| row.iter().rposition(|v| *v > 0.0))
+        .max()
+        .map(|i| i as u32 + 1)
+        .unwrap_or(0);
+    DEFAULT_STEPS.max(last.div_ceil(DEFAULT_STEPS) * DEFAULT_STEPS)
+}
+
 /// The rack, ready to turn into notes.
 #[derive(Debug, Clone, Default)]
 pub struct StepRack {
@@ -89,15 +104,17 @@ impl StepRack {
             .and_then(|id| rack.patterns.iter().find(|p| &p.id == id))
             .or_else(|| rack.patterns.first())
             .cloned();
+        let length_steps = rack
+            .length
+            .filter(|n| *n > 0)
+            .or_else(|| active.as_ref().and_then(|p| p.length).filter(|n| *n > 0))
+            .unwrap_or_else(|| active.as_ref().map(auto_length).unwrap_or(DEFAULT_STEPS))
+            .min(512);
         Some(Self {
             active,
             swing: rack.swing.clamp(0.0, 1.0),
             swingmix: rack.swingmix,
-            length_steps: rack
-                .length
-                .filter(|n| *n > 0)
-                .unwrap_or(DEFAULT_STEPS)
-                .min(512),
+            length_steps,
         })
     }
 
@@ -206,6 +223,24 @@ mod tests {
         assert_eq!(n[0].pan, -1.0);
         assert_eq!(n[1].tick, TICKS_PER_STEP / 4);
         assert_eq!(n[0].duration_ticks, TICKS_PER_STEP / 8);
+    }
+
+    #[test]
+    fn a_pattern_lasts_whole_bars_unless_it_says_otherwise() {
+        let r = rack(
+            r#"{"activeId":"p","patterns":[{"id":"p","steps":{"c":[0,0,0,0,0,0,0,0,0,0,0,0,1]}}]}"#,
+        );
+        assert_eq!(
+            r.length_ticks(),
+            16 * TICKS_PER_STEP,
+            "13 steps last the bar"
+        );
+        let long = rack(
+            r#"{"activeId":"p","patterns":[{"id":"p","steps":{"c":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]}}]}"#,
+        );
+        assert_eq!(long.length_ticks(), 32 * TICKS_PER_STEP);
+        let own = rack(r#"{"activeId":"p","patterns":[{"id":"p","length":12,"steps":{"c":[1]}}]}"#);
+        assert_eq!(own.length_ticks(), 12 * TICKS_PER_STEP);
     }
 
     #[test]

@@ -335,7 +335,10 @@ export const usePatternStore = create<PatternState>((set, get) => ({
       }
       if (last + 1 > max) max = last + 1
     }
-    return max > 0 ? Math.min(max, STEPS_PER_PATTERN) : STEPS_PER_PATTERN
+    // Whole bars, as in FL: a pattern whose last step is the 13th still
+    // lasts the bar. It ended at the last step, so the rack drew steps
+    // 14 to 16 as outside the pattern and the loop came round early.
+    return Math.max(STEPS_PER_PATTERN, Math.ceil(max / STEPS_PER_PATTERN) * STEPS_PER_PATTERN)
   },
 
   clearChannel: (channelId) => set(s => {
