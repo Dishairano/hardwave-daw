@@ -47,6 +47,7 @@ import { useBrowserStore } from '../stores/browserStore'
 import { useMidiCcStore } from '../stores/midiCcStore'
 import { FloatingWindow, DetachButton } from '../components/FloatingWindow'
 import { AudioSettings, focusSettingsTab, type SettingsTab } from '../components/settings/AudioSettings'
+import { HwPluginWindow } from '../components/plugins/HwPluginWindow'
 
 /** Browser panel with a sample library added to Places and two folders open. */
 function BrowserShot() {
@@ -228,6 +229,23 @@ function Full({ children }: { children: React.ReactNode }) {
 
 function Harness() {
   switch (panel) {
+    // A built-in's window: ?id=eq (the layout key). ?menu=1 right-clicks
+    // its first control, to photograph the parameter menu.
+    case 'plugin': {
+      const id = new URLSearchParams(location.search).get('id') || 'eq'
+      if (new URLSearchParams(location.search).get('menu')) {
+        setTimeout(() => {
+          const el = document.querySelector('.hwp .kb')
+          const r = el?.getBoundingClientRect()
+          el?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: (r?.left ?? 0) + 30, clientY: (r?.top ?? 0) + 30 }))
+        }, 1200)
+      }
+      return (
+        <div style={{ width: '100%', minHeight: '100%', background: '#08080c', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: 24, boxSizing: 'border-box' }}>
+          <HwPluginWindow trackId="mock" slotId={`hardwave.native.${id}`} pluginId={`hardwave.native.${id}`} pluginName={id.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())} onClose={() => {}} />
+        </div>
+      )
+    }
     case 'mixer':
       return <Full><MixerPanel /></Full>
     case 'channelrack':

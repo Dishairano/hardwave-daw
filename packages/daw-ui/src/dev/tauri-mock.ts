@@ -386,11 +386,47 @@ const mock: TauriInternals = {
           },
           { id: 'm2', name: 'Wide', value: 0, links: [] },
         ]
-      case 'get_plugin_parameters':
+      // The built-ins' own parameters (dump_params), loaded only here so
+      // the table never weighs on a real build. The screenshot harness
+      // names the plug-in as the slot id.
+      case 'get_plugin_parameters': {
+        const slotId = String((args as { slotId?: string })?.slotId ?? '')
+        if (slotId.startsWith('hardwave.native.')) {
+          const table = (await import('./builtinParams.json')).default as Record<string, { params: { min: number; max: number; value: number; texts: string[] | null }[] }>
+          return (table[slotId]?.params ?? []).map((q) => ({
+            ...q,
+            text: q.texts ? q.texts[Math.round(((q.value - q.min) / ((q.max - q.min) || 1)) * 100)] : null,
+          }))
+        }
+      }
+      // falls through
+      case 'get_plugin_parameters_generic':
         return [
           { id: 0, name: 'Drive', defaultValue: 0.3, value: 0.3, min: 0, max: 1, unit: '', automatable: true },
           { id: 4, name: 'Cutoff', defaultValue: 1200, value: 1200, min: 20, max: 20000, unit: 'Hz', automatable: true },
         ]
+      // A plug-in window's live data: steady levels, some reduction, a
+      // correlated stereo signal.
+      case 'get_slot_levels':
+        return [0.42, 0.37, 0.56, 0.5]
+      case 'get_gain_reduction': {
+        const slotId = new URLSearchParams(location.search).get('id')
+        return slotId ? [{ trackId: 'mock', slotId: `hardwave.native.${slotId}`, reductionDb: -3.8 }] : []
+      }
+      case 'get_slot_scope':
+        return Array.from({ length: 512 }, (_, i) => {
+          const k = Math.floor(i / 2), m = Math.sin(k * 0.21) * 0.5, sd = Math.sin(k * 0.67 + 1) * 0.18
+          return i % 2 ? m - sd : m + sd
+        })
+      case 'wavetable_frames': {
+        const { positions = 14, points = 128 } = (args ?? {}) as { positions?: number; points?: number }
+        return Array.from({ length: positions }, (_, k) => Array.from({ length: points }, (_, i) => {
+          const ph = (i / points) * 2 * Math.PI, t = k / Math.max(1, positions - 1)
+          return Math.sin(ph) * (1 - t) + Math.sign(Math.sin(ph)) * t * 0.8
+        }))
+      }
+      case 'set_plugin_parameter':
+        return null
       case 'add_macro':
       case 'add_macro_link':
         return 'new-id'

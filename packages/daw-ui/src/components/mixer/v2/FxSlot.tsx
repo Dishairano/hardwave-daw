@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { PluginControls } from '../PluginControls'
+import { openPluginWindow } from '../../plugins/openPluginWindow'
 import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from '../../../stores/notificationStore'
 import { Knob } from '../../primitives/Knob'
@@ -44,14 +43,6 @@ export interface FxSlotProps {
  * underlying `InsertInfo` changes, so a wet drag on slot 03 doesn't
  * re-render slots 01/02/04..10.
  */
-/** True inside a detached panel window (its label starts "panel-"). */
-function inDetachedWindow(): boolean {
-  const meta = (window as unknown as {
-    __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } }
-  }).__TAURI_INTERNALS__?.metadata
-  return (meta?.currentWindow?.label ?? 'main').startsWith('panel-')
-}
-
 export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
   const { trackId, slotIndex, insert, onOpenPicker } = props
   const reductionDb = usePerfMetersStore(
@@ -177,54 +168,21 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
   }, [insert, trackId])
 
   // Built-in plug-ins have no window of their own, and a sandboxed one
-  // cannot show its window in this process: both get their controls as a
-  // panel here. Show GUI used to try to load a built-in as a CLAP file
+  // cannot show its window in this process: both get our window. Show GUI used to try to load a built-in as a CLAP file
   // ("CLAP binary not found: <native>").
-  const [paramsOpen, setParamsOpen] = useState(false)
   const builtIn = !!insert?.pluginId.startsWith('hardwave.native.')
   const usesPanel = builtIn || sandboxed
 
   const onShowGui = useCallback(() => {
     if (!insert) return
     setMenuOpen(false)
-    if (usesPanel) {
-      // Beside a detached mixer the controls get a window of their own too;
-      // beside the docked mixer they float over the app.
-      if (inDetachedWindow()) {
-        const q = new URLSearchParams({
-          trackId, slotId: insert.id, pluginId: insert.pluginId, name: insert.pluginName,
-        }).toString()
-        invoke('open_panel_window', {
-          panel: 'pluginControls', params: q, instance: insert.id, title: insert.pluginName,
-        }).catch((e) => {
-          useNotificationStore.getState().push('error', `Could not open ${insert.pluginName}: ${String(e)}`)
-        })
-      } else {
-        setParamsOpen(true)
-      }
-      return
-    }
-    // Unique label per slot so a re-click focuses the existing window
-    // instead of erroring. plugins.rs:270 explicitly handles this.
-    const windowLabel = `plugin-editor:${trackId}:${insert.id}`
-    invoke('open_plugin_editor', {
-      pluginId: insert.pluginId,
-      windowLabel,
-      trackId,
-      slotId: insert.id,
-    }).catch((e) => {
-      // Said on screen: a refusal used to look like nothing happening.
-      console.error('open_plugin_editor failed', e)
-      useNotificationStore.getState().push('error', `Could not open ${insert.pluginName}: ${String(e)}`)
+    // Beside a detached mixer the window opens on its own too; beside the
+    // docked mixer it floats over the app (PluginPanelHost).
+    openPluginWindow({
+      trackId, slotId: insert.id, pluginId: insert.pluginId, pluginName: insert.pluginName, ownWindow: usesPanel,
     })
   }, [insert, trackId, usesPanel])
 
-  useEffect(() => {
-    if (!paramsOpen) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setParamsOpen(false) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [paramsOpen])
 
   const idxLabel = String(slotIndex + 1).padStart(2, '0')
 
@@ -331,27 +289,6 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
             {sandboxed ? 'Own process: on' : 'Own process: off'}
           </button>
         </div>
-      )}
-      {paramsOpen && insert && createPortal(
-        <div
-          role="dialog"
-          aria-label={`${insert.pluginName} controls`}
-          style={{
-            position: 'fixed', right: 16, top: 72, width: 'min(340px, calc(100vw - 32px))',
-            maxHeight: 'calc(100vh - 96px)', zIndex: 5000, display: 'flex', flexDirection: 'column',
-            background: '#0c0c11', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6,
-            boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
-          }}
-        >
-          <PluginControls
-            trackId={trackId}
-            slotId={insert.id}
-            pluginId={insert.pluginId}
-            pluginName={insert.pluginName}
-            onClose={() => setParamsOpen(false)}
-          />
-        </div>,
-        document.body,
       )}
       {presetMenuAnchor && insert && (
         <PresetDropdown

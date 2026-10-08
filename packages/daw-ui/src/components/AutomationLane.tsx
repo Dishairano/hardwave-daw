@@ -19,6 +19,7 @@ import {
   useTrackStore,
 } from '../stores/trackStore'
 import { snapToTicks, useTransportStore } from '../stores/transportStore'
+import { useAutomationTargetName } from './plugins/useParamName'
 
 const PPQ = 960
 
@@ -138,7 +139,7 @@ export function AutomationLane({ trackId, lane }: Props) {
     [trackId, lane.id],
   )
 
-  const targetLabel = describeTarget(lane.target)
+  const targetLabel = useAutomationTargetName(trackId, lane.target, describeTarget).toUpperCase()
 
   // Visible bars on the playlist — must match the playlist's own
   // horizontal mapping. The playlist uses 96px per bar at zoom 1.0.
@@ -407,7 +408,7 @@ function describeTarget(t: AutomationTargetInfo): string {
     case 'track_volume': return 'VOLUME'
     case 'track_pan':    return 'PAN'
     case 'track_mute':   return 'MUTE'
-    case 'plugin_param': return `PLUGIN ${t.paramId}`
+    case 'plugin_param': return `PARAMETER ${t.paramId}`
     case 'send_level':   return `SEND ${t.sendIndex}`
   }
 }

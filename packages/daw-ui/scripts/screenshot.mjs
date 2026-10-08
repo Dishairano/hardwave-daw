@@ -15,7 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin']
 const arg = process.argv[2]
 const single = arg && ALL.includes(arg)
 const panels = single ? [arg] : ALL
@@ -71,6 +71,10 @@ try {
       // SHOT_CC=cc1 opens that controller lane in the piano roll.
       + (process.env.SHOT_CC ? `&cc=${process.env.SHOT_CC}` : '')
       + (process.env.SHOT_SCROLLY ? `&scrolly=${process.env.SHOT_SCROLLY}` : '')
+      // SHOT_PLUGIN=eq shows that built-in's window (panel plugin);
+      // SHOT_MENU=1 opens its right-click menu.
+      + (process.env.SHOT_PLUGIN ? `&id=${process.env.SHOT_PLUGIN}` : '')
+      + (process.env.SHOT_MENU ? '&menu=1' : '')
     await page.goto(`${BASE}${query}`, { waitUntil: 'networkidle' })
     await sleep(2200) // let async loads + canvas redraw settle
     await page.screenshot({ path: out, scale: 'device' })

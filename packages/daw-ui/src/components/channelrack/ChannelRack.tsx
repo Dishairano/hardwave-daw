@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { usePluginCatalogStore } from '../../stores/pluginCatalogStore'
 import { usePluginStore } from '../../stores/pluginStore'
 import type { TrackInfo } from '../../stores/trackStore'
+import { isBuiltIn, openPluginWindow } from '../plugins/openPluginWindow'
 
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
@@ -78,17 +79,10 @@ export function ChannelRack() {
   const openChannelInstrument = useCallback((ch: TrackInfo) => {
     const inst = channelInstrumentSlot(ch)
     if (!inst) return
-    // The command needs the plug-in and a window name; without them every
-    // click here failed before it started.
-    invoke('open_plugin_editor', {
-      pluginId: inst.pluginId,
-      windowLabel: `plugin-editor:${ch.id}:${inst.id}`,
-      trackId: ch.id,
-      slotId: inst.id,
-    }).catch(e => {
-      console.error('open_plugin_editor failed', e)
-      void import('../../stores/notificationStore').then(({ useNotificationStore }) =>
-        useNotificationStore.getState().push('error', `Could not open ${inst.pluginName}: ${String(e)}`))
+    // A built-in synth has no editor of its own; it gets our window.
+    openPluginWindow({
+      trackId: ch.id, slotId: inst.id, pluginId: inst.pluginId, pluginName: inst.pluginName,
+      ownWindow: isBuiltIn(inst.pluginId),
     })
   }, [channelInstrumentSlot])
   // Channels are decoupled from playlist inserts. The 500 pre-allocated

@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { type AutomationClipInfo, type AutomationTargetInfo, useTrackStore } from '../stores/trackStore'
 import { snapToTicks, useTransportStore } from '../stores/transportStore'
+import { useAutomationTargetName } from './plugins/useParamName'
 
 const PPQ = 960
 
@@ -23,7 +24,7 @@ function describeTarget(t: AutomationTargetInfo): string {
     case 'track_volume': return 'Volume'
     case 'track_pan': return 'Pan'
     case 'track_mute': return 'Mute'
-    case 'plugin_param': return `Plugin p${t.paramId}`
+    case 'plugin_param': return `Parameter ${t.paramId}`
     case 'send_level': return `Send ${t.sendIndex + 1}`
     default: return 'Automation'
   }
@@ -45,6 +46,7 @@ export function AutomationClipLane({ trackId, clip }: Props) {
   const snapValue = useTransportStore(s => s.snapValue)
   const snapEnabled = useTransportStore(s => s.snapEnabled)
   const bodyRef = useRef<HTMLDivElement | null>(null)
+  const targetName = useAutomationTargetName(trackId, clip.target, describeTarget)
 
   const [drag, setDrag] = useState<{ pointIndex: number; tick: number; value: number } | null>(null)
 
@@ -131,7 +133,7 @@ export function AutomationClipLane({ trackId, clip }: Props) {
     <div className="fl-lane" style={{ height: trackHeight }} data-automation-clip-id={clip.id}>
       <div className="fl-lane-label">
         <span className="led" style={{ background: clipColor }} />
-        <span className="target">◆ {describeTarget(clip.target)}</span>
+        <span className="target">◆ {targetName}</span>
         <button type="button" className="del" title="Delete automation clip" onClick={() => deleteClip(trackId, clip.id)}>
           ×
         </button>

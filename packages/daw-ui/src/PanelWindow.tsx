@@ -11,6 +11,8 @@
  * windows is a follow-up.
  */
 import { PluginControls, PluginWindowBar } from './components/mixer/PluginControls'
+import { HwPluginWindow } from './components/plugins/HwPluginWindow'
+import { layoutFor } from './components/plugins/pluginLayouts'
 import { useMixerSelectionStore } from './stores/mixerSelectionStore'
 import React, { useEffect, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -88,7 +90,17 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
       case 'browser': return <Browser />
       case 'settings': return <AudioSettings onClose={() => { void getCurrentWindow().close() }} />
       // A built-in plug-in's window, opened from a detached mixer.
-      case 'pluginControls': return (
+      case 'pluginControls': return layoutFor(params.get('pluginId') ?? '') ? (
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'auto', background: '#060608' }}>
+          <HwPluginWindow
+            own
+            trackId={params.get('trackId') ?? ''}
+            slotId={params.get('slotId') ?? ''}
+            pluginId={params.get('pluginId') ?? ''}
+            pluginName={params.get('name') ?? 'Plug-in'}
+          />
+        </div>
+      ) : (
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: '#0c0c11' }}>
           <PluginControls
             trackId={params.get('trackId') ?? ''}

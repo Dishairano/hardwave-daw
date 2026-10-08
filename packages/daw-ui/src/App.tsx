@@ -30,6 +30,7 @@ import { TrackTemplateManager } from './components/TrackTemplateManager'
 import { WelcomeScreen, shouldSkipWelcome } from './components/WelcomeScreen'
 import { NotificationHost } from './components/NotificationHost'
 import { OpeningOverlay } from './components/OpeningOverlay'
+import { PluginPanelHost } from './components/plugins/PluginPanelHost'
 import { MetronomeScheduler } from './components/transport/MetronomeScheduler'
 import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecoveryDialog'
 import { ShortcutsPanel } from './components/ShortcutsPanel'
@@ -2530,6 +2531,7 @@ export function App() {
 
       <NotificationHost />
       <OpeningOverlay />
+      <PluginPanelHost />
       <MetronomeScheduler />
 
       {/* Update modal — same pattern as Hardwave Suite */}
