@@ -356,6 +356,72 @@ impl Project {
         id
     }
 
+    /// Clone a track right after itself (FL's "Clone selected"): settings,
+    /// clips, sends, automation and plug-ins. `live_states` holds the
+    /// plug-ins' state as they play now, by slot id; a slot not in it keeps
+    /// its saved state. Slots, clips, lanes and automation clips get new
+    /// ids, and automation that drove a plug-in of the original drives the
+    /// same plug-in of the clone. Returns the clone's id.
+    pub fn duplicate_track(
+        &mut self,
+        id: &str,
+        live_states: &std::collections::HashMap<String, Vec<u8>>,
+    ) -> Option<String> {
+        use crate::automation::AutomationTarget;
+        use crate::clip::ClipContent;
+        let fresh = || uuid::Uuid::new_v4().to_string();
+        let index = self.tracks.iter().position(|t| t.id == id)?;
+        let mut copy = self.tracks[index].clone();
+        let new_id = fresh();
+        copy.id = new_id.clone();
+        copy.name = format!("{} #2", copy.name);
+        copy.armed = false;
+        copy.frozen = false;
+        let mut slot_ids = std::collections::HashMap::new();
+        let mut states = Vec::new();
+        for slot in copy.inserts.iter_mut() {
+            let old = std::mem::replace(&mut slot.id, fresh());
+            let bytes = live_states
+                .get(&old)
+                .cloned()
+                .or_else(|| self.plugin_state(&old).map(|e| e.chunk.clone()))
+                .or_else(|| slot.state.clone());
+            if let Some(bytes) = bytes {
+                slot.state = Some(bytes.clone());
+                states.push((slot.id.clone(), bytes));
+            }
+            slot_ids.insert(old, slot.id.clone());
+        }
+        let remap = |target: &mut AutomationTarget| {
+            if let AutomationTarget::PluginParam { slot_id, .. } = target {
+                if let Some(new) = slot_ids.get(slot_id) {
+                    *slot_id = new.clone();
+                }
+            }
+        };
+        for clip in copy.clips.iter_mut() {
+            clip.track_id = new_id.clone();
+            match &mut clip.content {
+                ClipContent::Audio(a) => a.id = fresh(),
+                ClipContent::Midi(m) => m.id = fresh(),
+            }
+        }
+        for lane in copy.automation_lanes.iter_mut() {
+            lane.id = fresh();
+            remap(&mut lane.target);
+        }
+        for clip in copy.automation_clips.iter_mut() {
+            clip.id = fresh();
+            remap(&mut clip.target);
+            remap(&mut clip.lane.target);
+        }
+        for (slot_id, bytes) in states {
+            self.set_plugin_state(slot_id, "unknown", bytes);
+        }
+        self.tracks.insert(index + 1, copy);
+        Some(new_id)
+    }
+
     pub fn remove_track(&mut self, id: &str) {
         self.tracks.retain(|t| t.id != id);
     }
@@ -454,6 +520,58 @@ mod decompress_tests {
 
 #[cfg(test)]
 mod tests {
+    /// A clone has its own ids everywhere, keeps the plug-ins' live state,
+    /// and its automation drives its own plug-in, not the original's.
+    #[test]
+    fn a_cloned_track_owns_its_plugins_and_automation() {
+        use crate::automation::{AutomationLane, AutomationTarget};
+        let mut p = Project::default();
+        let id = p.add_midi_track("Lead".into());
+        {
+            let t = p.track_mut(&id).unwrap();
+            t.inserts.push(crate::track::PluginSlot {
+                id: "slot-a".into(),
+                plugin_id: "hardwave.native.filter".into(),
+                enabled: true,
+                state: Some(vec![1]),
+                sidechain_source: None,
+                wet: 1.0,
+            });
+            t.automation_lanes.push(AutomationLane {
+                id: "lane-a".into(),
+                target: AutomationTarget::PluginParam {
+                    slot_id: "slot-a".into(),
+                    param_id: 2,
+                },
+                points: Vec::new(),
+                visible: true,
+            });
+        }
+        let mut live = std::collections::HashMap::new();
+        live.insert("slot-a".to_string(), vec![9, 9]);
+        let clone = p.duplicate_track(&id, &live).unwrap();
+        let idx = p.tracks.iter().position(|t| t.id == clone).unwrap();
+        assert_eq!(p.tracks[idx - 1].id, id, "right after the original");
+        let c = p.track(&clone).unwrap();
+        assert_eq!(c.name, "Lead #2");
+        let slot = &c.inserts[0];
+        assert_ne!(slot.id, "slot-a");
+        assert_eq!(
+            slot.state.as_deref(),
+            Some(&[9u8, 9][..]),
+            "the live state, not the saved one"
+        );
+        assert_eq!(
+            p.plugin_state(&slot.id).map(|e| e.chunk.clone()),
+            Some(vec![9, 9])
+        );
+        assert_ne!(c.automation_lanes[0].id, "lane-a");
+        assert!(matches!(&c.automation_lanes[0].target,
+            AutomationTarget::PluginParam { slot_id, param_id: 2 } if *slot_id == slot.id));
+        let orig = p.track(&id).unwrap();
+        assert_eq!(orig.inserts[0].id, "slot-a", "the original is untouched");
+    }
+
     use super::*;
 
     #[test]
