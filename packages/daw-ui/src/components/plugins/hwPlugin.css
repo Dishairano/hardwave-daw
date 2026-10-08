@@ -164,5 +164,5 @@
 .hwp .ctx { position: fixed; }
 .hwp.fit { height: auto; }
 /* In a window of its own the plug-in fills it; floating it keeps its width. */
-.hwp.own { width: 100%; max-width: none; border-radius: 0; border: 0; box-shadow: none; min-height: 100%; }
+.hwp.own { width: 100%; max-width: none; border-radius: 0; border: 0; box-shadow: none; }
 @media (max-width: 760px) { .hwp .cols { grid-template-columns: 1fr !important; } .hwp .hdr { height: auto; flex-wrap: wrap; } .hwp .hdr > div { padding: 10px 12px; } }
