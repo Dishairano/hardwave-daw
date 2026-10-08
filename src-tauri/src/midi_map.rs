@@ -17,20 +17,29 @@ use std::sync::Arc;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
+// Fields are camelCase like the variants, since that is what the app sends
+// ({ kind: 'pluginParam', trackId, slotId, paramId }). They were snake_case,
+// so a plug-in parameter could never be learned (its fields were "missing")
+// and a channel's fader learned as no channel. The aliases still read
+// mappings saved before.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum MidiMapTarget {
     MasterVolume,
     TrackVolume {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none", alias = "track_id")]
         track_id: Option<String>,
     },
     TrackPan {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none", alias = "track_id")]
         track_id: Option<String>,
     },
     TrackMute {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none", alias = "track_id")]
         track_id: Option<String>,
     },
     /// A specific parameter of a plug-in slot inside a track's insert
@@ -39,8 +48,11 @@ pub enum MidiMapTarget {
     /// mapped into the parameter's own range by the chain
     /// (InsertChain::set_parameter_normalized).
     PluginParam {
+        #[serde(alias = "track_id")]
         track_id: String,
+        #[serde(alias = "slot_id")]
         slot_id: String,
+        #[serde(alias = "param_id")]
         param_id: u32,
     },
 }
@@ -461,5 +473,35 @@ pub fn send_bank_state(
     for (strip, (level, muted)) in strips.iter().enumerate() {
         out.broadcast(&cs::fader_feedback(strip, *level));
         out.broadcast(&cs::button_feedback(cs::mute_note(strip), *muted));
+    }
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+
+    /// The app sends camelCase; mappings saved before were snake_case.
+    #[test]
+    fn targets_read_what_the_app_sends_and_what_was_saved() {
+        let sent: MidiMapTarget = serde_json::from_str(
+            r#"{"kind":"pluginParam","trackId":"t","slotId":"s","paramId":3}"#,
+        )
+        .unwrap();
+        let saved: MidiMapTarget = serde_json::from_str(
+            r#"{"kind":"pluginParam","track_id":"t","slot_id":"s","param_id":3}"#,
+        )
+        .unwrap();
+        assert_eq!(sent, saved);
+        let fader: MidiMapTarget =
+            serde_json::from_str(r#"{"kind":"trackVolume","trackId":"t"}"#).unwrap();
+        assert_eq!(
+            fader,
+            MidiMapTarget::TrackVolume {
+                track_id: Some("t".into())
+            }
+        );
+        assert!(serde_json::to_string(&sent)
+            .unwrap()
+            .contains("\"trackId\":\"t\""));
     }
 }

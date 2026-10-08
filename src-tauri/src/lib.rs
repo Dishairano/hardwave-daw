@@ -505,6 +505,8 @@ pub fn run() {
             commands::plugins::scan_plugins,
             commands::plugins::get_slot_levels,
             commands::plugins::get_slot_scope,
+            commands::plugins::wavetable_frames,
+            commands::windows::fit_panel_window,
             commands::automation::add_param_automation_lane,
             commands::automation::init_param_automation_at_start,
             commands::automation_clips::create_param_automation_clip,

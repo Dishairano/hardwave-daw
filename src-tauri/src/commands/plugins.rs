@@ -1660,3 +1660,31 @@ pub fn get_slot_scope(state: State<AppState>, track_id: String, slot_id: String)
         .map(|levels| levels.scope())
         .unwrap_or_default()
 }
+
+/// A wavetable bank as the built-in wavetable synth plays it: `positions`
+/// frames across the table, `points` samples each, for its window to draw.
+#[tauri::command]
+pub fn wavetable_frames(bank: String, positions: usize, points: usize) -> Vec<Vec<f32>> {
+    use hardwave_dsp::wavetable::Wavetable;
+    let table = match bank.as_str() {
+        "Basic" => Wavetable::basic(),
+        "Analog" => Wavetable::analog(),
+        "Digital" => Wavetable::digital(),
+        "Vocal" => Wavetable::vocal(),
+        _ => Wavetable::noise(),
+    };
+    let positions = positions.clamp(1, 64);
+    let points = points.clamp(8, 512);
+    (0..positions)
+        .map(|k| {
+            let position = if positions == 1 {
+                0.0
+            } else {
+                k as f32 / (positions - 1) as f32
+            };
+            (0..points)
+                .map(|i| table.sample(i as f32 / points as f32, position))
+                .collect()
+        })
+        .collect()
+}

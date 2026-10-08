@@ -209,6 +209,8 @@ permissions = [
   "allow-scan-plugins",
   "allow-get-slot-levels",
   "allow-get-slot-scope",
+  "allow-wavetable-frames",
+  "allow-fit-panel-window",
   "allow-add-param-automation-lane",
   "allow-init-param-automation-at-start",
   "allow-create-param-automation-clip",

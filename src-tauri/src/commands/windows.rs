@@ -41,6 +41,7 @@ pub async fn open_panel_window(
     params: Option<String>,
     instance: Option<String>,
     title: Option<String>,
+    size: Option<(f64, f64)>,
 ) -> Result<String, String> {
     let slug: String = panel
         .chars()
@@ -109,7 +110,10 @@ pub async fn open_panel_window(
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| format!("Hardwave DAW - {slug}"));
     let (w, h, min_w, min_h) = if plugin_window {
-        (380.0, 560.0, 300.0, 240.0)
+        // A built-in's window knows its size (its layout's width); the page
+        // fits the height to what it shows once it has drawn.
+        let (w, h) = size.unwrap_or((380.0, 560.0));
+        (w.clamp(300.0, 2400.0), h.clamp(240.0, 1600.0), 300.0, 240.0)
     } else {
         (1100.0, 720.0, 480.0, 320.0)
     };
@@ -135,4 +139,24 @@ pub async fn close_panel_window(app: AppHandle, panel: String) -> Result<(), Str
         let _ = w.close();
     }
     Ok(())
+}
+
+/// Size the calling panel window to what its page shows (a built-in plug-in's
+/// window measures itself after drawing). Only panel windows: the main
+/// window keeps the size the user gave it.
+#[tauri::command]
+pub fn fit_panel_window(
+    window: tauri::WebviewWindow,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    if !window.label().starts_with("panel-") {
+        return Err("only a panel window can fit itself".into());
+    }
+    window
+        .set_size(tauri::LogicalSize::new(
+            width.clamp(300.0, 2400.0),
+            height.clamp(200.0, 1600.0),
+        ))
+        .map_err(|e| e.to_string())
 }

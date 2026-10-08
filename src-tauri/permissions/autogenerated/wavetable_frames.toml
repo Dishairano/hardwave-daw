@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wavetable-frames"
+description = "Enables the wavetable_frames command without any pre-configured scope."
+commands.allow = ["wavetable_frames"]
+
+[[permission]]
+identifier = "deny-wavetable-frames"
+description = "Denies the wavetable_frames command without any pre-configured scope."
+commands.deny = ["wavetable_frames"]
