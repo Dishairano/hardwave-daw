@@ -6,7 +6,6 @@
  * them. Sampling only runs while the meter is on.
  */
 
-let commits = 0
 let backendEvents = 0
 
 /** One message from the audio engine (transport, meters) reached the page. */
@@ -14,35 +13,10 @@ export function noteBackendEvent(): void {
   backendEvents++
 }
 
-/**
- * Count React commits, through the hook React looks for when it loads.
- * Must run before react-dom is imported. When a hook is there already
- * (React Refresh in development) its commit callback is kept and wrapped.
- * Nothing of React's internals is kept: only the count.
- */
-export function installCommitCounter(): void {
-  if (typeof window === 'undefined') return
-  type Hook = { onCommitFiberRoot?: (...args: unknown[]) => void } & Record<string, unknown>
-  const w = window as unknown as { __REACT_DEVTOOLS_GLOBAL_HOOK__?: Hook }
-  const hook = w.__REACT_DEVTOOLS_GLOBAL_HOOK__
-  if (hook) {
-    const previous = hook.onCommitFiberRoot
-    hook.onCommitFiberRoot = (...args: unknown[]) => {
-      commits++
-      previous?.(...args)
-    }
-    return
-  }
-  w.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
-    supportsFiber: true,
-    isDisabled: false,
-    renderers: new Map(),
-    inject: () => 1,
-    onCommitFiberRoot: () => { commits++ },
-    onCommitFiberUnmount: () => {},
-    onPostCommitFiberRoot: () => {},
-    checkDCE: () => {},
-  }
+/** React commits so far, counted by public/render-counter.js, which runs
+ *  before the app so the hook is there when react-dom loads. */
+function commitCount(): number {
+  return (window as unknown as { __hwCommits?: number }).__hwCommits ?? 0
 }
 
 export interface FrameSnapshot {
@@ -78,7 +52,7 @@ export function startFrameStats(onSnapshot: (s: FrameSnapshot) => void): () => v
   let raf = 0
   let longCount = 0
   let longMs = 0
-  let commitsAt = commits
+  let commitsAt = commitCount()
   let eventsAt = backendEvents
 
   let observer: PerformanceObserver | null = null
@@ -112,7 +86,7 @@ export function startFrameStats(onSnapshot: (s: FrameSnapshot) => void): () => v
         slowPerSec: frames.filter((f) => f > 33.4).length / secs,
         longTasksPerSec: longCount / secs,
         longTaskMs: longMs,
-        rendersPerSec: (commits - commitsAt) / secs,
+        rendersPerSec: (commitCount() - commitsAt) / secs,
         engineEventsPerSec: (backendEvents - eventsAt) / secs,
         heapMb: memory ? memory.usedJSHeapSize / (1024 * 1024) : null,
         recent: recent.slice(),
@@ -121,7 +95,7 @@ export function startFrameStats(onSnapshot: (s: FrameSnapshot) => void): () => v
       windowStart = now
       longCount = 0
       longMs = 0
-      commitsAt = commits
+      commitsAt = commitCount()
       eventsAt = backendEvents
     }
     raf = requestAnimationFrame(frame)
