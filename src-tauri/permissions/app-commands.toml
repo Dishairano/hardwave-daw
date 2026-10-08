@@ -146,6 +146,7 @@ permissions = [
   "allow-set-osc-enabled",
   "allow-get-sandboxed-plugins",
   "allow-take-sandbox-crashes",
+  "allow-restart-sandboxed-plugin",
   "allow-set-plugin-sandboxed",
   "allow-align-track-to",
   "allow-audio-clip-to-midi",

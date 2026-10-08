@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 
+/** When each sandboxed plug-in was last restarted, to stop a crash loop. */
+const restarts = new Map<string, number[]>()
+
 /**
  * Performance-meter source for the toolbar's CPU / RAM cluster.
  *
@@ -118,11 +121,28 @@ export function startPerfMeters(): () => void {
       .then(rows => {
         if (rows.length === 0) return
         void import('./notificationStore').then(({ useNotificationStore }) => {
+          const notify = useNotificationStore.getState().push
+          const now = Date.now()
           for (const row of rows) {
-            useNotificationStore.getState().push('warning', `${row.pluginId} stopped`, {
-              detail: `${row.message}. Its slot is silent and the song kept playing. `
-                + 'Remove and add it again to bring it back.',
-            })
+            // Started again by itself, with the slot's saved settings,
+            // unless it keeps falling over: three times in a minute and it
+            // stays off rather than crash in a loop.
+            const recent = (restarts.get(row.pluginId) ?? []).filter((t) => now - t < 60_000)
+            if (recent.length >= 3) {
+              notify('warning', `${row.pluginId} keeps stopping`, {
+                detail: `${row.message}. It crashed ${recent.length + 1} times in a minute, so its slot stays silent. `
+                  + 'Remove it, or try another version of the plug-in.',
+              })
+              continue
+            }
+            restarts.set(row.pluginId, [...recent, now])
+            invoke<number>('restart_sandboxed_plugin', { pluginId: row.pluginId })
+              .then(() => notify('warning', `${row.pluginId} stopped and was started again`, {
+                detail: `${row.message}. The song kept playing; the plug-in is back with the settings it had at the last save.`,
+              }))
+              .catch((e) => notify('warning', `${row.pluginId} stopped`, {
+                detail: `${row.message}. Starting it again did not work (${String(e)}); remove and add it to bring it back.`,
+              }))
           }
         })
       })

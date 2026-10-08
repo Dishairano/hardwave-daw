@@ -1328,34 +1328,16 @@ fn hydrate_chains(state: &AppState, only_track: Option<&str>) -> Result<(), Stri
                         );
                     }
                 }
-                let gain_reduction_db = LiveSlot::new_gain_reduction();
-                state.slot_gain_reduction.lock().insert(
-                    (track_id.clone(), slot_id.clone()),
-                    gain_reduction_db.clone(),
+                let slot = live_slot(
+                    state,
+                    &track_id,
+                    slot_id,
+                    plugin,
+                    enabled,
+                    wet,
+                    sidechain_active,
                 );
-                let slot_levels =
-                    std::sync::Arc::new(hardwave_engine::insert_chain::SlotLevels::with_params(
-                        LiveSlot::ranges_of(plugin.as_ref())
-                            .into_iter()
-                            .map(|(id, _, _)| id),
-                    ));
-                state
-                    .slot_levels
-                    .lock()
-                    .insert((track_id.clone(), slot_id.clone()), slot_levels.clone());
-                let cmd = InsertCommand::Add {
-                    track_id,
-                    slot: LiveSlot {
-                        param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
-                        levels: slot_levels.clone(),
-                        slot_id,
-                        plugin,
-                        enabled,
-                        wet,
-                        sidechain_active,
-                        gain_reduction_db,
-                    },
-                };
+                let cmd = InsertCommand::Add { track_id, slot };
                 if state.engine.lock().try_send_insert_command(cmd).is_err() {
                     log::warn!("hydrate: insert command queue full, will retry on next save");
                     break;
@@ -1729,4 +1711,136 @@ pub fn take_slot_param_changes(
         .get(&(track_id, slot_id))
         .map(|levels| levels.take_param_changes())
         .unwrap_or_default()
+}
+
+/// A plug-in instance ready to join a chain, with its gain reduction and
+/// levels registered for the windows that read them.
+fn live_slot(
+    state: &AppState,
+    track_id: &str,
+    slot_id: String,
+    plugin: Box<dyn HostedPlugin>,
+    enabled: bool,
+    wet: f32,
+    sidechain_active: bool,
+) -> LiveSlot {
+    let key = (track_id.to_string(), slot_id.clone());
+    let gain_reduction_db = LiveSlot::new_gain_reduction();
+    state
+        .slot_gain_reduction
+        .lock()
+        .insert(key.clone(), gain_reduction_db.clone());
+    let ranges = LiveSlot::ranges_of(plugin.as_ref());
+    let levels = std::sync::Arc::new(hardwave_engine::insert_chain::SlotLevels::with_params(
+        ranges.iter().map(|(id, _, _)| *id),
+    ));
+    state.slot_levels.lock().insert(key, levels.clone());
+    LiveSlot {
+        param_ranges: ranges,
+        levels,
+        slot_id,
+        plugin,
+        enabled,
+        wet,
+        sidechain_active,
+        gain_reduction_db,
+    }
+}
+
+/// Start a crashed plug-in again: every slot holding it gets a fresh
+/// instance in its own process, with the settings saved for that slot, in
+/// the same place in its chain. A crash used to leave the slot silent until
+/// the plug-in was removed and added by hand. Returns how many restarted.
+#[tauri::command]
+pub fn restart_sandboxed_plugin(
+    app: AppHandle,
+    state: State<AppState>,
+    plugin_id: String,
+) -> Result<usize, String> {
+    #[allow(clippy::type_complexity)]
+    let (descriptor, plan): (
+        PluginDescriptor,
+        Vec<(
+            String,
+            String,
+            usize,
+            usize,
+            bool,
+            f32,
+            bool,
+            Option<Vec<u8>>,
+        )>,
+    ) = {
+        let engine = state.engine.lock();
+        let descriptor = engine
+            .plugin_scanner
+            .lock()
+            .find(&plugin_id)
+            .cloned()
+            .ok_or_else(|| format!("Plug-in not found: {plugin_id}"))?;
+        let project = engine.project.lock();
+        let mut plan = Vec::new();
+        for track in &project.tracks {
+            for (index, slot) in track.inserts.iter().enumerate() {
+                if slot.plugin_id == plugin_id {
+                    plan.push((
+                        track.id.clone(),
+                        slot.id.clone(),
+                        index,
+                        track.inserts.len(),
+                        slot.enabled,
+                        slot.wet,
+                        slot.sidechain_source.is_some(),
+                        project
+                            .plugin_state(&slot.id)
+                            .map(|e| e.chunk.clone())
+                            .or_else(|| slot.state.clone()),
+                    ));
+                }
+            }
+        }
+        (descriptor, plan)
+    };
+    let mut restarted = 0;
+    for (track_id, slot_id, index, count, enabled, wet, sidechain_active, saved) in plan {
+        let mut plugin = instantiate_for_slot(&state.sandboxed_plugins, &descriptor)?;
+        if let Some(bytes) = saved {
+            let _ = plugin.set_state(&bytes);
+        }
+        let slot = live_slot(
+            &state,
+            &track_id,
+            slot_id.clone(),
+            plugin,
+            enabled,
+            wet,
+            sidechain_active,
+        );
+        let engine = state.engine.lock();
+        // Out with the dead one, in with the new one at the end of the
+        // chain, then back to where the old one sat.
+        for cmd in [
+            InsertCommand::Remove {
+                track_id: track_id.clone(),
+                slot_id,
+            },
+            InsertCommand::Add {
+                track_id: track_id.clone(),
+                slot,
+            },
+            InsertCommand::Reorder {
+                track_id: track_id.clone(),
+                from: count.saturating_sub(1),
+                to: index,
+            },
+        ] {
+            engine
+                .try_send_insert_command(cmd)
+                .map_err(|_| "insert command queue full; try again".to_string())?;
+        }
+        drop(engine);
+        tell_windows_track_changed(&app, &track_id);
+        restarted += 1;
+    }
+    Ok(restarted)
 }
