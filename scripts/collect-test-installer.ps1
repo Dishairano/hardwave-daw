@@ -3,12 +3,19 @@
 # the same place every time.
 $ErrorActionPreference = 'Stop'
 
-$dir = 'C:\Hardwave Test Builds'
+# The laptop's runner says where through its environment; the PC keeps
+# C:\Hardwave Test Builds.
+$dir = if ($env:HW_TEST_BUILDS_DIR) { $env:HW_TEST_BUILDS_DIR } else { 'C:\Hardwave Test Builds' }
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $candidates = @(
     'target\x86_64-pc-windows-msvc\release\bundle\nsis',
     'src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis'
-) | Where-Object { Test-Path $_ }
+)
+# A build folder set outside the checkout (the laptop keeps paths short).
+if ($env:CARGO_TARGET_DIR) {
+    $candidates += Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc\release\bundle\nsis'
+}
+$candidates = $candidates | Where-Object { Test-Path $_ }
 $exe = Get-ChildItem -Path $candidates -Filter '*_x64-setup.exe' |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $exe) {
