@@ -609,6 +609,7 @@
 /* ---- one slot row ---- */
 .mx-fx-slot {
   display: grid;
+  /* index | led | name | (spacer) | wet: the empty slot's five cells. */
   grid-template-columns: 18px 22px 1fr 28px 36px;
   align-items: center;
   gap: 8px;
@@ -618,6 +619,14 @@
   margin-bottom: 3px;
   font-size: 11px;
   position: relative;
+}
+/* A filled slot has seven cells: the preset arrows sit either side of the
+   name and the wet knob comes before the amount. With the empty slot's five
+   columns the cells wrapped onto a second row and the name landed in the
+   28 px knob column, so every plug-in read "Ha...". */
+.mx-fx-slot:not(.empty) {
+  grid-template-columns: 18px 22px 12px minmax(0, 1fr) 12px 28px 36px;
+  gap: 6px;
 }
 .mx-fx-slot-idx {
   color: var(--mx-dim);

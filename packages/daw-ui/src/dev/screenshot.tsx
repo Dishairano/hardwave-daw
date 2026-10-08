@@ -137,6 +137,12 @@ const tracks: TrackWithClips[] = [
   ]),
   midiTrack,
 ]
+// Plug-ins on the master, so the mixer's FX rack shows filled slots.
+tracks[0].inserts = [
+  { id: 'slot-eq', pluginId: 'hardwave.native.eq', pluginName: 'Hardwave EQ', enabled: true, wet: 1, sidechainSource: null },
+  { id: 'slot-lim', pluginId: 'hardwave.native.limiter', pluginName: 'Hardwave Limiter', enabled: true, wet: 0.8, sidechainSource: null },
+]
+tracks[0].insert_count = 2
 
 const selected = tracks[2].clips[0].id // Crash — red selection header stands out
 useTrackStore.setState({
