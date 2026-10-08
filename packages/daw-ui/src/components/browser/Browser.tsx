@@ -8,6 +8,7 @@ import { useSampleEditorStore } from '../../stores/sampleEditorStore'
 import { useBeatSlicerStore } from '../../stores/beatSlicerStore'
 import { FileWaveform } from './FileWaveform'
 import { DetachButton } from '../FloatingWindow'
+import { beginPointerDrag, useDropTarget } from '../../lib/pointerDrag'
 import {
   selectedSendTarget, sendToSelectedChannel, openInNewChannel,
   sendToPlaylistAsClip, sendToPlaylistAsAudioTrack, showInFolder, trashFile,
@@ -431,6 +432,13 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
   const [query, setQuery] = useState('')
   const [previewing, setPreviewing] = useState<string | null>(null)
   const [rootHover, setRootHover] = useState(false)
+  // Dropping onto Favorites itself (not a folder in it) moves to the top.
+  const favoritesRef = useRef<HTMLDivElement>(null)
+  useDropTarget(favoritesRef, {
+    onOver: () => setRootHover(true),
+    onLeave: () => setRootHover(false),
+    onDrop: (d) => handleDropOnTarget(d.data, null),
+  })
   const [previewVolume, setPreviewVolume] = useState<number>(() => {
     const raw = localStorage.getItem('hardwave.daw.previewVolume')
     const v = raw ? parseFloat(raw) : 0.7
@@ -594,10 +602,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
     if (confirmed) deleteFolder(id)
   }
 
-  const handleDropOnTarget = (e: React.DragEvent, targetFolderId: string | null) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const data = e.dataTransfer.getData('application/x-hw-browser')
+  const handleDropOnTarget = (data: string, targetFolderId: string | null) => {
     if (!data) return
     const [kind, ...rest] = data.split(':')
     const payload = rest.join(':')
@@ -621,7 +626,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         onAddSub={() => handleNewFolder(folder.id)}
         onRename={() => handleRenameFolder(folder.id, folder.name)}
         onDelete={() => handleDeleteFolder(folder.id, folder.name)}
-        onDropHere={(e) => handleDropOnTarget(e, folder.id)}
+        onDropHere={(data) => handleDropOnTarget(data, folder.id)}
       >
         {subFolders.map(sf => renderFolder(sf, depth + 1))}
         {files.map(p => (
@@ -828,12 +833,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
       </div>
 
       <div
-        onDragOver={(e) => {
-          const data = e.dataTransfer.types.includes('application/x-hw-browser')
-          if (data) { e.preventDefault(); setRootHover(true) }
-        }}
-        onDragLeave={() => setRootHover(false)}
-        onDrop={(e) => { setRootHover(false); handleDropOnTarget(e, null) }}
+        ref={favoritesRef}
         style={{
           background: rootHover ? 'rgba(124,201,255,0.06)' : 'transparent',
           outline: rootHover ? `1px dashed ${hw.accent}` : 'none',
@@ -1107,29 +1107,27 @@ function FolderRow({ folder, depth, expanded, count, onToggle, onAddSub, onRenam
   folder: FolderNode; depth: number;
   expanded: boolean; count: number;
   onToggle: () => void; onAddSub: () => void; onRename: () => void; onDelete: () => void;
-  onDropHere: (e: React.DragEvent) => void;
+  onDropHere: (data: string) => void;
   children: React.ReactNode;
 }) {
   const [hover, setHover] = useState(false)
   const [dropHover, setDropHover] = useState(false)
+  const rowRef = useRef<HTMLDivElement>(null)
+  useDropTarget(rowRef, {
+    // A folder cannot be dropped into itself.
+    accepts: (data) => data !== `folder:${folder.id}`,
+    onOver: () => setDropHover(true),
+    onLeave: () => setDropHover(false),
+    onDrop: (d) => onDropHere(d.data),
+  })
   return (
     <div>
       <div
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData('application/x-hw-browser', `folder:${folder.id}`)
-          e.dataTransfer.effectAllowed = 'move'
+        ref={rowRef}
+        onPointerDown={(e) => {
           e.stopPropagation()
+          beginPointerDrag(e, `folder:${folder.id}`, folder.name)
         }}
-        onDragOver={(e) => {
-          if (e.dataTransfer.types.includes('application/x-hw-browser')) {
-            e.preventDefault()
-            e.stopPropagation()
-            setDropHover(true)
-          }
-        }}
-        onDragLeave={() => setDropHover(false)}
-        onDrop={(e) => { setDropHover(false); onDropHere(e) }}
         onClick={onToggle}
         onDoubleClick={(e) => { e.stopPropagation(); onRename() }}
         onMouseEnter={() => setHover(true)}
@@ -1293,11 +1291,8 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
 
   return (
     <div
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData('application/x-hw-browser', `file:${path}`)
-        e.dataTransfer.effectAllowed = isFavorite ? 'copyMove' : 'copy'
-      }}
+      // A pointer drag, not HTML5: see lib/pointerDrag for why.
+      onPointerDown={(e) => beginPointerDrag(e, `file:${path}`, name)}
       onContextMenu={(e) => {
         e.preventDefault()
         setActionError(null)

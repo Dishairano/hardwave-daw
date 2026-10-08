@@ -1,4 +1,5 @@
 import { usePlaylistScrollStore } from '../../stores/playlistScrollStore'
+import { useDropTarget } from '../../lib/pointerDrag'
 import { playlistRowLayout, playlistTracks } from './playlistRows'
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { TuneDialog } from './TuneDialog'
@@ -1665,41 +1666,31 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
   }, [hitTest, getScrollOffset, selectClip, selectedClipIds, markers, pixelsPerTick, applySnap])
 
-  const handleBrowserDragOver = useCallback((e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes('application/x-hw-browser')) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
-    setDropHighlight(true)
-  }, [])
-
-  const handleBrowserDragLeave = useCallback((e: React.DragEvent) => {
-    const rt = e.relatedTarget as Node | null
-    if (rt && containerRef.current?.contains(rt)) return
-    setDropHighlight(false)
-  }, [])
-
-  const handleBrowserDrop = useCallback(async (e: React.DragEvent) => {
-    const data = e.dataTransfer.getData('application/x-hw-browser')
-    if (!data.startsWith('file:')) return
-    e.preventDefault()
-    setDropHighlight(false)
-    const path = data.slice('file:'.length)
+  // A sample dragged from the browser. The drag is a pointer drag (see
+  // lib/pointerDrag): HTML5 drag events never reach the page on Windows.
+  const dropBrowserFile = useCallback(async (path: string, clientX: number, clientY: number) => {
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
-    const mouseX = e.clientX - rect.left
-    const mouseY = e.clientY - rect.top
+    const mouseX = clientX - rect.left
+    const mouseY = clientY - rect.top
     const scrollOffset = getScrollOffset()
 
+    // The audio track under the pointer, or the next audio track below it:
+    // a sample dropped on an instrument row used to land on whichever
+    // audio track came first, wherever that was.
     const state = useTrackStore.getState()
-    const audio = state.tracks.filter(t => t.kind === 'Audio')
     const dropped = trackRowAt(Math.max(RULER_HEIGHT, mouseY))
     let trackId: string | null = null
-    if (dropped && dropped.kind === 'Audio') {
-      trackId = dropped.id
-    } else if (audio.length > 0) {
+    if (dropped) {
+      const from = audioTracks.findIndex(t => t.id === dropped.id)
+      trackId = audioTracks.slice(from).find(t => t.kind === 'Audio')?.id ?? null
+    }
+    if (!trackId) {
+      const audio = state.tracks.filter(t => t.kind === 'Audio')
       const sel = state.selectedTrackId
-      trackId = sel && audio.some(t => t.id === sel) ? sel : audio[0].id
-    } else {
+      trackId = sel && audio.some(t => t.id === sel) ? sel : audio[0]?.id ?? null
+    }
+    if (!trackId) {
       await state.addAudioTrack()
       trackId = useTrackStore.getState().tracks.find(t => t.kind === 'Audio')?.id ?? null
     }
@@ -1714,8 +1705,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       useBrowserStore.getState().pushFileRecent(path)
     } catch (err) {
       console.error('browser drop import failed:', path, err)
+      useNotificationStore.getState().push('error', `Could not add the sample: ${String(err)}`)
     }
-  }, [audioTracks, pixelsPerTick, trackHeight, getScrollOffset, applySnap, trackRowAt])
+  }, [audioTracks, pixelsPerTick, getScrollOffset, applySnap, trackRowAt])
+
+  useDropTarget(containerRef, {
+    accepts: (data) => data.startsWith('file:'),
+    onOver: () => setDropHighlight(true),
+    onLeave: () => setDropHighlight(false),
+    onDrop: (d) => { void dropBrowserFile(d.data.slice('file:'.length), d.clientX, d.clientY) },
+  })
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     // Ctrl+Shift+Wheel: vertical zoom (change track height)
@@ -2101,9 +2100,6 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   return (
     <div
       ref={containerRef}
-      onDragOver={handleBrowserDragOver}
-      onDragLeave={handleBrowserDragLeave}
-      onDrop={handleBrowserDrop}
       style={{
         flex: 1,
         position: 'relative',

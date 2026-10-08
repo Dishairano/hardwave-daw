@@ -1,5 +1,5 @@
 name: PC Test Build
-run-name: PC test build · ${{ github.ref_name }}
+run-name: Test build · ${{ github.ref_name }}
 
 # A test installer built on the founder's own PC, when he asks for one.
 #
@@ -13,12 +13,18 @@ run-name: PC test build · ${{ github.ref_name }}
 # that is not on the default branch cannot be dispatched by hand). Only
 # people with write access can push one. Nothing here uses the updater
 # signing key; a test build is not an update.
+#
+# A laptop-test-* tag builds on the founder's laptop instead (runner label
+# hw-laptop, set up by hardwave-builder.ps1), for when the PC is busy. The
+# laptop's runner carries no hardwave-daw label, so the gate never runs
+# there.
 
 on:
   workflow_dispatch:
   push:
     tags:
       - 'pc-test-*'
+      - 'laptop-test-*'
 
 permissions:
   contents: read
@@ -29,8 +35,9 @@ concurrency:
 
 jobs:
   build:
-    runs-on: [self-hosted, Windows, hardwave-daw]
-    timeout-minutes: 60
+    runs-on: ${{ startsWith(github.ref_name, 'laptop-test-') && fromJSON('["self-hosted", "Windows", "hw-laptop"]') || fromJSON('["self-hosted", "Windows", "hardwave-daw"]') }}
+    # A first build on the laptop compiles everything from scratch.
+    timeout-minutes: 120
     # cmd: the PC has no pwsh and refuses unsigned PowerShell scripts, so
     # PowerShell runs per command with the policy bypassed for that one
     # process only, the same way the gate does it.
