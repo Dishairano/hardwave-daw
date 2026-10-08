@@ -16,6 +16,7 @@
     "core:window:allow-is-maximized",
     "core:window:allow-close",
     "core:window:allow-destroy",
+    "core:webview:allow-set-webview-zoom",
     "core:event:default",
     "core:event:allow-emit",
     "core:event:allow-listen",

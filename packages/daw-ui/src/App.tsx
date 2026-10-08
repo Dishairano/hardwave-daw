@@ -164,7 +164,6 @@ export function App() {
   const { newProject, saveProject, loadProject } = useProjectStore()
   const recentProjects = useProjectStore(s => s.recentProjects)
   const uiScaleMode = useUiPreferencesStore(s => s.mode)
-  const uiScaleEffective = useUiPreferencesStore(s => s.effectiveScale)
   const setUiScaleMode = useUiPreferencesStore(s => s.setUiScaleMode)
 
   // QWERTY-as-MIDI-keyboard. Subscribes to the persisted toggle so a
@@ -2201,7 +2200,7 @@ export function App() {
             label: 'UI scale',
             submenu: [
               {
-                label: `${uiScaleMode === 'auto' ? '✓ ' : '   '}Auto (detected: ${uiScaleEffective}%)`,
+                label: `${uiScaleMode === 'auto' ? '✓ ' : '   '}Auto (system scale)`,
                 action: () => setUiScaleMode('auto'),
               },
               { separator: true, label: '' },
@@ -2335,7 +2334,7 @@ export function App() {
     ]
   }, [
     recentProjects, showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer, pdcEnabled,
-    uiScaleMode, uiScaleEffective, setUiScaleMode,
+    uiScaleMode, setUiScaleMode,
     handleNewProject, handleOpenProject, handleSaveProject, handleSaveProjectAs, handleSaveAsTemplate,
     handleExportAudio, handleOpenRecent, handleAddAutomationTrack, cutSelection, pasteAtPlayhead, duplicateSelection,
   ])

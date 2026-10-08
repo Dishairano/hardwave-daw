@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 
 const STORAGE_KEY = 'hardwave.daw.uiPreferences'
 
@@ -14,7 +15,7 @@ interface StoredPrefs {
 interface UiPreferencesState {
   /** Last explicitly-picked scale (used when `mode` is a fixed number). */
   uiScale: UiScale
-  /** 'auto' → derived from devicePixelRatio, else a fixed scale. */
+  /** 'auto' follows the system's display scale, else a fixed scale. */
   mode: UiScaleMode
   /** Scale currently applied to the root. Matches uiScale unless mode === 'auto'. */
   effectiveScale: UiScale
@@ -22,12 +23,13 @@ interface UiPreferencesState {
   setUiScaleMode: (mode: UiScaleMode) => void
 }
 
+/**
+ * Auto is the system's own scale. Windows already enlarges the page by its
+ * display scale (devicePixelRatio), so auto used to scale it a second time:
+ * at 125 % a laptop got the interface at 156 %, with a quarter of the
+ * window cut off on the right and at the bottom.
+ */
 function deriveAutoScale(): UiScale {
-  const dpr = typeof window === 'undefined' ? 1 : (window.devicePixelRatio || 1)
-  if (dpr >= 2.0) return 200
-  if (dpr >= 1.75) return 175
-  if (dpr >= 1.5) return 150
-  if (dpr >= 1.25) return 125
   return 100
 }
 
@@ -62,9 +64,18 @@ function persist(prefs: StoredPrefs) {
   }
 }
 
+/**
+ * Scale the whole page the way browser zoom does, through the webview.
+ * It used to be CSS `zoom` on the root, which leaves the viewport the same
+ * size: everything sized to the window (100vw, 90vh, innerWidth) came out
+ * too big by the scale, so the app ran off the screen at anything but 100 %.
+ */
 function applyScale(scale: UiScale) {
-  const root = document.documentElement as HTMLElement & { style: CSSStyleDeclaration & { zoom?: string } }
-  root.style.zoom = String(scale / 100)
+  try {
+    getCurrentWebview().setZoom(scale / 100).catch(() => { /* not in the app */ })
+  } catch {
+    /* not in the app: a browser preview has no webview to zoom */
+  }
 }
 
 function resolveScale(mode: UiScaleMode, _fixed: UiScale): UiScale {
@@ -102,27 +113,4 @@ export const useUiPreferencesStore = create<UiPreferencesState>((set, get) => {
 if (typeof window !== 'undefined') {
   const { mode, uiScale } = hydrate()
   applyScale(resolveScale(mode, uiScale))
-
-  // Per-monitor DPI awareness: listen for DPR changes (user moves window to a different monitor,
-  // system scale changes, etc.) and re-apply when in auto mode.
-  // matchMedia on the current DPR fires when DPR moves off that value.
-  let mq: MediaQueryList | null = null
-  const rewire = () => {
-    if (mq) mq.removeEventListener('change', onChange)
-    const dpr = window.devicePixelRatio || 1
-    mq = window.matchMedia(`(resolution: ${dpr}dppx)`)
-    mq.addEventListener('change', onChange)
-  }
-  const onChange = () => {
-    const state = useUiPreferencesStore.getState()
-    if (state.mode === 'auto') {
-      const next = deriveAutoScale()
-      if (next !== state.effectiveScale) {
-        applyScale(next)
-        useUiPreferencesStore.setState({ effectiveScale: next })
-      }
-    }
-    rewire()
-  }
-  rewire()
 }
