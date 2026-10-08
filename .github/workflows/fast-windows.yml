@@ -79,14 +79,26 @@ jobs:
       - name: Configure sccache
         shell: bash
         run: |
+          # The server is started with the settings the build uses. It
+          # used to start without GitHub's cache switched on, stop itself
+          # after ten idle minutes while the app crate compiled, and start
+          # again for the last crate with the cache on: a single error
+          # page from the cache service at that moment failed a build
+          # that was nearly done (2026-10-08). Now the cache is checked
+          # once, here, where a failure only means building without it,
+          # and the server stays up for the whole build.
+          export SCCACHE_GHA_ENABLED=true
+          export SCCACHE_IDLE_TIMEOUT=0
           if sccache --start-server 2>/dev/null; then
             echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+            echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
             echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
             # If GitHub's cache service goes down mid-build, compile
             # without it instead of failing the build (2026-10-07).
             echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> $GITHUB_ENV
             echo "sccache available"
           else
+            sccache --stop-server 2>/dev/null || true
             echo "sccache unavailable, building without cache"
           fi
 
