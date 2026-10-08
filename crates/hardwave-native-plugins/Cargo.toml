@@ -18,3 +18,5 @@ log.workspace = true
 # project with an insert, and hound to write the rendered master to disk.
 hardwave-project = { path = "../hardwave-project" }
 hound.workspace = true
+# The dump_params example prints JSON.
+serde_json.workspace = true

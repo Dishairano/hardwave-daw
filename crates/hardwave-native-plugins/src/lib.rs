@@ -27,6 +27,7 @@ pub mod exciter;
 pub mod filter;
 pub mod flanger;
 pub mod fm;
+pub mod format;
 pub mod gain;
 pub mod gate;
 pub mod limiter;

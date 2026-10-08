@@ -86,6 +86,20 @@ pub trait HostedPlugin: Send {
 
     fn latency_samples(&self) -> u32;
 
+    /// A parameter value as people read it: "1.2 kHz", "-6.0 dB", "Low
+    /// pass". Most parameters are stored 0 to 1, which said nothing on
+    /// screen ("0.57 Hz"). `None` when the plug-in has no text for it.
+    fn parameter_text(&self, _id: u32, _value: f64) -> Option<String> {
+        None
+    }
+
+    /// For a parameter that picks one of a few choices (a filter mode, a
+    /// wave shape), the choices in order. The value for choice `i` of `n`
+    /// is `i / (n - 1)`.
+    fn parameter_options(&self, _id: u32) -> Option<Vec<String>> {
+        None
+    }
+
     /// How many dB this plug-in is currently pulling the signal down by,
     /// as a non-positive number, or `None` when it does not reduce gain.
     ///

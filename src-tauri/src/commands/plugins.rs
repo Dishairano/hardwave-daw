@@ -979,7 +979,9 @@ pub fn set_plugin_parameter(
     slot_id: String,
     param_id: u32,
     value: f64,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
+    // The value as text, for the control that moved it.
+    let text = parameter_text_for_slot(&state, &track_id, &slot_id, param_id, value);
     let cmd = InsertCommand::SetParameter {
         track_id,
         slot_id,
@@ -991,7 +993,56 @@ pub fn set_plugin_parameter(
         .lock()
         .try_send_insert_command(cmd)
         .map_err(|_| "insert command queue full or engine not started".to_string())?;
-    Ok(())
+    Ok(text)
+}
+
+/// One instance per plug-in kind, kept to turn values into text: a
+/// parameter's text depends on the kind of plug-in, not on its settings.
+fn text_probes(
+) -> &'static parking_lot::Mutex<std::collections::HashMap<String, Box<dyn HostedPlugin>>> {
+    static PROBES: std::sync::OnceLock<
+        parking_lot::Mutex<std::collections::HashMap<String, Box<dyn HostedPlugin>>>,
+    > = std::sync::OnceLock::new();
+    PROBES.get_or_init(Default::default)
+}
+
+/// The plug-in id in a slot.
+fn slot_plugin_id(state: &AppState, track_id: &str, slot_id: &str) -> Option<String> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    project
+        .track(track_id)?
+        .inserts
+        .iter()
+        .find(|s| s.id == slot_id)
+        .map(|s| s.plugin_id.clone())
+}
+
+fn parameter_text_for_slot(
+    state: &AppState,
+    track_id: &str,
+    slot_id: &str,
+    param_id: u32,
+    value: f64,
+) -> Option<String> {
+    let plugin_id = slot_plugin_id(state, track_id, slot_id)?;
+    // Only built-in plug-ins: loading a third-party one just to format a
+    // number would be slow, and it is loaded in this process.
+    if !plugin_id.starts_with("hardwave.native.") {
+        return None;
+    }
+    let mut probes = text_probes().lock();
+    if !probes.contains_key(&plugin_id) {
+        let descriptor = state
+            .engine
+            .lock()
+            .plugin_scanner
+            .lock()
+            .find(&plugin_id)
+            .cloned()?;
+        probes.insert(plugin_id.clone(), instantiate_plugin(&descriptor).ok()?);
+    }
+    probes.get(&plugin_id)?.parameter_text(param_id, value)
 }
 
 #[derive(Serialize)]
@@ -1005,6 +1056,10 @@ pub struct PluginParamInfo {
     pub max: f64,
     pub unit: String,
     pub automatable: bool,
+    /// The value as people read it, when the plug-in can say.
+    pub text: Option<String>,
+    /// The choices of a parameter that picks one of a few.
+    pub options: Option<Vec<String>>,
 }
 
 /// Enumerate a plug-in slot's parameters for the generic parameter sheet
@@ -1041,7 +1096,25 @@ pub fn get_plugin_parameters(
     };
     drop(engine);
 
-    let plugin = load_hosted(&descriptor)?;
+    let mut plugin = load_hosted(&descriptor)?;
+    // The values the slot is playing, not this instance's defaults: the
+    // sheet opened at defaults and showed settings the song was not using.
+    let live = state
+        .engine
+        .lock()
+        .snapshot_plugin_states(std::time::Duration::from_millis(300))
+        .and_then(|mut states| states.remove(&(track_id.clone(), slot_id.clone())));
+    let saved = || {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        project
+            .track(&track_id)
+            .and_then(|t| t.inserts.iter().find(|s| s.id == slot_id))
+            .and_then(|s| s.state.clone())
+    };
+    if let Some(bytes) = live.or_else(saved) {
+        let _ = plugin.set_state(&bytes);
+    }
     let count = plugin.get_parameter_count();
     let mut out = Vec::with_capacity(count as usize);
     for i in 0..count {
@@ -1049,6 +1122,8 @@ pub fn get_plugin_parameters(
             let value = plugin.get_parameter_value(info.id);
             out.push(PluginParamInfo {
                 id: info.id,
+                text: plugin.parameter_text(info.id, value),
+                options: plugin.parameter_options(info.id),
                 name: info.name,
                 default_value: info.default_value,
                 value,
