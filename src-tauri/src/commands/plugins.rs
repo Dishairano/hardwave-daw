@@ -424,6 +424,15 @@ pub async fn open_plugin_editor(
         (descriptor, shared_queue)
     };
 
+    // Built-in plug-ins have no window of their own: the mixer shows their
+    // controls. Asked for one, this tried to load "<native>" as a CLAP file.
+    if descriptor.path == std::path::Path::new("<native>") {
+        return Err(format!(
+            "{} is built in; its controls open in the mixer (Show controls)",
+            descriptor.name
+        ));
+    }
+
     // The window needs the plug-in in this process; only one the probe
     // passed and the person has not sandboxed gets there.
     may_load_in_process(&descriptor)?;

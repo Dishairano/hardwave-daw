@@ -1,4 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { PluginParamSheet } from '../PluginParamSheet'
 import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from '../../../stores/notificationStore'
 import { Knob } from '../../primitives/Knob'
@@ -166,9 +168,21 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
     })
   }, [insert, trackId])
 
+  // Built-in plug-ins have no window of their own, and a sandboxed one
+  // cannot show its window in this process: both get their controls as a
+  // panel here. Show GUI used to try to load a built-in as a CLAP file
+  // ("CLAP binary not found: <native>").
+  const [paramsOpen, setParamsOpen] = useState(false)
+  const builtIn = !!insert?.pluginId.startsWith('hardwave.native.')
+  const usesPanel = builtIn || sandboxed
+
   const onShowGui = useCallback(() => {
     if (!insert) return
     setMenuOpen(false)
+    if (usesPanel) {
+      setParamsOpen(true)
+      return
+    }
     // Unique label per slot so a re-click focuses the existing window
     // instead of erroring. plugins.rs:270 explicitly handles this.
     const windowLabel = `plugin-editor:${trackId}:${insert.id}`
@@ -182,7 +196,14 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
       console.error('open_plugin_editor failed', e)
       useNotificationStore.getState().push('error', `Could not open ${insert.pluginName}: ${String(e)}`)
     })
-  }, [insert, trackId])
+  }, [insert, trackId, usesPanel])
+
+  useEffect(() => {
+    if (!paramsOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setParamsOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [paramsOpen])
 
   const idxLabel = String(slotIndex + 1).padStart(2, '0')
 
@@ -293,7 +314,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
             Remove
           </button>
           <button role="menuitem" onClick={onShowGui} disabled={!insert}>
-            Show GUI
+            {usesPanel ? 'Show controls' : 'Show GUI'}
           </button>
           <button
             role="menuitem"
@@ -306,6 +327,36 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
             {sandboxed ? 'Own process: on' : 'Own process: off'}
           </button>
         </div>
+      )}
+      {paramsOpen && insert && createPortal(
+        <div
+          role="dialog"
+          aria-label={`${insert.pluginName} controls`}
+          style={{
+            position: 'fixed', right: 16, top: 72, width: 'min(320px, calc(100vw - 32px))',
+            maxHeight: 'calc(100vh - 96px)', zIndex: 5000, display: 'flex', flexDirection: 'column',
+            background: '#0c0c11', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6,
+            boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            <span style={{ flex: 1, fontSize: 11, fontWeight: 600, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {insert.pluginName}
+            </span>
+            <button
+              onClick={() => setParamsOpen(false)}
+              aria-label="Close"
+              title="Close (Esc)"
+              style={{ background: 'transparent', border: 0, color: '#9a9aa6', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}
+            >
+              ×
+            </button>
+          </div>
+          <div style={{ padding: 10, overflowY: 'auto' }}>
+            <PluginParamSheet trackId={trackId} slotId={insert.id} />
+          </div>
+        </div>,
+        document.body,
       )}
       {presetMenuAnchor && insert && (
         <PresetDropdown
