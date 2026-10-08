@@ -10,7 +10,7 @@
  * persist through the shared backend; instant cross-window refresh of *other*
  * windows is a follow-up.
  */
-import { PluginControls } from './components/mixer/PluginControls'
+import { PluginControls, PluginWindowBar } from './components/mixer/PluginControls'
 import { useMixerSelectionStore } from './stores/mixerSelectionStore'
 import React, { useEffect, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -100,6 +100,19 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
       )
       default: return <div style={{ padding: 16, color: hw.textMuted }}>Unknown panel: {panel}</div>
     }
+  }
+
+  // A third-party plug-in's window on Windows: this page is only the bar
+  // along its top; the plug-in fills the area below it.
+  if (panel === 'pluginHeader') {
+    return (
+      <PluginWindowBar
+        trackId={params.get('trackId') ?? ''}
+        slotId={params.get('slotId') ?? ''}
+        pluginId={params.get('pluginId') ?? ''}
+        pluginName={params.get('name') ?? 'Plug-in'}
+      />
+    )
   }
 
   return (

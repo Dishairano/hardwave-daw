@@ -17,6 +17,7 @@ mod osc_control;
 mod plugin_describe;
 mod plugin_probe;
 mod plugin_sandbox;
+mod plugin_window_host;
 mod prefs;
 mod process_memory;
 mod scripting;

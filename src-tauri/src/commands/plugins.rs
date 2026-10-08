@@ -392,6 +392,20 @@ pub async fn open_plugin_editor(
     track_id: Option<String>,
     slot_id: Option<String>,
 ) -> Result<String, String> {
+    // On Windows the window shows our bar above the plug-in, which is a page
+    // of the app, so the label sits inside the panel-* permission. One
+    // window per slot.
+    #[cfg(windows)]
+    let window_label = {
+        let key: String = slot_id
+            .as_deref()
+            .unwrap_or(&window_label)
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(64)
+            .collect();
+        format!("panel-pluginEditor-{key}")
+    };
     // A second click on Show GUI brings the open window forward. This was
     // checked after a whole new plug-in instance had been loaded, which
     // was then thrown away.
@@ -437,15 +451,72 @@ pub async fn open_plugin_editor(
     // passed and the person has not sandboxed gets there.
     may_load_in_process(&descriptor)?;
 
+    // The window's plug-in is a second instance beside the one that plays.
+    // It opened at the plug-in's defaults, so the window showed settings
+    // the song was not using. It starts from the playing slot's state.
+    let slot_state = match (track_id.clone(), slot_id.clone()) {
+        (Some(t), Some(s)) => {
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                app.state::<AppState>()
+                    .engine
+                    .lock()
+                    .snapshot_plugin_states(std::time::Duration::from_millis(500))
+                    .and_then(|mut states| states.remove(&(t, s)))
+            })
+            .await
+            .ok()
+            .flatten()
+        }
+        _ => None,
+    };
+
     // Built here, from an async command, like the panel windows. As a sync
     // command this ran inside WebView2's own message callback: a window
     // made there never started its page, and a plug-in whose editor is a
     // WebView2 (every Hardwave plug-in) waited on it for ever. Show GUI did
     // nothing.
-    let url = tauri::WebviewUrl::App("about:blank".into());
-    let editor_window = tauri::WebviewWindowBuilder::new(&app, &window_label, url)
+    let builder = {
+        // Windows: the app's own page, which draws the bar with the
+        // plug-in's name and presets; the plug-in goes in an area below it
+        // (plugin_window_host). Elsewhere the plug-in fills the window.
+        #[cfg(windows)]
+        {
+            let q = |v: &str| -> String {
+                v.chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '))
+                    .collect::<String>()
+                    .replace(' ', "%20")
+            };
+            let params = format!(
+                "trackId={}&slotId={}&pluginId={}&name={}",
+                q(track_id.as_deref().unwrap_or("")),
+                q(slot_id.as_deref().unwrap_or("")),
+                q(&plugin_id),
+                q(&descriptor.name)
+            );
+            let init = format!(
+                "(function(){{window.__HW_PANEL__={{panel:\"pluginHeader\",params:\"{params}\"}};}})();"
+            );
+            let url = app
+                .get_webview_window("main")
+                .and_then(|w| w.url().ok())
+                .map(tauri::WebviewUrl::External)
+                .unwrap_or_else(|| tauri::WebviewUrl::App("index.html".into()));
+            tauri::WebviewWindowBuilder::new(&app, &window_label, url).initialization_script(&init)
+        }
+        #[cfg(not(windows))]
+        {
+            tauri::WebviewWindowBuilder::new(
+                &app,
+                &window_label,
+                tauri::WebviewUrl::App("about:blank".into()),
+            )
+        }
+    };
+    let editor_window = builder
         .title(descriptor.name.clone())
-        .inner_size(600.0, 400.0)
+        .inner_size(600.0, 400.0 + crate::plugin_window_host::HEADER_CSS_PX)
         .resizable(true)
         .always_on_top(true)
         .build()
@@ -484,10 +555,22 @@ pub async fn open_plugin_editor(
                             .map_err(|e| e.to_string())?,
                         ),
                     };
-                    let handle = window
+                    if let Some(bytes) = slot_state.as_deref() {
+                        if let Err(e) = hosted.set_state(bytes) {
+                            log::warn!(
+                                "{}: window could not take the slot's state: {e}",
+                                descriptor.name
+                            );
+                        }
+                    }
+                    #[cfg(windows)]
+                    let (parent, area) = crate::plugin_window_host::make_area(&window)?;
+                    #[cfg(not(windows))]
+                    let parent = window
                         .window_handle()
-                        .map_err(|e| format!("window handle unavailable: {e}"))?;
-                    if !hosted.open_editor(handle.as_raw()) {
+                        .map_err(|e| format!("window handle unavailable: {e}"))?
+                        .as_raw();
+                    if !hosted.open_editor(parent) {
                         return Err(format!(
                             "{} has no window this host can show",
                             descriptor.name
@@ -495,7 +578,14 @@ pub async fn open_plugin_editor(
                     }
                     // The window takes the size the editor asks for, not
                     // a fixed 600 by 400 that cut most editors off.
-                    if let Some((w, h)) = hosted.editor_size() {
+                    let size = hosted.editor_size();
+                    #[cfg(windows)]
+                    {
+                        let (w, h) = size.unwrap_or((600, 400));
+                        area.fit(&window, w, h);
+                    }
+                    #[cfg(not(windows))]
+                    if let Some((w, h)) = size {
                         let _ = window.set_size(tauri::PhysicalSize::new(w, h));
                     }
                     app.state::<AppState>()

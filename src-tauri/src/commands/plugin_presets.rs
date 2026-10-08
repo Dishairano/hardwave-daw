@@ -150,6 +150,30 @@ pub fn load_plugin_preset(
 ) -> Result<(), String> {
     let dir = preset_dir(&app, &plugin_id)?;
     let bytes = fs::read(blob_path(&dir, &preset_id)).map_err(|e| format!("read blob: {e}"))?;
+    // The plug-in's open window is an instance of its own: give it the
+    // preset too, on the main thread where its interface lives, or the
+    // window keeps showing the old settings while the new ones play.
+    {
+        let key: String = slot_id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect();
+        let for_window = bytes.clone();
+        let app_main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let state = app_main.state::<AppState>();
+            let mut editors = state.plugin_editors.lock();
+            for (label, hosted) in editors.iter_mut() {
+                let label_key: String = label
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                if !key.is_empty() && label_key.ends_with(&key) {
+                    let _ = hosted.set_state(&for_window);
+                }
+            }
+        });
+    }
     let cmd = InsertCommand::SetState {
         track_id,
         slot_id,
