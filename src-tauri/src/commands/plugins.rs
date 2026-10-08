@@ -14,6 +14,8 @@ use hardwave_plugin_host::types::HostedPlugin;
 use hardwave_plugin_host::{
     clap_instance::ClapPluginInstance, vst3::Vst3PluginInstance, PluginDescriptor, PluginFormat,
 };
+// On Windows the plug-in area is made in plugin_window_host, which takes the handle itself.
+#[cfg(not(windows))]
 use raw_window_handle::HasWindowHandle;
 use serde::Serialize;
 use std::collections::HashSet;
