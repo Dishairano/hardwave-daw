@@ -37,7 +37,9 @@ pub fn evaluate(
         mute: None,
     };
     for lane in lanes {
-        if !lane.visible {
+        // A lane without points drives nothing. It used to play 0.5, so
+        // adding an empty lane jumped the knob it pointed at to half-way.
+        if !lane.visible || lane.points.is_empty() {
             continue;
         }
         match &lane.target {
@@ -76,4 +78,25 @@ pub fn evaluate(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A lane without points leaves the fader where it is; it used to play
+    /// 0.5, which on a volume lane is -27 dB.
+    #[test]
+    fn an_empty_lane_drives_nothing() {
+        let lane = AutomationLane {
+            id: "l".into(),
+            target: AutomationTarget::TrackVolume,
+            points: Vec::new(),
+            visible: true,
+        };
+        let mut chain = InsertChain::new();
+        let mix = evaluate(&[lane], &[], 0, 0.8, 0.0, &mut chain);
+        assert_eq!(mix.volume_linear, 0.8);
+        assert_eq!(mix.mute, None);
+    }
 }

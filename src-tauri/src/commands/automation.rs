@@ -17,7 +17,7 @@
 use crate::AppState;
 use hardwave_project::automation::{AutomationLane, AutomationPoint, AutomationTarget, CurveMode};
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize)]
@@ -331,4 +331,121 @@ pub fn apply_lfo_to_lane(
     };
     engine.rebuild_graph();
     Ok(count)
+}
+
+/// Right-click "Add automation lane" on a plug-in's control: the lane for
+/// it on the plug-in's channel (the one already there, or a new one), shown,
+/// and starting at the control's value (0..1) so nothing changes until a
+/// point is drawn. Returns the lane's id.
+#[tauri::command]
+pub fn add_param_automation_lane(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_id: String,
+    slot_id: String,
+    param_id: u32,
+    value: f64,
+) -> Result<String, String> {
+    state.engine.lock().snapshot_before_mutation();
+    let target = AutomationTarget::PluginParam { slot_id, param_id };
+    let lane_id = {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let index = match track
+            .automation_lanes
+            .iter()
+            .position(|l| l.target == target)
+        {
+            Some(i) => i,
+            None => {
+                track.automation_lanes.push(AutomationLane {
+                    id: Uuid::new_v4().to_string(),
+                    target,
+                    points: Vec::new(),
+                    visible: true,
+                });
+                track.automation_lanes.len() - 1
+            }
+        };
+        let lane = &mut track.automation_lanes[index];
+        lane.visible = true;
+        if lane.points.is_empty() {
+            lane.points.push(AutomationPoint {
+                tick: 0,
+                value: value.clamp(0.0, 1.0),
+                curve: CurveMode::Linear,
+                tension: 0.0,
+            });
+        }
+        lane.id.clone()
+    };
+    state.engine.lock().rebuild_graph();
+    crate::commands::plugins::tell_windows_track_changed(&app, &track_id);
+    Ok(lane_id)
+}
+
+/// Right-click "Init song with this value", as FL's "Init song with this
+/// position": the control's automation starts the song at this value (0..1).
+/// Sets the point at the start of its lane, and the first point of a clip
+/// that starts the song. Returns how many it set; none means the control
+/// has no automation, so the song already starts with the value it has.
+#[tauri::command]
+pub fn init_param_automation_at_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_id: String,
+    slot_id: String,
+    param_id: u32,
+    value: f64,
+) -> Result<usize, String> {
+    let value = value.clamp(0.0, 1.0);
+    let target = AutomationTarget::PluginParam { slot_id, param_id };
+    state.engine.lock().snapshot_before_mutation();
+    let changed = {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let mut changed = 0;
+        for lane in track
+            .automation_lanes
+            .iter_mut()
+            .filter(|l| l.target == target)
+        {
+            match lane.points.first_mut() {
+                Some(first) if first.tick == 0 => first.value = value,
+                _ => lane.points.insert(
+                    0,
+                    AutomationPoint {
+                        tick: 0,
+                        value,
+                        curve: CurveMode::Linear,
+                        tension: 0.0,
+                    },
+                ),
+            }
+            changed += 1;
+        }
+        for clip in track
+            .automation_clips
+            .iter_mut()
+            .filter(|c| c.target == target && c.start_tick == 0)
+        {
+            match clip.lane.points.first_mut() {
+                Some(first) if first.tick == 0 => first.value = value,
+                _ => clip.insert_point(0, value, CurveMode::Linear),
+            }
+            changed += 1;
+        }
+        changed
+    };
+    if changed > 0 {
+        state.engine.lock().rebuild_graph();
+        crate::commands::plugins::tell_windows_track_changed(&app, &track_id);
+    }
+    Ok(changed)
 }

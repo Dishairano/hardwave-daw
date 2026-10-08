@@ -1075,6 +1075,10 @@ pub struct PluginParamInfo {
     pub text: Option<String>,
     /// The choices of a parameter that picks one of a few.
     pub options: Option<Vec<String>>,
+    /// Built-ins only: the text at 101 even steps from min to max, so a
+    /// window can name any position while it draws or drags without asking
+    /// the app each time.
+    pub texts: Option<Vec<String>>,
 }
 
 /// Enumerate a plug-in slot's parameters for the generic parameter sheet
@@ -1131,14 +1135,24 @@ pub fn get_plugin_parameters(
         let _ = plugin.set_state(&bytes);
     }
     let count = plugin.get_parameter_count();
+    let built_in = plugin_id.starts_with("hardwave.native.");
     let mut out = Vec::with_capacity(count as usize);
     for i in 0..count {
         if let Some(info) = plugin.get_parameter_info(i) {
             let value = plugin.get_parameter_value(info.id);
+            let texts = built_in.then(|| {
+                (0..=100)
+                    .map(|k| {
+                        let v = info.min + (info.max - info.min) * f64::from(k) / 100.0;
+                        plugin.parameter_text(info.id, v).unwrap_or_default()
+                    })
+                    .collect()
+            });
             out.push(PluginParamInfo {
                 id: info.id,
                 text: plugin.parameter_text(info.id, value),
                 options: plugin.parameter_options(info.id),
+                texts,
                 name: info.name,
                 default_value: info.default_value,
                 value,
@@ -1512,7 +1526,7 @@ pub fn take_sandbox_crashes(_state: State<AppState>) -> Vec<SandboxCrash> {
 /// round) until that window happened to reload, which looked like the
 /// plug-in moving between channels. Each change to a channel's inserts now
 /// says which channel, to every window, and each reloads that channel.
-fn tell_windows_track_changed(app: &AppHandle, track_id: &str) {
+pub(crate) fn tell_windows_track_changed(app: &AppHandle, track_id: &str) {
     let _ = app.emit(
         "daw:trackChanged",
         serde_json::json!({ "trackId": track_id }),

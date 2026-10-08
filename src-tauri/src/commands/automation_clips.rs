@@ -9,7 +9,7 @@ use crate::commands::automation::LaneTargetSpec;
 use crate::AppState;
 use hardwave_project::automation::CurveMode;
 use hardwave_project::automation_clip::AutomationClip;
-use tauri::State;
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 /// Run `f` against a track's automation-clip list with the standard
@@ -171,4 +171,55 @@ pub fn remove_automation_clip_point(
         clip.remove_point(point_index);
         Ok(())
     })
+}
+
+/// The bar the playhead is in and the length of one bar there, in ticks.
+fn playhead_bar(state: &State<AppState>) -> (u64, u64) {
+    let engine = state.engine.lock();
+    let sample_rate = f64::from(engine.current_sample_rate().max(1));
+    let position = engine.transport.position();
+    let project = engine.project.lock();
+    let tick = project.tempo_map.samples_to_tick(position, sample_rate);
+    let (start, per_bar) = project
+        .tempo_map
+        .meter_segments()
+        .into_iter()
+        .rev()
+        .find(|(start, _)| *start <= tick)
+        .unwrap_or((0, 4 * hardwave_midi::PPQ));
+    let per_bar = per_bar.max(1);
+    (start + (tick - start) / per_bar * per_bar, per_bar)
+}
+
+/// Right-click "Create automation clip" on a plug-in's control, as in FL:
+/// a clip on the plug-in's channel from the bar the playhead is in, eight
+/// bars long, flat at the control's value (0..1) so the song sounds the
+/// same until a point is moved. Returns the clip's id.
+#[tauri::command]
+pub fn create_param_automation_clip(
+    app: AppHandle,
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    param_id: u32,
+    value: f64,
+) -> Result<String, String> {
+    let (start, per_bar) = playhead_bar(&state);
+    let length = per_bar * 8;
+    let id = Uuid::new_v4().to_string();
+    let id_out = id.clone();
+    with_clips(&state, &track_id, |clips| {
+        let mut clip = AutomationClip::new(
+            id,
+            hardwave_project::automation::AutomationTarget::PluginParam { slot_id, param_id },
+            start,
+            length,
+        );
+        clip.insert_point(0, value, CurveMode::Linear);
+        clip.insert_point(length, value, CurveMode::Linear);
+        clips.push(clip);
+        Ok(())
+    })?;
+    crate::commands::plugins::tell_windows_track_changed(&app, &track_id);
+    Ok(id_out)
 }
