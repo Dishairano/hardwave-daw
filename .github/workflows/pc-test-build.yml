@@ -84,3 +84,9 @@ jobs:
 
       - name: Put it where the founder can find it
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect-test-installer.ps1
+
+      # laptop-test-install-* also installs it on the laptop, for testing
+      # there through the Hardwave link (never over an open DAW).
+      - name: Install it here for testing
+        if: startsWith(github.ref_name, 'laptop-test-install-')
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-test-build.ps1
