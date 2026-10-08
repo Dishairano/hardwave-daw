@@ -23,7 +23,6 @@ pub mod sidechain_routing;
 pub mod step_rack;
 pub mod tempo;
 pub mod track;
-pub mod track_freeze;
 pub mod vca;
 
 pub use arrangement::{Arrangement, TrackTimeline};

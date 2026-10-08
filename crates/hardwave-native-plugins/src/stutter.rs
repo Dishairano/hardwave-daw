@@ -2,11 +2,9 @@
 //! loops it for a few repeats with optional per-repeat decay, producing
 //! the glitch/stutter effect from the Gross-Beat family.
 //!
-//! This is the **internal-rate** sibling: the slice length is set in
-//! milliseconds rather than synced to the host bar, because native
-//! plugins aren't handed the transport/tempo in `process`. A
-//! host-synced, curve-editable Gross-Beat proper is a follow-up that
-//! needs transport plumbed into the plugin process path.
+//! The slice is set in milliseconds, or with Sync in note values at the
+//! song's tempo, lined up to the bar through the host transport
+//! (`set_transport`).
 
 use crate::format;
 use hardwave_midi::MidiEvent;
