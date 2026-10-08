@@ -210,7 +210,9 @@ impl HostedPlugin for NativeConvReverb {
         let (name, default, unit) = match index {
             PARAM_PRESET => ("Preset", preset_to_norm(IrPreset::Plate), ""),
             PARAM_PRE_DELAY => ("Pre-Delay", (15.0_f64 / 200.0).clamp(0.0, 1.0), "ms"),
-            PARAM_LOW_CPU => ("Low-CPU", 1.0, ""),
+            // How much of the impulse is kept (10..100 %): shorter costs
+            // less CPU. Called "Low-CPU" before, which read like a switch.
+            PARAM_LOW_CPU => ("Tail Length", 1.0, "%"),
             PARAM_LOW_CUT => (
                 "Low Cut",
                 ((120.0_f64.log10() - 20.0_f64.log10()) / (1_000.0_f64.log10() - 20.0_f64.log10()))

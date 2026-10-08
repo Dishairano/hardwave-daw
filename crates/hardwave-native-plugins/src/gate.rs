@@ -29,6 +29,8 @@ pub struct NativeGate {
     release_ms: f32,
     hysteresis_db: f32,
     active: bool,
+    /// How far the gate pulled the level down in the last block (0 = open).
+    last_reduction_db: f32,
 }
 
 impl NativeGate {
@@ -96,6 +98,7 @@ impl NativeGate {
             release_ms: 50.0,
             hysteresis_db: 3.0,
             active: false,
+            last_reduction_db: 0.0,
         }
     }
 }
@@ -143,6 +146,7 @@ impl HostedPlugin for NativeGate {
             }
             return;
         }
+        let mut lowest_gain = 1.0_f32;
         for i in 0..num_samples {
             let in_l = inputs[0].get(i).copied().unwrap_or(0.0);
             let in_r = inputs[1].get(i).copied().unwrap_or(0.0);
@@ -152,12 +156,21 @@ impl HostedPlugin for NativeGate {
             let gain = gate_gain(
                 level_db,
                 self.threshold_db,
-                self.range_db,
+                // Range is kept as a depth (0..80 dB); gate_gain takes the
+                // floor as a negative level and clamps a positive one to
+                // 0 dB, so passing it as kept left the gate wide open.
+                -self.range_db,
                 self.hysteresis_db,
             );
+            lowest_gain = lowest_gain.min(gain);
             outputs[0][i] = in_l * gain;
             outputs[1][i] = in_r * gain;
         }
+        self.last_reduction_db = linear_to_db(lowest_gain).min(0.0);
+    }
+
+    fn gain_reduction_db(&self) -> Option<f32> {
+        Some(self.last_reduction_db)
     }
 
     fn get_parameter_count(&self) -> u32 {
@@ -311,6 +324,38 @@ impl HostedPlugin for NativeGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A closed gate reports how far it pulls the level down; an open one 0.
+    #[test]
+    fn a_closed_gate_reports_its_reduction() {
+        let mut g = NativeGate::new();
+        g.activate(48_000.0, 512).unwrap();
+        let quiet = vec![0.0001_f32; 4_800];
+        let mut out = vec![Vec::new(), Vec::new()];
+        for _ in 0..10 {
+            g.process(
+                &[&quiet, &quiet],
+                &mut out,
+                &[],
+                &mut Vec::new(),
+                quiet.len(),
+            );
+        }
+        assert!(
+            g.gain_reduction_db().unwrap() < -20.0,
+            "{:?}",
+            g.gain_reduction_db()
+        );
+        let loud = vec![0.5_f32; 4_800];
+        for _ in 0..10 {
+            g.process(&[&loud, &loud], &mut out, &[], &mut Vec::new(), loud.len());
+        }
+        assert!(
+            g.gain_reduction_db().unwrap() > -0.5,
+            "{:?}",
+            g.gain_reduction_db()
+        );
+    }
 
     #[test]
     fn parameter_text_reads_real_units() {

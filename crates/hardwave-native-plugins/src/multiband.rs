@@ -38,6 +38,8 @@ pub struct NativeMultiband {
     bands: [BandCompressor; 3],
     output_gain_db: f32,
     active: bool,
+    /// The deepest reduction of any band in the last block, for the meter.
+    last_reduction_db: f32,
 }
 
 impl NativeMultiband {
@@ -92,6 +94,7 @@ impl NativeMultiband {
             bands,
             output_gain_db: 0.0,
             active: false,
+            last_reduction_db: 0.0,
         }
     }
 
@@ -189,6 +192,11 @@ impl HostedPlugin for NativeMultiband {
             outputs[0][i] = l;
             outputs[1][i] = r;
         }
+        self.last_reduction_db = self.mb.take_gain_reduction_db();
+    }
+
+    fn gain_reduction_db(&self) -> Option<f32> {
+        Some(self.last_reduction_db)
     }
 
     fn get_parameter_count(&self) -> u32 {
@@ -425,6 +433,23 @@ impl HostedPlugin for NativeMultiband {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A loud signal over the band thresholds shows up as gain reduction.
+    #[test]
+    fn a_loud_signal_shows_gain_reduction() {
+        let mut m = NativeMultiband::new();
+        m.activate(48_000.0, 512).unwrap();
+        let loud: Vec<f32> = (0..4_800).map(|i| (i as f32 * 0.05).sin() * 0.9).collect();
+        let mut out = vec![Vec::new(), Vec::new()];
+        for _ in 0..5 {
+            m.process(&[&loud, &loud], &mut out, &[], &mut Vec::new(), loud.len());
+        }
+        assert!(
+            m.gain_reduction_db().unwrap() < -1.0,
+            "{:?}",
+            m.gain_reduction_db()
+        );
+    }
 
     #[test]
     fn parameter_text_reads_real_units() {

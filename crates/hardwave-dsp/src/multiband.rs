@@ -121,6 +121,8 @@ struct BandState {
     params: BandCompressor,
     env_l: EnvelopeFollower,
     env_r: EnvelopeFollower,
+    /// The deepest reduction since it was last read (0 = none).
+    deepest_gr_db: f32,
 }
 
 impl BandState {
@@ -135,6 +137,7 @@ impl BandState {
             params: BandCompressor::default(),
             env_l,
             env_r,
+            deepest_gr_db: 0.0,
         }
     }
 }
@@ -198,6 +201,19 @@ impl MultibandCompressor3 {
         }
     }
 
+    /// The deepest reduction any band applied since the last call (0 dB =
+    /// none, more negative = more), then cleared.
+    pub fn take_gain_reduction_db(&mut self) -> f32 {
+        let deepest = self
+            .bands
+            .iter()
+            .fold(0.0_f32, |m, b| m.min(b.deepest_gr_db));
+        for band in self.bands.iter_mut() {
+            band.deepest_gr_db = 0.0;
+        }
+        deepest
+    }
+
     /// Process one stereo frame through the three-band chain.
     pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
         // Split low from rest.
@@ -235,6 +251,7 @@ impl MultibandCompressor3 {
             band.params.ratio,
             band.params.knee_db,
         );
+        band.deepest_gr_db = band.deepest_gr_db.min(gr_db);
         let mut gain = db_to_linear(gr_db + band.params.makeup_db);
         // Auto-makeup if the caller set makeup_db to 0 explicitly.
         if band.params.makeup_db == 0.0 {
