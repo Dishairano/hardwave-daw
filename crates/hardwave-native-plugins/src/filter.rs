@@ -6,6 +6,7 @@
 //! (0.1..=10), Mix (dry/wet). Tone shaping with peaking + shelves
 //! gets its own plug-in (the parametric EQ already covers them).
 
+use crate::format;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -29,6 +30,26 @@ fn mode_from_normalised(v: f32) -> BiquadKind {
         1 => BiquadKind::HighPass,
         2 => BiquadKind::BandPass,
         _ => BiquadKind::Notch,
+    }
+}
+
+/// The shapes in knob order, for the host's choice list.
+const MODES: [BiquadKind; 4] = [
+    BiquadKind::LowPass,
+    BiquadKind::HighPass,
+    BiquadKind::BandPass,
+    BiquadKind::Notch,
+];
+
+fn mode_label(k: BiquadKind) -> &'static str {
+    match k {
+        BiquadKind::LowPass => "Low pass",
+        BiquadKind::HighPass => "High pass",
+        BiquadKind::BandPass => "Band pass",
+        BiquadKind::Notch => "Notch",
+        BiquadKind::Peak => "Peak",
+        BiquadKind::LowShelf => "Low shelf",
+        BiquadKind::HighShelf => "High shelf",
     }
 }
 
@@ -251,6 +272,23 @@ impl HostedPlugin for NativeFilter {
         }
     }
 
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        Some(match id {
+            PARAM_MODE => mode_label(mode_from_normalised(value as f32)).to_string(),
+            PARAM_CUTOFF => format::hz(Self::cutoff_from_normalised(value) as f64),
+            PARAM_Q => format::num(Self::q_from_normalised(value) as f64, 2, ""),
+            PARAM_MIX => format::pct(value.clamp(0.0, 1.0)),
+            _ => return None,
+        })
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_MODE => Some(MODES.iter().map(|&k| mode_label(k).to_string()).collect()),
+            _ => None,
+        }
+    }
+
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"mode\":{},\"cutoff\":{},\"q\":{},\"mix\":{}}}",
@@ -298,5 +336,37 @@ impl HostedPlugin for NativeFilter {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_matches_what_the_setter_picks() {
+        let f = NativeFilter::new();
+        assert_eq!(
+            f.parameter_text(PARAM_CUTOFF, 0.0).as_deref(),
+            Some("20.0 Hz")
+        );
+        assert_eq!(
+            f.parameter_text(PARAM_CUTOFF, 1.0).as_deref(),
+            Some("20.00 kHz")
+        );
+        let q = f.get_parameter_info(PARAM_Q).unwrap().default_value;
+        assert_eq!(f.parameter_text(PARAM_Q, q).as_deref(), Some("0.71"));
+        let options = f.parameter_options(PARAM_MODE).unwrap();
+        assert_eq!(options, vec!["Low pass", "High pass", "Band pass", "Notch"]);
+        let n = options.len();
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / (n - 1) as f64;
+            assert_eq!(f.parameter_text(PARAM_MODE, v).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(f.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+        }
     }
 }

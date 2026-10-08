@@ -2,6 +2,7 @@
 //! Mirrors Fruity Chorus / Boss CE-2 baseline. Uses
 //! `hardwave_dsp::modulation::ModulatedDelay` for the per-channel core.
 
+use crate::format;
 use hardwave_dsp::modulation::ModulatedDelay;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -18,6 +19,21 @@ const PARAM_FEEDBACK: u32 = 2;
 const PARAM_MIX: u32 = 3;
 const PARAM_WIDTH: u32 = 4;
 const PARAM_COUNT: u32 = 5;
+
+/// Deepest LFO sweep, in seconds, at the top of the Depth knob.
+const MAX_DEPTH_SECS: f64 = 0.020;
+
+/// LFO rate in hertz (0..8) from the 0..1 knob. The setter and the text
+/// both use it so what is shown is what is set.
+fn rate_hz_from_norm(v: f64) -> f32 {
+    (v * 8.0) as f32
+}
+
+/// LFO sweep in seconds (0..20 ms) from the 0..1 knob; the setter turns
+/// it into samples at the current rate.
+fn depth_secs_from_norm(v: f64) -> f64 {
+    v * MAX_DEPTH_SECS
+}
 
 pub struct NativeChorus {
     descriptor: PluginDescriptor,
@@ -177,7 +193,8 @@ impl HostedPlugin for NativeChorus {
     fn get_parameter_value(&self, id: u32) -> f64 {
         match id {
             PARAM_RATE => (self.rate_hz / 8.0).clamp(0.0, 1.0) as f64,
-            PARAM_DEPTH => (self.depth_samples / (0.020 * self.sample_rate)).clamp(0.0, 1.0) as f64,
+            PARAM_DEPTH => (self.depth_samples / (MAX_DEPTH_SECS as f32 * self.sample_rate))
+                .clamp(0.0, 1.0) as f64,
             PARAM_FEEDBACK => self.feedback as f64,
             PARAM_MIX => self.mix as f64,
             PARAM_WIDTH => self.width as f64,
@@ -188,14 +205,28 @@ impl HostedPlugin for NativeChorus {
     fn set_parameter_value(&mut self, id: u32, value: f64) {
         let v = value.clamp(0.0, 1.0);
         match id {
-            PARAM_RATE => self.rate_hz = (v * 8.0) as f32,
-            PARAM_DEPTH => self.depth_samples = (v * 0.020 * self.sample_rate as f64) as f32,
+            PARAM_RATE => self.rate_hz = rate_hz_from_norm(v),
+            PARAM_DEPTH => {
+                self.depth_samples = (depth_secs_from_norm(v) * self.sample_rate as f64) as f32
+            }
             PARAM_FEEDBACK => self.feedback = v as f32,
             PARAM_MIX => self.mix = v as f32,
             PARAM_WIDTH => self.width = v as f32,
             _ => {}
         }
         self.refresh();
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0);
+        let text = match id {
+            PARAM_RATE => format::hz(rate_hz_from_norm(v) as f64),
+            PARAM_DEPTH => format::secs(depth_secs_from_norm(v)),
+            PARAM_FEEDBACK | PARAM_MIX | PARAM_WIDTH => format::pct(v),
+            _ => return None,
+        };
+        Some(text)
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -243,5 +274,25 @@ impl HostedPlugin for NativeChorus {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_read_as_text() {
+        let p = NativeChorus::new();
+        let shown = |id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(PARAM_RATE).as_deref(), Some("0.6 Hz"));
+        assert_eq!(shown(PARAM_DEPTH).as_deref(), Some("5.00 ms"));
+        assert_eq!(shown(PARAM_MIX).as_deref(), Some("40 %"));
+        for id in 0..PARAM_COUNT {
+            assert!(
+                p.parameter_text(id, 0.5).is_some(),
+                "parameter {id} has no text"
+            );
+        }
     }
 }

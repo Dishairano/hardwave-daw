@@ -3,6 +3,7 @@
 //! at the basics level: algorithm picker, 4 op ratios + levels, shared
 //! ADSR. Hardstyle producers use this for screech leads + bell stabs.
 
+use crate::format;
 use hardwave_dsp::fm_synth::{Algorithm, FmVoice};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -43,8 +44,8 @@ fn algo_from_norm(v: f32) -> Algorithm {
     }
 }
 
-fn algo_to_norm(a: Algorithm) -> f64 {
-    let idx = match a {
+fn algo_index(a: Algorithm) -> usize {
+    match a {
         Algorithm::Stack => 0,
         Algorithm::ParallelMid => 1,
         Algorithm::ThreeToOne => 2,
@@ -53,8 +54,35 @@ fn algo_to_norm(a: Algorithm) -> f64 {
         Algorithm::OneModTwoPlusTwoCarriers => 5,
         Algorithm::FanOutCarriers => 6,
         Algorithm::ChainPlusSolo => 7,
-    };
-    (idx as f64 + 0.5) / 8.0
+    }
+}
+
+fn algo_to_norm(a: Algorithm) -> f64 {
+    (algo_index(a) as f64 + 0.5) / 8.0
+}
+
+/// Algorithm names by `algo_index`, which is also the order
+/// `algo_from_norm` picks them in, so choice i sits at i / 7.
+const ALGO_NAMES: [&str; 8] = [
+    "Stack",
+    "Parallel Mid",
+    "3 to 1",
+    "Dual Pair",
+    "Parallel",
+    "Pair + 2",
+    "Fan Out",
+    "Chain + Solo",
+];
+
+/// Operator frequency ratio (0.01..8) from the 0..1 knob. The setter and
+/// the text both use it so what is shown is what is set.
+fn ratio_from_norm(v: f64) -> f32 {
+    (v * 8.0).max(0.01) as f32
+}
+
+/// Envelope time in seconds (1 ms..5 s) from the 0..1 knob.
+fn env_secs_from_norm(v: f64) -> f32 {
+    (v * 5.0).max(0.001) as f32
 }
 
 struct VoiceSlot {
@@ -311,22 +339,47 @@ impl HostedPlugin for NativeFmSynth {
         let v = value.clamp(0.0, 1.0);
         match id {
             PARAM_ALGORITHM => self.algorithm = algo_from_norm(v as f32),
-            PARAM_OP1_RATIO => self.op_ratios[0] = (v * 8.0).max(0.01) as f32,
+            PARAM_OP1_RATIO => self.op_ratios[0] = ratio_from_norm(v),
             PARAM_OP1_LEVEL => self.op_levels[0] = v as f32,
-            PARAM_OP2_RATIO => self.op_ratios[1] = (v * 8.0).max(0.01) as f32,
+            PARAM_OP2_RATIO => self.op_ratios[1] = ratio_from_norm(v),
             PARAM_OP2_LEVEL => self.op_levels[1] = v as f32,
-            PARAM_OP3_RATIO => self.op_ratios[2] = (v * 8.0).max(0.01) as f32,
+            PARAM_OP3_RATIO => self.op_ratios[2] = ratio_from_norm(v),
             PARAM_OP3_LEVEL => self.op_levels[2] = v as f32,
-            PARAM_OP4_RATIO => self.op_ratios[3] = (v * 8.0).max(0.01) as f32,
+            PARAM_OP4_RATIO => self.op_ratios[3] = ratio_from_norm(v),
             PARAM_OP4_LEVEL => self.op_levels[3] = v as f32,
-            PARAM_ATTACK => self.attack = (v * 5.0).max(0.001) as f32,
-            PARAM_DECAY => self.decay = (v * 5.0).max(0.001) as f32,
+            PARAM_ATTACK => self.attack = env_secs_from_norm(v),
+            PARAM_DECAY => self.decay = env_secs_from_norm(v),
             PARAM_SUSTAIN => self.sustain = v as f32,
-            PARAM_RELEASE => self.release = (v * 5.0).max(0.001) as f32,
+            PARAM_RELEASE => self.release = env_secs_from_norm(v),
             PARAM_MASTER => self.master_gain = v as f32,
             _ => {}
         }
         self.refresh_static();
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0);
+        let text = match id {
+            PARAM_ALGORITHM => ALGO_NAMES[algo_index(algo_from_norm(v as f32))].to_string(),
+            PARAM_OP1_RATIO | PARAM_OP2_RATIO | PARAM_OP3_RATIO | PARAM_OP4_RATIO => {
+                format::num(ratio_from_norm(v) as f64, 2, "x")
+            }
+            PARAM_OP1_LEVEL | PARAM_OP2_LEVEL | PARAM_OP3_LEVEL | PARAM_OP4_LEVEL
+            | PARAM_SUSTAIN | PARAM_MASTER => format::pct(v),
+            PARAM_ATTACK | PARAM_DECAY | PARAM_RELEASE => {
+                format::secs(env_secs_from_norm(v) as f64)
+            }
+            _ => return None,
+        };
+        Some(text)
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_ALGORITHM => Some(ALGO_NAMES.iter().map(|s| s.to_string()).collect()),
+            _ => None,
+        }
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -392,5 +445,35 @@ impl HostedPlugin for NativeFmSynth {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_read_as_text_and_choices_match_the_setter() {
+        let mut p = NativeFmSynth::new();
+        let shown = |p: &NativeFmSynth, id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(&p, PARAM_ALGORITHM).as_deref(), Some("Parallel Mid"));
+        assert_eq!(shown(&p, PARAM_OP2_RATIO).as_deref(), Some("2.00 x"));
+        assert_eq!(shown(&p, PARAM_MASTER).as_deref(), Some("60 %"));
+        assert_eq!(shown(&p, PARAM_RELEASE).as_deref(), Some("300 ms"));
+
+        let options = p.parameter_options(PARAM_ALGORITHM).unwrap();
+        let last = (options.len() - 1) as f64;
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / last;
+            assert_eq!(p.parameter_text(PARAM_ALGORITHM, v).as_ref(), Some(label));
+            p.set_parameter_value(PARAM_ALGORITHM, v);
+            assert_eq!(shown(&p, PARAM_ALGORITHM).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            assert!(
+                p.parameter_text(id, 0.5).is_some(),
+                "parameter {id} has no text"
+            );
+        }
     }
 }

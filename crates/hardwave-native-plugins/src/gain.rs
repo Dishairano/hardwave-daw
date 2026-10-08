@@ -1,6 +1,7 @@
 //! Native gain utility — volume in dB + pan + phase invert.
 //! Mirrors Fruity Balance / Pro Q "Utility" plugin essentials.
 
+use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
     HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
@@ -43,6 +44,16 @@ impl NativeGain {
             has_midi_input: false,
             has_editor: false,
         }
+    }
+
+    /// Gain a 0..1 value sets: -36..+12 dB, linear.
+    fn gain_db_from_normalised(v: f64) -> f32 {
+        (v.clamp(0.0, 1.0) * 48.0 - 36.0) as f32
+    }
+
+    /// Pan a 0..1 value sets: -1 (left) to +1 (right), 0.5 = centre.
+    fn pan_from_normalised(v: f64) -> f32 {
+        (v.clamp(0.0, 1.0) * 2.0 - 1.0) as f32
     }
 
     pub fn new() -> Self {
@@ -150,13 +161,33 @@ impl HostedPlugin for NativeGain {
     fn set_parameter_value(&mut self, id: u32, value: f64) {
         let v = value.clamp(0.0, 1.0);
         match id {
-            PARAM_GAIN => self.gain_db = (v * 48.0 - 36.0) as f32,
-            PARAM_PAN => self.pan = (v * 2.0 - 1.0) as f32,
+            PARAM_GAIN => self.gain_db = Self::gain_db_from_normalised(v),
+            PARAM_PAN => self.pan = Self::pan_from_normalised(v),
             PARAM_INVERT_L => self.invert_l = v >= 0.5,
             PARAM_INVERT_R => self.invert_r = v >= 0.5,
             PARAM_MUTE => self.muted = v >= 0.5,
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let v = value.clamp(0.0, 1.0);
+        Some(match id {
+            PARAM_GAIN => format::db(Self::gain_db_from_normalised(v) as f64),
+            // The way the mixer's pan knobs read: C, L50, R50.
+            PARAM_PAN => {
+                let pan = (Self::pan_from_normalised(v) as f64 * 100.0).round();
+                if pan == 0.0 {
+                    "C".to_string()
+                } else if pan < 0.0 {
+                    format!("L{}", -pan)
+                } else {
+                    format!("R{pan}")
+                }
+            }
+            PARAM_INVERT_L | PARAM_INVERT_R | PARAM_MUTE => format::on_off(v),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -207,5 +238,34 @@ impl HostedPlugin for NativeGain {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_reads_real_units() {
+        let g = NativeGain::new();
+        let gain = g.get_parameter_value(PARAM_GAIN);
+        assert_eq!(
+            g.parameter_text(PARAM_GAIN, gain).as_deref(),
+            Some("0.0 dB")
+        );
+        assert_eq!(
+            g.parameter_text(PARAM_GAIN, 0.0).as_deref(),
+            Some("-36.0 dB")
+        );
+        assert_eq!(g.parameter_text(PARAM_PAN, 0.5).as_deref(), Some("C"));
+        assert_eq!(g.parameter_text(PARAM_PAN, 0.25).as_deref(), Some("L50"));
+        assert_eq!(g.parameter_text(PARAM_PAN, 1.0).as_deref(), Some("R100"));
+        assert_eq!(g.parameter_text(PARAM_MUTE, 1.0).as_deref(), Some("On"));
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(g.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+            assert!(g.parameter_options(id).is_none());
+        }
     }
 }

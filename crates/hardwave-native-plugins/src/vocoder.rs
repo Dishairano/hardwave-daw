@@ -8,6 +8,7 @@
 //! the bands sum to the output. A saw/pulse carrier gives the robotic
 //! talk-box voice; the noise carrier gives a whisper/breath effect.
 
+use crate::format;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::dynamics::{DetectMode, EnvelopeFollower};
 use hardwave_midi::MidiEvent;
@@ -48,6 +49,14 @@ fn band_centers(n: usize, low: f32, high: f32) -> Vec<f32> {
     }
     let ratio = (high / low).powf(1.0 / (n - 1) as f32);
     (0..n).map(|i| low * ratio.powi(i as i32)).collect()
+}
+
+fn carrier_label(kind: Carrier) -> &'static str {
+    match kind {
+        Carrier::Saw => "Saw",
+        Carrier::Pulse => "Pulse",
+        Carrier::Noise => "Noise",
+    }
 }
 
 /// One carrier sample for `phase` in `[0, 1)`. `rng` advances only for noise.
@@ -151,6 +160,33 @@ impl NativeVocoder {
         e.set_mode(DetectMode::Peak);
         e.set_times(attack_ms, release_ms, sr);
         e
+    }
+
+    /// The real value behind a 0..1 knob: hertz for the tone, milliseconds
+    /// for the envelope, the wet amount itself otherwise. Setting a
+    /// parameter and showing it both go through here, so the label is
+    /// always what the sound is doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0) as f32;
+        match id {
+            PARAM_TONE => 55.0 + v * (220.0 - 55.0),
+            PARAM_ATTACK => (v * 100.0).max(0.1),
+            PARAM_RELEASE => (v * 500.0).max(1.0),
+            _ => v,
+        }
+    }
+
+    /// Which carrier a 0..1 setting picks. Saw, pulse and noise sit at 0,
+    /// 0.5 and 1, with the switch at a third and two thirds.
+    fn carrier_from_normalised(value: f64) -> Carrier {
+        let v = value.clamp(0.0, 1.0) as f32;
+        if v < 0.33 {
+            Carrier::Saw
+        } else if v < 0.66 {
+            Carrier::Pulse
+        } else {
+            Carrier::Noise
+        }
     }
 
     fn rebuild_bands(&mut self) {
@@ -269,28 +305,43 @@ impl HostedPlugin for NativeVocoder {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0) as f32;
+        let real = Self::from_normalised(id, value);
         match id {
-            PARAM_WET => self.wet = v,
-            PARAM_CARRIER => {
-                self.carrier = if v < 0.33 {
-                    Carrier::Saw
-                } else if v < 0.66 {
-                    Carrier::Pulse
-                } else {
-                    Carrier::Noise
-                };
-            }
-            PARAM_TONE => self.carrier_freq = 55.0 + v * (220.0 - 55.0),
+            PARAM_WET => self.wet = real,
+            PARAM_CARRIER => self.carrier = Self::carrier_from_normalised(value),
+            PARAM_TONE => self.carrier_freq = real,
             PARAM_ATTACK => {
-                self.attack_ms = (v * 100.0).max(0.1);
+                self.attack_ms = real;
                 self.rebuild_bands();
             }
             PARAM_RELEASE => {
-                self.release_ms = (v * 500.0).max(1.0);
+                self.release_ms = real;
                 self.rebuild_bands();
             }
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_WET => format::pct(real),
+            PARAM_CARRIER => carrier_label(Self::carrier_from_normalised(value)).to_string(),
+            PARAM_TONE => format::hz(real),
+            PARAM_ATTACK | PARAM_RELEASE => format::ms(real),
+            _ => return None,
+        })
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_CARRIER => Some(
+                [Carrier::Saw, Carrier::Pulse, Carrier::Noise]
+                    .into_iter()
+                    .map(|c| carrier_label(c).to_string())
+                    .collect(),
+            ),
+            _ => None,
         }
     }
 
@@ -416,5 +467,33 @@ mod tests {
         let mut v = NativeVocoder::new(); // not activated
         let out = run(&mut v, &[0.1, -0.2, 0.3, -0.4]);
         assert_eq!(out, vec![0.1, -0.2, 0.3, -0.4]);
+    }
+
+    #[test]
+    fn carrier_choices_match_what_the_setting_picks() {
+        let v = NativeVocoder::new();
+        let wet = v.get_parameter_info(PARAM_WET).unwrap().default_value;
+        assert_eq!(v.parameter_text(PARAM_WET, wet).as_deref(), Some("100 %"));
+        let release = v.get_parameter_info(PARAM_RELEASE).unwrap().default_value;
+        assert_eq!(
+            v.parameter_text(PARAM_RELEASE, release).as_deref(),
+            Some("60.0 ms")
+        );
+        assert_eq!(
+            v.parameter_text(PARAM_TONE, 0.0).as_deref(),
+            Some("55.0 Hz")
+        );
+        let options = v.parameter_options(PARAM_CARRIER).unwrap();
+        assert_eq!(options, vec!["Saw", "Pulse", "Noise"]);
+        let last = (options.len() - 1) as f64;
+        for (i, label) in options.iter().enumerate() {
+            let value = i as f64 / last;
+            assert_eq!(v.parameter_text(PARAM_CARRIER, value).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            for step in 0..=10 {
+                assert!(v.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }

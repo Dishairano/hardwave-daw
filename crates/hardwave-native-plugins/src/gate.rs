@@ -2,6 +2,7 @@
 //! Mirrors Fruity Limiter's gate mode at the basic level: threshold,
 //! range (dB of attenuation), attack/release, hysteresis.
 
+use crate::format;
 use hardwave_dsp::dynamics::{gate_gain, linear_to_db, DetectMode, EnvelopeFollower};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -46,6 +47,33 @@ impl NativeGate {
             num_outputs: 2,
             has_midi_input: false,
             has_editor: false,
+        }
+    }
+
+    /// The real value a 0..1 parameter value sets. Shared by the setter
+    /// and the label so the two never disagree.
+    fn from_normalised(id: u32, v: f64) -> f32 {
+        let v = v.clamp(0.0, 1.0);
+        match id {
+            // -80..0 dB
+            PARAM_THRESHOLD => (v * 80.0 - 80.0) as f32,
+            // 0..80 dB of attenuation
+            PARAM_RANGE => (v * 80.0) as f32,
+            // 0.1..200 ms log
+            PARAM_ATTACK => {
+                let lo = 0.1_f32.log10();
+                let hi = 200.0_f32.log10();
+                10.0_f32.powf(lo + (hi - lo) * v as f32)
+            }
+            // 0.1..2000 ms log
+            PARAM_RELEASE => {
+                let lo = 0.1_f32.log10();
+                let hi = 2000.0_f32.log10();
+                10.0_f32.powf(lo + (hi - lo) * v as f32)
+            }
+            // 0..12 dB
+            PARAM_HYSTERESIS => (v * 12.0) as f32,
+            _ => v as f32,
         }
     }
 
@@ -193,24 +221,20 @@ impl HostedPlugin for NativeGate {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let real = Self::from_normalised(id, value);
         let mut update_env = false;
         match id {
-            PARAM_THRESHOLD => self.threshold_db = (v * 80.0 - 80.0) as f32,
-            PARAM_RANGE => self.range_db = (v * 80.0) as f32,
+            PARAM_THRESHOLD => self.threshold_db = real,
+            PARAM_RANGE => self.range_db = real,
             PARAM_ATTACK => {
-                let lo = 0.1_f32.log10();
-                let hi = 200.0_f32.log10();
-                self.attack_ms = 10.0_f32.powf(lo + (hi - lo) * v as f32);
+                self.attack_ms = real;
                 update_env = true;
             }
             PARAM_RELEASE => {
-                let lo = 0.1_f32.log10();
-                let hi = 2000.0_f32.log10();
-                self.release_ms = 10.0_f32.powf(lo + (hi - lo) * v as f32);
+                self.release_ms = real;
                 update_env = true;
             }
-            PARAM_HYSTERESIS => self.hysteresis_db = (v * 12.0) as f32,
+            PARAM_HYSTERESIS => self.hysteresis_db = real,
             _ => {}
         }
         if update_env {
@@ -219,6 +243,18 @@ impl HostedPlugin for NativeGate {
             self.env_r
                 .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_THRESHOLD | PARAM_HYSTERESIS => format::db(real),
+            // Range is how far a closed gate pulls the signal down, so it
+            // reads as a cut. Zero stays "0.0 dB" rather than "-0.0 dB".
+            PARAM_RANGE => format::db(if real > 0.0 { -real } else { 0.0 }),
+            PARAM_ATTACK | PARAM_RELEASE => format::ms(real),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -269,5 +305,33 @@ impl HostedPlugin for NativeGate {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_reads_real_units() {
+        let g = NativeGate::new();
+        let text = |id: u32| {
+            let default = g.get_parameter_info(id).unwrap().default_value;
+            g.parameter_text(id, default)
+        };
+        assert_eq!(text(PARAM_THRESHOLD).as_deref(), Some("-40.0 dB"));
+        assert_eq!(text(PARAM_RANGE).as_deref(), Some("-60.0 dB"));
+        assert_eq!(text(PARAM_ATTACK).as_deref(), Some("1.00 ms"));
+        assert_eq!(text(PARAM_RELEASE).as_deref(), Some("50.0 ms"));
+        assert_eq!(
+            g.parameter_text(PARAM_RANGE, 0.0).as_deref(),
+            Some("0.0 dB")
+        );
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(g.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+            assert!(g.parameter_options(id).is_none());
+        }
     }
 }

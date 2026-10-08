@@ -3,6 +3,7 @@
 //! knob plus output trim. Distinct from individual Saturator + Limiter
 //! by being preset + one-shot for non-mastering producers.
 
+use crate::format;
 use hardwave_dsp::dynamics::{
     compressor_gain_reduction_db, db_to_linear, linear_to_db, DetectMode, EnvelopeFollower,
 };
@@ -67,6 +68,17 @@ impl NativeSoundgoodizer {
             amount: 0.4,
             output_db: 0.0,
             active: false,
+        }
+    }
+
+    /// The real value behind a 0..1 knob: dB for the output, the amount
+    /// itself otherwise. Setting a parameter and showing it both go
+    /// through here, so the label is always what the sound is doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0);
+        match id {
+            PARAM_OUTPUT => (v * 24.0 - 12.0) as f32,
+            _ => v as f32,
         }
     }
 
@@ -172,15 +184,24 @@ impl HostedPlugin for NativeSoundgoodizer {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let real = Self::from_normalised(id, value);
         match id {
             PARAM_AMOUNT => {
-                self.amount = v as f32;
+                self.amount = real;
                 self.refresh();
             }
-            PARAM_OUTPUT => self.output_db = (v * 24.0 - 12.0) as f32,
+            PARAM_OUTPUT => self.output_db = real,
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_AMOUNT => format::pct(real),
+            PARAM_OUTPUT => format::db(real),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -215,5 +236,35 @@ impl HostedPlugin for NativeSoundgoodizer {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amount_reads_in_percent_and_output_in_db() {
+        let sg = NativeSoundgoodizer::new();
+        let amount = sg.get_parameter_info(PARAM_AMOUNT).unwrap().default_value;
+        assert_eq!(
+            sg.parameter_text(PARAM_AMOUNT, amount).as_deref(),
+            Some("40 %")
+        );
+        let out = sg.get_parameter_info(PARAM_OUTPUT).unwrap().default_value;
+        assert_eq!(
+            sg.parameter_text(PARAM_OUTPUT, out).as_deref(),
+            Some("0.0 dB")
+        );
+        assert_eq!(
+            sg.parameter_text(PARAM_OUTPUT, 0.0).as_deref(),
+            Some("-12.0 dB")
+        );
+        for id in 0..PARAM_COUNT {
+            assert!(sg.parameter_options(id).is_none());
+            for step in 0..=10 {
+                assert!(sg.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }

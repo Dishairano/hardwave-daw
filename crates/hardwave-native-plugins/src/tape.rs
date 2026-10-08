@@ -3,6 +3,7 @@
 //! at the basic-features level. Distinct from NativeVibrato (which
 //! is purely modulation, no saturation/HF-loss colour).
 
+use crate::format;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::modulation::ModulatedDelay;
 use hardwave_dsp::synth_extras::FilterDrive;
@@ -87,6 +88,23 @@ impl NativeTape {
         s.drive_l.set_amount(0.4);
         s.drive_r.set_amount(0.4);
         s
+    }
+
+    /// The real value behind a 0..1 knob: hertz for the HF loss, dB for
+    /// the output, the amount itself otherwise. Setting a parameter and
+    /// showing it both go through here, so the label is always what the
+    /// sound is doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0);
+        match id {
+            PARAM_HF_LOSS => {
+                let lo = 4_000.0_f32.log10();
+                let hi = 20_000.0_f32.log10();
+                10.0_f32.powf(lo + (hi - lo) * v as f32)
+            }
+            PARAM_OUTPUT => (v * 24.0 - 12.0) as f32,
+            _ => v as f32,
+        }
     }
 
     fn ensure_coefs(&mut self) {
@@ -232,25 +250,33 @@ impl HostedPlugin for NativeTape {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let real = Self::from_normalised(id, value);
         match id {
             PARAM_WOW => {
-                self.wow_amount = v as f32;
+                self.wow_amount = real;
                 self.refresh_wow();
             }
             PARAM_DRIVE => {
-                self.drive_l.set_amount(v as f32);
-                self.drive_r.set_amount(v as f32);
+                self.drive_l.set_amount(real);
+                self.drive_r.set_amount(real);
             }
             PARAM_HF_LOSS => {
-                let lo = 4_000.0_f32.log10();
-                let hi = 20_000.0_f32.log10();
-                self.hf_loss_hz = 10.0_f32.powf(lo + (hi - lo) * v as f32);
+                self.hf_loss_hz = real;
                 self.needs_recoef = true;
             }
-            PARAM_OUTPUT => self.output_db = (v * 24.0 - 12.0) as f32,
+            PARAM_OUTPUT => self.output_db = real,
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_WOW | PARAM_DRIVE => format::pct(real),
+            PARAM_HF_LOSS => format::hz(real),
+            PARAM_OUTPUT => format::db(real),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -301,5 +327,36 @@ impl HostedPlugin for NativeTape {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameters_read_as_percent_hertz_and_db() {
+        let t = NativeTape::new();
+        let wow = t.get_parameter_info(PARAM_WOW).unwrap().default_value;
+        assert_eq!(t.parameter_text(PARAM_WOW, wow).as_deref(), Some("30 %"));
+        let hf = t.get_parameter_info(PARAM_HF_LOSS).unwrap().default_value;
+        assert_eq!(
+            t.parameter_text(PARAM_HF_LOSS, hf).as_deref(),
+            Some("12.00 kHz")
+        );
+        assert_eq!(
+            t.parameter_text(PARAM_OUTPUT, 0.5).as_deref(),
+            Some("0.0 dB")
+        );
+        assert_eq!(
+            t.parameter_text(PARAM_OUTPUT, 1.0).as_deref(),
+            Some("+12.0 dB")
+        );
+        for id in 0..PARAM_COUNT {
+            assert!(t.parameter_options(id).is_none());
+            for step in 0..=10 {
+                assert!(t.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }

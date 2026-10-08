@@ -3,6 +3,7 @@
 //! Distinct from NativeStereo's bass-mono toggle (which only mono-folds
 //! the sub band) by collapsing the full spectrum.
 
+use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
     HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
@@ -44,6 +45,13 @@ impl NativeMonoFold {
             amount: 1.0,
             active: false,
         }
+    }
+
+    /// How much of the stereo image folds to mono for a 0..1 setting.
+    /// Setting it and showing it both go through here, so the label is
+    /// always what the sound is doing.
+    fn amount_from_normalised(value: f64) -> f32 {
+        value.clamp(0.0, 1.0) as f32
     }
 }
 
@@ -124,7 +132,14 @@ impl HostedPlugin for NativeMonoFold {
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
         if id == PARAM_AMOUNT {
-            self.amount = value.clamp(0.0, 1.0) as f32
+            self.amount = Self::amount_from_normalised(value)
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        match id {
+            PARAM_AMOUNT => Some(format::pct(Self::amount_from_normalised(value) as f64)),
+            _ => None,
         }
     }
 
@@ -156,5 +171,29 @@ impl HostedPlugin for NativeMonoFold {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amount_reads_in_percent() {
+        let m = NativeMonoFold::new();
+        let amount = m.get_parameter_info(PARAM_AMOUNT).unwrap().default_value;
+        assert_eq!(
+            m.parameter_text(PARAM_AMOUNT, amount).as_deref(),
+            Some("100 %")
+        );
+        assert_eq!(
+            m.parameter_text(PARAM_AMOUNT, 0.25).as_deref(),
+            Some("25 %")
+        );
+        assert!(m.parameter_options(PARAM_AMOUNT).is_none());
+        for step in 0..=10 {
+            assert!(m.parameter_text(PARAM_AMOUNT, step as f64 / 10.0).is_some());
+        }
+        assert!(m.parameter_text(PARAM_COUNT, 0.5).is_none());
     }
 }

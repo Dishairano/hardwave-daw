@@ -1,6 +1,7 @@
 //! Native 3xOSC — three detunable oscillators sharing one ADSR.
 //! Mirrors FL's 3xOSC stock instrument.
 
+use crate::format;
 use hardwave_dsp::synth::{AdsrEnvelope, AdsrStage, Oscillator, Waveform};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -53,6 +54,21 @@ fn wave_index(w: Waveform) -> u8 {
         Waveform::Triangle => 3,
         Waveform::Noise => 4,
     }
+}
+
+/// Wave names by `wave_index`, which is also the order `wave_from_norm`
+/// picks them in, so choice i sits at i / 4 on the knob.
+const WAVE_NAMES: [&str; 5] = ["Sine", "Saw", "Square", "Triangle", "Noise"];
+
+/// Detune in semitones (-24..+24) from the 0..1 knob. The setter and the
+/// text both use it so what is shown is what is set.
+fn detune_from_norm(v: f64) -> f32 {
+    (v * 48.0 - 24.0) as f32
+}
+
+/// Envelope time in seconds (0..5) from the 0..1 knob.
+fn env_secs_from_norm(v: f64) -> f32 {
+    (v * 5.0) as f32
 }
 
 fn stage_priority(s: AdsrStage) -> u8 {
@@ -304,17 +320,47 @@ impl HostedPlugin for NativeTripleOsc {
             PARAM_OSC1_WAVE => self.waves[0] = wave_from_norm(v as f32),
             PARAM_OSC2_WAVE => self.waves[1] = wave_from_norm(v as f32),
             PARAM_OSC3_WAVE => self.waves[2] = wave_from_norm(v as f32),
-            PARAM_OSC1_DETUNE => self.detune[0] = (v * 48.0 - 24.0) as f32,
-            PARAM_OSC2_DETUNE => self.detune[1] = (v * 48.0 - 24.0) as f32,
-            PARAM_OSC3_DETUNE => self.detune[2] = (v * 48.0 - 24.0) as f32,
+            PARAM_OSC1_DETUNE => self.detune[0] = detune_from_norm(v),
+            PARAM_OSC2_DETUNE => self.detune[1] = detune_from_norm(v),
+            PARAM_OSC3_DETUNE => self.detune[2] = detune_from_norm(v),
             PARAM_OSC1_LEVEL => self.levels[0] = v as f32,
             PARAM_OSC2_LEVEL => self.levels[1] = v as f32,
             PARAM_OSC3_LEVEL => self.levels[2] = v as f32,
-            PARAM_ATTACK => self.attack = (v * 5.0) as f32,
-            PARAM_DECAY => self.decay = (v * 5.0) as f32,
+            PARAM_ATTACK => self.attack = env_secs_from_norm(v),
+            PARAM_DECAY => self.decay = env_secs_from_norm(v),
             PARAM_SUSTAIN => self.sustain = v as f32,
-            PARAM_RELEASE => self.release = (v * 5.0) as f32,
+            PARAM_RELEASE => self.release = env_secs_from_norm(v),
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0);
+        let text = match id {
+            PARAM_OSC1_WAVE | PARAM_OSC2_WAVE | PARAM_OSC3_WAVE => {
+                WAVE_NAMES[wave_index(wave_from_norm(v as f32)) as usize].to_string()
+            }
+            PARAM_OSC1_DETUNE | PARAM_OSC2_DETUNE | PARAM_OSC3_DETUNE => {
+                format::num(detune_from_norm(v) as f64, 2, "st")
+            }
+            PARAM_OSC1_LEVEL | PARAM_OSC2_LEVEL | PARAM_OSC3_LEVEL | PARAM_SUSTAIN => {
+                format::pct(v)
+            }
+            PARAM_ATTACK | PARAM_DECAY | PARAM_RELEASE => {
+                format::secs(env_secs_from_norm(v) as f64)
+            }
+            _ => return None,
+        };
+        Some(text)
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_OSC1_WAVE | PARAM_OSC2_WAVE | PARAM_OSC3_WAVE => {
+                Some(WAVE_NAMES.iter().map(|s| s.to_string()).collect())
+            }
+            _ => None,
         }
     }
 
@@ -351,5 +397,35 @@ impl HostedPlugin for NativeTripleOsc {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_read_as_text_and_choices_match_the_setter() {
+        let mut p = NativeTripleOsc::new();
+        let shown = |p: &NativeTripleOsc, id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(&p, PARAM_OSC1_WAVE).as_deref(), Some("Saw"));
+        assert_eq!(shown(&p, PARAM_OSC2_DETUNE).as_deref(), Some("-0.05 st"));
+        assert_eq!(shown(&p, PARAM_OSC1_LEVEL).as_deref(), Some("60 %"));
+        assert_eq!(shown(&p, PARAM_ATTACK).as_deref(), Some("5.00 ms"));
+
+        let options = p.parameter_options(PARAM_OSC1_WAVE).unwrap();
+        let last = (options.len() - 1) as f64;
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / last;
+            assert_eq!(p.parameter_text(PARAM_OSC1_WAVE, v).as_ref(), Some(label));
+            p.set_parameter_value(PARAM_OSC1_WAVE, v);
+            assert_eq!(shown(&p, PARAM_OSC1_WAVE).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            assert!(
+                p.parameter_text(id, 0.5).is_some(),
+                "parameter {id} has no text"
+            );
+        }
     }
 }

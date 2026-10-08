@@ -7,6 +7,7 @@
 //! (50 ms attack). The difference (fast - slow) is high during
 //! transients and low during sustain. Modulate gain accordingly.
 
+use crate::format;
 use hardwave_dsp::dynamics::{linear_to_db, DetectMode, EnvelopeFollower};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -52,6 +53,12 @@ impl NativeTransient {
             has_midi_input: false,
             has_editor: false,
         }
+    }
+
+    /// The dB shift a 0..1 value sets: -12..+12 dB, 0.5 = unity. All
+    /// three parameters share it; the setter and the label both use it.
+    fn db_from_normalised(v: f64) -> f32 {
+        (v.clamp(0.0, 1.0) * 24.0 - 12.0) as f32
     }
 
     pub fn new() -> Self {
@@ -182,12 +189,21 @@ impl HostedPlugin for NativeTransient {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let db = Self::db_from_normalised(value);
         match id {
-            PARAM_ATTACK => self.attack_db = (v * 24.0 - 12.0) as f32,
-            PARAM_SUSTAIN => self.sustain_db = (v * 24.0 - 12.0) as f32,
-            PARAM_OUTPUT => self.output_db = (v * 24.0 - 12.0) as f32,
+            PARAM_ATTACK => self.attack_db = db,
+            PARAM_SUSTAIN => self.sustain_db = db,
+            PARAM_OUTPUT => self.output_db = db,
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        match id {
+            PARAM_ATTACK | PARAM_SUSTAIN | PARAM_OUTPUT => {
+                Some(format::db(Self::db_from_normalised(value) as f64))
+            }
+            _ => None,
         }
     }
 
@@ -229,5 +245,34 @@ impl HostedPlugin for NativeTransient {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_reads_real_units() {
+        let t = NativeTransient::new();
+        let default = t.get_parameter_info(PARAM_ATTACK).unwrap().default_value;
+        assert_eq!(
+            t.parameter_text(PARAM_ATTACK, default).as_deref(),
+            Some("0.0 dB")
+        );
+        assert_eq!(
+            t.parameter_text(PARAM_SUSTAIN, 0.0).as_deref(),
+            Some("-12.0 dB")
+        );
+        assert_eq!(
+            t.parameter_text(PARAM_OUTPUT, 1.0).as_deref(),
+            Some("+12.0 dB")
+        );
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(t.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+            assert!(t.parameter_options(id).is_none());
+        }
     }
 }

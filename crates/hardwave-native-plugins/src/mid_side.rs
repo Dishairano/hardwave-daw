@@ -3,6 +3,7 @@
 //! work. Distinct from NativeStereo which exposes width and balance.
 //! Mastering staple for tightening centre or widening sides.
 
+use crate::format;
 use hardwave_dsp::stereo::{decode_ms, encode_ms};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -30,6 +31,20 @@ fn solo_from_norm(v: f32) -> Solo {
         1 => Solo::Mid,
         _ => Solo::Side,
     }
+}
+
+fn solo_label(s: Solo) -> &'static str {
+    match s {
+        Solo::Off => "Off",
+        Solo::Mid => "Mid",
+        Solo::Side => "Side",
+    }
+}
+
+/// -24..=+24 dB mapped from 0..=1, 0.5 = unity. Setting a gain and
+/// showing it both go through here, so the label is what the sound does.
+fn gain_db_from_norm(v: f64) -> f32 {
+    (v.clamp(0.0, 1.0) * 48.0 - 24.0) as f32
 }
 
 fn solo_to_norm(s: Solo) -> f64 {
@@ -171,10 +186,31 @@ impl HostedPlugin for NativeMidSide {
     fn set_parameter_value(&mut self, id: u32, value: f64) {
         let v = value.clamp(0.0, 1.0);
         match id {
-            PARAM_MID_GAIN => self.mid_gain_db = (v * 48.0 - 24.0) as f32,
-            PARAM_SIDE_GAIN => self.side_gain_db = (v * 48.0 - 24.0) as f32,
+            PARAM_MID_GAIN => self.mid_gain_db = gain_db_from_norm(v),
+            PARAM_SIDE_GAIN => self.side_gain_db = gain_db_from_norm(v),
             PARAM_SOLO => self.solo = solo_from_norm(v as f32),
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let v = value.clamp(0.0, 1.0);
+        match id {
+            PARAM_MID_GAIN | PARAM_SIDE_GAIN => Some(format::db(gain_db_from_norm(v) as f64)),
+            PARAM_SOLO => Some(solo_label(solo_from_norm(v as f32)).to_string()),
+            _ => None,
+        }
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_SOLO => Some(
+                [Solo::Off, Solo::Mid, Solo::Side]
+                    .into_iter()
+                    .map(|s| solo_label(s).to_string())
+                    .collect(),
+            ),
+            _ => None,
         }
     }
 
@@ -218,5 +254,38 @@ impl HostedPlugin for NativeMidSide {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gains_read_in_db_and_solo_choices_match_the_setting() {
+        let ms = NativeMidSide::new();
+        let mid = ms.get_parameter_info(PARAM_MID_GAIN).unwrap().default_value;
+        assert_eq!(
+            ms.parameter_text(PARAM_MID_GAIN, mid).as_deref(),
+            Some("0.0 dB")
+        );
+        assert_eq!(
+            ms.parameter_text(PARAM_SIDE_GAIN, 1.0).as_deref(),
+            Some("+24.0 dB")
+        );
+        let solo = ms.get_parameter_info(PARAM_SOLO).unwrap().default_value;
+        assert_eq!(ms.parameter_text(PARAM_SOLO, solo).as_deref(), Some("Off"));
+        let options = ms.parameter_options(PARAM_SOLO).unwrap();
+        assert_eq!(options, vec!["Off", "Mid", "Side"]);
+        let last = (options.len() - 1) as f64;
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / last;
+            assert_eq!(ms.parameter_text(PARAM_SOLO, v).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            for step in 0..=10 {
+                assert!(ms.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }

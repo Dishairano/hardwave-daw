@@ -2,6 +2,7 @@
 //! `hardwave_dsp::multiband::MultibandCompressor3`. Mirrors Fruity
 //! Multiband Compressor / Maximus' "3 band" mode.
 
+use crate::format;
 use hardwave_dsp::multiband::{BandCompressor, MultibandCompressor3};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -20,6 +21,13 @@ const PARAM_HI_THRESH: u32 = 6;
 const PARAM_HI_RATIO: u32 = 7;
 const PARAM_OUT_GAIN: u32 = 8;
 const PARAM_COUNT: u32 = 9;
+
+/// Where each crossover knob can go. One place, so the knob, its label
+/// and its saved value all agree.
+const LO_MID_MIN_HZ: f32 = 50.0;
+const LO_MID_MAX_HZ: f32 = 1_000.0;
+const MID_HI_MIN_HZ: f32 = 500.0;
+const MID_HI_MAX_HZ: f32 = 12_000.0;
 
 pub struct NativeMultiband {
     descriptor: PluginDescriptor,
@@ -130,6 +138,11 @@ fn ratio_from_norm(v: f64) -> f32 {
     let v = v.clamp(0.0, 1.0) as f32;
     20.0_f32.powf(v) // 1..=20
 }
+/// Output gain normalised: -24..=24 dB linear, 0.5 = unity.
+fn out_gain_from_norm(v: f64) -> f32 {
+    (v.clamp(0.0, 1.0) * 48.0 - 24.0) as f32
+}
+
 fn ratio_to_norm(r: f32) -> f64 {
     let r = r.clamp(1.0, 20.0);
     (r.log10() / 20.0_f32.log10()).clamp(0.0, 1.0) as f64
@@ -187,7 +200,7 @@ impl HostedPlugin for NativeMultiband {
             PARAM_LO_MID => Some(ParameterInfo {
                 id: PARAM_LO_MID,
                 name: "Low/Mid".into(),
-                default_value: freq_to_norm(200.0, 50.0, 1_000.0),
+                default_value: freq_to_norm(200.0, LO_MID_MIN_HZ, LO_MID_MAX_HZ),
                 min: 0.0,
                 max: 1.0,
                 unit: "Hz".into(),
@@ -196,7 +209,7 @@ impl HostedPlugin for NativeMultiband {
             PARAM_MID_HI => Some(ParameterInfo {
                 id: PARAM_MID_HI,
                 name: "Mid/High".into(),
-                default_value: freq_to_norm(2_000.0, 500.0, 12_000.0),
+                default_value: freq_to_norm(2_000.0, MID_HI_MIN_HZ, MID_HI_MAX_HZ),
                 min: 0.0,
                 max: 1.0,
                 unit: "Hz".into(),
@@ -271,8 +284,8 @@ impl HostedPlugin for NativeMultiband {
 
     fn get_parameter_value(&self, id: u32) -> f64 {
         match id {
-            PARAM_LO_MID => freq_to_norm(self.lo_mid_hz, 50.0, 1_000.0),
-            PARAM_MID_HI => freq_to_norm(self.mid_hi_hz, 500.0, 12_000.0),
+            PARAM_LO_MID => freq_to_norm(self.lo_mid_hz, LO_MID_MIN_HZ, LO_MID_MAX_HZ),
+            PARAM_MID_HI => freq_to_norm(self.mid_hi_hz, MID_HI_MIN_HZ, MID_HI_MAX_HZ),
             PARAM_LOW_THRESH => thresh_to_norm(self.bands[0].threshold_db),
             PARAM_LOW_RATIO => ratio_to_norm(self.bands[0].ratio),
             PARAM_MID_THRESH => thresh_to_norm(self.bands[1].threshold_db),
@@ -289,11 +302,11 @@ impl HostedPlugin for NativeMultiband {
         let mut update_band: Option<usize> = None;
         match id {
             PARAM_LO_MID => {
-                self.lo_mid_hz = freq_from_norm(value, 50.0, 1_000.0);
+                self.lo_mid_hz = freq_from_norm(value, LO_MID_MIN_HZ, LO_MID_MAX_HZ);
                 self.mb.set_crossovers(self.lo_mid_hz, self.mid_hi_hz);
             }
             PARAM_MID_HI => {
-                self.mid_hi_hz = freq_from_norm(value, 500.0, 12_000.0);
+                self.mid_hi_hz = freq_from_norm(value, MID_HI_MIN_HZ, MID_HI_MAX_HZ);
                 self.mb.set_crossovers(self.lo_mid_hz, self.mid_hi_hz);
             }
             PARAM_LOW_THRESH => {
@@ -321,7 +334,7 @@ impl HostedPlugin for NativeMultiband {
                 update_band = Some(2);
             }
             PARAM_OUT_GAIN => {
-                self.output_gain_db = (value.clamp(0.0, 1.0) * 48.0 - 24.0) as f32;
+                self.output_gain_db = out_gain_from_norm(value);
                 self.mb.set_output_gain_db(self.output_gain_db);
             }
             _ => {}
@@ -329,6 +342,21 @@ impl HostedPlugin for NativeMultiband {
         if let Some(i) = update_band {
             self.mb.set_band_params(i, self.bands[i]);
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        Some(match id {
+            PARAM_LO_MID => format::hz(freq_from_norm(value, LO_MID_MIN_HZ, LO_MID_MAX_HZ) as f64),
+            PARAM_MID_HI => format::hz(freq_from_norm(value, MID_HI_MIN_HZ, MID_HI_MAX_HZ) as f64),
+            PARAM_LOW_THRESH | PARAM_MID_THRESH | PARAM_HI_THRESH => {
+                format::db(thresh_from_norm(value) as f64)
+            }
+            PARAM_LOW_RATIO | PARAM_MID_RATIO | PARAM_HI_RATIO => {
+                format::ratio(ratio_from_norm(value) as f64)
+            }
+            PARAM_OUT_GAIN => format::db(out_gain_from_norm(value) as f64),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -391,5 +419,30 @@ impl HostedPlugin for NativeMultiband {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_reads_real_units() {
+        let m = NativeMultiband::new();
+        let text = |id: u32| {
+            let default = m.get_parameter_info(id).unwrap().default_value;
+            m.parameter_text(id, default)
+        };
+        assert_eq!(text(PARAM_LO_MID).as_deref(), Some("200 Hz"));
+        assert_eq!(text(PARAM_MID_HI).as_deref(), Some("2.00 kHz"));
+        assert_eq!(text(PARAM_LOW_THRESH).as_deref(), Some("-18.0 dB"));
+        assert_eq!(text(PARAM_LOW_RATIO).as_deref(), Some("4.0:1"));
+        assert_eq!(text(PARAM_OUT_GAIN).as_deref(), Some("0.0 dB"));
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(m.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+            assert!(m.parameter_options(id).is_none());
+        }
     }
 }

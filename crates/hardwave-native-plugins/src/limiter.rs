@@ -7,6 +7,7 @@
 //! Threshold (catches the signal), Ceiling (true peak), Release
 //! (recovery time), Drive (input gain → harder bite for harderstyles).
 
+use crate::format;
 use hardwave_dsp::dynamics::{
     compressor_gain_reduction_db, db_to_linear, linear_to_db, DetectMode, EnvelopeFollower,
 };
@@ -290,6 +291,15 @@ impl HostedPlugin for NativeLimiter {
         }
     }
 
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value);
+        Some(match id {
+            PARAM_THRESHOLD | PARAM_CEILING | PARAM_DRIVE => format::db(real),
+            PARAM_RELEASE => format::ms(real),
+            _ => return None,
+        })
+    }
+
     fn get_state(&self) -> Vec<u8> {
         format!(
             "{{\"threshold\":{},\"ceiling\":{},\"release\":{},\"drive\":{}}}",
@@ -335,5 +345,38 @@ impl HostedPlugin for NativeLimiter {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_reads_real_units() {
+        let l = NativeLimiter::new();
+        let default = l.get_parameter_info(PARAM_THRESHOLD).unwrap().default_value;
+        assert_eq!(
+            l.parameter_text(PARAM_THRESHOLD, default).as_deref(),
+            Some("-3.0 dB")
+        );
+        assert_eq!(
+            l.parameter_text(PARAM_CEILING, 1.0).as_deref(),
+            Some("0.0 dB")
+        );
+        assert_eq!(
+            l.parameter_text(PARAM_RELEASE, 0.0).as_deref(),
+            Some("1.00 ms")
+        );
+        assert_eq!(
+            l.parameter_text(PARAM_DRIVE, 1.0).as_deref(),
+            Some("+24.0 dB")
+        );
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(l.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+            assert!(l.parameter_options(id).is_none());
+        }
     }
 }

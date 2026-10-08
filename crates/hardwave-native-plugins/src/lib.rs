@@ -184,3 +184,95 @@ pub fn native_plugin_ids() -> Vec<&'static str> {
         "hardwave.kickforge",
     ]
 }
+
+#[cfg(test)]
+mod value_text_tests {
+    use super::*;
+    use hardwave_plugin_host::types::HostedPlugin;
+
+    fn all() -> Vec<Box<dyn HostedPlugin>> {
+        vec![
+            Box::new(NativeEq::new()),
+            Box::new(NativeCompressor::new()),
+            Box::new(NativeLimiter::new()),
+            Box::new(NativeDistortion::new()),
+            Box::new(NativeFilter::new()),
+            Box::new(NativeDelay::new()),
+            Box::new(NativeReverb::new()),
+            Box::new(NativeStereo::new()),
+            Box::new(NativeMultiband::new()),
+            Box::new(NativeTripleOsc::new()),
+            Box::new(NativeFmSynth::new()),
+            Box::new(NativeWavetable::new()),
+            Box::new(NativeChorus::new()),
+            Box::new(NativePhaser::new()),
+            Box::new(NativeConvReverb::new()),
+            Box::new(NativeTremolo::new()),
+            Box::new(NativeFlanger::new()),
+            Box::new(NativeAutoPan::new()),
+            Box::new(NativeBitcrush::new()),
+            Box::new(NativeGain::new()),
+            Box::new(NativeSaturator::new()),
+            Box::new(NativeNoise::new()),
+            Box::new(NativeSubBass::new()),
+            Box::new(NativeVibrato::new()),
+            Box::new(NativeMidSide::new()),
+            Box::new(NativeGate::new()),
+            Box::new(NativeTransient::new()),
+            Box::new(NativeClipper::new()),
+            Box::new(NativeExciter::new()),
+            Box::new(NativeTape::new()),
+            Box::new(NativeSoundgoodizer::new()),
+            Box::new(NativeMonoFold::new()),
+            Box::new(NativeRingMod::new()),
+            Box::new(NativeAutoFilter::new()),
+            Box::new(NativeStereoDouble::new()),
+            Box::new(NativeVocoder::new()),
+            Box::new(NativeStutter::new()),
+            Box::new(NativeSampler::new()),
+        ]
+    }
+
+    /// Every parameter of every built-in says its value in words, across
+    /// its whole range, and a parameter with choices names the one it is on.
+    /// The plug-in windows show these instead of raw 0..1 numbers.
+    #[test]
+    fn every_built_in_parameter_has_text() {
+        for p in all() {
+            let name = p.descriptor().name.clone();
+            for i in 0..p.get_parameter_count() {
+                let info = p.get_parameter_info(i).expect("parameter info");
+                for v in [
+                    info.min,
+                    info.default_value,
+                    info.max,
+                    (info.min + info.max) / 2.0,
+                ] {
+                    let text = p.parameter_text(info.id, v);
+                    assert!(
+                        text.as_deref().is_some_and(|t| !t.is_empty()),
+                        "{name} / {} has no text at {v}",
+                        info.name
+                    );
+                }
+                if let Some(options) = p.parameter_options(info.id) {
+                    assert!(
+                        options.len() > 1,
+                        "{name} / {}: one option is not a choice",
+                        info.name
+                    );
+                    let n = options.len();
+                    for (k, label) in options.iter().enumerate() {
+                        let v = info.min + (info.max - info.min) * k as f64 / (n - 1) as f64;
+                        assert_eq!(
+                            p.parameter_text(info.id, v).as_deref(),
+                            Some(label.as_str()),
+                            "{name} / {}: option {k} and its text disagree",
+                            info.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

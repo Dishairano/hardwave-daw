@@ -3,6 +3,7 @@
 //! Wavetable bank (Basic / Analog / Digital / Vocal / Noise). Voice
 //! count: 8, monotimbral.
 
+use crate::format;
 use hardwave_dsp::synth::AdsrEnvelope;
 use hardwave_dsp::wavetable::{Wavetable, WavetableOscillator};
 use hardwave_midi::MidiEvent;
@@ -44,15 +45,33 @@ fn bank_from_norm(v: f32) -> Bank {
     }
 }
 
-fn bank_to_norm(b: Bank) -> f64 {
-    let idx = match b {
+fn bank_index(b: Bank) -> usize {
+    match b {
         Bank::Basic => 0,
         Bank::Analog => 1,
         Bank::Digital => 2,
         Bank::Vocal => 3,
         Bank::Noise => 4,
-    };
-    (idx as f64 + 0.5) / 5.0
+    }
+}
+
+fn bank_to_norm(b: Bank) -> f64 {
+    (bank_index(b) as f64 + 0.5) / 5.0
+}
+
+/// Bank names by `bank_index`, which is also the order `bank_from_norm`
+/// picks them in, so choice i sits at i / 4.
+const BANK_NAMES: [&str; 5] = ["Basic", "Analog", "Digital", "Vocal", "Noise"];
+
+/// Detune in semitones (-0.5..+0.5) from the 0..1 knob. The setter and
+/// the text both use it so what is shown is what is set.
+fn detune_from_norm(v: f64) -> f32 {
+    (v - 0.5) as f32
+}
+
+/// Envelope time in seconds (1 ms..5 s) from the 0..1 knob.
+fn env_secs_from_norm(v: f64) -> f32 {
+    (v * 5.0).max(0.001) as f32
 }
 
 fn build_table(b: Bank) -> Wavetable {
@@ -295,13 +314,37 @@ impl HostedPlugin for NativeWavetable {
                 self.table = build_table(self.bank);
             }
             PARAM_POSITION => self.position = v as f32,
-            PARAM_UNISON_DETUNE => self.unison_detune = (v - 0.5) as f32,
-            PARAM_ATTACK => self.attack = (v * 5.0).max(0.001) as f32,
-            PARAM_DECAY => self.decay = (v * 5.0).max(0.001) as f32,
+            PARAM_UNISON_DETUNE => self.unison_detune = detune_from_norm(v),
+            PARAM_ATTACK => self.attack = env_secs_from_norm(v),
+            PARAM_DECAY => self.decay = env_secs_from_norm(v),
             PARAM_SUSTAIN => self.sustain = v as f32,
-            PARAM_RELEASE => self.release = (v * 5.0).max(0.001) as f32,
+            PARAM_RELEASE => self.release = env_secs_from_norm(v),
             PARAM_MASTER => self.master_gain = v as f32,
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0);
+        let text = match id {
+            PARAM_BANK => BANK_NAMES[bank_index(bank_from_norm(v as f32))].to_string(),
+            // Stored in semitones; half a semitone either way reads
+            // better in cents.
+            PARAM_UNISON_DETUNE => format::num(detune_from_norm(v) as f64 * 100.0, 0, "ct"),
+            PARAM_POSITION | PARAM_SUSTAIN | PARAM_MASTER => format::pct(v),
+            PARAM_ATTACK | PARAM_DECAY | PARAM_RELEASE => {
+                format::secs(env_secs_from_norm(v) as f64)
+            }
+            _ => return None,
+        };
+        Some(text)
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_BANK => Some(BANK_NAMES.iter().map(|s| s.to_string()).collect()),
+            _ => None,
         }
     }
 
@@ -366,5 +409,35 @@ impl HostedPlugin for NativeWavetable {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_read_as_text_and_choices_match_the_setter() {
+        let mut p = NativeWavetable::new();
+        let shown = |p: &NativeWavetable, id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(&p, PARAM_BANK).as_deref(), Some("Analog"));
+        assert_eq!(shown(&p, PARAM_UNISON_DETUNE).as_deref(), Some("5 ct"));
+        assert_eq!(shown(&p, PARAM_DECAY).as_deref(), Some("200 ms"));
+        assert_eq!(shown(&p, PARAM_MASTER).as_deref(), Some("60 %"));
+
+        let options = p.parameter_options(PARAM_BANK).unwrap();
+        let last = (options.len() - 1) as f64;
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / last;
+            assert_eq!(p.parameter_text(PARAM_BANK, v).as_ref(), Some(label));
+            p.set_parameter_value(PARAM_BANK, v);
+            assert_eq!(shown(&p, PARAM_BANK).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            assert!(
+                p.parameter_text(id, 0.5).is_some(),
+                "parameter {id} has no text"
+            );
+        }
     }
 }

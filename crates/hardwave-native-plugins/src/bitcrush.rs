@@ -2,6 +2,7 @@
 //! Distinct from NativeDistortion's bitcrush mode by giving direct
 //! control over both reduction axes plus a wet/dry mix and pre-gain.
 
+use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
     HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
@@ -59,6 +60,19 @@ impl NativeBitcrush {
             hold_r: 0.0,
             counter: 0.0,
             active: false,
+        }
+    }
+
+    /// The real value behind a 0..1 setting: bits, hold factor, dB, or
+    /// the mix itself. Setting a parameter and showing it both go through
+    /// here, so the label is always what the sound is doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0);
+        match id {
+            PARAM_BIT_DEPTH => (1.0 + v * 15.0) as f32,
+            PARAM_RATE => (1.0 + v * 63.0) as f32,
+            PARAM_DRIVE => (v * 48.0 - 24.0) as f32,
+            _ => v as f32,
         }
     }
 
@@ -162,14 +176,26 @@ impl HostedPlugin for NativeBitcrush {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let real = Self::from_normalised(id, value);
         match id {
-            PARAM_BIT_DEPTH => self.bit_depth = (1.0 + v * 15.0) as f32,
-            PARAM_RATE => self.rate_reduction = (1.0 + v * 63.0) as f32,
-            PARAM_DRIVE => self.drive_db = (v * 48.0 - 24.0) as f32,
-            PARAM_MIX => self.mix = v as f32,
+            PARAM_BIT_DEPTH => self.bit_depth = real,
+            PARAM_RATE => self.rate_reduction = real,
+            PARAM_DRIVE => self.drive_db = real,
+            PARAM_MIX => self.mix = real,
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_BIT_DEPTH => format::num(real, 1, "bit"),
+            // How many samples each held sample stands in for.
+            PARAM_RATE => format::num(real, 1, "x"),
+            PARAM_DRIVE => format::db(real),
+            PARAM_MIX => format::pct(real),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -213,5 +239,33 @@ impl HostedPlugin for NativeBitcrush {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameters_read_as_bits_hold_db_and_percent() {
+        let b = NativeBitcrush::new();
+        let bits = b.get_parameter_info(PARAM_BIT_DEPTH).unwrap().default_value;
+        assert_eq!(
+            b.parameter_text(PARAM_BIT_DEPTH, bits).as_deref(),
+            Some("8.0 bit")
+        );
+        assert_eq!(b.parameter_text(PARAM_RATE, 0.0).as_deref(), Some("1.0 x"));
+        assert_eq!(
+            b.parameter_text(PARAM_DRIVE, 0.5).as_deref(),
+            Some("0.0 dB")
+        );
+        assert_eq!(b.parameter_text(PARAM_MIX, 1.0).as_deref(), Some("100 %"));
+        for id in 0..PARAM_COUNT {
+            assert!(b.parameter_options(id).is_none());
+            for step in 0..=10 {
+                assert!(b.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
+        assert!(b.parameter_text(PARAM_COUNT, 0.5).is_none());
     }
 }

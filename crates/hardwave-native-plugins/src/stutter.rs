@@ -8,6 +8,7 @@
 //! host-synced, curve-editable Gross-Beat proper is a follow-up that
 //! needs transport plumbed into the plugin process path.
 
+use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
     HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
@@ -25,7 +26,7 @@ const PARAM_COUNT: u32 = 5;
 /// Slice lengths in beats, for the tempo-synced side. A bar at four
 /// four is four beats, which is where the long ones come from.
 const SYNC_DIVISIONS: [(f32, &str); 7] = [
-    (0.0, "off"),
+    (0.0, "Off"),
     (2.0, "1/2"),
     (1.0, "1/4"),
     (0.5, "1/8"),
@@ -100,6 +101,34 @@ impl NativeStutter {
             sync: 0,
             transport: hardwave_plugin_host::types::TransportInfo::default(),
         }
+    }
+
+    /// The real value behind a 0..1 knob: milliseconds for the slice,
+    /// the per-repeat gain for the decay, the mix itself otherwise.
+    /// Setting a parameter and showing it both go through here, so the
+    /// label is always what the sound is doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0) as f32;
+        match id {
+            PARAM_SLICE => SLICE_MIN_MS + v * (SLICE_MAX_MS - SLICE_MIN_MS),
+            PARAM_DECAY => 0.5 + v * 0.5,
+            _ => v,
+        }
+    }
+
+    /// How many slices a group plays for a 0..1 setting: 1 at 0, up to
+    /// `MAX_REPEATS` at 1, one step per 1/(MAX_REPEATS - 1).
+    fn repeats_from_normalised(value: f64) -> u32 {
+        let v = value.clamp(0.0, 1.0) as f32;
+        1 + (v * (MAX_REPEATS - 1) as f32).round() as u32
+    }
+
+    /// Which entry of `SYNC_DIVISIONS` a 0..1 setting picks: entry i sits
+    /// at i/(len - 1).
+    fn sync_from_normalised(value: f64) -> usize {
+        let v = value.clamp(0.0, 1.0) as f32;
+        let last = SYNC_DIVISIONS.len() - 1;
+        (v * last as f32).round() as usize
     }
 
     /// How long a slice is, in samples.
@@ -266,23 +295,48 @@ impl HostedPlugin for NativeStutter {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0) as f32;
+        let real = Self::from_normalised(id, value);
         match id {
-            PARAM_MIX => self.mix = v,
+            PARAM_MIX => self.mix = real,
             PARAM_SLICE => {
-                self.slice_ms = SLICE_MIN_MS + v * (SLICE_MAX_MS - SLICE_MIN_MS);
+                self.slice_ms = real;
                 self.recompute_slice();
             }
-            PARAM_REPEATS => {
-                self.repeats = 1 + (v * (MAX_REPEATS - 1) as f32).round() as u32;
-            }
-            PARAM_DECAY => self.decay = 0.5 + v * 0.5,
+            PARAM_REPEATS => self.repeats = Self::repeats_from_normalised(value),
+            PARAM_DECAY => self.decay = real,
             PARAM_SYNC => {
-                let last = SYNC_DIVISIONS.len() - 1;
-                self.sync = (v * last as f32).round() as usize;
+                self.sync = Self::sync_from_normalised(value);
                 self.recompute_slice();
             }
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_MIX => format::pct(real),
+            PARAM_SLICE => format::ms(real),
+            PARAM_REPEATS => Self::repeats_from_normalised(value).to_string(),
+            // Each repeat's level against the one before it.
+            PARAM_DECAY => format::pct(real),
+            PARAM_SYNC => SYNC_DIVISIONS[Self::sync_from_normalised(value)]
+                .1
+                .to_string(),
+            _ => return None,
+        })
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_REPEATS => Some((1..=MAX_REPEATS).map(|n| n.to_string()).collect()),
+            PARAM_SYNC => Some(
+                SYNC_DIVISIONS
+                    .iter()
+                    .map(|(_, label)| label.to_string())
+                    .collect(),
+            ),
+            _ => None,
         }
     }
 
@@ -388,6 +442,44 @@ mod tests {
         let mut s = NativeStutter::new();
         let (o, _) = run(&mut s, &[0.1, -0.2, 0.3]);
         assert_eq!(o, vec![0.1, -0.2, 0.3]);
+    }
+
+    #[test]
+    fn choices_match_what_the_setting_picks() {
+        let s = NativeStutter::new();
+        let slice = s.get_parameter_info(PARAM_SLICE).unwrap().default_value;
+        assert_eq!(
+            s.parameter_text(PARAM_SLICE, slice).as_deref(),
+            Some("125 ms")
+        );
+        let decay = s.get_parameter_info(PARAM_DECAY).unwrap().default_value;
+        assert_eq!(
+            s.parameter_text(PARAM_DECAY, decay).as_deref(),
+            Some("85 %")
+        );
+        let sync = s.get_parameter_info(PARAM_SYNC).unwrap().default_value;
+        assert_eq!(s.parameter_text(PARAM_SYNC, sync).as_deref(), Some("Off"));
+        assert_eq!(
+            s.parameter_options(PARAM_SYNC).unwrap(),
+            vec!["Off", "1/2", "1/4", "1/8", "1/16", "1/8T", "1/32"]
+        );
+        for id in [PARAM_REPEATS, PARAM_SYNC] {
+            let options = s.parameter_options(id).unwrap();
+            let last = (options.len() - 1) as f64;
+            for (i, label) in options.iter().enumerate() {
+                let v = i as f64 / last;
+                assert_eq!(s.parameter_text(id, v).as_ref(), Some(label));
+                // And the setting really lands on that choice.
+                let mut probe = NativeStutter::new();
+                probe.set_parameter_value(id, v);
+                assert!((probe.get_parameter_value(id) - v).abs() < 1e-6);
+            }
+        }
+        for id in 0..PARAM_COUNT {
+            for step in 0..=10 {
+                assert!(s.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }
 

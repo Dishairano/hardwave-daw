@@ -4,6 +4,7 @@
 //! from NativeChorus (symmetric LFO modulation on both channels) and
 //! NativeVibrato (pure pitch wobble, no doubling).
 
+use crate::format;
 use hardwave_dsp::modulation::ModulatedDelay;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -65,6 +66,18 @@ impl NativeStereoDouble {
             spread: 0.7,
             mix: 0.5,
             active: false,
+        }
+    }
+
+    /// The real value behind a 0..1 knob: milliseconds for the delay,
+    /// the amount itself otherwise. Setting a parameter and showing it
+    /// both go through here, so the label is always what the sound is
+    /// doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0);
+        match id {
+            PARAM_DELAY => (v * 50.0) as f32,
+            _ => v as f32,
         }
     }
 
@@ -171,20 +184,32 @@ impl HostedPlugin for NativeStereoDouble {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let real = Self::from_normalised(id, value);
         match id {
             PARAM_DELAY => {
-                self.delay_ms = (v * 50.0) as f32;
+                self.delay_ms = real;
                 self.refresh();
             }
             PARAM_DETUNE => {
-                self.detune_amount = v as f32;
+                self.detune_amount = real;
                 self.refresh();
             }
-            PARAM_SPREAD => self.spread = v as f32,
-            PARAM_MIX => self.mix = v as f32,
+            PARAM_SPREAD => self.spread = real,
+            PARAM_MIX => self.mix = real,
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_DELAY => format::ms(real),
+            // Detune is a depth for the wobble, not a set number of cents:
+            // how far the pitch moves depends on the delay line, so it
+            // reads as an amount.
+            PARAM_DETUNE | PARAM_SPREAD | PARAM_MIX => format::pct(real),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -229,5 +254,38 @@ impl HostedPlugin for NativeStereoDouble {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delay_reads_in_ms_and_the_rest_in_percent() {
+        let sd = NativeStereoDouble::new();
+        let delay = sd.get_parameter_info(PARAM_DELAY).unwrap().default_value;
+        assert_eq!(
+            sd.parameter_text(PARAM_DELAY, delay).as_deref(),
+            Some("12.0 ms")
+        );
+        assert_eq!(
+            sd.parameter_text(PARAM_DELAY, 1.0).as_deref(),
+            Some("50.0 ms")
+        );
+        assert_eq!(
+            sd.parameter_text(PARAM_DETUNE, 0.3).as_deref(),
+            Some("30 %")
+        );
+        assert_eq!(
+            sd.parameter_text(PARAM_SPREAD, 0.7).as_deref(),
+            Some("70 %")
+        );
+        for id in 0..PARAM_COUNT {
+            assert!(sd.parameter_options(id).is_none());
+            for step in 0..=10 {
+                assert!(sd.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }

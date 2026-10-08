@@ -2,7 +2,9 @@
 //! Distinct from NativeLimiter (lookahead, smooth) and NativeDistortion
 //! (multi-mode coloured) by being literal: drive, ceiling, instant clip.
 
+use crate::format;
 use hardwave_dsp::distortion::hard_clip;
+use hardwave_dsp::dynamics::linear_to_db;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
     HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
@@ -17,6 +19,39 @@ const PARAM_AUTO_GAIN: u32 = 2;
 /// folding back down, so this matters more here than anywhere.
 const PARAM_OVERSAMPLE: u32 = 3;
 const PARAM_COUNT: u32 = 4;
+
+/// Which oversampling an Oversample value picks: Off near 0, 2x around
+/// the middle, 4x near 1. Shared by the setter and the label so the two
+/// never disagree.
+fn oversample_from_value(v: f64) -> hardwave_dsp::oversample::OversampleFactor {
+    use hardwave_dsp::oversample::OversampleFactor;
+    if v < 0.25 {
+        OversampleFactor::Off
+    } else if v < 0.75 {
+        OversampleFactor::Two
+    } else {
+        OversampleFactor::Four
+    }
+}
+
+fn oversample_label(factor: hardwave_dsp::oversample::OversampleFactor) -> &'static str {
+    use hardwave_dsp::oversample::OversampleFactor;
+    match factor {
+        OversampleFactor::Off => "Off",
+        OversampleFactor::Two => "2x",
+        OversampleFactor::Four => "4x",
+    }
+}
+
+/// Drive a 0..1 value sets: 0..36 dB.
+fn drive_db_from_normalised(v: f64) -> f32 {
+    (v.clamp(0.0, 1.0) * 36.0) as f32
+}
+
+/// Ceiling a 0..1 value sets, as a linear level, floored at 0.01.
+fn ceiling_from_normalised(v: f64) -> f32 {
+    v.clamp(0.0, 1.0).max(0.01) as f32
+}
 
 pub struct NativeClipper {
     descriptor: PluginDescriptor,
@@ -168,20 +203,40 @@ impl HostedPlugin for NativeClipper {
     fn set_parameter_value(&mut self, id: u32, value: f64) {
         let v = value.clamp(0.0, 1.0);
         match id {
-            PARAM_DRIVE => self.drive_db = (v * 36.0) as f32,
-            PARAM_CEILING => self.ceiling = v.max(0.01) as f32,
+            PARAM_DRIVE => self.drive_db = drive_db_from_normalised(v),
+            PARAM_CEILING => self.ceiling = ceiling_from_normalised(v),
             PARAM_AUTO_GAIN => self.auto_gain = v >= 0.5,
-            PARAM_OVERSAMPLE => {
-                use hardwave_dsp::oversample::OversampleFactor;
-                self.oversample = if v < 0.25 {
-                    OversampleFactor::Off
-                } else if v < 0.75 {
-                    OversampleFactor::Two
-                } else {
-                    OversampleFactor::Four
-                };
-            }
+            PARAM_OVERSAMPLE => self.oversample = oversample_from_value(v),
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let v = value.clamp(0.0, 1.0);
+        Some(match id {
+            PARAM_DRIVE => format::db(drive_db_from_normalised(v) as f64),
+            // Stored as a linear level; people think of a ceiling in dB.
+            PARAM_CEILING => format::db(linear_to_db(ceiling_from_normalised(v)) as f64),
+            PARAM_AUTO_GAIN => format::on_off(v),
+            PARAM_OVERSAMPLE => oversample_label(oversample_from_value(v)).to_string(),
+            _ => return None,
+        })
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        use hardwave_dsp::oversample::OversampleFactor;
+        match id {
+            PARAM_OVERSAMPLE => Some(
+                [
+                    OversampleFactor::Off,
+                    OversampleFactor::Two,
+                    OversampleFactor::Four,
+                ]
+                .into_iter()
+                .map(|f| oversample_label(f).to_string())
+                .collect(),
+            ),
+            _ => None,
         }
     }
 
@@ -225,5 +280,43 @@ impl HostedPlugin for NativeClipper {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_matches_what_the_setter_picks() {
+        let c = NativeClipper::new();
+        assert_eq!(
+            c.parameter_text(PARAM_DRIVE, 0.0).as_deref(),
+            Some("0.0 dB")
+        );
+        assert_eq!(
+            c.parameter_text(PARAM_CEILING, 1.0).as_deref(),
+            Some("0.0 dB")
+        );
+        assert_eq!(
+            c.parameter_text(PARAM_CEILING, 0.0).as_deref(),
+            Some("-40.0 dB")
+        );
+        assert_eq!(
+            c.parameter_text(PARAM_AUTO_GAIN, 1.0).as_deref(),
+            Some("On")
+        );
+        let options = c.parameter_options(PARAM_OVERSAMPLE).unwrap();
+        assert_eq!(options, vec!["Off", "2x", "4x"]);
+        let n = options.len();
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / (n - 1) as f64;
+            assert_eq!(c.parameter_text(PARAM_OVERSAMPLE, v).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(c.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+        }
     }
 }

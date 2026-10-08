@@ -3,6 +3,8 @@
 //! clipper) by keeping it transparent at low settings and gluing
 //! tracks together when pushed.
 
+use crate::format;
+use hardwave_dsp::oversample::OversampleFactor;
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -64,6 +66,39 @@ impl NativeSaturator {
             // clipper's, so two is enough for the settings people use.
             oversample: hardwave_dsp::oversample::OversampleFactor::Two,
             oversampler: hardwave_dsp::oversample::Oversampler::new(),
+        }
+    }
+
+    /// The real value behind a 0..1 knob: dB for the output, the amount
+    /// or mix itself otherwise. Setting a parameter and showing it both
+    /// go through here, so the label is always what the sound is doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0);
+        match id {
+            // -24..=+12 dB
+            PARAM_OUTPUT => (v * 36.0 - 24.0) as f32,
+            _ => v as f32,
+        }
+    }
+
+    /// Which oversampling a 0..1 setting picks. Off, 2x and 4x sit at
+    /// 0, 0.5 and 1, with the switch half way between each.
+    fn oversample_from_normalised(value: f64) -> OversampleFactor {
+        let v = value.clamp(0.0, 1.0);
+        if v < 0.25 {
+            OversampleFactor::Off
+        } else if v < 0.75 {
+            OversampleFactor::Two
+        } else {
+            OversampleFactor::Four
+        }
+    }
+
+    fn oversample_label(factor: OversampleFactor) -> &'static str {
+        match factor {
+            OversampleFactor::Off => "Off",
+            OversampleFactor::Two => "2x",
+            OversampleFactor::Four => "4x",
         }
     }
 }
@@ -158,34 +193,53 @@ impl HostedPlugin for NativeSaturator {
             PARAM_OUTPUT => ((self.output_db + 24.0) / 36.0).clamp(0.0, 1.0) as f64,
             PARAM_MIX => self.mix as f64,
             PARAM_OVERSAMPLE => match self.oversample {
-                hardwave_dsp::oversample::OversampleFactor::Off => 0.0,
-                hardwave_dsp::oversample::OversampleFactor::Two => 0.5,
-                hardwave_dsp::oversample::OversampleFactor::Four => 1.0,
+                OversampleFactor::Off => 0.0,
+                OversampleFactor::Two => 0.5,
+                OversampleFactor::Four => 1.0,
             },
             _ => 0.0,
         }
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let real = Self::from_normalised(id, value);
         match id {
             PARAM_AMOUNT => {
-                self.drive_l.set_amount(v as f32);
-                self.drive_r.set_amount(v as f32);
+                self.drive_l.set_amount(real);
+                self.drive_r.set_amount(real);
             }
-            PARAM_OUTPUT => self.output_db = (v * 36.0 - 24.0) as f32,
-            PARAM_MIX => self.mix = v as f32,
-            PARAM_OVERSAMPLE => {
-                use hardwave_dsp::oversample::OversampleFactor;
-                self.oversample = if v < 0.25 {
-                    OversampleFactor::Off
-                } else if v < 0.75 {
-                    OversampleFactor::Two
-                } else {
-                    OversampleFactor::Four
-                };
-            }
+            PARAM_OUTPUT => self.output_db = real,
+            PARAM_MIX => self.mix = real,
+            PARAM_OVERSAMPLE => self.oversample = Self::oversample_from_normalised(value),
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_AMOUNT | PARAM_MIX => format::pct(real),
+            PARAM_OUTPUT => format::db(real),
+            PARAM_OVERSAMPLE => {
+                Self::oversample_label(Self::oversample_from_normalised(value)).to_string()
+            }
+            _ => return None,
+        })
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_OVERSAMPLE => Some(
+                [
+                    OversampleFactor::Off,
+                    OversampleFactor::Two,
+                    OversampleFactor::Four,
+                ]
+                .into_iter()
+                .map(|f| Self::oversample_label(f).to_string())
+                .collect(),
+            ),
+            _ => None,
         }
     }
 
@@ -237,7 +291,6 @@ impl HostedPlugin for NativeSaturator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hardwave_dsp::oversample::OversampleFactor;
 
     /// One bin of a discrete Fourier transform, which is all that is
     /// needed to ask how much sits at one frequency.
@@ -315,5 +368,37 @@ mod tests {
             peak > 0.1,
             "a 220 Hz tone should come out audible, got {peak:.4}"
         );
+    }
+
+    #[test]
+    fn oversample_choices_match_what_the_setting_picks() {
+        let sat = NativeSaturator::new();
+        let amount = sat.get_parameter_info(PARAM_AMOUNT).unwrap().default_value;
+        assert_eq!(
+            sat.parameter_text(PARAM_AMOUNT, amount).as_deref(),
+            Some("30 %")
+        );
+        assert_eq!(
+            sat.parameter_text(PARAM_OUTPUT, 0.5).as_deref(),
+            Some("-6.0 dB")
+        );
+        let options = sat.parameter_options(PARAM_OVERSAMPLE).unwrap();
+        assert_eq!(options, vec!["Off", "2x", "4x"]);
+        let last = (options.len() - 1) as f64;
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / last;
+            assert_eq!(
+                sat.parameter_text(PARAM_OVERSAMPLE, v).as_ref(),
+                Some(label)
+            );
+            let mut probe = NativeSaturator::new();
+            probe.set_parameter_value(PARAM_OVERSAMPLE, v);
+            assert_eq!(probe.get_parameter_value(PARAM_OVERSAMPLE), v);
+        }
+        for id in 0..PARAM_COUNT {
+            for step in 0..=10 {
+                assert!(sat.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }

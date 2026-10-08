@@ -7,6 +7,7 @@
 //! Mode (curve type), Mix, Output. Tone-shaping (post-distortion EQ)
 //! lands in a follow-up commit.
 
+use crate::format;
 use hardwave_dsp::distortion::{
     bitcrush, drive_compensate, hard_clip, parallel_mix, soft_clip, tape_saturation, tube_emulation,
 };
@@ -39,6 +40,25 @@ enum Mode {
 }
 
 impl Mode {
+    /// Every mode in knob order, for the host's choice list.
+    const ALL: [Mode; 5] = [
+        Mode::Soft,
+        Mode::Hard,
+        Mode::Tape,
+        Mode::Tube,
+        Mode::Bitcrush,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Mode::Soft => "Soft",
+            Mode::Hard => "Hard",
+            Mode::Tape => "Tape",
+            Mode::Tube => "Tube",
+            Mode::Bitcrush => "Bitcrush",
+        }
+    }
+
     /// 5 modes spread across 0..=1: 0..0.2 = Soft, 0.2..0.4 = Hard, …
     fn from_normalised(v: f32) -> Self {
         let idx = ((v * 5.0).floor() as i32).clamp(0, 4);
@@ -60,6 +80,29 @@ impl Mode {
             Mode::Tube => 0.70,
             Mode::Bitcrush => 0.90,
         }
+    }
+}
+
+/// Which oversampling an Oversample value picks: Off near 0, 2x around
+/// the middle, 4x near 1. Shared by the setter and the label so the two
+/// never disagree.
+fn oversample_from_value(value: f64) -> hardwave_dsp::oversample::OversampleFactor {
+    use hardwave_dsp::oversample::OversampleFactor;
+    if value < 0.25 {
+        OversampleFactor::Off
+    } else if value < 0.75 {
+        OversampleFactor::Two
+    } else {
+        OversampleFactor::Four
+    }
+}
+
+fn oversample_label(factor: hardwave_dsp::oversample::OversampleFactor) -> &'static str {
+    use hardwave_dsp::oversample::OversampleFactor;
+    match factor {
+        OversampleFactor::Off => "Off",
+        OversampleFactor::Two => "2x",
+        OversampleFactor::Four => "4x",
     }
 }
 
@@ -293,17 +336,36 @@ impl HostedPlugin for NativeDistortion {
             PARAM_MODE => self.mode = Mode::from_normalised(value as f32),
             PARAM_MIX => self.mix = value.clamp(0.0, 1.0) as f32,
             PARAM_OUTPUT => self.output_db = Self::from_normalised(id, value) as f32,
-            PARAM_OVERSAMPLE => {
-                use hardwave_dsp::oversample::OversampleFactor;
-                self.oversample = if value < 0.25 {
-                    OversampleFactor::Off
-                } else if value < 0.75 {
-                    OversampleFactor::Two
-                } else {
-                    OversampleFactor::Four
-                };
-            }
+            PARAM_OVERSAMPLE => self.oversample = oversample_from_value(value),
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        Some(match id {
+            PARAM_DRIVE | PARAM_OUTPUT => format::db(Self::from_normalised(id, value)),
+            PARAM_MODE => Mode::from_normalised(value as f32).label().to_string(),
+            PARAM_MIX => format::pct(value.clamp(0.0, 1.0)),
+            PARAM_OVERSAMPLE => oversample_label(oversample_from_value(value)).to_string(),
+            _ => return None,
+        })
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        use hardwave_dsp::oversample::OversampleFactor;
+        match id {
+            PARAM_MODE => Some(Mode::ALL.iter().map(|m| m.label().to_string()).collect()),
+            PARAM_OVERSAMPLE => Some(
+                [
+                    OversampleFactor::Off,
+                    OversampleFactor::Two,
+                    OversampleFactor::Four,
+                ]
+                .into_iter()
+                .map(|f| oversample_label(f).to_string())
+                .collect(),
+            ),
+            _ => None,
         }
     }
 
@@ -354,5 +416,40 @@ impl HostedPlugin for NativeDistortion {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_matches_what_the_setter_picks() {
+        let d = NativeDistortion::new();
+        let drive = d.get_parameter_info(PARAM_DRIVE).unwrap().default_value;
+        assert_eq!(
+            d.parameter_text(PARAM_DRIVE, drive).as_deref(),
+            Some("+6.0 dB")
+        );
+        assert_eq!(d.parameter_text(PARAM_MIX, 1.0).as_deref(), Some("100 %"));
+        // Modes are bands of 0.2, so 0.15 is still Soft.
+        assert_eq!(d.parameter_text(PARAM_MODE, 0.15).as_deref(), Some("Soft"));
+        for id in [PARAM_MODE, PARAM_OVERSAMPLE] {
+            let options = d.parameter_options(id).unwrap();
+            let n = options.len();
+            for (i, label) in options.iter().enumerate() {
+                let v = i as f64 / (n - 1) as f64;
+                assert_eq!(d.parameter_text(id, v).as_ref(), Some(label));
+            }
+        }
+        assert_eq!(
+            d.parameter_options(PARAM_OVERSAMPLE).unwrap(),
+            vec!["Off", "2x", "4x"]
+        );
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(d.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+        }
     }
 }

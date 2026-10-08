@@ -2,6 +2,7 @@
 //! / bass-mono primitives in a HostedPlugin. Mirrors Fruity Stereo
 //! Enhancer's main controls.
 
+use crate::format;
 use hardwave_dsp::stereo::{apply_ms_balance, apply_width, BassMono};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -57,6 +58,35 @@ impl NativeStereo {
             crossover_hz: 120.0,
             active: false,
         }
+    }
+}
+
+/// Width a 0..1 value sets: 0 (mono) to 2 (doubly wide), 0.5 = as is.
+fn width_from_normalised(v: f64) -> f32 {
+    (v.clamp(0.0, 1.0) * 2.0) as f32
+}
+
+/// Mid/side balance a 0..1 value sets: -1 (side only) to +1 (mid only).
+fn balance_from_normalised(v: f64) -> f32 {
+    (v.clamp(0.0, 1.0) * 2.0 - 1.0) as f32
+}
+
+/// Bass-mono crossover a 0..1 value sets: 20 to 500 Hz, log.
+fn crossover_hz_from_normalised(v: f64) -> f32 {
+    let lo = 20.0_f32.log10();
+    let hi = 500.0_f32.log10();
+    10.0_f32.powf(lo + (hi - lo) * v.clamp(0.0, 1.0) as f32)
+}
+
+/// Balance as people read it: how far it leans to mid or to side.
+fn balance_text(balance: f32) -> String {
+    let lean = balance as f64;
+    if (lean * 100.0).round() == 0.0 {
+        "Centre".to_string()
+    } else if lean > 0.0 {
+        format!("Mid {}", format::pct(lean))
+    } else {
+        format!("Side {}", format::pct(-lean))
     }
 }
 
@@ -187,18 +217,28 @@ impl HostedPlugin for NativeStereo {
     fn set_parameter_value(&mut self, id: u32, value: f64) {
         let v = value.clamp(0.0, 1.0);
         match id {
-            PARAM_WIDTH => self.width = (v * 2.0) as f32,
-            PARAM_BALANCE => self.balance = (v * 2.0 - 1.0) as f32,
+            PARAM_WIDTH => self.width = width_from_normalised(v),
+            PARAM_BALANCE => self.balance = balance_from_normalised(v),
             PARAM_BASS_MONO => self.bass_mono_on = v >= 0.5,
             PARAM_CROSSOVER => {
-                let lo = 20.0_f32.log10();
-                let hi = 500.0_f32.log10();
-                self.crossover_hz = 10.0_f32.powf(lo + (hi - lo) * v as f32);
+                self.crossover_hz = crossover_hz_from_normalised(v);
                 self.bass_mono
                     .set_crossover(self.sample_rate, self.crossover_hz);
             }
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let v = value.clamp(0.0, 1.0);
+        Some(match id {
+            // Width reads as a percentage of the original: 100 % = as is.
+            PARAM_WIDTH => format::pct(width_from_normalised(v) as f64),
+            PARAM_BALANCE => balance_text(balance_from_normalised(v)),
+            PARAM_BASS_MONO => format::on_off(v),
+            PARAM_CROSSOVER => format::hz(crossover_hz_from_normalised(v) as f64),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -247,5 +287,46 @@ impl HostedPlugin for NativeStereo {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_reads_real_units() {
+        let st = NativeStereo::new();
+        let width = st.get_parameter_info(PARAM_WIDTH).unwrap().default_value;
+        assert_eq!(
+            st.parameter_text(PARAM_WIDTH, width).as_deref(),
+            Some("100 %")
+        );
+        assert_eq!(
+            st.parameter_text(PARAM_BALANCE, 0.5).as_deref(),
+            Some("Centre")
+        );
+        assert_eq!(
+            st.parameter_text(PARAM_BALANCE, 1.0).as_deref(),
+            Some("Mid 100 %")
+        );
+        assert_eq!(
+            st.parameter_text(PARAM_BALANCE, 0.25).as_deref(),
+            Some("Side 50 %")
+        );
+        let cross = st
+            .get_parameter_info(PARAM_CROSSOVER)
+            .unwrap()
+            .default_value;
+        assert_eq!(
+            st.parameter_text(PARAM_CROSSOVER, cross).as_deref(),
+            Some("120 Hz")
+        );
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(st.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+            assert!(st.parameter_options(id).is_none());
+        }
     }
 }

@@ -2,6 +2,7 @@
 //! cutoff sweeps up/down with input level for talking-bass / wah-wah
 //! effects. Distinct from NativeFilter (static cutoff).
 
+use crate::format;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::dynamics::{DetectMode, EnvelopeFollower};
 use hardwave_midi::MidiEvent;
@@ -80,6 +81,34 @@ impl NativeAutoFilter {
             release_ms: 100.0,
             block_counter: 0,
             active: false,
+        }
+    }
+
+    /// The real value behind a 0..1 knob: hertz, octaves, Q or
+    /// milliseconds, or the sensitivity itself. Setting a parameter and
+    /// showing it both go through here, so the label is always what the
+    /// sound is doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0);
+        match id {
+            PARAM_BASE => {
+                let lo = 50.0_f32.log10();
+                let hi = 2_000.0_f32.log10();
+                10.0_f32.powf(lo + (hi - lo) * v as f32)
+            }
+            PARAM_RANGE => (v * 6.0) as f32,
+            PARAM_RESONANCE => 10.0_f32.powf(v as f32),
+            PARAM_ATTACK => {
+                let lo = 0.5_f32.log10();
+                let hi = 200.0_f32.log10();
+                10.0_f32.powf(lo + (hi - lo) * v as f32)
+            }
+            PARAM_RELEASE => {
+                let lo = 5.0_f32.log10();
+                let hi = 1000.0_f32.log10();
+                10.0_f32.powf(lo + (hi - lo) * v as f32)
+            }
+            _ => v as f32,
         }
     }
 }
@@ -231,27 +260,19 @@ impl HostedPlugin for NativeAutoFilter {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let real = Self::from_normalised(id, value);
         let mut update_env = false;
         match id {
-            PARAM_BASE => {
-                let lo = 50.0_f32.log10();
-                let hi = 2_000.0_f32.log10();
-                self.base_hz = 10.0_f32.powf(lo + (hi - lo) * v as f32);
-            }
-            PARAM_RANGE => self.range_octaves = (v * 6.0) as f32,
-            PARAM_SENSITIVITY => self.sensitivity = v as f32,
-            PARAM_RESONANCE => self.resonance = 10.0_f32.powf(v as f32),
+            PARAM_BASE => self.base_hz = real,
+            PARAM_RANGE => self.range_octaves = real,
+            PARAM_SENSITIVITY => self.sensitivity = real,
+            PARAM_RESONANCE => self.resonance = real,
             PARAM_ATTACK => {
-                let lo = 0.5_f32.log10();
-                let hi = 200.0_f32.log10();
-                self.attack_ms = 10.0_f32.powf(lo + (hi - lo) * v as f32);
+                self.attack_ms = real;
                 update_env = true;
             }
             PARAM_RELEASE => {
-                let lo = 5.0_f32.log10();
-                let hi = 1000.0_f32.log10();
-                self.release_ms = 10.0_f32.powf(lo + (hi - lo) * v as f32);
+                self.release_ms = real;
                 update_env = true;
             }
             _ => {}
@@ -262,6 +283,19 @@ impl HostedPlugin for NativeAutoFilter {
             self.env_r
                 .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_BASE => format::hz(real),
+            PARAM_RANGE => format::num(real, 1, "oct"),
+            PARAM_SENSITIVITY => format::pct(real),
+            // The filter's Q, which has no unit.
+            PARAM_RESONANCE => format::num(real, 2, ""),
+            PARAM_ATTACK | PARAM_RELEASE => format::ms(real),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -320,5 +354,43 @@ impl HostedPlugin for NativeAutoFilter {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameters_read_as_hertz_octaves_q_and_ms() {
+        let af = NativeAutoFilter::new();
+        let default_text = |id: u32| {
+            let v = af.get_parameter_info(id).unwrap().default_value;
+            af.parameter_text(id, v)
+        };
+        assert_eq!(default_text(PARAM_BASE).as_deref(), Some("200 Hz"));
+        assert_eq!(default_text(PARAM_RANGE).as_deref(), Some("4.0 oct"));
+        assert_eq!(default_text(PARAM_SENSITIVITY).as_deref(), Some("70 %"));
+        assert_eq!(default_text(PARAM_RESONANCE).as_deref(), Some("4.00"));
+        // The log curve puts the defaults a hair under 10 and 100 ms, so
+        // the ends of the range make the steadier check.
+        assert_eq!(
+            af.parameter_text(PARAM_ATTACK, 0.0).as_deref(),
+            Some("0.50 ms")
+        );
+        assert_eq!(
+            af.parameter_text(PARAM_ATTACK, 1.0).as_deref(),
+            Some("200 ms")
+        );
+        assert_eq!(
+            af.parameter_text(PARAM_RELEASE, 1.0).as_deref(),
+            Some("1.00 s")
+        );
+        for id in 0..PARAM_COUNT {
+            assert!(af.parameter_options(id).is_none());
+            for step in 0..=10 {
+                assert!(af.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }

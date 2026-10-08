@@ -4,6 +4,7 @@
 //! feedback for resonant comb sweep). This is a pure pitch-modulation
 //! warble — Hammond-organ leslie character at slower rates.
 
+use crate::format;
 use hardwave_dsp::modulation::ModulatedDelay;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -17,6 +18,17 @@ const MAX_DELAY_SAMPLES: usize = 2048;
 const PARAM_RATE: u32 = 0;
 const PARAM_DEPTH: u32 = 1;
 const PARAM_COUNT: u32 = 2;
+
+/// LFO rate in hertz (0..12) from the 0..1 knob. The setter and the text
+/// both use these so what is shown is what is set.
+fn rate_hz_from_norm(v: f64) -> f32 {
+    (v * 12.0) as f32
+}
+
+/// LFO sweep in milliseconds (0..5) from the 0..1 knob.
+fn depth_ms_from_norm(v: f64) -> f32 {
+    (v * 5.0) as f32
+}
 
 pub struct NativeVibrato {
     descriptor: PluginDescriptor,
@@ -166,11 +178,22 @@ impl HostedPlugin for NativeVibrato {
     fn set_parameter_value(&mut self, id: u32, value: f64) {
         let v = value.clamp(0.0, 1.0);
         match id {
-            PARAM_RATE => self.rate_hz = (v * 12.0) as f32,
-            PARAM_DEPTH => self.depth_ms = (v * 5.0) as f32,
+            PARAM_RATE => self.rate_hz = rate_hz_from_norm(v),
+            PARAM_DEPTH => self.depth_ms = depth_ms_from_norm(v),
             _ => {}
         }
         self.refresh();
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0);
+        let text = match id {
+            PARAM_RATE => format::hz(rate_hz_from_norm(v) as f64),
+            PARAM_DEPTH => format::ms(depth_ms_from_norm(v) as f64),
+            _ => return None,
+        };
+        Some(text)
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -205,5 +228,23 @@ impl HostedPlugin for NativeVibrato {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_read_as_text() {
+        let p = NativeVibrato::new();
+        let shown = |id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(PARAM_RATE).as_deref(), Some("5.0 Hz"));
+        assert_eq!(shown(PARAM_DEPTH).as_deref(), Some("1.50 ms"));
+        assert_eq!(
+            p.parameter_text(PARAM_RATE, 1.0).as_deref(),
+            Some("12.0 Hz")
+        );
+        assert_eq!(p.parameter_text(PARAM_COUNT, 0.5), None);
     }
 }

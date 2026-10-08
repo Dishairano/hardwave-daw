@@ -1,6 +1,7 @@
 //! Native tremolo — sine LFO modulating volume. Mirrors Fruity Tremolo
 //! at the basic-features level: rate, depth, shape, stereo phase.
 
+use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
     HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
@@ -31,13 +32,26 @@ fn shape_from_norm(v: f32) -> Shape {
     }
 }
 
-fn shape_to_norm(s: Shape) -> f64 {
-    let i = match s {
+fn shape_index(s: Shape) -> usize {
+    match s {
         Shape::Sine => 0,
         Shape::Triangle => 1,
         Shape::Square => 2,
-    };
-    (i as f64 + 0.5) / 3.0
+    }
+}
+
+fn shape_to_norm(s: Shape) -> f64 {
+    (shape_index(s) as f64 + 0.5) / 3.0
+}
+
+/// Shape names by `shape_index`, which is also the order
+/// `shape_from_norm` picks them in, so choice i sits at i / 2.
+const SHAPE_NAMES: [&str; 3] = ["Sine", "Triangle", "Square"];
+
+/// LFO rate in hertz (0..20) from the 0..1 knob. The setter and the text
+/// both use it so what is shown is what is set.
+fn rate_hz_from_norm(v: f64) -> f32 {
+    (v * 20.0) as f32
 }
 
 fn lfo_value(shape: Shape, phase: f32) -> f32 {
@@ -192,7 +206,7 @@ impl HostedPlugin for NativeTremolo {
     fn set_parameter_value(&mut self, id: u32, value: f64) {
         let v = value.clamp(0.0, 1.0);
         match id {
-            PARAM_RATE => self.rate_hz = (v * 20.0) as f32,
+            PARAM_RATE => self.rate_hz = rate_hz_from_norm(v),
             PARAM_DEPTH => self.depth = v as f32,
             PARAM_SHAPE => self.shape = shape_from_norm(v as f32),
             PARAM_STEREO => {
@@ -200,6 +214,28 @@ impl HostedPlugin for NativeTremolo {
                 self.phase_r = (self.phase_l + self.stereo_phase) % 1.0;
             }
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0);
+        let text = match id {
+            PARAM_RATE => format::hz(rate_hz_from_norm(v) as f64),
+            PARAM_DEPTH => format::pct(v),
+            PARAM_SHAPE => SHAPE_NAMES[shape_index(shape_from_norm(v as f32))].to_string(),
+            // Stored as a fraction of an LFO cycle; an offset reads as an
+            // angle.
+            PARAM_STEREO => format::num(v * 360.0, 0, "deg"),
+            _ => return None,
+        };
+        Some(text)
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_SHAPE => Some(SHAPE_NAMES.iter().map(|s| s.to_string()).collect()),
+            _ => None,
         }
     }
 
@@ -247,5 +283,38 @@ impl HostedPlugin for NativeTremolo {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_read_as_text_and_choices_match_the_setter() {
+        let mut p = NativeTremolo::new();
+        let shown = |p: &NativeTremolo, id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(&p, PARAM_RATE).as_deref(), Some("5.0 Hz"));
+        assert_eq!(shown(&p, PARAM_DEPTH).as_deref(), Some("50 %"));
+        assert_eq!(shown(&p, PARAM_SHAPE).as_deref(), Some("Sine"));
+        assert_eq!(
+            p.parameter_text(PARAM_STEREO, 0.5).as_deref(),
+            Some("180 deg")
+        );
+
+        let options = p.parameter_options(PARAM_SHAPE).unwrap();
+        let last = (options.len() - 1) as f64;
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / last;
+            assert_eq!(p.parameter_text(PARAM_SHAPE, v).as_ref(), Some(label));
+            p.set_parameter_value(PARAM_SHAPE, v);
+            assert_eq!(shown(&p, PARAM_SHAPE).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            assert!(
+                p.parameter_text(id, 0.5).is_some(),
+                "parameter {id} has no text"
+            );
+        }
     }
 }

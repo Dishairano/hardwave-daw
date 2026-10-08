@@ -3,6 +3,7 @@
 //! Distinct from Chorus (longer delay, low feedback) by focusing on
 //! the metallic comb-filter character.
 
+use crate::format;
 use hardwave_dsp::modulation::ModulatedDelay;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -19,6 +20,22 @@ const PARAM_FEEDBACK: u32 = 2;
 const PARAM_MIX: u32 = 3;
 const PARAM_INVERT: u32 = 4;
 const PARAM_COUNT: u32 = 5;
+
+/// LFO rate in hertz (0..5) from the 0..1 knob. The setter and the text
+/// both use these so what is shown is what is set.
+fn rate_hz_from_norm(v: f64) -> f32 {
+    (v * 5.0) as f32
+}
+
+/// LFO sweep in milliseconds (0..5) from the 0..1 knob.
+fn depth_ms_from_norm(v: f64) -> f32 {
+    (v * 5.0) as f32
+}
+
+/// Feedback stops at 95 % so the comb cannot ring forever.
+fn feedback_from_norm(v: f64) -> f32 {
+    v.clamp(0.0, 0.95) as f32
+}
 
 pub struct NativeFlanger {
     descriptor: PluginDescriptor,
@@ -186,14 +203,28 @@ impl HostedPlugin for NativeFlanger {
     fn set_parameter_value(&mut self, id: u32, value: f64) {
         let v = value.clamp(0.0, 1.0);
         match id {
-            PARAM_RATE => self.rate_hz = (v * 5.0) as f32,
-            PARAM_DEPTH => self.depth_ms = (v * 5.0) as f32,
-            PARAM_FEEDBACK => self.feedback = v.clamp(0.0, 0.95) as f32,
+            PARAM_RATE => self.rate_hz = rate_hz_from_norm(v),
+            PARAM_DEPTH => self.depth_ms = depth_ms_from_norm(v),
+            PARAM_FEEDBACK => self.feedback = feedback_from_norm(v),
             PARAM_MIX => self.mix = v as f32,
             PARAM_INVERT => self.invert = v >= 0.5,
             _ => {}
         }
         self.refresh();
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0);
+        let text = match id {
+            PARAM_RATE => format::hz(rate_hz_from_norm(v) as f64),
+            PARAM_DEPTH => format::ms(depth_ms_from_norm(v) as f64),
+            PARAM_FEEDBACK => format::pct(feedback_from_norm(v) as f64),
+            PARAM_MIX => format::pct(v),
+            PARAM_INVERT => format::on_off(v),
+            _ => return None,
+        };
+        Some(text)
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -245,5 +276,31 @@ impl HostedPlugin for NativeFlanger {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_read_as_text() {
+        let p = NativeFlanger::new();
+        let shown = |id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(PARAM_RATE).as_deref(), Some("0.3 Hz"));
+        assert_eq!(shown(PARAM_DEPTH).as_deref(), Some("0.50 ms"));
+        assert_eq!(shown(PARAM_FEEDBACK).as_deref(), Some("60 %"));
+        assert_eq!(shown(PARAM_INVERT).as_deref(), Some("Off"));
+        // The setter stops feedback at 95 %, and so does the text.
+        assert_eq!(
+            p.parameter_text(PARAM_FEEDBACK, 1.0).as_deref(),
+            Some("95 %")
+        );
+        for id in 0..PARAM_COUNT {
+            assert!(
+                p.parameter_text(id, 0.5).is_some(),
+                "parameter {id} has no text"
+            );
+        }
     }
 }

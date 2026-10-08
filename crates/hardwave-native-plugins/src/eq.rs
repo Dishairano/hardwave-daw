@@ -2,6 +2,7 @@
 //! `HostedPlugin` trait so the audio engine can host it like any
 //! external VST3 / CLAP plugin.
 
+use crate::format;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -245,6 +246,23 @@ impl HostedPlugin for NativeEq {
         self.refresh_coeffs();
     }
 
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Values are real units here, not 0..1, so the text is the value
+        // clamped to the range set_parameter_value clamps it to.
+        let info = self.get_parameter_info(id)?;
+        let v = value.clamp(info.min, info.max);
+        if id == NUM_BANDS as u32 * PARAMS_PER_BAND {
+            return Some(format::db(v));
+        }
+        Some(match id % PARAMS_PER_BAND {
+            0 => format::on_off(v),
+            1 => format::hz(v),
+            2 => format::db(v),
+            3 => format::num(v, 2, ""),
+            _ => return None,
+        })
+    }
+
     fn get_state(&self) -> Vec<u8> {
         let mut state = Vec::with_capacity(1 + NUM_BANDS * 32 + 8);
         state.extend_from_slice(&1u32.to_le_bytes());
@@ -338,6 +356,24 @@ mod tests {
         let in_peak = input_l.iter().fold(0.0_f32, |m, &v| m.max(v.abs()));
         let out_peak = outputs[0].iter().fold(0.0_f32, |m, &v| m.max(v.abs()));
         assert!(out_peak > in_peak * 1.5, "shelf boost should lift peak");
+    }
+
+    #[test]
+    fn parameter_text_reads_real_units() {
+        let eq = NativeEq::new();
+        assert_eq!(eq.parameter_text(1, 1_000.0).as_deref(), Some("1.00 kHz"));
+        assert_eq!(eq.parameter_text(2, -6.0).as_deref(), Some("-6.0 dB"));
+        assert_eq!(eq.parameter_text(3, 1.0).as_deref(), Some("1.00"));
+        assert_eq!(eq.parameter_text(0, 1.0).as_deref(), Some("On"));
+        // Out-of-range values read as what the plug-in would clamp them to.
+        assert_eq!(eq.parameter_text(1, 5.0).as_deref(), Some("20.0 Hz"));
+        for id in 0..eq.get_parameter_count() {
+            let info = eq.get_parameter_info(id).unwrap();
+            for v in [info.min, info.default_value, info.max] {
+                assert!(eq.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+            assert!(eq.parameter_options(id).is_none());
+        }
     }
 
     #[test]

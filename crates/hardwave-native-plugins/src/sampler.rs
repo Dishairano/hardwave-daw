@@ -8,6 +8,7 @@
 //! same bytes round-trip through project save/load — so a project with a
 //! sampler is self-contained (the sample travels with it).
 
+use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
     HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
@@ -124,6 +125,17 @@ pub struct NativeSampler {
     gain: f32,
     attack_ms: f32,
     release_ms: f32,
+}
+
+/// Attack in milliseconds (0.1..200) from the 0..1 knob. The setter and
+/// the text both use it so what is shown is what is set.
+fn attack_ms_from_norm(v: f32) -> f32 {
+    (v * 200.0).max(0.1)
+}
+
+/// Release in milliseconds (1..1000) from the 0..1 knob.
+fn release_ms_from_norm(v: f32) -> f32 {
+    (v * 1000.0).max(1.0)
 }
 
 fn pitch_ratio(note: u8, base: u8) -> f64 {
@@ -347,10 +359,22 @@ impl HostedPlugin for NativeSampler {
         let v = value.clamp(0.0, 1.0) as f32;
         match id {
             PARAM_GAIN => self.gain = v,
-            PARAM_ATTACK => self.attack_ms = (v * 200.0).max(0.1),
-            PARAM_RELEASE => self.release_ms = (v * 1000.0).max(1.0),
+            PARAM_ATTACK => self.attack_ms = attack_ms_from_norm(v),
+            PARAM_RELEASE => self.release_ms = release_ms_from_norm(v),
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0) as f32;
+        let text = match id {
+            PARAM_GAIN => format::pct(v as f64),
+            PARAM_ATTACK => format::ms(attack_ms_from_norm(v) as f64),
+            PARAM_RELEASE => format::ms(release_ms_from_norm(v) as f64),
+            _ => return None,
+        };
+        Some(text)
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -478,6 +502,30 @@ mod tests {
         }];
         s.process(&[], &mut out, &notes, &mut Vec::new(), 32);
         assert!(out[0].iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn values_read_as_text() {
+        let p = NativeSampler::new();
+        let shown = |id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(PARAM_GAIN).as_deref(), Some("100 %"));
+        assert_eq!(shown(PARAM_ATTACK).as_deref(), Some("2.00 ms"));
+        assert_eq!(shown(PARAM_RELEASE).as_deref(), Some("60.0 ms"));
+        // The floors the setter keeps show up in the text too.
+        assert_eq!(
+            p.parameter_text(PARAM_ATTACK, 0.0).as_deref(),
+            Some("0.10 ms")
+        );
+        assert_eq!(
+            p.parameter_text(PARAM_RELEASE, 1.0).as_deref(),
+            Some("1.00 s")
+        );
+        for id in 0..PARAM_COUNT {
+            assert!(
+                p.parameter_text(id, 0.5).is_some(),
+                "parameter {id} has no text"
+            );
+        }
     }
 
     #[test]

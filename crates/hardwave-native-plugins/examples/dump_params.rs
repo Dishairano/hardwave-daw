@@ -53,7 +53,20 @@ fn main() {
             let d = p.descriptor();
             let params: Vec<serde_json::Value> = (0..p.get_parameter_count())
                 .filter_map(|i| p.get_parameter_info(i))
-                .map(|info| serde_json::to_value(&info).unwrap_or_default())
+                .map(|info| {
+                    // The value's text at 101 points across the range, so a
+                    // mockup can show what the plug-in itself would say.
+                    let texts: Vec<Option<String>> = (0..=100)
+                        .map(|k| {
+                            let v = info.min + (info.max - info.min) * k as f64 / 100.0;
+                            p.parameter_text(info.id, v)
+                        })
+                        .collect();
+                    let mut value = serde_json::to_value(&info).unwrap_or_default();
+                    value["options"] = serde_json::json!(p.parameter_options(info.id));
+                    value["texts"] = serde_json::json!(texts);
+                    value
+                })
                 .collect();
             serde_json::json!({ "id": d.id, "name": d.name, "category": format!("{:?}", d.category), "params": params })
         })

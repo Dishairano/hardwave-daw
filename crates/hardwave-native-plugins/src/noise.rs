@@ -2,6 +2,7 @@
 //! Triggered by MIDI note-on (any note); note-off stops. Useful for
 //! kick layering, FX risers, hi-hat synthesis, sound design.
 
+use crate::format;
 use hardwave_dsp::synth::AdsrEnvelope;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -34,13 +35,26 @@ fn colour_from_norm(v: f32) -> Colour {
     }
 }
 
-fn colour_to_norm(c: Colour) -> f64 {
-    let i = match c {
+fn colour_index(c: Colour) -> usize {
+    match c {
         Colour::White => 0,
         Colour::Pink => 1,
         Colour::Brown => 2,
-    };
-    (i as f64 + 0.5) / 3.0
+    }
+}
+
+fn colour_to_norm(c: Colour) -> f64 {
+    (colour_index(c) as f64 + 0.5) / 3.0
+}
+
+/// Colour names by `colour_index`, which is also the order
+/// `colour_from_norm` picks them in, so choice i sits at i / 2.
+const COLOUR_NAMES: [&str; 3] = ["White", "Pink", "Brown"];
+
+/// Envelope time in seconds (1 ms..5 s) from the 0..1 knob. The setter
+/// and the text both use it so what is shown is what is set.
+fn env_secs_from_norm(v: f64) -> f32 {
+    (v * 5.0).max(0.001) as f32
 }
 
 /// Voss-McCartney pink noise generator with 16 octaves of resolution.
@@ -260,11 +274,11 @@ impl HostedPlugin for NativeNoise {
             PARAM_COLOUR => self.colour = colour_from_norm(v as f32),
             PARAM_LEVEL => self.level = v as f32,
             PARAM_ATTACK => {
-                self.attack = (v * 5.0).max(0.001) as f32;
+                self.attack = env_secs_from_norm(v);
                 self.env.set_times(self.attack, self.decay, self.release);
             }
             PARAM_DECAY => {
-                self.decay = (v * 5.0).max(0.001) as f32;
+                self.decay = env_secs_from_norm(v);
                 self.env.set_times(self.attack, self.decay, self.release);
             }
             PARAM_SUSTAIN => {
@@ -272,10 +286,31 @@ impl HostedPlugin for NativeNoise {
                 self.env.set_sustain(self.sustain);
             }
             PARAM_RELEASE => {
-                self.release = (v * 5.0).max(0.001) as f32;
+                self.release = env_secs_from_norm(v);
                 self.env.set_times(self.attack, self.decay, self.release);
             }
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0);
+        let text = match id {
+            PARAM_COLOUR => COLOUR_NAMES[colour_index(colour_from_norm(v as f32))].to_string(),
+            PARAM_LEVEL | PARAM_SUSTAIN => format::pct(v),
+            PARAM_ATTACK | PARAM_DECAY | PARAM_RELEASE => {
+                format::secs(env_secs_from_norm(v) as f64)
+            }
+            _ => return None,
+        };
+        Some(text)
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_COLOUR => Some(COLOUR_NAMES.iter().map(|s| s.to_string()).collect()),
+            _ => None,
         }
     }
 
@@ -333,5 +368,34 @@ impl HostedPlugin for NativeNoise {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_read_as_text_and_choices_match_the_setter() {
+        let mut p = NativeNoise::new();
+        let shown = |p: &NativeNoise, id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(&p, PARAM_COLOUR).as_deref(), Some("White"));
+        assert_eq!(shown(&p, PARAM_LEVEL).as_deref(), Some("60 %"));
+        assert_eq!(shown(&p, PARAM_RELEASE).as_deref(), Some("200 ms"));
+
+        let options = p.parameter_options(PARAM_COLOUR).unwrap();
+        let last = (options.len() - 1) as f64;
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / last;
+            assert_eq!(p.parameter_text(PARAM_COLOUR, v).as_ref(), Some(label));
+            p.set_parameter_value(PARAM_COLOUR, v);
+            assert_eq!(shown(&p, PARAM_COLOUR).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            assert!(
+                p.parameter_text(id, 0.5).is_some(),
+                "parameter {id} has no text"
+            );
+        }
     }
 }

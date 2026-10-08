@@ -3,6 +3,7 @@
 //! Mirrors Fruity Convolver / Logic Space Designer at the basic-
 //! features level: pick a space, set mix, pre-delay, tail tone.
 
+use crate::format;
 use hardwave_dsp::convolution::ConvolutionReverb;
 use hardwave_dsp::ir_library::{synthesize_ir, IrPreset};
 use hardwave_midi::MidiEvent;
@@ -31,14 +32,52 @@ fn preset_from_norm(v: f32) -> IrPreset {
     }
 }
 
-fn preset_to_norm(p: IrPreset) -> f64 {
-    let idx = match p {
+fn preset_index(p: IrPreset) -> usize {
+    match p {
         IrPreset::LargeHall => 0,
         IrPreset::SmallRoom => 1,
         IrPreset::Plate => 2,
         IrPreset::Spring => 3,
-    };
-    (idx as f64 + 0.5) / 4.0
+    }
+}
+
+fn preset_to_norm(p: IrPreset) -> f64 {
+    (preset_index(p) as f64 + 0.5) / 4.0
+}
+
+/// Space names by `preset_index`, which is also the order
+/// `preset_from_norm` picks them in, so choice i sits at i / 3.
+const PRESET_NAMES: [&str; 4] = ["Hall", "Room", "Plate", "Spring"];
+
+/// Pre-delay in milliseconds (0..200) from the 0..1 knob. The setter and
+/// the text both use these so what is shown is what is set.
+fn pre_delay_ms_from_norm(v: f64) -> f32 {
+    (v * 200.0) as f32
+}
+
+/// How much of the impulse tail is kept (10..100 %): the knob's floor is
+/// the shortest tail `set_low_cpu_mode` accepts.
+fn low_cpu_from_norm(v: f64) -> f32 {
+    v.clamp(0.1, 1.0) as f32
+}
+
+/// Tail low cut in hertz, 20 Hz..1 kHz on a log scale.
+fn low_cut_hz_from_norm(v: f64) -> f32 {
+    let lo = 20.0_f32.log10();
+    let hi = 1_000.0_f32.log10();
+    10.0_f32.powf(lo + (hi - lo) * v as f32)
+}
+
+/// Tail high cut in hertz, 1 kHz..20 kHz on a log scale.
+fn high_cut_hz_from_norm(v: f64) -> f32 {
+    let lo = 1_000.0_f32.log10();
+    let hi = 20_000.0_f32.log10();
+    10.0_f32.powf(lo + (hi - lo) * v as f32)
+}
+
+/// Stereo width (0..2, 1 is the impulse as recorded) from the 0..1 knob.
+fn width_from_norm(v: f64) -> f32 {
+    (v * 2.0) as f32
 }
 
 pub struct NativeConvReverb {
@@ -230,27 +269,23 @@ impl HostedPlugin for NativeConvReverb {
                 self.refresh();
             }
             PARAM_PRE_DELAY => {
-                self.pre_delay_ms = (v * 200.0) as f32;
+                self.pre_delay_ms = pre_delay_ms_from_norm(v);
                 self.rev.set_pre_delay_ms(self.pre_delay_ms);
             }
             PARAM_LOW_CPU => {
-                self.low_cpu = v.clamp(0.1, 1.0) as f32;
+                self.low_cpu = low_cpu_from_norm(v);
                 self.rev.set_low_cpu_mode(self.low_cpu);
             }
             PARAM_LOW_CUT => {
-                let lo = 20.0_f32.log10();
-                let hi = 1_000.0_f32.log10();
-                self.low_cut_hz = 10.0_f32.powf(lo + (hi - lo) * v as f32);
+                self.low_cut_hz = low_cut_hz_from_norm(v);
                 self.rev.set_tail_eq(self.low_cut_hz, self.high_cut_hz);
             }
             PARAM_HIGH_CUT => {
-                let lo = 1_000.0_f32.log10();
-                let hi = 20_000.0_f32.log10();
-                self.high_cut_hz = 10.0_f32.powf(lo + (hi - lo) * v as f32);
+                self.high_cut_hz = high_cut_hz_from_norm(v);
                 self.rev.set_tail_eq(self.low_cut_hz, self.high_cut_hz);
             }
             PARAM_WIDTH => {
-                self.width = (v * 2.0) as f32;
+                self.width = width_from_norm(v);
                 self.rev.set_stereo_width(self.width);
             }
             PARAM_MIX => {
@@ -258,6 +293,29 @@ impl HostedPlugin for NativeConvReverb {
                 self.rev.set_mix(self.mix);
             }
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0);
+        let text = match id {
+            PARAM_PRESET => PRESET_NAMES[preset_index(preset_from_norm(v as f32))].to_string(),
+            PARAM_PRE_DELAY => format::ms(pre_delay_ms_from_norm(v) as f64),
+            PARAM_LOW_CPU => format::pct(low_cpu_from_norm(v) as f64),
+            PARAM_LOW_CUT => format::hz(low_cut_hz_from_norm(v) as f64),
+            PARAM_HIGH_CUT => format::hz(high_cut_hz_from_norm(v) as f64),
+            PARAM_WIDTH => format::pct(width_from_norm(v) as f64),
+            PARAM_MIX => format::pct(v),
+            _ => return None,
+        };
+        Some(text)
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_PRESET => Some(PRESET_NAMES.iter().map(|s| s.to_string()).collect()),
+            _ => None,
         }
     }
 
@@ -319,5 +377,40 @@ impl HostedPlugin for NativeConvReverb {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_read_as_text_and_choices_match_the_setter() {
+        let mut p = NativeConvReverb::new();
+        let shown = |p: &NativeConvReverb, id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(&p, PARAM_PRESET).as_deref(), Some("Plate"));
+        assert_eq!(shown(&p, PARAM_PRE_DELAY).as_deref(), Some("15.0 ms"));
+        assert_eq!(shown(&p, PARAM_LOW_CUT).as_deref(), Some("120 Hz"));
+        assert_eq!(shown(&p, PARAM_HIGH_CUT).as_deref(), Some("12.00 kHz"));
+        assert_eq!(shown(&p, PARAM_WIDTH).as_deref(), Some("100 %"));
+        assert_eq!(
+            p.parameter_text(PARAM_LOW_CPU, 0.0).as_deref(),
+            Some("10 %")
+        );
+
+        let options = p.parameter_options(PARAM_PRESET).unwrap();
+        let last = (options.len() - 1) as f64;
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / last;
+            assert_eq!(p.parameter_text(PARAM_PRESET, v).as_ref(), Some(label));
+            p.set_parameter_value(PARAM_PRESET, v);
+            assert_eq!(shown(&p, PARAM_PRESET).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            assert!(
+                p.parameter_text(id, 0.5).is_some(),
+                "parameter {id} has no text"
+            );
+        }
     }
 }

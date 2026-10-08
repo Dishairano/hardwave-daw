@@ -1,6 +1,7 @@
 //! Native reverb plug-in — wraps `hardwave_dsp::reverb::AlgorithmicReverb`
 //! in HostedPlugin. Mirrors Fruity Reverb 2's main controls.
 
+use crate::format;
 use hardwave_dsp::reverb::AlgorithmicReverb;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -59,6 +60,17 @@ impl NativeReverb {
             mix: 0.3,
             active: false,
         }
+    }
+
+    /// Decay a 0..1 value sets: 0.1 s to 10 s, linear. Shared by the
+    /// setter and the label.
+    fn decay_secs_from_normalised(v: f64) -> f32 {
+        (0.1 + v.clamp(0.0, 1.0) * 9.9) as f32
+    }
+
+    /// Pre-delay a 0..1 value sets: 0 to 200 ms, linear.
+    fn pre_delay_ms_from_normalised(v: f64) -> f32 {
+        (v.clamp(0.0, 1.0) * 200.0) as f32
     }
 
     fn refresh(&mut self) {
@@ -190,13 +202,23 @@ impl HostedPlugin for NativeReverb {
         let v = value.clamp(0.0, 1.0);
         match id {
             PARAM_ROOM_SIZE => self.room_size = v as f32,
-            PARAM_DECAY => self.decay_secs = (0.1 + v * 9.9) as f32,
+            PARAM_DECAY => self.decay_secs = Self::decay_secs_from_normalised(v),
             PARAM_DAMPING => self.damping = v as f32,
-            PARAM_PRE_DELAY => self.pre_delay_ms = (v * 200.0) as f32,
+            PARAM_PRE_DELAY => self.pre_delay_ms = Self::pre_delay_ms_from_normalised(v),
             PARAM_MIX => self.mix = v as f32,
             _ => {}
         }
         self.refresh();
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let v = value.clamp(0.0, 1.0);
+        Some(match id {
+            PARAM_ROOM_SIZE | PARAM_DAMPING | PARAM_MIX => format::pct(v),
+            PARAM_DECAY => format::secs(Self::decay_secs_from_normalised(v) as f64),
+            PARAM_PRE_DELAY => format::ms(Self::pre_delay_ms_from_normalised(v) as f64),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -244,5 +266,36 @@ impl HostedPlugin for NativeReverb {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_reads_real_units() {
+        let r = NativeReverb::new();
+        let decay = r.get_parameter_info(PARAM_DECAY).unwrap().default_value;
+        assert_eq!(
+            r.parameter_text(PARAM_DECAY, decay).as_deref(),
+            Some("2.00 s")
+        );
+        assert_eq!(
+            r.parameter_text(PARAM_DECAY, 0.0).as_deref(),
+            Some("100 ms")
+        );
+        let pre = r.get_parameter_info(PARAM_PRE_DELAY).unwrap().default_value;
+        assert_eq!(
+            r.parameter_text(PARAM_PRE_DELAY, pre).as_deref(),
+            Some("20.0 ms")
+        );
+        assert_eq!(r.parameter_text(PARAM_MIX, 0.3).as_deref(), Some("30 %"));
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(r.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+            assert!(r.parameter_options(id).is_none());
+        }
     }
 }

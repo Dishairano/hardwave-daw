@@ -1,6 +1,7 @@
 //! Native delay plug-in — wraps `hardwave_dsp::delay_line::StereoDelayLine`.
 //! Mirrors Fruity Delay 3's main controls: time, feedback, mix, ping-pong.
 
+use crate::format;
 use hardwave_dsp::delay_line::StereoDelayLine;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -64,6 +65,12 @@ impl NativeDelay {
             ping_pong: false,
             active: false,
         }
+    }
+
+    /// The delay time a 0..1 Time value sets, in ms: linear up to
+    /// MAX_DELAY_MS. Shared by the setter and the label.
+    fn time_ms_from_normalised(v: f64) -> f32 {
+        (v.clamp(0.0, 1.0) * MAX_DELAY_MS as f64) as f32
     }
 
     fn refresh_time(&mut self) {
@@ -187,7 +194,7 @@ impl HostedPlugin for NativeDelay {
         let v = value.clamp(0.0, 1.0);
         match id {
             PARAM_TIME_MS => {
-                self.time_ms = (v * MAX_DELAY_MS as f64) as f32;
+                self.time_ms = Self::time_ms_from_normalised(v);
                 self.refresh_time();
             }
             PARAM_FEEDBACK => {
@@ -201,6 +208,16 @@ impl HostedPlugin for NativeDelay {
             }
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let v = value.clamp(0.0, 1.0);
+        Some(match id {
+            PARAM_TIME_MS => format::ms(Self::time_ms_from_normalised(v) as f64),
+            PARAM_FEEDBACK | PARAM_MIX => format::pct(v),
+            PARAM_PING_PONG => format::on_off(v),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -250,5 +267,38 @@ impl HostedPlugin for NativeDelay {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_text_reads_real_units() {
+        let d = NativeDelay::new();
+        let time = d.get_parameter_info(PARAM_TIME_MS).unwrap().default_value;
+        assert_eq!(
+            d.parameter_text(PARAM_TIME_MS, time).as_deref(),
+            Some("250 ms")
+        );
+        assert_eq!(
+            d.parameter_text(PARAM_TIME_MS, 1.0).as_deref(),
+            Some("2.00 s")
+        );
+        assert_eq!(
+            d.parameter_text(PARAM_FEEDBACK, 0.35).as_deref(),
+            Some("35 %")
+        );
+        assert_eq!(
+            d.parameter_text(PARAM_PING_PONG, 1.0).as_deref(),
+            Some("On")
+        );
+        for id in 0..PARAM_COUNT {
+            for v in [0.0, 0.5, 1.0] {
+                assert!(d.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+            assert!(d.parameter_options(id).is_none());
+        }
     }
 }

@@ -1,6 +1,7 @@
 //! Native compressor plugin — wraps `hardwave_dsp::dynamics` in the
 //! `HostedPlugin` trait.
 
+use crate::format;
 use hardwave_dsp::dynamics::{
     compressor_gain_reduction_db, db_to_linear, linear_to_db, DetectMode, EnvelopeFollower,
 };
@@ -20,6 +21,23 @@ const PARAM_MAKEUP: u32 = 5;
 const PARAM_AUTO_MAKEUP: u32 = 6;
 const PARAM_MODE: u32 = 7;
 const PARAM_COUNT: u32 = 8;
+
+/// Which detector a Detect Mode value picks: Peak below the middle, RMS
+/// from it. One function so the label and the sound never disagree.
+fn detect_mode_from_value(value: f64) -> DetectMode {
+    if value >= 0.5 {
+        DetectMode::Rms
+    } else {
+        DetectMode::Peak
+    }
+}
+
+fn detect_mode_label(mode: DetectMode) -> &'static str {
+    match mode {
+        DetectMode::Peak => "Peak",
+        DetectMode::Rms => "RMS",
+    }
+}
 
 pub struct NativeCompressor {
     descriptor: PluginDescriptor,
@@ -253,14 +271,37 @@ impl HostedPlugin for NativeCompressor {
             PARAM_MAKEUP => self.makeup_db = (value as f32).clamp(0.0, 30.0),
             PARAM_AUTO_MAKEUP => self.auto_makeup = value >= 0.5,
             PARAM_MODE => {
-                self.mode = if value >= 0.5 {
-                    DetectMode::Rms
-                } else {
-                    DetectMode::Peak
-                };
+                self.mode = detect_mode_from_value(value);
                 self.update_envelope();
             }
             _ => {}
+        }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Values are real units here, not 0..1, so the text is the value
+        // clamped to the range set_parameter_value clamps it to.
+        let info = self.get_parameter_info(id)?;
+        let v = value.clamp(info.min, info.max);
+        Some(match id {
+            PARAM_THRESHOLD | PARAM_KNEE | PARAM_MAKEUP => format::db(v),
+            PARAM_RATIO => format::ratio(v),
+            PARAM_ATTACK | PARAM_RELEASE => format::ms(v),
+            PARAM_AUTO_MAKEUP => format::on_off(v),
+            PARAM_MODE => detect_mode_label(detect_mode_from_value(v)).to_string(),
+            _ => return None,
+        })
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        match id {
+            PARAM_MODE => Some(
+                [DetectMode::Peak, DetectMode::Rms]
+                    .into_iter()
+                    .map(|m| detect_mode_label(m).to_string())
+                    .collect(),
+            ),
+            _ => None,
         }
     }
 
@@ -324,6 +365,33 @@ impl HostedPlugin for NativeCompressor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parameter_text_reads_real_units() {
+        let c = NativeCompressor::new();
+        assert_eq!(
+            c.parameter_text(PARAM_THRESHOLD, -18.0).as_deref(),
+            Some("-18.0 dB")
+        );
+        assert_eq!(c.parameter_text(PARAM_RATIO, 4.0).as_deref(), Some("4.0:1"));
+        assert_eq!(
+            c.parameter_text(PARAM_ATTACK, 10.0).as_deref(),
+            Some("10.0 ms")
+        );
+        let options = c.parameter_options(PARAM_MODE).unwrap();
+        assert_eq!(options, vec!["Peak", "RMS"]);
+        let n = options.len();
+        for (i, label) in options.iter().enumerate() {
+            let v = i as f64 / (n - 1) as f64;
+            assert_eq!(c.parameter_text(PARAM_MODE, v).as_ref(), Some(label));
+        }
+        for id in 0..PARAM_COUNT {
+            let info = c.get_parameter_info(id).unwrap();
+            for v in [info.min, info.default_value, info.max] {
+                assert!(c.parameter_text(id, v).is_some(), "no text for {id}");
+            }
+        }
+    }
 
     #[test]
     fn param_count_is_correct() {

@@ -2,6 +2,7 @@
 //! Adds harmonic sparkle without muddying the low end. Mirrors Aphex
 //! Aural Exciter / Waves Vitamin baseline.
 
+use crate::format;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
@@ -64,6 +65,22 @@ impl NativeExciter {
         s.drive_l.set_amount(0.4);
         s.drive_r.set_amount(0.4);
         s
+    }
+
+    /// The real value behind a 0..1 knob: hertz for the frequency, the
+    /// amount or mix itself otherwise. Setting a parameter and showing it
+    /// both go through here, so the label is always what the sound is
+    /// doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0);
+        match id {
+            PARAM_FREQUENCY => {
+                let lo = 2_000.0_f32.log10();
+                let hi = 15_000.0_f32.log10();
+                10.0_f32.powf(lo + (hi - lo) * v as f32)
+            }
+            _ => v as f32,
+        }
     }
 
     fn ensure_coefs(&mut self) {
@@ -188,21 +205,28 @@ impl HostedPlugin for NativeExciter {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let real = Self::from_normalised(id, value);
         match id {
             PARAM_FREQUENCY => {
-                let lo = 2_000.0_f32.log10();
-                let hi = 15_000.0_f32.log10();
-                self.frequency_hz = 10.0_f32.powf(lo + (hi - lo) * v as f32);
+                self.frequency_hz = real;
                 self.needs_recoef = true;
             }
             PARAM_AMOUNT => {
-                self.drive_l.set_amount(v as f32);
-                self.drive_r.set_amount(v as f32);
+                self.drive_l.set_amount(real);
+                self.drive_r.set_amount(real);
             }
-            PARAM_MIX => self.mix = v as f32,
+            PARAM_MIX => self.mix = real,
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_FREQUENCY => format::hz(real),
+            PARAM_AMOUNT | PARAM_MIX => format::pct(real),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -248,5 +272,37 @@ impl HostedPlugin for NativeExciter {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameters_read_as_hertz_and_percent() {
+        let ex = NativeExciter::new();
+        let freq = ex
+            .get_parameter_info(PARAM_FREQUENCY)
+            .unwrap()
+            .default_value;
+        assert_eq!(
+            ex.parameter_text(PARAM_FREQUENCY, freq).as_deref(),
+            Some("5.00 kHz")
+        );
+        assert_eq!(
+            ex.parameter_text(PARAM_FREQUENCY, 0.0).as_deref(),
+            Some("2.00 kHz")
+        );
+        assert_eq!(
+            ex.parameter_text(PARAM_AMOUNT, 0.4).as_deref(),
+            Some("40 %")
+        );
+        for id in 0..PARAM_COUNT {
+            assert!(ex.parameter_options(id).is_none());
+            for step in 0..=10 {
+                assert!(ex.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }

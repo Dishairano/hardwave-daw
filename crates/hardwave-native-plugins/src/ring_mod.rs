@@ -4,6 +4,7 @@
 //! (tremolo modulates amplitude with positive-only LFO, ring-mod uses
 //! bipolar -1..+1 LFO so sign-flips create new partials).
 
+use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
     HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
@@ -52,6 +53,22 @@ impl NativeRingMod {
             mix: 0.5,
             phase: 0.0,
             active: false,
+        }
+    }
+
+    /// The real value behind a 0..1 knob: hertz for the frequency, the
+    /// mix itself otherwise. Setting a parameter and showing it both go
+    /// through here, so the label is always what the sound is doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0);
+        match id {
+            // 1..2000 Hz log
+            PARAM_FREQUENCY => {
+                let lo = 1.0_f32.log10();
+                let hi = 2_000.0_f32.log10();
+                10.0_f32.powf(lo + (hi - lo) * v as f32)
+            }
+            _ => v as f32,
         }
     }
 }
@@ -149,16 +166,21 @@ impl HostedPlugin for NativeRingMod {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let real = Self::from_normalised(id, value);
         match id {
-            PARAM_FREQUENCY => {
-                let lo = 1.0_f32.log10();
-                let hi = 2_000.0_f32.log10();
-                self.frequency_hz = 10.0_f32.powf(lo + (hi - lo) * v as f32);
-            }
-            PARAM_MIX => self.mix = v as f32,
+            PARAM_FREQUENCY => self.frequency_hz = real,
+            PARAM_MIX => self.mix = real,
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_FREQUENCY => format::hz(real),
+            PARAM_MIX => format::pct(real),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -192,5 +214,38 @@ impl HostedPlugin for NativeRingMod {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frequency_reads_in_hertz_and_mix_in_percent() {
+        let rm = NativeRingMod::new();
+        let freq = rm
+            .get_parameter_info(PARAM_FREQUENCY)
+            .unwrap()
+            .default_value;
+        assert_eq!(
+            rm.parameter_text(PARAM_FREQUENCY, freq).as_deref(),
+            Some("200 Hz")
+        );
+        assert_eq!(
+            rm.parameter_text(PARAM_FREQUENCY, 0.0).as_deref(),
+            Some("1.0 Hz")
+        );
+        assert_eq!(
+            rm.parameter_text(PARAM_FREQUENCY, 1.0).as_deref(),
+            Some("2.00 kHz")
+        );
+        assert_eq!(rm.parameter_text(PARAM_MIX, 0.5).as_deref(), Some("50 %"));
+        for id in 0..PARAM_COUNT {
+            assert!(rm.parameter_options(id).is_none());
+            for step in 0..=10 {
+                assert!(rm.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }

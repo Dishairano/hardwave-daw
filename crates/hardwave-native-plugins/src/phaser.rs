@@ -7,6 +7,7 @@
 //! modulation would need a Biquad cookbook recompute per sample,
 //! which is too much for what is effectively a colour effect.
 
+use crate::format;
 use hardwave_dsp::modulation::PhaserChain;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -24,6 +25,25 @@ const PARAM_BASE: u32 = 2;
 const PARAM_SPREAD: u32 = 3;
 const PARAM_MIX: u32 = 4;
 const PARAM_COUNT: u32 = 5;
+
+/// LFO rate in hertz (0..8) from the 0..1 knob. The setter and the text
+/// both use these so what is shown is what is set.
+fn rate_hz_from_norm(v: f64) -> f32 {
+    (v * 8.0) as f32
+}
+
+/// Depth and spread in octaves (0..4) from the 0..1 knob.
+fn octaves_from_norm(v: f64) -> f32 {
+    (v * 4.0) as f32
+}
+
+/// Centre notch in hertz, 100 Hz..5 kHz on a log scale, from the 0..1
+/// knob.
+fn base_hz_from_norm(v: f64) -> f32 {
+    let lo = 100.0_f32.log10();
+    let hi = 5_000.0_f32.log10();
+    10.0_f32.powf(lo + (hi - lo) * v as f32)
+}
 
 pub struct NativePhaser {
     descriptor: PluginDescriptor,
@@ -199,17 +219,26 @@ impl HostedPlugin for NativePhaser {
     fn set_parameter_value(&mut self, id: u32, value: f64) {
         let v = value.clamp(0.0, 1.0);
         match id {
-            PARAM_RATE => self.rate_hz = (v * 8.0) as f32,
-            PARAM_DEPTH => self.depth_octaves = (v * 4.0) as f32,
-            PARAM_BASE => {
-                let lo = 100.0_f32.log10();
-                let hi = 5_000.0_f32.log10();
-                self.base_hz = 10.0_f32.powf(lo + (hi - lo) * v as f32);
-            }
-            PARAM_SPREAD => self.spread_octaves = (v * 4.0) as f32,
+            PARAM_RATE => self.rate_hz = rate_hz_from_norm(v),
+            PARAM_DEPTH => self.depth_octaves = octaves_from_norm(v),
+            PARAM_BASE => self.base_hz = base_hz_from_norm(v),
+            PARAM_SPREAD => self.spread_octaves = octaves_from_norm(v),
             PARAM_MIX => self.mix = v as f32,
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        // Same clamp as the setter, so the text names what the value sets.
+        let v = value.clamp(0.0, 1.0);
+        let text = match id {
+            PARAM_RATE => format::hz(rate_hz_from_norm(v) as f64),
+            PARAM_DEPTH | PARAM_SPREAD => format::num(octaves_from_norm(v) as f64, 2, "oct"),
+            PARAM_BASE => format::hz(base_hz_from_norm(v) as f64),
+            PARAM_MIX => format::pct(v),
+            _ => return None,
+        };
+        Some(text)
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -256,5 +285,30 @@ impl HostedPlugin for NativePhaser {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_read_as_text() {
+        let p = NativePhaser::new();
+        let shown = |id: u32| p.parameter_text(id, p.get_parameter_value(id));
+        assert_eq!(shown(PARAM_RATE).as_deref(), Some("0.5 Hz"));
+        assert_eq!(shown(PARAM_DEPTH).as_deref(), Some("1.50 oct"));
+        assert_eq!(shown(PARAM_BASE).as_deref(), Some("500 Hz"));
+        assert_eq!(
+            p.parameter_text(PARAM_BASE, 1.0).as_deref(),
+            Some("5.00 kHz")
+        );
+        assert_eq!(shown(PARAM_MIX).as_deref(), Some("50 %"));
+        for id in 0..PARAM_COUNT {
+            assert!(
+                p.parameter_text(id, 0.5).is_some(),
+                "parameter {id} has no text"
+            );
+        }
     }
 }

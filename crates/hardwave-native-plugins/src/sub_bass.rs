@@ -3,6 +3,7 @@
 //! sub-shelf treatment essentials. Hardstyle producers use this to
 //! glue 808 sub-layers under a kick punch.
 
+use crate::format;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
@@ -68,6 +69,24 @@ impl NativeSubBass {
             mix: 0.5,
             needs_recoef: true,
             active: false,
+        }
+    }
+
+    /// The real value behind a 0..1 knob: hertz for the crossover, dB
+    /// for the boost, the amount or mix itself otherwise. Setting a
+    /// parameter and showing it both go through here, so the label is
+    /// always what the sound is doing.
+    fn from_normalised(id: u32, value: f64) -> f32 {
+        let v = value.clamp(0.0, 1.0);
+        match id {
+            PARAM_CROSSOVER => {
+                let lo = 30.0_f32.log10();
+                let hi = 300.0_f32.log10();
+                10.0_f32.powf(lo + (hi - lo) * v as f32)
+            }
+            // -12..=+12 dB
+            PARAM_BOOST => (v * 24.0 - 12.0) as f32,
+            _ => v as f32,
         }
     }
 
@@ -209,22 +228,30 @@ impl HostedPlugin for NativeSubBass {
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0);
+        let real = Self::from_normalised(id, value);
         match id {
             PARAM_CROSSOVER => {
-                let lo = 30.0_f32.log10();
-                let hi = 300.0_f32.log10();
-                self.crossover_hz = 10.0_f32.powf(lo + (hi - lo) * v as f32);
+                self.crossover_hz = real;
                 self.needs_recoef = true;
             }
-            PARAM_BOOST => self.boost_db = (v * 24.0 - 12.0) as f32,
+            PARAM_BOOST => self.boost_db = real,
             PARAM_DRIVE => {
-                self.drive_l.set_amount(v as f32);
-                self.drive_r.set_amount(v as f32);
+                self.drive_l.set_amount(real);
+                self.drive_r.set_amount(real);
             }
-            PARAM_MIX => self.mix = v as f32,
+            PARAM_MIX => self.mix = real,
             _ => {}
         }
+    }
+
+    fn parameter_text(&self, id: u32, value: f64) -> Option<String> {
+        let real = Self::from_normalised(id, value) as f64;
+        Some(match id {
+            PARAM_CROSSOVER => format::hz(real),
+            PARAM_BOOST => format::db(real),
+            PARAM_DRIVE | PARAM_MIX => format::pct(real),
+            _ => return None,
+        })
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -274,5 +301,39 @@ impl HostedPlugin for NativeSubBass {
     fn close_editor(&mut self) {}
     fn has_editor(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameters_read_as_hertz_db_and_percent() {
+        let sb = NativeSubBass::new();
+        let cross = sb
+            .get_parameter_info(PARAM_CROSSOVER)
+            .unwrap()
+            .default_value;
+        assert_eq!(
+            sb.parameter_text(PARAM_CROSSOVER, cross).as_deref(),
+            Some("80.0 Hz")
+        );
+        assert_eq!(
+            sb.parameter_text(PARAM_CROSSOVER, 1.0).as_deref(),
+            Some("300 Hz")
+        );
+        let boost = sb.get_parameter_info(PARAM_BOOST).unwrap().default_value;
+        assert_eq!(
+            sb.parameter_text(PARAM_BOOST, boost).as_deref(),
+            Some("+4.0 dB")
+        );
+        assert_eq!(sb.parameter_text(PARAM_MIX, 0.5).as_deref(), Some("50 %"));
+        for id in 0..PARAM_COUNT {
+            assert!(sb.parameter_options(id).is_none());
+            for step in 0..=10 {
+                assert!(sb.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
     }
 }
