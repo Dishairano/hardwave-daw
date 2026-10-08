@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-transpose-track-notes"
+description = "Enables the transpose_track_notes command without any pre-configured scope."
+commands.allow = ["transpose_track_notes"]
+
+[[permission]]
+identifier = "deny-transpose-track-notes"
+description = "Denies the transpose_track_notes command without any pre-configured scope."
+commands.deny = ["transpose_track_notes"]

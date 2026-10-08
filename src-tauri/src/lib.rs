@@ -359,6 +359,7 @@ pub fn run() {
             commands::tracks::add_automation_track,
             commands::tracks::remove_track,
             commands::tracks::duplicate_track,
+            commands::midi::transpose_track_notes,
             commands::tracks::set_track_volume,
             commands::tracks::set_track_pan,
             commands::tracks::toggle_mute,

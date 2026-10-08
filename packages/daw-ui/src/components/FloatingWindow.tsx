@@ -148,11 +148,13 @@ export function FloatingWindow({ panelId, title, onClose, dockable = true, actio
   )
 }
 
-export function DetachButton({ panelId, title }: { panelId: PanelId; title?: string }) {
-  // Pop the panel out into its OWN OS window (movable to another monitor) via
-  // the open_panel_window command, then hide the inline copy in this window so
-  // it isn't shown twice. The piano roll carries its open clip as context.
-  const onClick = async () => {
+/**
+ * Pop a panel out into its OWN OS window (movable to another monitor) via
+ * the open_panel_window command, then hide the inline copy in this window so
+ * it isn't shown twice. The piano roll carries its open clip as context.
+ */
+export async function detachPanel(panelId: PanelId) {
+  {
     // Hide the inline copy right away — the panel is moving to its own window.
     window.dispatchEvent(new CustomEvent('daw:popoutPanel', { detail: panelId }))
     try {
@@ -178,6 +180,10 @@ export function DetachButton({ panelId, title }: { panelId: PanelId; title?: str
       window.dispatchEvent(new CustomEvent('daw:redockPanel', { detail: panelId }))
     }
   }
+}
+
+export function DetachButton({ panelId, title }: { panelId: PanelId; title?: string }) {
+  const onClick = () => { void detachPanel(panelId) }
   return (
     <button
       onClick={onClick}

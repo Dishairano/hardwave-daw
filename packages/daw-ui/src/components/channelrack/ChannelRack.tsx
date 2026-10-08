@@ -4,13 +4,14 @@ import { useTrackStore } from '../../stores/trackStore'
 import { usePatternStore, STEPS_PER_PATTERN, PATTERN_COLORS, STEP_GRAPH_RANGES, STEP_GRAPH_DEFAULTS, STEP_GRAPH_LABELS, type StepGraphKind } from '../../stores/patternStore'
 import { useTrackFolderStore, type TrackFolder } from '../../stores/trackFolderStore'
 import { useChannelRackPrefsStore, type LoopMode } from '../../stores/channelRackPrefsStore'
-import { DetachButton } from '../FloatingWindow'
+import { DetachButton, detachPanel } from '../FloatingWindow'
 import { ParameterContextMenu } from '../ParameterContextMenu'
 import { invoke } from '@tauri-apps/api/core'
 import { usePluginCatalogStore } from '../../stores/pluginCatalogStore'
 import { usePluginStore } from '../../stores/pluginStore'
 import type { TrackInfo } from '../../stores/trackStore'
 import { isBuiltIn, openPluginWindow } from '../plugins/openPluginWindow'
+import { useNotificationStore } from '../../stores/notificationStore'
 
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
@@ -93,6 +94,125 @@ export function ChannelRack() {
   // its instruments on the first playlist rows, and they belong here too.
   const allChannels = tracks.filter(t =>
     t.kind !== 'Master' && (!t.id.startsWith('insert-') || (t.kind || '').toLowerCase() === 'midi'))
+  // Channels picked with Ctrl-click (one more) or Shift-click (a range) on
+  // their names, for the Channels menu. With none picked the selected
+  // channel is what "selected" means, as in FL.
+  const report = (what: string) => (e: unknown) =>
+    useNotificationStore.getState().push('error', `${what}: ${String(e)}`)
+  const [picked, setPicked] = useState<string[]>([])
+  const pickAnchor = useRef<string | null>(null)
+  const targets = () => {
+    const ids = picked.length ? picked : selectedTrackId ? [selectedTrackId] : []
+    return allChannels.filter((c) => ids.includes(c.id))
+  }
+  const pickName = (e: React.MouseEvent, id: string) => {
+    if (e.ctrlKey || e.metaKey) {
+      setPicked((p) => {
+        const base = p.length ? p : selectedTrackId ? [selectedTrackId] : []
+        return base.includes(id) ? base.filter((x) => x !== id) : [...base, id]
+      })
+      pickAnchor.current = id
+      return
+    }
+    if (e.shiftKey && (pickAnchor.current ?? selectedTrackId)) {
+      const order = allChannels.map((c) => c.id)
+      const a = order.indexOf(pickAnchor.current ?? selectedTrackId ?? id)
+      const b = order.indexOf(id)
+      if (a >= 0 && b >= 0) setPicked(order.slice(Math.min(a, b), Math.max(a, b) + 1))
+      return
+    }
+    setPicked([])
+    pickAnchor.current = id
+    selectTrack(id)
+  }
+  // The Channels menu's actions, also on their keys while the rack has focus.
+  const channelActions = {
+    addOne: () => { setChannelMenuOpen(false); setInstPickerOpen(true) },
+    selectUnused: () => {
+      // A channel is in use when it has a clip on the playlist or
+      // a step in any pattern.
+      const patterns = usePatternStore.getState().patterns
+      const used = (c: (typeof allChannels)[number]) =>
+        (c.clips?.length ?? 0) > 0 || patterns.some((p) => (p.steps[c.id] ?? []).some((v) => v > 0))
+      setPicked(allChannels.filter((c) => !used(c)).map((c) => c.id))
+      setChannelMenuOpen(false)
+    },
+    clone: async () => {
+      setChannelMenuOpen(false)
+      for (const ch of targets()) await invoke('duplicate_track', { trackId: ch.id }).catch(report('Could not clone'))
+      await fetchTracks()
+    },
+    remove: async () => {
+      const list = targets()
+      setChannelMenuOpen(false)
+      if (!list.length) return
+      if (!window.confirm(list.length === 1 ? `Delete ${list[0].name}?` : `Delete ${list.length} channels?`)) return
+      for (const ch of list) await removeTrack(ch.id)
+      setPicked([])
+    },
+    move: async (delta: -1 | 1) => {
+      setChannelMenuOpen(false)
+      const order = allChannels.map((c) => c.id)
+      const chosen = targets().map((c) => c.id)
+      // Up moves the top one first, down the bottom one first, so
+      // a block of channels moves together.
+      const seq = delta < 0 ? order.filter((id) => chosen.includes(id)) : order.filter((id) => chosen.includes(id)).reverse()
+      for (const id of seq) {
+        const now = useTrackStore.getState().tracks
+        const rack = now.filter((t) => order.includes(t.id))
+        const i = rack.findIndex((t) => t.id === id)
+        const other = rack[i + delta]
+        if (!other || chosen.includes(other.id)) continue
+        await reorderTrack(id, now.findIndex((t) => t.id === other.id))
+      }
+    },
+    setMute: async (muted: boolean) => {
+      setChannelMenuOpen(false)
+      for (const ch of targets()) if (ch.muted !== muted) await toggleMute(ch.id)
+    },
+    transpose: async () => {
+      const list = targets()
+      setChannelMenuOpen(false)
+      if (!list.length) return
+      const raw = window.prompt('Transpose the notes of the selected channels by how many semitones? (for example 12 or -5)', '12')
+      const n = raw == null ? NaN : parseInt(raw, 10)
+      if (!Number.isFinite(n) || n === 0) return
+      for (const ch of list) await invoke('transpose_track_notes', { trackId: ch.id, semitones: n }).catch(report('Could not transpose'))
+      await fetchTracks()
+    },
+    assignFree: async () => {
+      setChannelMenuOpen(false)
+      // A free mixer track: an insert no channel routes to that has
+      // no plug-ins and nothing on the playlist.
+      const now = useTrackStore.getState().tracks
+      const taken = new Set(now.map((t) => t.outputBus).filter(Boolean) as string[])
+      const free = now.filter((t) => t.id.startsWith('insert-') && (t.kind || '').toLowerCase() !== 'midi'
+        && !taken.has(t.id) && !(t.inserts?.length) && !(t.clips?.length))
+      let k = 0
+      for (const ch of targets()) {
+        const bus = free[k++]
+        if (!bus) break
+        await setTrackOutputBus(ch.id, bus.id)
+      }
+    },
+    detach: () => { setChannelMenuOpen(false); void detachPanel('channelRack') },
+  }
+  const onRackKeyDown = (e: React.KeyboardEvent) => {
+    const t = e.target as HTMLElement
+    if (t.closest('input, textarea, select, [contenteditable="true"]')) return
+    const run = (fn: () => void) => { e.preventDefault(); e.stopPropagation(); fn() }
+    if (e.altKey && !e.ctrlKey && !e.metaKey) {
+      if (e.code === 'KeyA') return run(channelActions.addOne)
+      if (e.code === 'KeyC') return run(() => { void channelActions.clone() })
+      if (e.code === 'Delete') return run(() => { void channelActions.remove() })
+      if (e.code === 'ArrowUp') return run(() => { void channelActions.move(-1) })
+      if (e.code === 'ArrowDown') return run(() => { void channelActions.move(1) })
+      if (e.code === 'KeyM') return run(toggleShowMixerSelectors)
+      if (e.code === 'KeyZ') return run(() => { if (selectedTrackId) zipChannel(selectedTrackId) })
+      if (e.code === 'KeyU') return run(unzipAll)
+    }
+    if (e.ctrlKey && !e.altKey && e.code === 'KeyL') return run(() => { void channelActions.assignFree() })
+  }
   const folderByTrack = new Map<string, TrackFolder>()
   for (const f of folders) for (const tid of f.trackIds) folderByTrack.set(tid, f)
   const channels = allChannels.filter(t => {
@@ -280,7 +400,11 @@ export function ChannelRack() {
   }
 
   return (
-    <div style={{ height: '100%', background: 'rgba(255,255,255,0.02)', backdropFilter: hw.blur.sm, display: 'flex', flexDirection: 'column' }}>
+    <div
+      tabIndex={-1}
+      onKeyDown={onRackKeyDown}
+      style={{ height: '100%', background: 'rgba(255,255,255,0.02)', backdropFilter: hw.blur.sm, display: 'flex', flexDirection: 'column', outline: 'none' }}
+    >
       {/* Top toolbar — Ship 4 FL Channel Rack title bar. The menu
           icon opens the Channel Options dropdown (25 entries per
           FL Studio's RMB title-bar set). Right-click on the toolbar
@@ -464,6 +588,8 @@ export function ChannelRack() {
             onUnzipAll={() => { unzipAll(); setChannelMenuOpen(false) }}
             onZipSelected={() => { if (selectedTrackId) zipChannel(selectedTrackId); setChannelMenuOpen(false) }}
             selectedChannelId={selectedTrackId}
+            selectionCount={targets().length}
+            actions={channelActions}
             onSortColor={async () => {
               // Sort by hex (red-violet gradient FL ordering). Channels
               // without a color sort to the end. reorderTrack runs
@@ -625,7 +751,7 @@ export function ChannelRack() {
           const ch = channels[row.channelIdx]
           const ci = row.channelIdx
           const inFolder = folderByTrack.get(ch.id) != null
-          const selected = selectedTrackId === ch.id
+          const selected = selectedTrackId === ch.id || picked.includes(ch.id)
           const vol = dbToNorm(ch.volume_db)
           const pan = panToNorm(ch.pan)
           // Ship 4 — zipped row (18px collapsed). Renders a summary
@@ -757,7 +883,7 @@ export function ChannelRack() {
 
               {/* 5. Channel name */}
               <div
-                onClick={() => selectTrack(ch.id)}
+                onClick={(e) => pickName(e, ch.id)}
                 onDoubleClick={(e) => { e.stopPropagation(); startRename(ch.id, ch.name) }}
                 onContextMenu={(e) => {
                   e.preventDefault()
@@ -1856,7 +1982,7 @@ function HwLoopIconMenu({
 
 function HwChannelOptionsMenu({
   showMixerSelectors, showCompletePianoRoll, muteRemovedSteps,
-  zippedCount, selectedChannelId,
+  zippedCount, selectedChannelId, selectionCount, actions,
   onToggleMixerSelectors, onTogglePianoRollPreview, onToggleMuteRemovedSteps,
   onZipSelected, onUnzipAll, onClose,
   onSortColor, onSortName, onSortTrack,
@@ -1867,6 +1993,19 @@ function HwChannelOptionsMenu({
   muteRemovedSteps: boolean
   zippedCount: number
   selectedChannelId: string | null
+  /** Channels "selected" covers: the picked ones, or the selected one. */
+  selectionCount: number
+  actions: {
+    addOne: () => void
+    selectUnused: () => void
+    clone: () => void
+    remove: () => void
+    move: (delta: -1 | 1) => void
+    setMute: (muted: boolean) => void
+    transpose: () => void
+    assignFree: () => void
+    detach: () => void
+  }
   onToggleMixerSelectors: () => void
   onTogglePianoRollPreview: () => void
   onToggleMuteRemovedSteps: () => void
@@ -1884,12 +2023,7 @@ function HwChannelOptionsMenu({
     const id = window.setTimeout(() => window.addEventListener('click', handle), 0)
     return () => { window.clearTimeout(id); window.removeEventListener('click', handle) }
   }, [onClose])
-  const dim: React.CSSProperties = {
-    padding: '5px 10px', fontSize: 10, color: hw.textFaint,
-    background: 'transparent', border: 'none', textAlign: 'left',
-    cursor: 'not-allowed', borderRadius: hw.radius.sm, width: '100%',
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-  }
+  const none = selectionCount === 0
   return (
     <div
       onMouseDown={(e) => e.stopPropagation()}
@@ -1906,31 +2040,27 @@ function HwChannelOptionsMenu({
       }}
     >
       <HwMenuHeader>Channels</HwMenuHeader>
-      <HwMenuRow label="Add one…" kbd="⌥A" disabled />
-      <button style={dim} disabled title="Tier B — Loop Starter / genre-based sample generation"><span>Loop Starter…</span><span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>tier B</span></button>
-      <HwMenuRow label="Select unused channels" disabled />
-      <HwMenuRow label="Clone selected" kbd="⌥C" disabled />
-      <HwMenuRow label="Delete selected" kbd="⌥Del" disabled />
-      <HwMenuRow label="Move selected up" kbd="⌥↑" disabled />
-      <HwMenuRow label="Move selected down" kbd="⌥↓" disabled />
+      <HwMenuRow label="Add one…" kbd="⌥A" onClick={actions.addOne} />
+      <HwMenuRow label="Select unused channels" onClick={actions.selectUnused} />
+      <HwMenuRow label="Clone selected" kbd="⌥C" onClick={none ? undefined : actions.clone} disabled={none} />
+      <HwMenuRow label="Delete selected" kbd="⌥Del" onClick={none ? undefined : actions.remove} disabled={none} />
+      <HwMenuRow label="Move selected up" kbd="⌥↑" onClick={none ? undefined : () => actions.move(-1)} disabled={none} />
+      <HwMenuRow label="Move selected down" kbd="⌥↓" onClick={none ? undefined : () => actions.move(1)} disabled={none} />
       <HwDivider />
       <HwMenuHeader>Sort by</HwMenuHeader>
       <HwMenuRow label="Color" onClick={() => onSortColor()} />
       <HwMenuRow label="Name" onClick={() => onSortName()} />
       <HwMenuRow label="Track number" onClick={() => onSortTrack()} />
       <HwDivider />
-      <HwMenuRow label="Group selected" kbd="⌥G" disabled />
       <HwMenuHeader>Color selected</HwMenuHeader>
       <HwMenuRow label="Random" onClick={() => onColorRandom()} />
       <HwMenuRow label="Gradient (pick start + end)" onClick={() => onColorGradient()} />
       <HwDivider />
-      <HwMenuRow label="Mute selected" disabled />
-      <HwMenuRow label="Unmute selected" disabled />
-      <HwMenuRow label="Transpose selected…" disabled />
-      <HwMenuRow label="Set swingmix for selected…" disabled />
-      <button style={dim} disabled><span>Truncate swing notes</span><span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>tier B</span></button>
+      <HwMenuRow label="Mute selected" onClick={none ? undefined : () => actions.setMute(true)} disabled={none} />
+      <HwMenuRow label="Unmute selected" onClick={none ? undefined : () => actions.setMute(false)} disabled={none} />
+      <HwMenuRow label="Transpose selected…" onClick={none ? undefined : actions.transpose} disabled={none} />
       <HwDivider />
-      <HwMenuRow label="Assign to free mixer tracks" kbd="^L" disabled />
+      <HwMenuRow label="Assign to free mixer tracks" kbd="^L" onClick={none ? undefined : actions.assignFree} disabled={none} />
       <HwCheckRow label="Show mixer-track selectors" kbd="⌥M" checked={showMixerSelectors} onClick={onToggleMixerSelectors} />
       <HwDivider />
       <HwMenuRow label={selectedChannelId ? 'Zip selected channel' : 'Zip selected (no selection)'} kbd="⌥Z" onClick={selectedChannelId ? onZipSelected : undefined} disabled={!selectedChannelId} />
@@ -1938,9 +2068,7 @@ function HwChannelOptionsMenu({
       <HwCheckRow label="Mute removed steps" checked={muteRemovedSteps} onClick={onToggleMuteRemovedSteps} />
       <HwCheckRow label="Show complete piano-roll preview" checked={showCompletePianoRoll} onClick={onTogglePianoRollPreview} />
       <HwDivider />
-      <button style={dim} disabled><span>Switch all to Realtime</span><span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>tier B</span></button>
-      <button style={dim} disabled><span>Switch all to Elastique</span><span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>tier B</span></button>
-      <button style={dim} disabled><span>Detached (own window)</span><span style={{ fontSize: 8, color: hw.textFaint, fontFamily: hw.font.mono }}>tier B</span></button>
+      <HwMenuRow label="Detached (own window)" onClick={actions.detach} />
     </div>
   )
 }

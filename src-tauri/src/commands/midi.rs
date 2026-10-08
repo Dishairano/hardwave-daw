@@ -57,6 +57,44 @@ fn with_clip_notes<T>(
     Ok(result)
 }
 
+/// Move every note of a track's MIDI clips by `semitones`, as the channel
+/// rack's "Transpose selected". Notes stay inside 0..127. One undo step.
+/// Returns how many notes moved.
+#[tauri::command]
+pub fn transpose_track_notes(
+    state: State<AppState>,
+    track_id: String,
+    semitones: i32,
+) -> Result<usize, String> {
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let moved = {
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        transpose_notes(&mut track.clips, semitones)
+    };
+    engine.rebuild_graph();
+    Ok(moved)
+}
+
+fn transpose_notes(clips: &mut [hardwave_project::clip::ClipPlacement], semitones: i32) -> usize {
+    let mut moved = 0;
+    for clip in clips.iter_mut() {
+        if let hardwave_project::clip::ClipContent::Midi(mc) = &mut clip.content {
+            for note in mc.clip.notes.iter_mut() {
+                let to = (note.pitch as i32 + semitones).clamp(0, 127) as u8;
+                if to != note.pitch {
+                    note.pitch = to;
+                    moved += 1;
+                }
+            }
+        }
+    }
+    moved
+}
+
 #[derive(Serialize)]
 pub struct MidiNoteInfo {
     pub index: usize,
