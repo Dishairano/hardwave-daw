@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-slot-live"
+description = "Enables the get_slot_live command without any pre-configured scope."
+commands.allow = ["get_slot_live"]
+
+[[permission]]
+identifier = "deny-get-slot-live"
+description = "Denies the get_slot_live command without any pre-configured scope."
+commands.deny = ["get_slot_live"]
