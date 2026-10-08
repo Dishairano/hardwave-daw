@@ -212,8 +212,33 @@ export const yEq = (y: number, H: number) => ((H / 2 - y) / (H / 2 - 10)) * EQ_R
 
 // ------------------------------------------------------------ displays
 
+// Each canvas's CSS size, kept by one ResizeObserver. Reading clientWidth
+// on every draw forced a layout each time the window had changed, 30 times
+// a second for every live display.
+const SIZES = new WeakMap<HTMLCanvasElement, { W: number; H: number }>()
+let sizeObserver: ResizeObserver | null = null
+
+function sizeOf(c: HTMLCanvasElement): { W: number; H: number } {
+  let s = SIZES.get(c)
+  if (!s) {
+    s = { W: c.clientWidth, H: c.clientHeight }
+    SIZES.set(c, s)
+    if (!sizeObserver && typeof ResizeObserver !== 'undefined') {
+      sizeObserver = new ResizeObserver((entries) => {
+        for (const e of entries) {
+          const known = SIZES.get(e.target as HTMLCanvasElement)
+          if (known) { known.W = e.contentRect.width; known.H = e.contentRect.height }
+        }
+      })
+    }
+    sizeObserver?.observe(c)
+  }
+  return s
+}
+
 function setup(c: HTMLCanvasElement) {
-  const dpr = window.devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight
+  const dpr = window.devicePixelRatio || 1
+  const { W, H } = sizeOf(c)
   if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) {
     c.width = Math.round(W * dpr); c.height = Math.round(H * dpr)
   }

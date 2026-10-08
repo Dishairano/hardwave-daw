@@ -9,6 +9,7 @@
 //   TOP=40     show more components
 //   PROFILE=1  CPU self time per function while playing
 //   TRACE=f    write a Chrome trace of the playing phase to f
+//   PLUGIN=id  open a built-in's window first (hardwave.native.limiter)
 //
 // Headless Chromium composites in software, so its FPS runs lower than on
 // a machine with a GPU: compare runs with each other, not with the app.
@@ -38,6 +39,11 @@ try {
   for (const re of ['^Close this screen$', 'SKIP']) await page.evaluate((r) => { const b = [...document.querySelectorAll('button')].find((x) => new RegExp(r, 'i').test(x.textContent.trim())); b && b.click() }, re)
   await sleep(800)
   for (const k of keys) { await page.keyboard.press(k); await sleep(700) }
+  if (process.env.PLUGIN) {
+    // A built-in's window, the way a mixer slot opens it.
+    await page.evaluate((id) => window.dispatchEvent(new CustomEvent('daw:openPluginPanel', { detail: { trackId: 'mock', slotId: id, pluginId: id, pluginName: id, ownWindow: true } })), process.env.PLUGIN)
+    await sleep(1500)
+  }
   const ids = await page.evaluate(async () => (await window.__TAURI_INTERNALS__.invoke('get_tracks')).map((t) => t.id))
   const cdp = await page.context().newCDPSession(page); await cdp.send('Performance.enable')
   const metrics = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map((m) => [m.name, m.value]))

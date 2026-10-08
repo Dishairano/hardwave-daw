@@ -414,19 +414,22 @@ const mock: TauriInternals = {
         ]
       // A plug-in window's live data: steady levels, some reduction, a
       // correlated stereo signal.
-      case 'get_slot_levels':
-        return [0.42, 0.37, 0.56, 0.5]
+      case 'get_slot_live':
+        return {
+          levels: [0.42, 0.37, 0.56, 0.5],
+          gr: -3.8,
+          scope: (args as { scope?: boolean })?.scope
+            ? Array.from({ length: 512 }, (_, i) => {
+              const k = Math.floor(i / 2), m = Math.sin(k * 0.21) * 0.5, sd = Math.sin(k * 0.67 + 1) * 0.18
+              return i % 2 ? m - sd : m + sd
+            })
+            : null,
+          changes: [],
+        }
       case 'get_gain_reduction': {
         const slotId = new URLSearchParams(location.search).get('id')
         return slotId ? [{ trackId: 'mock', slotId: `hardwave.native.${slotId}`, reductionDb: -3.8 }] : []
       }
-      case 'take_slot_param_changes':
-        return []
-      case 'get_slot_scope':
-        return Array.from({ length: 512 }, (_, i) => {
-          const k = Math.floor(i / 2), m = Math.sin(k * 0.21) * 0.5, sd = Math.sin(k * 0.67 + 1) * 0.18
-          return i % 2 ? m - sd : m + sd
-        })
       case 'wavetable_frames': {
         const { positions = 14, points = 128 } = (args ?? {}) as { positions?: number; points?: number }
         return Array.from({ length: positions }, (_, k) => Array.from({ length: points }, (_, i) => {

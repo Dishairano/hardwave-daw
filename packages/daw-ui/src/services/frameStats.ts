@@ -19,6 +19,37 @@ function commitCount(): number {
   return (window as unknown as { __hwCommits?: number }).__hwCommits ?? 0
 }
 
+// Calls to the app's backend, timed while the meter runs: a window can draw
+// at 60 FPS and still lag when the answers it waits for come late.
+let ipcOn = false
+let ipcCalls = 0
+let ipcTotalMs = 0
+let ipcMaxMs = 0
+let ipcSlowest = ''
+
+/** Time every backend call from now on. Wraps the function @tauri-apps/api
+ *  looks up on each call, so it works whenever it is turned on. */
+function timeBackendCalls(): void {
+  type Internals = { invoke?: (cmd: string, ...rest: unknown[]) => Promise<unknown>; __hwTimed?: boolean }
+  const internals = (window as unknown as { __TAURI_INTERNALS__?: Internals }).__TAURI_INTERNALS__
+  if (!internals?.invoke || internals.__hwTimed) return
+  const original = internals.invoke.bind(internals)
+  internals.invoke = (cmd: string, ...rest: unknown[]) => {
+    if (!ipcOn || cmd.startsWith('plugin:event|')) return original(cmd, ...rest)
+    const t0 = performance.now()
+    const done = () => {
+      const ms = performance.now() - t0
+      ipcCalls++
+      ipcTotalMs += ms
+      if (ms > ipcMaxMs) { ipcMaxMs = ms; ipcSlowest = cmd }
+    }
+    const p = original(cmd, ...rest)
+    p.then(done, done)
+    return p
+  }
+  internals.__hwTimed = true
+}
+
 export interface FrameSnapshot {
   fps: number
   /** Average and longest frame in the window, ms. */
@@ -31,6 +62,12 @@ export interface FrameSnapshot {
   longTaskMs: number
   rendersPerSec: number
   engineEventsPerSec: number
+  /** Backend calls a second, their average and longest round trip (ms),
+   *  and which command took longest. */
+  ipcPerSec: number
+  ipcAvgMs: number
+  ipcMaxMs: number
+  ipcSlowest: string
   /** JavaScript heap in use, MB, where the browser reports it. */
   heapMb: number | null
   /** The last frame times, oldest first, for the graph. */
@@ -54,6 +91,9 @@ export function startFrameStats(onSnapshot: (s: FrameSnapshot) => void): () => v
   let longMs = 0
   let commitsAt = commitCount()
   let eventsAt = backendEvents
+  timeBackendCalls()
+  ipcOn = true
+  ipcCalls = 0; ipcTotalMs = 0; ipcMaxMs = 0; ipcSlowest = ''
 
   let observer: PerformanceObserver | null = null
   try {
@@ -88,6 +128,10 @@ export function startFrameStats(onSnapshot: (s: FrameSnapshot) => void): () => v
         longTaskMs: longMs,
         rendersPerSec: (commitCount() - commitsAt) / secs,
         engineEventsPerSec: (backendEvents - eventsAt) / secs,
+        ipcPerSec: ipcCalls / secs,
+        ipcAvgMs: ipcCalls ? ipcTotalMs / ipcCalls : 0,
+        ipcMaxMs,
+        ipcSlowest,
         heapMb: memory ? memory.usedJSHeapSize / (1024 * 1024) : null,
         recent: recent.slice(),
       })
@@ -97,6 +141,7 @@ export function startFrameStats(onSnapshot: (s: FrameSnapshot) => void): () => v
       longMs = 0
       commitsAt = commitCount()
       eventsAt = backendEvents
+      ipcCalls = 0; ipcTotalMs = 0; ipcMaxMs = 0; ipcSlowest = ''
     }
     raf = requestAnimationFrame(frame)
   }
@@ -109,5 +154,6 @@ export function startFrameStats(onSnapshot: (s: FrameSnapshot) => void): () => v
   return () => {
     cancelAnimationFrame(raf)
     observer?.disconnect()
+    ipcOn = false
   }
 }

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { usePluginPresetStore } from '../../stores/pluginPresetStore'
@@ -171,24 +171,28 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
   const kinds = useMemo(() => displayKinds(layout), [layout])
   const wantsScope = kinds.some((k) => SCOPE_KINDS.has(k))
   const live = useRef<LiveData>({ ...NO_LIVE, grHistory: [], inHistory: [] })
-  const [liveTick, setLiveTick] = useState(0)
+  // New measurements go to the meters and displays that show them, not
+  // through React state: that re-rendered every knob in the window 30
+  // times a second.
+  const bus = useMemo(() => createLiveBus(), [])
 
   useEffect(() => {
     let alive = true
-    let busy = false
+    let timer = 0
     let n = 0
-    const timer = window.setInterval(() => {
-      if (busy || document.hidden) return
-      busy = true
+    // The next call is planned when the last one answers, POLL_MS after it
+    // started. A fixed interval that skipped a beat whenever an answer came
+    // a little late halved the rate the meters moved at.
+    const poll = () => {
+      if (!alive) return
+      if (document.hidden) { timer = window.setTimeout(poll, POLL_MS); return }
+      const started = performance.now()
       n++
       const scope = wantsScope && n % 2 === 0
-      Promise.all([
-        invoke<[number, number, number, number]>('get_slot_levels', { trackId, slotId }),
-        invoke<{ trackId: string; slotId: string; reductionDb: number }[]>('get_gain_reduction'),
-        scope ? invoke<number[]>('get_slot_scope', { trackId, slotId }) : Promise.resolve(null),
-        invoke<[number, number][]>('take_slot_param_changes', { trackId, slotId }),
-      ])
-        .then(([levels, reductions, frames, moved]) => {
+      invoke<{ levels: [number, number, number, number]; gr: number | null; scope: number[] | null; changes: [number, number][] }>(
+        'get_slot_live', { trackId, slotId, scope },
+      )
+        .then(({ levels, gr, scope: frames, changes: moved }) => {
           if (!alive) return
           // The song moved these (automation, a controller, modulation):
           // the knobs follow, except one being dragged right now.
@@ -208,25 +212,27 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
           }
           const l = live.current
           l.levels = levels
-          const gr = reductions.find((r) => r.trackId === trackId && r.slotId === slotId)
-          l.gr = gr ? gr.reductionDb : null
+          l.gr = gr
           l.grHistory = [...l.grHistory, l.gr ?? 0].slice(-HISTORY)
           l.inHistory = [...l.inHistory, toDb(Math.max(levels[0], levels[1]))].slice(-HISTORY)
           if (frames) l.scope = frames
-          setLiveTick((t) => (t + 1) % 1_000_000)
+          bus.emit()
         })
         .catch(() => { /* the slot may be going away */ })
-        .finally(() => { busy = false })
-    }, POLL_MS)
-    return () => { alive = false; window.clearInterval(timer) }
-  }, [trackId, slotId, wantsScope])
+        .finally(() => {
+          if (alive) timer = window.setTimeout(poll, Math.max(0, POLL_MS - (performance.now() - started)))
+        })
+    }
+    poll()
+    return () => { alive = false; window.clearTimeout(timer) }
+  }, [trackId, slotId, wantsScope, bus])
 
   // The wavetable's frames, for its display.
   const bank = view.t('Bank')
   useEffect(() => {
     if (!kinds.includes('table') || !bank) return
     invoke<number[][]>('wavetable_frames', { bank, positions: 14, points: 128 })
-      .then((frames) => { live.current.table = frames; setLiveTick((t) => t + 1) })
+      .then((frames) => { live.current.table = frames; bus.emit() })
       .catch(() => { live.current.table = null })
   }, [bank, kinds])
 
@@ -257,22 +263,21 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
     })
   }
 
-  const openMenu = (e: React.MouseEvent, q: PluginParam) => {
+  const openMenu = useCallback((e: React.MouseEvent, q: PluginParam) => {
     e.preventDefault()
     e.stopPropagation()
     setMenu({ x: e.clientX, y: e.clientY, param: q })
-  }
+  }, [])
 
-  const ctx: Ctx = {
-    view, fam, live: live.current, liveTick, setParam, openMenu, automated, eqBand, setEqBand, kinds,
-  }
+  const ctx: Ctx = useMemo(() => ({
+    view, fam, live: live.current, bus, setParam, openMenu, automated, eqBand, setEqBand, kinds,
+  }), [view, fam, bus, setParam, openMenu, automated, eqBand, kinds])
 
   const style = {
     '--w': `${windowWidth(layout)}px`, '--a': fam.a, '--a2': fam.a2, '--deep': fam.deep,
   } as CSSProperties
 
   const name = pluginName.replace(/^Hardwave /, '')
-  const lv = live.current.levels
 
   return (
     <div ref={rootRef} className={`hwp${own ? ' own' : ''}`} style={style} onContextMenu={(e) => e.preventDefault()}>
@@ -306,7 +311,7 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
       </div>
 
       <div className="main">
-        {!layout.outOnly && <Strip label="IN" l={lv[0]} r={lv[1]} />}
+        {!layout.outOnly && <Strip label="IN" ctx={ctx} at={0} />}
         {error ? (
           <div className="note" style={{ flex: 1, padding: 20 }}>Could not read {name}&apos;s settings: {error}</div>
         ) : !params ? (
@@ -324,7 +329,7 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
             {layout.bottom && <PanelView ctx={ctx} p={layout.bottom} wide />}
           </div>
         )}
-        <Strip label="OUT" l={lv[2]} r={lv[3]} />
+        <Strip label="OUT" ctx={ctx} at={2} />
       </div>
 
       <div className="ftr">
@@ -354,11 +359,34 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
 
 // ------------------------------------------------------------------ parts
 
+/** Tells the parts that show measurements a new set has come in. */
+interface LiveBus {
+  subscribe: (fn: () => void) => () => void
+  emit: () => void
+}
+
+function createLiveBus(): LiveBus {
+  const subs = new Set<() => void>()
+  return {
+    subscribe: (fn) => { subs.add(fn); return () => { subs.delete(fn) } },
+    emit: () => { subs.forEach((fn) => fn()) },
+  }
+}
+
+/** Re-render this part with each set of measurements (when `on`). */
+function useLive(bus: LiveBus, on = true) {
+  const [, bump] = useReducer((x: number) => (x + 1) % 1_000_000, 0)
+  useEffect(() => (on ? bus.subscribe(bump) : undefined), [bus, on])
+}
+
+/** Readouts that show measurements rather than settings. */
+const LIVE_READOUTS = new Set<Readout>(['in', 'out', 'gr', 'grmax', 'gate', 'corr'])
+
 interface Ctx {
   view: ParamView
   fam: FamilyColours
   live: LiveData
-  liveTick: number
+  bus: LiveBus
   setParam: (q: PluginParam, v: number) => void
   openMenu: (e: React.MouseEvent, q: PluginParam) => void
   automated: Set<number>
@@ -411,8 +439,8 @@ function RowView({ ctx, r }: { ctx: Ctx; r: Row }) {
   if (kind === 'd') return <Display ctx={ctx} kind={r[1] as string} h={r[2] as number} />
   if (kind === 'r') return <Readouts ctx={ctx} items={r.slice(1) as Readout[]} />
   if (kind === 'n') return <div className="note">{r[1] as string}</div>
-  if (kind === 'm') return <LevelRows live={ctx.live} />
-  if (kind === 'g') return <GrRow live={ctx.live} />
+  if (kind === 'm') return <LevelRows ctx={ctx} />
+  if (kind === 'g') return <GrRow ctx={ctx} />
   if (kind === 'load') return <LoadSample />
   return null
 }
@@ -552,10 +580,19 @@ function Display({ ctx, kind, h }: { ctx: Ctx; kind: string; h: number }) {
   useEffect(() => {
     if (!ref.current) return
     setCorner(drawDisplay(ref.current, kind, ctx.view, ctx.fam, ctx.live, { eqBand: ctx.eqBand, time: performance.now() }))
-  }, [kind, ctx.view, ctx.fam, ctx.eqBand, isLive ? ctx.liveTick : 0])
+  }, [kind, ctx.view, ctx.fam, ctx.eqBand, ctx.live])
   // Redraw when the window changes size, with what is current then.
   const latest = useRef(ctx)
   latest.current = ctx
+  // A display of measurements redraws with each one, by itself.
+  useEffect(() => {
+    if (!isLive) return
+    return ctx.bus.subscribe(() => {
+      const c = ref.current
+      const x = latest.current
+      if (c) setCorner(drawDisplay(c, kind, x.view, x.fam, x.live, { eqBand: x.eqBand, time: performance.now() }))
+    })
+  }, [isLive, kind, ctx.bus])
   useEffect(() => {
     const c = ref.current
     if (!c || typeof ResizeObserver === 'undefined') return
@@ -602,6 +639,7 @@ function xoverDrag(ctx: Ctx, ref: React.RefObject<HTMLCanvasElement | null>) {
 }
 
 function Readouts({ ctx, items }: { ctx: Ctx; items: Readout[] }) {
+  useLive(ctx.bus, items.some((r) => LIVE_READOUTS.has(r)))
   const l = ctx.live
   const fmtDb = (lin: number) => { const d = toDb(lin); return d > -100 ? `${d.toFixed(1)} dB` : '-inf' }
   const cell = (r: Readout): [string, string] => {
@@ -631,8 +669,9 @@ function Readouts({ ctx, items }: { ctx: Ctx; items: Readout[] }) {
 
 const pct = (lin: number) => `${Math.max(0, Math.min(1, 1 + toDb(lin) / 60)) * 100}%`
 
-function LevelRows({ live }: { live: LiveData }) {
-  const [il, ir, ol, or] = live.levels
+function LevelRows({ ctx }: { ctx: Ctx }) {
+  useLive(ctx.bus)
+  const [il, ir, ol, or] = ctx.live.levels
   const row = (label: string, a: number, b: number) => (
     <>
       <div className="row"><span style={{ minWidth: 34 }}>{label}</span><i><b style={{ width: pct(a) }} /></i><span className="db">{toDb(Math.max(a, b)) > -100 ? toDb(Math.max(a, b)).toFixed(1) : '-inf'}</span></div>
@@ -642,7 +681,9 @@ function LevelRows({ live }: { live: LiveData }) {
   return <div className="hm">{row('IN', il, ir)}{row('OUT', ol, or)}</div>
 }
 
-function GrRow({ live }: { live: LiveData }) {
+function GrRow({ ctx }: { ctx: Ctx }) {
+  useLive(ctx.bus)
+  const live = ctx.live
   const gr = live.gr ?? 0
   return (
     <div className="hm">
@@ -655,7 +696,10 @@ function GrRow({ live }: { live: LiveData }) {
   )
 }
 
-function Strip({ label, l, r }: { label: string; l: number; r: number }) {
+function Strip({ label, ctx, at }: { label: string; ctx: Ctx; at: 0 | 2 }) {
+  useLive(ctx.bus)
+  const l = ctx.live.levels[at]
+  const r = ctx.live.levels[at + 1]
   const h = (x: number) => `${Math.max(0, Math.min(1, 1 + toDb(x) / 60)) * 100}%`
   return (
     <div className="strip">
@@ -770,7 +814,7 @@ function EqBody({ ctx }: { ctx: Ctx }) {
         </div>
         <div className="pnl grow">
           <div className="ph"><span className="dot" /><span className="t">Output</span></div>
-          <div className="sec fill"><div className="rows"><div className="knobs"><KnobFor ctx={ctx} name="Output Gain" big /></div><LevelRows live={ctx.live} /></div></div>
+          <div className="sec fill"><div className="rows"><div className="knobs"><KnobFor ctx={ctx} name="Output Gain" big /></div><LevelRows ctx={ctx} /></div></div>
         </div>
       </div>
     </div>

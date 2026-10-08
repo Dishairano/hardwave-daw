@@ -794,12 +794,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const viewRef = useRef({ pps: PIXELS_PER_SECOND, scrollX })
   viewRef.current = { pps: PIXELS_PER_SECOND, scrollX }
   useEffect(() => {
+    // The view's width, kept by the ResizeObserver below: reading it on
+    // every position forced a layout 30 times a second.
+    let width = containerRef.current?.clientWidth ?? 0
     drawPlayheadRef.current = () => {
       const el = playheadRef.current
       const container = containerRef.current
       if (!el || !container) return
       const { positionSamples, playing, sampleRate: sr } = useTransportStore.getState()
-      const w = container.clientWidth
+      const w = width
       const { pps, scrollX: sx } = viewRef.current
       const secs = sr > 0 ? positionSamples / sr : 0
       const offset = followRef.current ? Math.max(0, secs * pps - w * 0.25) : sx
@@ -812,7 +815,11 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // A new size clears the canvas, so redraw it.
     const container = containerRef.current
     const ro = typeof ResizeObserver !== 'undefined' && container
-      ? new ResizeObserver(() => { drawMainRef.current(); drawPlayheadRef.current() })
+      ? new ResizeObserver((entries) => {
+        width = entries[entries.length - 1]?.contentRect.width ?? width
+        drawMainRef.current()
+        drawPlayheadRef.current()
+      })
       : null
     if (ro && container) ro.observe(container)
     const unsubscribe = useTransportStore.subscribe((st, prev) => {

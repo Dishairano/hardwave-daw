@@ -49,6 +49,17 @@ function FpsMeterPanel() {
       />
       <Row label="Renders" value={snap ? `${snap.rendersPerSec.toFixed(0)}/s` : '--'} warn={!!snap && snap.rendersPerSec > 40} />
       <Row label="Engine events" value={snap ? `${snap.engineEventsPerSec.toFixed(0)}/s` : '--'} />
+      <Row
+        label="Backend calls"
+        value={snap ? `${snap.ipcPerSec.toFixed(0)}/s · ${snap.ipcAvgMs.toFixed(1)} ms` : '--'}
+        warn={!!snap && snap.ipcAvgMs > 8}
+      />
+      <Row
+        label="Slowest call"
+        value={snap && snap.ipcSlowest ? `${snap.ipcMaxMs.toFixed(0)} ms` : '--'}
+        warn={!!snap && snap.ipcMaxMs > 33}
+      />
+      {snap?.ipcSlowest && <div style={{ color: '#8a8a92', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{snap.ipcSlowest}</div>}
       <Row label="Audio load" value={`${audioLoad}%`} warn={audioLoad >= 70} />
       {snap?.heapMb != null && <Row label="JS heap" value={`${snap.heapMb.toFixed(0)} MB`} />}
     </div>

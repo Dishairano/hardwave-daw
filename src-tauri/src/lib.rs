@@ -507,9 +507,7 @@ pub fn run() {
             commands::sends::create_return_with_send,
             // Plugins
             commands::plugins::scan_plugins,
-            commands::plugins::get_slot_levels,
-            commands::plugins::get_slot_scope,
-            commands::plugins::take_slot_param_changes,
+            commands::plugins::get_slot_live,
             commands::plugins::wavetable_frames,
             commands::windows::fit_panel_window,
             commands::automation::add_param_automation_lane,

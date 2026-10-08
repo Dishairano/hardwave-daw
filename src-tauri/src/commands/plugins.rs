@@ -1758,31 +1758,6 @@ pub fn set_fx_chain_bypassed(
     result
 }
 
-/// The peak levels in and out of a slot since the last call: [in L, in R,
-/// out L, out R], linear. The plug-in window's IN and OUT meters read it.
-#[tauri::command]
-pub fn get_slot_levels(state: State<AppState>, track_id: String, slot_id: String) -> [f32; 4] {
-    state
-        .slot_levels
-        .lock()
-        .get(&(track_id, slot_id))
-        .map(|levels| levels.take())
-        .unwrap_or([0.0; 4])
-}
-
-/// The last output frames of a slot as [l, r, l, r, ..], for the stereo
-/// field in a plug-in's window. Reading it keeps the slot recording for a
-/// couple of seconds; nothing is recorded while no window asks.
-#[tauri::command]
-pub fn get_slot_scope(state: State<AppState>, track_id: String, slot_id: String) -> Vec<f32> {
-    state
-        .slot_levels
-        .lock()
-        .get(&(track_id, slot_id))
-        .map(|levels| levels.scope())
-        .unwrap_or_default()
-}
-
 /// A wavetable bank as the built-in wavetable synth plays it: `positions`
 /// frames across the table, `points` samples each, for its window to draw.
 #[tauri::command]
@@ -1811,21 +1786,51 @@ pub fn wavetable_frames(bank: String, positions: usize, points: usize) -> Vec<Ve
         .collect()
 }
 
-/// Parameters of a slot that changed since the last call, as (id, value):
-/// automation, a controller or modulation moving them. A plug-in's window
-/// polls this so its knobs follow the song.
-#[tauri::command]
-pub fn take_slot_param_changes(
-    state: State<AppState>,
+/// What a plug-in's window shows live, in one call: the peak levels in and
+/// out since the last call ([in L, in R, out L, out R], linear), the gain
+/// reduction, the last output frames when `scope` is asked for, and the
+/// parameters the song moved (automation, a controller, modulation) so the
+/// knobs follow.
+///
+/// It was four calls every 33 ms per open window, each one a round trip
+/// through the main thread, which is shared with everything else the
+/// interface asks for: the window's meters and knobs fell behind the
+/// sound. One call, run off the main thread, since it only reads.
+#[derive(serde::Serialize, Default)]
+pub struct SlotLive {
+    pub levels: [f32; 4],
+    pub gr: Option<f32>,
+    pub scope: Option<Vec<f32>>,
+    pub changes: Vec<(u32, f64)>,
+}
+
+#[tauri::command(async)]
+pub fn get_slot_live(
+    state: State<'_, AppState>,
     track_id: String,
     slot_id: String,
-) -> Vec<(u32, f64)> {
-    state
-        .slot_levels
+    scope: bool,
+) -> SlotLive {
+    use std::sync::atomic::Ordering;
+    let key = (track_id, slot_id);
+    let gr = state
+        .slot_gain_reduction
         .lock()
-        .get(&(track_id, slot_id))
-        .map(|levels| levels.take_param_changes())
-        .unwrap_or_default()
+        .get(&key)
+        .map(|v| v.load(Ordering::Relaxed));
+    let levels = state.slot_levels.lock().get(&key).cloned();
+    let Some(levels) = levels else {
+        return SlotLive {
+            gr,
+            ..SlotLive::default()
+        };
+    };
+    SlotLive {
+        levels: levels.take(),
+        gr,
+        scope: scope.then(|| levels.scope()),
+        changes: levels.take_param_changes(),
+    }
 }
 
 /// A plug-in instance ready to join a chain, with its gain reduction and
