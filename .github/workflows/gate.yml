@@ -105,7 +105,7 @@ jobs:
         run: where rustup || (curl -sSfLo "%RUNNER_TEMP%\rustup-init.exe" https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe && "%RUNNER_TEMP%\rustup-init.exe" -y --profile minimal --default-toolchain none --no-modify-path)
 
       - name: Put cargo on PATH
-        run: echo %USERPROFILE%\.cargo\bin>>%GITHUB_PATH%
+        run: echo %USERPROFILE%\.cargo\bin>>"%GITHUB_PATH%"
 
       - name: Install the pinned toolchain
         run: rustup show && rustc -V && cargo -V
