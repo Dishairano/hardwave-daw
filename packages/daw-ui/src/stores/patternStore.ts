@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useChannelRackPrefsStore } from './channelRackPrefsStore'
 
 export const STEPS_PER_PATTERN = 16
 
@@ -349,7 +350,13 @@ export const usePatternStore = create<PatternState>((set, get) => ({
 
   serialize: () => {
     const { patterns, activeId } = get()
-    return JSON.stringify({ v: 1, patterns, activeId })
+    // The swing and the pattern length belong to the song and are what the
+    // engine plays, so they travel with the patterns.
+    const prefs = useChannelRackPrefsStore.getState()
+    return JSON.stringify({
+      v: 1, patterns, activeId,
+      swing: prefs.globalSwing, swingmix: prefs.channelSwingmix, length: prefs.patternLength,
+    })
   },
 
   hydrate: (json) => {
@@ -369,6 +376,10 @@ export const usePatternStore = create<PatternState>((set, get) => ({
           color: p.color || PATTERN_COLORS[i % PATTERN_COLORS.length],
         }))
         set({ patterns: migrated, activeId })
+        const prefs = useChannelRackPrefsStore.getState()
+        if (typeof parsed.swing === 'number') prefs.setGlobalSwing(parsed.swing)
+        if (parsed.swingmix && typeof parsed.swingmix === 'object') useChannelRackPrefsStore.setState({ channelSwingmix: parsed.swingmix })
+        if ('length' in parsed) prefs.setPatternLength(typeof parsed.length === 'number' ? parsed.length : null)
         return
       }
     } catch {}

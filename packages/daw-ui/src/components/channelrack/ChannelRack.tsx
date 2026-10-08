@@ -180,6 +180,16 @@ export function ChannelRack() {
       for (const ch of list) await invoke('transpose_track_notes', { trackId: ch.id, semitones: n }).catch(report('Could not transpose'))
       await fetchTracks()
     },
+    swingmix: () => {
+      const list = targets()
+      setChannelMenuOpen(false)
+      if (!list.length) return
+      const cur = useChannelRackPrefsStore.getState().channelSwingmix[list[0].id] ?? 1
+      const raw = window.prompt('How much of the swing these channels get (0 to 100 %):', String(Math.round(cur * 100)))
+      const v = raw == null ? NaN : parseFloat(raw)
+      if (!Number.isFinite(v)) return
+      for (const ch of list) useChannelRackPrefsStore.getState().setChannelSwingmix(ch.id, v / 100)
+    },
     assignFree: async () => {
       setChannelMenuOpen(false)
       // A free mixer track: an insert no channel routes to that has
@@ -196,6 +206,16 @@ export function ChannelRack() {
       }
     },
     detach: () => { setChannelMenuOpen(false); void detachPanel('channelRack') },
+    placePattern: async () => {
+      setChannelMenuOpen(false)
+      try {
+        const n = await invoke<number>('place_pattern_on_playlist')
+        await fetchTracks()
+        useNotificationStore.getState().push('info', n ? `Pattern placed on ${n} channel${n === 1 ? '' : 's'}` : 'This pattern has no steps', {
+          detail: n ? 'At the bar the playhead is in, one clip per channel with steps.' : undefined,
+        })
+      } catch (e) { report('Could not place the pattern')(e) }
+    },
   }
   const onRackKeyDown = (e: React.KeyboardEvent) => {
     const t = e.target as HTMLElement
@@ -2003,8 +2023,10 @@ function HwChannelOptionsMenu({
     move: (delta: -1 | 1) => void
     setMute: (muted: boolean) => void
     transpose: () => void
+    swingmix: () => void
     assignFree: () => void
     detach: () => void
+    placePattern: () => void
   }
   onToggleMixerSelectors: () => void
   onTogglePianoRollPreview: () => void
@@ -2059,6 +2081,7 @@ function HwChannelOptionsMenu({
       <HwMenuRow label="Mute selected" onClick={none ? undefined : () => actions.setMute(true)} disabled={none} />
       <HwMenuRow label="Unmute selected" onClick={none ? undefined : () => actions.setMute(false)} disabled={none} />
       <HwMenuRow label="Transpose selected…" onClick={none ? undefined : actions.transpose} disabled={none} />
+      <HwMenuRow label="Set swingmix for selected…" onClick={none ? undefined : actions.swingmix} disabled={none} />
       <HwDivider />
       <HwMenuRow label="Assign to free mixer tracks" kbd="^L" onClick={none ? undefined : actions.assignFree} disabled={none} />
       <HwCheckRow label="Show mixer-track selectors" kbd="⌥M" checked={showMixerSelectors} onClick={onToggleMixerSelectors} />
@@ -2068,6 +2091,7 @@ function HwChannelOptionsMenu({
       <HwCheckRow label="Mute removed steps" checked={muteRemovedSteps} onClick={onToggleMuteRemovedSteps} />
       <HwCheckRow label="Show complete piano-roll preview" checked={showCompletePianoRoll} onClick={onTogglePianoRollPreview} />
       <HwDivider />
+      <HwMenuRow label="Place pattern on the playlist" onClick={actions.placePattern} />
       <HwMenuRow label="Detached (own window)" onClick={actions.detach} />
     </div>
   )

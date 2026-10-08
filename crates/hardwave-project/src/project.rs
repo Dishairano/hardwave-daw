@@ -71,6 +71,10 @@ pub struct Project {
     /// Stored as a string so schema changes in the UI don't require project-crate updates.
     #[serde(default)]
     pub channel_rack_state: Option<String>,
+    /// `channel_rack_state` read into the step sequencer's notes. Not
+    /// saved: it is made from the rack state when that is set or loaded.
+    #[serde(skip)]
+    pub step_rack: Option<crate::step_rack::StepRack>,
     /// Opaque JSON array of MIDI Learn CC→parameter mappings. Same pattern as
     /// channel_rack_state — the src-tauri side owns the real type; the project
     /// crate just ferries the blob across save/load.
@@ -179,6 +183,7 @@ impl Default for Project {
             tempo_map: TempoMap::default(),
             tracks,
             channel_rack_state: None,
+            step_rack: None,
             midi_mappings: None,
             plugin_states: Vec::new(),
             arrangements: Vec::new(),
@@ -291,6 +296,7 @@ impl Project {
         }
         project.migrate();
         project.make_safe()?;
+        project.refresh_step_rack();
         Ok(project)
     }
 
@@ -318,6 +324,7 @@ impl Project {
         }
         project.migrate();
         project.make_safe()?;
+        project.refresh_step_rack();
         Ok(project)
     }
 
@@ -422,6 +429,62 @@ impl Project {
         Some(new_id)
     }
 
+    /// Set the channel rack's state (the UI's JSON) and read its steps.
+    pub fn set_channel_rack_state(&mut self, payload: Option<String>) {
+        self.channel_rack_state = payload;
+        self.refresh_step_rack();
+    }
+
+    /// Put the rack's active pattern on the playlist at `tick`: one MIDI
+    /// clip per channel that has steps in it, on that channel, as long as
+    /// the pattern. In song mode a pattern only plays from the playlist, so
+    /// this is how steps get into a song. Returns how many clips it placed.
+    pub fn place_pattern(&mut self, tick: u64) -> usize {
+        let Some(rack) = self.step_rack.clone() else {
+            return 0;
+        };
+        let length = rack.length_ticks();
+        let mut placed = 0;
+        for track in self.tracks.iter_mut() {
+            let notes = rack.notes_for(&track.id);
+            if notes.is_empty() {
+                continue;
+            }
+            let id = uuid::Uuid::new_v4().to_string();
+            let mut clip = hardwave_midi::MidiClip::new(id.clone(), "Pattern".into(), length);
+            clip.notes = notes
+                .into_iter()
+                .map(|n| hardwave_midi::MidiNote {
+                    start_tick: n.tick,
+                    duration_ticks: n.duration_ticks,
+                    pitch: n.pitch,
+                    velocity: n.velocity,
+                    pan: n.pan,
+                    fine_cents: n.fine_cents,
+                    release_velocity: n.release_velocity,
+                    ..Default::default()
+                })
+                .collect();
+            track.clips.push(crate::clip::ClipPlacement {
+                content: crate::clip::ClipContent::Midi(crate::clip::MidiClipRef { id, clip }),
+                track_id: track.id.clone(),
+                position_ticks: tick,
+                length_ticks: length,
+                lane: 0,
+            });
+            placed += 1;
+        }
+        placed
+    }
+
+    /// Read the steps from the saved rack state (after a load).
+    pub fn refresh_step_rack(&mut self) {
+        self.step_rack = self
+            .channel_rack_state
+            .as_deref()
+            .and_then(crate::step_rack::StepRack::parse);
+    }
+
     pub fn remove_track(&mut self, id: &str) {
         self.tracks.retain(|t| t.id != id);
     }
@@ -520,6 +583,27 @@ mod decompress_tests {
 
 #[cfg(test)]
 mod tests {
+    /// Placing a pattern puts one clip per channel with steps, where asked.
+    #[test]
+    fn a_pattern_goes_on_the_playlist_per_channel() {
+        let mut p = Project::default();
+        let a = p.add_midi_track("Kick".into());
+        let b = p.add_midi_track("Clap".into());
+        let _c = p.add_midi_track("Empty".into());
+        p.set_channel_rack_state(Some(format!(
+            r#"{{"activeId":"p","patterns":[{{"id":"p","steps":{{"{a}":[1,0,0,0,1],"{b}":[0,0,0,0,1]}}}}]}}"#
+        )));
+        assert_eq!(p.place_pattern(3840), 2);
+        let kick = p.track(&a).unwrap();
+        assert_eq!(kick.clips.len(), 1);
+        assert_eq!(kick.clips[0].position_ticks, 3840);
+        let crate::clip::ClipContent::Midi(m) = &kick.clips[0].content else {
+            panic!("a MIDI clip")
+        };
+        assert_eq!(m.clip.notes.len(), 2);
+        assert_eq!(p.track(&b).unwrap().clips.len(), 1);
+    }
+
     /// A clone has its own ids everywhere, keeps the plug-ins' live state,
     /// and its automation drives its own plug-in, not the original's.
     #[test]

@@ -1748,6 +1748,16 @@ impl DawEngine {
         );
         transport.set_position(start_samples);
         transport.playing.store(true, Ordering::Relaxed);
+        // A render in pattern mode is the pattern, as in FL: the step
+        // sequencer's notes, looped at the pattern's length.
+        transport.pattern_mode.store(
+            self.transport.pattern_mode.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        transport.pattern_len_ticks.store(
+            self.transport.pattern_len_ticks.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
 
         let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);
         let (_command_tx, command_rx) = bounded::<EngineCommand>(4);
@@ -2546,6 +2556,9 @@ impl EngineCallback {
                 self.transport
                     .pattern_mode
                     .store(on, std::sync::atomic::Ordering::Relaxed);
+                // The instrument tracks swap between the playlist's notes
+                // and the pattern's.
+                self.needs_rebuild = true;
             }
             TransportCommand::SetPosition(pos) => {
                 self.transport.set_position(pos);
@@ -2743,8 +2756,69 @@ impl EngineCallback {
                 // instrument through this track's chain, which is what
                 // layering two synths off one part means.
                 let routed = midi_routes.get(&track.id).cloned().unwrap_or_default();
-                let clip_sources = std::iter::once(&track.clips)
-                    .chain(routed.iter().map(|index| &project.tracks[*index].clips));
+                // In pattern mode the channel plays the channel rack's
+                // active pattern instead of the playlist, as in FL. The
+                // steps were saved and never read, so the step sequencer
+                // made no sound at all.
+                let pattern_mode = self
+                    .transport
+                    .pattern_mode
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                if let Some(rack) = &project.step_rack {
+                    self.transport
+                        .pattern_len_ticks
+                        .store(rack.length_ticks(), std::sync::atomic::Ordering::Relaxed);
+                }
+                let pattern_clip = if pattern_mode {
+                    project.step_rack.as_ref().map(|rack| {
+                        let notes: Vec<hardwave_midi::MidiNote> = rack
+                            .notes_for(&track.id)
+                            .into_iter()
+                            .map(|n| hardwave_midi::MidiNote {
+                                start_tick: n.tick,
+                                duration_ticks: n.duration_ticks,
+                                pitch: n.pitch,
+                                velocity: n.velocity,
+                                pan: n.pan,
+                                fine_cents: n.fine_cents,
+                                release_velocity: n.release_velocity,
+                                ..Default::default()
+                            })
+                            .collect();
+                        hardwave_project::clip::ClipPlacement {
+                            content: hardwave_project::clip::ClipContent::Midi(
+                                hardwave_project::clip::MidiClipRef {
+                                    id: "pattern".into(),
+                                    clip: hardwave_midi::MidiClip {
+                                        notes,
+                                        length_ticks: rack.length_ticks(),
+                                        ..hardwave_midi::MidiClip::new(
+                                            "pattern".into(),
+                                            "Pattern".into(),
+                                            rack.length_ticks(),
+                                        )
+                                    },
+                                },
+                            ),
+                            track_id: track.id.clone(),
+                            position_ticks: 0,
+                            length_ticks: rack.length_ticks(),
+                            lane: 0,
+                        }
+                    })
+                } else {
+                    None
+                };
+                let pattern_clips = pattern_clip.map(|c| vec![c]);
+                let clip_sources: Box<
+                    dyn Iterator<Item = &Vec<hardwave_project::clip::ClipPlacement>>,
+                > = match &pattern_clips {
+                    Some(p) => Box::new(std::iter::once(p)),
+                    None => Box::new(
+                        std::iter::once(&track.clips)
+                            .chain(routed.iter().map(|index| &project.tracks[*index].clips)),
+                    ),
+                };
                 for clip in clip_sources.flatten() {
                     let hardwave_project::clip::ClipContent::Midi(midi_ref) = &clip.content else {
                         continue;

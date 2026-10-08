@@ -256,10 +256,27 @@ pub fn get_channel_rack_state(state: State<AppState>) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn set_channel_rack_state(state: State<AppState>, payload: Option<String>) {
-    let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    project.channel_rack_state = payload;
+pub fn set_channel_rack_state(
+    app: AppHandle,
+    state: State<AppState>,
+    payload: Option<String>,
+    from: Option<String>,
+) {
+    {
+        let engine = state.engine.lock();
+        // Read into the step sequencer's notes and played: the rack sends
+        // this whenever a step changes, so pattern mode hears it at once.
+        engine
+            .project
+            .lock()
+            .set_channel_rack_state(payload.clone());
+        engine.rebuild_graph();
+    }
+    // Every other window takes the same steps, so none saves old ones.
+    let _ = app.emit(
+        "daw:rackChanged",
+        serde_json::json!({ "payload": payload, "from": from.unwrap_or_default() }),
+    );
 }
 
 /// Markers and the punch range, as the UI serialises them. Opaque here on
@@ -658,4 +675,49 @@ mod timeline_state_merge_tests {
         let merged = merge(None, r#"{"markers":[]}"#);
         assert_eq!(merged, r#"{"markers":[]}"#);
     }
+}
+
+/// Put the channel rack's active pattern on the playlist at the bar the
+/// playhead is in, one clip per channel with steps. Returns how many.
+#[tauri::command]
+pub fn place_pattern_on_playlist(app: AppHandle, state: State<AppState>) -> usize {
+    state.engine.lock().snapshot_before_mutation();
+    let (placed, ids) = {
+        let engine = state.engine.lock();
+        let sample_rate = f64::from(engine.current_sample_rate().max(1));
+        let position = engine.transport.position();
+        let mut project = engine.project.lock();
+        let tick = project.tempo_map.samples_to_tick(position, sample_rate);
+        let (start, per_bar) = project
+            .tempo_map
+            .meter_segments()
+            .into_iter()
+            .rev()
+            .find(|(s, _)| *s <= tick)
+            .unwrap_or((0, 4 * hardwave_midi::PPQ));
+        let bar = start + (tick - start) / per_bar.max(1) * per_bar.max(1);
+        let before: Vec<(String, usize)> = project
+            .tracks
+            .iter()
+            .map(|t| (t.id.clone(), t.clips.len()))
+            .collect();
+        let placed = project.place_pattern(bar);
+        let ids: Vec<String> = project
+            .tracks
+            .iter()
+            .filter(|t| {
+                before
+                    .iter()
+                    .any(|(id, n)| *id == t.id && *n != t.clips.len())
+            })
+            .map(|t| t.id.clone())
+            .collect();
+        drop(project);
+        engine.rebuild_graph();
+        (placed, ids)
+    };
+    for id in ids {
+        crate::commands::plugins::tell_windows_track_changed(&app, &id);
+    }
+    placed
 }

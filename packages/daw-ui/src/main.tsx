@@ -12,6 +12,7 @@ import { App } from './App'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { PanelWindow } from './PanelWindow'
 import { listenForTrackChanges } from './stores/trackStore'
+import { startRackSync } from './stores/rackSync'
 import './fonts'
 import './mockup.css'
 
@@ -22,6 +23,7 @@ import './mockup.css'
 // resolution → blank white window. Fall back to hash/query for older builds.
 // Every window, main or detached, follows channel changes made in another.
 listenForTrackChanges()
+startRackSync()
 
 const injected = (window as unknown as { __HW_PANEL__?: { panel?: string; params?: string } }).__HW_PANEL__
 const rawFallback = window.location.hash.startsWith('#')

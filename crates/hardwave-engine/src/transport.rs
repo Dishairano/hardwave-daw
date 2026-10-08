@@ -34,6 +34,9 @@ pub struct TransportState {
 
     /// Playback mode: 0 = Song, 1 = Pattern.
     pub pattern_mode: Arc<AtomicBool>,
+    /// How long the pattern pattern mode loops is, in ticks: the channel
+    /// rack's pattern length. It looped four bars whatever the pattern was.
+    pub pattern_len_ticks: Arc<AtomicU64>,
 
     /// When true, live input on armed+monitored tracks is routed directly to
     /// the master bus, bypassing the track's FX chain and fader. Gives the
@@ -93,6 +96,7 @@ impl Default for TransportState {
             master_volume_db: Arc::new(AtomicF64::new(0.0)),
             time_sig: Arc::new(AtomicU64::new(pack_time_sig(4, 4))),
             pattern_mode: Arc::new(AtomicBool::new(false)),
+            pattern_len_ticks: Arc::new(AtomicU64::new(16 * hardwave_midi::PPQ)),
             direct_monitoring: Arc::new(AtomicBool::new(false)),
             pdc_enabled: Arc::new(AtomicBool::new(true)),
             wait_for_input: Arc::new(AtomicBool::new(false)),
@@ -116,15 +120,14 @@ impl TransportState {
     pub fn advance(&self, frames: u64) {
         let pos = self.position_samples.fetch_add(frames, Ordering::Relaxed) + frames;
 
-        // Pattern mode: hard-loop on a 4-bar pattern at the current tempo/meter.
+        // Pattern mode: loop the channel rack's pattern at the current tempo.
         // Song mode: use the user's loop region if looping is enabled.
         if self.pattern_mode.load(Ordering::Relaxed) {
             let sr = self.sample_rate.load(Ordering::Relaxed) as f64;
             let bpm = self.bpm.load(Ordering::Relaxed).max(1.0);
-            let (num, _den) = unpack_time_sig(self.time_sig.load(Ordering::Relaxed));
-            let beats_per_bar = num.max(1) as f64;
-            let samples_per_beat = 60.0 / bpm * sr;
-            let pattern_len = (samples_per_beat * beats_per_bar * 4.0) as u64;
+            let ticks = self.pattern_len_ticks.load(Ordering::Relaxed).max(1) as f64;
+            let samples_per_tick = 60.0 / bpm * sr / hardwave_midi::PPQ as f64;
+            let pattern_len = (ticks * samples_per_tick) as u64;
             if pattern_len > 0 && pos >= pattern_len {
                 self.position_samples
                     .store(pos % pattern_len, Ordering::Relaxed);

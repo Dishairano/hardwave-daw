@@ -66,6 +66,7 @@ permissions = [
   "allow-remove-track",
   "allow-duplicate-track",
   "allow-transpose-track-notes",
+  "allow-place-pattern-on-playlist",
   "allow-set-track-volume",
   "allow-set-track-pan",
   "allow-toggle-mute",

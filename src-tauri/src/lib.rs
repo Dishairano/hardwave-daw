@@ -360,6 +360,7 @@ pub fn run() {
             commands::tracks::remove_track,
             commands::tracks::duplicate_track,
             commands::midi::transpose_track_notes,
+            commands::project::place_pattern_on_playlist,
             commands::tracks::set_track_volume,
             commands::tracks::set_track_pan,
             commands::tracks::toggle_mute,

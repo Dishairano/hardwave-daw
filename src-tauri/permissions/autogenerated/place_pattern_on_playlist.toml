@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-place-pattern-on-playlist"
+description = "Enables the place_pattern_on_playlist command without any pre-configured scope."
+commands.allow = ["place_pattern_on_playlist"]
+
+[[permission]]
+identifier = "deny-place-pattern-on-playlist"
+description = "Denies the place_pattern_on_playlist command without any pre-configured scope."
+commands.deny = ["place_pattern_on_playlist"]
