@@ -301,7 +301,11 @@ pub fn rescan_and_restore_missing_plugins(
                     gain_reduction_db.clone(),
                 );
                 let slot_levels =
-                    std::sync::Arc::<hardwave_engine::insert_chain::SlotLevels>::default();
+                    std::sync::Arc::new(hardwave_engine::insert_chain::SlotLevels::with_params(
+                        LiveSlot::ranges_of(plugin.as_ref())
+                            .into_iter()
+                            .map(|(id, _, _)| id),
+                    ));
                 state
                     .slot_levels
                     .lock()
@@ -830,7 +834,11 @@ pub(crate) fn add_plugin_without_undo_step(
         (track_id.clone(), slot_id.clone()),
         gain_reduction_db.clone(),
     );
-    let slot_levels = std::sync::Arc::<hardwave_engine::insert_chain::SlotLevels>::default();
+    let slot_levels = std::sync::Arc::new(hardwave_engine::insert_chain::SlotLevels::with_params(
+        LiveSlot::ranges_of(plugin.as_ref())
+            .into_iter()
+            .map(|(id, _, _)| id),
+    ));
     state
         .slot_levels
         .lock()
@@ -1313,7 +1321,11 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
                     gain_reduction_db.clone(),
                 );
                 let slot_levels =
-                    std::sync::Arc::<hardwave_engine::insert_chain::SlotLevels>::default();
+                    std::sync::Arc::new(hardwave_engine::insert_chain::SlotLevels::with_params(
+                        LiveSlot::ranges_of(plugin.as_ref())
+                            .into_iter()
+                            .map(|(id, _, _)| id),
+                    ));
                 state
                     .slot_levels
                     .lock()
@@ -1687,4 +1699,21 @@ pub fn wavetable_frames(bank: String, positions: usize, points: usize) -> Vec<Ve
                 .collect()
         })
         .collect()
+}
+
+/// Parameters of a slot that changed since the last call, as (id, value):
+/// automation, a controller or modulation moving them. A plug-in's window
+/// polls this so its knobs follow the song.
+#[tauri::command]
+pub fn take_slot_param_changes(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+) -> Vec<(u32, f64)> {
+    state
+        .slot_levels
+        .lock()
+        .get(&(track_id, slot_id))
+        .map(|levels| levels.take_param_changes())
+        .unwrap_or_default()
 }

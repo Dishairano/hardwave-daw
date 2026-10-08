@@ -4,6 +4,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { usePluginPresetStore } from '../../stores/pluginPresetStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { useTrackStore } from '../../stores/trackStore'
+import { useAutomationWriteStore } from '../../stores/automationWriteStore'
+import { useTransportStore } from '../../stores/transportStore'
 import {
   EQ_BAND_COLOURS, EQ_BAND_KINDS, FAMILY, type FamilyColours, type Panel, type PluginLayout, type Readout, type Row,
   layoutFor, windowWidth,
@@ -138,8 +140,19 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
     })
   }, [trackId, slotId])
 
+  // When the window last moved each parameter, so the song's own moves
+  // (read back below) do not fight a knob being dragged.
+  const touched = useRef(new Map<number, number>())
+
   const setParam = useCallback((q: PluginParam, value: number) => {
     const v = Math.max(q.min, Math.min(q.max, value))
+    touched.current.set(q.id, performance.now())
+    // Written into the automation while the song plays in a write mode.
+    const write = useAutomationWriteStore.getState()
+    if (write.isRecording() && useTransportStore.getState().playing) {
+      const span = q.max - q.min
+      write.writeFromControl(trackId, { kind: 'plugin_param', slotId, paramId: q.id }, span ? (v - q.min) / span : 0)
+    }
     setValues((prev) => (prev[q.id] === v ? prev : { ...prev, [q.id]: v }))
     setExact((e) => {
       if (!(q.id in e)) return e
@@ -152,7 +165,7 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
       flushQueued.current = true
       requestAnimationFrame(flush)
     }
-  }, [flush])
+  }, [flush, trackId, slotId])
 
   // ---- live data from the slot
   const kinds = useMemo(() => displayKinds(layout), [layout])
@@ -173,9 +186,26 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
         invoke<[number, number, number, number]>('get_slot_levels', { trackId, slotId }),
         invoke<{ trackId: string; slotId: string; reductionDb: number }[]>('get_gain_reduction'),
         scope ? invoke<number[]>('get_slot_scope', { trackId, slotId }) : Promise.resolve(null),
+        invoke<[number, number][]>('take_slot_param_changes', { trackId, slotId }),
       ])
-        .then(([levels, reductions, frames]) => {
+        .then(([levels, reductions, frames, moved]) => {
           if (!alive) return
+          // The song moved these (automation, a controller, modulation):
+          // the knobs follow, except one being dragged right now.
+          const now = performance.now()
+          const follow = moved.filter(([id]) => now - (touched.current.get(id) ?? -1e9) > 500)
+          if (follow.length) {
+            setValues((prev) => {
+              const next = { ...prev }
+              for (const [id, v] of follow) next[id] = v
+              return next
+            })
+            setExact((e) => {
+              const next = { ...e }
+              for (const [id] of follow) delete next[id]
+              return next
+            })
+          }
           const l = live.current
           l.levels = levels
           const gr = reductions.find((r) => r.trackId === trackId && r.slotId === slotId)

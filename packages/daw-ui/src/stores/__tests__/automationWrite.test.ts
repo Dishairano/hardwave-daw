@@ -37,6 +37,27 @@ describe('automation write', () => {
     expect(invokeMock.mock.calls.filter(c => c[0] === 'automation_touch_end')).toHaveLength(1)
   })
 
+  it('a knob without a release of its own ends its pass once it is still', () => {
+    vi.useFakeTimers()
+    try {
+      useAutomationWriteStore.getState().setMode('touch')
+      const store = useAutomationWriteStore.getState()
+      const target = { kind: 'plugin_param', slotId: 's1', paramId: 4 } as const
+      store.writeFromControl('t1', target, 0.2)
+      vi.advanceTimersByTime(200)
+      store.writeFromControl('t1', target, 0.3)
+      vi.advanceTimersByTime(300)
+      expect(invokeMock.mock.calls.filter(c => c[0] === 'automation_touch_end')).toHaveLength(0)
+      vi.advanceTimersByTime(200)
+      expect(invokeMock.mock.calls.filter(c => c[0] === 'automation_touch_begin')).toHaveLength(1)
+      expect(invokeMock.mock.calls.filter(c => c[0] === 'automation_write_sample')).toHaveLength(2)
+      expect(invokeMock.mock.calls.filter(c => c[0] === 'automation_touch_end')).toHaveLength(1)
+    } finally {
+      useAutomationWriteStore.getState().setMode('off')
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps two controls in separate sessions', () => {
     useAutomationWriteStore.getState().setMode('touch')
     const store = useAutomationWriteStore.getState()

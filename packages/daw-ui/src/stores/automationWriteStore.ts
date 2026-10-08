@@ -45,7 +45,17 @@ interface AutomationWriteState {
   beginTouch: (trackId: string, target: AutomationTargetInfo) => void
   writeSample: (trackId: string, target: AutomationTargetInfo, normalized: number) => void
   endTouch: (trackId: string, target: AutomationTargetInfo) => void
+  /**
+   * A control without a press and release of its own (a knob in a plug-in
+   * window, a value typed in) moved. Records it like a drag; the gesture
+   * ends once the control has been still for a moment.
+   */
+  writeFromControl: (trackId: string, target: AutomationTargetInfo, normalized: number) => void
 }
+
+/** How long a control must be still before its gesture counts as let go. */
+const IDLE_END_MS = 400
+const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 const ORDER: AutomationWriteMode[] = ['off', 'write', 'touch', 'latch']
 
@@ -83,7 +93,10 @@ function startKnobPolling() {
         if (!Array.isArray(moves) || moves.length === 0) return
         if (!store.isRecording()) return
         for (const move of moves) {
-          store.writeSample(
+          // Through writeFromControl, so the pass ends when the knob stops:
+          // these moves opened a session that nothing ever closed, so they
+          // were never written into a lane.
+          store.writeFromControl(
             move.trackId,
             { kind: 'plugin_param', slotId: move.slotId, paramId: move.paramId },
             move.value,
@@ -144,6 +157,18 @@ export const useAutomationWriteStore = create<AutomationWriteState>((set, get) =
     // opens one, so a component only has to stream values.
     get().beginTouch(trackId, target)
     invoke('automation_write_sample', { trackId, target, value: normalized }).catch(() => {})
+  },
+
+  writeFromControl: (trackId, target, normalized) => {
+    if (!get().isRecording()) return
+    get().writeSample(trackId, target, normalized)
+    const key = keyOf(trackId, target)
+    const prev = idleTimers.get(key)
+    if (prev) clearTimeout(prev)
+    idleTimers.set(key, setTimeout(() => {
+      idleTimers.delete(key)
+      get().endTouch(trackId, target)
+    }, IDLE_END_MS))
   },
 
   endTouch: (trackId, target) => {

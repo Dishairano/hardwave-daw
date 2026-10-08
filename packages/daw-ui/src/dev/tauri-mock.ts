@@ -413,6 +413,8 @@ const mock: TauriInternals = {
         const slotId = new URLSearchParams(location.search).get('id')
         return slotId ? [{ trackId: 'mock', slotId: `hardwave.native.${slotId}`, reductionDb: -3.8 }] : []
       }
+      case 'take_slot_param_changes':
+        return []
       case 'get_slot_scope':
         return Array.from({ length: 512 }, (_, i) => {
           const k = Math.floor(i / 2), m = Math.sin(k * 0.21) * 0.5, sd = Math.sin(k * 0.67 + 1) * 0.18

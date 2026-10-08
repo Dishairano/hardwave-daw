@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
+import { useAutomationWriteStore } from '../../stores/automationWriteStore'
+import { useTransportStore } from '../../stores/transportStore'
 
 interface PluginParamInfo {
   id: number
@@ -47,6 +49,13 @@ export function PluginParamSheet({ trackId, slotId, fill = false }: { trackId: s
 
   const setParam = (id: number, v: number) => {
     setValues((prev) => ({ ...prev, [id]: v }))
+    // Recorded into the automation while the song plays in a write mode.
+    const q = params.find((p) => p.id === id)
+    const write = useAutomationWriteStore.getState()
+    if (q && write.isRecording() && useTransportStore.getState().playing) {
+      const span = q.max - q.min
+      write.writeFromControl(trackId, { kind: 'plugin_param', slotId, paramId: id }, span ? (v - q.min) / span : 0)
+    }
     invoke('set_plugin_parameter', { trackId, slotId, paramId: id, value: v })
       .catch((e) => console.error('set_plugin_parameter failed', e))
   }

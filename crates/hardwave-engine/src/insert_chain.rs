@@ -83,6 +83,13 @@ pub struct SlotLevels {
     /// (left, right) as two f32 bit patterns in one word.
     scope: Box<[std::sync::atomic::AtomicU64]>,
     scope_pos: std::sync::atomic::AtomicUsize,
+    /// Each parameter's latest value as the chain set it (automation, a
+    /// controller, modulation, the window itself), as f64 bits; NaN until
+    /// first set. A window reads what changed, so its knobs follow the
+    /// song instead of showing what they were when it opened.
+    params: Box<[(u32, std::sync::atomic::AtomicU64)]>,
+    /// What the window last read, so it only gets changes. UI side only.
+    params_read: parking_lot::Mutex<Vec<u64>>,
 }
 
 pub const SCOPE_LEN: usize = 256;
@@ -100,11 +107,51 @@ impl Default for SlotLevels {
                 .map(|_| std::sync::atomic::AtomicU64::new(0))
                 .collect(),
             scope_pos: Default::default(),
+            params: Box::new([]),
+            params_read: parking_lot::Mutex::new(Vec::new()),
         }
     }
 }
 
 impl SlotLevels {
+    /// Levels for a slot whose parameters have these ids.
+    pub fn with_params(ids: impl IntoIterator<Item = u32>) -> Self {
+        let nan = f64::NAN.to_bits();
+        let params: Box<[(u32, std::sync::atomic::AtomicU64)]> = ids
+            .into_iter()
+            .map(|id| (id, std::sync::atomic::AtomicU64::new(nan)))
+            .collect();
+        let n = params.len();
+        Self {
+            params,
+            params_read: parking_lot::Mutex::new(vec![nan; n]),
+            ..Self::default()
+        }
+    }
+
+    /// The chain set a parameter (audio thread: one search, one store).
+    fn note_param(&self, id: u32, value: f64) {
+        if let Some((_, cell)) = self.params.iter().find(|(p, _)| *p == id) {
+            cell.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Parameters whose value changed since the last call, as (id, value).
+    pub fn take_param_changes(&self) -> Vec<(u32, f64)> {
+        let mut read = self.params_read.lock();
+        let mut out = Vec::new();
+        for (i, (id, cell)) in self.params.iter().enumerate() {
+            let bits = cell.load(std::sync::atomic::Ordering::Relaxed);
+            if read.get(i) != Some(&bits) && !f64::from_bits(bits).is_nan() {
+                out.push((*id, f64::from_bits(bits)));
+                if let Some(r) = read.get_mut(i) {
+                    *r = bits;
+                }
+            }
+        }
+        out
+    }
+
     /// Record output frames into the scope if a window asked for it.
     fn record_scope(&self, left: &[f32], right: &[f32]) {
         use std::sync::atomic::Ordering::Relaxed;
@@ -412,6 +459,7 @@ impl InsertChain {
                 None => v,
             };
             s.plugin.set_parameter_value(param_id, value);
+            s.levels.note_param(param_id, value);
             true
         } else {
             false
@@ -421,6 +469,7 @@ impl InsertChain {
     pub fn set_parameter(&mut self, slot_id: &str, param_id: u32, value: f64) -> bool {
         if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
             s.plugin.set_parameter_value(param_id, value);
+            s.levels.note_param(param_id, value);
             true
         } else {
             false
@@ -1541,5 +1590,27 @@ mod tests {
         let frames = levels.scope();
         assert_eq!(frames.len(), SCOPE_LEN * 2);
         assert_eq!((frames[0], frames[1]), (0.5, -0.25));
+    }
+
+    /// A window's knobs follow automation: what the chain sets is read back
+    /// once, as a change, and only parameters that changed.
+    #[test]
+    fn parameter_changes_are_read_back_once() {
+        let mut chain = InsertChain::new();
+        let (mut slot, _) = make_gain_slot("g", 1.0, true);
+        slot.levels = std::sync::Arc::new(SlotLevels::with_params([0]));
+        let levels = std::sync::Arc::clone(&slot.levels);
+        chain.slots.push(slot);
+        assert!(levels.take_param_changes().is_empty(), "nothing set yet");
+        chain.set_parameter_normalized("g", 0, 0.25);
+        assert_eq!(levels.take_param_changes(), vec![(0, 1.0)]);
+        assert!(levels.take_param_changes().is_empty(), "read once");
+        chain.set_parameter("g", 0, 1.0);
+        assert!(
+            levels.take_param_changes().is_empty(),
+            "the same value is no change"
+        );
+        chain.set_parameter("g", 0, 3.0);
+        assert_eq!(levels.take_param_changes(), vec![(0, 3.0)]);
     }
 }
