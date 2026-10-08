@@ -95,7 +95,9 @@ export function PerformanceTest({ onClose, onOpenTestSong }: Props) {
           <div style={{ fontSize: 12, fontWeight: 600 }}>Performance test</div>
           <div style={{ fontSize: 9, color: hw.textFaint }}>how many tracks this PC can play</div>
           <div style={{ flex: 1 }} />
-          <button onClick={onClose} disabled={running} style={btn(false)}>Close</button>
+          {running
+            ? <button onClick={() => void invoke('cancel_load_test')} style={btn(false)}>Stop</button>
+            : <button onClick={onClose} style={btn(false)}>Close</button>}
         </div>
 
         <div style={{ overflowY: 'auto', padding: 16, fontSize: 11, lineHeight: 1.6 }}>
@@ -105,7 +107,8 @@ export function PerformanceTest({ onClose, onOpenTestSong }: Props) {
                 The test builds songs of test tracks next to your project and times every
                 block at your sound card's buffer size. It keeps adding tracks until blocks
                 start arriving late, which is what you would hear as crackles. Your song is
-                not changed. Playback stops while it runs, which takes about a minute.
+                not changed. Playback stops while it runs, which takes one to three minutes; Stop
+                ends it early.
               </p>
               <p style={{ margin: '0 0 14px', color: hw.textFaint }}>
                 Each test track is a synth playing chords through an EQ, a compressor and a
@@ -125,6 +128,7 @@ export function PerformanceTest({ onClose, onOpenTestSong }: Props) {
               {latest && <LoadBar step={latest} />}
               <div style={{ color: hw.textFaint, marginTop: 8 }}>
                 {steps.length} {steps.length === 1 ? 'measurement' : 'measurements'} so far.
+                Each one plays two seconds of the test song in real time.
               </div>
             </div>
           )}

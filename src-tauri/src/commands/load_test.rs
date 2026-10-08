@@ -12,6 +12,14 @@
 //! count passes when 99 blocks in 100 finish within 70% of that time:
 //! the rest is for the sound card driver, the screen and the occasional
 //! spike a real plug-in has.
+//!
+//! Measured the way playback runs: on a thread Windows treats as audio
+//! (MMCSS "Pro Audio"), one block per block's worth of time rather than
+//! back to back, for at least two seconds and 400 blocks, so one hiccup
+//! is a small share of the blocks. A count that fails is measured once
+//! more before it counts as failed: the search trusts every answer, and
+//! one unlucky pass used to end it low and give a different number each
+//! run.
 
 use crate::AppState;
 use hardwave_engine::DawEngine;
@@ -37,8 +45,10 @@ const HEADROOM: f64 = 0.7;
 /// The most tracks the test tries. A machine past this is not the
 /// limit any more; the plug-ins someone chooses are.
 const MOST: usize = 512;
-/// Audio rendered per measurement, after the warm-up.
-const MEASURED: Duration = Duration::from_millis(1500);
+/// Audio rendered per measurement, after the warm-up, at least.
+const MEASURED: Duration = Duration::from_millis(2000);
+/// And at least this many blocks, so p99 is not one block's word.
+const MIN_BLOCKS: u64 = 400;
 const WARM_UP: Duration = Duration::from_millis(250);
 
 /// One measured track count.
@@ -96,9 +106,16 @@ pub struct Capacity {
 /// the last pass and the first failure until the two are within a
 /// tenth of each other. Measuring is the slow part, so a typical
 /// machine is done in about ten measurements.
-pub fn search(mut passes: impl FnMut(usize) -> bool, most: usize) -> Capacity {
+#[cfg(test)]
+pub fn search(passes: impl FnMut(usize) -> bool, most: usize) -> Capacity {
+    search_from(passes, most, 8)
+}
+
+/// [`search`] starting at `start` instead of 8: the multi-core run starts
+/// where one core stopped, since it does at least as well.
+pub fn search_from(mut passes: impl FnMut(usize) -> bool, most: usize, start: usize) -> Capacity {
     let mut good = 0usize;
-    let mut n = 8usize.min(most);
+    let mut n = start.clamp(1, most);
     let mut bad = loop {
         if !passes(n) {
             break n;
@@ -223,15 +240,67 @@ fn measure(tracks: usize, sample_rate: u32, buffer_size: u32, threads: usize, ru
     engine.rebuild_graph();
 
     let samples = |d: Duration| (d.as_secs_f64() * sample_rate as f64) as u64;
-    let times = engine.measure_block_times(
+    let measured = samples(MEASURED).max(MIN_BLOCKS * buffer_size as u64);
+    let times = engine.measure_block_times_paced(
         sample_rate,
         buffer_size as usize,
-        samples(WARM_UP + MEASURED),
+        samples(WARM_UP) + measured,
         Some(&native),
+        &CANCEL,
     );
     let skip = samples(WARM_UP).div_ceil(buffer_size as u64) as usize;
     let budget = Duration::from_secs_f64(buffer_size as f64 / sample_rate as f64);
     summarise(&times[skip.min(times.len())..], budget, tracks, run)
+}
+
+/// Set by `cancel_load_test`; the running measurement stops at its next block.
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Stop a performance test that is running. The steps measured so far stay.
+#[tauri::command]
+pub fn cancel_load_test() {
+    CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Treat this thread as audio work for as long as the guard lives, the way
+/// Windows schedules a sound card's own thread (MMCSS "Pro Audio"). Without
+/// it the test ran at normal priority and, on a hybrid CPU with the window
+/// in the background, could land on an efficiency core.
+struct ProAudioThread {
+    #[cfg(windows)]
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+impl ProAudioThread {
+    fn enter() -> Self {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Threading::AvSetMmThreadCharacteristicsW;
+            let name: Vec<u16> = "Pro Audio"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let mut index = 0u32;
+            // A null handle means MMCSS said no; the test still runs.
+            let handle = unsafe { AvSetMmThreadCharacteristicsW(name.as_ptr(), &mut index) };
+            Self { handle }
+        }
+        #[cfg(not(windows))]
+        {
+            Self {}
+        }
+    }
+}
+
+impl Drop for ProAudioThread {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if !self.handle.is_null() {
+            unsafe {
+                windows_sys::Win32::System::Threading::AvRevertMmThreadCharacteristics(self.handle)
+            };
+        }
+    }
 }
 
 /// Run the whole test with the sound card's settings.
@@ -252,27 +321,41 @@ pub async fn run_load_test(app: AppHandle) -> Result<LoadTestResult, String> {
         )
     };
     let progress = app.clone();
+    CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
+        let _priority = ProAudioThread::enter();
+        let cancelled = || CANCEL.load(std::sync::atomic::Ordering::SeqCst);
         let mut steps = Vec::new();
-        let run = |name: &str, threads: usize, steps: &mut Vec<Step>| {
-            search(
+        let run = |name: &str, threads: usize, start: usize, steps: &mut Vec<Step>| {
+            search_from(
                 |n| {
-                    let step = measure(n, sample_rate, buffer_size, threads, name);
+                    if cancelled() {
+                        return false;
+                    }
+                    let mut step = measure(n, sample_rate, buffer_size, threads, name);
+                    // A fail is measured again before it counts.
+                    if !step.passed && !cancelled() {
+                        let again = measure(n, sample_rate, buffer_size, threads, name);
+                        if again.passed {
+                            step = again;
+                        }
+                    }
                     let _ = progress.emit("load-test-step", &step);
                     let passed = step.passed;
                     steps.push(step);
                     passed
                 },
                 MOST,
+                start,
             )
         };
-        let now = run("now", threads, &mut steps);
+        let now = run("now", threads, 8, &mut steps);
         // With multi-core audio off, show what switching it on would
         // give, because that is the one setting that changes the answer.
         let multicore = if threads == 0 {
             let helpers = hardwave_engine::parallel::default_worker_count();
-            (helpers > 0).then(|| {
-                let found = run("multicore", helpers, &mut steps);
+            (helpers > 0 && !cancelled()).then(|| {
+                let found = run("multicore", helpers, now.tracks.max(8), &mut steps);
                 MulticoreResult {
                     threads: helpers,
                     tracks: found.tracks,
@@ -302,8 +385,20 @@ pub async fn run_load_test(app: AppHandle) -> Result<LoadTestResult, String> {
 ///
 /// The window starts a new project first. The plug-ins go in through
 /// the same path as a person adding them, so they are live.
+///
+/// Off the window's thread, with one undo step for the whole song: as a
+/// sync command it made 400 plug-ins on the window's thread, each one
+/// copying the whole project for undo, and the window stopped responding.
 #[tauri::command]
-pub fn open_load_test_song(state: State<AppState>, tracks: usize) -> Result<usize, String> {
+pub async fn open_load_test_song(app: AppHandle, tracks: usize) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_load_test_song_blocking(app.state::<AppState>(), tracks)
+    })
+    .await
+    .map_err(|e| format!("the test song stopped: {e}"))?
+}
+
+fn open_load_test_song_blocking(state: State<AppState>, tracks: usize) -> Result<usize, String> {
     let tracks = tracks.clamp(1, MOST);
     state.engine.lock().snapshot_before_mutation();
     let ids = {
@@ -325,7 +420,7 @@ pub fn open_load_test_song(state: State<AppState>, tracks: usize) -> Result<usiz
     }
     for id in ids {
         for plugin_id in TEST_CHAIN {
-            super::plugins::add_plugin_to_track_quietly(
+            super::plugins::add_plugin_without_undo_step(
                 state.clone(),
                 id.clone(),
                 plugin_id.to_string(),

@@ -735,9 +735,7 @@ impl DawEngine {
             self.audio_prefs.clone(),
             Arc::clone(&self.record_pass),
             Arc::clone(&self.record_last_pos),
-            // Not the live pool: it serves one caller at a time, and an
-            // export running beside playback wrote into the same batch.
-            Arc::new(Mutex::new(None)),
+            Arc::clone(&self.worker_pool),
             Arc::clone(&self.reference),
             Arc::clone(&self.reference_on),
             Arc::clone(&self.reference_gain_centi_db),
@@ -1569,6 +1567,11 @@ impl DawEngine {
         prepare: impl FnOnce(&mut Project),
     ) -> OfflineRender {
         let buffer_size: usize = 1024;
+        // A pool of its own with as many helpers as playback has. Not the
+        // live pool: it serves one caller at a time, and an export running
+        // beside playback wrote into the same batch.
+        let threads = self.worker_threads();
+        let pool = (threads > 0).then(|| Arc::new(crate::parallel::WorkerPool::new(threads)));
         OfflineRender {
             callback: self.offline_callback(
                 sample_rate,
@@ -1576,6 +1579,7 @@ impl DawEngine {
                 start_samples,
                 instantiate,
                 prepare,
+                Arc::new(Mutex::new(pool)),
             ),
             buffer_size,
         }
@@ -1598,11 +1602,65 @@ impl DawEngine {
         instantiate: Option<OfflineInsertFactory<'_>>,
     ) -> Vec<std::time::Duration> {
         let buffer_size = buffer_size.max(16);
-        let mut callback = self.offline_callback(sample_rate, buffer_size, 0, instantiate, |_| {});
+        // This engine's own pool: the performance test builds an engine of
+        // its own per measurement, with the helper threads it is testing.
+        let mut callback = self.offline_callback(
+            sample_rate,
+            buffer_size,
+            0,
+            instantiate,
+            |_| {},
+            Arc::clone(&self.worker_pool),
+        );
         let mut buf = vec![0.0_f32; buffer_size * 2];
         let blocks = total_samples.div_ceil(buffer_size as u64) as usize;
         let mut times = Vec::with_capacity(blocks);
         for _ in 0..blocks {
+            buf.fill(0.0);
+            let started = std::time::Instant::now();
+            callback.process(&mut buf, buffer_size, 2);
+            times.push(started.elapsed());
+        }
+        times
+    }
+
+    /// [`Self::measure_block_times`], but in time: each block starts when
+    /// a sound card would ask for it, not as soon as the last one ends.
+    /// Back to back, caches stay warm and the CPU stays at full clock,
+    /// which playback never gets; the numbers came out better than real.
+    /// Stops early, with what it has, when `cancel` is set.
+    pub fn measure_block_times_paced(
+        &self,
+        sample_rate: u32,
+        buffer_size: usize,
+        total_samples: u64,
+        instantiate: Option<OfflineInsertFactory<'_>>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Vec<std::time::Duration> {
+        let buffer_size = buffer_size.max(16);
+        let mut callback = self.offline_callback(
+            sample_rate,
+            buffer_size,
+            0,
+            instantiate,
+            |_| {},
+            Arc::clone(&self.worker_pool),
+        );
+        let mut buf = vec![0.0_f32; buffer_size * 2];
+        let blocks = total_samples.div_ceil(buffer_size as u64) as usize;
+        let block_len =
+            std::time::Duration::from_secs_f64(buffer_size as f64 / sample_rate.max(1) as f64);
+        let mut times = Vec::with_capacity(blocks);
+        let begun = std::time::Instant::now();
+        for i in 0..blocks {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            let due = begun + block_len * i as u32;
+            let now = std::time::Instant::now();
+            if due > now {
+                std::thread::sleep(due - now);
+            }
             buf.fill(0.0);
             let started = std::time::Instant::now();
             callback.process(&mut buf, buffer_size, 2);
@@ -1620,6 +1678,7 @@ impl DawEngine {
         start_samples: u64,
         instantiate: Option<OfflineInsertFactory<'_>>,
         prepare: impl FnOnce(&mut Project),
+        worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
     ) -> EngineCallback {
         // Bake stretch variants before rendering. The offline callback's
         // rebuild only looks them up, so without this an export would fall
@@ -1724,7 +1783,7 @@ impl DawEngine {
             self.audio_prefs.clone(),
             Arc::clone(&self.record_pass),
             Arc::clone(&self.record_last_pos),
-            Arc::clone(&self.worker_pool),
+            worker_pool,
             Arc::clone(&self.reference),
             Arc::clone(&self.reference_on),
             Arc::clone(&self.reference_gain_centi_db),

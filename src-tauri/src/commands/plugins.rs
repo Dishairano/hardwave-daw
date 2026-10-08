@@ -638,7 +638,16 @@ pub(crate) fn add_plugin_to_track_quietly(
     plugin_id: String,
 ) -> Result<String, String> {
     state.engine.lock().snapshot_before_mutation();
+    add_plugin_without_undo_step(state, track_id, plugin_id)
+}
 
+/// Add a plug-in without an undo step of its own, for callers that add
+/// many as one change and took the snapshot themselves.
+pub(crate) fn add_plugin_without_undo_step(
+    state: State<AppState>,
+    track_id: String,
+    plugin_id: String,
+) -> Result<String, String> {
     // Phase 1: clone descriptor and push project metadata while holding
     // the engine + project locks. Drop them before instantiation so the
     // (potentially slow) VST3 / CLAP load doesn't block other commands.

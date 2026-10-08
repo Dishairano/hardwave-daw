@@ -390,6 +390,7 @@ pub fn run() {
             commands::stems::stop_stems,
             commands::stems::stems_service,
             commands::load_test::run_load_test,
+            commands::load_test::cancel_load_test,
             commands::load_test::open_load_test_song,
             commands::cloud::save_to_workspace,
             commands::cloud::list_workspace_songs,

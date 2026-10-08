@@ -108,6 +108,7 @@ permissions = [
   "allow-stop-stems",
   "allow-stems-service",
   "allow-run-load-test",
+  "allow-cancel-load-test",
   "allow-open-load-test-song",
   "allow-save-to-workspace",
   "allow-list-workspace-songs",

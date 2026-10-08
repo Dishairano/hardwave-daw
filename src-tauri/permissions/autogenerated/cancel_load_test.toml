@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-load-test"
+description = "Enables the cancel_load_test command without any pre-configured scope."
+commands.allow = ["cancel_load_test"]
+
+[[permission]]
+identifier = "deny-cancel-load-test"
+description = "Denies the cancel_load_test command without any pre-configured scope."
+commands.deny = ["cancel_load_test"]
