@@ -193,7 +193,7 @@ pub struct ClapOutputEvents {
 pub struct ClapProcess {
     pub steady_time: i64,
     pub frames_count: u32,
-    pub transport: *const c_void, // clap_event_transport_t — unused for now
+    pub transport: *const ClapEventTransport,
     pub audio_inputs: *const ClapAudioBuffer,
     pub audio_outputs: *mut ClapAudioBuffer,
     pub audio_inputs_count: u32,
@@ -217,6 +217,36 @@ pub const CLAP_EVENT_NOTE_OFF: u16 = 1;
 pub const CLAP_EVENT_NOTE_CHOKE: u16 = 2;
 pub const CLAP_EVENT_PARAM_VALUE: u16 = 5;
 pub const CLAP_EVENT_MIDI: u16 = 6;
+pub const CLAP_EVENT_TRANSPORT: u16 = 9;
+
+/// clap_event_transport_t: where the song is, handed to every block.
+#[repr(C)]
+pub struct ClapEventTransport {
+    pub header: ClapEventHeader,
+    pub flags: u32,
+    /// Fixed point, CLAP_BEATTIME_FACTOR to a beat (a quarter note).
+    pub song_pos_beats: i64,
+    /// Fixed point, CLAP_SECTIME_FACTOR to a second.
+    pub song_pos_seconds: i64,
+    pub tempo: f64,
+    pub tempo_inc: f64,
+    pub loop_start_beats: i64,
+    pub loop_end_beats: i64,
+    pub loop_start_seconds: i64,
+    pub loop_end_seconds: i64,
+    pub bar_start: i64,
+    pub bar_number: i32,
+    pub tsig_num: u16,
+    pub tsig_denom: u16,
+}
+
+pub const CLAP_BEATTIME_FACTOR: f64 = (1i64 << 31) as f64;
+pub const CLAP_SECTIME_FACTOR: f64 = (1i64 << 31) as f64;
+pub const CLAP_TRANSPORT_HAS_TEMPO: u32 = 1 << 0;
+pub const CLAP_TRANSPORT_HAS_BEATS_TIMELINE: u32 = 1 << 1;
+pub const CLAP_TRANSPORT_HAS_SECONDS_TIMELINE: u32 = 1 << 2;
+pub const CLAP_TRANSPORT_HAS_TIME_SIGNATURE: u32 = 1 << 3;
+pub const CLAP_TRANSPORT_IS_PLAYING: u32 = 1 << 4;
 pub const CLAP_CORE_EVENT_SPACE_ID: u16 = 0;
 
 /// `clap_event_param_value_t` — carries a single parameter change into

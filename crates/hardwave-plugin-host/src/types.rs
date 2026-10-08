@@ -183,6 +183,8 @@ pub struct TransportInfo {
     /// says.
     pub time_sig: (u32, u32),
     pub sample_rate: f64,
+    /// The same position in samples.
+    pub position_samples: u64,
 }
 
 impl Default for TransportInfo {
@@ -193,6 +195,7 @@ impl Default for TransportInfo {
             position_beats: 0.0,
             time_sig: (4, 4),
             sample_rate: 48_000.0,
+            position_samples: 0,
         }
     }
 }

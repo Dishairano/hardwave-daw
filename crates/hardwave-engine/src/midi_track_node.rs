@@ -1174,6 +1174,7 @@ impl AudioNode for MidiTrackNode {
                         position_beats: ctx.position_ticks as f64 / hardwave_midi::PPQ as f64,
                         time_sig: ctx.time_sig,
                         sample_rate: ctx.sample_rate,
+                        position_samples: ctx.position_samples,
                     });
                 self.chain.process(
                     left,

@@ -495,6 +495,7 @@ mod sync_tests {
             position_beats,
             time_sig: (4, 4),
             sample_rate: 48_000.0,
+            position_samples: 0,
         }
     }
 

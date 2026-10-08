@@ -33,11 +33,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use vst3::Steinberg::Vst::{
-    BusDirections_, BusInfo, Event, Event_::EventTypes_, IAudioProcessor, IAudioProcessorTrait,
-    IComponent, IComponentHandler, IComponentHandlerTrait, IComponentTrait, IEditController,
-    IEditControllerTrait, IEventList, IEventListTrait, IUnitInfo, IUnitInfoTrait, IoModes_,
-    MediaTypes_, NoteOffEvent, NoteOnEvent, ParamID, ParamValue, ProcessModes_, ProcessSetup,
-    ProgramListInfo, SymbolicSampleSizes_, ViewType,
+    BusDirections_, BusInfo, ControllerNumbers_, Event, Event_::EventTypes_, IAudioProcessor,
+    IAudioProcessorTrait, IComponent, IComponentHandler, IComponentHandlerTrait, IComponentTrait,
+    IEditController, IEditControllerTrait, IEventList, IEventListTrait, IMidiMapping,
+    IMidiMappingTrait, IParamValueQueue, IParamValueQueueTrait, IParameterChanges,
+    IParameterChangesTrait, IUnitInfo, IUnitInfoTrait, IoModes_, MediaTypes_, NoteOffEvent,
+    NoteOnEvent, ParamID, ParamValue, PolyPressureEvent, ProcessContext,
+    ProcessContext_::StatesAndFlags_, ProcessModes_, ProcessSetup, ProgramListInfo,
+    SymbolicSampleSizes_, ViewType,
 };
 use vst3::Steinberg::{
     kResultOk, tresult, FIDString, IBStream, IBStreamTrait, IBStream_::IStreamSeekMode_, IPlugView,
@@ -139,6 +142,25 @@ struct Vst3Inner {
     /// the pointer the controller still holds.
     #[allow(dead_code)]
     component_handler: Option<vst3::ComWrapper<HardwaveComponentHandler>>,
+    /// Where the song is, for the plug-in's ProcessContext. A null context
+    /// left every tempo-synced delay, LFO, arp and gate without a tempo.
+    transport: TransportInfo,
+    /// Values the host set since the last block (automation, a controller,
+    /// our parameter sheet). The controller hears them at once; the audio
+    /// processor only hears what arrives in a block's parameter changes, so
+    /// they wait here. Before this the processor of any plug-in with its
+    /// own controller never heard automation at all.
+    host_param_changes: Vec<(u32, f64)>,
+    /// MIDI controllers to parameters, as the plug-in's IMidiMapping says,
+    /// per (channel, controller); pitch bend is controller 129 and channel
+    /// pressure 128. VST3 has no CC events: a plug-in hears CC and pitch
+    /// bend only as these parameters, so they were dropped before.
+    midi_map: std::collections::HashMap<(u8, u16), ParamID>,
+    /// Made once and refilled every block, so processing does not allocate.
+    in_changes: vst3::ComWrapper<HostParameterChanges>,
+    in_changes_ptr: Option<ComPtr<IParameterChanges>>,
+    events: vst3::ComWrapper<HostEventList>,
+    events_ptr: Option<ComPtr<IEventList>>,
 }
 
 /// Bridges the plugin's editor → host parameter notifications back to
@@ -399,6 +421,10 @@ impl Vst3PluginInstance {
             }
         }
 
+        let in_changes = vst3::ComWrapper::new(HostParameterChanges::new());
+        let events = vst3::ComWrapper::new(HostEventList {
+            events: Mutex::new(Vec::with_capacity(MAX_EVENTS)),
+        });
         let inner = Arc::new(Vst3Inner {
             descriptor,
             library: Some(library),
@@ -421,6 +447,13 @@ impl Vst3PluginInstance {
             pending_params,
             gui_edit_log,
             component_handler: Some(handler_wrapper),
+            transport: TransportInfo::default(),
+            host_param_changes: Vec::with_capacity(MAX_HOST_CHANGES),
+            midi_map: std::collections::HashMap::new(),
+            in_changes_ptr: in_changes.to_com_ptr::<IParameterChanges>(),
+            in_changes,
+            events_ptr: events.to_com_ptr::<IEventList>(),
+            events,
         });
 
         Ok(Self { inner })
@@ -673,6 +706,7 @@ impl HostedPlugin for Vst3PluginInstance {
             return Err(format!("setProcessing(true) failed ({res})"));
         }
         inner.processing = true;
+        inner.midi_map = read_midi_mapping(inner.controller.as_ref());
         Ok(())
     }
 
@@ -716,17 +750,21 @@ impl HostedPlugin for Vst3PluginInstance {
         // pipeline aligned without breaking through to the IParameterChanges
         // wire format (which would require building a per-block
         // parameter-changes stream and is the next milestone).
-        let pending: Vec<(u32, f64)> = {
+        // The processor hears parameters only through this block's
+        // parameter changes: edits made in the plug-in's own window (its
+        // controller already has them) and values the host set.
+        inner.in_changes.clear();
+        {
             let mut q = inner.pending_params.lock();
-            std::mem::take(&mut *q)
-        };
-        if !pending.is_empty() {
-            if let Some(ctrl) = &inner.controller {
-                for (id, value) in pending {
-                    unsafe { ctrl.setParamNormalized(id as ParamID, value as ParamValue) };
-                }
+            for &(id, value) in q.iter() {
+                inner.in_changes.add(id as ParamID, 0, value);
             }
+            q.clear();
         }
+        for &(id, value) in inner.host_param_changes.iter() {
+            inner.in_changes.add(id as ParamID, 0, value);
+        }
+        inner.host_param_changes.clear();
 
         // Prepare output buffers.
         for out in outputs.iter_mut() {
@@ -782,19 +820,25 @@ impl HostedPlugin for Vst3PluginInstance {
             processContext: std::ptr::null_mut(),
         };
 
-        // Wire host MIDI events into VST3 Event list via a local
-        // IEventList implementation. The wrapper lives until the
-        // ComPtr is dropped at the end of this scope.
-        let midi_events: Vec<Event> = encode_midi_events_for_vst3(midi_in);
-        let event_list_wrapper = vst3::ComWrapper::new(HostEventList {
-            events: Mutex::new(midi_events),
-        });
-        let event_list_ptr = event_list_wrapper
-            .to_com_ptr::<IEventList>()
-            .map(|p| p.as_ptr())
-            .unwrap_or(std::ptr::null_mut());
-        if !event_list_ptr.is_null() && !midi_in.is_empty() {
-            data.inputEvents = event_list_ptr;
+        let mut context = process_context(&inner.transport, inner.sample_rate);
+        data.processContext = &mut context;
+
+        // Notes go in as events; CC, pitch bend and channel pressure as
+        // the parameters the plug-in mapped them to.
+        {
+            let mut list = inner.events.events.lock();
+            list.clear();
+            encode_midi_events_for_vst3(midi_in, &mut list, &inner.midi_map, &inner.in_changes);
+            if !list.is_empty() {
+                if let Some(p) = &inner.events_ptr {
+                    data.inputEvents = p.as_ptr();
+                }
+            }
+        }
+        if inner.in_changes.count() > 0 {
+            if let Some(p) = &inner.in_changes_ptr {
+                data.inputParameterChanges = p.as_ptr();
+            }
         }
 
         if let Some(processor) = &inner.processor {
@@ -833,8 +877,22 @@ impl HostedPlugin for Vst3PluginInstance {
         let Ok(inner) = self.inner_mut() else {
             return;
         };
+        let value = value.clamp(0.0, 1.0);
         if let Some(ctrl) = &inner.controller {
-            unsafe { ctrl.setParamNormalized(id, value.clamp(0.0, 1.0)) };
+            unsafe { ctrl.setParamNormalized(id, value) };
+        }
+        // And the audio processor, in the next block. A full queue keeps
+        // the newest value of a parameter already in it.
+        if let Some(slot) = inner.host_param_changes.iter_mut().find(|(p, _)| *p == id) {
+            slot.1 = value;
+        } else if inner.host_param_changes.len() < MAX_HOST_CHANGES {
+            inner.host_param_changes.push((id, value));
+        }
+    }
+
+    fn set_transport(&mut self, transport: TransportInfo) {
+        if let Ok(inner) = self.inner_mut() {
+            inner.transport = transport;
         }
     }
 
@@ -1216,8 +1274,77 @@ impl IEventListTrait for HostEventList {
     }
 }
 
-fn encode_midi_events_for_vst3(midi: &[hardwave_midi::MidiEvent]) -> Vec<Event> {
-    let mut out = Vec::with_capacity(midi.len());
+/// Most events and parameter queues one block carries; preallocated so
+/// processing never allocates.
+const MAX_EVENTS: usize = 512;
+const MAX_HOST_CHANGES: usize = 256;
+const MAX_QUEUES: usize = 128;
+const MAX_POINTS: usize = 64;
+
+/// The song position as VST3 wants it.
+fn process_context(t: &TransportInfo, sample_rate: f64) -> ProcessContext {
+    // SAFETY: a plain C struct; zero is a valid value for every field.
+    let mut c: ProcessContext = unsafe { std::mem::zeroed() };
+    let (num, den) = (t.time_sig.0.max(1), t.time_sig.1.max(1));
+    // Positions are in quarter notes; a bar holds num * 4 / den of them.
+    let bar_quarters = num as f64 * 4.0 / den as f64;
+    c.state = (StatesAndFlags_::kTempoValid
+        | StatesAndFlags_::kTimeSigValid
+        | StatesAndFlags_::kProjectTimeMusicValid
+        | StatesAndFlags_::kBarPositionValid
+        | if t.playing {
+            StatesAndFlags_::kPlaying
+        } else {
+            0
+        }) as u32;
+    c.sampleRate = sample_rate;
+    c.projectTimeSamples = t.position_samples as i64;
+    c.continousTimeSamples = t.position_samples as i64;
+    c.projectTimeMusic = t.position_beats;
+    c.barPositionMusic = (t.position_beats / bar_quarters).floor() * bar_quarters;
+    c.tempo = t.tempo;
+    c.timeSigNumerator = num as i32;
+    c.timeSigDenominator = den as i32;
+    c
+}
+
+/// Which parameter each MIDI controller drives, per channel, as the
+/// plug-in's controller maps them (CC 0..127, channel pressure 128, pitch
+/// bend 129). Read once, when the plug-in is activated.
+fn read_midi_mapping(
+    controller: Option<&ComPtr<IEditController>>,
+) -> std::collections::HashMap<(u8, u16), ParamID> {
+    let mut map = std::collections::HashMap::new();
+    let Some(mapping) = controller.and_then(|c| c.cast::<IMidiMapping>()) else {
+        return map;
+    };
+    for channel in 0..16u8 {
+        for ctrl in 0..=(ControllerNumbers_::kPitchBend as u16) {
+            let mut id: ParamID = 0;
+            let res = unsafe {
+                mapping.getMidiControllerAssignment(0, channel as i16, ctrl as i16, &mut id)
+            };
+            if res == kResultOk {
+                map.insert((channel, ctrl), id);
+            }
+        }
+    }
+    map
+}
+
+/// The host's MIDI for one block: notes and poly pressure as events, the
+/// rest as the parameters the plug-in mapped them to.
+fn encode_midi_events_for_vst3(
+    midi: &[hardwave_midi::MidiEvent],
+    out: &mut Vec<Event>,
+    map: &std::collections::HashMap<(u8, u16), ParamID>,
+    changes: &HostParameterChanges,
+) {
+    let mut push = |event: Event| {
+        if out.len() < MAX_EVENTS {
+            out.push(event);
+        }
+    };
     for ev in midi {
         match *ev {
             hardwave_midi::MidiEvent::NoteOn {
@@ -1240,7 +1367,7 @@ fn encode_midi_events_for_vst3(midi: &[hardwave_midi::MidiEvent]) -> Vec<Event> 
                     length: 0,
                     noteId: -1,
                 };
-                out.push(event);
+                push(event);
             }
             hardwave_midi::MidiEvent::NoteOff {
                 timing,
@@ -1261,17 +1388,378 @@ fn encode_midi_events_for_vst3(midi: &[hardwave_midi::MidiEvent]) -> Vec<Event> 
                     velocity,
                     noteId: -1,
                 };
-                out.push(event);
+                push(event);
             }
-            _ => {}
+            hardwave_midi::MidiEvent::Aftertouch {
+                timing,
+                channel,
+                note,
+                pressure,
+            } => {
+                let mut event: Event = unsafe { std::mem::zeroed() };
+                event.sampleOffset = timing as i32;
+                event.r#type = EventTypes_::kPolyPressureEvent as u16;
+                event.__field0.polyPressure = PolyPressureEvent {
+                    channel: channel as i16,
+                    pitch: note as i16,
+                    pressure,
+                    noteId: -1,
+                };
+                push(event);
+            }
+            hardwave_midi::MidiEvent::ControlChange {
+                timing,
+                channel,
+                cc,
+                value,
+            } => {
+                if let Some(&id) = map.get(&(channel, cc as u16)) {
+                    changes.add(id, timing as i32, value.clamp(0.0, 1.0) as f64);
+                }
+            }
+            hardwave_midi::MidiEvent::PitchBend {
+                timing,
+                channel,
+                value,
+            } => {
+                if let Some(&id) = map.get(&(channel, ControllerNumbers_::kPitchBend as u16)) {
+                    // -1..1 around the centre, to 0..1 around 0.5.
+                    changes.add(
+                        id,
+                        timing as i32,
+                        ((value.clamp(-1.0, 1.0) + 1.0) * 0.5) as f64,
+                    );
+                }
+            }
+            hardwave_midi::MidiEvent::ChannelPressure {
+                timing,
+                channel,
+                pressure,
+            } => {
+                if let Some(&id) = map.get(&(channel, ControllerNumbers_::kAfterTouch as u16)) {
+                    changes.add(id, timing as i32, pressure.clamp(0.0, 1.0) as f64);
+                }
+            }
         }
     }
-    out
+}
+
+// ---------------------------------------------------------------------------
+// HostParameterChanges — the IParameterChanges a block hands the processor.
+// A fixed set of queues made up front and reused, so the audio thread never
+// allocates; each queue keeps its points in time order, as VST3 requires.
+// ---------------------------------------------------------------------------
+
+struct ParamQueueData {
+    id: ParamID,
+    points: Vec<(i32, f64)>,
+}
+
+struct HostParamQueue {
+    data: Mutex<ParamQueueData>,
+}
+
+impl vst3::Class for HostParamQueue {
+    type Interfaces = (IParamValueQueue,);
+}
+
+impl IParamValueQueueTrait for HostParamQueue {
+    unsafe fn getParameterId(&self) -> ParamID {
+        self.data.lock().id
+    }
+
+    unsafe fn getPointCount(&self) -> i32 {
+        self.data.lock().points.len() as i32
+    }
+
+    unsafe fn getPoint(
+        &self,
+        index: i32,
+        sample_offset: *mut i32,
+        value: *mut ParamValue,
+    ) -> tresult {
+        let d = self.data.lock();
+        let Some(&(offset, v)) = d.points.get(index.max(0) as usize).filter(|_| index >= 0) else {
+            return vst3::Steinberg::kInvalidArgument;
+        };
+        if !sample_offset.is_null() {
+            *sample_offset = offset;
+        }
+        if !value.is_null() {
+            *value = v;
+        }
+        kResultOk
+    }
+
+    unsafe fn addPoint(&self, sample_offset: i32, value: ParamValue, index: *mut i32) -> tresult {
+        let at = self.data.lock().add(sample_offset, value);
+        match at {
+            Some(i) => {
+                if !index.is_null() {
+                    *index = i as i32;
+                }
+                kResultOk
+            }
+            None => vst3::Steinberg::kResultFalse,
+        }
+    }
+}
+
+impl ParamQueueData {
+    /// Add a point in time order; a point at the same offset replaces it.
+    fn add(&mut self, offset: i32, value: f64) -> Option<usize> {
+        let at = self.points.partition_point(|&(o, _)| o < offset);
+        if let Some(p) = self.points.get_mut(at).filter(|p| p.0 == offset) {
+            p.1 = value;
+            return Some(at);
+        }
+        if self.points.len() >= MAX_POINTS {
+            return None;
+        }
+        self.points.insert(at, (offset, value));
+        Some(at)
+    }
+}
+
+struct HostParameterChanges {
+    queues: Vec<vst3::ComWrapper<HostParamQueue>>,
+    ptrs: Vec<Option<ComPtr<IParamValueQueue>>>,
+    used: Mutex<usize>,
+}
+
+impl HostParameterChanges {
+    fn new() -> Self {
+        let queues: Vec<_> = (0..MAX_QUEUES)
+            .map(|_| {
+                vst3::ComWrapper::new(HostParamQueue {
+                    data: Mutex::new(ParamQueueData {
+                        id: 0,
+                        points: Vec::with_capacity(MAX_POINTS),
+                    }),
+                })
+            })
+            .collect();
+        let ptrs = queues
+            .iter()
+            .map(|q| q.to_com_ptr::<IParamValueQueue>())
+            .collect();
+        Self {
+            queues,
+            ptrs,
+            used: Mutex::new(0),
+        }
+    }
+
+    fn clear(&self) {
+        *self.used.lock() = 0;
+    }
+
+    fn count(&self) -> usize {
+        *self.used.lock()
+    }
+
+    /// The queue for a parameter: the one already in use, or the next free.
+    fn queue_for(&self, id: ParamID) -> Option<usize> {
+        let mut used = self.used.lock();
+        if let Some(i) = (0..*used).find(|&i| self.queues[i].data.lock().id == id) {
+            return Some(i);
+        }
+        if *used >= self.queues.len() {
+            return None;
+        }
+        let i = *used;
+        {
+            let mut d = self.queues[i].data.lock();
+            d.id = id;
+            d.points.clear();
+        }
+        *used += 1;
+        Some(i)
+    }
+
+    /// Add a value for a parameter at a sample offset in this block.
+    fn add(&self, id: ParamID, offset: i32, value: f64) {
+        if let Some(i) = self.queue_for(id) {
+            self.queues[i]
+                .data
+                .lock()
+                .add(offset.max(0), value.clamp(0.0, 1.0));
+        }
+    }
+}
+
+impl vst3::Class for HostParameterChanges {
+    type Interfaces = (IParameterChanges,);
+}
+
+impl IParameterChangesTrait for HostParameterChanges {
+    unsafe fn getParameterCount(&self) -> i32 {
+        self.count() as i32
+    }
+
+    unsafe fn getParameterData(&self, index: i32) -> *mut IParamValueQueue {
+        if index < 0 || index as usize >= self.count() {
+            return std::ptr::null_mut();
+        }
+        self.ptrs[index as usize]
+            .as_ref()
+            .map(|p| p.as_ptr())
+            .unwrap_or(std::ptr::null_mut())
+    }
+
+    unsafe fn addParameterData(
+        &self,
+        id: *const ParamID,
+        index: *mut i32,
+    ) -> *mut IParamValueQueue {
+        if id.is_null() {
+            return std::ptr::null_mut();
+        }
+        let Some(i) = self.queue_for(*id) else {
+            return std::ptr::null_mut();
+        };
+        if !index.is_null() {
+            *index = i as i32;
+        }
+        self.ptrs[i]
+            .as_ref()
+            .map(|p| p.as_ptr())
+            .unwrap_or(std::ptr::null_mut())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn transport_at(beats: f64, playing: bool) -> TransportInfo {
+        TransportInfo {
+            playing,
+            tempo: 150.0,
+            position_beats: beats,
+            time_sig: (4, 4),
+            sample_rate: 48_000.0,
+            position_samples: (beats * 48_000.0 * 60.0 / 150.0) as u64,
+        }
+    }
+
+    /// The context says where the song is, at what tempo, in which bar.
+    #[test]
+    fn the_process_context_carries_tempo_position_and_bar() {
+        let c = process_context(&transport_at(9.5, true), 48_000.0);
+        assert_eq!(c.tempo, 150.0);
+        assert_eq!(c.projectTimeMusic, 9.5);
+        assert_eq!(
+            c.barPositionMusic, 8.0,
+            "beat 9.5 is in the bar that starts at 8"
+        );
+        assert_eq!((c.timeSigNumerator, c.timeSigDenominator), (4, 4));
+        assert_eq!(c.projectTimeSamples, 182_400);
+        let s = c.state;
+        for flag in [
+            StatesAndFlags_::kPlaying,
+            StatesAndFlags_::kTempoValid,
+            StatesAndFlags_::kTimeSigValid,
+            StatesAndFlags_::kProjectTimeMusicValid,
+            StatesAndFlags_::kBarPositionValid,
+        ] {
+            assert!(s & flag as u32 != 0, "flag {flag} missing");
+        }
+        let stopped = process_context(&transport_at(0.0, false), 48_000.0);
+        assert_eq!(stopped.state & StatesAndFlags_::kPlaying as u32, 0);
+        // 6/8: a bar is three quarter notes.
+        let mut t = transport_at(7.0, true);
+        t.time_sig = (6, 8);
+        assert_eq!(process_context(&t, 48_000.0).barPositionMusic, 6.0);
+    }
+
+    /// Points stay in time order per parameter, and a block starts empty.
+    #[test]
+    fn parameter_changes_keep_points_in_order_and_reset_per_block() {
+        let ch = HostParameterChanges::new();
+        ch.add(7, 64, 0.5);
+        ch.add(7, 0, 0.1);
+        ch.add(3, 10, 0.9);
+        ch.add(7, 64, 0.6);
+        assert_eq!(ch.count(), 2);
+        unsafe {
+            let q = &ch.queues[0];
+            assert_eq!(q.getParameterId(), 7);
+            assert_eq!(q.getPointCount(), 2);
+            let (mut o, mut v) = (0, 0.0);
+            q.getPoint(0, &mut o, &mut v);
+            assert_eq!((o, v), (0, 0.1));
+            q.getPoint(1, &mut o, &mut v);
+            assert_eq!((o, v), (64, 0.6), "the later value at the same offset wins");
+            assert!(!ch.getParameterData(1).is_null());
+            assert!(ch.getParameterData(2).is_null());
+        }
+        ch.clear();
+        assert_eq!(ch.count(), 0);
+        ch.add(9, 0, 1.0);
+        unsafe {
+            assert_eq!(
+                ch.queues[0].getPointCount(),
+                1,
+                "a reused queue starts empty"
+            )
+        };
+    }
+
+    /// Notes become events; CC and pitch bend become the parameters the
+    /// plug-in mapped them to, with pitch bend centred on 0.5.
+    #[test]
+    fn midi_reaches_a_vst3_as_events_and_mapped_parameters() {
+        use hardwave_midi::MidiEvent;
+        let mut map = std::collections::HashMap::new();
+        map.insert((0u8, 1u16), 100 as ParamID);
+        map.insert((0u8, ControllerNumbers_::kPitchBend as u16), 200 as ParamID);
+        let changes = HostParameterChanges::new();
+        let mut events = Vec::new();
+        encode_midi_events_for_vst3(
+            &[
+                MidiEvent::NoteOn {
+                    timing: 3,
+                    channel: 0,
+                    note: 60,
+                    velocity: 0.8,
+                },
+                MidiEvent::ControlChange {
+                    timing: 10,
+                    channel: 0,
+                    cc: 1,
+                    value: 0.25,
+                },
+                MidiEvent::ControlChange {
+                    timing: 11,
+                    channel: 0,
+                    cc: 74,
+                    value: 0.5,
+                },
+                MidiEvent::PitchBend {
+                    timing: 20,
+                    channel: 0,
+                    value: 0.0,
+                },
+            ],
+            &mut events,
+            &map,
+            &changes,
+        );
+        assert_eq!(events.len(), 1, "only the note is an event");
+        assert_eq!(
+            changes.count(),
+            2,
+            "CC 74 is not mapped, so it goes nowhere"
+        );
+        unsafe {
+            let (mut o, mut v) = (0, 0.0);
+            changes.queues[0].getPoint(0, &mut o, &mut v);
+            assert_eq!((changes.queues[0].getParameterId(), o, v), (100, 10, 0.25));
+            changes.queues[1].getPoint(0, &mut o, &mut v);
+            assert_eq!((changes.queues[1].getParameterId(), o, v), (200, 20, 0.5));
+        }
+    }
 
     fn descriptor_for(path: PathBuf) -> PluginDescriptor {
         PluginDescriptor {

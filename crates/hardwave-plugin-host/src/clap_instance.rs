@@ -12,12 +12,14 @@
 
 use crate::clap_ffi::{
     build_static_host, ClapAudioBuffer, ClapEventHeader, ClapEventMidi, ClapEventNote,
-    ClapEventParamValue, ClapHost, ClapHostParams, ClapInputEvents, ClapIstream, ClapOstream,
-    ClapOutputEvents, ClapParamInfo, ClapPlugin, ClapPluginEntry, ClapPluginFactory, ClapPluginGui,
-    ClapPluginParams, ClapPluginState, ClapProcess, ClapWindow, ClapWindowHandle,
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
-    CLAP_EVENT_PARAM_VALUE, CLAP_EXT_GUI, CLAP_EXT_HOST_PARAMS, CLAP_EXT_PARAMS, CLAP_EXT_STATE,
-    CLAP_PROCESS_ERROR,
+    ClapEventParamValue, ClapEventTransport, ClapHost, ClapHostParams, ClapInputEvents,
+    ClapIstream, ClapOstream, ClapOutputEvents, ClapParamInfo, ClapPlugin, ClapPluginEntry,
+    ClapPluginFactory, ClapPluginGui, ClapPluginParams, ClapPluginState, ClapProcess, ClapWindow,
+    ClapWindowHandle, CLAP_BEATTIME_FACTOR, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI,
+    CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
+    CLAP_EXT_GUI, CLAP_EXT_HOST_PARAMS, CLAP_EXT_PARAMS, CLAP_EXT_STATE, CLAP_PROCESS_ERROR,
+    CLAP_SECTIME_FACTOR, CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
+    CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
 };
 use crate::types::*;
 use parking_lot::Mutex;
@@ -54,6 +56,9 @@ pub struct ClapPluginInstance {
     /// True between a successful `open_editor` and `close_editor` so we
     /// don't double-create / leak the plugin's GUI.
     gui_open: bool,
+    /// Where the song is. Every block passed a null transport, so a
+    /// tempo-synced delay, LFO or arp had no tempo to sync to.
+    transport: TransportInfo,
 }
 
 /// Host-side context reachable from the C callbacks via
@@ -189,6 +194,7 @@ impl ClapPluginInstance {
             pending_params,
             gui_edit_log,
             gui_open: false,
+            transport: TransportInfo::default(),
         };
         me.refresh_params();
         Ok(me)
@@ -295,7 +301,54 @@ impl Drop for ClapPluginInstance {
     }
 }
 
+/// The song position as CLAP wants it.
+fn clap_transport(t: &TransportInfo) -> ClapEventTransport {
+    let (num, den) = (t.time_sig.0.max(1), t.time_sig.1.max(1));
+    // Beats are quarter notes; a bar holds num * 4 / den of them.
+    let bar_quarters = num as f64 * 4.0 / den as f64;
+    let bar = (t.position_beats / bar_quarters).floor();
+    let seconds = if t.sample_rate > 0.0 {
+        t.position_samples as f64 / t.sample_rate
+    } else {
+        0.0
+    };
+    ClapEventTransport {
+        header: ClapEventHeader {
+            size: std::mem::size_of::<ClapEventTransport>() as u32,
+            time: 0,
+            space_id: CLAP_CORE_EVENT_SPACE_ID,
+            event_type: CLAP_EVENT_TRANSPORT,
+            flags: 0,
+        },
+        flags: CLAP_TRANSPORT_HAS_TEMPO
+            | CLAP_TRANSPORT_HAS_BEATS_TIMELINE
+            | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE
+            | CLAP_TRANSPORT_HAS_TIME_SIGNATURE
+            | if t.playing {
+                CLAP_TRANSPORT_IS_PLAYING
+            } else {
+                0
+            },
+        song_pos_beats: (t.position_beats * CLAP_BEATTIME_FACTOR) as i64,
+        song_pos_seconds: (seconds * CLAP_SECTIME_FACTOR) as i64,
+        tempo: t.tempo,
+        tempo_inc: 0.0,
+        loop_start_beats: 0,
+        loop_end_beats: 0,
+        loop_start_seconds: 0,
+        loop_end_seconds: 0,
+        bar_start: (bar * bar_quarters * CLAP_BEATTIME_FACTOR) as i64,
+        bar_number: bar as i32,
+        tsig_num: num as u16,
+        tsig_denom: den as u16,
+    }
+}
+
 impl HostedPlugin for ClapPluginInstance {
+    fn set_transport(&mut self, transport: TransportInfo) {
+        self.transport = transport;
+    }
+
     fn descriptor(&self) -> &PluginDescriptor {
         &self.descriptor
     }
@@ -418,10 +471,11 @@ impl HostedPlugin for ClapPluginInstance {
             try_push: event_queue_push_noop,
         };
 
+        let transport = clap_transport(&self.transport);
         let process = ClapProcess {
             steady_time: -1,
             frames_count: num_samples as u32,
-            transport: std::ptr::null(),
+            transport: &transport,
             audio_inputs: &audio_in,
             audio_outputs: &mut audio_out,
             audio_inputs_count: 1,
@@ -927,6 +981,34 @@ unsafe extern "C" fn state_reader_read(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A CLAP plug-in hears the tempo, the position in beats and seconds,
+    /// the bar and whether the song plays.
+    #[test]
+    fn the_transport_says_where_the_song_is() {
+        let t = TransportInfo {
+            playing: true,
+            tempo: 150.0,
+            position_beats: 9.5,
+            time_sig: (4, 4),
+            sample_rate: 48_000.0,
+            position_samples: 96_000,
+        };
+        let c = clap_transport(&t);
+        assert_eq!(c.tempo, 150.0);
+        assert_eq!(c.song_pos_beats as f64 / CLAP_BEATTIME_FACTOR, 9.5);
+        assert_eq!(c.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR, 2.0);
+        assert_eq!(c.bar_number, 2);
+        assert_eq!(c.bar_start as f64 / CLAP_BEATTIME_FACTOR, 8.0);
+        assert_eq!((c.tsig_num, c.tsig_denom), (4, 4));
+        assert!(c.flags & CLAP_TRANSPORT_IS_PLAYING != 0);
+        assert!(c.flags & CLAP_TRANSPORT_HAS_TEMPO != 0);
+        assert_eq!(c.header.event_type, CLAP_EVENT_TRANSPORT);
+        assert_eq!(
+            c.header.size as usize,
+            std::mem::size_of::<ClapEventTransport>()
+        );
+    }
     use std::path::PathBuf;
 
     fn descriptor_for(path: PathBuf) -> PluginDescriptor {
