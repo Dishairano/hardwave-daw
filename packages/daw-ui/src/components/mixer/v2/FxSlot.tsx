@@ -256,26 +256,12 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
     >
       <div className="mx-fx-slot-idx">{idxLabel}</div>
       <div className="mx-fx-slot-led" />
-      <button
-        type="button"
-        className="mx-fx-preset-arrow"
-        title="Previous preset"
-        onClick={(e) => {
-          e.stopPropagation()
-          usePluginPresetStore
-            .getState()
-            .step(trackId, insert.id, insert.pluginId, -1)
-            .catch(console.error)
-        }}
-      >
-        ‹
-      </button>
       <div
         className="mx-fx-slot-name"
         title={insert.pluginName + ' · click to open · right-click for the menu'}
         onClick={(e) => {
           // A click on the name opens the plug-in. Presets are in its
-          // window's dropdown (and on the arrows either side).
+          // window's dropdown.
           e.stopPropagation()
           onShowGui()
         }}
@@ -295,20 +281,6 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
           />
         )}
       </div>
-      <button
-        type="button"
-        className="mx-fx-preset-arrow"
-        title="Next preset"
-        onClick={(e) => {
-          e.stopPropagation()
-          usePluginPresetStore
-            .getState()
-            .step(trackId, insert.id, insert.pluginId, 1)
-            .catch(console.error)
-        }}
-      >
-        ›
-      </button>
       <div className="mx-fx-slot-knob">
         <Knob
           value={wetPct}
