@@ -738,6 +738,13 @@ export function App() {
     return () => { for (const u of unlistens) u() }
   }, [])
 
+  // The tempo menu and the SIG pill open the tempo map.
+  useEffect(() => {
+    const open = () => setShowTempoMap(true)
+    window.addEventListener('daw:openTempoMap', open)
+    return () => window.removeEventListener('daw:openTempoMap', open)
+  }, [setShowTempoMap])
+
   /**
    * "MIDI learn" on a control.
    *

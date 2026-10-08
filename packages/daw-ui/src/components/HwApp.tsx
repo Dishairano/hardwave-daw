@@ -27,7 +27,7 @@ import { AutomationLane } from './AutomationLane'
 import { AutomationClipLane } from './AutomationClipLane'
 import { KickSynthEditor } from './KickSynthEditor'
 import type { AutomationTargetInfo } from '../stores/trackStore'
-import { useTransportStore } from '../stores/transportStore'
+import { SNAP_VALUES, useTransportStore } from '../stores/transportStore'
 import { useTempoMapStore } from '../stores/tempoMapStore'
 import { barBeatAtTick, PPQ as PPQ_TICKS } from '../utils/meter'
 import { useGeneralPrefsStore } from '../stores/generalPrefsStore'
@@ -455,6 +455,8 @@ export function HwTopbar({
             onHalf={() => { setBpm(Math.max(20, Math.round(bpm * 0.5 * 10) / 10)); setTempoMenuOpen(false) }}
             onDouble={() => { setBpm(Math.min(999, Math.round(bpm * 2 * 10) / 10)); setTempoMenuOpen(false) }}
             onOpenTapper={() => { onOpenTempoTapper?.(); setTempoMenuOpen(false) }}
+            onEditEvents={() => { window.dispatchEvent(new CustomEvent('daw:openTempoMap')); setTempoMenuOpen(false) }}
+            onChangeAtPlayhead={() => { setTempoMenuOpen(false); void tempoChangeAtPlayhead(bpm, setBpm) }}
             onClose={() => setTempoMenuOpen(false)}
           />
         )}
@@ -747,11 +749,32 @@ function HwBpmSplitDisplay({ bpm, setBpm }: { bpm: number; setBpm: (v: number) =
 // FL's tempo RMB reference set: type-in-value (handled by the inline
 // click-to-edit input), preset BPMs (80/100/120/140/160), Half/Double-
 // speed shortcuts, and a Tap sub-menu that surfaces the full Tempo
-// Tapper modal. Edit events / Create automation clip are stubs for
-// Tier B — they appear disabled so the affordance is visible.
+// Tapper modal. Edit events opens the tempo map (the song's tempo and
+// signature changes); a tempo change at the playhead adds one there, which
+// is what FL's tempo automation clip is for.
+
+/** Add a tempo change where the playhead is (at the start it sets the
+ *  song's tempo). */
+async function tempoChangeAtPlayhead(bpm: number, setBpm: (v: number) => void) {
+  const raw = window.prompt('Tempo from the playhead on (BPM):', bpm.toFixed(1))
+  const v = raw == null ? NaN : parseFloat(raw.replace(',', '.'))
+  if (!Number.isFinite(v)) return
+  const { invoke } = await import('@tauri-apps/api/core')
+  const { useNotificationStore } = await import('../stores/notificationStore')
+  try {
+    const tick = await invoke<number>('get_playhead_tick')
+    if (!tick) { setBpm(v); return }
+    await invoke('add_tempo_entry', { tick, bpm: v, ramp: 'step' })
+    useNotificationStore.getState().push('info', `Tempo ${v.toFixed(1)} BPM from the playhead`, {
+      detail: 'Edit or remove it under Edit events.',
+    })
+  } catch (e) {
+    useNotificationStore.getState().push('error', `Could not add the tempo change: ${String(e)}`)
+  }
+}
 
 function HwTempoContextMenu({
-  bpm, presets, onPreset, onHalf, onDouble, onOpenTapper, onClose,
+  bpm, presets, onPreset, onHalf, onDouble, onOpenTapper, onEditEvents, onChangeAtPlayhead, onClose,
 }: {
   bpm: number
   presets: number[]
@@ -759,6 +782,8 @@ function HwTempoContextMenu({
   onHalf: () => void
   onDouble: () => void
   onOpenTapper: () => void
+  onEditEvents: () => void
+  onChangeAtPlayhead: () => void
   onClose: () => void
 }) {
   useEffect(() => {
@@ -772,7 +797,6 @@ function HwTempoContextMenu({
     background: 'transparent', border: 'none', textAlign: 'left',
     cursor: 'pointer', borderRadius: 3, width: '100%',
   }
-  const itemDisabled: React.CSSProperties = { ...item, color: 'var(--text-dim)', cursor: 'not-allowed' }
   return (
     <div
       onMouseDown={(e) => e.stopPropagation()}
@@ -796,8 +820,8 @@ function HwTempoContextMenu({
       }}>
         Tempo · {bpm.toFixed(1)} BPM
       </div>
-      <button style={itemDisabled} disabled title="Coming in Tier B">Edit events…</button>
-      <button style={itemDisabled} disabled title="Coming in Tier B">Create automation clip…</button>
+      <button style={item} onClick={onEditEvents}>Edit events…</button>
+      <button style={item} onClick={onChangeAtPlayhead}>Tempo change at the playhead…</button>
       <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
       <div style={{ padding: '2px 10px 4px', fontSize: 8, color: 'var(--text-dim)', letterSpacing: 0.6, textTransform: 'uppercase' }}>
         Presets
@@ -1196,6 +1220,10 @@ function HwPlaylistTools() {
   const tsNum = useTransportStore(s => s.timeSigNumerator)
   const tsDen = useTransportStore(s => s.timeSigDenominator)
   const horizontalZoom = useTransportStore(s => s.horizontalZoom)
+  const setHorizontalZoom = useTransportStore(s => s.setHorizontalZoom)
+  const zoomToFit = useTransportStore(s => s.zoomToFit)
+  const setSnapValue = useTransportStore(s => s.setSnapValue)
+  const [snapMenu, setSnapMenu] = useState(false)
   // Live tool binding — these buttons were decorative until 2026-07-07
   // ("Select" hard-coded active, clicks did nothing) while only the
   // keyboard shortcuts drove the real store Arrangement.tsx reads.
@@ -1256,20 +1284,43 @@ function HwPlaylistTools() {
         type="button"
         className={`fl-tool-pill${snapEnabled ? ' on' : ''}`}
         onClick={() => toggleSnap()}
-        title={snapEnabled ? 'Snap ON — click to disable' : 'Snap OFF — click to enable'}
+        onContextMenu={(e) => { e.preventDefault(); setSnapMenu(true) }}
+        title={snapEnabled ? 'Snap on: click to turn off, right-click to pick the grid' : 'Snap off: click to turn on, right-click to pick the grid'}
       >
         <small>SNAP</small>{snapValue}
       </button>
-      <div className="fl-tool-pill" title="Grid display">
-        <small>GRID</small>BARS
+      {/* The grid the playlist snaps to; the lines it draws follow the zoom. */}
+      <div style={{ position: 'relative' }}>
+        <button type="button" className="fl-tool-pill" onClick={() => setSnapMenu((o) => !o)} title="Pick the snap grid">
+          <small>GRID</small>{snapValue === 'Off' ? 'OFF' : snapValue}
+        </button>
+        {snapMenu && (
+          <div className="fl-pill-menu" onMouseLeave={() => setSnapMenu(false)}>
+            {SNAP_VALUES.map((v) => (
+              <button key={v} type="button" className={v === snapValue ? 'on' : ''} onClick={() => { setSnapValue(v); setSnapMenu(false) }}>{v}</button>
+            ))}
+          </div>
+        )}
       </div>
       <div style={{ flex: 1 }} />
-      <div className="fl-tool-pill" title="Time signature">
+      <button
+        type="button"
+        className="fl-tool-pill"
+        title="Time signature: click to edit the song's tempo and signature changes"
+        onClick={() => window.dispatchEvent(new CustomEvent('daw:openTempoMap'))}
+      >
         <small>SIG</small>{tsNum}/{tsDen}
-      </div>
-      <div className="fl-tool-pill" title="Horizontal zoom">
+      </button>
+      <button
+        type="button"
+        className="fl-tool-pill"
+        title="Horizontal zoom: scroll to zoom, click to fit the song, double-click for 100%"
+        onClick={() => zoomToFit()}
+        onDoubleClick={() => setHorizontalZoom(1)}
+        onWheel={(e) => setHorizontalZoom(horizontalZoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15))}
+      >
         <small>H-ZOOM</small>{Math.round(horizontalZoom * 100)}%
-      </div>
+      </button>
     </div>
   )
 }
