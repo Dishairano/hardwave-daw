@@ -24,7 +24,7 @@ function formatParamValue(v: number, unit: string): string {
  * Fetches the slot's parameters via `get_plugin_parameters` and renders
  * each as a labelled slider that pushes edits through `set_plugin_parameter`.
  */
-export function PluginParamSheet({ trackId, slotId }: { trackId: string; slotId: string }) {
+export function PluginParamSheet({ trackId, slotId, fill = false }: { trackId: string; slotId: string; fill?: boolean }) {
   const [params, setParams] = useState<PluginParamInfo[]>([])
   const [values, setValues] = useState<Record<number, number>>({})
   const [loading, setLoading] = useState(true)
@@ -57,7 +57,7 @@ export function PluginParamSheet({ trackId, slotId }: { trackId: string; slotId:
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 7, maxHeight: 280, overflowY: 'auto', paddingRight: 2 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 7, maxHeight: fill ? undefined : 280, overflowY: fill ? undefined : 'auto', paddingRight: 2 }}>
       {params.map((p) => {
         const val = values[p.id] ?? p.value
         const span = p.max - p.min || 1

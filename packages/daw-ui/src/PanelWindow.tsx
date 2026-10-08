@@ -10,6 +10,7 @@
  * persist through the shared backend; instant cross-window refresh of *other*
  * windows is a follow-up.
  */
+import { PluginControls } from './components/mixer/PluginControls'
 import { useMixerSelectionStore } from './stores/mixerSelectionStore'
 import React, { useEffect, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -86,6 +87,17 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
       case 'playlist': return <Arrangement />
       case 'browser': return <Browser />
       case 'settings': return <AudioSettings onClose={() => { void getCurrentWindow().close() }} />
+      // A built-in plug-in's window, opened from a detached mixer.
+      case 'pluginControls': return (
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: '#0c0c11' }}>
+          <PluginControls
+            trackId={params.get('trackId') ?? ''}
+            slotId={params.get('slotId') ?? ''}
+            pluginId={params.get('pluginId') ?? ''}
+            pluginName={params.get('name') ?? 'Plug-in'}
+          />
+        </div>
+      )
       default: return <div style={{ padding: 16, color: hw.textMuted }}>Unknown panel: {panel}</div>
     }
   }
@@ -108,11 +120,11 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
           WebkitAppRegion: 'drag',
         } as React.CSSProperties}
       >
-        <span data-tauri-drag-region style={{ flex: 1, pointerEvents: 'none' }}>{TITLES[panel] ?? panel}</span>
-        <button onClick={dock} title="Dock back into the main window"
+        <span data-tauri-drag-region style={{ flex: 1, pointerEvents: 'none' }}>{panel === 'pluginControls' ? (params.get('name') ?? 'Plug-in') : (TITLES[panel] ?? panel)}</span>
+        {panel !== 'pluginControls' && <button onClick={dock} title="Dock back into the main window"
           style={{ height: 16, padding: '0 6px', fontSize: 9, color: hw.textMuted, background: 'transparent', border: `1px solid ${hw.border}`, borderRadius: 3, cursor: 'pointer', WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           ⧉ Dock
-        </button>
+        </button>}
         <button onClick={() => { void getCurrentWindow().close() }} title="Close"
           style={{ height: 16, width: 18, fontSize: 12, lineHeight: 1, color: hw.textMuted, background: 'transparent', border: `1px solid ${hw.border}`, borderRadius: 3, cursor: 'pointer', WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           ×

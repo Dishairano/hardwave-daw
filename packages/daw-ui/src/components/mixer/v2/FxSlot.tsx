@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { PluginParamSheet } from '../PluginParamSheet'
+import { PluginControls } from '../PluginControls'
 import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from '../../../stores/notificationStore'
 import { Knob } from '../../primitives/Knob'
@@ -44,6 +44,14 @@ export interface FxSlotProps {
  * underlying `InsertInfo` changes, so a wet drag on slot 03 doesn't
  * re-render slots 01/02/04..10.
  */
+/** True inside a detached panel window (its label starts "panel-"). */
+function inDetachedWindow(): boolean {
+  const meta = (window as unknown as {
+    __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } }
+  }).__TAURI_INTERNALS__?.metadata
+  return (meta?.currentWindow?.label ?? 'main').startsWith('panel-')
+}
+
 export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
   const { trackId, slotIndex, insert, onOpenPicker } = props
   const reductionDb = usePerfMetersStore(
@@ -180,7 +188,20 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
     if (!insert) return
     setMenuOpen(false)
     if (usesPanel) {
-      setParamsOpen(true)
+      // Beside a detached mixer the controls get a window of their own too;
+      // beside the docked mixer they float over the app.
+      if (inDetachedWindow()) {
+        const q = new URLSearchParams({
+          trackId, slotId: insert.id, pluginId: insert.pluginId, name: insert.pluginName,
+        }).toString()
+        invoke('open_panel_window', {
+          panel: 'pluginControls', params: q, instance: insert.id, title: insert.pluginName,
+        }).catch((e) => {
+          useNotificationStore.getState().push('error', `Could not open ${insert.pluginName}: ${String(e)}`)
+        })
+      } else {
+        setParamsOpen(true)
+      }
       return
     }
     // Unique label per slot so a re-click focuses the existing window
@@ -251,12 +272,12 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
       </button>
       <div
         className="mx-fx-slot-name"
-        title={insert.pluginName + ' · right-click for preset menu'}
+        title={insert.pluginName + ' · click to open · right-click for the menu'}
         onClick={(e) => {
-          // Click on the plug-in name opens the preset list dropdown.
+          // A click on the name opens the plug-in. Presets are in its
+          // window's dropdown (and on the arrows either side).
           e.stopPropagation()
-          const anchor = (e.currentTarget as HTMLElement).getBoundingClientRect()
-          setPresetMenuAnchor(anchor)
+          onShowGui()
         }}
       >
         {insert.pluginName}
@@ -318,6 +339,17 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
           </button>
           <button
             role="menuitem"
+            onClick={() => {
+              setMenuOpen(false)
+              const r = rowRef.current?.getBoundingClientRect()
+              if (r) setPresetMenuAnchor(r)
+            }}
+            disabled={!insert}
+          >
+            Presets…
+          </button>
+          <button
+            role="menuitem"
             onClick={onToggleSandbox}
             disabled={!insert}
             title={sandboxed
@@ -333,28 +365,19 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
           role="dialog"
           aria-label={`${insert.pluginName} controls`}
           style={{
-            position: 'fixed', right: 16, top: 72, width: 'min(320px, calc(100vw - 32px))',
+            position: 'fixed', right: 16, top: 72, width: 'min(340px, calc(100vw - 32px))',
             maxHeight: 'calc(100vh - 96px)', zIndex: 5000, display: 'flex', flexDirection: 'column',
             background: '#0c0c11', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6,
             boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-            <span style={{ flex: 1, fontSize: 11, fontWeight: 600, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {insert.pluginName}
-            </span>
-            <button
-              onClick={() => setParamsOpen(false)}
-              aria-label="Close"
-              title="Close (Esc)"
-              style={{ background: 'transparent', border: 0, color: '#9a9aa6', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}
-            >
-              ×
-            </button>
-          </div>
-          <div style={{ padding: 10, overflowY: 'auto' }}>
-            <PluginParamSheet trackId={trackId} slotId={insert.id} />
-          </div>
+          <PluginControls
+            trackId={trackId}
+            slotId={insert.id}
+            pluginId={insert.pluginId}
+            pluginName={insert.pluginName}
+            onClose={() => setParamsOpen(false)}
+          />
         </div>,
         document.body,
       )}

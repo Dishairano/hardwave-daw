@@ -39,6 +39,8 @@ pub async fn open_panel_window(
     app: AppHandle,
     panel: String,
     params: Option<String>,
+    instance: Option<String>,
+    title: Option<String>,
 ) -> Result<String, String> {
     let slug: String = panel
         .chars()
@@ -47,7 +49,20 @@ pub async fn open_panel_window(
     if slug.is_empty() {
         return Err("invalid panel id".into());
     }
-    let label = label_for(&panel);
+    // A panel that can be open more than once (a plug-in's controls, one
+    // window per slot) passes an instance; its label stays inside panel-*.
+    let instance_slug: String = instance
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(64)
+        .collect();
+    let label = if instance_slug.is_empty() {
+        label_for(&panel)
+    } else {
+        format!("{}-{instance_slug}", label_for(&panel))
+    };
+    let plugin_window = slug == "pluginControls";
 
     // Re-clicking detach on an already-open panel just focuses its window.
     if let Some(existing) = app.get_webview_window(&label) {
@@ -84,14 +99,28 @@ pub async fn open_panel_window(
         .map(WebviewUrl::External)
         .unwrap_or_else(|| WebviewUrl::App("index.html".into()));
 
+    let window_title = title
+        .map(|t| {
+            t.chars()
+                .filter(|c| !c.is_control())
+                .take(80)
+                .collect::<String>()
+        })
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| format!("Hardwave DAW - {slug}"));
+    let (w, h, min_w, min_h) = if plugin_window {
+        (380.0, 560.0, 300.0, 240.0)
+    } else {
+        (1100.0, 720.0, 480.0, 320.0)
+    };
     WebviewWindowBuilder::new(&app, &label, url)
-        .title(format!("Hardwave DAW — {slug}"))
+        .title(window_title)
         // Frameless like the main DAW window (no OS "Hardwave DAW" title bar);
         // the panel renders its own thin drag/close bar.
         .decorations(false)
         .initialization_script(&init)
-        .inner_size(1100.0, 720.0)
-        .min_inner_size(480.0, 320.0)
+        .inner_size(w, h)
+        .min_inner_size(min_w, min_h)
         .resizable(true)
         .build()
         .map_err(|e| format!("Failed to open panel window: {e}"))?;
