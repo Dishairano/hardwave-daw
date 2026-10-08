@@ -901,7 +901,7 @@ pub fn run() {
                             .into_iter()
                             .map(|(id, v, p)| (id, (v, p)))
                             .collect();
-                        let track_payload: Vec<_> = eng
+                        let mut track_payload: Vec<_> = eng
                             .track_meter_snapshots()
                             .into_iter()
                             .map(|(id, pl, pr, rms, pre_fader)| {
@@ -918,6 +918,25 @@ pub fn run() {
                                 })
                             })
                             .collect();
+                        // The master has no track meter of its own (it is not
+                        // an audio-bearing track), so the mixer's master strip
+                        // never moved. It reads the master meter instead.
+                        let master_id = eng
+                            .project
+                            .lock()
+                            .tracks
+                            .iter()
+                            .find(|t| matches!(t.kind, hardwave_project::TrackKind::Master))
+                            .map(|t| t.id.clone());
+                        if let Some(id) = master_id {
+                            track_payload.push(serde_json::json!({
+                                "id": id,
+                                "peakL": meters.peak_db,
+                                "peakR": meters.peak_db,
+                                "rms": meters.rms_db,
+                                "preFaderPeak": meters.peak_db,
+                            }));
+                        }
                         let pos = eng.transport.position();
                         let playing = eng.transport.is_playing();
                         let bpm = eng.transport.bpm.load(Ordering::Relaxed);
