@@ -89,9 +89,78 @@ pub struct Collab {
     generation: AtomicU64,
     /// The connection's tasks, so leaving really ends them.
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Each track's hash as last sent or received, so what goes out is
+    /// only the tracks that changed since.
+    track_hashes: Mutex<std::collections::HashMap<String, u64>>,
+}
+
+/// Tracks that changed, as (id, place in the song, bytes).
+pub type ChangedTracks = Vec<(String, usize, Vec<u8>)>;
+
+fn hash_of(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
 }
 
 impl Collab {
+    /// Take the song as it is now as what the other side has, so only
+    /// later edits are sent (when a room opens or a song arrives).
+    pub fn remember_tracks(&self, project: &hardwave_project::Project) {
+        let mut hashes = self.track_hashes.lock();
+        hashes.clear();
+        for t in &project.tracks {
+            hashes.insert(
+                t.id.clone(),
+                hash_of(&hardwave_project::Project::track_blob(t)),
+            );
+        }
+    }
+
+    /// A track the other side sent: it has it, so it is not sent back.
+    pub fn remember_track(&self, track_id: &str, blob: &[u8]) {
+        self.track_hashes
+            .lock()
+            .insert(track_id.to_string(), hash_of(blob));
+    }
+
+    pub fn forget_track(&self, track_id: &str) {
+        self.track_hashes.lock().remove(track_id);
+    }
+
+    /// The tracks that changed since last time, as (id, place, bytes), and
+    /// the ones that are gone. Marks them as sent.
+    pub fn track_changes(
+        &self,
+        project: &hardwave_project::Project,
+    ) -> (ChangedTracks, Vec<String>) {
+        let mut hashes = self.track_hashes.lock();
+        let mut changed = Vec::new();
+        for (i, t) in project.tracks.iter().enumerate() {
+            let blob = hardwave_project::Project::track_blob(t);
+            let h = hash_of(&blob);
+            if hashes.get(&t.id) != Some(&h) {
+                hashes.insert(t.id.clone(), h);
+                changed.push((t.id.clone(), i, blob));
+            }
+        }
+        let gone: Vec<String> = hashes
+            .keys()
+            .filter(|id| !project.tracks.iter().any(|t| &t.id == *id))
+            .cloned()
+            .collect();
+        for id in &gone {
+            hashes.remove(id);
+        }
+        (changed, gone)
+    }
+
+    /// True while a message from the other side is being applied.
+    pub fn set_applying(&self, on: bool) {
+        self.applying.store(on, Ordering::Relaxed);
+    }
+
     pub fn status(&self) -> CollabStatus {
         let mut status = self.status.lock().clone();
         status.received = self.received.load(Ordering::Relaxed);
@@ -402,6 +471,34 @@ mod tests {
             pan: None,
             muted: None,
         })
+    }
+
+    /// Only tracks that changed since the last look go out, and a deleted
+    /// one is reported once; one the other side sent is not sent back.
+    #[test]
+    fn only_changed_tracks_go_out() {
+        let collab = Collab::default();
+        let mut p = hardwave_project::Project::default();
+        let a = p.add_midi_track("A".into());
+        collab.remember_tracks(&p);
+        assert_eq!(collab.track_changes(&p).0.len(), 0, "nothing changed yet");
+        p.track_mut(&a).unwrap().muted = true;
+        let (changed, gone) = collab.track_changes(&p);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].0, a);
+        assert!(gone.is_empty());
+        assert_eq!(collab.track_changes(&p).0.len(), 0, "sent once");
+        p.track_mut(&a).unwrap().name = "Theirs".into();
+        let blob = hardwave_project::Project::track_blob(p.track(&a).unwrap());
+        collab.remember_track(&a, &blob);
+        assert_eq!(
+            collab.track_changes(&p).0.len(),
+            0,
+            "what they sent is not echoed"
+        );
+        p.remove_track(&a);
+        assert_eq!(collab.track_changes(&p).1, vec![a.clone()]);
+        assert!(collab.track_changes(&p).1.is_empty());
     }
 
     #[test]

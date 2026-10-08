@@ -6,10 +6,10 @@
 
 use crate::AppState;
 use futures_util::{SinkExt, StreamExt};
-use hardwave_project::multiplayer::{SyncMessage, TransportSync};
+use hardwave_project::multiplayer::{SyncKind, SyncMessage, TransportSync};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Manager, State};
 use tokio::sync::mpsc;
 
 /// What the UI needs after asking to open or join.
@@ -30,6 +30,7 @@ pub struct CollabJoined {
 /// host says yes.
 #[tauri::command]
 pub async fn start_collab(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     room: Option<String>,
     code: Option<String>,
@@ -118,10 +119,13 @@ pub async fn start_collab(
 
     let (outbox, mut to_send) = mpsc::unbounded_channel::<SyncMessage>();
     let generation = collab.begin(&room_id, &invite_code, room.is_empty(), outbox);
+    // The song as it is now is what both sides start from; from here on
+    // only the tracks that change are sent.
+    collab.remember_tracks(&engine.lock().project.lock());
 
     // Whatever was missed, before anything new arrives.
     for message in &missed {
-        apply_one(&engine, &collab, message, generation);
+        apply_one(&app, &engine, &collab, message, generation);
     }
 
     // Out: what this person does.
@@ -148,6 +152,7 @@ pub async fn start_collab(
     // In: what the other person does.
     let collab_for_reader = Arc::clone(&collab);
     let engine_for_reader = Arc::clone(&engine);
+    let app_for_reader = app.clone();
     collab.hold(tokio::spawn(async move {
         while let Some(Ok(message)) = reader.next().await {
             if !collab_for_reader.is_current(generation) {
@@ -160,10 +165,53 @@ pub async fn start_collab(
             let Ok(parsed) = serde_json::from_str::<SyncMessage>(text) else {
                 continue;
             };
-            apply_one(&engine_for_reader, &collab_for_reader, &parsed, generation);
+            apply_one(
+                &app_for_reader,
+                &engine_for_reader,
+                &collab_for_reader,
+                &parsed,
+                generation,
+            );
         }
         if collab_for_reader.is_current(generation) {
             collab_for_reader.stop("the other side left");
+        }
+    }));
+
+    // Out, for everything one edit at a time does not carry: a few times a
+    // second, every track that changed goes as a whole (clips, plug-ins,
+    // automation, mute, names), and a deleted one as gone.
+    let collab_for_tracks = Arc::clone(&collab);
+    let engine_for_tracks = Arc::clone(&engine);
+    collab.hold(tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(300));
+        loop {
+            tick.tick().await;
+            if !collab_for_tracks.is_current(generation) {
+                break;
+            }
+            let (changed, gone) = {
+                let engine_guard = engine_for_tracks.lock();
+                let project = engine_guard.project.lock();
+                collab_for_tracks.track_changes(&project)
+            };
+            for (track_id, index, blob) in changed {
+                if blob.len() > hardwave_room_limits::MAX_TRACK {
+                    log::warn!(
+                        "room: track {track_id} is too large to send ({} bytes)",
+                        blob.len()
+                    );
+                    continue;
+                }
+                collab_for_tracks.send(SyncKind::TrackState {
+                    track_id,
+                    index,
+                    blob,
+                });
+            }
+            for track_id in gone {
+                collab_for_tracks.send(SyncKind::TrackRemoved { track_id });
+            }
         }
     }));
 
@@ -193,6 +241,8 @@ mod hardwave_room_limits {
     /// The largest message read from the room: the largest song plus
     /// its envelope.
     pub const MAX_MESSAGE: usize = 16 * 1024 * 1024 + 64 * 1024;
+    /// The largest track sent on its own; the room refuses larger.
+    pub const MAX_TRACK: usize = 4 * 1024 * 1024;
 }
 
 /// Answer "send me the song" with the song, and take one when it
@@ -203,6 +253,7 @@ mod hardwave_room_limits {
 /// machine does not have reads as missing there, exactly as it does
 /// when a project is copied between machines by hand.
 fn handle_project(
+    app: &tauri::AppHandle,
     engine: &Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
     collab: &Arc<crate::collab::Collab>,
     message: &SyncMessage,
@@ -244,6 +295,19 @@ fn handle_project(
                     *engine_guard.project.lock() = incoming;
                     engine_guard.sync_track_meters();
                     engine_guard.rebuild_graph();
+                    collab.remember_tracks(&engine_guard.project.lock());
+                    drop(engine_guard);
+                    // Its plug-ins too, made where plug-ins are made: the
+                    // song arrived without any of them playing.
+                    let for_main = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        let state = for_main.state::<AppState>();
+                        if let Err(e) =
+                            crate::commands::plugins::hydrate_chains_from_project(&state)
+                        {
+                            log::warn!("room: could not load the song's plug-ins: {e}");
+                        }
+                    });
                     log::info!("took the song \"{name}\" from the other side");
                 }
                 Err(e) => log::warn!("could not read the song they sent: {e}"),
@@ -256,6 +320,7 @@ fn handle_project(
 
 /// Apply one message and do what it asks of the transport.
 fn apply_one(
+    app: &tauri::AppHandle,
     engine: &Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
     collab: &Arc<crate::collab::Collab>,
     message: &SyncMessage,
@@ -264,6 +329,44 @@ fn apply_one(
     use hardwave_project::multiplayer::SyncKind;
     if !collab.is_current(generation) {
         return;
+    }
+    match &message.kind {
+        SyncKind::TrackState {
+            track_id,
+            index,
+            blob,
+        } => {
+            apply_track_state(app, engine, collab, track_id, *index, blob);
+            return;
+        }
+        SyncKind::TrackRemoved { track_id } => {
+            let engine_guard = engine.lock();
+            engine_guard.snapshot_before_mutation();
+            engine_guard.project.lock().remove_track(track_id);
+            collab.forget_track(track_id);
+            engine_guard.sync_track_meters();
+            engine_guard.rebuild_graph();
+            drop(engine_guard);
+            crate::commands::plugins::tell_windows_track_changed(app, track_id);
+            return;
+        }
+        SyncKind::PluginParam {
+            track_id,
+            slot_id,
+            param_id,
+            value,
+        } => {
+            let _ = engine.lock().try_send_insert_command(
+                hardwave_engine::insert_chain::InsertCommand::SetParameter {
+                    track_id: track_id.clone(),
+                    slot_id: slot_id.clone(),
+                    param_id: *param_id,
+                    value: *value,
+                },
+            );
+            return;
+        }
+        _ => {}
     }
     // Who is in the room, who wants in, and where the other person is
     // change what is drawn, not the song.
@@ -297,7 +400,7 @@ fn apply_one(
     }
     // The song itself is not an edit, and it is handled before the
     // engine lock is taken because packing or unpacking it is slow.
-    if handle_project(engine, collab, message) {
+    if handle_project(app, engine, collab, message) {
         return;
     }
     let engine_guard = engine.lock();
@@ -381,4 +484,53 @@ pub fn share_presence(state: State<AppState>, tick: u64, track_index: Option<u32
         cursor_track_index: track_index,
         last_heartbeat_ms: 0,
     }));
+}
+
+/// A whole track the other side sent: put in place of ours (or added at
+/// its place), its plug-ins brought in line, and remembered as what the
+/// other side has so it is not sent back.
+fn apply_track_state(
+    app: &tauri::AppHandle,
+    engine: &Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
+    collab: &Arc<crate::collab::Collab>,
+    track_id: &str,
+    index: usize,
+    blob: &[u8],
+) {
+    let (new, old) = {
+        let engine_guard = engine.lock();
+        engine_guard.snapshot_before_mutation();
+        let mut project = engine_guard.project.lock();
+        match project.put_track_blob(blob, index) {
+            Ok(pair) => pair,
+            Err(e) => {
+                log::warn!("room: track {track_id} not taken: {e}");
+                return;
+            }
+        }
+    };
+    collab.remember_track(&new.id, &hardwave_project::Project::track_blob(&new));
+    {
+        let engine_guard = engine.lock();
+        engine_guard.sync_track_meters();
+        engine_guard.rebuild_graph();
+    }
+    let old_slots = old.map(|t| t.inserts).unwrap_or_default();
+    if old_slots
+        .iter()
+        .map(|s| (&s.id, &s.plugin_id, &s.state, s.enabled, s.wet))
+        .ne(new
+            .inserts
+            .iter()
+            .map(|s| (&s.id, &s.plugin_id, &s.state, s.enabled, s.wet)))
+    {
+        let for_main = app.clone();
+        let id = new.id.clone();
+        let new_slots = new.inserts.clone();
+        let _ = app.run_on_main_thread(move || {
+            let state = for_main.state::<AppState>();
+            crate::commands::plugins::sync_track_chain(&state, &id, &old_slots, &new_slots);
+        });
+    }
+    crate::commands::plugins::tell_windows_track_changed(app, &new.id);
 }

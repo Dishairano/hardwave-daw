@@ -324,10 +324,12 @@ async fn handle(
             tokens =
                 (tokens + refilled.elapsed().as_secs_f64() * limits.per_second).min(limits.burst);
             refilled = Instant::now();
-            let cost = if matches!(parsed.kind, SyncKind::ProjectOffer { .. }) {
-                100.0
-            } else {
-                1.0
+            // A whole track costs by its size: a few for one with plug-in
+            // state, one for an empty one.
+            let cost = match &parsed.kind {
+                SyncKind::ProjectOffer { .. } => 100.0,
+                SyncKind::TrackState { blob, .. } => 1.0 + (blob.len() / (256 * 1024)) as f64,
+                _ => 1.0,
             };
             if tokens < cost {
                 continue;

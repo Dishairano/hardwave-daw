@@ -32,6 +32,8 @@ pub const REPLAY_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_PROJECT_BYTES: usize = 16 * 1024 * 1024;
 /// The largest chat message.
 pub const MAX_CHAT_CHARS: usize = 2000;
+/// The largest single track a room carries (its clips and plug-in state).
+pub const MAX_TRACK_BYTES: usize = 4 * 1024 * 1024;
 /// Wrong codes a room takes before its code is replaced.
 pub const MAX_WRONG_CODES: u32 = 10;
 
@@ -340,6 +342,9 @@ impl LiveRoom {
                     Relay::pass()
                 }
             }
+            SyncKind::TrackState { blob, .. } if blob.len() > MAX_TRACK_BYTES => {
+                Relay::stop("that track is too large to send")
+            }
             // Everything that changes the song needs edit rights.
             _ => {
                 if permission.can_edit() {
@@ -359,6 +364,9 @@ impl LiveRoom {
                 | SyncKind::Note(_)
                 | SyncKind::Clip(_)
                 | SyncKind::Chat { .. }
+                | SyncKind::TrackState { .. }
+                | SyncKind::TrackRemoved { .. }
+                | SyncKind::PluginParam { .. }
         );
         if relay.forward && worth_replaying {
             self.remember(message.clone());
@@ -605,6 +613,23 @@ mod tests {
             },
         ));
         assert!(!essay.forward);
+    }
+
+    /// A whole track needs edit rights and a sane size.
+    #[test]
+    fn a_track_needs_edit_rights_and_a_sane_size() {
+        let mut live = with_guest();
+        let track = |n: usize| SyncKind::TrackState {
+            track_id: "t1".into(),
+            index: 0,
+            blob: vec![0; n],
+        };
+        assert!(live.handle(&msg("guest-1", 1, track(1024))).forward);
+        let big = live.handle(&msg("guest-1", 2, track(MAX_TRACK_BYTES + 1)));
+        assert_eq!(big.refused, Some("that track is too large to send"));
+        live.room.member_mut("guest-1").unwrap().permission = Permission::Viewer;
+        let listening = live.handle(&msg("guest-1", 3, track(10)));
+        assert_eq!(listening.refused, Some("you are listening, not editing"));
     }
 
     #[test]

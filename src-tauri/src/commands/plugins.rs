@@ -1005,6 +1005,16 @@ pub fn set_plugin_parameter(
 ) -> Result<Option<String>, String> {
     // The value as text, for the control that moved it.
     let text = parameter_text_for_slot(&state, &track_id, &slot_id, param_id, value);
+    // The other side of a room hears the knob too (live state is not in
+    // the track's saved state, which is what travels otherwise).
+    state
+        .collab
+        .send(hardwave_project::multiplayer::SyncKind::PluginParam {
+            track_id: track_id.clone(),
+            slot_id: slot_id.clone(),
+            param_id,
+            value,
+        });
     let cmd = InsertCommand::SetParameter {
         track_id,
         slot_id,
@@ -1017,6 +1027,111 @@ pub fn set_plugin_parameter(
         .try_send_insert_command(cmd)
         .map_err(|_| "insert command queue full or engine not started".to_string())?;
     Ok(text)
+}
+
+/// Bring a track's live plug-ins in line with its slots after the track
+/// was replaced (a room sent it): drop the ones it no longer has, load the
+/// new ones in their places, and give changed ones their new state. Runs
+/// where plug-ins are made (the main thread).
+pub(crate) fn sync_track_chain(
+    state: &AppState,
+    track_id: &str,
+    old: &[hardwave_project::track::PluginSlot],
+    new: &[hardwave_project::track::PluginSlot],
+) {
+    let engine = state.engine.lock();
+    let send = |cmd: InsertCommand| {
+        if engine.try_send_insert_command(cmd).is_err() {
+            log::warn!("room: insert queue full while syncing {track_id}");
+        }
+    };
+    let same = |a: &hardwave_project::track::PluginSlot,
+                b: &hardwave_project::track::PluginSlot| {
+        a.id == b.id && a.plugin_id == b.plugin_id
+    };
+    // The live chain's order, as it will be after each step.
+    let mut order: Vec<String> = Vec::new();
+    for slot in old {
+        if new.iter().any(|n| same(n, slot)) {
+            order.push(slot.id.clone());
+        } else {
+            send(InsertCommand::Remove {
+                track_id: track_id.to_string(),
+                slot_id: slot.id.clone(),
+            });
+        }
+    }
+    for (index, slot) in new.iter().enumerate() {
+        match old.iter().find(|o| same(o, slot)) {
+            Some(prev) => {
+                if slot.state.is_some() && slot.state != prev.state {
+                    if let Some(bytes) = &slot.state {
+                        send(InsertCommand::SetState {
+                            track_id: track_id.to_string(),
+                            slot_id: slot.id.clone(),
+                            bytes: bytes.clone(),
+                        });
+                    }
+                }
+                if slot.enabled != prev.enabled {
+                    send(InsertCommand::SetEnabled {
+                        track_id: track_id.to_string(),
+                        slot_id: slot.id.clone(),
+                        enabled: slot.enabled,
+                    });
+                }
+                if slot.wet != prev.wet {
+                    send(InsertCommand::SetWet {
+                        track_id: track_id.to_string(),
+                        slot_id: slot.id.clone(),
+                        wet: slot.wet,
+                    });
+                }
+            }
+            None => {
+                let Some(descriptor) = engine.plugin_scanner.lock().find(&slot.plugin_id).cloned()
+                else {
+                    log::warn!("room: plug-in {} is not on this machine", slot.plugin_id);
+                    continue;
+                };
+                let mut plugin = match instantiate_for_slot(&state.sandboxed_plugins, &descriptor) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        log::warn!("room: could not load {}: {e}", slot.plugin_id);
+                        continue;
+                    }
+                };
+                if let Some(bytes) = &slot.state {
+                    let _ = plugin.set_state(bytes);
+                }
+                let live = live_slot(
+                    state,
+                    track_id,
+                    slot.id.clone(),
+                    plugin,
+                    slot.enabled,
+                    slot.wet,
+                    slot.sidechain_source.is_some(),
+                );
+                send(InsertCommand::Add {
+                    track_id: track_id.to_string(),
+                    slot: live,
+                });
+                order.push(slot.id.clone());
+                let from = order.len() - 1;
+                let to = index.min(from);
+                if from != to {
+                    let id = order.remove(from);
+                    order.insert(to, id);
+                    send(InsertCommand::Reorder {
+                        track_id: track_id.to_string(),
+                        from,
+                        to,
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// One instance per plug-in kind, kept to turn values into text: a

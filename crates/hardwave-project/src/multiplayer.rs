@@ -231,6 +231,24 @@ pub enum SyncKind {
     /// Sent by the room to the host when too many wrong codes were
     /// tried: the old code no longer works, and this is the new one.
     CodeChanged { invite_code: String },
+    /// A whole track as it is now, at its place in the song: what one edit
+    /// at a time could not carry (clips added, resized or deleted, plug-ins
+    /// and their order, automation, names, colours). MessagePack of the
+    /// track, as `Project::track_blob` writes it.
+    TrackState {
+        track_id: String,
+        index: usize,
+        blob: Vec<u8>,
+    },
+    /// A track was deleted.
+    TrackRemoved { track_id: String },
+    /// A plug-in knob moved (live, so not yet in the track's saved state).
+    PluginParam {
+        track_id: String,
+        slot_id: String,
+        param_id: u32,
+        value: f64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

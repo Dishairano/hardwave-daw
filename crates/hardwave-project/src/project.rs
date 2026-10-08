@@ -435,6 +435,37 @@ impl Project {
         self.refresh_step_rack();
     }
 
+    /// A track as bytes, for a room: MessagePack with field names.
+    pub fn track_blob(track: &crate::track::Track) -> Vec<u8> {
+        rmp_serde::to_vec_named(track).unwrap_or_default()
+    }
+
+    /// A track a room sent, put in place of the one with its id (or at
+    /// `index` when it is new). Returns the track it replaced.
+    pub fn put_track_blob(
+        &mut self,
+        blob: &[u8],
+        index: usize,
+    ) -> Result<(crate::track::Track, Option<crate::track::Track>), String> {
+        let track: crate::track::Track =
+            rmp_serde::from_slice(blob).map_err(|e| format!("unreadable track: {e}"))?;
+        if matches!(track.kind, crate::track::TrackKind::Master) {
+            // The master stays this song's own.
+            if let Some(i) = self.tracks.iter().position(|t| t.id == track.id) {
+                let old = std::mem::replace(&mut self.tracks[i], track.clone());
+                return Ok((track, Some(old)));
+            }
+            return Err("a second master".into());
+        }
+        if let Some(i) = self.tracks.iter().position(|t| t.id == track.id) {
+            let old = std::mem::replace(&mut self.tracks[i], track.clone());
+            return Ok((track, Some(old)));
+        }
+        let at = index.min(self.tracks.len());
+        self.tracks.insert(at, track.clone());
+        Ok((track, None))
+    }
+
     /// Put the rack's active pattern on the playlist at `tick`: one MIDI
     /// clip per channel that has steps in it, on that channel, as long as
     /// the pattern. In song mode a pattern only plays from the playlist, so
@@ -583,6 +614,27 @@ mod decompress_tests {
 
 #[cfg(test)]
 mod tests {
+    /// A track a room sends replaces ours by id, or lands at its place
+    /// when it is new; the bytes round-trip.
+    #[test]
+    fn a_track_from_a_room_takes_its_place() {
+        let mut p = Project::default();
+        let a = p.add_midi_track("A".into());
+        let mut changed = p.track(&a).unwrap().clone();
+        changed.name = "A (theirs)".into();
+        changed.muted = true;
+        let (new, old) = p.put_track_blob(&Project::track_blob(&changed), 0).unwrap();
+        assert_eq!(old.unwrap().name, "A");
+        assert!(new.muted && p.track(&a).unwrap().muted);
+        let mut fresh = changed.clone();
+        fresh.id = "theirs-new".into();
+        let n = p.tracks.len();
+        p.put_track_blob(&Project::track_blob(&fresh), 1).unwrap();
+        assert_eq!(p.tracks.len(), n + 1);
+        assert_eq!(p.tracks[1].id, "theirs-new");
+        assert!(p.put_track_blob(b"not a track", 0).is_err());
+    }
+
     /// Placing a pattern puts one clip per channel with steps, where asked.
     #[test]
     fn a_pattern_goes_on_the_playlist_per_channel() {

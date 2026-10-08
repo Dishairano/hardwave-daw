@@ -98,6 +98,12 @@ pub fn stop(state: State<AppState>) -> Result<Option<RecordedTake>, String> {
     // toggle_recording does it on the trailing edge.
     let was_recording = engine.transport.recording.swap(false, Ordering::Relaxed);
     engine.send_command(TransportCommand::Stop);
+    // The other side stops too; play and seek were sent, stop was not.
+    state
+        .collab
+        .send(hardwave_project::multiplayer::SyncKind::Transport(
+            hardwave_project::multiplayer::TransportSync::Stop,
+        ));
     if was_recording {
         finalize_recording_session(&engine).map(Some)
     } else {
