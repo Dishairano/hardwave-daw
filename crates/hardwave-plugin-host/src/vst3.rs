@@ -161,6 +161,8 @@ struct Vst3Inner {
     in_changes_ptr: Option<ComPtr<IParameterChanges>>,
     events: vst3::ComWrapper<HostEventList>,
     events_ptr: Option<ComPtr<IEventList>>,
+    /// Input copies kept between blocks.
+    input_scratch: Vec<Vec<f32>>,
 }
 
 /// Bridges the plugin's editor → host parameter notifications back to
@@ -454,6 +456,7 @@ impl Vst3PluginInstance {
             in_changes,
             events_ptr: events.to_com_ptr::<IEventList>(),
             events,
+            input_scratch: Vec::new(),
         });
 
         Ok(Self { inner })
@@ -707,6 +710,8 @@ impl HostedPlugin for Vst3PluginInstance {
         }
         inner.processing = true;
         inner.midi_map = read_midi_mapping(inner.controller.as_ref());
+        let block = inner.max_block.max(1) as usize;
+        inner.input_scratch = (0..4).map(|_| Vec::with_capacity(block)).collect();
         Ok(())
     }
 
@@ -773,24 +778,45 @@ impl HostedPlugin for Vst3PluginInstance {
         }
 
         // Build channel pointer arrays for input and output.
-        let mut input_copies: Vec<Vec<f32>> = inputs
-            .iter()
-            .map(|c| c[..num_samples.min(c.len())].to_vec())
-            .collect();
-        let mut input_channel_ptrs: Vec<*mut f32> =
-            input_copies.iter_mut().map(|c| c.as_mut_ptr()).collect();
-        let mut output_channel_ptrs: Vec<*mut f32> =
-            outputs.iter_mut().map(|c| c.as_mut_ptr()).collect();
+        // Copies of the inputs (a plug-in may write to its input buffers),
+        // in buffers kept between blocks, and the channel pointers on the
+        // stack: none of this allocates once the scratch has grown.
+        let n_in = inputs.len().min(MAX_CHANNELS);
+        let n_out = outputs.len().min(MAX_CHANNELS);
+        if inner.input_scratch.len() < n_in {
+            inner.input_scratch.resize_with(n_in, Vec::new);
+        }
+        for (copy, src) in inner.input_scratch.iter_mut().zip(inputs.iter()).take(n_in) {
+            copy.clear();
+            copy.extend_from_slice(&src[..num_samples.min(src.len())]);
+            copy.resize(num_samples, 0.0);
+        }
+        let mut input_channel_ptrs = [std::ptr::null_mut::<f32>(); MAX_CHANNELS];
+        for (ptr, copy) in input_channel_ptrs
+            .iter_mut()
+            .zip(inner.input_scratch.iter_mut())
+            .take(n_in)
+        {
+            *ptr = copy.as_mut_ptr();
+        }
+        let mut output_channel_ptrs = [std::ptr::null_mut::<f32>(); MAX_CHANNELS];
+        for (ptr, out) in output_channel_ptrs
+            .iter_mut()
+            .zip(outputs.iter_mut())
+            .take(n_out)
+        {
+            *ptr = out.as_mut_ptr();
+        }
 
         let mut in_bus = vst3::Steinberg::Vst::AudioBusBuffers {
-            numChannels: input_channel_ptrs.len() as i32,
+            numChannels: n_in as i32,
             silenceFlags: 0,
             __field0: vst3::Steinberg::Vst::AudioBusBuffers__type0 {
                 channelBuffers32: input_channel_ptrs.as_mut_ptr(),
             },
         };
         let mut out_bus = vst3::Steinberg::Vst::AudioBusBuffers {
-            numChannels: output_channel_ptrs.len() as i32,
+            numChannels: n_out as i32,
             silenceFlags: 0,
             __field0: vst3::Steinberg::Vst::AudioBusBuffers__type0 {
                 channelBuffers32: output_channel_ptrs.as_mut_ptr(),
@@ -1277,6 +1303,7 @@ impl IEventListTrait for HostEventList {
 /// Most events and parameter queues one block carries; preallocated so
 /// processing never allocates.
 const MAX_EVENTS: usize = 512;
+const MAX_CHANNELS: usize = 8;
 const MAX_HOST_CHANGES: usize = 256;
 const MAX_QUEUES: usize = 128;
 const MAX_POINTS: usize = 64;
