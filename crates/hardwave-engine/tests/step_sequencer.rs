@@ -53,3 +53,30 @@ fn an_empty_pattern_is_silent_in_pattern_mode() {
     let stats = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 2);
     assert!(stats.peak < 1e-4, "peak {:.5}", stats.peak);
 }
+
+/// The pattern loops: the steps sound on the second pass too. The built-in
+/// synths played a loop once and then fell silent.
+#[test]
+fn the_pattern_keeps_playing_after_it_loops() {
+    let engine = engine_with_steps("[1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0]");
+    engine.transport.pattern_mode.store(true, Ordering::Relaxed);
+    // At 140 BPM one 16-step pattern is about 1.71 s; listen to the third pass.
+    let bar = (SAMPLE_RATE as f64 * 60.0 / 140.0 * 4.0) as u64;
+    let mut seen = 0u64;
+    let mut late_peak = 0.0_f32;
+    engine
+        .render_offline(SAMPLE_RATE, bar * 3, |block| {
+            for frame in block.chunks(2) {
+                if seen > bar * 2 + 2_000 {
+                    late_peak = late_peak.max(frame[0].abs()).max(frame[1].abs());
+                }
+                seen += 1;
+            }
+            true
+        })
+        .expect("render");
+    assert!(
+        late_peak > 0.01,
+        "the third pass must sound too, peak {late_peak:.5}"
+    );
+}

@@ -199,6 +199,11 @@ pub struct MidiTrackNode {
     /// `notes` linearly each block; because `notes` is kept sorted by
     /// `note_on_sample`, the audio thread does no per-sample scanning.
     next_note_idx: usize,
+    /// Where the last played block ended, to see the playhead go back.
+    last_block_end: u64,
+    /// Notes still held when the playhead went back, let go at the top of
+    /// the next block (reused, so the audio thread does not allocate).
+    jump_offs: Vec<u8>,
     /// Active built-in-synth voices (polyphonic — a chord plays as many
     /// voices). Live notes carry `off_sample = None` (released by an
     /// explicit NoteOff); clip notes carry their scheduled release sample.
@@ -305,6 +310,8 @@ impl MidiTrackNode {
             chase_scratch: Vec::with_capacity(16),
             bend_mul: 1.0,
             next_note_idx: 0,
+            last_block_end: 0,
+            jump_offs: Vec::with_capacity(64),
             voices: Vec::new(),
             volume: 1.0,
             pan: 0.0,
@@ -854,6 +861,35 @@ impl AudioNode for MidiTrackNode {
         }
         let block_start = ctx.position_samples;
 
+        // The playhead went back: a loop, pattern mode starting the pattern
+        // again, or a jump. The schedule only ever walked forward, so the
+        // built-in synths played a loop once and then fell silent, and a
+        // note held across the loop end was never let go. Start the
+        // schedule over and release what was sounding.
+        self.jump_offs.clear();
+        if ctx.playing {
+            if block_start < self.last_block_end {
+                let at = self.last_block_end;
+                for n in &self.notes {
+                    if !n.muted
+                        && n.note_on_sample < at
+                        && n.note_off_sample >= at
+                        && self.jump_offs.len() < self.jump_offs.capacity()
+                    {
+                        self.jump_offs.push(n.pitch);
+                    }
+                }
+                for v in self.voices.iter_mut() {
+                    if v.stage != EnvStage::Release && v.stage != EnvStage::Idle {
+                        v.stage = EnvStage::Release;
+                    }
+                }
+                self.next_note_idx = 0;
+                self.next_control_idx = 0;
+            }
+            self.last_block_end = block_start.saturating_add(block_size as u64);
+        }
+
         // Constant-power pan curve. At pan=0 both channels get
         // cos(π/4) = sin(π/4) ≈ 0.707; at pan=±1 the far channel hits
         // unity while the near channel is silent. Matches the standard
@@ -1120,6 +1156,15 @@ impl AudioNode for MidiTrackNode {
         // insert chain so a hosted instrument plug-in (VST3 / CLAP synth
         // or sampler) can generate audio from them. Timing is block-local.
         let mut block_midi: Vec<hardwave_midi::MidiEvent> = midi_in.to_vec();
+        // Held notes the playhead jumped away from end here, first.
+        for &note in &self.jump_offs {
+            block_midi.push(hardwave_midi::MidiEvent::NoteOff {
+                timing: 0,
+                channel: 0,
+                note,
+                velocity: 0.0,
+            });
+        }
         block_midi.extend_from_slice(&self.control_scratch);
         if ctx.playing {
             let block_end = block_start.saturating_add(block_size as u64);
@@ -1250,6 +1295,7 @@ impl AudioNode for MidiTrackNode {
     fn reset(&mut self) {
         self.voices.clear();
         self.next_note_idx = 0;
+        self.last_block_end = 0;
         self.rms_smooth = 0.0;
     }
 
@@ -1743,6 +1789,48 @@ mod tests {
             quiet < open * 0.01,
             "the clip pulls the fader down: {quiet} vs {open}"
         );
+    }
+
+    /// A loop or pattern mode takes the playhead back; the notes play
+    /// again every pass. They played once and then never again.
+    #[test]
+    fn notes_play_again_when_the_playhead_goes_back() {
+        let mut node = make_node();
+        node.set_notes(vec![MidiNoteRegion {
+            note_on_sample: 0,
+            note_off_sample: 2_000,
+            pitch: 60,
+            velocity: 0.8,
+            muted: false,
+            ..Default::default()
+        }]);
+        let inputs: [&[f32]; 0] = [];
+        let mut out = block_outputs(256);
+        let mut pos = 0u64;
+        let mut fired = 0;
+        for pass in 0..3 {
+            pos = 0;
+            for _ in 0..20 {
+                let before = node.voices.len();
+                node.process(
+                    &inputs,
+                    &mut out,
+                    &[],
+                    &mut Vec::new(),
+                    &ctx_at(48_000.0, 256, pos, true),
+                );
+                if node.voices.len() > before && pos == 0 {
+                    fired += 1;
+                }
+                pos += 256;
+            }
+            assert!(
+                node.voices.iter().all(|v| v.stage != EnvStage::Attack),
+                "pass {pass}: the note was let go"
+            );
+        }
+        let _ = pos;
+        assert_eq!(fired, 3, "the note starts on every pass");
     }
 
     #[test]
