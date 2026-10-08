@@ -57,9 +57,23 @@ pub struct LiveSlot {
     /// in dB, for the mixer's gain-reduction meter. Dynamics plug-ins fill
     /// it; everything else leaves it at zero.
     pub gain_reduction_db: std::sync::Arc<atomic_float::AtomicF32>,
+    /// Each parameter's range, taken when the slot was made (off the audio
+    /// thread). Automation and controllers move parameters 0..1; a
+    /// parameter whose own range is, say, 20..20000 Hz was set to 0.5 Hz.
+    pub param_ranges: Vec<(u32, f64, f64)>,
 }
 
 impl LiveSlot {
+    /// Read every parameter's range from the plug-in. Allocates (names come
+    /// with the info), so it runs where the slot is built, never on the
+    /// audio thread.
+    pub fn ranges_of(plugin: &dyn HostedPlugin) -> Vec<(u32, f64, f64)> {
+        (0..plugin.get_parameter_count())
+            .filter_map(|i| plugin.get_parameter_info(i))
+            .map(|info| (info.id, info.min, info.max))
+            .collect()
+    }
+
     /// A fresh place for this slot to publish its gain reduction.
     pub fn new_gain_reduction() -> std::sync::Arc<atomic_float::AtomicF32> {
         std::sync::Arc::new(atomic_float::AtomicF32::new(0.0))
@@ -292,6 +306,22 @@ impl InsertChain {
         }
     }
 
+    /// Set a parameter from a 0..1 value (automation, a controller), mapped
+    /// into the parameter's own range.
+    pub fn set_parameter_normalized(&mut self, slot_id: &str, param_id: u32, value01: f64) -> bool {
+        if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
+            let v = value01.clamp(0.0, 1.0);
+            let value = match s.param_ranges.iter().find(|(id, _, _)| *id == param_id) {
+                Some(&(_, min, max)) => min + v * (max - min),
+                None => v,
+            };
+            s.plugin.set_parameter_value(param_id, value);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn set_parameter(&mut self, slot_id: &str, param_id: u32, value: f64) -> bool {
         if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
             s.plugin.set_parameter_value(param_id, value);
@@ -393,6 +423,14 @@ pub enum InsertCommand {
         param_id: u32,
         value: f64,
     },
+    /// As SetParameter, from a 0..1 value mapped into the parameter's own
+    /// range (a MIDI controller).
+    SetParameterNormalized {
+        track_id: String,
+        slot_id: String,
+        param_id: u32,
+        value01: f64,
+    },
     /// Replace the plug-in's internal state — used by preset load. The
     /// `bytes` are the same opaque blob the plug-in returns from
     /// `get_state()`. Audio-thread cost is the plug-in's own
@@ -441,6 +479,7 @@ impl InsertCommand {
             | InsertCommand::SetEnabled { track_id, .. }
             | InsertCommand::SetWet { track_id, .. }
             | InsertCommand::SetParameter { track_id, .. }
+            | InsertCommand::SetParameterNormalized { track_id, .. }
             | InsertCommand::SetState { track_id, .. }
             | InsertCommand::LoadFactoryPreset { track_id, .. } => track_id,
         }
@@ -591,6 +630,16 @@ impl InsertRouter {
             } => {
                 if let Some(chain) = self.chains.get_mut(&track_id) {
                     chain.set_parameter(&slot_id, param_id, value);
+                }
+            }
+            InsertCommand::SetParameterNormalized {
+                track_id,
+                slot_id,
+                param_id,
+                value01,
+            } => {
+                if let Some(chain) = self.chains.get_mut(&track_id) {
+                    chain.set_parameter_normalized(&slot_id, param_id, value01);
                 }
             }
             InsertCommand::SetState {
@@ -834,9 +883,11 @@ mod tests {
 
     fn make_gain_slot(id: &str, gain: f32, enabled: bool) -> (LiveSlot, Arc<AtomicU32>) {
         let counter = Arc::new(AtomicU32::new(0));
+        let plugin: Box<dyn HostedPlugin> = Box::new(GainPlugin::new(gain, counter.clone()));
         let slot = LiveSlot {
+            param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
             slot_id: id.into(),
-            plugin: Box::new(GainPlugin::new(gain, counter.clone())),
+            plugin,
             enabled,
             wet: 1.0,
             sidechain_active: false,
@@ -940,6 +991,7 @@ mod tests {
         chain
             .push_slot(
                 LiveSlot {
+                    param_ranges: Vec::new(),
                     slot_id: "sc".into(),
                     plugin: Box::new(ChannelSpyPlugin::new(active_seen.clone())),
                     enabled: true,
@@ -955,6 +1007,7 @@ mod tests {
         chain
             .push_slot(
                 LiveSlot {
+                    param_ranges: Vec::new(),
                     slot_id: "plain".into(),
                     plugin: Box::new(ChannelSpyPlugin::new(plain_seen.clone())),
                     enabled: true,
@@ -1002,6 +1055,7 @@ mod tests {
         chain
             .push_slot(
                 LiveSlot {
+                    param_ranges: Vec::new(),
                     slot_id: "sink".into(),
                     plugin: Box::new(MidiSinkPlugin::new(seen.clone())),
                     enabled: true,
@@ -1055,6 +1109,7 @@ mod tests {
         chain
             .push_slot(
                 LiveSlot {
+                    param_ranges: Vec::new(),
                     slot_id: "sink".into(),
                     plugin: Box::new(MidiSinkPlugin::new(seen.clone())),
                     enabled: false,
@@ -1326,5 +1381,21 @@ mod tests {
             0,
             "disabled slot should not call plugin"
         );
+    }
+
+    /// Automation and controllers move a parameter 0..1; the plug-in gets
+    /// it in its own range. The test gain runs 0..4, so the middle is 2.
+    #[test]
+    fn a_normalised_value_lands_in_the_parameters_own_range() {
+        let mut chain = InsertChain::new();
+        let (slot, _) = make_gain_slot("g", 1.0, true);
+        chain.slots.push(slot);
+        assert!(chain.set_parameter_normalized("g", 0, 0.5));
+        assert!((chain.slots[0].plugin.get_parameter_value(0) - 2.0).abs() < 1e-9);
+        chain.set_parameter_normalized("g", 0, 1.0);
+        assert!((chain.slots[0].plugin.get_parameter_value(0) - 4.0).abs() < 1e-9);
+        // The plain call still takes the value as given.
+        chain.set_parameter("g", 0, 1.5);
+        assert!((chain.slots[0].plugin.get_parameter_value(0) - 1.5).abs() < 1e-9);
     }
 }

@@ -36,8 +36,8 @@ pub enum MidiMapTarget {
     /// A specific parameter of a plug-in slot inside a track's insert
     /// chain. `param_id` matches the index/id the plug-in exposes via
     /// its parameter list. CC values arrive normalised 0..1 and are
-    /// forwarded as f64 — plug-ins re-map to their own ranges
-    /// internally.
+    /// mapped into the parameter's own range by the chain
+    /// (InsertChain::set_parameter_normalized).
     PluginParam {
         track_id: String,
         slot_id: String,
@@ -253,11 +253,13 @@ fn apply_cc(engine: &Arc<Mutex<DawEngine>>, target: &MidiMapTarget, value: f32) 
             // change via the shared insert-command queue so the audio
             // thread applies it at the start of its next block — exactly
             // the same path the mixer UI uses for set_parameter clicks.
-            let cmd = hardwave_engine::insert_chain::InsertCommand::SetParameter {
+            // CC values arrive 0..1; the chain maps them into the
+            // parameter's own range (a built-in's Hz, dB or ms).
+            let cmd = hardwave_engine::insert_chain::InsertCommand::SetParameterNormalized {
                 track_id: track_id.clone(),
                 slot_id: slot_id.clone(),
                 param_id: *param_id,
-                value: value as f64,
+                value01: value as f64,
             };
             let eng = engine.lock();
             let _ = eng.try_send_insert_command(cmd);

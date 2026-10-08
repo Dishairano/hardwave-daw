@@ -2399,6 +2399,7 @@ impl EngineCallback {
             hydrated_any = true;
             if let Some(node) = self.graph.node_mut(node_id) {
                 let slot = crate::insert_chain::LiveSlot {
+                    param_ranges: crate::insert_chain::LiveSlot::ranges_of(plugin.as_ref()),
                     slot_id,
                     plugin,
                     enabled,
@@ -2672,6 +2673,8 @@ impl EngineCallback {
                     hardwave_project::vca::offset_for(&project.vcas, &track.id);
                 midi_node.set_volume_db(track.volume_db + vca_gain_db);
                 midi_node.set_pan(track.pan);
+                midi_node.set_automation_lanes(track.automation_lanes.clone());
+                midi_node.set_automation_clips(track.automation_clips.clone());
                 midi_node.set_stereo_separation(track.stereo_separation);
                 // The live mix starts from what the project says.
                 meter.set_mix(

@@ -772,7 +772,9 @@ impl TrackNode {
 
 impl AudioNode for TrackNode {
     fn set_chain_parameter(&mut self, slot_id: &str, param_id: u32, value: f64) {
-        self.chain.set_parameter(slot_id, param_id, value);
+        // Modulation moves a parameter 0..1, as automation does.
+        self.chain
+            .set_parameter_normalized(slot_id, param_id, value);
     }
 
     /// The engine calls this through the trait after the send pass, so the
@@ -845,6 +847,15 @@ impl AudioNode for TrackNode {
                 ..
             } => {
                 self.chain.set_parameter(&slot_id, param_id, value);
+            }
+            InsertCommand::SetParameterNormalized {
+                slot_id,
+                param_id,
+                value01,
+                ..
+            } => {
+                self.chain
+                    .set_parameter_normalized(&slot_id, param_id, value01);
             }
             InsertCommand::SetState { slot_id, bytes, .. } => {
                 self.chain.set_state(&slot_id, &bytes);
@@ -988,72 +999,15 @@ impl AudioNode for TrackNode {
             // put every curve in the wrong place as soon as the song had a
             // tempo change or a ramp.
             let tick = ctx.position_ticks;
-            let mut volume = self.static_volume;
-            let mut pan = self.static_pan;
-            // Mute lanes can flip the running mute state mid-block;
-            // we treat values > 0.5 as muted so a step lane between
-            // 0.0 and 1.0 acts like a kill switch.
-            let mut mute_override: Option<bool> = None;
-            for lane in &self.automation_lanes {
-                if !lane.visible {
-                    continue;
-                }
-                use hardwave_project::automation::AutomationTarget;
-                match &lane.target {
-                    AutomationTarget::TrackVolume => {
-                        // Stored normalized 0..1, mapped to the
-                        // standard fader range (-60dB..=+6dB).
-                        let v = lane.denormalized_value_at(tick, -60.0, 6.0);
-                        volume = db_to_linear(v);
-                    }
-                    AutomationTarget::TrackPan => {
-                        let v = lane.denormalized_value_at(tick, -1.0, 1.0);
-                        pan = v as f32;
-                    }
-                    AutomationTarget::TrackMute => {
-                        mute_override = Some(lane.value_at(tick) > 0.5);
-                    }
-                    AutomationTarget::PluginParam { slot_id, param_id } => {
-                        // Plug-in parameters are stored normalized 0..1
-                        // in the lane and the host expects the same
-                        // shape on the controller. Apply directly to
-                        // the chain so the next sample inside this
-                        // block already reflects the new value.
-                        let v = lane.value_at(tick);
-                        self.chain.set_parameter(slot_id, *param_id, v);
-                    }
-                    AutomationTarget::SendLevel { .. } => {
-                        // Handled by the engine, not here: a send is a graph
-                        // edge between two nodes, so its gain is moved in the
-                        // callback's send pass where the edges are known.
-                    }
-                }
-            }
-            // Automation clips evaluate after lanes, so where both target
-            // the same parameter the clip (the FL-canonical, movable
-            // object) wins. A clip outside its window returns `None` and
-            // contributes nothing.
-            use hardwave_project::automation::{AutomationLane, AutomationTarget as AT};
-            for clip in &self.automation_clips {
-                let Some(v_norm) = clip.value_at_timeline(tick) else {
-                    continue;
-                };
-                match &clip.target {
-                    AT::TrackVolume => {
-                        volume = db_to_linear(AutomationLane::denormalize(v_norm, -60.0, 6.0));
-                    }
-                    AT::TrackPan => {
-                        pan = AutomationLane::denormalize(v_norm, -1.0, 1.0) as f32;
-                    }
-                    AT::TrackMute => {
-                        mute_override = Some(v_norm > 0.5);
-                    }
-                    AT::PluginParam { slot_id, param_id } => {
-                        self.chain.set_parameter(slot_id, *param_id, v_norm);
-                    }
-                    AT::SendLevel { .. } => {}
-                }
-            }
+            let mix = crate::automation_eval::evaluate(
+                &self.automation_lanes,
+                &self.automation_clips,
+                tick,
+                self.static_volume,
+                self.static_pan,
+                &mut self.chain,
+            );
+            let (volume, pan, mute_override) = (mix.volume_linear, mix.pan, mix.mute);
             self.volume = volume;
             self.pan = pan;
             if let Some(m) = mute_override {

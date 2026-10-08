@@ -207,6 +207,14 @@ pub struct MidiTrackNode {
     /// the mixer panel can drive the same atomics.
     volume: f32,
     pan: f32,
+    /// The fader and pan as set, before automation moves them for a block.
+    fader_volume: f32,
+    fader_pan: f32,
+    /// This track's automation, cloned in at rebuild. Instrument tracks
+    /// ignored automation altogether, so a lane or clip on a synth track
+    /// (its fader, or a knob of its plug-ins) did nothing.
+    automation_lanes: Vec<hardwave_project::automation::AutomationLane>,
+    automation_clips: Vec<hardwave_project::automation_clip::AutomationClip>,
     /// Mid/side width: 0 mono, 1 as played, 2 wide.
     stereo_separation: f32,
     width_applied: f32,
@@ -300,6 +308,10 @@ impl MidiTrackNode {
             voices: Vec::new(),
             volume: 1.0,
             pan: 0.0,
+            fader_volume: 1.0,
+            fader_pan: 0.0,
+            automation_lanes: Vec::new(),
+            automation_clips: Vec::new(),
             stereo_separation: 1.0,
             width_applied: 1.0,
             gain_ramp: crate::track_node::GainRamp::default(),
@@ -598,8 +610,23 @@ impl MidiTrackNode {
         // rebuilds during playback.
     }
 
+    pub fn set_automation_lanes(
+        &mut self,
+        lanes: Vec<hardwave_project::automation::AutomationLane>,
+    ) {
+        self.automation_lanes = lanes;
+    }
+
+    pub fn set_automation_clips(
+        &mut self,
+        clips: Vec<hardwave_project::automation_clip::AutomationClip>,
+    ) {
+        self.automation_clips = clips;
+    }
+
     pub fn set_volume_db(&mut self, db: f64) {
         self.volume = 10.0_f64.powf(db / 20.0) as f32;
+        self.fader_volume = self.volume;
     }
     pub fn set_stereo_separation(&mut self, sep: f64) {
         self.stereo_separation = sep.clamp(0.0, 2.0) as f32;
@@ -607,6 +634,7 @@ impl MidiTrackNode {
 
     pub fn set_pan(&mut self, pan: f64) {
         self.pan = pan.clamp(-1.0, 1.0) as f32;
+        self.fader_pan = self.pan;
     }
     pub fn set_muted(&mut self, m: bool) {
         self.muted = m;
@@ -665,7 +693,9 @@ impl MidiTrackNode {
 
 impl AudioNode for MidiTrackNode {
     fn set_chain_parameter(&mut self, slot_id: &str, param_id: u32, value: f64) {
-        self.chain.set_parameter(slot_id, param_id, value);
+        // Modulation moves a parameter 0..1, as automation does.
+        self.chain
+            .set_parameter_normalized(slot_id, param_id, value);
     }
 
     fn name(&self) -> &str {
@@ -693,9 +723,33 @@ impl AudioNode for MidiTrackNode {
         let _cpu = crate::track_node::CpuTimer::new(&self.meter);
         // The mixer's live fader, pan and width, as for audio tracks.
         if let Some((volume, pan, width)) = self.meter.live_mix() {
-            self.volume = volume;
-            self.pan = pan;
+            self.fader_volume = volume;
+            self.fader_pan = pan;
             self.stereo_separation = width;
+        }
+        self.volume = self.fader_volume;
+        self.pan = self.fader_pan;
+        // Automation moves the fader, the pan and the plug-ins' knobs for
+        // this block. A mute from automation silences the block's output
+        // (the voices keep their state, so it comes back cleanly).
+        if (!self.automation_lanes.is_empty() || !self.automation_clips.is_empty())
+            && ctx.sample_rate > 0.0
+            && ctx.tempo > 0.0
+        {
+            let mix = crate::automation_eval::evaluate(
+                &self.automation_lanes,
+                &self.automation_clips,
+                ctx.position_ticks,
+                self.fader_volume,
+                self.fader_pan,
+                &mut self.chain,
+            );
+            self.volume = if mix.mute == Some(true) {
+                0.0
+            } else {
+                mix.volume_linear
+            };
+            self.pan = mix.pan;
         }
         // Defensive: zero outputs first so we never leak undefined data.
         for buf in outputs.iter_mut() {
@@ -1236,6 +1290,15 @@ impl AudioNode for MidiTrackNode {
             } => {
                 self.chain.set_parameter(&slot_id, param_id, value);
             }
+            InsertCommand::SetParameterNormalized {
+                slot_id,
+                param_id,
+                value01,
+                ..
+            } => {
+                self.chain
+                    .set_parameter_normalized(&slot_id, param_id, value01);
+            }
             InsertCommand::SetState { slot_id, bytes, .. } => {
                 self.chain.set_state(&slot_id, &bytes);
             }
@@ -1407,6 +1470,7 @@ mod tests {
         let mut node = make_node();
         node.push_offline_slot(
             crate::insert_chain::LiveSlot {
+                param_ranges: Vec::new(),
                 slot_id: "s".into(),
                 plugin: Box::new(Silencer(desc)),
                 enabled: true,
@@ -1523,6 +1587,7 @@ mod tests {
         let mut node = make_node();
         node.push_offline_slot(
             crate::insert_chain::LiveSlot {
+                param_ranges: Vec::new(),
                 slot_id: "inst".into(),
                 plugin: Box::new(ToneGen {
                     desc,
@@ -1630,6 +1695,45 @@ mod tests {
             .chain(out[1].iter())
             .fold(0.0_f32, |a, b| a.max(b.abs()));
         assert!(peak > 0.0, "chord should be audible");
+    }
+
+    /// An automation clip on an instrument track moves its fader. Instrument
+    /// tracks ignored their automation, so a clip drawn on a synth track did
+    /// nothing at all.
+    #[test]
+    fn a_volume_clip_moves_an_instrument_tracks_fader() {
+        use hardwave_project::automation::{AutomationTarget, CurveMode};
+        use hardwave_project::automation_clip::AutomationClip;
+        let chord = |node: &mut MidiTrackNode| {
+            let mut out = block_outputs(256);
+            let ctx = ctx_at(48_000.0, 256, 0, false);
+            let inputs: [&[f32]; 0] = [];
+            let on = vec![MidiEvent::NoteOn {
+                timing: 0,
+                channel: 0,
+                note: 60,
+                velocity: 0.8,
+            }];
+            node.process(&inputs, &mut out, &on, &mut Vec::new(), &ctx);
+            out[0]
+                .iter()
+                .chain(out[1].iter())
+                .fold(0.0_f32, |a, b| a.max(b.abs()))
+        };
+        let open = chord(&mut make_node());
+
+        let mut node = make_node();
+        let mut clip = AutomationClip::new("c", AutomationTarget::TrackVolume, 0, 3840);
+        // 0 across the fader's range is -60 dB.
+        clip.insert_point(0, 0.0, CurveMode::Linear);
+        clip.insert_point(3840, 0.0, CurveMode::Linear);
+        node.set_automation_clips(vec![clip]);
+        let quiet = chord(&mut node);
+        assert!(open > 0.01, "the chord sounds without automation: {open}");
+        assert!(
+            quiet < open * 0.01,
+            "the clip pulls the fader down: {quiet} vs {open}"
+        );
     }
 
     #[test]

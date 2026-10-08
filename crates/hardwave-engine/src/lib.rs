@@ -2,6 +2,7 @@
 
 pub mod audio_pool;
 pub mod audio_prefs;
+pub mod automation_eval;
 pub mod engine;
 pub mod graph;
 pub mod input_node;

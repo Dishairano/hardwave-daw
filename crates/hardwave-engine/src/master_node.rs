@@ -138,6 +138,15 @@ impl AudioNode for MasterNode {
             } => {
                 self.chain.set_parameter(&slot_id, param_id, value);
             }
+            InsertCommand::SetParameterNormalized {
+                slot_id,
+                param_id,
+                value01,
+                ..
+            } => {
+                self.chain
+                    .set_parameter_normalized(&slot_id, param_id, value01);
+            }
             InsertCommand::SetState { slot_id, bytes, .. } => {
                 self.chain.set_state(&slot_id, &bytes);
             }

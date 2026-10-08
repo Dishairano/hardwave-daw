@@ -303,6 +303,7 @@ pub fn rescan_and_restore_missing_plugins(
                 let cmd = InsertCommand::Add {
                     track_id,
                     slot: LiveSlot {
+                        param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
                         slot_id,
                         plugin,
                         enabled,
@@ -825,6 +826,7 @@ pub(crate) fn add_plugin_without_undo_step(
     let cmd = InsertCommand::Add {
         track_id: track_id.clone(),
         slot: LiveSlot {
+            param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
             slot_id: slot_id.clone(),
             plugin,
             enabled: true,
@@ -1286,6 +1288,7 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
                 let cmd = InsertCommand::Add {
                     track_id,
                     slot: LiveSlot {
+                        param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
                         slot_id,
                         plugin,
                         enabled,
