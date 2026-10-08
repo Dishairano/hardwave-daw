@@ -71,6 +71,12 @@ pub struct TrackMeterState {
     /// False until the engine has written the three above for this track;
     /// before that the node keeps the values it was built with.
     pub mix_set: std::sync::atomic::AtomicBool,
+    /// Where automation put the fader (linear) and the pan on the last
+    /// block, so the mixer can follow it; bit 0 of `auto_on` says the
+    /// volume is automated, bit 1 the pan.
+    pub auto_volume: AtomicF32,
+    pub auto_pan: AtomicF32,
+    pub auto_on: std::sync::atomic::AtomicU8,
 }
 
 impl TrackMeterState {
@@ -85,6 +91,29 @@ impl TrackMeterState {
         self.mix_width
             .store(finite(width, 1.0).clamp(0.0, 2.0), Relaxed);
         self.mix_set.store(true, Release);
+    }
+
+    /// What automation did to the fader and pan this block (audio thread).
+    pub fn publish_automation(&self, volume_linear: Option<f32>, pan: Option<f32>) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if let Some(v) = volume_linear {
+            self.auto_volume.store(v, Relaxed);
+        }
+        if let Some(p) = pan {
+            self.auto_pan.store(p, Relaxed);
+        }
+        let on = u8::from(volume_linear.is_some()) | (u8::from(pan.is_some()) << 1);
+        self.auto_on.store(on, Relaxed);
+    }
+
+    /// The automated volume (linear) and pan, when automation drives them.
+    pub fn automation(&self) -> (Option<f32>, Option<f32>) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let on = self.auto_on.load(Relaxed);
+        (
+            (on & 1 != 0).then(|| self.auto_volume.load(Relaxed)),
+            (on & 2 != 0).then(|| self.auto_pan.load(Relaxed)),
+        )
     }
 
     /// The live mix, once the engine has set one.
@@ -990,6 +1019,7 @@ impl AudioNode for TrackNode {
         // parameters or sends are forwarded in a follow-up pass —
         // volume + pan are the highest-impact targets and fully wire
         // up the automation pipeline end-to-end.
+        self.meter.publish_automation(None, None);
         if (!self.automation_lanes.is_empty() || !self.automation_clips.is_empty())
             && ctx.sample_rate > 0.0
             && ctx.tempo > 0.0
@@ -1008,6 +1038,10 @@ impl AudioNode for TrackNode {
                 &mut self.chain,
             );
             let (volume, pan, mute_override) = (mix.volume_linear, mix.pan, mix.mute);
+            self.meter.publish_automation(
+                mix.volume_automated.then_some(volume),
+                mix.pan_automated.then_some(pan),
+            );
             self.volume = volume;
             self.pan = pan;
             if let Some(m) = mute_override {

@@ -890,16 +890,27 @@ pub fn run() {
                             }
                         }
                         let meters = eng.master_meter();
+                        // What automation does to each fader and pan, so the
+                        // mixer can move with it.
+                        let automated: std::collections::HashMap<_, _> = eng
+                            .track_automation()
+                            .into_iter()
+                            .map(|(id, v, p)| (id, (v, p)))
+                            .collect();
                         let track_payload: Vec<_> = eng
                             .track_meter_snapshots()
                             .into_iter()
                             .map(|(id, pl, pr, rms, pre_fader)| {
+                                let (auto_db, auto_pan) =
+                                    automated.get(&id).copied().unwrap_or((None, None));
                                 serde_json::json!({
                                     "id": id,
                                     "peakL": pl,
                                     "peakR": pr,
                                     "rms": rms,
                                     "preFaderPeak": pre_fader,
+                                    "autoVolumeDb": auto_db,
+                                    "autoPan": auto_pan,
                                 })
                             })
                             .collect();

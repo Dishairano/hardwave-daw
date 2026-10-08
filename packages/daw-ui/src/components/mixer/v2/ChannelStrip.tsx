@@ -19,6 +19,7 @@ import {
   useTrackArmed,
 } from '../../../stores/trackStore'
 import { useMixerSettingsStore } from '../../../stores/mixerSettingsStore'
+import { useMeterStore } from '../../../stores/meterStore'
 import {
   normalizePan,
   normalizeVolumeDb,
@@ -63,8 +64,16 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const name = useTrackName(trackId)
   const kind = useTrackKind(trackId)
   const color = useTrackColor(trackId)
-  const volumeDb = useTrackVolume(trackId)
-  const pan = useTrackPan(trackId)
+  const setVolumeDb = useTrackVolume(trackId)
+  const setPan = useTrackPan(trackId)
+  // With automation on the fader or pan they move with the song, as in FL,
+  // except while this strip is recording a move of its own.
+  const autoVolumeDb = useMeterStore((s) => s.tracks[trackId]?.autoVolumeDb ?? null)
+  const autoPan = useMeterStore((s) => s.tracks[trackId]?.autoPan ?? null)
+  const writingVol = useAutomationWriteStore((s) => s.touching.some((k) => k === `${trackId}:{"kind":"track_volume"}`))
+  const writingPan = useAutomationWriteStore((s) => s.touching.some((k) => k === `${trackId}:{"kind":"track_pan"}`))
+  const volumeDb = autoVolumeDb != null && !writingVol ? Math.max(-60, autoVolumeDb) : setVolumeDb
+  const pan = autoPan != null && !writingPan ? autoPan : setPan
   const stereoSep = useTrackStereoSeparation(trackId)
   const muted = useTrackMuted(trackId)
   const soloed = useTrackSoloed(trackId)

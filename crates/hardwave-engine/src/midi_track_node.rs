@@ -750,6 +750,12 @@ impl AudioNode for MidiTrackNode {
                 mix.volume_linear
             };
             self.pan = mix.pan;
+            self.meter.publish_automation(
+                mix.volume_automated.then_some(mix.volume_linear),
+                mix.pan_automated.then_some(mix.pan),
+            );
+        } else {
+            self.meter.publish_automation(None, None);
         }
         // Defensive: zero outputs first so we never leak undefined data.
         for buf in outputs.iter_mut() {

@@ -14,6 +14,10 @@ pub struct AutomatedMix {
     pub pan: f32,
     /// `Some(true)` when a mute lane or clip silences the track here.
     pub mute: Option<bool>,
+    /// Whether automation set the volume or the pan, for the mixer to
+    /// follow.
+    pub volume_automated: bool,
+    pub pan_automated: bool,
 }
 
 fn db_to_linear(db: f64) -> f32 {
@@ -35,6 +39,8 @@ pub fn evaluate(
         volume_linear: static_volume,
         pan: static_pan,
         mute: None,
+        volume_automated: false,
+        pan_automated: false,
     };
     for lane in lanes {
         // A lane without points drives nothing. It used to play 0.5, so
@@ -45,10 +51,12 @@ pub fn evaluate(
         match &lane.target {
             // Stored 0..1 across the fader's range (-60 dB..+6 dB).
             AutomationTarget::TrackVolume => {
-                out.volume_linear = db_to_linear(lane.denormalized_value_at(tick, -60.0, 6.0))
+                out.volume_linear = db_to_linear(lane.denormalized_value_at(tick, -60.0, 6.0));
+                out.volume_automated = true;
             }
             AutomationTarget::TrackPan => {
-                out.pan = lane.denormalized_value_at(tick, -1.0, 1.0) as f32
+                out.pan = lane.denormalized_value_at(tick, -1.0, 1.0) as f32;
+                out.pan_automated = true;
             }
             // Above 0.5 is muted, so a step lane works as a kill switch.
             AutomationTarget::TrackMute => out.mute = Some(lane.value_at(tick) > 0.5),
@@ -65,10 +73,12 @@ pub fn evaluate(
         };
         match &clip.target {
             AutomationTarget::TrackVolume => {
-                out.volume_linear = db_to_linear(AutomationLane::denormalize(v, -60.0, 6.0))
+                out.volume_linear = db_to_linear(AutomationLane::denormalize(v, -60.0, 6.0));
+                out.volume_automated = true;
             }
             AutomationTarget::TrackPan => {
-                out.pan = AutomationLane::denormalize(v, -1.0, 1.0) as f32
+                out.pan = AutomationLane::denormalize(v, -1.0, 1.0) as f32;
+                out.pan_automated = true;
             }
             AutomationTarget::TrackMute => out.mute = Some(v > 0.5),
             AutomationTarget::PluginParam { slot_id, param_id } => {
@@ -98,5 +108,27 @@ mod tests {
         let mix = evaluate(&[lane], &[], 0, 0.8, 0.0, &mut chain);
         assert_eq!(mix.volume_linear, 0.8);
         assert_eq!(mix.mute, None);
+    }
+
+    /// The mixer follows what automation does, so the result says which
+    /// of fader and pan it drove.
+    #[test]
+    fn it_says_which_controls_automation_drove() {
+        use hardwave_project::automation::{AutomationPoint, CurveMode};
+        let lane = AutomationLane {
+            id: "l".into(),
+            target: AutomationTarget::TrackPan,
+            points: vec![AutomationPoint {
+                tick: 0,
+                value: 1.0,
+                curve: CurveMode::Linear,
+                tension: 0.0,
+            }],
+            visible: true,
+        };
+        let mut chain = InsertChain::new();
+        let mix = evaluate(&[lane], &[], 0, 0.8, 0.0, &mut chain);
+        assert!(mix.pan_automated && !mix.volume_automated);
+        assert_eq!(mix.pan, 1.0);
     }
 }

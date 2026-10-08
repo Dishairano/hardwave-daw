@@ -1142,6 +1142,29 @@ impl DawEngine {
             .collect()
     }
 
+    /// What automation is doing to each track's fader and pan right now:
+    /// (track id, volume in dB, pan -1..1), each `None` when not automated.
+    /// The mixer follows these so a fader moves with its automation.
+    pub fn track_automation(&self) -> Vec<(String, Option<f32>, Option<f32>)> {
+        let meters = self.track_meters.lock();
+        meters
+            .iter()
+            .filter_map(|(id, m)| {
+                let (v, p) = m.automation();
+                (v.is_some() || p.is_some()).then(|| {
+                    let db = v.map(|lin| {
+                        if lin > 1e-6 {
+                            20.0 * lin.log10()
+                        } else {
+                            -120.0
+                        }
+                    });
+                    (id.clone(), db, p)
+                })
+            })
+            .collect()
+    }
+
     /// How much of each block every track is taking, as a percentage of the
     /// time the block has. Returns (track id, percent).
     ///

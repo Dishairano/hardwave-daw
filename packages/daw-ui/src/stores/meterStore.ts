@@ -16,6 +16,10 @@ interface TrackMeter {
   peakL: number
   peakR: number
   rms: number
+  /** Where automation has the fader (dB) and pan right now; null when the
+   *  track has no automation on them. The mixer follows these. */
+  autoVolumeDb?: number | null
+  autoPan?: number | null
 }
 
 interface MeterState {
@@ -40,7 +44,7 @@ export const useMeterStore = create<MeterState>((set) => ({
     listen<MeterSnapshot>('daw:meters', (event) => {
       set({ master: event.payload })
     })
-    listen<Array<{ id: string; peakL: number; peakR: number; rms: number }>>(
+    listen<Array<{ id: string; peakL: number; peakR: number; rms: number; autoVolumeDb?: number | null; autoPan?: number | null }>>(
       'daw:trackMeters',
       (event) => {
         // Preserve object identity for unchanged tracks so the
@@ -54,10 +58,13 @@ export const useMeterStore = create<MeterState>((set) => ({
           let changed = event.payload.length !== Object.keys(prev).length
           for (const t of event.payload) {
             const p = prev[t.id]
-            if (p && p.peakL === t.peakL && p.peakR === t.peakR && p.rms === t.rms) {
+            const autoVolumeDb = t.autoVolumeDb ?? null
+            const autoPan = t.autoPan ?? null
+            if (p && p.peakL === t.peakL && p.peakR === t.peakR && p.rms === t.rms
+              && (p.autoVolumeDb ?? null) === autoVolumeDb && (p.autoPan ?? null) === autoPan) {
               next[t.id] = p
             } else {
-              next[t.id] = { peakL: t.peakL, peakR: t.peakR, rms: t.rms }
+              next[t.id] = { peakL: t.peakL, peakR: t.peakR, rms: t.rms, autoVolumeDb, autoPan }
               changed = true
             }
           }
