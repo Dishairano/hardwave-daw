@@ -1100,6 +1100,28 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   }, [sampleRate, followPlayhead, scrollX])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    // Middle button held: slide the playlist left and right, as in FL.
+    // Followed on the window, so the drag keeps going past the edge.
+    if (e.button === 1) {
+      e.preventDefault()
+      const startX = e.clientX
+      const startScroll = getScrollOffset()
+      if (followPlayhead) setFollowPlayhead(false)
+      const previousCursor = document.body.style.cursor
+      document.body.style.cursor = 'grabbing'
+      const move = (ev: MouseEvent) => {
+        setScrollX(Math.max(0, startScroll - (ev.clientX - startX)))
+      }
+      const up = (ev: MouseEvent) => {
+        if (ev.button !== 1) return
+        window.removeEventListener('mousemove', move)
+        window.removeEventListener('mouseup', up)
+        document.body.style.cursor = previousCursor
+      }
+      window.addEventListener('mousemove', move)
+      window.addEventListener('mouseup', up)
+      return
+    }
     if (e.button === 2) {
       // Right-mouse-button drag → 2D pan. Stash the start position so
       // pointermove can compute deltas and onContextMenu can decide
@@ -1366,7 +1388,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
       // No forceRender — pending state is invisible until promoted.
     }
-  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm, horizontalZoom, setHorizontalZoom, trackRowAt, paintClipAt, onSetHint, trackHeight, verticalScroll])
+  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm, horizontalZoom, setHorizontalZoom, trackRowAt, paintClipAt, onSetHint, trackHeight, verticalScroll, followPlayhead, setFollowPlayhead])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     // Right-mouse-button pan takes priority over any other drag mode.
@@ -1798,11 +1820,20 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       setTrackHeight(trackHeight + delta)
       return
     }
-    // Ctrl+Wheel: horizontal zoom
+    // Ctrl+Wheel: horizontal zoom, around the mouse. The moment under the
+    // pointer stays under it, as in FL; zooming used to keep the left
+    // edge still, so what you pointed at slid away.
     if (e.ctrlKey) {
       e.preventDefault()
       const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
+      const rect = containerRef.current?.getBoundingClientRect()
+      const mouseX = rect ? Math.max(0, e.clientX - rect.left) : 0
+      const secsAtMouse = (mouseX + getScrollOffset()) / PIXELS_PER_SECOND
       setHorizontalZoom(horizontalZoom * factor)
+      // The store clamps the zoom, so read back what it became.
+      const pps = PIXELS_PER_SECOND_BASE * useTransportStore.getState().horizontalZoom
+      setScrollX(Math.max(0, secsAtMouse * pps - mouseX))
+      if (followPlayhead) setFollowPlayhead(false)
       return
     }
     // Plain wheel (no modifier) → scroll the track list vertically.
@@ -1838,7 +1869,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     if (e.deltaMode === 1) dy *= 16
     else if (e.deltaMode === 2) dy *= viewportH
     setVerticalScroll((v) => Math.max(0, Math.min(maxScroll, v + dy)))
-  }, [trackHeight, setTrackHeight, horizontalZoom, setHorizontalZoom, audioTracks.length, followPlayhead, getScrollOffset])
+  }, [trackHeight, setTrackHeight, horizontalZoom, setHorizontalZoom, audioTracks.length, followPlayhead, getScrollOffset, PIXELS_PER_SECOND, setFollowPlayhead])
 
   // Close marker context menu on outside mousedown
   useEffect(() => {
