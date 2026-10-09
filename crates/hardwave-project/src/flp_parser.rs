@@ -382,7 +382,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
 /// than garbage).
 fn playlist_item_size(data: &[u8]) -> Option<usize> {
     PLAYLIST_ITEM_SIZES.into_iter().find(|&size| {
-        if data.len() < size || data.len() % size != 0 {
+        if data.len() < size || !data.len().is_multiple_of(size) {
             return false;
         }
         let base = u16_at(data, 4);
