@@ -55,10 +55,12 @@ export const useMeterStore = create<MeterState>((set) => ({
         // With transport stopped every meter idles at the floor — this
         // turns the whole meter tick into a no-op instead of
         // re-rendering every subscribed strip N times a second.
+        // Only tracks whose meter moved arrive (the engine skips the
+        // rest), so this merges into what is there rather than replacing it.
         set((state) => {
           const prev = state.tracks
-          const next: Record<string, TrackMeter> = {}
-          let changed = event.payload.length !== Object.keys(prev).length
+          const next: Record<string, TrackMeter> = { ...prev }
+          let changed = false
           for (const t of event.payload) {
             const p = prev[t.id]
             const autoVolumeDb = t.autoVolumeDb ?? null

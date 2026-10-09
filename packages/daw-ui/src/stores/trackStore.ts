@@ -64,6 +64,11 @@ export interface ClipInfo {
   fadeOutCurve: FadeCurveKind
   /** Take lane. 0 unless the takes on this track have been spread out. */
   lane?: number
+  /** Where in its file the clip starts, in the loaded file's frames. */
+  sourceStart?: number
+  /** The loaded file's length in frames and its rate; 0 when not loaded. */
+  sourceFrames?: number
+  sourceRate?: number
 }
 
 export interface InsertInfo {

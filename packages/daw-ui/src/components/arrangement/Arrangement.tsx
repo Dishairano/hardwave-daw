@@ -105,6 +105,22 @@ const waveformData = new Map<string, [number, number, number, number][]>()
 const FADE_HANDLE_PX = 10
 const HEADER_H = 14
 
+/** Requests for waveform tiers that have not answered yet, so a quick
+ *  zoom does not ask for the same file again with every wheel step. */
+const waveformPending = new Set<string>()
+
+/** How wide a clip's whole file is at this zoom, in pixels: what its
+ *  waveform tier is chosen by. The clip's own width when the file's
+ *  length is not known. */
+function fileWidthPx(clip: ClipInfo, pxPerTick: number, bpm: number): number {
+  if (clip.sourceFrames && clip.sourceRate) {
+    const pxPerSec = pxPerTick * (bpm / 60) * PPQ
+    const stretch = clip.stretchRatio > 0 ? clip.stretchRatio : 1
+    return (clip.sourceFrames / clip.sourceRate) * stretch * pxPerSec
+  }
+  return clip.length_ticks * pxPerTick
+}
+
 function bucketTier(desired: number): number {
   // Quantise to powers of two so we don't hammer the backend on tiny zoom changes.
   const clamped = Math.max(100, Math.min(4000, Math.ceil(desired)))
@@ -310,21 +326,35 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
   // Load waveforms. Multi-zoom tiering: cache by (sourceId, tier) so zooming in refetches
   // a higher-resolution peak set rather than stretching the existing buckets.
+  // Asked for once the zoom has settled (a quick zoom used to ask for every
+  // file at every step), each tier once, and the redraws they cause come
+  // together in one frame.
+  const redrawQueued = useRef(false)
   useEffect(() => {
-    for (const track of audioTracks) {
-      for (const clip of track.clips) {
-        if (!clip.source_id) continue
-        const desired = Math.max(100, Math.ceil(clip.length_ticks * pixelsPerTick))
-        const tier = bucketTier(desired)
-        const key = `${clip.source_id}:${tier}`
-        if (!waveformData.has(key)) {
-          getWaveformPeaks(clip.source_id, tier).then(peaks => {
-            waveformData.set(key, peaks)
-            forceRender(n => n + 1)
-          })
+    const timer = window.setTimeout(() => {
+      for (const track of audioTracks) {
+        for (const clip of track.clips) {
+          if (!clip.source_id) continue
+          const tier = bucketTier(Math.max(100, Math.ceil(fileWidthPx(clip, pixelsPerTick, bpm))))
+          const key = `${clip.source_id}:${tier}`
+          if (waveformData.has(key) || waveformPending.has(key)) continue
+          waveformPending.add(key)
+          getWaveformPeaks(clip.source_id, tier)
+            .then((peaks) => {
+              waveformData.set(key, peaks)
+              if (!redrawQueued.current) {
+                redrawQueued.current = true
+                requestAnimationFrame(() => {
+                  redrawQueued.current = false
+                  forceRender((n) => n + 1)
+                })
+              }
+            })
+            .finally(() => waveformPending.delete(key))
         }
       }
-    }
+    }, 150)
+    return () => window.clearTimeout(timer)
   }, [tracks, horizontalZoom])
 
   // Draw. Kept in a ref so following the playhead can redraw without a
@@ -895,8 +925,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     // Waveform — pick the best available tier: prefer the current one, else fallback
     // to any other tier we've already fetched so we render something during refetch.
-    const desired = Math.max(100, Math.ceil(clip.length_ticks * pxPerTick))
-    const tier = bucketTier(desired)
+    const tier = bucketTier(Math.max(100, Math.ceil(fileWidthPx(clip, pxPerTick, bpm))))
     let peaks = waveformData.get(`${clip.source_id}:${tier}`)
     if (!peaks) {
       for (const [k, v] of waveformData) {
@@ -913,11 +942,27 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const midY = y + headerH + waveArea * 0.5
       const ampScale = waveArea * 0.46
       const n = peaks.length
-      const pxPerBucket = w / n
+      // Where bucket j of the file sits. With the file's length known, the
+      // file is laid out at the speed it plays and from where the clip
+      // starts in it, so what is drawn is what is heard. It used to be
+      // the whole file squeezed into the clip, which only matched an
+      // untrimmed clip exactly as long as its file.
+      let originX = x
+      let pxPerBucket = w / n
+      let backwards = false
+      if (clip.sourceFrames && clip.sourceRate) {
+        const pxPerSec = pxPerTick * (bpm / 60) * PPQ
+        const stretch = clip.stretchRatio > 0 ? clip.stretchRatio : 1
+        pxPerBucket = (clip.sourceFrames / clip.sourceRate / n) * stretch * pxPerSec
+        originX = x - ((clip.sourceStart ?? 0) / clip.sourceRate) * stretch * pxPerSec
+        backwards = clip.reversed
+      }
 
-      // Only walk the buckets that fall inside the viewport.
-      const startJ = Math.max(0, Math.floor((0 - x) / pxPerBucket) - 1)
-      const endJ = Math.min(n, Math.ceil((viewWidth - x) / pxPerBucket) + 1)
+      // Only walk the buckets that fall inside the clip and the viewport.
+      const left = Math.max(x, 0)
+      const right = Math.min(x + w, viewWidth)
+      const startJ = Math.max(0, Math.floor((left - originX) / pxPerBucket) - 1)
+      const endJ = Math.min(n, Math.ceil((right - originX) / pxPerBucket) + 1)
 
       if (endJ > startJ) {
         // Frequency-coloured waveform. Each slice is tinted by its spectral
@@ -930,16 +975,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         // not soft blended blobs).
         const colW = Math.max(1, Math.ceil(pxPerBucket))
         for (let j = startJ; j < endJ; j++) {
-          const bx = Math.floor(x + j * pxPerBucket)
-          ctx.fillStyle = spectralColor(peaks[j][3])
+          const bx = Math.floor(originX + j * pxPerBucket)
+          const pk = peaks[backwards ? n - 1 - j : j]
+          ctx.fillStyle = spectralColor(pk[3])
           // Outer min/max envelope — the transient "hair".
-          const top = midY - peaks[j][1] * ampScale
-          const bot = midY - peaks[j][0] * ampScale
+          const top = midY - pk[1] * ampScale
+          const bot = midY - pk[0] * ampScale
           ctx.globalAlpha = 0.72
           ctx.fillRect(bx, top, colW, Math.max(1, bot - top))
           // Inner RMS body — full-opacity, symmetric around the centre line
           // so the loud part of the sound reads as a bright solid core.
-          const rms = peaks[j][2] * ampScale
+          const rms = pk[2] * ampScale
           ctx.globalAlpha = 1.0
           ctx.fillRect(bx, midY - rms, colW, Math.max(1, rms * 2))
         }
@@ -1812,6 +1858,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     onDrop: (d) => { void dropBrowserFile(d.data.slice('file:'.length), d.clientX, d.clientY) },
   })
 
+  const zoomPending = useRef<{ factor: number; mouseX: number } | null>(null)
   const handleWheel = useCallback((e: React.WheelEvent) => {
     // Ctrl+Shift+Wheel: vertical zoom (change track height)
     if (e.ctrlKey && e.shiftKey) {
@@ -1823,17 +1870,35 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // Ctrl+Wheel: horizontal zoom, around the mouse. The moment under the
     // pointer stays under it, as in FL; zooming used to keep the left
     // edge still, so what you pointed at slid away.
+    // Wheel steps arrive faster than frames, and each one redrew the whole
+    // playlist: they are gathered and applied once a frame. The amount
+    // follows the wheel, so a trackpad pinch zooms smoothly and a mouse
+    // notch about 15 %.
     if (e.ctrlKey) {
       e.preventDefault()
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
       const rect = containerRef.current?.getBoundingClientRect()
       const mouseX = rect ? Math.max(0, e.clientX - rect.left) : 0
-      const secsAtMouse = (mouseX + getScrollOffset()) / PIXELS_PER_SECOND
-      setHorizontalZoom(horizontalZoom * factor)
-      // The store clamps the zoom, so read back what it became.
-      const pps = PIXELS_PER_SECOND_BASE * useTransportStore.getState().horizontalZoom
-      setScrollX(Math.max(0, secsAtMouse * pps - mouseX))
-      if (followPlayhead) setFollowPlayhead(false)
+      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY
+      const step = Math.exp(-dy * 0.0014)
+      const pending = zoomPending.current
+      if (pending) {
+        pending.factor *= step
+        pending.mouseX = mouseX
+        return
+      }
+      zoomPending.current = { factor: step, mouseX }
+      requestAnimationFrame(() => {
+        const z = zoomPending.current
+        zoomPending.current = null
+        if (!z) return
+        const store = useTransportStore.getState()
+        const secsAtMouse = (z.mouseX + getScrollOffset()) / (PIXELS_PER_SECOND_BASE * store.horizontalZoom)
+        store.setHorizontalZoom(store.horizontalZoom * z.factor)
+        // The store clamps the zoom, so read back what it became.
+        const pps = PIXELS_PER_SECOND_BASE * useTransportStore.getState().horizontalZoom
+        setScrollX(Math.max(0, secsAtMouse * pps - z.mouseX))
+        if (followPlayhead) setFollowPlayhead(false)
+      })
       return
     }
     // Plain wheel (no modifier) → scroll the track list vertically.

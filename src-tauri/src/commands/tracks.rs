@@ -360,7 +360,7 @@ pub fn get_tracks_with_clips(state: State<AppState>) -> Vec<TrackWithClipsPayloa
         .iter()
         .map(|t| TrackWithClipsPayload {
             track: track_to_info(t, &name_of),
-            clips: crate::commands::audio::track_clips_to_info(t),
+            clips: crate::commands::audio::track_clips_to_info(t, &engine.audio_pool),
         })
         .collect()
 }
@@ -391,7 +391,7 @@ pub fn get_track_with_clips(
         .find(|t| t.id == track_id)
         .map(|t| TrackWithClipsPayload {
             track: track_to_info(t, &name_of),
-            clips: crate::commands::audio::track_clips_to_info(t),
+            clips: crate::commands::audio::track_clips_to_info(t, &engine.audio_pool),
         })
 }
 

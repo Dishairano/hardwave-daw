@@ -880,8 +880,21 @@ pub fn run() {
             // re-fetched on demand when the Audio Settings panel opens.
 
             std::thread::spawn(move || {
+                // What the page was last sent. Every track's meter went out
+                // 30 times a second, the 500 empty inserts included: about
+                // 55 KB a tick, each one a script the main thread runs in
+                // the page. Now only what changed goes, with everything
+                // again every two seconds so a window that starts
+                // listening late catches up.
+                let mut sent_tracks: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
+                let mut sent_meters = String::new();
+                let mut sent_transport = String::new();
+                let mut tick: u32 = 0;
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(33));
+                    tick = tick.wrapping_add(1);
+                    let resend_all = tick.is_multiple_of(60);
 
                     // Single lock acquisition per tick — coalesces what used to be
                     // four separate engine.lock() calls and eliminates per-tick
@@ -977,9 +990,31 @@ pub fn run() {
                         (meters, track_payload, transport_payload)
                     };
 
-                    let _ = app_handle.emit("daw:meters", &meters);
-                    let _ = app_handle.emit("daw:trackMeters", &track_payload);
-                    let _ = app_handle.emit("daw:transport", &transport_payload);
+                    let changed_tracks: Vec<serde_json::Value> = track_payload
+                        .into_iter()
+                        .filter(|entry| {
+                            let id = entry["id"].as_str().unwrap_or_default().to_string();
+                            let now = entry.to_string();
+                            if !resend_all && sent_tracks.get(&id) == Some(&now) {
+                                return false;
+                            }
+                            sent_tracks.insert(id, now);
+                            true
+                        })
+                        .collect();
+                    if !changed_tracks.is_empty() {
+                        let _ = app_handle.emit("daw:trackMeters", &changed_tracks);
+                    }
+                    let meters_now = serde_json::to_string(&meters).unwrap_or_default();
+                    if resend_all || meters_now != sent_meters {
+                        let _ = app_handle.emit("daw:meters", &meters);
+                        sent_meters = meters_now;
+                    }
+                    let transport_now = transport_payload.to_string();
+                    if resend_all || transport_now != sent_transport {
+                        let _ = app_handle.emit("daw:transport", &transport_payload);
+                        sent_transport = transport_now;
+                    }
                 }
             });
 

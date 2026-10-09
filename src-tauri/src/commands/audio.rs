@@ -145,30 +145,45 @@ pub(crate) fn import_audio_file_blocking(
 /// Map a project-side `Track` into the serialized `ClipInfo` vector
 /// the frontend expects. Shared by `get_track_clips` and the bulk
 /// `get_tracks_with_clips` endpoint.
-pub(crate) fn track_clips_to_info(track: &hardwave_project::Track) -> Vec<ClipInfo> {
+pub(crate) fn track_clips_to_info(
+    track: &hardwave_project::Track,
+    pool: &hardwave_engine::audio_pool::AudioPool,
+) -> Vec<ClipInfo> {
     track
         .clips
         .iter()
         .map(|clip| match &clip.content {
-            hardwave_project::clip::ClipContent::Audio(ac) => ClipInfo {
-                id: ac.id.clone(),
-                name: ac.name.clone(),
-                kind: "audio".into(),
-                source_id: ac.source_path.clone(),
-                position_ticks: clip.position_ticks,
-                length_ticks: clip.length_ticks,
-                muted: ac.muted,
-                gain_db: ac.gain_db,
-                fade_in_ticks: ac.fade_in_ticks,
-                fade_out_ticks: ac.fade_out_ticks,
-                reversed: ac.reversed,
-                pitch_semitones: ac.pitch_semitones,
-                stretch_ratio: ac.stretch_ratio,
-                warp_markers: ac.warp_markers.clone(),
-                fade_in_curve: fade_curve_name(ac.fade_in_curve),
-                fade_out_curve: fade_curve_name(ac.fade_out_curve),
-                lane: clip.lane,
-            },
+            hardwave_project::clip::ClipContent::Audio(ac) => {
+                // The loaded file's length and rate, so the playlist can
+                // draw the part of the file the clip plays, at the speed it
+                // plays, instead of the whole file squeezed into the clip.
+                let (source_frames, source_rate) = pool
+                    .get(&ac.source_path)
+                    .map(|b| (b.num_frames as u64, b.sample_rate))
+                    .unwrap_or((0, 0));
+                ClipInfo {
+                    id: ac.id.clone(),
+                    name: ac.name.clone(),
+                    kind: "audio".into(),
+                    source_id: ac.source_path.clone(),
+                    position_ticks: clip.position_ticks,
+                    length_ticks: clip.length_ticks,
+                    muted: ac.muted,
+                    gain_db: ac.gain_db,
+                    fade_in_ticks: ac.fade_in_ticks,
+                    fade_out_ticks: ac.fade_out_ticks,
+                    reversed: ac.reversed,
+                    pitch_semitones: ac.pitch_semitones,
+                    stretch_ratio: ac.stretch_ratio,
+                    warp_markers: ac.warp_markers.clone(),
+                    fade_in_curve: fade_curve_name(ac.fade_in_curve),
+                    fade_out_curve: fade_curve_name(ac.fade_out_curve),
+                    lane: clip.lane,
+                    source_start: ac.source_start,
+                    source_frames,
+                    source_rate,
+                }
+            }
             hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
                 id: mc.id.clone(),
                 name: mc.clip.name.clone(),
@@ -187,6 +202,9 @@ pub(crate) fn track_clips_to_info(track: &hardwave_project::Track) -> Vec<ClipIn
                 fade_in_curve: "linear".into(),
                 fade_out_curve: "linear".into(),
                 lane: clip.lane,
+                source_start: 0,
+                source_frames: 0,
+                source_rate: 0,
             },
         })
         .collect()
@@ -198,7 +216,7 @@ pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo
     let engine = state.engine.lock();
     let project = engine.project.lock();
     match project.track(&track_id) {
-        Some(t) => track_clips_to_info(t),
+        Some(t) => track_clips_to_info(t, &engine.audio_pool),
         None => vec![],
     }
 }
@@ -233,6 +251,14 @@ pub struct ClipInfo {
     /// Which take lane this piece sits on. 0 unless the takes on the
     /// track have been spread out for comping.
     lane: u32,
+    /// Where in its file the clip starts, in the loaded file's frames.
+    #[serde(rename = "sourceStart")]
+    source_start: u64,
+    /// The loaded file's length in frames and its rate; 0 when not loaded.
+    #[serde(rename = "sourceFrames")]
+    source_frames: u64,
+    #[serde(rename = "sourceRate")]
+    source_rate: u32,
 }
 
 fn fade_curve_name(curve: hardwave_project::clip::FadeCurve) -> String {
