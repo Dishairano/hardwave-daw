@@ -1,8 +1,22 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Tauri's core module on disk, so the app's imports of it can go through
+// src/lib/timedCore.ts (which times calls for the FPS meter) and that one
+// file can still reach the real thing.
+const tauriApiDir = dirname(createRequire(import.meta.url).resolve('@tauri-apps/api/package.json'))
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: [
+      { find: /^@tauri-apps\/api\/core$/, replacement: fileURLToPath(new URL('./src/lib/timedCore.ts', import.meta.url)) },
+      { find: /^tauri-api-core-original$/, replacement: join(tauriApiDir, 'core.js') },
+    ],
+  },
   clearScreen: false,
   server: {
     port: 5173,

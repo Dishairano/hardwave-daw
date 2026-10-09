@@ -8,3 +8,9 @@ declare module '*.md?raw' {
   const content: string
   export default content
 }
+
+// Tauri's own core module, under the name src/lib/timedCore.ts imports it
+// by (vite.config.ts): '@tauri-apps/api/core' itself points at timedCore.
+declare module 'tauri-api-core-original' {
+  export * from '@tauri-apps/api/core'
+}

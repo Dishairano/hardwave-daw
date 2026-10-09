@@ -27,27 +27,17 @@ let ipcTotalMs = 0
 let ipcMaxMs = 0
 let ipcSlowest = ''
 
-/** Time every backend call from now on. Wraps the function @tauri-apps/api
- *  looks up on each call, so it works whenever it is turned on. */
-function timeBackendCalls(): void {
-  type Internals = { invoke?: (cmd: string, ...rest: unknown[]) => Promise<unknown>; __hwTimed?: boolean }
-  const internals = (window as unknown as { __TAURI_INTERNALS__?: Internals }).__TAURI_INTERNALS__
-  if (!internals?.invoke || internals.__hwTimed) return
-  const original = internals.invoke.bind(internals)
-  internals.invoke = (cmd: string, ...rest: unknown[]) => {
-    if (!ipcOn || cmd.startsWith('plugin:event|')) return original(cmd, ...rest)
-    const t0 = performance.now()
-    const done = () => {
-      const ms = performance.now() - t0
-      ipcCalls++
-      ipcTotalMs += ms
-      if (ms > ipcMaxMs) { ipcMaxMs = ms; ipcSlowest = cmd }
-    }
-    const p = original(cmd, ...rest)
-    p.then(done, done)
-    return p
-  }
-  internals.__hwTimed = true
+/** True while the meter runs and wants backend calls timed. */
+export function timingBackendCalls(): boolean {
+  return ipcOn
+}
+
+/** One backend call finished, after `ms` (from src/lib/timedCore.ts). */
+export function noteBackendCall(cmd: string, ms: number): void {
+  if (!ipcOn) return
+  ipcCalls++
+  ipcTotalMs += ms
+  if (ms > ipcMaxMs) { ipcMaxMs = ms; ipcSlowest = cmd }
 }
 
 export interface FrameSnapshot {
@@ -91,7 +81,6 @@ export function startFrameStats(onSnapshot: (s: FrameSnapshot) => void): () => v
   let longMs = 0
   let commitsAt = commitCount()
   let eventsAt = backendEvents
-  timeBackendCalls()
   ipcOn = true
   ipcCalls = 0; ipcTotalMs = 0; ipcMaxMs = 0; ipcSlowest = ''
 
