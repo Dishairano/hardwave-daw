@@ -414,6 +414,8 @@ const mock: TauriInternals = {
         ]
       // A plug-in window's live data: steady levels, some reduction, a
       // correlated stereo signal.
+      case 'get_backend_stats':
+        return { mainLagAvgMs: 0.4, mainLagMaxMs: 1.2, slow: [] }
       case 'get_slot_live':
         return {
           levels: [0.42, 0.37, 0.56, 0.5],

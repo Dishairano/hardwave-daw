@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
+mod backend_stats;
 mod collab;
 mod commands;
 mod control_surface;
@@ -125,6 +126,21 @@ pub struct AppState {
     /// finishes a HotSwapReady so a subsequent state query won't keep
     /// telling App.tsx the same bundle still needs applying.
     pub frontend_launch_plan: Arc<Mutex<Option<frontend_updater::LaunchPlanCacheEntry>>>,
+}
+
+/// Every command, timed for the FPS meter (see `backend_stats`). A command
+/// without `async` runs inside this call, so the time is what it held the
+/// main thread for; an `async` one only counts its hand-off.
+fn timed<R: tauri::Runtime>(
+    handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        let command = invoke.message.command().to_string();
+        let started = std::time::Instant::now();
+        let handled = handler(invoke);
+        backend_stats::note_command(&command, started.elapsed());
+        handled
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -295,7 +311,8 @@ pub fn run() {
         // Before any window loads: nothing but our own pages in them.
         .plugin(window_guard::init())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(timed(tauri::generate_handler![
+            backend_stats::get_backend_stats,
             // Transport
             commands::transport::play,
             commands::transport::stop,
@@ -731,7 +748,7 @@ pub fn run() {
             frontend_updater::version_contract_state,
             // Diagnostics — session-log location for Help → Export diagnostics
             diagnostics::diagnostics_info,
-        ])
+        ]))
         .setup(move |app| {
             log::info!("Hardwave DAW starting");
 

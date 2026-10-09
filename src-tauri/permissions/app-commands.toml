@@ -5,6 +5,7 @@
 identifier = "app-commands"
 description = "Every command the app registers, for the app's own pages."
 permissions = [
+  "allow-get-backend-stats",
   "allow-play",
   "allow-stop",
   "allow-start-count-in",

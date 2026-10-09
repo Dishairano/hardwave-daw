@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { useGeneralPrefsStore } from '../stores/generalPrefsStore'
 import { usePerfMetersStore } from '../stores/perfMetersStore'
 import { startFrameStats, type FrameSnapshot } from '../services/frameStats'
@@ -11,6 +12,13 @@ import { startFrameStats, type FrameSnapshot } from '../services/frameStats'
 export function FpsMeter() {
   const on = useGeneralPrefsStore((s) => s.showFpsMeter)
   return on ? <FpsMeterPanel /> : null
+}
+
+/** How the backend keeps up (src-tauri/src/backend_stats.rs). */
+interface BackendStats {
+  mainLagAvgMs: number
+  mainLagMaxMs: number
+  slow: { command: string; count: number; avgMs: number; maxMs: number }[]
 }
 
 const GRAPH_W = 196
@@ -27,6 +35,21 @@ function FpsMeterPanel() {
     setSnap(s)
     drawGraph(graphRef.current, s.recent)
   }), [])
+
+  // The main thread's lag and its slowest commands, twice a second.
+  const [backend, setBackend] = useState<BackendStats | null>(null)
+  useEffect(() => {
+    let alive = true
+    const read = () => {
+      invoke<BackendStats>('get_backend_stats')
+        .then((b) => { if (alive) setBackend(b) })
+        .catch(() => { if (alive) setBackend(null) })
+    }
+    read()
+    const timer = window.setInterval(read, 500)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [])
+  const top = backend?.slow[0]
 
   const fps = snap ? Math.round(snap.fps) : 0
   const fpsColor = !snap ? '#8a8a92' : fps >= 50 ? '#3ed07a' : fps >= 30 ? '#f0a032' : '#ff2d4f'
@@ -60,6 +83,17 @@ function FpsMeterPanel() {
         warn={!!snap && snap.ipcMaxMs > 33}
       />
       {snap?.ipcSlowest && <div style={{ color: '#8a8a92', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{snap.ipcSlowest}</div>}
+      <Row
+        label="Main thread lag"
+        value={backend ? `${backend.mainLagAvgMs.toFixed(1)} · max ${backend.mainLagMaxMs.toFixed(0)} ms` : '--'}
+        warn={!!backend && backend.mainLagMaxMs > 16}
+      />
+      <Row
+        label="Slowest on it"
+        value={top ? `${top.avgMs.toFixed(1)} ms ×${top.count}` : '--'}
+        warn={!!top && top.maxMs > 16}
+      />
+      {top && <div style={{ color: '#8a8a92', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{top.command}</div>}
       <Row label="Audio load" value={`${audioLoad}%`} warn={audioLoad >= 70} />
       {snap?.heapMb != null && <Row label="JS heap" value={`${snap.heapMb.toFixed(0)} MB`} />}
     </div>
