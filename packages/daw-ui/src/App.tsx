@@ -2017,14 +2017,13 @@ export function App() {
                   filters: [{ name: 'FL Studio project', extensions: ['flp'] }],
                 })
                 if (typeof picked !== 'string') return
-                const report = await invoke<{
-                  bpm: number; tracks: number; clips: number; notes: number
-                  samples: string[]; leftBehind: string[]
-                }>('import_flp', { path: picked })
+                // It opens as a song of its own, like any other.
+                if (!(await confirmDiscardIfDirty('Save changes before opening the FL project'))) return
+                const report = await useProjectStore.getState().importFlProject(picked)
                 await useTrackStore.getState().fetchTracks()
                 push('info',
                   `${report.tracks} tracks, ${report.clips} clips, ${report.notes} notes at ${report.bpm} BPM`, {
-                    detail: report.leftBehind.join('. ') + '.',
+                    detail: report.leftBehind.length ? `Not carried over: ${report.leftBehind.join('. ')}.` : undefined,
                   })
               } catch (e) {
                 push('warning', 'Could not open that project', { detail: String(e) })

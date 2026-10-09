@@ -233,33 +233,14 @@ fn build_into(project: &mut hardwave_project::Project, genre: &Genre, plan: &[Se
 
 /// Take over playlist row `row` for a starter part.
 ///
-/// A new project's playlist is its numbered insert rows; the name
-/// column and the playlist draw those. A track added after them sat
-/// five hundred rows down, where nobody would see it: the song played
-/// and the playlist looked empty. So a starter part replaces the empty
-/// insert at its row, keeping the row's id and place, as the kind of
-/// track it needs to be (an instrument plays MIDI, a vocal row audio).
+/// A starter part takes a playlist row: see `Project::claim_row`.
 pub(crate) fn claim_row(
     project: &mut hardwave_project::Project,
     row: usize,
     name: &str,
     instrument: bool,
 ) -> String {
-    use hardwave_project::track::Track;
-    let id = format!("insert-{row:03}");
-    let fresh = if instrument {
-        Track::new_midi(id.clone(), name.to_string())
-    } else {
-        Track::new_audio(id.clone(), name.to_string())
-    };
-    match project.tracks.iter_mut().find(|t| t.id == id) {
-        Some(slot) => {
-            *slot = fresh;
-            id
-        }
-        None if instrument => project.add_midi_track(name.to_string()),
-        None => project.add_audio_track(name.to_string()),
-    }
+    project.claim_row(row, name, instrument)
 }
 
 /// Build a starter song into the open project.

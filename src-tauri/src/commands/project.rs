@@ -123,16 +123,29 @@ struct LoadProgress {
 }
 
 fn load_project_blocking(app: &AppHandle, path: String) -> Result<(), String> {
+    let project_file = PathBuf::from(&path);
+    let loaded = Project::load(&project_file).map_err(|e| e.to_string())?;
+    let project_dir = project_file.parent().map(|p| p.to_path_buf());
+    open_project_blocking(app, loaded, project_dir, |_, _| {})
+}
+
+/// Make `loaded` the open song: its audio read without the engine, the
+/// song swapped in under a short lock, its plug-ins created on the main
+/// thread. `after_audio` gets the song once its samples are in the pool
+/// and before it is swapped in (an FL import sets where its clips start
+/// in their files there, which needs each file's length and rate).
+pub(crate) fn open_project_blocking(
+    app: &AppHandle,
+    mut loaded: Project,
+    project_dir: Option<PathBuf>,
+    after_audio: impl FnOnce(&mut Project, &hardwave_engine::audio_pool::AudioPool),
+) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     if OPENING.swap(true, Ordering::SeqCst) {
         return Err("A song is already opening.".into());
     }
     let _done = OpeningDone;
     let state = app.state::<AppState>();
-
-    let project_file = PathBuf::from(&path);
-    let loaded = Project::load(&project_file).map_err(|e| e.to_string())?;
-    let project_dir = project_file.parent().map(|p| p.to_path_buf());
 
     // The audio first, without the engine. A collected project stores its
     // samples relative to its folder, so the loader is given that folder.
@@ -154,6 +167,8 @@ fn load_project_blocking(app: &AppHandle, path: String) -> Result<(), String> {
             missing_audio
         );
     }
+    let pool = state.engine.lock().audio_pool.clone();
+    after_audio(&mut loaded, &pool);
 
     let new_bpm = loaded
         .tempo_map

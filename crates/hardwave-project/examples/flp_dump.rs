@@ -77,5 +77,28 @@ fn main() {
             "   named playlist tracks {:?}",
             fl.playlist_track_names.iter().take(6).collect::<Vec<_>>()
         );
+        // What the import makes of it, with no samples found here.
+        let built = hardwave_project::fl_build::build_project(&fl, "dump", &|_| None);
+        let r = &built.report;
+        println!(
+            "   import: {} instrument + {} audio tracks, {} audio + {} pattern clips, {} notes, {} samples to find, {} automation clips",
+            r.instrument_tracks,
+            r.audio_tracks,
+            r.audio_clips,
+            r.pattern_clips,
+            r.notes,
+            r.missing_samples.len(),
+            r.automation_clips
+        );
+        let rows: Vec<String> = built
+            .project
+            .tracks
+            .iter()
+            .skip(1)
+            .take(14)
+            .map(|t| format!("{} ({})", t.name, t.clips.len()))
+            .collect();
+        println!("   rows: {}", rows.join(", "));
+        println!("   plug-ins left: {}", r.plugins_left_behind.join(", "));
     }
 }

@@ -345,6 +345,32 @@ impl Project {
         write_atomic(path, json.as_bytes())
     }
 
+    /// Put a track at a playlist row, replacing the empty insert there
+    /// and keeping the row's id and place, as the kind of track it needs
+    /// to be (an instrument plays MIDI, anything else audio).
+    ///
+    /// A new project's playlist is its numbered insert rows; the name
+    /// column and the playlist draw those. A track added after them sat
+    /// five hundred rows down, where nobody would see it: the song played
+    /// and the playlist looked empty. Past the last row it is added at
+    /// the end after all.
+    pub fn claim_row(&mut self, row: usize, name: &str, instrument: bool) -> String {
+        let id = format!("insert-{row:03}");
+        let fresh = if instrument {
+            Track::new_midi(id.clone(), name.to_string())
+        } else {
+            Track::new_audio(id.clone(), name.to_string())
+        };
+        match self.tracks.iter_mut().find(|t| t.id == id) {
+            Some(slot) => {
+                *slot = fresh;
+                id
+            }
+            None if instrument => self.add_midi_track(name.to_string()),
+            None => self.add_audio_track(name.to_string()),
+        }
+    }
+
     pub fn add_audio_track(&mut self, name: String) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.tracks.push(Track::new_audio(id.clone(), name));

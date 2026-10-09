@@ -75,7 +75,9 @@ fn start_watchdog(app: tauri::AppHandle) {
                 return;
             }
             // Two seconds is "stuck" and enough to show it.
-            let lag = rx.recv_timeout(Duration::from_secs(2)).unwrap_or(Duration::from_secs(2));
+            let lag = rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap_or(Duration::from_secs(2));
             let mut w = window().lock();
             w.lag_ms.push(lag.as_secs_f32() * 1000.0);
             // Keep it bounded if nobody reads for a while.

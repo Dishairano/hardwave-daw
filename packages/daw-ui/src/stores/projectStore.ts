@@ -40,11 +40,24 @@ interface ProjectState {
   newProject: () => Promise<void>
   saveProject: (path?: string) => Promise<void>
   loadProject: (path: string) => Promise<void>
+  /** Open an FL Studio project as a new, unsaved song. */
+  importFlProject: (path: string) => Promise<FlImportReport>
   getInfo: () => Promise<ProjectInfo>
   markDirty: () => void
   pushRecent: (path: string) => void
   removeRecent: (path: string) => void
   clearRecent: () => void
+}
+
+/** What came across from an FL project, and what did not. */
+export interface FlImportReport {
+  bpm: number
+  tracks: number
+  clips: number
+  notes: number
+  /** Samples it points at that are not on this computer. */
+  samples: string[]
+  leftBehind: string[]
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -114,6 +127,34 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ filePath: path, projectName: name, dirty: false })
     get().pushRecent(path)
     reportMissingAudioSources().catch(() => {})
+  },
+
+  importFlProject: async (path: string) => {
+    const name = path.split(/[\\/]/).pop()?.replace(/\.flp$/i, '') || 'FL project'
+    set({ opening: { name, stage: 'file', done: 0, total: 0 } })
+    let stopListening: (() => void) | undefined
+    try {
+      const { listen } = await import('@tauri-apps/api/event')
+      stopListening = await listen<{ stage: string; done: number; total: number }>(
+        'project-load-progress',
+        (ev) => set({ opening: { name, ...ev.payload } }),
+      )
+    } catch { /* outside Tauri */ }
+    let report: FlImportReport
+    try {
+      report = await invoke<FlImportReport>('import_flp', { path })
+    } finally {
+      stopListening?.()
+      set({ opening: null })
+    }
+    // The same as after opening a song, except that it has no file yet:
+    // saving asks where, and it starts unsaved.
+    usePatternStore.getState().hydrate(null)
+    await invoke('set_channel_rack_state', { payload: null })
+    resetTimelineState()
+    await useTempoMapStore.getState().refresh()
+    set({ filePath: null, projectName: name, dirty: true })
+    return report
   },
 
   getInfo: async () => {
