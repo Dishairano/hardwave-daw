@@ -1802,7 +1802,15 @@ pub struct SlotLive {
     pub gr: Option<f32>,
     pub scope: Option<Vec<f32>>,
     pub changes: Vec<(u32, f64)>,
+    /// The sound going into and coming out of the slot, as SPECTRUM_BANDS
+    /// log-spaced bands from 20 Hz to 20 kHz in dBFS, when asked for: an
+    /// EQ's analyzer shows both.
+    pub spectrum: Option<(Vec<f32>, Vec<f32>)>,
 }
+
+/// How many bands the analyzer gets: enough for a smooth curve across a
+/// window a thousand pixels wide, few enough to send 30 times a second.
+const SPECTRUM_BANDS: usize = 192;
 
 #[tauri::command(async)]
 pub fn get_slot_live(
@@ -1810,6 +1818,7 @@ pub fn get_slot_live(
     track_id: String,
     slot_id: String,
     scope: bool,
+    spectrum: Option<bool>,
 ) -> SlotLive {
     use std::sync::atomic::Ordering;
     let key = (track_id, slot_id);
@@ -1825,11 +1834,25 @@ pub fn get_slot_live(
             ..SlotLive::default()
         };
     };
+    let spectrum = spectrum.unwrap_or(false).then(|| {
+        let (pre, post, rate) = levels.spectrum_samples();
+        let bands = |s: &[f32]| {
+            hardwave_dsp::spectrum::log_band_spectrum_db(
+                s,
+                rate as f32,
+                SPECTRUM_BANDS,
+                20.0,
+                20_000.0,
+            )
+        };
+        (bands(&pre), bands(&post))
+    });
     SlotLive {
         levels: levels.take(),
         gr,
         scope: scope.then(|| levels.scope()),
         changes: levels.take_param_changes(),
+        spectrum,
     }
 }
 

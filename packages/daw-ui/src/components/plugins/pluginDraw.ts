@@ -35,6 +35,9 @@ export interface LiveData {
   scope: number[] | null
   /** Wavetable frames for the current bank, when the window has them. */
   table: number[][] | null
+  /** The sound into and out of the slot, as log-spaced bands from 20 Hz
+   *  to 20 kHz in dBFS, for a window that shows an analyzer. */
+  spectrum?: [number[], number[]] | null
 }
 
 export const NO_LIVE: LiveData = {

@@ -87,7 +87,7 @@ const levels: Row = ['m']
 // stereo fields draw the slot's output, and the displays draw what the
 // parameters set. Footers carry no invented facts.
 export const LAYOUTS: Record<string, PluginLayout> = {
-  eq: { sub: 'Parametric equaliser', fam: 'eq', w: 1080, custom: 'eq' },
+  eq: { sub: 'Parametric equaliser', fam: 'eq', w: 1000, custom: 'eq' },
   compressor: { sub: 'Dynamics · Compressor', fam: 'dyn', w: 1000, cols: '1fr 1.25fr 0.8fr', panels: [
     [{ t: 'Detector', s: [[['k', 'Threshold', 'Ratio', 'Knee']], [['p', 'Detect Mode']]] },
      { t: 'Envelope', grow: true, s: [[['k', 'Attack', 'Release']], [['n', 'Attack is how fast the level comes down once it passes the threshold, release how fast it comes back.']]] }],

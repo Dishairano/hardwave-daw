@@ -193,6 +193,72 @@ pub fn log_spaced_frequencies(n: usize, low: f32, high: f32) -> Vec<f32> {
         .collect()
 }
 
+/// A display-ready spectrum: `bands` log-spaced bands from `low` to
+/// `high` Hz, each the loudest FFT bin inside it in dBFS (interpolated
+/// where a band is narrower than a bin, at the low end). For an EQ's
+/// analyzer, which wants a few hundred points and not 2048 bins.
+pub fn log_band_spectrum_db(
+    samples: &[f32],
+    sample_rate: f32,
+    bands: usize,
+    low: f32,
+    high: f32,
+) -> Vec<f32> {
+    let n = samples.len().next_power_of_two().max(64);
+    if bands == 0 || sample_rate <= 0.0 {
+        return Vec::new();
+    }
+    let window_sum: f32 = (0..samples.len())
+        .map(|i| {
+            0.5 * (1.0
+                - (2.0 * std::f32::consts::PI * i as f32 / (samples.len().max(2) - 1) as f32).cos())
+        })
+        .sum();
+    let mut buf: Vec<Complex32> = (0..n)
+        .map(|i| {
+            let x = samples.get(i).copied().unwrap_or(0.0);
+            let w = if i < samples.len() {
+                0.5 * (1.0
+                    - (2.0 * std::f32::consts::PI * i as f32 / (samples.len().max(2) - 1) as f32)
+                        .cos())
+            } else {
+                0.0
+            };
+            Complex32::new(x * w, 0.0)
+        })
+        .collect();
+    FftPlanner::<f32>::new()
+        .plan_fft_forward(n)
+        .process(&mut buf);
+    // Amplitude of a full-scale sine reads 0 dBFS: two sides, window gain.
+    let scale = 2.0 / window_sum.max(1e-6);
+    let mags: Vec<f32> = buf[..n / 2].iter().map(|c| c.norm() * scale).collect();
+    let bin_hz = sample_rate / n as f32;
+    let edges = log_spaced_frequencies(bands + 1, low, high);
+    (0..bands)
+        .map(|b| {
+            let (f0, f1) = (edges[b], edges[b + 1]);
+            let (i0, i1) = (
+                (f0 / bin_hz).floor() as usize,
+                (f1 / bin_hz).ceil() as usize,
+            );
+            let peak = if i1 > i0 + 1 {
+                mags[i0.min(mags.len() - 1)..i1.min(mags.len())]
+                    .iter()
+                    .copied()
+                    .fold(0.0, f32::max)
+            } else {
+                // Narrower than a bin: read between the two nearest.
+                let pos = ((f0 * f1).sqrt() / bin_hz).min((mags.len() - 1) as f32);
+                let k = pos.floor() as usize;
+                let t = pos - k as f32;
+                mags[k] * (1.0 - t) + mags[(k + 1).min(mags.len() - 1)] * t
+            };
+            20.0 * (peak + 1e-9).log10()
+        })
+        .collect()
+}
+
 /// Aggregate spectrum energy into the three crossover bands of a
 /// multiband processor at `low_xover` and `high_xover` Hz. Returns
 /// `(low_db, mid_db, high_db)`. Uses simple linear bucketing by bin
@@ -241,6 +307,31 @@ pub fn band_split_energies(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_full_scale_sine_reads_near_zero_db_where_it_is() {
+        let sr = 48_000.0;
+        let tone: Vec<f32> = (0..4096)
+            .map(|i| (2.0 * std::f32::consts::PI * 1_000.0 * i as f32 / sr).sin())
+            .collect();
+        let bands = log_band_spectrum_db(&tone, sr, 192, 20.0, 20_000.0);
+        assert_eq!(bands.len(), 192);
+        let (loudest, db) =
+            bands
+                .iter()
+                .enumerate()
+                .fold((0, f32::MIN), |m, (i, &d)| if d > m.1 { (i, d) } else { m });
+        let edges = log_spaced_frequencies(193, 20.0, 20_000.0);
+        assert!(
+            edges[loudest] <= 1_000.0 * 1.05 && edges[loudest + 1] >= 1_000.0 / 1.05,
+            "the peak sits at 1 kHz"
+        );
+        assert!(
+            db > -3.0 && db < 1.0,
+            "full scale reads about 0 dB, got {db}"
+        );
+        assert!(bands[0] < -60.0, "nothing at 20 Hz");
+    }
 
     fn sine(freq: f32, sr: f32, n: usize, amp: f32) -> Vec<f32> {
         (0..n)

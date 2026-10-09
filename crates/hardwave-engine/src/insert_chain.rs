@@ -90,7 +90,20 @@ pub struct SlotLevels {
     params: Box<[(u32, std::sync::atomic::AtomicU64)]>,
     /// What the window last read, so it only gets changes. UI side only.
     params_read: parking_lot::Mutex<Vec<u64>>,
+    /// Blocks left to record the analyzer's samples for; topped up by the
+    /// reader like the scope, so it costs nothing while no window shows it.
+    spec_blocks: std::sync::atomic::AtomicU32,
+    /// The last SPEC_LEN samples (mono) going into and out of the slot, as
+    /// f32 bits, both written at the same positions.
+    spec_in: Box<[std::sync::atomic::AtomicU32]>,
+    spec_out: Box<[std::sync::atomic::AtomicU32]>,
+    spec_pos: std::sync::atomic::AtomicUsize,
+    spec_rate: std::sync::atomic::AtomicU32,
 }
+
+/// Samples the analyzer looks at: 4096 at 48 kHz is 85 ms, enough to
+/// tell 20 Hz from 30 Hz.
+pub const SPEC_LEN: usize = 4096;
 
 pub const SCOPE_LEN: usize = 256;
 const SCOPE_STEP: usize = 4;
@@ -109,6 +122,15 @@ impl Default for SlotLevels {
             scope_pos: Default::default(),
             params: Box::new([]),
             params_read: parking_lot::Mutex::new(Vec::new()),
+            spec_blocks: Default::default(),
+            spec_in: (0..SPEC_LEN)
+                .map(|_| std::sync::atomic::AtomicU32::new(0))
+                .collect(),
+            spec_out: (0..SPEC_LEN)
+                .map(|_| std::sync::atomic::AtomicU32::new(0))
+                .collect(),
+            spec_pos: Default::default(),
+            spec_rate: std::sync::atomic::AtomicU32::new(48_000),
         }
     }
 }
@@ -167,6 +189,56 @@ impl SlotLevels {
             pos = pos.wrapping_add(1);
         }
         self.scope_pos.store(pos, Relaxed);
+    }
+
+    /// Record the block going into the slot for the analyzer, when a window
+    /// asked for it. Does not move the write position; the output does.
+    fn record_spec_in(&self, left: &[f32], right: &[f32]) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.spec_blocks.load(Relaxed) == 0 {
+            return;
+        }
+        let pos = self.spec_pos.load(Relaxed);
+        for (k, (l, r)) in left.iter().zip(right.iter()).enumerate() {
+            self.spec_in[(pos + k) % SPEC_LEN].store(((l + r) * 0.5).to_bits(), Relaxed);
+        }
+    }
+
+    /// Record the block coming out of the slot, then move on.
+    fn record_spec_out(&self, left: &[f32], right: &[f32], sample_rate: f64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let blocks = self.spec_blocks.load(Relaxed);
+        if blocks == 0 {
+            return;
+        }
+        self.spec_blocks.store(blocks - 1, Relaxed);
+        self.spec_rate.store(sample_rate.max(1.0) as u32, Relaxed);
+        let pos = self.spec_pos.load(Relaxed);
+        let mut n = 0;
+        for (k, (l, r)) in left.iter().zip(right.iter()).enumerate() {
+            self.spec_out[(pos + k) % SPEC_LEN].store(((l + r) * 0.5).to_bits(), Relaxed);
+            n = k + 1;
+        }
+        self.spec_pos.store(pos.wrapping_add(n), Relaxed);
+    }
+
+    /// The last `SPEC_LEN` samples into and out of the slot, oldest first,
+    /// and the rate they were taken at; keeps recording for about the next
+    /// two seconds.
+    pub fn spectrum_samples(&self) -> (Vec<f32>, Vec<f32>, u32) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.spec_blocks.store(400, Relaxed);
+        let pos = self.spec_pos.load(Relaxed);
+        let read = |ring: &[std::sync::atomic::AtomicU32]| -> Vec<f32> {
+            (0..SPEC_LEN)
+                .map(|k| f32::from_bits(ring[(pos + k) % SPEC_LEN].load(Relaxed)))
+                .collect()
+        };
+        (
+            read(&self.spec_in),
+            read(&self.spec_out),
+            self.spec_rate.load(Relaxed),
+        )
     }
 
     /// The last `SCOPE_LEN` output frames, oldest first, as [l, r, l, r, ..],
@@ -289,6 +361,7 @@ impl InsertChain {
             scratch.midi_out.clear();
             SlotLevels::raise(&slot.levels.in_l, &left[..n]);
             SlotLevels::raise(&slot.levels.in_r, &right[..n]);
+            slot.levels.record_spec_in(&left[..n], &right[..n]);
             // Where the song is, so a plug-in can work in beats rather
             // than only in milliseconds.
             slot.plugin.set_transport(self.transport);
@@ -348,6 +421,8 @@ impl InsertChain {
             SlotLevels::raise(&slot.levels.out_l, &left[..n]);
             SlotLevels::raise(&slot.levels.out_r, &right[..n]);
             slot.levels.record_scope(&left[..n], &right[..n]);
+            slot.levels
+                .record_spec_out(&left[..n], &right[..n], self.transport.sample_rate);
         }
     }
 
@@ -1590,6 +1665,35 @@ mod tests {
         let frames = levels.scope();
         assert_eq!(frames.len(), SCOPE_LEN * 2);
         assert_eq!((frames[0], frames[1]), (0.5, -0.25));
+    }
+
+    #[test]
+    fn the_analyzer_hears_before_and_after_the_slot_only_while_read() {
+        let mut chain = InsertChain::new();
+        // A gain slot at 0.5, so what goes out is half of what comes in.
+        let (slot, _) = make_gain_slot("g", 0.5, true);
+        let levels = std::sync::Arc::clone(&slot.levels);
+        chain.slots.push(slot);
+        let mut scratch = Scratch::default();
+        let (mut left, mut right) = (vec![0.8_f32; 512], vec![0.4_f32; 512]);
+        chain.process(&mut left, &mut right, 512, &mut scratch, &[], None);
+        let (pre, post, _) = levels.spectrum_samples();
+        assert!(
+            pre.iter().chain(post.iter()).all(|v| *v == 0.0),
+            "nothing before a read"
+        );
+        let (mut left, mut right) = (vec![0.8_f32; SPEC_LEN], vec![0.4_f32; SPEC_LEN]);
+        chain.process(&mut left, &mut right, SPEC_LEN, &mut scratch, &[], None);
+        let (pre, post, _) = levels.spectrum_samples();
+        assert_eq!(pre.len(), SPEC_LEN);
+        assert!(
+            (pre[SPEC_LEN - 1] - 0.6).abs() < 1e-6,
+            "mono of what went in"
+        );
+        assert!(
+            (post[SPEC_LEN - 1] - 0.3).abs() < 1e-6,
+            "mono of what came out"
+        );
     }
 
     /// A window's knobs follow automation: what the chain sets is read back

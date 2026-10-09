@@ -14,26 +14,87 @@ use std::path::PathBuf;
 const NUM_BANDS: usize = 7;
 const PARAMS_PER_BAND: u32 = 4;
 const PARAMS_GLOBAL: u32 = 1;
+/// Each band's shape, one parameter per band after Output Gain. Added after
+/// the others so every older parameter keeps its id: automation and saved
+/// songs address parameters by id.
+const TYPE_BASE: u32 = NUM_BANDS as u32 * PARAMS_PER_BAND + PARAMS_GLOBAL;
+
+/// The shapes a band can take, in the order the Type parameter counts them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    LowCut,
+    LowShelf,
+    Bell,
+    Notch,
+    HighShelf,
+    HighCut,
+}
+
+const SHAPES: [Shape; 6] = [
+    Shape::LowCut,
+    Shape::LowShelf,
+    Shape::Bell,
+    Shape::Notch,
+    Shape::HighShelf,
+    Shape::HighCut,
+];
+
+impl Shape {
+    fn from_value(v: f64) -> Self {
+        SHAPES[(v.round().max(0.0) as usize).min(SHAPES.len() - 1)]
+    }
+    fn value(self) -> f64 {
+        SHAPES.iter().position(|s| *s == self).unwrap_or(2) as f64
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Shape::LowCut => "Low cut",
+            Shape::LowShelf => "Low shelf",
+            Shape::Bell => "Bell",
+            Shape::Notch => "Notch",
+            Shape::HighShelf => "High shelf",
+            Shape::HighCut => "High cut",
+        }
+    }
+    fn kind(self) -> BiquadKind {
+        match self {
+            Shape::LowCut => BiquadKind::HighPass,
+            Shape::LowShelf => BiquadKind::LowShelf,
+            Shape::Bell => BiquadKind::Peak,
+            Shape::Notch => BiquadKind::Notch,
+            Shape::HighShelf => BiquadKind::HighShelf,
+            Shape::HighCut => BiquadKind::LowPass,
+        }
+    }
+    /// The cuts are two filters in a row: 24 dB an octave, as an EQ's
+    /// cut is expected to be, not the 12 of one biquad.
+    fn stages(self) -> usize {
+        matches!(self, Shape::LowCut | Shape::HighCut) as usize + 1
+    }
+}
 
 /// One EQ band — shared-coefficient biquad + user-facing params.
 struct Band {
-    kind: BiquadKind,
+    shape: Shape,
     enabled: bool,
     frequency_hz: f64,
     gain_db: f64,
     q: f64,
     biquad: Biquad,
+    /// The second stage of a cut.
+    biquad2: Biquad,
 }
 
 impl Band {
-    fn new(kind: BiquadKind, freq: f64) -> Self {
+    fn new(shape: Shape, freq: f64) -> Self {
         Self {
-            kind,
+            shape,
             enabled: false,
             frequency_hz: freq,
             gain_db: 0.0,
             q: 1.0,
             biquad: Biquad::default(),
+            biquad2: Biquad::default(),
         }
     }
 
@@ -41,13 +102,15 @@ impl Band {
         if !self.enabled {
             return;
         }
-        self.biquad.set(
-            self.kind,
-            sr as f32,
-            self.frequency_hz as f32,
-            self.q as f32,
-            self.gain_db as f32,
-        );
+        for b in [&mut self.biquad, &mut self.biquad2] {
+            b.set(
+                self.shape.kind(),
+                sr as f32,
+                self.frequency_hz as f32,
+                self.q as f32,
+                self.gain_db as f32,
+            );
+        }
     }
 }
 
@@ -83,13 +146,13 @@ impl NativeEq {
         Self {
             descriptor: Self::descriptor(),
             bands: [
-                Band::new(BiquadKind::LowShelf, 80.0),
-                Band::new(BiquadKind::Peak, 200.0),
-                Band::new(BiquadKind::Peak, 500.0),
-                Band::new(BiquadKind::Peak, 1_000.0),
-                Band::new(BiquadKind::Peak, 3_000.0),
-                Band::new(BiquadKind::Peak, 6_000.0),
-                Band::new(BiquadKind::HighShelf, 10_000.0),
+                Band::new(Shape::LowShelf, 80.0),
+                Band::new(Shape::Bell, 200.0),
+                Band::new(Shape::Bell, 500.0),
+                Band::new(Shape::Bell, 1_000.0),
+                Band::new(Shape::Bell, 3_000.0),
+                Band::new(Shape::Bell, 6_000.0),
+                Band::new(Shape::HighShelf, 10_000.0),
             ],
             output_gain_db: 0.0,
             sample_rate: 48_000.0,
@@ -98,7 +161,7 @@ impl NativeEq {
     }
 
     fn total_params(&self) -> u32 {
-        NUM_BANDS as u32 * PARAMS_PER_BAND + PARAMS_GLOBAL
+        TYPE_BASE + NUM_BANDS as u32
     }
 
     fn refresh_coeffs(&mut self) {
@@ -154,7 +217,10 @@ impl HostedPlugin for NativeEq {
             for i in 0..outputs[0].len().min(outputs[1].len()) {
                 let l = outputs[0][i];
                 let r = outputs[1][i];
-                let (yl, yr) = band.biquad.process_stereo(l, r);
+                let (mut yl, mut yr) = band.biquad.process_stereo(l, r);
+                if band.shape.stages() == 2 {
+                    (yl, yr) = band.biquad2.process_stereo(yl, yr);
+                }
                 outputs[0][i] = yl;
                 outputs[1][i] = yr;
             }
@@ -180,9 +246,10 @@ impl HostedPlugin for NativeEq {
         if index < bands * PARAMS_PER_BAND {
             let band_index = index / PARAMS_PER_BAND;
             let param_index = index % PARAMS_PER_BAND;
+            let start = Self::new().bands[band_index as usize].frequency_hz;
             let (name, min, max, unit, default) = match param_index {
                 0 => ("Enabled", 0.0, 1.0, "toggle", 0.0),
-                1 => ("Frequency", 20.0, 20_000.0, "Hz", 1_000.0),
+                1 => ("Frequency", 20.0, 20_000.0, "Hz", start),
                 2 => ("Gain", -24.0, 24.0, "dB", 0.0),
                 3 => ("Q", 0.1, 10.0, "", 1.0),
                 _ => return None,
@@ -208,6 +275,18 @@ impl HostedPlugin for NativeEq {
                 automatable: true,
             });
         }
+        if (TYPE_BASE..TYPE_BASE + bands).contains(&index) {
+            let band = (index - TYPE_BASE) as usize;
+            return Some(ParameterInfo {
+                id: index,
+                name: format!("Band {} Type", band + 1),
+                default_value: Self::new().bands[band].shape.value(),
+                min: 0.0,
+                max: (SHAPES.len() - 1) as f64,
+                unit: String::new(),
+                automatable: false,
+            });
+        }
         None
     }
 
@@ -224,6 +303,8 @@ impl HostedPlugin for NativeEq {
             }
         } else if id == bands * PARAMS_PER_BAND {
             self.output_gain_db
+        } else if (TYPE_BASE..TYPE_BASE + bands).contains(&id) {
+            self.bands[(id - TYPE_BASE) as usize].shape.value()
         } else {
             0.0
         }
@@ -242,6 +323,15 @@ impl HostedPlugin for NativeEq {
             }
         } else if id == bands * PARAMS_PER_BAND {
             self.output_gain_db = value.clamp(-24.0, 24.0);
+        } else if (TYPE_BASE..TYPE_BASE + bands).contains(&id) {
+            let band = &mut self.bands[(id - TYPE_BASE) as usize];
+            let shape = Shape::from_value(value);
+            if shape != band.shape {
+                band.shape = shape;
+                // A new shape starts from silence, not the old filter's memory.
+                band.biquad.reset();
+                band.biquad2.reset();
+            }
         }
         self.refresh_coeffs();
     }
@@ -254,6 +344,9 @@ impl HostedPlugin for NativeEq {
         if id == NUM_BANDS as u32 * PARAMS_PER_BAND {
             return Some(format::db(v));
         }
+        if id >= TYPE_BASE {
+            return Some(Shape::from_value(v).label().to_string());
+        }
         Some(match id % PARAMS_PER_BAND {
             0 => format::on_off(v),
             1 => format::hz(v),
@@ -263,9 +356,14 @@ impl HostedPlugin for NativeEq {
         })
     }
 
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        (id >= TYPE_BASE && id < self.total_params())
+            .then(|| SHAPES.iter().map(|s| s.label().to_string()).collect())
+    }
+
     fn get_state(&self) -> Vec<u8> {
         let mut state = Vec::with_capacity(1 + NUM_BANDS * 32 + 8);
-        state.extend_from_slice(&1u32.to_le_bytes());
+        state.extend_from_slice(&2u32.to_le_bytes());
         for band in self.bands.iter() {
             state.push(u8::from(band.enabled));
             state.extend_from_slice(&(band.frequency_hz as f32).to_le_bytes());
@@ -273,6 +371,10 @@ impl HostedPlugin for NativeEq {
             state.extend_from_slice(&(band.q as f32).to_le_bytes());
         }
         state.extend_from_slice(&(self.output_gain_db as f32).to_le_bytes());
+        // Version 2: each band's shape, after everything version 1 had.
+        for band in self.bands.iter() {
+            state.push(band.shape.value() as u8);
+        }
         state
     }
 
@@ -298,6 +400,15 @@ impl HostedPlugin for NativeEq {
         if cursor + 4 <= bytes.len() {
             self.output_gain_db =
                 f32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as f64;
+            cursor += 4;
+        }
+        // Shapes came in version 2; an older state keeps the default ones.
+        let defaults = Self::new();
+        for (i, band) in self.bands.iter_mut().enumerate() {
+            band.shape = bytes
+                .get(cursor + i)
+                .map(|b| Shape::from_value(*b as f64))
+                .unwrap_or(defaults.bands[i].shape);
         }
         self.refresh_coeffs();
         Ok(())
@@ -372,14 +483,24 @@ mod tests {
             for v in [info.min, info.default_value, info.max] {
                 assert!(eq.parameter_text(id, v).is_some(), "no text for {id}");
             }
-            assert!(eq.parameter_options(id).is_none());
+            assert_eq!(
+                eq.parameter_options(id).is_some(),
+                id >= TYPE_BASE,
+                "options only for the shapes"
+            );
         }
     }
 
     #[test]
     fn param_count_matches_formula() {
         let eq = NativeEq::new();
-        assert_eq!(eq.get_parameter_count(), NUM_BANDS as u32 * 4 + 1);
+        assert_eq!(
+            eq.get_parameter_count(),
+            NUM_BANDS as u32 * 4 + 1 + NUM_BANDS as u32
+        );
+        // The parameters that were there before keep their ids.
+        assert_eq!(eq.get_parameter_info(28).unwrap().name, "Output Gain");
+        assert_eq!(eq.get_parameter_info(29).unwrap().name, "Band 1 Type");
     }
 
     #[test]
@@ -403,5 +524,57 @@ mod tests {
         assert!((eq2.get_parameter_value(0) - 1.0).abs() < 1e-6);
         assert!((eq2.get_parameter_value(2) - 6.0).abs() < 1e-6);
         assert!((eq2.get_parameter_value(NUM_BANDS as u32 * 4) + 3.0).abs() < 1e-6);
+    }
+
+    /// RMS of a sine at `hz` through the EQ, in dB relative to the input.
+    fn gain_at(eq: &mut NativeEq, hz: f32) -> f32 {
+        let n = 16_384;
+        let input: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * hz * i as f32 / 48_000.0).sin() * 0.5)
+            .collect();
+        let mut outputs = vec![Vec::new(), Vec::new()];
+        eq.process(&[&input, &input], &mut outputs, &[], &mut Vec::new(), n);
+        let rms =
+            |v: &[f32]| (v[n / 2..].iter().map(|x| x * x).sum::<f32>() / (n / 2) as f32).sqrt();
+        20.0 * (rms(&outputs[0]) / rms(&input)).log10()
+    }
+
+    #[test]
+    fn a_low_cut_takes_out_the_lows_at_24_db_an_octave() {
+        let mut eq = NativeEq::new();
+        eq.activate(48_000.0, 512).unwrap();
+        eq.set_parameter_value(TYPE_BASE, 0.0); // band 1: low cut
+        eq.set_parameter_value(0, 1.0);
+        eq.set_parameter_value(1, 200.0);
+        eq.set_parameter_value(3, 0.71);
+        let pass = gain_at(&mut eq, 2_000.0);
+        let octave_down = gain_at(&mut eq, 100.0);
+        assert!(pass.abs() < 0.5, "the highs pass: {pass}");
+        assert!(
+            octave_down < -18.0,
+            "an octave below is about 24 dB down: {octave_down}"
+        );
+    }
+
+    #[test]
+    fn shapes_are_saved_and_older_states_keep_theirs() {
+        let mut eq = NativeEq::new();
+        eq.set_parameter_value(TYPE_BASE + 6, 5.0); // band 7: high cut
+        let mut back = NativeEq::new();
+        back.set_state(&eq.get_state()).unwrap();
+        assert_eq!(back.get_parameter_value(TYPE_BASE + 6), 5.0);
+        // A version 1 state: no shapes at the end.
+        let mut v1 = eq.get_state();
+        v1.truncate(v1.len() - NUM_BANDS);
+        let mut old = NativeEq::new();
+        old.set_state(&v1).unwrap();
+        assert_eq!(
+            old.get_parameter_value(TYPE_BASE + 6),
+            Shape::HighShelf.value()
+        );
+        assert_eq!(
+            old.parameter_text(TYPE_BASE, 0.0).as_deref(),
+            Some("Low cut")
+        );
     }
 }

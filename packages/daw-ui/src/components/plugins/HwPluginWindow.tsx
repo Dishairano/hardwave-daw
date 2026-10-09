@@ -7,14 +7,15 @@ import { useTrackStore } from '../../stores/trackStore'
 import { useAutomationWriteStore } from '../../stores/automationWriteStore'
 import { useTransportStore } from '../../stores/transportStore'
 import {
-  EQ_BAND_COLOURS, EQ_BAND_KINDS, FAMILY, type FamilyColours, type Panel, type PluginLayout, type Readout, type Row,
+  FAMILY, type FamilyColours, type Panel, type PluginLayout, type Readout, type Row,
   layoutFor, windowWidth,
 } from './pluginLayouts'
 import {
-  LIVE_KINDS, NO_LIVE, ParamView, SCOPE_KINDS, correlation, drawDisplay, drawKnob, eqBands, freqX, toDb, valueForNumber, xFreq, yEq,
+  LIVE_KINDS, NO_LIVE, ParamView, SCOPE_KINDS, correlation, drawDisplay, drawKnob, freqX, toDb, valueForNumber, xFreq,
   type LiveData, type PluginParam,
 } from './pluginDraw'
 import { ParamMenu, type ParamMenuTarget } from './ParamMenu'
+import { EqWindow } from './EqWindow'
 import './hwPlugin.css'
 
 export interface HwPluginWindowProps {
@@ -89,6 +90,7 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
   const insert = useTrackStore((s) => s.tracks.find((t) => t.id === trackId)?.inserts?.find((i) => i.id === slotId))
   const track = useTrackStore((s) => s.tracks.find((t) => t.id === trackId))
   const [enabled, setEnabled] = useState(insert?.enabled ?? true)
+  const sampleRate = useTransportStore((st) => st.sampleRate) || 48000
   useEffect(() => { if (insert) setEnabled(insert.enabled) }, [insert?.enabled])
 
   // Which of this slot's parameters have automation, to mark them.
@@ -170,6 +172,8 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
   // ---- live data from the slot
   const kinds = useMemo(() => displayKinds(layout), [layout])
   const wantsScope = kinds.some((k) => SCOPE_KINDS.has(k))
+  // The EQ shows the sound before and after it.
+  const wantsSpectrum = layout.custom === 'eq'
   const live = useRef<LiveData>({ ...NO_LIVE, grHistory: [], inHistory: [] })
   // New measurements go to the meters and displays that show them, not
   // through React state: that re-rendered every knob in the window 30
@@ -189,10 +193,10 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
       const started = performance.now()
       n++
       const scope = wantsScope && n % 2 === 0
-      invoke<{ levels: [number, number, number, number]; gr: number | null; scope: number[] | null; changes: [number, number][] }>(
-        'get_slot_live', { trackId, slotId, scope },
+      invoke<{ levels: [number, number, number, number]; gr: number | null; scope: number[] | null; changes: [number, number][]; spectrum?: [number[], number[]] | null }>(
+        'get_slot_live', { trackId, slotId, scope, spectrum: wantsSpectrum },
       )
-        .then(({ levels, gr, scope: frames, changes: moved }) => {
+        .then(({ levels, gr, scope: frames, changes: moved, spectrum }) => {
           if (!alive) return
           // The song moved these (automation, a controller, modulation):
           // the knobs follow, except one being dragged right now.
@@ -216,6 +220,7 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
           l.grHistory = [...l.grHistory, l.gr ?? 0].slice(-HISTORY)
           l.inHistory = [...l.inHistory, toDb(Math.max(levels[0], levels[1]))].slice(-HISTORY)
           if (frames) l.scope = frames
+          l.spectrum = spectrum ?? null
           bus.emit()
         })
         .catch(() => { /* the slot may be going away */ })
@@ -225,7 +230,7 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
     }
     poll()
     return () => { alive = false; window.clearTimeout(timer) }
-  }, [trackId, slotId, wantsScope, bus])
+  }, [trackId, slotId, wantsScope, wantsSpectrum, bus])
 
   // The wavetable's frames, for its display.
   const bank = view.t('Bank')
@@ -279,6 +284,37 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
 
   const name = pluginName.replace(/^Hardwave /, '')
 
+  const menuEl = menu && (
+    <ParamMenu
+      target={menu}
+      view={view}
+      trackId={trackId}
+      slotId={slotId}
+      pluginName={name}
+      accent={fam.a2}
+      automated={automated.has(menu.param.id)}
+      onSet={(v) => setParam(menu.param, v)}
+      onClose={() => setMenu(null)}
+    />
+  )
+
+  if (layout.custom === 'eq') {
+    return (
+      <div style={style}>
+        <EqWindow
+          name={name === 'EQ' || name === 'Eq' ? 'Parametric EQ' : name}
+          view={view} ready={!!params} error={error}
+          setParam={setParam} openMenu={openMenu} automated={automated}
+          bus={bus} live={live.current} sampleRate={sampleRate}
+          ab={ab} onAb={switchAb} enabled={enabled} onBypass={setBypass}
+          presetPicker={<PresetPicker trackId={trackId} slotId={slotId} pluginId={pluginId} onLoaded={() => setGeneration((g) => g + 1)} />}
+          rootRef={rootRef} menu={menuEl}
+          onClose={onClose} onHeaderPointerDown={onHeaderPointerDown}
+        />
+      </div>
+    )
+  }
+
   return (
     <div ref={rootRef} className={`hwp${own ? ' own' : ''}`} style={style} onContextMenu={(e) => e.preventDefault()}>
       <div className="hdr" onPointerDown={onHeaderPointerDown}>
@@ -316,8 +352,6 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
           <div className="note" style={{ flex: 1, padding: 20 }}>Could not read {name}&apos;s settings: {error}</div>
         ) : !params ? (
           <div className="note" style={{ flex: 1, padding: 20 }}>Loading…</div>
-        ) : layout.custom === 'eq' ? (
-          <EqBody ctx={ctx} />
         ) : (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
             {layout.top && <PanelView ctx={ctx} p={layout.top} />}
@@ -340,19 +374,7 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
         {version && <span className="r"><b>v{version}</b></span>}
       </div>
 
-      {menu && (
-        <ParamMenu
-          target={menu}
-          view={view}
-          trackId={trackId}
-          slotId={slotId}
-          pluginName={name}
-          accent={fam.a2}
-          automated={automated.has(menu.param.id)}
-          onSet={(v) => setParam(menu.param, v)}
-          onClose={() => setMenu(null)}
-        />
-      )}
+      {menuEl}
     </div>
   )
 }
@@ -720,109 +742,6 @@ function LoadSample() {
   return (
     <div className="note">
       With this channel selected, right-click a sample in the browser and choose <b style={{ color: 'var(--txt)' }}>Send to selected channel</b>.
-    </div>
-  )
-}
-
-// ----------------------------------------------------------------- the EQ
-
-function EqBody({ ctx }: { ctx: Ctx }) {
-  const v = ctx.view
-  const bands = eqBands(v)
-  const b = ctx.eqBand + 1
-  const col = EQ_BAND_COLOURS[ctx.eqBand] ?? '#2DD4BF'
-  const onQ = v.par(`Band ${b} Enabled`)
-  const kindName = { lowshelf: 'Low shelf', highshelf: 'High shelf', peak: 'Bell' }[EQ_BAND_KINDS[ctx.eqBand] ?? 'peak']
-  const ref = useRef<HTMLCanvasElement>(null)
-  const [corner, setCorner] = useState('')
-  useEffect(() => {
-    if (ref.current) setCorner(drawDisplay(ref.current, 'eq', v, ctx.fam, ctx.live, { eqBand: ctx.eqBand }))
-  }, [v, ctx.fam, ctx.eqBand, ctx.live])
-
-  // Drag a band's point: frequency across, gain up and down. Scroll for Q.
-  const pick = (x: number, y: number, W: number, H: number) => {
-    let best = -1, bestD = 18
-    bands.forEach((bd, i) => {
-      if (!bd.on && i !== ctx.eqBand) return
-      const d = Math.hypot(freqX(bd.f, W) - x, (H / 2 - (bd.g / 24) * (H / 2 - 10)) - y)
-      if (d < bestD) { bestD = d; best = i }
-    })
-    return best
-  }
-  const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    const c = e.currentTarget, r = c.getBoundingClientRect()
-    const i = pick(e.clientX - r.left, e.clientY - r.top, r.width, r.height)
-    if (i < 0) return
-    ctx.setEqBand(i)
-    const fq = v.par(`Band ${i + 1} Frequency`), gq = v.par(`Band ${i + 1} Gain`), en = v.par(`Band ${i + 1} Enabled`)
-    if (!fq || !gq) return
-    if (en && v.norm(en) < 0.5) ctx.setParam(en, en.max)
-    c.setPointerCapture(e.pointerId)
-    const move = (ev: PointerEvent) => {
-      ctx.setParam(fq, xFreq(ev.clientX - r.left, r.width))
-      ctx.setParam(gq, Math.max(-24, Math.min(24, yEq(ev.clientY - r.top, r.height))))
-    }
-    const up = () => { c.removeEventListener('pointermove', move); c.removeEventListener('pointerup', up) }
-    c.addEventListener('pointermove', move); c.addEventListener('pointerup', up)
-  }
-  const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    const qq = v.par(`Band ${b} Q`)
-    if (!qq) return
-    ctx.setParam(qq, v.v(`Band ${b} Q`, 0.7) * (e.deltaY < 0 ? 1.08 : 1 / 1.08))
-  }
-  const onContextMenu = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const r = e.currentTarget.getBoundingClientRect()
-    const i = pick(e.clientX - r.left, e.clientY - r.top, r.width, r.height)
-    const q = v.par(`Band ${(i < 0 ? ctx.eqBand : i) + 1} Gain`)
-    if (q) ctx.openMenu(e, q)
-  }
-
-  return (
-    <div className="cols" style={{ '--cols': '1fr 250px' } as CSSProperties}>
-      <div className="col">
-        <div className="pnl grow">
-          <div className="ph"><span className="dot" /><span className="t">Response</span><span className="x">drag a point · scroll for Q</span></div>
-          <div className="sec fill">
-            <div className="disp drag" style={{ height: 300 }}>
-              <canvas ref={ref} onPointerDown={onPointerDown} onWheel={onWheel} onContextMenu={onContextMenu} />
-              <span className="dl">FREQUENCY RESPONSE</span>
-              <span className="dr">{corner}</span>
-            </div>
-          </div>
-          <div className="sec">
-            <div className="bandbar">
-              {bands.map((bd, i) => (
-                <button key={i} style={{ '--c': EQ_BAND_COLOURS[i] } as CSSProperties} className={`${bd.on ? 'live' : ''} ${i === ctx.eqBand ? 'sel' : ''}`} onClick={() => ctx.setEqBand(i)}>
-                  <i />BAND {i + 1}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-      <div className="col">
-        <div className="pnl" style={{ '--a': col, '--a2': col } as CSSProperties}>
-          <div className="ph">
-            <span className="dot" /><span className="t hi">Band {b}</span><span className="x">{kindName}</span>
-            {onQ && (
-              <span className={`tg${v.norm(onQ) >= 0.5 ? ' on' : ''}`} onClick={() => ctx.setParam(onQ, v.norm(onQ) >= 0.5 ? onQ.min : onQ.max)} onContextMenu={(e) => ctx.openMenu(e, onQ)}>ON<i /></span>
-            )}
-          </div>
-          <div className="sec">
-            <div className="rows">
-              <div className="knobs"><KnobFor ctx={{ ...ctx, fam: { a: col, a2: col, deep: ctx.fam.deep } }} name={`Band ${b} Frequency`} big /></div>
-              <div className="knobs">
-                <KnobFor ctx={{ ...ctx, fam: { a: col, a2: col, deep: ctx.fam.deep } }} name={`Band ${b} Gain`} />
-                <KnobFor ctx={{ ...ctx, fam: { a: col, a2: col, deep: ctx.fam.deep } }} name={`Band ${b} Q`} />
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="pnl grow">
-          <div className="ph"><span className="dot" /><span className="t">Output</span></div>
-          <div className="sec fill"><div className="rows"><div className="knobs"><KnobFor ctx={ctx} name="Output Gain" big /></div><LevelRows ctx={ctx} /></div></div>
-        </div>
-      </div>
     </div>
   )
 }

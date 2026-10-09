@@ -427,6 +427,19 @@ const mock: TauriInternals = {
             })
             : null,
           changes: [],
+          // A kick-heavy mix, so the EQ's analyzer has something to show.
+          spectrum: (args as { spectrum?: boolean })?.spectrum
+            ? (() => {
+              const t = performance.now() / 400, kick = Math.exp(-(t % 1) * 7)
+              const band = (i: number, eq: number) => {
+                const f = 20 * Math.pow(1000, i / 191), o = Math.log2(f / 60)
+                return -26 - 4.2 * Math.max(0, Math.log2(f / 120)) - 9 * Math.max(0, -Math.log2(f / 40))
+                  + 16 * kick * Math.exp(-o * o * 1.4) + (Math.random() - 0.5) * 5 + eq
+              }
+              const pre = Array.from({ length: 192 }, (_, i) => band(i, 0))
+              return [pre, pre.map((d, i) => d + (i < 30 ? 2 : i > 150 ? 1.5 : 0))]
+            })()
+            : null,
         }
       case 'get_gain_reduction': {
         const slotId = new URLSearchParams(location.search).get('id')

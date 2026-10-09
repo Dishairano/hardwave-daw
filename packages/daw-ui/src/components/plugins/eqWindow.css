@@ -1,0 +1,75 @@
+/* The EQ's window (EqWindow.tsx). Flat, quiet chrome around a display
+   that takes nearly all of it; small sans type; nothing in boxes. The
+   direction approved on 10 Oct 2026 (suite: daw-plugin-feel-mockup). */
+.eqw {
+  --win: #121317; --bar: #17181d; --line: #24262d; --line2: #2e3038;
+  --txt: #e6e7eb; --sub: #9a9ca7; --dim: #5d606b;
+  width: var(--w, 1000px); max-width: 100%; background: var(--win); color: var(--txt);
+  font: 12px/1.4 Inter, 'Segoe UI', system-ui, sans-serif; border-radius: 9px; overflow: hidden; position: relative;
+  box-shadow: 0 0 0 1px #000, 0 0 0 2px rgba(255,255,255,.035), 0 30px 80px rgba(0,0,0,.7);
+  user-select: none; display: flex; flex-direction: column;
+}
+.eqw *, .eqw *::before, .eqw *::after { box-sizing: border-box; }
+.eqw button { font: inherit; }
+
+.eqw-hd { height: 40px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 12px; background: var(--bar); border-bottom: 1px solid #0b0b0d; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
+.eqw-logo { width: 20px; height: 20px; border-radius: 5px; background: linear-gradient(140deg, #ff6a78, #d9223b); display: grid; place-items: center; box-shadow: inset 0 1px 0 rgba(255,255,255,.3); flex: none; }
+.eqw-nm { font-weight: 600; font-size: 13px; color: #fff; margin: 0 10px 0 6px; letter-spacing: -.01em; white-space: nowrap; }
+.eqw-sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+.eqw-grow { flex: 1; }
+
+/* the shared preset picker, in this window's look */
+.eqw-pre { height: 26px; width: 240px; display: flex; align-items: center; background: #0d0e11; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.eqw-pre .arw { width: 24px; height: 100%; border: 0; background: transparent; color: var(--sub); cursor: pointer; font-size: 9px; }
+.eqw-pre .arw:hover:not(:disabled) { color: #fff; background: #1b1c22; }
+.eqw-pre .arw:disabled { opacity: .35; cursor: default; }
+.eqw-pre .preset { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 500; color: var(--txt); }
+.eqw-pre .preset select { all: unset; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; text-align: center; }
+.eqw-pre .preset i { font-style: normal; color: var(--dim); font-size: 9px; }
+
+.eqw-ab { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.eqw-ab button, .eqw-tools button { height: 26px; min-width: 26px; padding: 0 8px; border: 0; background: transparent; color: var(--sub); font-weight: 500; font-size: 11px; cursor: pointer; border-radius: 5px; }
+.eqw-ab button { border-radius: 0; }
+.eqw-ab button:hover, .eqw-tools button:hover { color: #fff; background: #1d1e24; }
+.eqw-ab button.on, .eqw-tools button.on { color: #fff; background: #23252c; }
+.eqw-tools { display: flex; align-items: center; gap: 2px; }
+.eqw-pw { width: 26px !important; min-width: 26px; height: 26px; padding: 0 !important; border-radius: 50% !important; display: grid; place-items: center; background: #0d0e11 !important; box-shadow: 0 0 0 1px var(--line); border: 0; cursor: pointer; }
+.eqw-pw svg { stroke: #4fe3a0; filter: drop-shadow(0 0 4px rgba(79,227,160,.6)); }
+.eqw-pw.off svg { stroke: var(--dim); filter: none; }
+.eqw-x { width: 26px; color: var(--sub) !important; }
+
+.eqw-main { display: flex; height: 470px; }
+.eqw-disp { position: relative; flex: 1; min-width: 0; background: radial-gradient(120% 90% at 50% 0%, #15171c, #0b0c0f 70%); overflow: hidden; cursor: crosshair; touch-action: none; }
+.eqw-disp > canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.eqw-note { position: absolute; left: 16px; top: 14px; color: var(--sub); }
+.eqw-empty { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); color: var(--dim); font-size: 13px; pointer-events: none; }
+.eqw-hint { margin-left: auto; color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eqw-tip { position: absolute; z-index: 6; pointer-events: none; padding: 4px 7px; border-radius: 5px; background: rgba(10,10,12,.92); box-shadow: 0 0 0 1px rgba(255,255,255,.08); font-weight: 500; font-size: 11px; color: #fff; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.eqw-side { width: 76px; border-left: 1px solid #0b0b0d; background: var(--bar); display: flex; flex-direction: column; align-items: center; padding: 12px 0 10px; gap: 10px; }
+.eqw-lab { font-size: 10px; color: var(--dim); }
+.eqw-meter { width: 22px; flex: 1; min-height: 0; }
+
+.eqw-pop { position: absolute; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 8px; border-radius: 8px;
+  background: rgba(24,25,31,.94); backdrop-filter: blur(10px); cursor: default;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.6), 0 0 0 2px rgba(255,255,255,.04), 0 14px 34px rgba(0,0,0,.55); }
+.eqw-types { display: grid; grid-template-columns: repeat(3, 26px); gap: 2px; }
+.eqw-types button { width: 26px; height: 22px; border: 0; border-radius: 4px; background: transparent; display: grid; place-items: center; cursor: pointer; }
+.eqw-types button svg { stroke: var(--dim); }
+.eqw-types button:hover svg { stroke: #fff; }
+.eqw-types button.on { background: #2a2c34; }
+.eqw-types button.on svg { stroke: var(--bc); }
+
+.eqw-k { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 56px; cursor: ns-resize; }
+.eqw-k canvas { width: 32px; height: 32px; }
+.eqw-k b { font-weight: 600; font-size: 11px; color: #fff; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.eqw-k small { font-size: 10px; color: var(--dim); }
+.eqw-k.dis { opacity: .3; cursor: default; }
+.eqw-k.auto b { color: #ffd84d; }
+
+.eqw-ft { height: 34px; display: flex; align-items: center; gap: 4px; padding: 0 8px; background: var(--bar); border-top: 1px solid #0b0b0d; overflow: hidden; }
+.eqw-chip { height: 24px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; font-weight: 500; font-size: 11px; color: var(--sub); cursor: pointer; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.eqw-chip i { width: 8px; height: 8px; border-radius: 50%; }
+.eqw-chip:hover { background: #1d1e24; color: #fff; }
+.eqw-chip.sel { background: #23252c; color: #fff; box-shadow: inset 0 0 0 1px var(--line2); }
+.eqw-chip.off { opacity: .45; }
