@@ -15,7 +15,9 @@
 //! anything by it, so a project comes in as its arrangement and its
 //! samples, with a list of what could not be carried.
 
-use crate::fl_import::{FlChannel, FlClipContent, FlNote, FlPlaylistClip, FlProject};
+use crate::fl_import::{
+    FlChannel, FlChannelKind, FlClipContent, FlNote, FlPlaylistClip, FlProject,
+};
 
 /// Event id boundaries: below 64 is one byte, below 128 two, below
 /// 192 four, and the rest carry a length.
@@ -25,14 +27,29 @@ const TEXT: u8 = 192;
 
 // The ids this reads. FL has hundreds; these are the ones that carry
 // the arrangement.
+const CH_TYPE: u8 = 21; // a byte: sampler, instrument, audio clip, ...
 const CH_NEW: u8 = WORD; // 64
 const PAT_NEW: u8 = WORD + 1; // 65
 const PROJ_TEMPO: u8 = DWORD + 28; // 156
+/// The channel's name in files from before FL 12 or so.
 const CH_NAME: u8 = TEXT; // 192
 const PAT_NAME: u8 = TEXT + 1; // 193
 const CH_SAMPLE: u8 = TEXT + 4; // 196
+/// What the plug-in is ("Fruity Wrapper" for a VST, "FLEX", ...).
+const PLUGIN_INTERNAL_NAME: u8 = TEXT + 9; // 201
+/// The channel's name as the rack shows it, in current files.
+const CH_DISPLAY_NAME: u8 = TEXT + 11; // 203
 const PAT_NOTES: u8 = TEXT + 16 + 16; // 224
 const ARR_PLAYLIST: u8 = TEXT + 16 + 25; // 233
+/// A playlist track's settings; its first four bytes are its index.
+const TRACK_DATA: u8 = TEXT + 46; // 238
+/// The name given to the playlist track just before it.
+const TRACK_NAME: u8 = TEXT + 47; // 239
+/// The sizes FL has written a playlist item in: 32 bytes for years, then
+/// 60 (FL 20 to 24), 80 (FL 25) and 88 (FL 26). Every item starts the
+/// same way, with the pattern base at bytes 4..6, so the right size is the
+/// one that reads the same base in every item.
+const PLAYLIST_ITEM_SIZES: [usize; 4] = [88, 80, 60, 32];
 
 /// FL counts a bar as its own PPQ in the playlist, and four of them
 /// inside a pattern. Both are converted to our ticks on the way out.
@@ -127,6 +144,10 @@ fn u32_at(data: &[u8], at: usize) -> u32 {
         .unwrap_or(0)
 }
 
+fn f32_at(data: &[u8], at: usize) -> f32 {
+    f32::from_bits(u32_at(data, at))
+}
+
 /// Read a `.flp` file.
 ///
 /// Best effort by design: a file written by a version we have not
@@ -141,6 +162,10 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     // The header holds the file's own resolution, which is what every
     // tick in it is counted in.
     let ppq = u16_at(bytes, 8 + 4).max(1) as u64;
+    // How many channels the rack has. Event 64 also turns up inside
+    // pattern data in newer files, with numbers that are not channels
+    // (one file read as 32,869 of them); only these are real.
+    let channel_count = u16_at(bytes, 8 + 2) as usize;
     // Every length here is the file's word for it, so every step is
     // checked: a short or lying file is "not an .flp", never a crash.
     let mut i = 8usize.checked_add(header_len).ok_or(FlpError::NotAnFlp)?;
@@ -163,6 +188,11 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     let scale = |ticks: u64| -> u64 { ticks * hardwave_midi::PPQ / ppq };
 
     let mut current_channel: Option<usize> = None;
+    let mut current_track: Option<u32> = None;
+    // Playlist items naming a channel: (track, start, length, channel,
+    // start offset ms, end offset ms). Made into clips at the end, once
+    // every channel's kind and sample is known.
+    let mut channel_items: Vec<(u32, u64, u64, u32, f32, f32)> = Vec::new();
     let mut current_pattern: Option<u32> = None;
     let mut pattern_names: Vec<(u32, String)> = Vec::new();
 
@@ -177,20 +207,60 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
             }
             CH_NEW => {
                 let index = u16_at(event.data, 0) as usize;
+                if channel_count > 0 && index >= channel_count {
+                    current_channel = None;
+                    continue;
+                }
                 if project.channels.len() <= index {
                     project.channels.resize_with(index + 1, || FlChannel {
                         name: String::new(),
                         sample_path: None,
                         plugin_name: None,
                         pattern_steps: Vec::new(),
+                        kind: FlChannelKind::Other,
                     });
                 }
                 current_channel = Some(index);
             }
+            CH_TYPE => {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    channel.kind =
+                        FlChannelKind::from_byte(event.data.first().copied().unwrap_or(255));
+                }
+            }
+            // The old name only fills a gap; the display name wins.
             CH_NAME => {
-                if let Some(index) = current_channel {
-                    if let Some(channel) = project.channels.get_mut(index) {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    if channel.name.is_empty() {
                         channel.name = text(event.data);
+                    }
+                }
+            }
+            CH_DISPLAY_NAME => {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    let name = text(event.data);
+                    if !name.is_empty() {
+                        channel.name = name;
+                    }
+                }
+            }
+            PLUGIN_INTERNAL_NAME => {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    let name = text(event.data);
+                    if !name.is_empty() {
+                        channel.plugin_name = Some(name);
+                    }
+                }
+            }
+            TRACK_DATA => {
+                current_track = Some(u32_at(event.data, 0));
+            }
+            TRACK_NAME => {
+                if let Some(index) = current_track {
+                    let name = text(event.data);
+                    if !name.is_empty() {
+                        // Stored from 0; the playlist's tracks count from 1.
+                        project.playlist_track_names.push((index + 1, name));
                     }
                 }
             }
@@ -237,35 +307,39 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 }
             }
             ARR_PLAYLIST => {
-                // FL has written 32 bytes per item for years and 80
-                // since 2026. Both start the same way, so the stride
-                // is whichever divides the block.
-                let stride = if event.data.len() % 80 == 0 && event.data.len() >= 80 {
-                    80
-                } else {
-                    32
+                let Some(stride) = playlist_item_size(event.data) else {
+                    continue;
                 };
                 for item in event.data.chunks_exact(stride) {
                     let position = u32_at(item, 0) as u64;
                     let pattern_base = u16_at(item, 4) as u32;
-                    let pattern_id = u16_at(item, 6) as u32;
+                    let item_id = u16_at(item, 6) as u32;
                     let length = u32_at(item, 8) as u64;
                     let track = u16_at(item, 12) as u32;
-                    // Above the base it is a pattern; below it, an
-                    // audio or automation clip, which we cannot carry.
-                    if pattern_id <= pattern_base {
-                        continue;
+                    // FL stores playlist tracks counting down from the
+                    // top of its own list.
+                    let track_index = 500u32.saturating_sub(track);
+                    if item_id > pattern_base {
+                        project.playlist_clips.push(FlPlaylistClip {
+                            track_index,
+                            start_tick: scale(position),
+                            length_ticks: scale(length).max(1),
+                            content: FlClipContent::Pattern {
+                                pattern_index: item_id - pattern_base,
+                            },
+                        });
+                    } else {
+                        let start_ms = f32_at(item, 24);
+                        let end_ms = f32_at(item, 28);
+                        channel_items.push((
+                            track_index,
+                            scale(position),
+                            scale(length).max(1),
+                            item_id,
+                            start_ms,
+                            end_ms,
+                        ));
                     }
-                    project.playlist_clips.push(FlPlaylistClip {
-                        // FL stores playlist tracks counting down from
-                        // the top of its own list.
-                        track_index: 500u32.saturating_sub(track),
-                        start_tick: scale(position),
-                        length_ticks: scale(length).max(1),
-                        content: FlClipContent::Pattern {
-                            pattern_index: pattern_id - pattern_base,
-                        },
-                    });
                 }
             }
             _ => {}
@@ -273,7 +347,47 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     }
 
     project.pattern_names = pattern_names;
+
+    // A playlist item naming a channel is an audio clip when that channel
+    // holds a sample, and an automation clip when it is one.
+    for (track_index, start_tick, length_ticks, channel_index, start_ms, end_ms) in channel_items {
+        let Some(channel) = project.channels.get(channel_index as usize) else {
+            continue;
+        };
+        let content = match (channel.kind, &channel.sample_path) {
+            (FlChannelKind::Automation, _) => FlClipContent::Automation {
+                channel_index,
+                target: channel.name.clone(),
+            },
+            (_, Some(path)) => FlClipContent::AudioSample {
+                channel_index,
+                sample_path: path.clone(),
+                start_offset_ms: start_ms,
+                end_offset_ms: end_ms,
+            },
+            _ => continue,
+        };
+        project.playlist_clips.push(FlPlaylistClip {
+            track_index,
+            start_tick,
+            length_ticks,
+            content,
+        });
+    }
     Ok(project)
+}
+
+/// The size of one playlist item in this block, from the sizes FL has
+/// used, or None when none of them reads it (then nothing is read rather
+/// than garbage).
+fn playlist_item_size(data: &[u8]) -> Option<usize> {
+    PLAYLIST_ITEM_SIZES.into_iter().find(|&size| {
+        if data.len() < size || data.len() % size != 0 {
+            return false;
+        }
+        let base = u16_at(data, 4);
+        base != 0 && data.chunks_exact(size).all(|item| u16_at(item, 4) == base)
+    })
 }
 
 #[cfg(test)]
@@ -337,7 +451,7 @@ mod tests {
             out.extend_from_slice(b"FLhd");
             out.extend_from_slice(&6u32.to_le_bytes());
             out.extend_from_slice(&0u16.to_le_bytes()); // format
-            out.extend_from_slice(&1u16.to_le_bytes()); // channels
+            out.extend_from_slice(&64u16.to_le_bytes()); // channels
             out.extend_from_slice(&ppq.to_le_bytes());
             out.extend_from_slice(b"FLdt");
             out.extend_from_slice(&(self.body.len() as u32).to_le_bytes());
@@ -503,5 +617,141 @@ mod tests {
         // At 192 ticks to the beat, 192 is beat two.
         let project = parse(&writer.finish(192)).expect("it should read");
         assert_eq!(project.notes[0].1[0].tick, hardwave_midi::PPQ);
+    }
+
+    /// One playlist item of `size` bytes, as FL writes it.
+    fn item(
+        size: usize,
+        position: u32,
+        id: u16,
+        length: u32,
+        track: u16,
+        offsets_ms: (f32, f32),
+    ) -> Vec<u8> {
+        let mut item = Vec::new();
+        item.extend_from_slice(&position.to_le_bytes());
+        item.extend_from_slice(&20480u16.to_le_bytes());
+        item.extend_from_slice(&id.to_le_bytes());
+        item.extend_from_slice(&length.to_le_bytes());
+        item.extend_from_slice(&(500 - track).to_le_bytes());
+        item.resize(24, 0);
+        item.extend_from_slice(&offsets_ms.0.to_le_bytes());
+        item.extend_from_slice(&offsets_ms.1.to_le_bytes());
+        item.resize(size, 0);
+        item
+    }
+
+    #[test]
+    fn channels_say_what_they_are_and_go_by_their_display_names() {
+        let mut writer = Writer::new();
+        writer.event(CH_NEW, &0u16.to_le_bytes());
+        writer.event(CH_TYPE, &[4]);
+        writer.text(CH_DISPLAY_NAME, "Kick render");
+        writer.text(CH_SAMPLE, "C:\\kicks\\render.wav");
+        writer.event(CH_NEW, &1u16.to_le_bytes());
+        writer.event(CH_TYPE, &[2]);
+        writer.text(PLUGIN_INTERNAL_NAME, "Fruity Wrapper");
+        writer.text(CH_NAME, "old name");
+        writer.text(CH_DISPLAY_NAME, "Serum 2");
+
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.channels[0].kind, FlChannelKind::AudioClip);
+        assert_eq!(project.channels[0].name, "Kick render");
+        assert_eq!(project.channels[1].kind, FlChannelKind::Instrument);
+        assert_eq!(
+            project.channels[1].name, "Serum 2",
+            "the display name wins over the old one"
+        );
+        assert_eq!(
+            project.channels[1].plugin_name.as_deref(),
+            Some("Fruity Wrapper")
+        );
+    }
+
+    #[test]
+    fn a_channel_number_past_the_rack_is_not_a_channel() {
+        // Newer files use the same event inside pattern data.
+        let mut writer = Writer::new();
+        writer.event(CH_NEW, &0u16.to_le_bytes());
+        writer.text(CH_DISPLAY_NAME, "Kick");
+        writer.event(CH_NEW, &32868u16.to_le_bytes());
+        writer.text(CH_DISPLAY_NAME, "not a channel");
+
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.channels.len(), 1);
+        assert_eq!(
+            project.channels[0].name, "Kick",
+            "nothing was written over it"
+        );
+    }
+
+    #[test]
+    fn audio_and_automation_clips_come_off_the_playlist_at_every_item_size() {
+        for size in PLAYLIST_ITEM_SIZES {
+            let mut writer = Writer::new();
+            writer.event(CH_NEW, &0u16.to_le_bytes());
+            writer.event(CH_TYPE, &[4]);
+            writer.text(CH_SAMPLE, "C:\\kick.wav");
+            writer.event(CH_NEW, &1u16.to_le_bytes());
+            writer.event(CH_TYPE, &[5]);
+            writer.text(CH_DISPLAY_NAME, "Filter cutoff");
+            writer.event(CH_NEW, &2u16.to_le_bytes());
+            writer.event(CH_TYPE, &[2]);
+            let mut items = Vec::new();
+            items.extend(item(size, 0, 20481, 384, 1, (-1.0, -1.0)));
+            items.extend(item(size, 96, 0, 24, 2, (12.5, 100.0)));
+            items.extend(item(size, 192, 1, 384, 3, (-1.0, -1.0)));
+            // An instrument channel on the playlist has nothing to carry.
+            items.extend(item(size, 0, 2, 96, 4, (0.0, 0.0)));
+            writer.event(ARR_PLAYLIST, &items);
+
+            let project = parse(&writer.finish(96)).expect("it should read");
+            let clips = &project.playlist_clips;
+            assert_eq!(clips.len(), 3, "{size}-byte items");
+            assert!(matches!(
+                clips[0].content,
+                FlClipContent::Pattern { pattern_index: 1 }
+            ));
+            match &clips[1].content {
+                FlClipContent::AudioSample {
+                    channel_index,
+                    sample_path,
+                    start_offset_ms,
+                    end_offset_ms,
+                } => {
+                    assert_eq!(*channel_index, 0);
+                    assert_eq!(sample_path, "C:\\kick.wav");
+                    assert_eq!((*start_offset_ms, *end_offset_ms), (12.5, 100.0));
+                }
+                other => panic!("{size}-byte items: expected audio, got {other:?}"),
+            }
+            assert_eq!(clips[1].track_index, 2);
+            assert_eq!(clips[1].start_tick, hardwave_midi::PPQ);
+            assert!(
+                matches!(&clips[2].content, FlClipContent::Automation { channel_index: 1, target } if target == "Filter cutoff")
+            );
+        }
+    }
+
+    #[test]
+    fn a_playlist_block_no_item_size_reads_is_left_alone() {
+        let mut writer = Writer::new();
+        writer.event(ARR_PLAYLIST, &[7u8; 61]);
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert!(project.playlist_clips.is_empty());
+    }
+
+    #[test]
+    fn playlist_tracks_keep_their_names() {
+        let mut writer = Writer::new();
+        writer.event(TRACK_DATA, &[0u8; 16]);
+        writer.event(TRACK_DATA, &{
+            let mut d = 7u32.to_le_bytes().to_vec();
+            d.resize(16, 0);
+            d
+        });
+        writer.text(TRACK_NAME, "Kicks");
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.playlist_track_names, vec![(8, "Kicks".to_string())]);
     }
 }

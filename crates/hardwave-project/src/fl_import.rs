@@ -15,6 +15,41 @@ pub struct FlChannel {
     pub sample_path: Option<String>,
     pub plugin_name: Option<String>,
     pub pattern_steps: Vec<bool>,
+    /// What the channel is in FL, which decides what it becomes here.
+    #[serde(default)]
+    pub kind: FlChannelKind,
+}
+
+/// The kinds of channel in FL's channel rack, as the file numbers them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FlChannelKind {
+    /// Plays a sample from its notes.
+    Sampler,
+    /// A plug-in instrument (FL's own, or a VST in FL's wrapper).
+    Instrument,
+    /// Several channels played as one.
+    Layer,
+    /// An audio clip: a file placed on the playlist.
+    AudioClip,
+    /// An automation clip.
+    Automation,
+    /// Anything else, or not said.
+    #[default]
+    Other,
+}
+
+impl FlChannelKind {
+    /// From the byte FL writes.
+    pub fn from_byte(b: u8) -> Self {
+        match b {
+            0 => Self::Sampler,
+            2 => Self::Instrument,
+            3 => Self::Layer,
+            4 => Self::AudioClip,
+            5 => Self::Automation,
+            _ => Self::Other,
+        }
+    }
 }
 
 /// Parsed piano-roll note.
@@ -37,9 +72,22 @@ pub struct FlPlaylistClip {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FlClipContent {
-    Pattern { pattern_index: u32 },
-    AudioSample { sample_path: String },
-    Automation { target: String },
+    Pattern {
+        pattern_index: u32,
+    },
+    /// A sample on the playlist: the channel it belongs to, its file, and
+    /// where in the file the clip starts and ends, in milliseconds (FL
+    /// writes -1 for "not trimmed").
+    AudioSample {
+        channel_index: u32,
+        sample_path: String,
+        start_offset_ms: f32,
+        end_offset_ms: f32,
+    },
+    Automation {
+        channel_index: u32,
+        target: String,
+    },
 }
 
 /// Parsed mixer track — volume / pan / routing only.
@@ -70,6 +118,9 @@ pub struct FlProject {
     pub pattern_names: Vec<(u32, String)>,
     pub playlist_clips: Vec<FlPlaylistClip>,
     pub mixer: Vec<FlMixerTrack>,
+    /// Names given to playlist tracks, by track number (1 is the top).
+    #[serde(default)]
+    pub playlist_track_names: Vec<(u32, String)>,
 }
 
 /// Plugin mapping — translate an FL native plugin name into a
@@ -290,24 +341,28 @@ mod tests {
                     sample_path: Some("/samples/kick.wav".into()),
                     plugin_name: None,
                     pattern_steps: [true, false, false, false].repeat(4),
+                    kind: FlChannelKind::Other,
                 },
                 FlChannel {
                     name: "Sytrus Lead".into(),
                     sample_path: None,
                     plugin_name: Some("Sytrus".into()),
                     pattern_steps: vec![true; 16],
+                    kind: FlChannelKind::Other,
                 },
                 FlChannel {
                     name: "Harmor Pad".into(),
                     sample_path: None,
                     plugin_name: Some("Harmor".into()),
                     pattern_steps: vec![false; 16],
+                    kind: FlChannelKind::Other,
                 },
                 FlChannel {
                     name: "Mystery Plugin".into(),
                     sample_path: None,
                     plugin_name: Some("WeirdOne".into()),
                     pattern_steps: vec![false; 16],
+                    kind: FlChannelKind::Other,
                 },
             ],
             notes: vec![(
@@ -334,6 +389,7 @@ mod tests {
             }],
             pattern_notes: Vec::new(),
             pattern_names: Vec::new(),
+            playlist_track_names: Vec::new(),
         }
     }
 
@@ -396,6 +452,7 @@ mod tests {
             start_tick: 0,
             length_ticks: 960,
             content: FlClipContent::Automation {
+                channel_index: 0,
                 target: "master-volume".into(),
             },
         });
