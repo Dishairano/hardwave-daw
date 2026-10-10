@@ -153,7 +153,7 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
     }
     if !r.plugins_left_behind.is_empty() {
         left_behind.push(format!(
-            "plug-ins on {}: their notes are here, add your own plug-in on those tracks",
+            "plug-ins on {}: their notes are here on muted tracks; put your own plug-in on one and unmute it",
             r.plugins_left_behind.join(", ")
         ));
     }

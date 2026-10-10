@@ -615,6 +615,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
       looping: boolean
       loopStart: number
       loopEnd: number
+      sampleRate?: number
     }>('daw:transport', (event) => {
       noteBackendEvent()
       set({
@@ -628,6 +629,8 @@ export const useTransportStore = create<TransportState>((set, get) => ({
         looping: event.payload.looping,
         loopStart: event.payload.loopStart,
         loopEnd: event.payload.loopEnd,
+        // What the position is counted in; older engines did not say.
+        ...(event.payload.sampleRate ? { sampleRate: event.payload.sampleRate } : {}),
       })
     })
   },

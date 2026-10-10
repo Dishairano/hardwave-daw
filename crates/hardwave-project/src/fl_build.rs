@@ -112,6 +112,14 @@ pub fn build_project(
                         Some(plugin) if plugin != "Fruity Wrapper" => format!("{name} ({plugin})"),
                         _ => name.clone(),
                     });
+                    // Its plug-in could not come, so the track would play its
+                    // notes on the built-in test tone: a dozen tracks of
+                    // leads and screeches as bare sines, summed at full
+                    // level, came out as a harsh distorted noise. The notes
+                    // stay; the track is muted until a plug-in is put on it.
+                    if let Some(track) = project.track_mut(&id) {
+                        track.muted = true;
+                    }
                 }
                 _ => {}
             }
@@ -437,6 +445,14 @@ mod tests {
     #[test]
     fn what_waits_for_the_samples_and_what_did_not_come_is_said() {
         let built = build_project(&song(), "Industrial", &here);
+        assert!(
+            built.project.track("insert-001").unwrap().muted,
+            "the track whose plug-in did not come is muted"
+        );
+        assert!(
+            !built.project.track("insert-002").unwrap().muted,
+            "the sampler track plays"
+        );
         assert_eq!(built.audio_offsets.len(), 1, "only the trimmed clip");
         assert_eq!(
             (built.audio_offsets[0].2, built.audio_offsets[0].3),

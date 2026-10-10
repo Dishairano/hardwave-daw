@@ -976,6 +976,10 @@ pub fn run() {
                         let looping = eng.transport.looping.load(Ordering::Relaxed);
                         let loop_start = eng.transport.loop_start.load(Ordering::Relaxed);
                         let loop_end = eng.transport.loop_end.load(Ordering::Relaxed);
+                        // The rate the engine counts the position in. The page
+                        // assumed 48 kHz, so at 192 kHz its clock and playhead
+                        // ran four times too fast.
+                        let sample_rate = eng.transport.sample_rate.load(Ordering::Relaxed);
                         let transport_payload = serde_json::json!({
                             "position": pos,
                             "playing": playing,
@@ -986,6 +990,7 @@ pub fn run() {
                             "looping": looping,
                             "loopStart": loop_start,
                             "loopEnd": loop_end,
+                            "sampleRate": sample_rate,
                         });
                         (meters, track_payload, transport_payload)
                     };
