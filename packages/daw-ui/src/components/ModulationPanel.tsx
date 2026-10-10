@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTrackStore } from '../stores/trackStore'
 import { useNotificationStore } from '../stores/notificationStore'
+import { DialogFrame } from './ui/DialogFrame'
+import { btn, sel, th, td } from './ui/dialogStyles'
 
 /**
  * The modulation matrix: a source that keeps running, wired to a knob.
@@ -157,153 +159,109 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
   }, [tracks])
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 9800,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
+    <DialogFrame
+      title="Modulation"
+      subtitle="A shape that keeps running, wired to a knob"
+      onClose={onClose}
+      width={720}
     >
-      <div style={{
-        width: 720, maxWidth: '95vw', maxHeight: '82vh',
-        background: hw.bg, color: hw.textPrimary,
-        border: `1px solid ${hw.border}`, borderRadius: hw.radius.lg,
-        overflow: 'hidden', display: 'flex', flexDirection: 'column',
-      }}>
-        <div style={{
-          padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 12,
-          background: hw.bgElevated, borderBottom: `1px solid ${hw.border}`,
-        }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>Modulation</div>
-          <div style={{ fontSize: 9, color: hw.textFaint }}>
-            a shape that keeps running, wired to a knob
-          </div>
-          <div style={{ flex: 1 }} />
-          <button onClick={onClose} style={btn()}>Close</button>
-        </div>
-
-        <div style={{ overflowY: 'auto', flex: 1, padding: 10 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10 }}>
-            <thead>
-              <tr style={{ color: hw.textSecondary, borderBottom: `1px solid ${hw.border}` }}>
-                <th style={th()}>On</th>
-                <th style={th()}>Moves</th>
-                <th style={th()}>Shape</th>
-                <th style={th()}>Rate</th>
-                <th style={th()}>Centre</th>
-                <th style={th()}>Depth</th>
-                <th style={th()} />
+      <div style={{ overflowY: 'auto', flex: 1, padding: 10 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ color: hw.textSecondary, borderBottom: `1px solid ${hw.border}` }}>
+              <th style={th()}>On</th>
+              <th style={th()}>Moves</th>
+              <th style={th()}>Shape</th>
+              <th style={th()}>Rate</th>
+              <th style={th()}>Centre</th>
+              <th style={th()}>Depth</th>
+              <th style={th()} />
+            </tr>
+          </thead>
+          <tbody>
+            {routes.length === 0 && (
+              <tr><td style={td()} colSpan={7}>
+                <span style={{ color: hw.textFaint }}>
+                  Nothing wired yet. Pick a plug-in knob below and give it a shape.
+                </span>
+              </td></tr>
+            )}
+            {routes.map(route => (
+              <tr key={route.id} style={{ borderBottom: `1px solid ${hw.border}` }}>
+                <td style={td()}>
+                  <input
+                    type="checkbox"
+                    checked={route.enabled}
+                    onChange={() => { void update(route.id, { enabled: !route.enabled }) }}
+                    style={{ accentColor: hw.accent }}
+                  />
+                </td>
+                <td style={td()}>{targetLabel(route)}</td>
+                <td style={td()}>{shapeLabel(route)}</td>
+                <td style={td()}>{rateLabel(route)}</td>
+                <td style={td()}>
+                  <input
+                    type="range" min={0} max={1} step={0.01}
+                    value={route.center}
+                    onChange={(e) => { void update(route.id, { center: Number(e.target.value) }) }}
+                    style={{ width: 90, accentColor: hw.accent }}
+                  />
+                </td>
+                <td style={td()}>
+                  <input
+                    type="range" min={-1} max={1} step={0.01}
+                    value={route.depth}
+                    onChange={(e) => { void update(route.id, { depth: Number(e.target.value) }) }}
+                    style={{ width: 90, accentColor: hw.accent }}
+                  />
+                </td>
+                <td style={{ ...td(), textAlign: 'right' }}>
+                  <button onClick={() => { void remove(route.id) }} style={btn()}>Remove</button>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {routes.length === 0 && (
-                <tr><td style={td()} colSpan={7}>
-                  <span style={{ color: hw.textFaint }}>
-                    Nothing wired yet. Pick a plug-in knob below and give it a shape.
-                  </span>
-                </td></tr>
-              )}
-              {routes.map(route => (
-                <tr key={route.id} style={{ borderBottom: `1px solid ${hw.border}` }}>
-                  <td style={td()}>
-                    <input
-                      type="checkbox"
-                      checked={route.enabled}
-                      onChange={() => { void update(route.id, { enabled: !route.enabled }) }}
-                      style={{ accentColor: hw.accent }}
-                    />
-                  </td>
-                  <td style={td()}>{targetLabel(route)}</td>
-                  <td style={td()}>{shapeLabel(route)}</td>
-                  <td style={td()}>{rateLabel(route)}</td>
-                  <td style={td()}>
-                    <input
-                      type="range" min={0} max={1} step={0.01}
-                      value={route.center}
-                      onChange={(e) => { void update(route.id, { center: Number(e.target.value) }) }}
-                      style={{ width: 90, accentColor: hw.accent }}
-                    />
-                  </td>
-                  <td style={td()}>
-                    <input
-                      type="range" min={-1} max={1} step={0.01}
-                      value={route.depth}
-                      onChange={(e) => { void update(route.id, { depth: Number(e.target.value) }) }}
-                      style={{ width: 90, accentColor: hw.accent }}
-                    />
-                  </td>
-                  <td style={{ ...td(), textAlign: 'right' }}>
-                    <button onClick={() => { void remove(route.id) }} style={btn()}>Remove</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div style={{
-          padding: '8px 12px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
-          background: hw.bgElevated, borderTop: `1px solid ${hw.border}`,
-        }}>
-          <span style={{ fontSize: 10, color: hw.textSecondary }}>Wire:</span>
-          <select value={trackId} onChange={e => setTrackId(e.target.value)} style={sel()}>
-            {tracks.length === 0 && <option value="">(no tracks)</option>}
-            {tracks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-          <select value={slotId} onChange={e => setSlotId(e.target.value)} style={sel()}>
-            {slots.length === 0 && <option value="">(no plug-ins on that track)</option>}
-            {slots.map(s => <option key={s.id} value={s.id}>{s.pluginName}</option>)}
-          </select>
-          <select value={paramId} onChange={e => setParamId(Number(e.target.value))} style={sel()}>
-            {params.length === 0 && <option value={-1}>(no parameters)</option>}
-            {params.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <select value={shape} onChange={e => setShape(e.target.value)} style={sel()}>
-            {SHAPES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
-          <select value={rateIndex} onChange={e => setRateIndex(Number(e.target.value))} style={sel()}>
-            {RATES.map((r, i) => <option key={r.label} value={i}>{r.label}</option>)}
-          </select>
-          <label style={{ fontSize: 10, color: hw.textSecondary, display: 'flex', alignItems: 'center', gap: 4 }}>
-            Depth
-            <input
-              type="range" min={-1} max={1} step={0.05}
-              value={depth}
-              onChange={e => setDepth(Number(e.target.value))}
-              style={{ width: 90, accentColor: hw.accent }}
-            />
-          </label>
-          <button onClick={() => { void add() }} style={btn(true)}>Add</button>
-          <span style={{ fontSize: 9, color: hw.textFaint }}>
-            The knob's own value becomes the middle of the swing, so switching a route on does not jump the sound.
-          </span>
-        </div>
+            ))}
+          </tbody>
+        </table>
       </div>
-    </div>
+
+      <div style={{
+        padding: '8px 12px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+        background: hw.bgElevated, borderTop: `1px solid ${hw.border}`,
+      }}>
+        <span style={{ fontSize: 12, color: hw.textSecondary }}>Wire:</span>
+        <select value={trackId} onChange={e => setTrackId(e.target.value)} style={sel()}>
+          {tracks.length === 0 && <option value="">(no tracks)</option>}
+          {tracks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        <select value={slotId} onChange={e => setSlotId(e.target.value)} style={sel()}>
+          {slots.length === 0 && <option value="">(no plug-ins on that track)</option>}
+          {slots.map(s => <option key={s.id} value={s.id}>{s.pluginName}</option>)}
+        </select>
+        <select value={paramId} onChange={e => setParamId(Number(e.target.value))} style={sel()}>
+          {params.length === 0 && <option value={-1}>(no parameters)</option>}
+          {params.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <select value={shape} onChange={e => setShape(e.target.value)} style={sel()}>
+          {SHAPES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+        <select value={rateIndex} onChange={e => setRateIndex(Number(e.target.value))} style={sel()}>
+          {RATES.map((r, i) => <option key={r.label} value={i}>{r.label}</option>)}
+        </select>
+        <label style={{ fontSize: 12, color: hw.textSecondary, display: 'flex', alignItems: 'center', gap: 4 }}>
+          Depth
+          <input
+            type="range" min={-1} max={1} step={0.05}
+            value={depth}
+            onChange={e => setDepth(Number(e.target.value))}
+            style={{ width: 90, accentColor: hw.accent }}
+          />
+        </label>
+        <button onClick={() => { void add() }} style={btn(true)}>Add</button>
+        <span style={{ fontSize: 11, color: hw.textFaint }}>
+          The knob's own value becomes the middle of the swing, so switching a route on does not jump the sound.
+        </span>
+      </div>
+    </DialogFrame>
   )
 }
 
-function btn(active: boolean = false) {
-  return {
-    padding: '3px 10px', fontSize: 10, background: 'transparent',
-    border: `1px solid ${active ? hw.accent : hw.border}`, borderRadius: hw.radius.sm,
-    color: active ? hw.accent : hw.textSecondary, cursor: 'pointer',
-  } as const
-}
-
-function sel() {
-  return {
-    fontSize: 10, padding: '2px 6px', background: hw.bg,
-    border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
-    color: hw.textPrimary, maxWidth: 170,
-  } as const
-}
-
-function th() {
-  return { textAlign: 'left' as const, padding: '6px 8px', fontWeight: 600 }
-}
-
-function td() {
-  return { padding: '6px 8px', fontVariantNumeric: 'tabular-nums' as const }
-}

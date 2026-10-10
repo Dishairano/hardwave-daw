@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTrackStore } from '../stores/trackStore'
 import { useNotificationStore } from '../stores/notificationStore'
+import { DialogFrame } from './ui/DialogFrame'
+import { btn, sel, th, td } from './ui/dialogStyles'
 
 /**
  * Macro knobs: one control that moves several parameters at once.
@@ -217,198 +219,154 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
   const linkRows = useMemo(() => selected?.links ?? [], [selected])
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 9800,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
+    <DialogFrame
+      title="Macro knobs"
+      subtitle="One knob, several parameters · saved with the song"
+      onClose={onClose}
+      width={720}
+      headerActions={<button onClick={() => { void newMacro() }} style={btn()}>New macro</button>}
     >
-      <div style={{
-        width: 720, maxWidth: '95vw', maxHeight: '82vh',
-        background: hw.bg, color: hw.textPrimary,
-        border: `1px solid ${hw.border}`, borderRadius: hw.radius.lg,
-        overflow: 'hidden', display: 'flex', flexDirection: 'column',
-      }}>
+      <div style={{ display: 'flex', minHeight: 0, flex: 1 }}>
         <div style={{
-          padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 12,
-          background: hw.bgElevated, borderBottom: `1px solid ${hw.border}`,
+          width: 180, borderRight: `1px solid ${hw.border}`,
+          overflowY: 'auto', background: hw.bgElevated,
         }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>Macro knobs</div>
-          <div style={{ fontSize: 9, color: hw.textFaint }}>
-            one knob, several parameters · saved with the song
-          </div>
-          <div style={{ flex: 1 }} />
-          <button onClick={() => { void newMacro() }} style={btn()}>New macro</button>
-          <button onClick={onClose} style={btn()}>Close</button>
+          {macros.length === 0 && (
+            <div style={{ padding: 12, fontSize: 12, color: hw.textFaint }}>
+              No macros yet. Make one, then link the knobs it should move.
+            </div>
+          )}
+          {macros.map(m => (
+            <div
+              key={m.id}
+              onClick={() => setSelectedId(m.id)}
+              onDoubleClick={() => { void renameMacro(m) }}
+              style={{
+                padding: '7px 10px', fontSize: 12.5, cursor: 'pointer',
+                background: m.id === selectedId ? hw.bg : 'transparent',
+                borderLeft: `2px solid ${m.id === selectedId ? hw.accent : 'transparent'}`,
+                display: 'flex', alignItems: 'center', gap: 6,
+              }}
+            >
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.name}</span>
+              <span style={{ fontSize: 11, color: hw.textFaint, fontVariantNumeric: 'tabular-nums' }}>
+                {Math.round(m.value * 100)}
+              </span>
+            </div>
+          ))}
         </div>
 
-        <div style={{ display: 'flex', minHeight: 0, flex: 1 }}>
-          <div style={{
-            width: 180, borderRight: `1px solid ${hw.border}`,
-            overflowY: 'auto', background: hw.bgElevated,
-          }}>
-            {macros.length === 0 && (
-              <div style={{ padding: 12, fontSize: 10, color: hw.textFaint }}>
-                No macros yet. Make one, then link the knobs it should move.
+        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: 12 }}>
+          {!selected && (
+            <div style={{ fontSize: 12, color: hw.textFaint }}>
+              Pick a macro on the left, or make one.
+            </div>
+          )}
+          {selected && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>{selected.name}</div>
+                <input
+                  type="range" min={0} max={1} step={0.001}
+                  value={selected.value}
+                  onChange={(e) => { void turn(selected.id, Number(e.target.value)) }}
+                  style={{ flex: 1, accentColor: hw.accent }}
+                />
+                <div style={{ width: 34, textAlign: 'right', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+                  {Math.round(selected.value * 100)}
+                </div>
+                <button onClick={() => { void renameMacro(selected) }} style={btn()}>Rename</button>
+                <button onClick={() => { void removeMacro(selected.id) }} style={btn()}>Delete</button>
               </div>
-            )}
-            {macros.map(m => (
-              <div
-                key={m.id}
-                onClick={() => setSelectedId(m.id)}
-                onDoubleClick={() => { void renameMacro(m) }}
-                style={{
-                  padding: '7px 10px', fontSize: 11, cursor: 'pointer',
-                  background: m.id === selectedId ? hw.bg : 'transparent',
-                  borderLeft: `2px solid ${m.id === selectedId ? hw.accent : 'transparent'}`,
-                  display: 'flex', alignItems: 'center', gap: 6,
-                }}
-              >
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.name}</span>
-                <span style={{ fontSize: 9, color: hw.textFaint, fontVariantNumeric: 'tabular-nums' }}>
-                  {Math.round(m.value * 100)}
+
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ color: hw.textSecondary, borderBottom: `1px solid ${hw.border}` }}>
+                    <th style={th()}>Moves</th>
+                    <th style={th()}>At 0</th>
+                    <th style={th()}>At 100</th>
+                    <th style={th()} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {linkRows.length === 0 && (
+                    <tr><td style={td()} colSpan={4}>
+                      <span style={{ color: hw.textFaint }}>
+                        Nothing linked yet. Pick a track and a parameter below.
+                      </span>
+                    </td></tr>
+                  )}
+                  {linkRows.map(link => (
+                    <tr key={link.id} style={{ borderBottom: `1px solid ${hw.border}` }}>
+                      <td style={td()}>{targetLabel(link)}</td>
+                      <td style={td()}>
+                        <input
+                          type="number" value={link.min} step="any"
+                          onChange={(e) => { void setRange(link.id, Number(e.target.value), link.max) }}
+                          style={num()}
+                        />
+                      </td>
+                      <td style={td()}>
+                        <input
+                          type="number" value={link.max} step="any"
+                          onChange={(e) => { void setRange(link.id, link.min, Number(e.target.value)) }}
+                          style={num()}
+                        />
+                      </td>
+                      <td style={td()}>
+                        <button onClick={() => { void removeLink(link.id) }} style={btn()}>Unlink</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div style={{
+                marginTop: 12, paddingTop: 10, borderTop: `1px solid ${hw.border}`,
+                display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+              }}>
+                <span style={{ fontSize: 12, color: hw.textSecondary }}>Link:</span>
+                <select value={linkTrackId} onChange={(e) => setLinkTrackId(e.target.value)} style={sel()}>
+                  {tracks.length === 0 && <option value="">(no tracks)</option>}
+                  {tracks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <select value={linkWhat} onChange={(e) => setLinkWhat(e.target.value)} style={sel()}>
+                  <option value="volume">Volume</option>
+                  <option value="pan">Pan</option>
+                  {slots.map(s => (
+                    <option key={s.id} value={`slot:${s.id}`}>{s.pluginName}</option>
+                  ))}
+                </select>
+                {linkWhat.startsWith('slot:') && (
+                  <select
+                    value={linkParamId}
+                    onChange={(e) => setLinkParamId(Number(e.target.value))}
+                    style={sel()}
+                  >
+                    {params.length === 0 && <option value={-1}>(no parameters)</option>}
+                    {params.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                )}
+                <button onClick={() => { void addLink() }} style={btn(true)}>Add</button>
+                <span style={{ fontSize: 11, color: hw.textFaint }}>
+                  Put the larger number in the "At 0" box to make a link run backwards.
                 </span>
               </div>
-            ))}
-          </div>
-
-          <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: 12 }}>
-            {!selected && (
-              <div style={{ fontSize: 10, color: hw.textFaint }}>
-                Pick a macro on the left, or make one.
-              </div>
-            )}
-            {selected && (
-              <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{selected.name}</div>
-                  <input
-                    type="range" min={0} max={1} step={0.001}
-                    value={selected.value}
-                    onChange={(e) => { void turn(selected.id, Number(e.target.value)) }}
-                    style={{ flex: 1, accentColor: hw.accent }}
-                  />
-                  <div style={{ width: 34, textAlign: 'right', fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>
-                    {Math.round(selected.value * 100)}
-                  </div>
-                  <button onClick={() => { void renameMacro(selected) }} style={btn()}>Rename</button>
-                  <button onClick={() => { void removeMacro(selected.id) }} style={btn()}>Delete</button>
-                </div>
-
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10 }}>
-                  <thead>
-                    <tr style={{ color: hw.textSecondary, borderBottom: `1px solid ${hw.border}` }}>
-                      <th style={th()}>Moves</th>
-                      <th style={th()}>At 0</th>
-                      <th style={th()}>At 100</th>
-                      <th style={th()} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {linkRows.length === 0 && (
-                      <tr><td style={td()} colSpan={4}>
-                        <span style={{ color: hw.textFaint }}>
-                          Nothing linked yet. Pick a track and a parameter below.
-                        </span>
-                      </td></tr>
-                    )}
-                    {linkRows.map(link => (
-                      <tr key={link.id} style={{ borderBottom: `1px solid ${hw.border}` }}>
-                        <td style={td()}>{targetLabel(link)}</td>
-                        <td style={td()}>
-                          <input
-                            type="number" value={link.min} step="any"
-                            onChange={(e) => { void setRange(link.id, Number(e.target.value), link.max) }}
-                            style={num()}
-                          />
-                        </td>
-                        <td style={td()}>
-                          <input
-                            type="number" value={link.max} step="any"
-                            onChange={(e) => { void setRange(link.id, link.min, Number(e.target.value)) }}
-                            style={num()}
-                          />
-                        </td>
-                        <td style={td()}>
-                          <button onClick={() => { void removeLink(link.id) }} style={btn()}>Unlink</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                <div style={{
-                  marginTop: 12, paddingTop: 10, borderTop: `1px solid ${hw.border}`,
-                  display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
-                }}>
-                  <span style={{ fontSize: 10, color: hw.textSecondary }}>Link:</span>
-                  <select value={linkTrackId} onChange={(e) => setLinkTrackId(e.target.value)} style={sel()}>
-                    {tracks.length === 0 && <option value="">(no tracks)</option>}
-                    {tracks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                  <select value={linkWhat} onChange={(e) => setLinkWhat(e.target.value)} style={sel()}>
-                    <option value="volume">Volume</option>
-                    <option value="pan">Pan</option>
-                    {slots.map(s => (
-                      <option key={s.id} value={`slot:${s.id}`}>{s.pluginName}</option>
-                    ))}
-                  </select>
-                  {linkWhat.startsWith('slot:') && (
-                    <select
-                      value={linkParamId}
-                      onChange={(e) => setLinkParamId(Number(e.target.value))}
-                      style={sel()}
-                    >
-                      {params.length === 0 && <option value={-1}>(no parameters)</option>}
-                      {params.map(p => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
-                  )}
-                  <button onClick={() => { void addLink() }} style={btn(true)}>Add</button>
-                  <span style={{ fontSize: 9, color: hw.textFaint }}>
-                    Put the larger number in the "At 0" box to make a link run backwards.
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
+            </>
+          )}
         </div>
       </div>
-    </div>
+    </DialogFrame>
   )
-}
-
-function btn(active: boolean = false) {
-  return {
-    padding: '3px 10px', fontSize: 10, background: 'transparent',
-    border: `1px solid ${active ? hw.accent : hw.border}`, borderRadius: hw.radius.sm,
-    color: active ? hw.accent : hw.textSecondary, cursor: 'pointer',
-  } as const
-}
-
-function sel() {
-  return {
-    fontSize: 10, padding: '2px 6px', background: hw.bg,
-    border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
-    color: hw.textPrimary, maxWidth: 200,
-  } as const
 }
 
 function num() {
   return {
-    fontSize: 10, padding: '2px 4px', width: 78, background: hw.bg,
+    fontSize: 12, padding: '2px 4px', width: 78, background: hw.bg,
     border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
     color: hw.textPrimary, fontVariantNumeric: 'tabular-nums' as const,
   } as const
 }
 
-function th() {
-  return { textAlign: 'left' as const, padding: '6px 8px', fontWeight: 600 }
-}
-
-function td() {
-  return { padding: '6px 8px', fontVariantNumeric: 'tabular-nums' as const }
-}

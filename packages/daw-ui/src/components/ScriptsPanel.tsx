@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useNotificationStore } from '../stores/notificationStore'
+import { DialogFrame } from './ui/DialogFrame'
+import { btn } from './ui/dialogStyles'
 
 /**
  * The user's own scripts.
@@ -98,111 +100,91 @@ export function ScriptsPanel({ onClose }: { onClose: () => void }) {
   }, [refresh])
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 9800,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
+    <DialogFrame
+      title="Scripts"
+      subtitle="A run is one undo step, however much it does"
+      onClose={onClose}
+      width={820}
     >
-      <div style={{
-        width: 820, maxWidth: '96vw', maxHeight: '90vh',
-        background: hw.bg, color: hw.textPrimary,
-        border: `1px solid ${hw.border}`, borderRadius: hw.radius.lg,
-        overflow: 'hidden', display: 'flex', flexDirection: 'column',
-      }}>
+      <div style={{ display: 'flex', minHeight: 0, flex: 1 }}>
         <div style={{
-          padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 12,
-          background: hw.bgElevated, borderBottom: `1px solid ${hw.border}`,
+          width: 190, borderRight: `1px solid ${hw.border}`,
+          overflowY: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 4,
         }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>Scripts</div>
-          <div style={{ fontSize: 9, color: hw.textFaint }}>
-            a run is one undo step, however much it does
-          </div>
-          <div style={{ flex: 1 }} />
-          <button onClick={onClose} style={btn()}>Close</button>
+          {scripts.length === 0 && (
+            <div style={{ fontSize: 12, color: hw.textFaint, padding: 6 }}>
+              Nothing saved yet.
+            </div>
+          )}
+          {scripts.map(script => (
+            <div key={script.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button
+                onClick={() => { setName(script.name); setBody(script.body); setLog([]); setError(null) }}
+                style={{
+                  ...btn(), flex: 1, textAlign: 'left',
+                  background: script.name === name ? hw.accent : 'rgba(255,255,255,0.06)',
+                  color: script.name === name ? '#fff' : hw.textSecondary,
+                }}
+              >{script.name}</button>
+              <button
+                onClick={() => void remove(script.name)}
+                title={`Delete ${script.name}`}
+                style={{ ...btn(), padding: '3px 6px' }}
+              >×</button>
+            </div>
+          ))}
         </div>
 
-        <div style={{ display: 'flex', minHeight: 0, flex: 1 }}>
-          <div style={{
-            width: 190, borderRight: `1px solid ${hw.border}`,
-            overflowY: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 4,
-          }}>
-            {scripts.length === 0 && (
-              <div style={{ fontSize: 10, color: hw.textFaint, padding: 6 }}>
-                Nothing saved yet.
-              </div>
-            )}
-            {scripts.map(script => (
-              <div key={script.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <button
-                  onClick={() => { setName(script.name); setBody(script.body); setLog([]); setError(null) }}
-                  style={{
-                    ...btn(), flex: 1, textAlign: 'left',
-                    background: script.name === name ? hw.accent : 'rgba(255,255,255,0.06)',
-                    color: script.name === name ? '#fff' : hw.textSecondary,
-                  }}
-                >{script.name}</button>
-                <button
-                  onClick={() => void remove(script.name)}
-                  title={`Delete ${script.name}`}
-                  style={{ ...btn(), padding: '3px 6px' }}
-                >×</button>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, padding: 10, gap: 8 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input
-                value={name}
-                onChange={e => setName(e.target.value)}
-                aria-label="Script name"
-                style={{
-                  flex: 1, padding: '4px 8px', fontSize: 11, fontFamily: 'inherit',
-                  background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
-                  border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
-                }}
-              />
-              <button onClick={() => void save()} style={btn()}>Save</button>
-              <button onClick={() => void check()} disabled={busy} style={btn()}>Check</button>
-              <button
-                onClick={() => void run()}
-                disabled={busy}
-                style={{ ...btn(), background: hw.accent, color: '#fff' }}
-              >Run</button>
-            </div>
-
-            <textarea
-              value={body}
-              onChange={e => setBody(e.target.value)}
-              spellCheck={false}
-              aria-label="Script"
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, padding: 10, gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              value={name}
+              onChange={e => setName(e.target.value)}
+              aria-label="Script name"
               style={{
-                flex: 1, minHeight: 240, resize: 'vertical',
-                padding: 10, fontSize: 12, lineHeight: 1.5,
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                background: 'rgba(0,0,0,0.35)', color: hw.textPrimary,
+                flex: 1, padding: '4px 8px', fontSize: 12.5, fontFamily: 'inherit',
+                background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
                 border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
-                whiteSpace: 'pre', overflowWrap: 'normal', overflowX: 'auto',
               }}
             />
+            <button onClick={() => void save()} style={btn()}>Save</button>
+            <button onClick={() => void check()} disabled={busy} style={btn()}>Check</button>
+            <button
+              onClick={() => void run()}
+              disabled={busy}
+              style={{ ...btn(), background: hw.accent, color: '#fff' }}
+            >Run</button>
+          </div>
 
-            <div style={{
-              minHeight: 54, maxHeight: 120, overflowY: 'auto',
-              padding: 8, fontSize: 11, lineHeight: 1.5,
+          <textarea
+            value={body}
+            onChange={e => setBody(e.target.value)}
+            spellCheck={false}
+            aria-label="Script"
+            style={{
+              flex: 1, minHeight: 240, resize: 'vertical',
+              padding: 10, fontSize: 12, lineHeight: 1.5,
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-              background: 'rgba(0,0,0,0.25)', borderRadius: hw.radius.sm,
-              color: error ? hw.red : hw.textSecondary,
-              border: `1px solid ${hw.border}`,
-            }}>
-              {error ?? (log.length > 0 ? log.join('\n') : 'Check reads the script without changing anything.')}
-            </div>
+              background: 'rgba(0,0,0,0.35)', color: hw.textPrimary,
+              border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+              whiteSpace: 'pre', overflowWrap: 'normal', overflowX: 'auto',
+            }}
+          />
 
-            <details style={{ fontSize: 10, color: hw.textFaint }}>
-              <summary style={{ cursor: 'pointer' }}>What a script can call</summary>
-              <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', fontSize: 10 }}>{
+          <div style={{
+            minHeight: 54, maxHeight: 120, overflowY: 'auto',
+            padding: 8, fontSize: 12.5, lineHeight: 1.5,
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            background: 'rgba(0,0,0,0.25)', borderRadius: hw.radius.sm,
+            color: error ? hw.red : hw.textSecondary,
+            border: `1px solid ${hw.border}`,
+          }}>
+            {error ?? (log.length > 0 ? log.join('\n') : 'Check reads the script without changing anything.')}
+          </div>
+
+          <details style={{ fontSize: 12, color: hw.textFaint }}>
+            <summary style={{ cursor: 'pointer' }}>What a script can call</summary>
+            <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', fontSize: 12 }}>{
 `play()  stop()  seek(tick)
 set_volume(track_id, db)   set_pan(track_id, -1..1)
 set_muted(track_id, true)  set_master_volume(db)
@@ -211,20 +193,11 @@ delete_note(clip_id, tick, pitch)
 move_clip(clip_id, tick)   delete_clip(clip_id)
 beats(n)  bars(n)   ticks, so you can write beats(2)
 print(text)`
-              }</pre>
-            </details>
-          </div>
+            }</pre>
+          </details>
         </div>
       </div>
-    </div>
+    </DialogFrame>
   )
 }
 
-function btn(): React.CSSProperties {
-  return {
-    padding: '4px 10px', fontSize: 11, fontWeight: 600,
-    background: 'rgba(255,255,255,0.08)', color: hw.textSecondary,
-    border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
-    fontFamily: 'inherit',
-  }
-}
