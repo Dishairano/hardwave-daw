@@ -7,8 +7,9 @@
 //!
 //! What comes across is the song: the tempo, an instrument track per
 //! channel that plays notes (a sampler channel with its sample in the
-//! built-in sampler), every sample on the playlist where FL had it, and
-//! the playlist's track names. It opens as a song of its own, like a
+//! built-in sampler), every sample on the playlist where FL had it at its
+//! channel's level, pan, pitch, direction and stretch, and the playlist's
+//! track names and switches. It opens as a song of its own, like a
 //! .hwp. What cannot come across is everything a plug-in holds: FL
 //! stores a plug-in's state as its own blob, and nothing outside FL can
 //! mean anything by it. The report says what was left behind rather
@@ -80,18 +81,30 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
 
     // Sampler channels play their sample in the built-in sampler, which
     // keeps it as its state; the song's plug-ins are made from that when
-    // it opens.
+    // it opens. FL's reverse, stereo swap and polarity are done to the
+    // sample itself, as FL does them.
     let mut samplers_failed = Vec::new();
-    for (track_id, sample) in &built.sampler_samples {
-        match hardwave_dsp::audio_file::AudioFileReader::read(Path::new(sample)) {
-            Ok((info, channels)) => {
+    for sampler in &built.sampler_samples {
+        match hardwave_dsp::audio_file::AudioFileReader::read(Path::new(&sampler.file)) {
+            Ok((info, mut channels)) => {
+                if sampler.reversed {
+                    channels.iter_mut().for_each(|c| c.reverse());
+                }
+                if sampler.swap_stereo && channels.len() == 2 {
+                    channels.swap(0, 1);
+                }
+                if sampler.polarity_inverted {
+                    channels
+                        .iter_mut()
+                        .for_each(|c| c.iter_mut().for_each(|v| *v = -*v));
+                }
                 let state = hardwave_native_plugins::sampler::encode_sample_state(
                     info.sample_rate,
-                    60,
+                    sampler.root_note,
                     channels,
                 );
                 let slot_id = uuid::Uuid::new_v4().to_string();
-                if let Some(track) = project.track_mut(track_id) {
+                if let Some(track) = project.track_mut(&sampler.track_id) {
                     track.inserts.insert(
                         0,
                         hardwave_project::track::PluginSlot {
@@ -108,15 +121,15 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
                 }
             }
             Err(e) => {
-                log::warn!("import_flp: sampler sample {sample}: {e:?}");
-                samplers_failed.push(sample.clone());
+                log::warn!("import_flp: sampler sample {}: {e:?}", sampler.file);
+                samplers_failed.push(sampler.file.clone());
             }
         }
     }
 
-    let offsets = built.audio_offsets;
+    let fixups = built.audio_fixups;
     crate::commands::project::open_project_blocking(app, project, None, move |song, pool| {
-        apply_offsets(song, pool, &offsets)
+        apply_fixups(song, pool, &fixups)
     })?;
     log::info!(
         "import_flp: {name}: {} instrument and {} audio tracks, {} audio and {} pattern clips, {} samples missing",
@@ -157,6 +170,18 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
             r.plugins_left_behind.join(", ")
         ));
     }
+    if !r.sample_fades_left_behind.is_empty() {
+        left_behind.push(format!(
+            "the quick fades on {}",
+            list_of(&r.sample_fades_left_behind)
+        ));
+    }
+    if !r.mixed_lanes.is_empty() {
+        left_behind.push(format!(
+            "pan, stereo swap and polarity on {}, whose samples are set differently from each other",
+            list_of(&r.mixed_lanes)
+        ));
+    }
     if r.automation_clips > 0 {
         left_behind.push(format!("{} automation clips", r.automation_clips));
     }
@@ -172,38 +197,39 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
     })
 }
 
-/// Where each trimmed clip starts and ends in its file. FL gives
-/// milliseconds; a clip counts in the pool's frames, at the rate the
-/// file was loaded at.
-fn apply_offsets(
+/// "a, b, c" for up to five names, then "and n more".
+fn list_of(names: &[String]) -> String {
+    let shown = names.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    if names.len() > 5 {
+        format!("{shown} and {} more", names.len() - 5)
+    } else {
+        shown
+    }
+}
+
+/// Finish each audio clip now that its file is loaded: where it starts in
+/// the file, how far it is stretched and where a reversed one reads from
+/// all depend on the file's length (fl_build.rs, `AudioFixup`).
+fn apply_fixups(
     project: &mut hardwave_project::Project,
     pool: &hardwave_engine::audio_pool::AudioPool,
-    offsets: &[(String, String, f32, f32)],
+    fixups: &[hardwave_project::fl_build::AudioFixup],
 ) {
-    for (track_id, clip_id, start_ms, end_ms) in offsets {
-        let Some(track) = project.track_mut(track_id) else {
+    for fixup in fixups {
+        let Some(track) = project.track_mut(&fixup.track_id) else {
             continue;
         };
         for placement in &mut track.clips {
             let ClipContent::Audio(clip) = &mut placement.content else {
                 continue;
             };
-            if clip.id != *clip_id {
+            if clip.id != fixup.clip_id {
                 continue;
             }
             let Some(buffer) = pool.get(&clip.source_path) else {
                 continue;
             };
-            let frames = buffer.num_frames as u64;
-            let at = |ms: f32| ((ms as f64) * buffer.sample_rate as f64 / 1000.0).round() as u64;
-            if *start_ms > 0.0 {
-                clip.source_start = at(*start_ms).min(frames);
-            }
-            clip.source_end = if *end_ms > 0.0 {
-                at(*end_ms).min(frames)
-            } else {
-                frames
-            };
+            fixup.apply(clip, buffer.num_frames as u64, buffer.sample_rate);
         }
     }
 }

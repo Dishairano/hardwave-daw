@@ -18,6 +18,89 @@ pub struct FlChannel {
     /// What the channel is in FL, which decides what it becomes here.
     #[serde(default)]
     pub kind: FlChannelKind,
+    /// Its level, pan, pitch and sample settings.
+    #[serde(default)]
+    pub settings: FlChannelSettings,
+}
+
+/// A channel's settings as FL stores them, in FL's own units. What they
+/// mean here is worked out where the song is built (fl_build.rs).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlChannelSettings {
+    /// The channel's on/off switch in the rack.
+    pub enabled: bool,
+    /// The volume knob, 0 to 12800; 10000 is FL's 78 % default.
+    pub volume: u32,
+    /// The pan knob, 0 (left) to 12800 (right); 6400 is the centre.
+    pub pan: i32,
+    /// The pitch knob, in cents.
+    pub pitch_cents: i32,
+    /// The mixer insert it plays into: 0 is the master, -1 "current".
+    pub mixer_insert: i32,
+    /// Sample settings: played backwards.
+    pub reversed: bool,
+    /// Sample settings: left and right swapped.
+    pub swap_stereo: bool,
+    /// Sample settings: polarity inverted.
+    pub polarity_inverted: bool,
+    /// The root note, as a MIDI key; FL's default is 60 (its C5).
+    pub root_note: u8,
+    /// FL's quick fade knobs on the sample, 0 to 1024 (0 is off).
+    pub fade_in: u16,
+    pub fade_out: u16,
+    pub stretch: FlStretch,
+}
+
+impl Default for FlChannelSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            volume: 10_000,
+            pan: 6_400,
+            pitch_cents: 0,
+            mixer_insert: -1,
+            reversed: false,
+            swap_stereo: false,
+            polarity_inverted: false,
+            root_note: 60,
+            fade_in: 0,
+            fade_out: 0,
+            stretch: FlStretch::default(),
+        }
+    }
+}
+
+/// The time stretching section of FL's sample settings.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FlStretch {
+    /// The TIME knob: how long the whole sample should last, in our ticks.
+    /// 0 is "(none)", the sample at its own length.
+    pub time_ticks: f64,
+    /// The PITCH knob, in cents.
+    pub pitch_cents: i32,
+    /// The MUL knob, as a factor on the length (0.25 to 4).
+    pub multiplier: f64,
+    /// The mode: 0 is Resample, where length and pitch change together like
+    /// a tape; every other mode keeps them apart.
+    pub mode: i32,
+}
+
+impl Default for FlStretch {
+    fn default() -> Self {
+        Self {
+            time_ticks: 0.0,
+            pitch_cents: 0,
+            multiplier: 1.0,
+            mode: 0,
+        }
+    }
+}
+
+impl FlStretch {
+    /// Resample: speed and pitch move together.
+    pub fn is_resample(&self) -> bool {
+        self.mode == 0
+    }
 }
 
 /// The kinds of channel in FL's channel rack, as the file numbers them.
@@ -68,6 +151,9 @@ pub struct FlPlaylistClip {
     pub start_tick: u64,
     pub length_ticks: u64,
     pub content: FlClipContent,
+    /// Muted on the playlist (FL greys it out).
+    #[serde(default)]
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +207,9 @@ pub struct FlProject {
     /// Names given to playlist tracks, by track number (1 is the top).
     #[serde(default)]
     pub playlist_track_names: Vec<(u32, String)>,
+    /// Playlist tracks switched off in FL, by track number.
+    #[serde(default)]
+    pub playlist_tracks_off: Vec<u32>,
 }
 
 /// Plugin mapping — translate an FL native plugin name into a
@@ -342,6 +431,7 @@ mod tests {
                     plugin_name: None,
                     pattern_steps: [true, false, false, false].repeat(4),
                     kind: FlChannelKind::Other,
+                    settings: FlChannelSettings::default(),
                 },
                 FlChannel {
                     name: "Sytrus Lead".into(),
@@ -349,6 +439,7 @@ mod tests {
                     plugin_name: Some("Sytrus".into()),
                     pattern_steps: vec![true; 16],
                     kind: FlChannelKind::Other,
+                    settings: FlChannelSettings::default(),
                 },
                 FlChannel {
                     name: "Harmor Pad".into(),
@@ -356,6 +447,7 @@ mod tests {
                     plugin_name: Some("Harmor".into()),
                     pattern_steps: vec![false; 16],
                     kind: FlChannelKind::Other,
+                    settings: FlChannelSettings::default(),
                 },
                 FlChannel {
                     name: "Mystery Plugin".into(),
@@ -363,6 +455,7 @@ mod tests {
                     plugin_name: Some("WeirdOne".into()),
                     pattern_steps: vec![false; 16],
                     kind: FlChannelKind::Other,
+                    settings: FlChannelSettings::default(),
                 },
             ],
             notes: vec![(
@@ -379,6 +472,7 @@ mod tests {
                 start_tick: 0,
                 length_ticks: 1920,
                 content: FlClipContent::Pattern { pattern_index: 0 },
+                muted: false,
             }],
             mixer: vec![FlMixerTrack {
                 name: "Master".into(),
@@ -390,6 +484,7 @@ mod tests {
             pattern_notes: Vec::new(),
             pattern_names: Vec::new(),
             playlist_track_names: Vec::new(),
+            playlist_tracks_off: Vec::new(),
         }
     }
 
@@ -455,6 +550,7 @@ mod tests {
                 channel_index: 0,
                 target: "master-volume".into(),
             },
+            muted: false,
         });
         let report = summarize_import(&project, &default_plugin_mappings());
         assert_eq!(report.imported_automation_clips, 1);

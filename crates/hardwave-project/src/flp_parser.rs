@@ -16,7 +16,7 @@
 //! samples, with a list of what could not be carried.
 
 use crate::fl_import::{
-    FlChannel, FlChannelKind, FlClipContent, FlNote, FlPlaylistClip, FlProject,
+    FlChannel, FlChannelKind, FlChannelSettings, FlClipContent, FlNote, FlPlaylistClip, FlProject,
 };
 
 /// Event id boundaries: below 64 is one byte, below 128 two, below
@@ -45,7 +45,8 @@ const PLUGIN_INTERNAL_NAME: u8 = TEXT + 9; // 201
 const CH_DISPLAY_NAME: u8 = TEXT + 11; // 203
 const PAT_NOTES: u8 = TEXT + 16 + 16; // 224
 const ARR_PLAYLIST: u8 = TEXT + 16 + 25; // 233
-/// A playlist track's settings; its first four bytes are its index.
+/// A playlist track's settings: its number (from 1) in the first four
+/// bytes, and at byte 12 whether it is switched on.
 const TRACK_DATA: u8 = TEXT + 46; // 238
 /// The name given to the playlist track just before it.
 const TRACK_NAME: u8 = TEXT + 47; // 239
@@ -58,6 +59,29 @@ const PLAYLIST_ITEM_SIZES: [usize; 4] = [88, 80, 60, 32];
 /// FL counts a bar as its own PPQ in the playlist, and four of them
 /// inside a pattern. Both are converted to our ticks on the way out.
 const FL_NOTE_BYTES: usize = 24;
+/// A playlist item's flags (two bytes at 18): this one is "muted".
+const ITEM_MUTED: u16 = 0x1000;
+
+// A channel's settings. Every one of these follows the channel's CH_NEW.
+const CH_ENABLED: u8 = 0;
+/// The mixer insert, one signed byte.
+const CH_ROUTED_TO: u8 = 22;
+/// Sample settings flags: reverse is bit 1, swap stereo bit 8.
+const CH_FX_FLAGS: u8 = WORD + 6; // 70
+const FX_REVERSE: u16 = 1 << 1;
+const FX_SWAP_STEREO: u16 = 1 << 8;
+const CH_FADE_OUT: u8 = WORD + 11; // 75
+const CH_FADE_IN: u8 = WORD + 12; // 76
+const CH_ROOT_NOTE: u8 = DWORD + 7; // 135
+/// The sample settings block: polarity at byte 81, then from byte 96 the
+/// time stretching section (TIME as a float in the file's ticks, PITCH in
+/// cents, MUL as a power of two in ten-thousandths, the mode).
+const CH_PARAMETERS: u8 = TEXT + 23; // 215
+/// Pan, volume and pitch, four bytes each.
+const CH_LEVELS: u8 = TEXT + 27; // 219
+/// The arrangement starts: no channel event comes after it, while the
+/// mixer's plug-ins further on use the same name events as channels do.
+const ARRANGEMENT_NEW: u8 = WORD + 35; // 99
 
 /// Why a file could not be read.
 #[derive(Debug, Clone, PartialEq)]
@@ -176,6 +200,10 @@ fn f32_at(data: &[u8], at: usize) -> f32 {
     f32::from_bits(u32_at(data, at))
 }
 
+fn i32_at(data: &[u8], at: usize) -> i32 {
+    u32_at(data, at) as i32
+}
+
 /// Read a `.flp` file.
 ///
 /// Best effort by design: a file written by a version we have not
@@ -217,10 +245,11 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
 
     let mut current_channel: Option<usize> = None;
     let mut current_track: Option<u32> = None;
-    // Playlist items naming a channel: (track, start, length, channel,
-    // start offset ms, end offset ms). Made into clips at the end, once
+    // Stretch times are floats in the file's ticks.
+    let scale_f = |ticks: f64| -> f64 { ticks * hardwave_midi::PPQ as f64 / ppq as f64 };
+    // Playlist items naming a channel. Made into clips at the end, once
     // every channel's kind and sample is known.
-    let mut channel_items: Vec<(u32, u64, u64, u32, f32, f32)> = Vec::new();
+    let mut channel_items: Vec<ChannelItem> = Vec::new();
     let mut current_pattern: Option<u32> = None;
     let mut pattern_names: Vec<(u32, String)> = Vec::new();
 
@@ -251,6 +280,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                         plugin_name: None,
                         pattern_steps: Vec::new(),
                         kind: FlChannelKind::Other,
+                        settings: FlChannelSettings::default(),
                     });
                 }
                 current_channel = Some(index);
@@ -285,15 +315,26 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                     }
                 }
             }
+            CH_ENABLED | CH_ROUTED_TO | CH_FX_FLAGS | CH_FADE_IN | CH_FADE_OUT | CH_ROOT_NOTE
+            | CH_PARAMETERS | CH_LEVELS => {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    read_channel_setting(&mut channel.settings, event.id, event.data, &scale_f);
+                }
+            }
+            ARRANGEMENT_NEW => current_channel = None,
             TRACK_DATA => {
-                current_track = Some(u32_at(event.data, 0));
+                current_channel = None;
+                let index = u32_at(event.data, 0);
+                current_track = Some(index);
+                if event.data.get(12) == Some(&0) {
+                    project.playlist_tracks_off.push(index);
+                }
             }
             TRACK_NAME => {
                 if let Some(index) = current_track {
                     let name = text(event.data);
                     if !name.is_empty() {
-                        // Stored from 0; the playlist's tracks count from 1.
-                        project.playlist_track_names.push((index + 1, name));
+                        project.playlist_track_names.push((index, name));
                     }
                 }
             }
@@ -340,6 +381,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 }
             }
             ARR_PLAYLIST => {
+                current_channel = None;
                 let Some(stride) = playlist_item_size(event.data) else {
                     continue;
                 };
@@ -349,6 +391,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                     let item_id = u16_at(item, 6) as u32;
                     let length = u32_at(item, 8) as u64;
                     let track = u16_at(item, 12) as u32;
+                    let muted = u16_at(item, 18) & ITEM_MUTED != 0;
                     // FL stores playlist tracks counting down from the
                     // top of its own list.
                     let track_index = 500u32.saturating_sub(track);
@@ -360,18 +403,20 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                             content: FlClipContent::Pattern {
                                 pattern_index: item_id - pattern_base,
                             },
+                            muted,
                         });
                     } else {
                         let start_ms = f32_at(item, 24);
                         let end_ms = f32_at(item, 28);
-                        channel_items.push((
+                        channel_items.push(ChannelItem {
                             track_index,
-                            scale(position),
-                            scale(length).max(1),
-                            item_id,
+                            start_tick: scale(position),
+                            length_ticks: scale(length).max(1),
+                            channel_index: item_id,
                             start_ms,
                             end_ms,
-                        ));
+                            muted,
+                        });
                     }
                 }
             }
@@ -388,7 +433,16 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
 
     // A playlist item naming a channel is an audio clip when that channel
     // holds a sample, and an automation clip when it is one.
-    for (track_index, start_tick, length_ticks, channel_index, start_ms, end_ms) in channel_items {
+    for item in channel_items {
+        let ChannelItem {
+            track_index,
+            start_tick,
+            length_ticks,
+            channel_index,
+            start_ms,
+            end_ms,
+            muted,
+        } = item;
         let Some(channel) = project.channels.get(channel_index as usize) else {
             continue;
         };
@@ -410,9 +464,66 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
             start_tick,
             length_ticks,
             content,
+            muted,
         });
     }
     Ok(project)
+}
+
+/// A playlist item that names a channel rather than a pattern.
+struct ChannelItem {
+    track_index: u32,
+    start_tick: u64,
+    length_ticks: u64,
+    channel_index: u32,
+    /// Where it starts and ends in its sample, in milliseconds (-1: not set).
+    start_ms: f32,
+    end_ms: f32,
+    muted: bool,
+}
+
+/// One of a channel's settings events, read into its settings.
+fn read_channel_setting(
+    settings: &mut FlChannelSettings,
+    id: u8,
+    data: &[u8],
+    scale: &dyn Fn(f64) -> f64,
+) {
+    let byte = data.first().copied().unwrap_or(0);
+    match id {
+        CH_ENABLED => settings.enabled = byte != 0,
+        CH_ROUTED_TO => settings.mixer_insert = byte as i8 as i32,
+        CH_FX_FLAGS => {
+            let flags = u16_at(data, 0);
+            settings.reversed = flags & FX_REVERSE != 0;
+            settings.swap_stereo = flags & FX_SWAP_STEREO != 0;
+        }
+        CH_FADE_IN => settings.fade_in = u16_at(data, 0),
+        CH_FADE_OUT => settings.fade_out = u16_at(data, 0),
+        CH_ROOT_NOTE => settings.root_note = u32_at(data, 0).min(127) as u8,
+        CH_LEVELS if data.len() >= 12 => {
+            settings.pan = i32_at(data, 0);
+            settings.volume = u32_at(data, 4);
+            settings.pitch_cents = i32_at(data, 8);
+        }
+        CH_PARAMETERS => {
+            settings.polarity_inverted = data.get(81).is_some_and(|b| *b != 0);
+            if data.len() >= 112 {
+                let time = f32_at(data, 96) as f64;
+                settings.stretch.time_ticks = if time.is_finite() && time > 0.0 {
+                    scale(time)
+                } else {
+                    0.0
+                };
+                settings.stretch.pitch_cents = i32_at(data, 100);
+                // A power of two in ten-thousandths: 0 is 1x, 10000 is 2x.
+                settings.stretch.multiplier =
+                    2f64.powf((i32_at(data, 104) as f64 / 10_000.0).clamp(-2.0, 2.0));
+                settings.stretch.mode = i32_at(data, 108);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The size of one playlist item in this block, from the sizes FL has
@@ -779,18 +890,96 @@ mod tests {
         assert!(project.playlist_clips.is_empty());
     }
 
+    /// A playlist track's settings: its number (FL counts from 1) and
+    /// whether it is on.
+    fn track_data(number: u32, on: bool) -> Vec<u8> {
+        let mut d = number.to_le_bytes().to_vec();
+        d.resize(16, 0);
+        d[12] = on as u8;
+        d
+    }
+
     #[test]
     fn playlist_tracks_keep_their_names() {
         let mut writer = Writer::new();
-        writer.event(TRACK_DATA, &[0u8; 16]);
-        writer.event(TRACK_DATA, &{
-            let mut d = 7u32.to_le_bytes().to_vec();
-            d.resize(16, 0);
-            d
-        });
+        writer.event(TRACK_DATA, &track_data(1, true));
+        writer.event(TRACK_DATA, &track_data(7, true));
         writer.text(TRACK_NAME, "Kicks");
         let project = parse(&writer.finish(96)).expect("it should read");
-        assert_eq!(project.playlist_track_names, vec![(8, "Kicks".to_string())]);
+        assert_eq!(
+            project.playlist_track_names,
+            vec![(7, "Kicks".to_string())],
+            "the number is FL's own; it named the track below the one it meant"
+        );
+    }
+
+    #[test]
+    fn tracks_switched_off_and_muted_items_are_known() {
+        let mut writer = Writer::new();
+        writer.event(TRACK_DATA, &track_data(1, false));
+        writer.event(TRACK_DATA, &track_data(2, true));
+        let mut muted = item(32, 0, 20481, 384, 2, (-1.0, -1.0));
+        muted[18..20].copy_from_slice(&(ITEM_MUTED | 0x40).to_le_bytes());
+        let mut items = item(32, 0, 20481, 384, 1, (-1.0, -1.0));
+        items.extend(muted);
+        writer.event(ARR_PLAYLIST, &items);
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.playlist_tracks_off, vec![1]);
+        assert!(!project.playlist_clips[0].muted);
+        assert!(project.playlist_clips[1].muted);
+    }
+
+    #[test]
+    fn a_channel_s_settings_come_across() {
+        let mut writer = Writer::new();
+        writer.event(CH_NEW, &0u16.to_le_bytes());
+        writer.event(CH_TYPE, &[4]);
+        writer.event(CH_ENABLED, &[0]);
+        writer.event(CH_FX_FLAGS, &(FX_REVERSE | FX_SWAP_STEREO).to_le_bytes());
+        writer.event(CH_FADE_IN, &184u16.to_le_bytes());
+        writer.event(CH_ROUTED_TO, &[16]);
+        let mut levels = Vec::new();
+        levels.extend_from_slice(&9_600i32.to_le_bytes()); // pan
+        levels.extend_from_slice(&7_456u32.to_le_bytes()); // volume
+        levels.extend_from_slice(&(-250i32).to_le_bytes()); // pitch
+        levels.resize(24, 0);
+        writer.event(CH_LEVELS, &levels);
+        let mut params = vec![0u8; 168];
+        params[81] = 1;
+        params[96..100].copy_from_slice(&768.0f32.to_le_bytes());
+        params[100..104].copy_from_slice(&224i32.to_le_bytes());
+        params[104..108].copy_from_slice(&10_000i32.to_le_bytes());
+        params[108..112].copy_from_slice(&(-2i32).to_le_bytes());
+        writer.event(CH_PARAMETERS, &params);
+        writer.event(CH_ROOT_NOTE, &72u32.to_le_bytes());
+
+        let project = parse(&writer.finish(96)).expect("it should read");
+        let s = &project.channels[0].settings;
+        assert!(!s.enabled);
+        assert!(s.reversed && s.swap_stereo && s.polarity_inverted);
+        assert_eq!(s.fade_in, 184);
+        assert_eq!(s.mixer_insert, 16);
+        assert_eq!((s.pan, s.volume, s.pitch_cents), (9_600, 7_456, -250));
+        assert_eq!(s.root_note, 72);
+        // Two bars at FL's 96 a beat, in our ticks.
+        assert_eq!(s.stretch.time_ticks, 8.0 * hardwave_midi::PPQ as f64);
+        assert_eq!(s.stretch.pitch_cents, 224);
+        assert_eq!(s.stretch.multiplier, 2.0);
+        assert!(!s.stretch.is_resample());
+    }
+
+    #[test]
+    fn the_mixer_s_plug_in_names_do_not_rename_the_last_channel() {
+        let mut writer = Writer::new();
+        writer.event(CH_NEW, &0u16.to_le_bytes());
+        writer.text(CH_DISPLAY_NAME, "Full Track Render");
+        writer.event(ARRANGEMENT_NEW, &0u16.to_le_bytes());
+        // Further on, a mixer slot names its plug-in with the same events.
+        writer.text(PLUGIN_INTERNAL_NAME, "Fruity Parametric EQ 2");
+        writer.text(CH_DISPLAY_NAME, "Fruity Parametric EQ 2");
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.channels[0].name, "Full Track Render");
+        assert_eq!(project.channels[0].plugin_name, None);
     }
 
     #[test]

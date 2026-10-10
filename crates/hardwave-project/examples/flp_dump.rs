@@ -100,5 +100,54 @@ fn main() {
             .collect();
         println!("   rows: {}", rows.join(", "));
         println!("   plug-ins left: {}", r.plugins_left_behind.join(", "));
+        println!("   playlist tracks off: {:?}", fl.playlist_tracks_off);
+        println!(
+            "   quick fades left: {}",
+            r.sample_fades_left_behind.join(", ")
+        );
+        println!("   mixed lanes: {}", r.mixed_lanes.join(", "));
+        for track in &built.project.tracks {
+            let audio: Vec<_> = track
+                .clips
+                .iter()
+                .filter_map(|c| match &c.content {
+                    hardwave_project::clip::ClipContent::Audio(a) => Some(a),
+                    _ => None,
+                })
+                .collect();
+            if audio.is_empty() && track.volume_db == 0.0 && !track.muted {
+                continue;
+            }
+            let gains: std::collections::BTreeSet<String> =
+                audio.iter().map(|a| format!("{:.1}", a.gain_db)).collect();
+            println!(
+                "   {:<34} vol {:>5.1} pan {:>4.2}{} | {} clips, {} muted, {} reversed, gain dB {:?}",
+                track.name,
+                track.volume_db,
+                track.pan,
+                if track.muted { " MUTED" } else { "" },
+                audio.len(),
+                audio.iter().filter(|a| a.muted).count(),
+                audio.iter().filter(|a| a.reversed).count(),
+                gains
+            );
+        }
+        let stretched: Vec<String> = built
+            .audio_fixups
+            .iter()
+            .filter(|f| f.fit_seconds.is_some() || f.pitch_semitones != 0.0 || f.multiplier != 1.0)
+            .map(|f| {
+                format!(
+                    "fit {:?} s, pitch {}, mul {}, resample {}",
+                    f.fit_seconds.map(|s| (s * 100.0).round() / 100.0),
+                    f.pitch_semitones,
+                    f.multiplier,
+                    f.resample
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        println!("   stretch/pitch settings in use: {stretched:#?}");
     }
 }

@@ -949,20 +949,26 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // untrimmed clip exactly as long as its file.
       let originX = x
       let pxPerBucket = w / n
-      let backwards = false
       if (clip.sourceFrames && clip.sourceRate) {
         const pxPerSec = pxPerTick * (bpm / 60) * PPQ
         const stretch = clip.stretchRatio > 0 ? clip.stretchRatio : 1
         pxPerBucket = (clip.sourceFrames / clip.sourceRate / n) * stretch * pxPerSec
         originX = x - ((clip.sourceStart ?? 0) / clip.sourceRate) * stretch * pxPerSec
-        backwards = clip.reversed
       }
+      // Reversed, the engine reads the clip's own stretch of the file from
+      // its end back to its start, so that stretch is drawn mirrored inside
+      // the clip. Mirroring the whole file instead drew a trimmed reversed
+      // clip with audio it does not play.
+      const backwards = clip.reversed
+      const place = (bx: number) => (backwards ? 2 * x + w - bx - pxPerBucket : bx)
 
       // Only walk the buckets that fall inside the clip and the viewport.
       const left = Math.max(x, 0)
       const right = Math.min(x + w, viewWidth)
-      const startJ = Math.max(0, Math.floor((left - originX) / pxPerBucket) - 1)
-      const endJ = Math.min(n, Math.ceil((right - originX) / pxPerBucket) + 1)
+      const from = backwards ? 2 * x + w - right : left
+      const to = backwards ? 2 * x + w - left : right
+      const startJ = Math.max(0, Math.floor((from - originX) / pxPerBucket) - 1)
+      const endJ = Math.min(n, Math.ceil((to - originX) / pxPerBucket) + 1)
 
       if (endJ > startJ) {
         // Frequency-coloured waveform. Each slice is tinted by its spectral
@@ -975,8 +981,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         // not soft blended blobs).
         const colW = Math.max(1, Math.ceil(pxPerBucket))
         for (let j = startJ; j < endJ; j++) {
-          const bx = Math.floor(originX + j * pxPerBucket)
-          const pk = peaks[backwards ? n - 1 - j : j]
+          const bx = Math.floor(place(originX + j * pxPerBucket))
+          const pk = peaks[j]
           ctx.fillStyle = spectralColor(pk[3])
           // Outer min/max envelope — the transient "hair".
           const top = midY - pk[1] * ampScale
