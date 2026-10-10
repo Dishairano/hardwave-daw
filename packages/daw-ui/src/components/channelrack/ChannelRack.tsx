@@ -12,6 +12,7 @@ import { usePluginStore } from '../../stores/pluginStore'
 import type { TrackInfo } from '../../stores/trackStore'
 import { isBuiltIn, openPluginWindow } from '../plugins/openPluginWindow'
 import { useNotificationStore } from '../../stores/notificationStore'
+import { mixHex } from '../../lib/color'
 
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
@@ -450,11 +451,11 @@ export function ChannelRack() {
         {/* Add an instrument channel — native synths + VST/CLAP instruments. */}
         <div style={{ position: 'relative' }}>
           <button
-            style={{ ...topBtn, width: 'auto', padding: '0 8px', fontSize: 9, fontWeight: 700, color: hw.accent }}
+            style={{ ...topBtn, width: 'auto', padding: '0 10px', fontSize: 11.5, fontWeight: 700, color: hw.accent }}
             title="Add an instrument channel (native synth or VST/CLAP instrument)"
             data-hint="Add an instrument channel — native synth or VST/CLAP instrument"
             onClick={() => setInstPickerOpen(v => !v)}
-          >+ Inst</button>
+          >+ Instrument</button>
           {instPickerOpen && (
             <>
               <div
@@ -497,8 +498,8 @@ export function ChannelRack() {
         <div style={{ display: 'flex', gap: 1 }}>
           {['All', 'Audio', 'MIDI'].map(g => (
             <button key={g} style={{
-              ...topBtn, width: 'auto', padding: '0 6px',
-              fontSize: 9, color: g === 'All' ? hw.textBright : hw.textMuted,
+              ...topBtn, width: 'auto', padding: '0 9px',
+              fontSize: 11, color: g === 'All' ? hw.textBright : hw.textMuted,
               background: g === 'All' ? hw.accentDim : 'transparent',
               border: `1px solid ${g === 'All' ? hw.accentGlow : 'transparent'}`,
             }}>
@@ -511,11 +512,11 @@ export function ChannelRack() {
 
         {/* Global Swing — left-click drag the mini-knob, double-click resets to 0 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 3 }} title={`Global swing · ${Math.round(globalSwing * 100)}%`}>
-          <span style={{ fontSize: 8, color: hw.textFaint }}>SWG</span>
+          <span data-testid="rack-swing" style={{ fontSize: 11, color: hw.textMuted }}>Swing</span>
           <MiniKnob
             value={globalSwing}
             color={globalSwing > 0 ? hw.accent : hw.textMuted}
-            size={14}
+            size={18}
             onChange={setGlobalSwing}
             onReset={() => setGlobalSwing(0)}
             title={`Global swing — multiplied with each channel's swingmix`}
@@ -526,7 +527,7 @@ export function ChannelRack() {
 
         {/* Pattern length — click-to-edit input, right-click for bar selector */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, position: 'relative' }}>
-          <span style={{ fontSize: 8, color: hw.textFaint }}>Steps</span>
+          <span style={{ fontSize: 11, color: hw.textMuted }}>Steps</span>
           <input
             type="number" min={1} max={512}
             value={patternLengthOverride ?? activePatternLength}
@@ -835,11 +836,11 @@ export function ChannelRack() {
               }}
               onDragEnd={() => { setDragSource(null); setDragOverIndex(null) }}
               style={{
-                height: 30, display: 'flex', alignItems: 'stretch',
-                borderBottom: `1px solid ${hw.border}`,
+                height: 38, display: 'flex', alignItems: 'stretch',
+                borderBottom: '1px solid rgba(255,255,255,0.05)',
                 borderTop: dragOverIndex === ci ? `2px solid ${hw.accent}` : '2px solid transparent',
                 opacity: dragSource === ch.id ? 0.4 : 1,
-                background: selected ? hw.selectionDim : (ci % 2 === 1 ? 'transparent' : 'rgba(255,255,255,0.015)'),
+                background: selected ? 'rgba(255,255,255,0.045)' : 'transparent',
                 paddingLeft: inFolder ? 6 : 0,
               }}
             >
@@ -847,23 +848,27 @@ export function ChannelRack() {
               <div
                 onClick={() => toggleMute(ch.id)}
                 style={{
-                  width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
                   cursor: 'pointer',
                 }}
               >
-                <div style={{
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: ch.muted ? 'rgba(255,255,255,0.06)' : hw.green,
-                  boxShadow: ch.muted ? 'none' : `0 0 6px ${hw.greenDim}`,
-                }} />
+                <div
+                  title={ch.muted ? 'Muted: click to unmute' : 'Playing: click to mute'}
+                  style={{
+                    width: 10, height: 10, borderRadius: '50%',
+                    background: ch.muted ? 'transparent' : hw.green,
+                    border: ch.muted ? '1.5px solid #52525b' : 'none',
+                    boxShadow: ch.muted ? 'none' : `0 0 6px ${hw.greenDim}`,
+                  }}
+                />
               </div>
 
               {/* 2. Pan knob */}
-              <div style={{ width: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ width: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <MiniKnob
                   value={pan}
                   color={hw.yellow}
-                  size={14}
+                  size={20}
                   onChange={(v) => setPan(ch.id, normToPan(v))}
                   onReset={() => setPan(ch.id, 0)}
                   onContextMenu={(e) => {
@@ -876,11 +881,11 @@ export function ChannelRack() {
               </div>
 
               {/* 3. Volume knob */}
-              <div style={{ width: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ width: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <MiniKnob
                   value={vol}
                   color={hw.green}
-                  size={14}
+                  size={20}
                   onChange={(v) => setVolume(ch.id, normToDb(v))}
                   onReset={() => setVolume(ch.id, 0)}
                   onContextMenu={(e) => {
@@ -894,9 +899,8 @@ export function ChannelRack() {
 
               {/* 4. Mixer track # */}
               <div style={{
-                width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 9, color: hw.textFaint, fontFamily: "'Consolas', monospace",
-                borderRight: `1px solid ${hw.border}`,
+                width: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 11, color: hw.textMuted, fontFamily: "'JetBrains Mono', Consolas, monospace",
               }}>
                 {ci + 1}
               </div>
@@ -911,15 +915,16 @@ export function ChannelRack() {
                   setCtxMenu({ x: e.clientX, y: e.clientY, trackId: ch.id })
                 }}
                 style={{
-                  width: 110, minWidth: 110, display: 'flex', alignItems: 'center',
-                  padding: '0 6px', cursor: 'default',
-                  background: selected ? hw.accentDim : 'rgba(255,255,255,0.03)',
-                  borderRight: `1px solid ${hw.border}`,
-                  gap: 4,
+                  width: 156, minWidth: 156, display: 'flex', alignItems: 'center',
+                  margin: '4px 0', padding: '0 8px 0 0', cursor: 'default',
+                  background: selected ? '#2a2a31' : '#1b1b20',
+                  border: `1px solid ${selected ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.07)'}`,
+                  borderRadius: 7, overflow: 'hidden',
+                  gap: 7,
                 }}
               >
                 <div style={{
-                  width: 3, height: 18, borderRadius: 1,
+                  width: 4, alignSelf: 'stretch',
                   background: ch.color, flexShrink: 0,
                 }} />
                 {channelInstrumentSlot(ch) && (
@@ -950,7 +955,7 @@ export function ChannelRack() {
                       if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
                     }}
                     style={{
-                      flex: 1, minWidth: 0, fontSize: 10,
+                      flex: 1, minWidth: 0, fontSize: 12.5,
                       background: hw.bg, color: hw.textBright,
                       border: `1px solid ${hw.accent}`, borderRadius: hw.radius.sm,
                       padding: '0 4px', outline: 'none',
@@ -958,9 +963,9 @@ export function ChannelRack() {
                   />
                 ) : (
                   <span style={{
-                    fontSize: 10, color: selected ? hw.textBright : hw.textPrimary,
+                    fontSize: 12.5, color: selected ? hw.textBright : hw.textPrimary,
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    fontWeight: selected ? 600 : 400,
+                    fontWeight: 600,
                   }}>
                     {ch.name}
                   </span>
@@ -969,19 +974,18 @@ export function ChannelRack() {
 
               {/* 6. Channel select dot */}
               <div style={{
-                width: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRight: `1px solid ${hw.border}`,
+                width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
                 <div style={{
-                  width: 6, height: 6, borderRadius: '50%',
+                  width: 7, height: 7, borderRadius: '50%',
                   background: selected ? hw.accent : 'transparent',
-                  border: `1px solid ${selected ? hw.accent : hw.textFaint}`,
+                  border: `1.5px solid ${selected ? hw.accent : '#52525b'}`,
                 }} />
               </div>
 
               {/* 7. Step sequencer — velocity-aware buttons */}
               <div
-                style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 4px', gap: 1, overflow: 'hidden' }}
+                style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 8px 0 4px', gap: 3, overflow: 'hidden' }}
                 onContextMenu={(e) => { e.preventDefault(); clearChannel(ch.id) }}
               >
                 {(() => {
@@ -998,6 +1002,7 @@ export function ChannelRack() {
                     mode === 'step' ? 1 : STEPS
                   return Array.from({ length: STEPS }, (_, i) => {
                   const vel = getSteps(ch.id)[i] || 0
+                  const stepColor = /^#[0-9a-f]{6}$/i.test(ch.color || '') ? ch.color : '#DC2626'
                   const active = vel > 0
                   const groupIdx = Math.floor(i / 4)
                   const isOddGroup = groupIdx % 2 === 1
@@ -1021,16 +1026,19 @@ export function ChannelRack() {
                         ? `Step beyond ${mode} loop boundary — ghost (will not play)`
                         : active ? `Velocity ${Math.round(vel * 127)} (drag up/down · Alt+click to preview)` : 'Click to add step'}
                       style={{
-                        flex: 1, maxWidth: 28, height: 22, position: 'relative',
+                        flex: 1, maxWidth: 34, height: 28, position: 'relative',
+                        // Beats alternate between two greys so the bar reads
+                        // in fours; a step that is on fills in the channel's
+                        // own colour, as high as its velocity.
                         background: active
-                          ? 'rgba(0,0,0,0.25)'
-                          : (isOddGroup ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.03)'),
+                          ? mixHex(stepColor, '#000000', 0.72)
+                          : (isOddGroup ? '#2a2a31' : '#202026'),
                         border: ghost
-                          ? `1px dashed ${active ? hw.accentLight : 'rgba(255,255,255,0.18)'}`
-                          : `1px solid ${active ? hw.accentLight : 'rgba(255,255,255,0.06)'}`,
-                        borderRadius: hw.radius.sm,
-                        boxShadow: active && !ghost ? `0 0 8px ${hw.accentGlow}` : 'none',
-                        marginRight: i % 4 === 3 ? 4 : 0,
+                          ? `1px dashed ${active ? stepColor : 'rgba(255,255,255,0.18)'}`
+                          : `1px solid ${active ? stepColor : 'rgba(255,255,255,0.05)'}`,
+                        borderRadius: 5,
+                        boxShadow: 'none',
+                        marginRight: i % 4 === 3 ? 6 : 0,
                         overflow: 'hidden',
                         transition: 'background 0.05s',
                         padding: 0,
@@ -1041,8 +1049,8 @@ export function ChannelRack() {
                         <div style={{
                           position: 'absolute', left: 0, right: 0, bottom: 0,
                           height: `${Math.round(vel * 100)}%`,
-                          background: `linear-gradient(180deg, ${hw.accentLight}, ${hw.accent})`,
-                          borderRadius: hw.radius.sm,
+                          background: stepColor,
+                          borderRadius: 4,
                           opacity: ghost ? 0.4 : (0.85 + vel * 0.15),
                           pointerEvents: 'none',
                         }} />
