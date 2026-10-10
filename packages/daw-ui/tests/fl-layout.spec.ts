@@ -139,8 +139,10 @@ test.describe('Default panel state — FL Studio defaults', () => {
   })
 
   test('Browser is visible by default', async ({ page }) => {
-    // Browser panel should be rendered
-    await expect(page.getByText('Plugins').first()).toBeVisible()
+    // The browser panel itself, not a word inside it: its tabs have been
+    // renamed before and will be again.
+    await expect(page.locator('.fl-browser')).toBeVisible()
+    await expect(page.locator('.fl-browser-head')).toContainText('Browser')
   })
 
   test('Playlist is visible by default', async ({ page }) => {
