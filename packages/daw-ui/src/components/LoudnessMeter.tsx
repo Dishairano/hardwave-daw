@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { hw } from '../theme'
 import { useMeterStore } from '../stores/meterStore'
+import { DialogFrame } from './ui/DialogFrame'
 
 interface LoudnessMeterProps {
   onClose: () => void
@@ -87,31 +88,14 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
   }
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 9800,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div
-        style={{
-          width: 560, maxWidth: '92vw',
-          background: hw.bg, color: hw.textPrimary,
-          border: `1px solid ${hw.border}`, borderRadius: hw.radius.lg,
-          overflow: 'hidden',
-        }}
-      >
-        <div style={{
-          padding: '8px 12px', display: 'flex', alignItems: 'center',
-          gap: 12, background: hw.bgElevated, borderBottom: `1px solid ${hw.border}`,
-        }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>Loudness Meter</div>
-          <div style={{ fontSize: 9, color: hw.textFaint }}>BS.1770 · 30s history</div>
-          <div style={{ flex: 1 }} />
+    <DialogFrame
+      title="Loudness Meter"
+      subtitle="BS.1770 · 30s history"
+      onClose={onClose}
+      width={560}
+      headerActions={<>
           <button onClick={copyReadings} style={{
-            padding: '3px 10px', fontSize: 10, background: 'transparent',
+            padding: '3px 10px', fontSize: 12, background: 'transparent',
             border: `1px solid ${copied ? hw.accent : hw.border}`, borderRadius: hw.radius.sm,
             color: copied ? hw.accent : hw.textSecondary, cursor: 'pointer',
             transition: 'color 0.15s, border-color 0.15s',
@@ -119,61 +103,53 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
             {copied ? 'Copied!' : 'Copy readings'}
           </button>
           <button onClick={reset} style={{
-            padding: '3px 10px', fontSize: 10, background: 'transparent',
+            padding: '3px 10px', fontSize: 12, background: 'transparent',
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
             color: hw.textSecondary, cursor: 'pointer',
           }}>
             Clear history
           </button>
-          <button onClick={onClose} style={{
-            padding: '3px 10px', fontSize: 10, background: 'transparent',
-            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
-            color: hw.textSecondary, cursor: 'pointer',
-          }}>
-            Close
-          </button>
-        </div>
-
-        <div style={{ padding: 12, display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
-          <Reading label="Momentary" unit="LUFS" value={formatLufs(master.lufs_m)} target={target} dbValue={master.lufs_m} />
-          <Reading label="Short-term" unit="LUFS" value={formatLufs(master.lufs_s)} target={target} dbValue={master.lufs_s} />
-          <Reading label="Integrated" unit="LUFS" value={formatLufs(master.lufs_i)} target={target} dbValue={master.lufs_i} />
-          <Reading label="LRA" unit="LU" value={formatLra(lra)} target={target} dbValue={null} />
-          <Reading label="True Peak" unit="dBTP"
-            value={isFinite(master.true_peak_db) ? master.true_peak_db.toFixed(1) : '—'}
-            target={0} dbValue={master.true_peak_db} invertTolerance />
-        </div>
-
-        <div style={{
-          padding: '8px 12px', borderTop: `1px solid ${hw.border}`,
-          background: hw.bgElevated, display: 'flex', alignItems: 'center', gap: 12,
-        }}>
-          <label style={{ fontSize: 10, color: hw.textSecondary, display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span>Target</span>
-            <input type="range" min={-30} max={-6} step={0.5} value={target}
-              onChange={(e) => setTarget(parseFloat(e.target.value))}
-              style={{ width: 140 }} />
-            <span style={{ color: hw.textPrimary, fontVariantNumeric: 'tabular-nums', minWidth: 48 }}>
-              {target.toFixed(1)} LUFS
-            </span>
-          </label>
-          <div style={{ flex: 1 }} />
-          <div style={{ fontSize: 9, color: hw.textFaint }}>
-            <span style={{ color: hw.accent }}>━</span> Momentary &nbsp;
-            <span style={{ color: hw.secondary }}>━</span> Short-term &nbsp;
-            <span style={{ color: hw.textMuted }}>━</span> Integrated &nbsp;
-            <span style={{ color: hw.textFaint }}>┄</span> Target
-          </div>
-        </div>
-
-        <canvas
-          ref={canvasRef}
-          width={560}
-          height={170}
-          style={{ width: '100%', height: 170, background: '#0a0a0e', display: 'block' }}
-        />
+      </>}
+    >
+      <div style={{ padding: 12, display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
+        <Reading label="Momentary" unit="LUFS" value={formatLufs(master.lufs_m)} target={target} dbValue={master.lufs_m} />
+        <Reading label="Short-term" unit="LUFS" value={formatLufs(master.lufs_s)} target={target} dbValue={master.lufs_s} />
+        <Reading label="Integrated" unit="LUFS" value={formatLufs(master.lufs_i)} target={target} dbValue={master.lufs_i} />
+        <Reading label="LRA" unit="LU" value={formatLra(lra)} target={target} dbValue={null} />
+        <Reading label="True Peak" unit="dBTP"
+          value={isFinite(master.true_peak_db) ? master.true_peak_db.toFixed(1) : '—'}
+          target={0} dbValue={master.true_peak_db} invertTolerance />
       </div>
-    </div>
+
+      <div style={{
+        padding: '8px 12px', borderTop: `1px solid ${hw.border}`,
+        background: hw.bgElevated, display: 'flex', alignItems: 'center', gap: 12,
+      }}>
+        <label style={{ fontSize: 12, color: hw.textSecondary, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span>Target</span>
+          <input type="range" min={-30} max={-6} step={0.5} value={target}
+            onChange={(e) => setTarget(parseFloat(e.target.value))}
+            style={{ width: 140 }} />
+          <span style={{ color: hw.textPrimary, fontVariantNumeric: 'tabular-nums', minWidth: 48 }}>
+            {target.toFixed(1)} LUFS
+          </span>
+        </label>
+        <div style={{ flex: 1 }} />
+        <div style={{ fontSize: 11, color: hw.textFaint }}>
+          <span style={{ color: hw.accent }}>━</span> Momentary &nbsp;
+          <span style={{ color: hw.secondary }}>━</span> Short-term &nbsp;
+          <span style={{ color: hw.textMuted }}>━</span> Integrated &nbsp;
+          <span style={{ color: hw.textFaint }}>┄</span> Target
+        </div>
+      </div>
+
+      <canvas
+        ref={canvasRef}
+        width={560}
+        height={170}
+        style={{ width: '100%', height: 170, background: '#0a0a0e', display: 'block' }}
+      />
+    </DialogFrame>
   )
 }
 
@@ -196,13 +172,13 @@ function Reading({
       padding: 10, background: hw.bgElevated,
       border: `1px solid ${hw.border}`, borderRadius: hw.radius.md, textAlign: 'center',
     }}>
-      <div style={{ fontSize: 9, color: hw.textFaint, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+      <div style={{ fontSize: 11, color: hw.textFaint, textTransform: 'uppercase', letterSpacing: 0.5 }}>
         {label}
       </div>
       <div style={{ fontSize: 20, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums', marginTop: 4 }}>
         {value}
       </div>
-      <div style={{ fontSize: 8, color: hw.textFaint, marginTop: 2 }}>{unit}</div>
+      <div style={{ fontSize: 10.5, color: hw.textFaint, marginTop: 2 }}>{unit}</div>
     </div>
   )
 }
