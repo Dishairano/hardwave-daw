@@ -1348,6 +1348,14 @@ function HwPlaylistTools() {
 // rows so the totals line up.
 const PLAYLIST_TOTAL_SLOTS = 500
 
+/** The small line under a track name: what kind of track it is. */
+function trackSubtitle(t: { kind?: string; automationLanes: unknown[] }): string {
+  const kind = (t.kind || '').toLowerCase()
+  const base = kind === 'audio' ? 'Audio' : kind === 'bus' ? 'Bus' : kind === 'return' ? 'Return' : kind ? kind[0].toUpperCase() + kind.slice(1) : 'Track'
+  const lanes = t.automationLanes.length
+  return lanes > 0 ? `${base} · ${lanes} lane${lanes === 1 ? '' : 's'}` : base
+}
+
 export function HwPlaylistTracks() {
   const allTracks = useTrackStore(s => s.tracks)
   const folders = useTrackFolderStore(s => s.folders)
@@ -1365,6 +1373,8 @@ export function HwPlaylistTracks() {
     usePlaylistScrollStore.getState().scrollBy(dy)
   }
   const toggleArm = useTrackStore(s => s.toggleArm)
+  const toggleMute = useTrackStore(s => s.toggleMute)
+  const toggleSolo = useTrackStore(s => s.toggleSolo)
   const addAutomationLane = useTrackStore(s => s.addAutomationLane)
   const createAutomationClip = useTrackStore(s => s.createAutomationClip)
   const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
@@ -1386,47 +1396,54 @@ export function HwPlaylistTracks() {
               style={{ ['--track-color' as any]: t.color || '#06b6d4' }}
               title={t.name}
             >
-              <span className="led off"></span>
-              <span className="nm">{t.name}</span>
-              {isMidi && (
-                <HwInstrumentPicker
+              <span className="strip" />
+              <span className="nm">
+                <b>{t.name}</b>
+                {isMidi ? (
+                  <HwInstrumentPicker
+                    trackId={t.id}
+                    current={(t.instrument as any) || 'builtin_sine'}
+                    onPick={setTrackInstrument}
+                    onOpenEditor={
+                      t.instrument === 'kick_synth'
+                        ? () => setKickEditorTrack(t.id)
+                        : undefined
+                    }
+                  />
+                ) : (
+                  <small>{trackSubtitle(t)}</small>
+                )}
+              </span>
+              <span className="btns">
+                <button
+                  type="button"
+                  className={`fl-tr-btn m${t.muted ? ' on' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); void toggleMute(t.id) }}
+                  title={t.muted ? 'Unmute' : 'Mute'}
+                  aria-label={t.muted ? `Unmute ${t.name}` : `Mute ${t.name}`}
+                >M</button>
+                <button
+                  type="button"
+                  className={`fl-tr-btn s${t.soloed ? ' on' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); void toggleSolo(t.id) }}
+                  title={t.soloed ? 'Unsolo' : 'Solo'}
+                  aria-label={t.soloed ? `Unsolo ${t.name}` : `Solo ${t.name}`}
+                >S</button>
+                <button
+                  type="button"
+                  className={`fl-tr-btn r${t.armed ? ' on' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); toggleArm(t.id) }}
+                  title={t.armed ? 'Track armed — click to disarm' : 'Arm for recording'}
+                  aria-label={t.armed ? `Disarm ${t.name}` : `Arm ${t.name} for recording`}
+                >
+                  <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.2" fill="currentColor" /></svg>
+                </button>
+                <HwAddLaneButton
                   trackId={t.id}
-                  current={(t.instrument as any) || 'builtin_sine'}
-                  onPick={setTrackInstrument}
-                  onOpenEditor={
-                    t.instrument === 'kick_synth'
-                      ? () => setKickEditorTrack(t.id)
-                      : undefined
-                  }
+                  onAdd={addAutomationLane}
+                  onAddClip={() => createAutomationClip(t.id, { kind: 'track_volume' }, 0, 15360)}
                 />
-              )}
-              <button
-                type="button"
-                className={`fl-tr-arm${t.armed ? ' on' : ''}`}
-                onClick={(e) => { e.stopPropagation(); toggleArm(t.id) }}
-                title={t.armed ? 'Track armed — click to disarm' : 'Arm for recording'}
-                aria-label={t.armed ? `Disarm ${t.name}` : `Arm ${t.name} for recording`}
-              >
-                R
-              </button>
-              <HwAddLaneButton trackId={t.id} onAdd={addAutomationLane} />
-              <button
-                type="button"
-                title="Add automation clip (Volume, 4 bars — edit target/length after)"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  // Default: a 4-bar volume automation clip at the start
-                  // (4 bars × 4 beats × 960 PPQ = 15360 ticks).
-                  createAutomationClip(t.id, { kind: 'track_volume' }, 0, 15360)
-                }}
-                style={{
-                  fontSize: 9, fontWeight: 700, padding: '0 4px', marginLeft: 2,
-                  background: 'rgba(255,255,255,0.06)', color: '#bdbdc8',
-                  border: '1px solid #2a2a36', borderRadius: 4, cursor: 'pointer',
-                }}
-              >
-                +A
-              </button>
+              </span>
             </div>
           )
           // Render the track's automation lanes directly under it. The
@@ -1452,7 +1469,7 @@ export function HwPlaylistTracks() {
               style={{ ['--track-color' as any]: 'transparent' }}
               aria-hidden="true"
             >
-              <span className="led off"></span>
+              <span className="strip" />
               <span className="nm" />
             </div>
           )
@@ -1494,9 +1511,12 @@ const LANE_TARGETS: { spec: AutomationTargetInfo; label: string }[] = [
 function HwAddLaneButton({
   trackId,
   onAdd,
+  onAddClip,
 }: {
   trackId: string
   onAdd: (trackId: string, target: AutomationTargetInfo) => Promise<string>
+  /** Adds a 4-bar volume automation clip at the start. */
+  onAddClip?: () => void
 }) {
   const [open, setOpen] = useState(false)
   useEffect(() => {
@@ -1509,14 +1529,13 @@ function HwAddLaneButton({
     <span style={{ position: 'relative', display: 'inline-flex' }}>
       <button
         type="button"
-        className="fl-tr-arm"
+        className="fl-tr-btn add"
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
         onMouseDown={(e) => e.stopPropagation()}
-        title="Add automation lane"
-        aria-label="Add an automation lane to this track"
-        style={{ fontWeight: 600 }}
+        title="Add automation"
+        aria-label="Add automation to this track"
       >
-        +L
+        +
       </button>
       {open && (
         <div
@@ -1524,6 +1543,11 @@ function HwAddLaneButton({
           onMouseDown={(e) => e.stopPropagation()}
           style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 20 }}
         >
+          {onAddClip && (
+            <div className="item" onClick={() => { setOpen(false); onAddClip() }}>
+              Volume automation clip (4 bars)
+            </div>
+          )}
           {LANE_TARGETS.map(t => (
             <div
               key={t.label}

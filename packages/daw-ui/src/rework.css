@@ -219,3 +219,58 @@
 .fl-app .fl-toolrow .fl-hint.active { color: var(--text); background: none; }
 .fl-app .fl-hint-sync { font-family: var(--sans); font-size: 10.5px; letter-spacing: 0.4px; }
 .fl-app .fl-hint-tsig { font-family: var(--mono); font-size: 11.5px; height: 24px; padding: 0 10px; border-radius: 12px; }
+
+/* === Track headers === */
+.fl-app .fl-pl-tracks { width: 196px; background: #0e0e10; }
+.fl-app .fl-pl-tracks-head {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+  background: #0c0c0e;
+}
+.fl-app .fl-tr {
+  grid-template-columns: 4px minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 0 8px 0 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  letter-spacing: 0;
+  color: var(--text);
+  background: #121215;
+}
+.fl-app .fl-tr:hover { background: #17171b; }
+.fl-app .fl-tr .strip { align-self: stretch; background: var(--track-color); }
+.fl-app .fl-tr .nm { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fl-app .fl-tr .nm b { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fl-app .fl-tr .nm small { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fl-app .fl-tr .nm .fl-tr-instr { width: auto; height: 18px; padding: 0 6px; align-self: flex-start; font-family: var(--sans); font-size: 10.5px; letter-spacing: 0.2px; }
+.fl-app .fl-tr .btns { display: flex; gap: 3px; align-items: center; }
+.fl-app .fl-tr-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: #1e1e23;
+  color: var(--text-muted);
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.fl-app .fl-tr-btn:hover { color: #fff; border-color: rgba(255,255,255,0.2); }
+.fl-app .fl-tr-btn.m.on { background: #3f3f46; color: #fff; }
+.fl-app .fl-tr-btn.s.on { background: #f59e0b; border-color: #f59e0b; color: #111; }
+.fl-app .fl-tr-btn.r { color: #7f3a3a; }
+.fl-app .fl-tr-btn.r.on { background: #dc2626; border-color: #dc2626; color: #fff; }
+.fl-app .fl-tr-btn.add { color: var(--text-dim); font-size: 14px; font-weight: 500; background: transparent; border-color: transparent; }
+.fl-app .fl-tr-btn.add:hover { background: #1e1e23; color: #fff; }
+.fl-app .fl-tr.fl-tr-empty { background: #0e0e10; }
+.fl-app .fl-tr.fl-tr-empty .strip { background: transparent; }
+.fl-app .fl-tr.armed { box-shadow: none; background: #1a1214; }
