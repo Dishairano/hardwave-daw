@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
+import { DialogFrame } from './ui/DialogFrame'
 
 interface OscilloscopeProps {
   onClose: () => void
@@ -76,117 +77,92 @@ export function Oscilloscope({ onClose }: OscilloscopeProps) {
   }, [mode, trigger])
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 9800,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div
-        style={{
-          width: 680, maxWidth: '94vw',
-          background: hw.bg, color: hw.textPrimary,
-          border: `1px solid ${hw.border}`, borderRadius: hw.radius.lg,
-          overflow: 'hidden',
-        }}
-      >
-        <div style={{
-          padding: '8px 12px', display: 'flex', alignItems: 'center',
-          gap: 12, background: hw.bgElevated, borderBottom: `1px solid ${hw.border}`,
-        }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>Oscilloscope</div>
-          <div style={{ fontSize: 9, color: hw.textFaint }}>Master bus · {sampleRate} Hz</div>
-          <div style={{ flex: 1 }} />
+    <DialogFrame
+      title="Oscilloscope"
+      subtitle={`Master bus · ${sampleRate} Hz`}
+      onClose={onClose}
+      width={680}
+      headerActions={<>
           <button onClick={() => setFreeze(v => !v)} style={{
-            padding: '3px 10px', fontSize: 10, background: 'transparent',
+            padding: '3px 10px', fontSize: 12, background: 'transparent',
             border: `1px solid ${freeze ? hw.accent : hw.border}`, borderRadius: hw.radius.sm,
             color: freeze ? hw.accent : hw.textSecondary, cursor: 'pointer',
             transition: 'color 0.15s, border-color 0.15s',
           }}>
             {freeze ? 'Frozen' : 'Freeze'}
           </button>
-          <button onClick={onClose} style={{
-            padding: '3px 10px', fontSize: 10, background: 'transparent',
-            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
-            color: hw.textSecondary, cursor: 'pointer',
-          }}>
-            Close
-          </button>
-        </div>
+      </>}
+    >
+      <canvas
+        ref={canvasRef}
+        width={680}
+        height={320}
+        style={{ width: '100%', height: 320, background: '#0a0a0e', display: 'block' }}
+      />
 
-        <canvas
-          ref={canvasRef}
-          width={680}
-          height={320}
-          style={{ width: '100%', height: 320, background: '#0a0a0e', display: 'block' }}
-        />
+      <div style={{
+        padding: '8px 12px', borderTop: `1px solid ${hw.border}`,
+        background: hw.bgElevated, display: 'flex', alignItems: 'center',
+        gap: 16, flexWrap: 'wrap',
+      }}>
+        <label style={{ fontSize: 12, color: hw.textSecondary, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span>Window</span>
+          <input
+            type="range"
+            min={MIN_WINDOW_MS}
+            max={MAX_WINDOW_MS}
+            step={1}
+            value={windowMs}
+            onChange={(e) => setWindowMs(parseInt(e.target.value, 10))}
+            style={{ width: 140 }}
+            disabled={mode === 'xy'}
+          />
+          <span style={{ color: hw.textPrimary, fontVariantNumeric: 'tabular-nums', minWidth: 48 }}>
+            {windowMs} ms
+          </span>
+        </label>
 
-        <div style={{
-          padding: '8px 12px', borderTop: `1px solid ${hw.border}`,
-          background: hw.bgElevated, display: 'flex', alignItems: 'center',
-          gap: 16, flexWrap: 'wrap',
-        }}>
-          <label style={{ fontSize: 10, color: hw.textSecondary, display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span>Window</span>
-            <input
-              type="range"
-              min={MIN_WINDOW_MS}
-              max={MAX_WINDOW_MS}
-              step={1}
-              value={windowMs}
-              onChange={(e) => setWindowMs(parseInt(e.target.value, 10))}
-              style={{ width: 140 }}
-              disabled={mode === 'xy'}
-            />
-            <span style={{ color: hw.textPrimary, fontVariantNumeric: 'tabular-nums', minWidth: 48 }}>
-              {windowMs} ms
-            </span>
-          </label>
+        <label style={{ fontSize: 12, color: hw.textSecondary, display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span>Mode</span>
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as Mode)}
+            style={{
+              fontSize: 12, padding: '2px 6px', background: hw.bg,
+              border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+              color: hw.textPrimary,
+            }}
+          >
+            <option value="overlay">Overlay L+R</option>
+            <option value="split">Split (L/R)</option>
+            <option value="xy">Lissajous (X-Y)</option>
+          </select>
+        </label>
 
-          <label style={{ fontSize: 10, color: hw.textSecondary, display: 'flex', gap: 6, alignItems: 'center' }}>
-            <span>Mode</span>
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as Mode)}
-              style={{
-                fontSize: 10, padding: '2px 6px', background: hw.bg,
-                border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
-                color: hw.textPrimary,
-              }}
-            >
-              <option value="overlay">Overlay L+R</option>
-              <option value="split">Split (L/R)</option>
-              <option value="xy">Lissajous (X-Y)</option>
-            </select>
-          </label>
+        <label style={{ fontSize: 12, color: hw.textSecondary, display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span>Trigger</span>
+          <select
+            value={trigger}
+            onChange={(e) => setTrigger(e.target.value as Trigger)}
+            disabled={mode === 'xy'}
+            style={{
+              fontSize: 12, padding: '2px 6px', background: hw.bg,
+              border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+              color: hw.textPrimary,
+            }}
+          >
+            <option value="off">Free-run</option>
+            <option value="rising">Rising zero-cross</option>
+          </select>
+        </label>
 
-          <label style={{ fontSize: 10, color: hw.textSecondary, display: 'flex', gap: 6, alignItems: 'center' }}>
-            <span>Trigger</span>
-            <select
-              value={trigger}
-              onChange={(e) => setTrigger(e.target.value as Trigger)}
-              disabled={mode === 'xy'}
-              style={{
-                fontSize: 10, padding: '2px 6px', background: hw.bg,
-                border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
-                color: hw.textPrimary,
-              }}
-            >
-              <option value="off">Free-run</option>
-              <option value="rising">Rising zero-cross</option>
-            </select>
-          </label>
-
-          <div style={{ flex: 1 }} />
-          <div style={{ fontSize: 9, color: hw.textFaint }}>
-            <span style={{ color: hw.accent }}>━</span> L &nbsp;
-            <span style={{ color: hw.secondary }}>━</span> R
-          </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ fontSize: 11, color: hw.textFaint }}>
+          <span style={{ color: hw.accent }}>━</span> L &nbsp;
+          <span style={{ color: hw.secondary }}>━</span> R
         </div>
       </div>
-    </div>
+    </DialogFrame>
   )
 }
 
