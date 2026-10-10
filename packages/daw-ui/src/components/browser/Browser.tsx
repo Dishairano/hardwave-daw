@@ -59,6 +59,7 @@ export function Browser() {
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <path d="M8 1.5l1.9 4 4.4.5-3.3 3 .9 4.3L8 11.4l-3.9 1.9.9-4.3-3.3-3 4.4-.5z" fill="currentColor"/>
           </svg>
+          <span>Favorites</span>
         </button>
         <button
           type="button"
@@ -69,6 +70,7 @@ export function Browser() {
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <path d="M2 4.5h4l1 1h7v8H2z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
           </svg>
+          <span>Folders</span>
         </button>
         <button
           type="button"
@@ -81,16 +83,18 @@ export function Browser() {
             <circle cx="11" cy="10" r="2" fill="currentColor"/>
             <path d="M7 12V3.5l6-1.5v8" fill="none" stroke="currentColor" strokeWidth="1.4"/>
           </svg>
+          <span>Audio</span>
         </button>
         <button
           type="button"
           onClick={() => setActiveTab('lists')}
-          title="Lists"
+          title="Plug-ins"
           className={`fl-browser-tab${activeTab === 'lists' ? ' on' : ''}`}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
+          <span>Plug-ins</span>
         </button>
         <button
           type="button"
@@ -102,6 +106,7 @@ export function Browser() {
             <circle cx="6.8" cy="6.8" r="4.3" fill="none" stroke="currentColor" strokeWidth="1.3"/>
             <path d="M10 10l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
           </svg>
+          <span>Search</span>
         </button>
       </div>
 
@@ -135,7 +140,7 @@ function FavoritesTab() {
   if (favPlugins.length === 0 && favFiles.length === 0) {
     return (
       <div style={{
-        padding: 18, textAlign: 'center', fontSize: 10,
+        padding: 18, textAlign: 'center', fontSize: 12,
         color: hw.textFaint, fontFamily: hw.font.mono,
         letterSpacing: hw.tracking.wide, lineHeight: 1.6,
       }}>
@@ -216,7 +221,7 @@ function SearchTab() {
           onChange={e => setQuery(e.target.value)}
           placeholder="Search plugins & files..."
           style={{
-            width: '100%', padding: '4px 8px', fontSize: 10,
+            width: '100%', padding: '4px 8px', fontSize: 12,
             background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.md, outline: 'none',
           }}
@@ -224,7 +229,7 @@ function SearchTab() {
       </div>
       {!q && (
         <div style={{
-          padding: 18, textAlign: 'center', fontSize: 10,
+          padding: 18, textAlign: 'center', fontSize: 12,
           color: hw.textFaint, fontFamily: hw.font.mono,
           letterSpacing: hw.tracking.wide,
         }}>
@@ -233,7 +238,7 @@ function SearchTab() {
       )}
       {q && matchedPlugins.length === 0 && matchedFiles.length === 0 && (
         <div style={{
-          padding: 18, textAlign: 'center', fontSize: 10,
+          padding: 18, textAlign: 'center', fontSize: 12,
           color: hw.textFaint, fontFamily: hw.font.mono,
           letterSpacing: hw.tracking.wide,
         }}>
@@ -303,7 +308,7 @@ function PluginsTab() {
           placeholder="Search plugins..."
           data-testid="plugin-search"
           style={{
-            flex: 1, padding: '3px 6px', fontSize: 10,
+            flex: 1, padding: '3px 6px', fontSize: 12,
             background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.md, outline: 'none',
           }}
@@ -313,7 +318,7 @@ function PluginsTab() {
           disabled={scanning}
           title="Scan for VST3 & CLAP plugins"
           style={{
-            padding: '3px 8px', fontSize: 10, color: hw.textSecondary,
+            padding: '3px 8px', fontSize: 12, color: hw.textSecondary,
             background: 'rgba(255,255,255,0.04)', border: `1px solid ${hw.border}`,
             borderRadius: hw.radius.md, opacity: scanning ? 0.5 : 1,
           }}
@@ -323,7 +328,7 @@ function PluginsTab() {
       </div>
 
       {plugins.length === 0 && !scanning && (
-        <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 10 }}>
+        <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 12 }}>
           Click Scan to find<br />VST3 & CLAP plugins
         </div>
       )}
@@ -333,7 +338,7 @@ function PluginsTab() {
           looking for plug-ins rather than only on the website. */}
       {!scanning && !plugins.some(p => (p.vendor || '').toLowerCase().includes('hardwave')) && (
         <div style={{
-          margin: '6px 8px', padding: 10, fontSize: 10, lineHeight: 1.5,
+          margin: '6px 8px', padding: 10, fontSize: 12, lineHeight: 1.5,
           color: hw.textSecondary, background: 'rgba(255,255,255,0.03)',
           border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
         }}>
@@ -342,7 +347,7 @@ function PluginsTab() {
           <button
             onClick={() => window.open('https://hardwavestudios.com/downloads', '_blank', 'noopener,noreferrer')}
             style={{
-              display: 'block', marginTop: 8, padding: '4px 10px', fontSize: 10,
+              display: 'block', marginTop: 8, padding: '4px 10px', fontSize: 12,
               fontWeight: 600, color: '#fff', background: hw.accent,
               border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
               fontFamily: 'inherit',
@@ -688,7 +693,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
           placeholder="Search files..."
           data-testid="file-search"
           style={{
-            flex: 1, padding: '3px 6px', fontSize: 10,
+            flex: 1, minWidth: 0, padding: '5px 8px', fontSize: 12,
             background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.md, outline: 'none',
           }}
@@ -697,18 +702,18 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
           onClick={() => handleNewFolder(null)}
           title="New folder"
           style={{
-            padding: '3px 8px', fontSize: 10, color: hw.textSecondary,
+            padding: '3px 8px', fontSize: 12, color: hw.textSecondary,
             background: 'rgba(255,255,255,0.04)', border: `1px solid ${hw.border}`,
             borderRadius: hw.radius.md,
           }}
         >
-          +Folder
+          + Folder
         </button>
         <button
           onClick={pickFile}
           title="Add audio file"
           style={{
-            padding: '3px 8px', fontSize: 10, color: hw.textSecondary,
+            padding: '3px 8px', fontSize: 12, color: hw.textSecondary,
             background: 'rgba(255,255,255,0.04)', border: `1px solid ${hw.border}`,
             borderRadius: hw.radius.md,
           }}
@@ -719,19 +724,23 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
 
       <div style={{
         padding: '2px 8px 4px', display: 'flex', alignItems: 'center', gap: 6,
-        fontSize: 9, color: hw.textFaint,
+        fontSize: 11, color: hw.textFaint,
         borderBottom: `1px solid ${hw.border}`,
       }}>
-        <span title="Preview volume" style={{ fontSize: 10 }}>🔊</span>
+        <span title="Preview volume" className="fl-browser-vol-lbl">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M2.5 6h2.5l3.5-3v10l-3.5-3H2.5z" /><path d="M11 5.5a3.5 3.5 0 010 5M12.8 3.6a6 6 0 010 8.8" strokeLinecap="round" /></svg>
+          Preview
+        </span>
         <input
           type="range" min={0} max={1} step={0.01}
           value={previewVolume}
           onChange={(e) => setPreviewVolume(parseFloat(e.target.value))}
           title={`Preview volume ${Math.round(previewVolume * 100)}%`}
           data-testid="preview-volume"
-          style={{ flex: 1, accentColor: hw.accent, height: 2 }}
+          className="fl-range"
+          style={{ flex: 1, minWidth: 0 }}
         />
-        <span style={{ minWidth: 24, textAlign: 'right' }}>
+        <span style={{ minWidth: 30, textAlign: 'right' }}>
           {Math.round(previewVolume * 100)}%
         </span>
         <button
@@ -741,7 +750,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
             : 'Auto-preview OFF: click a filename to import it to the selected track'}
           data-testid="auto-preview-toggle"
           style={{
-            padding: '2px 6px', fontSize: 9, fontWeight: 600,
+            padding: '2px 6px', fontSize: 11, fontWeight: 600,
             color: autoPreview ? hw.accent : hw.textFaint,
             background: autoPreview ? 'rgba(124,201,255,0.12)' : 'transparent',
             border: `1px solid ${autoPreview ? hw.accent : hw.border}`,
@@ -757,7 +766,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
             : 'Previews play at the speed the file was recorded at'}
           data-testid="preview-tempo-toggle"
           style={{
-            padding: '2px 6px', fontSize: 9, fontWeight: 600,
+            padding: '2px 6px', fontSize: 11, fontWeight: 600,
             color: matchTempo ? hw.accent : hw.textFaint,
             background: matchTempo ? 'rgba(124,201,255,0.12)' : 'transparent',
             border: `1px solid ${matchTempo ? hw.accent : hw.border}`,
@@ -768,7 +777,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         </button>
       </div>
       {previewNote && (
-        <div style={{ padding: '2px 10px 4px', fontSize: 9, color: hw.textFaint }}>
+        <div style={{ padding: '2px 10px 4px', fontSize: 11, color: hw.textFaint }}>
           {previewNote}
         </div>
       )}
@@ -793,12 +802,12 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         >
           {libraryHits.map(hit => renderDiskFile(hit.path, 1))}
           {!librarySearching && libraryHits.length === 0 && (
-            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 9 }}>
+            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 11 }}>
               Nothing in your folders matches that.
             </div>
           )}
           {libraryCapped && (
-            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 9 }}>
+            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 11 }}>
               Stopped early: there is more to find. Type more of the name to narrow it.
             </div>
           )}
@@ -825,7 +834,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
             />
           ))}
           {diskRoots.length === 0 && (
-            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 9 }}>
+            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 11 }}>
               Add a folder on disk, like a sample pack, to browse it here.
             </div>
           )}
@@ -859,7 +868,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
             />
           ))}
           {!favHasAny && (
-            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 9 }}>
+            <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 11 }}>
               Star files or drop into folders.
             </div>
           )}
@@ -891,7 +900,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
           />
         ))}
         {recents.length === 0 && !favHasAny && (
-          <div style={{ padding: '8px 12px', color: hw.textFaint, fontSize: 10 }}>
+          <div style={{ padding: '8px 12px', color: hw.textFaint, fontSize: 12 }}>
             Click Add to pick audio files.
           </div>
         )}
@@ -980,12 +989,12 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, r
   const dirs = entries?.filter(e => e.isDir) ?? []
   const files = entries?.filter(e => !e.isDir && filter(e.path)) ?? []
   const hint: React.CSSProperties = {
-    padding: `3px 6px 3px ${22 + depth * 12}px`, color: hw.textFaint, fontSize: 9,
+    padding: `3px 6px 3px ${22 + depth * 12}px`, color: hw.textFaint, fontSize: 11,
   }
   const iconButton: React.CSSProperties = {
     width: 16, height: 16, padding: 0,
     background: 'transparent', border: 'none',
-    color: hw.textFaint, fontSize: 10, cursor: 'pointer',
+    color: hw.textFaint, fontSize: 12, cursor: 'pointer',
   }
 
   return (
@@ -997,19 +1006,20 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, r
         title={path}
         data-testid={isRoot ? 'browser-disk-root' : 'browser-disk-folder'}
         style={{
-          padding: `3px 6px 3px ${8 + depth * 12}px`,
+          padding: `5px 8px 5px ${10 + depth * 14}px`,
           display: 'flex', alignItems: 'center', gap: 4,
-          fontSize: 10, cursor: 'pointer',
+          fontSize: 12, cursor: 'pointer',
           background: hover ? 'rgba(255,255,255,0.06)' : 'transparent',
           transition: 'background 0.1s',
         }}
       >
         <span style={{
-          fontSize: 8, color: hw.textMuted,
+          fontSize: 10, color: hw.textMuted,
           transform: expanded ? 'rotate(90deg)' : 'none',
           display: 'inline-block', transition: 'transform 150ms',
           width: 8,
         }}>▶</span>
+        {!isRoot && <FolderIcon open={expanded} />}
         <span style={{
           flex: 1, minWidth: 0, color: hw.textPrimary,
           fontWeight: isRoot ? 600 : 400,
@@ -1018,7 +1028,7 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, r
           {label}
         </span>
         {expanded && entries && (
-          <span style={{ fontSize: 9, color: hw.textFaint }}>{dirs.length + files.length}</span>
+          <span style={{ fontSize: 11, color: hw.textFaint }}>{dirs.length + files.length}</span>
         )}
         {isRoot && (
           <>
@@ -1083,14 +1093,11 @@ function TreeGroup({ label, count, expanded, onToggle, children, actionLabel, on
             onClick={(e) => { e.stopPropagation(); onAction() }}
             style={{
               marginLeft: 8,
-              fontSize: 9,
+              fontSize: 11,
               color: hw.textFaint,
               padding: '1px 6px',
               borderRadius: 4,
               background: 'rgba(255,255,255,0.03)',
-              fontFamily: hw.font.mono,
-              letterSpacing: hw.tracking.eyebrow,
-              textTransform: 'uppercase',
               cursor: 'pointer',
             }}
           >
@@ -1133,26 +1140,26 @@ function FolderRow({ folder, depth, expanded, count, onToggle, onAddSub, onRenam
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         style={{
-          padding: `3px 6px 3px ${8 + depth * 12}px`,
+          padding: `5px 8px 5px ${10 + depth * 14}px`,
           display: 'flex', alignItems: 'center', gap: 4,
-          fontSize: 10, cursor: 'grab',
+          fontSize: 12, cursor: 'grab',
           background: dropHover ? 'rgba(124,201,255,0.12)' : (hover ? 'rgba(255,255,255,0.06)' : 'transparent'),
           outline: dropHover ? `1px dashed ${hw.accent}` : 'none',
           transition: 'background 0.1s',
         }}
       >
         <span style={{
-          fontSize: 8, color: hw.textMuted,
+          fontSize: 10, color: hw.textMuted,
           transform: expanded ? 'rotate(90deg)' : 'none',
           display: 'inline-block', transition: 'transform 150ms',
           width: 8,
         }}>▶</span>
-        <span style={{ color: hw.yellow, fontSize: 10 }}>{expanded ? '📂' : '📁'}</span>
+        <FolderIcon open={expanded} />
         <span style={{
           flex: 1, color: hw.textPrimary,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{folder.name}</span>
-        <span style={{ color: hw.textFaint, fontSize: 9 }}>{count}</span>
+        <span style={{ color: hw.textFaint, fontSize: 11 }}>{count}</span>
         {hover && (
           <>
             <button
@@ -1161,7 +1168,7 @@ function FolderRow({ folder, depth, expanded, count, onToggle, onAddSub, onRenam
               style={{
                 width: 16, height: 16, padding: 0,
                 background: 'transparent', border: 'none',
-                color: hw.textFaint, fontSize: 11, cursor: 'pointer',
+                color: hw.textFaint, fontSize: 12.5, cursor: 'pointer',
               }}
             >+</button>
             <button
@@ -1170,7 +1177,7 @@ function FolderRow({ folder, depth, expanded, count, onToggle, onAddSub, onRenam
               style={{
                 width: 16, height: 16, padding: 0,
                 background: 'transparent', border: 'none',
-                color: hw.textFaint, fontSize: 10, cursor: 'pointer',
+                color: hw.textFaint, fontSize: 12, cursor: 'pointer',
               }}
             >×</button>
           </>
@@ -1181,9 +1188,29 @@ function FolderRow({ folder, depth, expanded, count, onToggle, onAddSub, onRenam
   )
 }
 
+/** A small folder mark for tree rows (it was an emoji, drawn differently on every system). */
+function FolderIcon({ open }: { open: boolean }) {
+  return (
+    <svg width="14" height="12" viewBox="0 0 16 13" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d={open ? 'M1 2.5h4.5l1.2 1.3H15v1.4H3.6L1 11.5z' : 'M1 2h4.8l1.4 1.5H15V12H1z'} fill={open ? '#d4a33b' : '#b58a2e'} />
+      {open && <path d="M3.4 5.4H15.5L13 11.8H1z" fill="#e9b949" />}
+    </svg>
+  )
+}
+
+/** A small audio-file mark for file rows. */
+function AudioFileIcon() {
+  return (
+    <svg width="12" height="14" viewBox="0 0 12 14" aria-hidden="true" style={{ flexShrink: 0, color: hw.textMuted }}>
+      <path d="M1.5 1h6l3 3v9h-9z" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
+      <path d="M3.5 9.5v-2M5 10.5v-4M6.5 9.5v-2M8 10v-3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 function EmptyRow() {
   return (
-    <div style={{ padding: '4px 16px', color: hw.textFaint, fontSize: 9 }}>
+    <div style={{ padding: '4px 16px', color: hw.textFaint, fontSize: 11 }}>
       (none)
     </div>
   )
@@ -1220,7 +1247,7 @@ function PluginItem({ plugin, canAdd, isFavorite, onToggleFavorite }: {
           width: 14, height: 14, padding: 0,
           background: 'transparent', border: 'none',
           color: isFavorite ? '#fbbf24' : hw.textFaint,
-          fontSize: 11, cursor: 'pointer', lineHeight: 1,
+          fontSize: 12.5, cursor: 'pointer', lineHeight: 1,
           flexShrink: 0,
         }}
       >
@@ -1299,7 +1326,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
         setCtxMenu({ x: e.clientX, y: e.clientY })
       }}
       style={{
-        padding: `3px 8px 3px ${16 + depth * 12}px`,
+        padding: `4px 8px 4px ${14 + depth * 14}px`,
         display: 'flex', alignItems: 'center', gap: 4,
         transition: 'background 0.15s',
         cursor: 'grab',
@@ -1308,6 +1335,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
       onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
     >
+      <AudioFileIcon />
       <div
         style={{ flex: 1, minWidth: 0 }}
         onClick={autoPreview ? onPreview : onImport}
@@ -1317,7 +1345,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           : `Import to selected track\n${path}`}
       >
         <div style={{
-          fontSize: 10, color: hw.textPrimary,
+          fontSize: 12, color: hw.textPrimary,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           cursor: 'pointer',
         }}>
@@ -1325,7 +1353,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
         </div>
         {showDir && dir && (
           <div style={{
-            fontSize: 8, color: hw.textFaint,
+            fontSize: 10, color: hw.textFaint,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {dir}
@@ -1341,7 +1369,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
                 onClick={(e) => { e.stopPropagation(); onRemoveTag?.(t) }}
                 title={`Remove tag "${t}"`}
                 style={{
-                  fontSize: 8, padding: '1px 5px',
+                  fontSize: 10, padding: '1px 5px',
                   color: hw.accent,
                   background: 'rgba(124,201,255,0.12)',
                   border: `1px solid rgba(124,201,255,0.3)`,
@@ -1387,7 +1415,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           style={{
             width: 16, height: 16, padding: 0,
             background: 'transparent', border: 'none',
-            color: hw.textFaint, fontSize: 10, cursor: 'pointer',
+            color: hw.textFaint, fontSize: 12, cursor: 'pointer',
           }}
         >
           ×
@@ -1409,7 +1437,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           }}
         >
           <div style={{
-            padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint,
+            padding: '4px 8px 2px', fontSize: 10, color: hw.textFaint,
             letterSpacing: 0.5, textTransform: 'uppercase',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
@@ -1462,7 +1490,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
             </>
           )}
           {actionError && (
-            <div style={{ padding: '4px 8px', fontSize: 9, color: hw.red, maxWidth: 260 }}>{actionError}</div>
+            <div style={{ padding: '4px 8px', fontSize: 11, color: hw.red, maxWidth: 260 }}>{actionError}</div>
           )}
         </div>
       )}
@@ -1483,14 +1511,14 @@ function FileMenuItem({ label, hint, danger, disabled, checked, onClick }: {
         padding: '5px 8px', gap: 6, border: 'none',
         background: 'transparent',
         color: disabled ? hw.textFaint : danger ? hw.red : hw.textSecondary,
-        fontSize: 11, cursor: disabled ? 'default' : 'pointer', borderRadius: hw.radius.sm,
+        fontSize: 12.5, cursor: disabled ? 'default' : 'pointer', borderRadius: hw.radius.sm,
         textAlign: 'left',
       }}
       onMouseEnter={e => { if (!disabled) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)' }}
       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
     >
       {checked !== undefined && (
-        <span style={{ width: 10, color: hw.accent, fontSize: 10 }}>{checked ? '✓' : ''}</span>
+        <span style={{ width: 10, color: hw.accent, fontSize: 12 }}>{checked ? '✓' : ''}</span>
       )}
       {label}
     </button>
@@ -1504,7 +1532,7 @@ function MenuDivider() {
 function MenuSection({ label }: { label: string }) {
   return (
     <div style={{
-      margin: '4px 0 2px', padding: '3px 8px', fontSize: 8, color: hw.textFaint,
+      margin: '4px 0 2px', padding: '3px 8px', fontSize: 10, color: hw.textFaint,
       letterSpacing: 0.5, textTransform: 'uppercase', borderTop: `1px solid ${hw.border}`,
     }}>
       {label}
@@ -1754,7 +1782,7 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', gap: 4,
-        fontSize: 9, color: hw.textFaint, marginBottom: 2,
+        fontSize: 11, color: hw.textFaint, marginBottom: 2,
       }}>
         <span style={{
           flex: 1, color: hw.textSecondary,
@@ -1766,14 +1794,14 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
           style={{
             width: 16, height: 16, padding: 0,
             background: 'transparent', border: 'none',
-            color: hw.accent, fontSize: 10, cursor: 'pointer',
+            color: hw.accent, fontSize: 12, cursor: 'pointer',
           }}
         >■</button>
       </div>
       <div style={{ height: 32, display: 'flex', alignItems: 'center' }}>
         {peaks
           ? <canvas ref={canvasRef} />
-          : <div style={{ fontSize: 9, color: hw.textFaint }}>
+          : <div style={{ fontSize: 11, color: hw.textFaint }}>
               {err ? 'waveform unavailable' : 'decoding…'}
             </div>
         }
@@ -1781,7 +1809,7 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
       {info && (
         <div style={{
           display: 'flex', gap: 8, marginTop: 2,
-          fontSize: 9, color: hw.textFaint,
+          fontSize: 11, color: hw.textFaint,
           fontFamily: 'ui-monospace, Menlo, monospace',
         }}>
           <span title="Duration">{formatDuration(info.durationSec)}</span>
