@@ -274,3 +274,38 @@
 .fl-app .fl-tr.fl-tr-empty { background: #0e0e10; }
 .fl-app .fl-tr.fl-tr-empty .strip { background: transparent; }
 .fl-app .fl-tr.armed { box-shadow: none; background: #1a1214; }
+
+/* === Browser === */
+.fl-app .fl-browser, .fl-floating .fl-browser { width: 284px; background: #0e0e10; }
+.fl-browser-head {
+  font-family: Inter, 'Segoe UI', system-ui, sans-serif !important;
+  font-size: 12.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  color: #ececf0 !important;
+  padding: 10px 12px !important;
+}
+.fl-browser-head .disclosure { display: none; }
+.fl-browser-head .count { font-size: 11px !important; letter-spacing: 0 !important; color: #8a8a94 !important; }
+.fl-browser-tabs { padding: 6px 6px !important; gap: 1px !important; background: transparent !important; }
+.fl-browser-tab {
+  flex: 1;
+  width: auto !important;
+  height: 42px !important;
+  flex-direction: column;
+  gap: 3px;
+  border-radius: 8px !important;
+  color: #8a8a94 !important;
+}
+.fl-browser-tab span { font-family: Inter, 'Segoe UI', system-ui, sans-serif; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+.fl-browser-tab svg { width: 14px; height: 14px; }
+.fl-browser-tab:hover { background: rgba(255,255,255,0.05) !important; color: #fff !important; }
+.fl-browser-tab.on { background: #232329 !important; color: #fff !important; }
+.fl-browser-tree { font-family: Inter, 'Segoe UI', system-ui, sans-serif; }
+.fl-browser-vol-lbl { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: #a8a8b2; }
+.fl-bt-folder { font-family: Inter, 'Segoe UI', system-ui, sans-serif !important; font-size: 12px !important; letter-spacing: 0 !important; padding: 6px 12px !important; font-weight: 600 !important; }
+.fl-bt-folder .ct { font-size: 11px !important; }
+input[type="range"].fl-range { -webkit-appearance: none; appearance: none; height: 16px; background: transparent; cursor: pointer; }
+input[type="range"].fl-range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.12); }
+input[type="range"].fl-range::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border-radius: 50%; background: #ececf0; border: 0; box-shadow: 0 1px 3px rgba(0,0,0,.5); }

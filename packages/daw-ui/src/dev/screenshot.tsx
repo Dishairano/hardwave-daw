@@ -442,7 +442,15 @@ function Harness() {
     case 'wizard':
       return <Full><WizardShot /></Full>
     case 'browser':
-      return <Full><BrowserShot /></Full>
+      // Docked at its real width beside the playlist, as in the app.
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <div className="fl-body">
+            <div className="fl-browser"><BrowserShot /></div>
+            <div style={{ flex: 1, display: 'flex', minWidth: 0 }}><Arrangement onSetHint={noop} /></div>
+          </div>
+        </div>
+      )
     case 'settings': {
       // SHOT_TAB=midi (?tab=) photographs a specific settings tab.
       focusSettingsTab((new URLSearchParams(location.search).get('tab') || 'audio') as SettingsTab)
