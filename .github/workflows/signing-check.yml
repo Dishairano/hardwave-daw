@@ -1,0 +1,49 @@
+# Proves the Azure Trusted Signing setup works, without making a release:
+# a tiny program is compiled on a Windows runner and signed the same way
+# the release signs the DAW (scripts/sign-windows.ps1), then Windows
+# checks the signature. Run it by hand after changing anything in Azure
+# or in the six repository values (docs/CODE_SIGNING.md).
+name: Signing check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: A program to sign
+        shell: pwsh
+        run: |
+          $src = @'
+          public static class Hello { public static void Main() { System.Console.WriteLine("Hardwave signing check"); } }
+          '@
+          Set-Content -Path hello.cs -Value $src
+          $csc = Get-ChildItem "$env:WINDIR\Microsoft.NET\Framework64\v4*\csc.exe" | Select-Object -Last 1
+          & $csc.FullName /nologo /out:signing-check.exe hello.cs
+          if (-not (Test-Path signing-check.exe)) { throw 'could not build the test program' }
+
+      - name: Sign it as a release would
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: ./scripts/sign-windows.ps1 signing-check.exe
+
+      - name: Say who signed it
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature -FilePath signing-check.exe
+          if ($sig.Status -ne 'Valid') { throw "the signature is not valid: $($sig.Status) $($sig.StatusMessage)" }
+          Write-Host "Signed by: $($sig.SignerCertificate.Subject)"
+          Write-Host "Valid until: $($sig.SignerCertificate.NotAfter)"
+          Write-Host "Timestamped by: $($sig.TimeStamperCertificate.Subject)"
