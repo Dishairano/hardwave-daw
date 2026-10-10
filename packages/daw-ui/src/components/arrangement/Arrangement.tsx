@@ -25,6 +25,7 @@ import { hw } from '../../theme'
 import { paintSlotOccupied, paintSlotTick } from './paint'
 import { useTempoMapStore } from '../../stores/tempoMapStore'
 import { gridLines } from '../../utils/meter'
+import { mixHex, hexLuma } from '../../lib/color'
 
 const PPQ = 960
 const PIXELS_PER_SECOND_BASE = 100
@@ -104,6 +105,7 @@ interface ContextMenuState {
 const waveformData = new Map<string, [number, number, number, number][]>()
 const FADE_HANDLE_PX = 10
 const HEADER_H = 14
+
 
 /** Requests for waveform tiers that have not answered yet, so a quick
  *  zoom does not ask for the same file again with every wheel step. */
@@ -883,43 +885,56 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const h = laneHeight - pad * 2
     const isSelected = clip.id === selectedClipId || selectedClipIds.has(clip.id)
     const color = clip.muted ? '#1a1a24' : baseColor
-    // Mockup-style: sharp 1px corners, thin proportional header, full-saturation header stripe.
-    const radius = 1
-    const headerH = Math.min(9, Math.max(7, Math.round(h * 0.4)))
+    // Clip chrome (rework proposal 2026-10-10): a readable title bar in a deeper
+    // shade of the track colour with the name in Inter, a body tinted by the
+    // track colour with a hairline border, and selection shown as an outline so
+    // the colour identity stays. The waveform drawing below is unchanged.
+    const radius = 3
+    const headerH = h >= 34 ? 15 : Math.min(12, Math.max(9, Math.round(h * 0.34)))
+    const shade = mixHex(color, '#000000', 0.28)
+    const lum = hexLuma(color)
 
-    // Clip body — near-black base with only a faint colour tint, so the
-    // frequency-coloured waveform reads clearly on top. FL Studio / rekordbox
-    // keep the body dark and let the header carry the clip's colour identity.
     ctx.beginPath()
     ctx.roundRect(x, y, w, h, radius)
-    ctx.fillStyle = '#0b0910'
-    ctx.globalAlpha = clip.muted ? 0.72 : 0.9
+    ctx.fillStyle = '#100f15'
+    ctx.globalAlpha = clip.muted ? 0.7 : 0.95
     ctx.fill()
     ctx.fillStyle = color
-    ctx.globalAlpha = clip.muted ? 0.06 : 0.15
+    ctx.globalAlpha = clip.muted ? 0.05 : 0.17
     ctx.fill()
+    ctx.globalAlpha = clip.muted ? 0.25 : 0.5
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, radius)
+    ctx.stroke()
     ctx.globalAlpha = 1.0
 
-    // Clip header bar — full-color stripe. Turns red while the clip is
-    // selected (the sole selection affordance now that clips are
-    // borderless) and reverts to the clip's own colour when deselected.
-    ctx.fillStyle = clip.muted ? '#161620' : isSelected ? '#EF4444' : color
-    ctx.globalAlpha = clip.muted ? 0.5 : 1.0
+    ctx.fillStyle = clip.muted ? '#1d1d26' : shade
     ctx.beginPath()
     ctx.roundRect(x, y, w, headerH, [radius, radius, 0, 0])
     ctx.fill()
-    ctx.globalAlpha = 1
 
-    // Clip name — only render if header is tall enough and clip is wide enough
-    if (headerH >= 8 && w >= 16) {
-      ctx.fillStyle = clip.muted ? '#52525b' : 'rgba(0,0,0,0.85)'
-      ctx.font = "700 7px 'JetBrains Mono', ui-monospace, Menlo, monospace"
+    if (headerH >= 9 && w >= 18) {
+      const fontPx = headerH >= 15 ? 10.5 : 9
+      ctx.fillStyle = clip.muted ? '#71717a' : lum > 0.62 ? 'rgba(10,10,12,0.92)' : 'rgba(255,255,255,0.95)'
+      ctx.font = `600 ${fontPx}px Inter, 'Segoe UI', system-ui, sans-serif`
+      ctx.textBaseline = 'middle'
       ctx.save()
       ctx.beginPath()
-      ctx.rect(x + 2, y, w - 4, headerH)
+      ctx.rect(x + 3, y, w - 6, headerH)
       ctx.clip()
-      ctx.fillText(clip.name, x + 3, y + headerH - 2)
+      ctx.fillText(clip.name, x + 6, y + headerH / 2 + 0.5)
       ctx.restore()
+      ctx.textBaseline = 'alphabetic'
+    }
+
+    if (isSelected) {
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.roundRect(x + 0.75, y + 0.75, w - 1.5, h - 1.5, radius)
+      ctx.stroke()
     }
 
     // Waveform — pick the best available tier: prefer the current one, else fallback
