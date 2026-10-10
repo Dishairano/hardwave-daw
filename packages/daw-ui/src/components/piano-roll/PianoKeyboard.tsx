@@ -1,5 +1,4 @@
 import { useRef, useEffect, useCallback } from 'react'
-import { hw } from '../../theme'
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
@@ -54,14 +53,21 @@ export function PianoKeyboard({
       const isC = pitch % 12 === 0
       const rootHere = showScale && ((pitch - scaleRoot) % 12 + 12) % 12 === 0
 
+      // A real keyboard: light white keys, dark black keys at 62% width,
+      // so the octave reads at a glance. It was near-black on near-black.
+      ctx.fillStyle = isC ? '#e4e4ea' : '#cfcfd6'
+      ctx.fillRect(0, y, width, noteHeight)
       if (black) {
-        ctx.fillStyle = '#08080d'
-        ctx.fillRect(0, y, width, noteHeight)
-        ctx.fillStyle = '#060608'
-        ctx.fillRect(0, y + 1, width * 0.6, noteHeight - 2)
-      } else {
-        ctx.fillStyle = isC ? '#0d0d12' : '#0a0a0f'
-        ctx.fillRect(0, y, width, noteHeight)
+        ctx.fillStyle = '#17171c'
+        ctx.fillRect(0, y + 0.5, width * 0.62, noteHeight - 1)
+      }
+      // Seam between white keys where two white keys meet (E-F, B-C).
+      if (pitch % 12 === 4 || pitch % 12 === 11) {
+        ctx.fillStyle = 'rgba(0,0,0,0.28)'
+        ctx.fillRect(0, y, width, 1)
+      } else if (!black) {
+        ctx.fillStyle = 'rgba(0,0,0,0.12)'
+        ctx.fillRect(width * 0.62, y + noteHeight - 0.5, width * 0.38, 0.5)
       }
 
       if (showScale && !inScale(pitch)) {
@@ -69,31 +75,23 @@ export function PianoKeyboard({
         ctx.fillRect(0, y, width, noteHeight)
       }
       if (rootHere) {
-        ctx.fillStyle = 'rgba(220,38,38,0.18)'
-        ctx.fillRect(0, y, 3, noteHeight)
+        ctx.fillStyle = '#dc2626'
+        ctx.fillRect(width - 3, y, 3, noteHeight)
       }
 
-      // Key border
-      ctx.fillStyle = pitch % 12 === 0 || pitch % 12 === 5
-        ? 'rgba(220,38,38,0.06)'
-        : 'rgba(255,255,255,0.02)'
-      ctx.fillRect(0, y + noteHeight - 0.5, width, 0.5)
-
-      // Note label
+      // Octave label on every C; the other white keys get their letter
+      // once the rows are tall enough to read it.
       if (isC || (noteHeight >= 14 && !black)) {
-        const label = isC
-          ? `C${Math.floor(pitch / 12) - 1}`
-          : NOTE_NAMES[pitch % 12]
-        ctx.fillStyle = isC ? hw.textSecondary : hw.textFaint
-        ctx.font = isC
-          ? `bold ${Math.min(10, noteHeight - 3)}px Inter, ui-sans-serif, sans-serif`
-          : `${Math.min(8, noteHeight - 4)}px Inter, ui-sans-serif, sans-serif`
-        ctx.fillText(label, 4, y + noteHeight - 3)
+        ctx.fillStyle = isC ? '#18181b' : '#6b6b75'
+        ctx.font = `${isC ? 600 : 500} ${Math.max(9, Math.min(11, noteHeight - 3))}px Inter, ui-sans-serif, sans-serif`
+        ctx.textAlign = 'right'
+        ctx.fillText(isC ? `C${Math.floor(pitch / 12) - 1}` : NOTE_NAMES[pitch % 12], width - 6, y + noteHeight - 3)
+        ctx.textAlign = 'left'
       }
     }
 
     // Right border
-    ctx.fillStyle = 'rgba(255,255,255,0.04)'
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'
     ctx.fillRect(width - 1, 0, 1, h)
   }, [width, noteHeight, scrollY, totalNotes, scaleRoot, scaleIntervals, showScale])
 

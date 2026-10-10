@@ -22,6 +22,7 @@ import { useTempoMapStore } from '../../stores/tempoMapStore'
 import { segmentAt } from '../../utils/meter'
 import { decodeMidi, rescaleNotes } from '../../utils/midi'
 import { useNotificationStore } from '../../stores/notificationStore'
+import { mixHex, hexLuma } from '../../lib/color'
 
 const PPQ = 960
 const MINIMAP_HEIGHT = 36
@@ -167,6 +168,11 @@ export function PianoRoll() {
   const containerRef = useRef<HTMLDivElement>(null)
   const activeTrackId = useTrackStore(s => s.activeMidiTrackId)
   const activeClipId = useTrackStore(s => s.activeMidiClipId)
+  // The clip's track colour and name: notes draw in the colour, the title
+  // shows the name (it showed the first 8 characters of the clip's id).
+  const activeTrack = useTrackStore(s => s.tracks.find(t => t.id === activeTrackId))
+  const trackColor = activeTrack?.color && /^#[0-9a-f]{6}$/i.test(activeTrack.color) ? activeTrack.color : '#DC2626'
+  const activeClipName = activeTrack?.clips.find(c => c.id === activeClipId)?.name
   const tracks = useTrackStore(s => s.tracks)
   const [notes, setNotes] = useState<Note[]>([])
   const [ghostMode, setGhostMode] = useState<'off' | 'track' | 'all'>('off')
@@ -375,7 +381,7 @@ export function PianoRoll() {
     const ctx = canvas.getContext('2d')!
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
-    ctx.fillStyle = '#0a0a0f'
+    ctx.fillStyle = '#131317'
     ctx.fillRect(0, 0, w, h)
 
     const highlightScale = scaleType !== 'chromatic'
@@ -383,12 +389,13 @@ export function PianoRoll() {
       const y = yFromPitch(pitch)
       if (y + noteHeight < 0 || y > h) continue
       if (isBlackKey(pitch)) {
-        ctx.fillStyle = '#08080d'
+        ctx.fillStyle = '#0d0d10'
         ctx.fillRect(0, y, w, noteHeight)
       }
       if (pitch % 12 === 0) {
-        ctx.fillStyle = 'rgba(220,38,38,0.02)'
-        ctx.fillRect(0, y, w, noteHeight)
+        // The line under each C marks the octave.
+        ctx.fillStyle = 'rgba(255,255,255,0.10)'
+        ctx.fillRect(0, y + noteHeight - 1, w, 1)
       }
       if (highlightScale) {
         const inScale = isPitchInScale(pitch, scaleRoot, scaleType)
@@ -504,31 +511,24 @@ export function PianoRoll() {
       if (x + noteW < 0 || x > w || y + noteHeight < 0 || y > h) continue
 
       const isSelected = selectedNotes.has(note.index)
-      let color = '#DC2626'
+      let color = trackColor
       if (note.muted) {
         color = '#52525b'
       } else {
-        // Velocity-driven lightness: 0.2 → dark maroon, 1.0 → bright red
+        // The track's colour, darker for soft notes: velocity 0 is 60%
+        // towards black, velocity 1 is the colour itself.
         const t = Math.max(0, Math.min(1, note.velocity))
-        const r = Math.round(100 + 155 * t)
-        const g = Math.round(20 + 38 * t)
-        const b = Math.round(20 + 38 * t)
-        color = `rgb(${r},${g},${b})`
+        color = mixHex(trackColor, '#000000', 0.6 * (1 - t))
       }
 
-      ctx.fillStyle = isSelected ? '#EF4444' : color
-      ctx.globalAlpha = note.muted ? 0.4 : 0.85
+      ctx.fillStyle = isSelected ? mixHex(color, '#ffffff', 0.25) : color
+      ctx.globalAlpha = note.muted ? 0.4 : 0.95
       ctx.beginPath()
       ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), noteHeight - 2, 4)
       ctx.fill()
       ctx.globalAlpha = 1
 
-      if (!note.muted && !isSelected) {
-        ctx.shadowColor = 'rgba(220,38,38,0.3)'
-        ctx.shadowBlur = 4
-      }
-
-      ctx.strokeStyle = isSelected ? '#fff' : 'rgba(255,255,255,0.1)'
+      ctx.strokeStyle = isSelected ? '#fff' : 'rgba(0,0,0,0.35)'
       ctx.lineWidth = isSelected ? 1.5 : 0.5
       ctx.beginPath()
       ctx.roundRect(x + 0.5, y + 1, Math.max(noteW - 1, 2), noteHeight - 2, 4)
@@ -536,9 +536,9 @@ export function PianoRoll() {
       ctx.shadowBlur = 0
 
       if (noteW > 30) {
-        ctx.fillStyle = isSelected ? '#fff' : 'rgba(255,255,255,0.7)'
-        ctx.font = '9px Inter, ui-sans-serif, sans-serif'
-        ctx.fillText(noteName(note.pitch), x + 4, y + noteHeight - 3)
+        ctx.fillStyle = hexLuma(color) > 0.6 ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.92)'
+        ctx.font = `600 ${Math.min(11, noteHeight - 4)}px Inter, ui-sans-serif, sans-serif`
+        ctx.fillText(noteName(note.pitch), x + 5, y + noteHeight - 3.5)
       }
 
       const velH = (noteHeight - 4) * note.velocity
@@ -562,7 +562,7 @@ export function PianoRoll() {
       ctx.strokeRect(mx + 0.5, my + 0.5, mw, mh)
       ctx.setLineDash([])
     }
-  }, [notes, scrollX, scrollY, pixelsPerTick, selectedNotes, marquee, scaleRoot, scaleType, ghostMode, ghostNotes, noteHeight, chordPreview, tool, chordType, chordInversion, customChordSet, snap])
+  }, [notes, trackColor, scrollX, scrollY, pixelsPerTick, selectedNotes, marquee, scaleRoot, scaleType, ghostMode, ghostNotes, noteHeight, chordPreview, tool, chordType, chordInversion, customChordSet, snap])
 
   useEffect(() => { draw() }, [draw])
 
@@ -1867,10 +1867,13 @@ export function PianoRoll() {
         borderBottom: `1px solid ${hw.border}`,
         display: 'flex', alignItems: 'center', padding: '0 8px', gap: 6,
       }}>
-        <span style={{ fontSize: 10, fontWeight: 600, color: hw.textMuted }}>Piano Roll</span>
-        <span style={{ fontSize: 9, color: hw.textFaint }}>
-          {activeTrackId && activeClipId ? `${activeClipId.slice(0, 8)}…` : 'No clip selected'}
+        {activeTrackId && activeClipId && (
+          <span style={{ width: 9, height: 9, borderRadius: 3, background: trackColor, flexShrink: 0 }} />
+        )}
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: hw.textPrimary }}>
+          {activeTrackId && activeClipId ? (activeClipName || 'Untitled clip') : 'No clip selected'}
         </span>
+        {activeTrack && <span style={{ fontSize: 11.5, color: hw.textMuted }}>{activeTrack.name}</span>}
         {selectedNotes.size > 0 && (
           <span style={{
             fontSize: 9, fontWeight: 600, color: hw.accent,
