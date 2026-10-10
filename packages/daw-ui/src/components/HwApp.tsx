@@ -140,9 +140,13 @@ function HwClockText() {
 export function HwTopbar({
   menus, onTogglePlaylist, onToggleChannelRack, onTogglePianoRoll, onToggleMixer,
   showPlaylist, showChannelRack, showPianoRoll, showMixer,
-  onOpenTempoTapper, onAction, onOpenExport,
+  onOpenTempoTapper, onAction, onOpenExport, projectName, children,
 }: {
   menus?: MenuDef[]
+  /** Shown in the middle of the top bar. */
+  projectName?: string
+  /** Rendered at the end of the tool row (the live hint). */
+  children?: React.ReactNode
   onTogglePlaylist?: () => void
   onToggleChannelRack?: () => void
   onTogglePianoRoll?: () => void
@@ -317,6 +321,7 @@ export function HwTopbar({
         >Mixer</button>
       </div>
       <div className="fl-topbar-spacer" />
+      {projectName && <div className="fl-project" data-tauri-drag-region>{projectName}</div>}
       {/* Perf meters (CPU/MEM) + MIDI activity — Option B top-right cluster. */}
       <div className="fl-topbar-perf">
         <HwPerfCluster />
@@ -498,12 +503,14 @@ export function HwTopbar({
           <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round">
             <path d="M2 2h8v8H2zM4 2v3h4V2M4 10v-3h4v3"/>
           </svg>
+          <span className="lbl">Save</span>
         </button>
         <SaveAsButton onClick={() => onAction?.('saveAs')} />
         <button onClick={() => onOpenExport?.()} className="fl-mini-btn" title="Render audio (Ctrl+R)">
           <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
             <path d="M6 1v6m-3-3 3 3 3-3M2 9v2h8V9"/>
           </svg>
+          <span className="lbl">Render</span>
         </button>
         <button onClick={() => onAction?.('cut')} className="fl-mini-btn" title="Cut (Ctrl+X)">
           <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1">
@@ -639,6 +646,7 @@ export function HwTopbar({
         </button>
       </div>
 
+      {children}
     </div>
     </>
   )
@@ -987,7 +995,7 @@ function syncLedState(s: { playing: boolean; positionSamples: number; sampleRate
   return beat % Math.max(1, s.timeSigNumerator) === 0 ? ' on-bar' : ' on-beat'
 }
 
-export function HwSecondRow({ projectName }: { projectName: string }) {
+export function HwSecondRow() {
   // Live hover info, fed by the delegated listener in HwApp.
   const hint = useHoverInfoStore(s => s.info)
   // Ship 3c — Hint Bar redesign. The legacy fl-tag-pill / fl-step-pill
@@ -1004,7 +1012,7 @@ export function HwSecondRow({ projectName }: { projectName: string }) {
   // LED changes, a few times a beat, instead of on every position tick.
   const led = useTransportStore(syncLedState)
 
-  const defaultHint = `${projectName}  ·  Hover anything for live info`
+  const defaultHint = 'Hover anything for live info'
 
   // Lightweight heuristic for the icon type — pick the highest-
   // priority badge that applies right now. The full FL set (sad /
@@ -1818,8 +1826,10 @@ export function HwApp({
         onOpenTempoTapper={onOpenTempoTapper}
         onAction={onAction}
         onOpenExport={onOpenExport}
-      />
-      <HwSecondRow projectName={projectName} />
+        projectName={projectName}
+      >
+        <HwSecondRow />
+      </HwTopbar>
 
       <div className="fl-body">
         {showBrowser && !layout.browser.floating && (
