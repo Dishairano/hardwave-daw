@@ -31,6 +31,10 @@ const CH_TYPE: u8 = 21; // a byte: sampler, instrument, audio clip, ...
 const CH_NEW: u8 = WORD; // 64
 const PAT_NEW: u8 = WORD + 1; // 65
 const PROJ_TEMPO: u8 = DWORD + 28; // 156
+/// Before FL 3.4 the tempo was a whole number here, with thousandths in
+/// TEMPO_FINE; read only when PROJ_TEMPO is not there.
+const TEMPO_COARSE: u8 = WORD + 2; // 66
+const TEMPO_FINE: u8 = WORD + 29; // 93
 /// The channel's name in files from before FL 12 or so.
 const CH_NAME: u8 = TEXT; // 192
 const PAT_NAME: u8 = TEXT + 1; // 193
@@ -77,14 +81,25 @@ struct Event<'a> {
     data: &'a [u8],
 }
 
+/// The FL version text, first in every project ("25.2.3.5171").
+const FL_VERSION: u8 = TEXT + 7; // 199
+/// An event FL 25 and later write with three bytes after it, although its
+/// id is in the four-byte range. Read as four, it took the next event's
+/// first byte with it and the project tempo after it was never seen, so
+/// every song from FL 25 opened at 140.
+const THREE_BYTE_SINCE_FL25: u8 = DWORD + 44; // 172
+
 /// Walk the event stream.
 fn events(body: &[u8]) -> Result<Vec<Event<'_>>, FlpError> {
     let mut out = Vec::new();
     let mut i = 0usize;
+    let mut fl_major = 0u32;
     while i < body.len() {
         let id = body[i];
         i += 1;
-        let len = if id < WORD {
+        let len = if id == THREE_BYTE_SINCE_FL25 && fl_major >= 25 {
+            3
+        } else if id < WORD {
             1
         } else if id < DWORD {
             2
@@ -111,13 +126,26 @@ fn events(body: &[u8]) -> Result<Vec<Event<'_>>, FlpError> {
         if i + len > body.len() {
             return Err(FlpError::Truncated);
         }
-        out.push(Event {
-            id,
-            data: &body[i..i + len],
-        });
+        let data = &body[i..i + len];
+        if id == FL_VERSION {
+            fl_major = text_ascii(data)
+                .split('.')
+                .next()
+                .and_then(|m| m.trim().parse().ok())
+                .unwrap_or(0);
+        }
+        out.push(Event { id, data });
         i += len;
     }
     Ok(out)
+}
+
+/// The version is written as plain bytes, a zero at the end.
+fn text_ascii(data: &[u8]) -> String {
+    data.iter()
+        .take_while(|b| **b != 0)
+        .map(|b| *b as char)
+        .collect()
 }
 
 /// FL writes text as UTF-16, two zero bytes at the end.
@@ -196,13 +224,18 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     let mut current_pattern: Option<u32> = None;
     let mut pattern_names: Vec<(u32, String)> = Vec::new();
 
+    let mut tempo_seen = false;
+    let (mut coarse, mut fine) = (None::<u16>, 0u16);
     for event in events(body)? {
         match event.id {
+            TEMPO_COARSE => coarse = Some(u16_at(event.data, 0)),
+            TEMPO_FINE => fine = u16_at(event.data, 0),
             PROJ_TEMPO => {
                 // Thousandths of a beat per minute.
                 let raw = u32_at(event.data, 0);
                 if raw > 0 {
                     project.bpm = raw as f32 / 1000.0;
+                    tempo_seen = true;
                 }
             }
             CH_NEW => {
@@ -347,6 +380,11 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     }
 
     project.pattern_names = pattern_names;
+    if !tempo_seen {
+        if let Some(c) = coarse.filter(|c| *c > 0) {
+            project.bpm = c as f32 + fine as f32 / 1000.0;
+        }
+    }
 
     // A playlist item naming a channel is an audio clip when that channel
     // holds a sample, and an automation clip when it is one.
@@ -753,5 +791,40 @@ mod tests {
         writer.text(TRACK_NAME, "Kicks");
         let project = parse(&writer.finish(96)).expect("it should read");
         assert_eq!(project.playlist_track_names, vec![(8, "Kicks".to_string())]);
+    }
+
+    #[test]
+    fn a_project_from_fl_25_keeps_its_tempo() {
+        // The start of a real FL 25.2.3 project, as written: version,
+        // build, event 172 with three bytes, the version as UTF-16, the
+        // licensee, then the tempo (160.000).
+        let mut writer = Writer::new();
+        writer.event(FL_VERSION, b"25.2.3.5171\0");
+        writer.event(DWORD + 31, &5171u32.to_le_bytes());
+        writer.event(28, &[1]);
+        writer
+            .body
+            .extend_from_slice(&[THREE_BYTE_SINCE_FL25, 1, 1, 0]);
+        writer.text(TEXT, "FL Studio 25.2.3.5171");
+        writer.event(PROJ_TEMPO, &160_000u32.to_le_bytes());
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.bpm, 160.0);
+    }
+
+    #[test]
+    fn before_fl_25_event_172_is_four_bytes() {
+        let mut writer = Writer::new();
+        writer.event(FL_VERSION, b"24.2.2.4646\0");
+        writer.event(THREE_BYTE_SINCE_FL25, &[1, 1, 0, 0]);
+        writer.event(PROJ_TEMPO, &150_000u32.to_le_bytes());
+        assert_eq!(parse(&writer.finish(96)).unwrap().bpm, 150.0);
+    }
+
+    #[test]
+    fn an_old_project_s_tempo_comes_from_coarse_and_fine() {
+        let mut writer = Writer::new();
+        writer.event(TEMPO_COARSE, &174u16.to_le_bytes());
+        writer.event(TEMPO_FINE, &500u16.to_le_bytes());
+        assert_eq!(parse(&writer.finish(96)).unwrap().bpm, 174.5);
     }
 }
