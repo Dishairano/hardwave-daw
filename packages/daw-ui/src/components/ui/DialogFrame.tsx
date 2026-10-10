@@ -6,7 +6,7 @@ import type { ReactNode } from 'react'
  * an optional footer whose buttons sit on the right. Styles: rework.css
  * (.hw-dialog*).
  */
-export function DialogFrame({ title, subtitle, onClose, headerActions, footer, width = 720, children }: {
+export function DialogFrame({ title, subtitle, onClose, headerActions, footer, width = 720, height, children }: {
   title: string
   subtitle?: string
   onClose: () => void
@@ -14,6 +14,8 @@ export function DialogFrame({ title, subtitle, onClose, headerActions, footer, w
   headerActions?: ReactNode
   footer?: ReactNode
   width?: number
+  /** A fixed height (for example '80vh'); by default the frame fits its content. */
+  height?: number | string
   children: ReactNode
 }) {
   return (
@@ -21,7 +23,7 @@ export function DialogFrame({ title, subtitle, onClose, headerActions, footer, w
       className="hw-dialog-backdrop"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="hw-dialog" style={{ width }} role="dialog" aria-label={title}>
+      <div className="hw-dialog" style={{ width, height }} role="dialog" aria-label={title}>
         <div className="hw-dialog-head">
           <div className="hw-dialog-titles">
             <b>{title}</b>

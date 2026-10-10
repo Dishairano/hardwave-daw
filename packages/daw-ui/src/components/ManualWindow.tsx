@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import manualSource from '../../../../docs/MANUAL.md?raw'
 import { hw } from '../theme'
+import { DialogFrame } from './ui/DialogFrame'
 
 /**
  * The manual, in the app.
@@ -44,7 +45,7 @@ function inline(text: string, key: number) {
         if (part.startsWith('`') && part.endsWith('`')) {
           return (
             <code key={i} style={{
-              fontFamily: hw.font.mono, fontSize: 11,
+              fontFamily: hw.font.mono, fontSize: 12.5,
               background: 'rgba(255,255,255,0.06)', padding: '1px 4px', borderRadius: 3,
             }}>{part.slice(1, -1)}</code>
           )
@@ -135,87 +136,59 @@ export function ManualWindow({ onClose }: { onClose: () => void }) {
   const section = all[shown]
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 9800,
-        background: 'rgba(0,0,0,0.5)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
+    <DialogFrame
+      title="Manual"
+      subtitle="What the program does today"
+      onClose={onClose}
+      width={860}
+      height="80vh"
+      headerActions={
+        <input
+          className="hw-input"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search the manual"
+          style={{ width: 200 }}
+        />
+      }
     >
-      <div style={{
-        width: 860, maxWidth: '95vw', height: '80vh',
-        background: hw.bg, color: hw.textPrimary,
-        border: `1px solid ${hw.border}`, borderRadius: hw.radius.lg,
-        overflow: 'hidden', display: 'flex', flexDirection: 'column',
-      }}>
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <div style={{
-          padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 12,
-          background: hw.bgElevated, borderBottom: `1px solid ${hw.border}`,
+          width: 210, flexShrink: 0, overflowY: 'auto',
+          borderRight: `1px solid ${hw.border}`, background: hw.bgElevated, padding: 6,
         }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>Manual</div>
-          <div style={{ fontSize: 9, color: hw.textFaint }}>
-            what the program does today
-          </div>
-          <div style={{ flex: 1 }} />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search the manual"
-            style={{
-              fontSize: 10, padding: '3px 8px', width: 180,
-              background: hw.bgInput ?? hw.bg, color: hw.textPrimary,
-              border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, outline: 'none',
-            }}
-          />
-          <button onClick={onClose} style={btn()}>Close</button>
+          {matches.length === 0 && (
+            <div style={{ fontSize: 12, color: hw.textFaint, padding: 8 }}>
+              Nothing in the manual mentions that.
+            </div>
+          )}
+          {matches.map(i => (
+            <div
+              key={i}
+              onClick={() => setActive(i)}
+              style={{
+                padding: '6px 8px', fontSize: 12.5, cursor: 'pointer',
+                borderRadius: hw.radius.sm,
+                color: i === shown ? hw.textPrimary : hw.textMuted,
+                background: i === shown ? 'rgba(255,255,255,0.06)' : 'transparent',
+                borderLeft: `2px solid ${i === shown ? hw.accent : 'transparent'}`,
+              }}
+            >
+              {all[i].title}
+            </div>
+          ))}
         </div>
 
-        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          <div style={{
-            width: 210, flexShrink: 0, overflowY: 'auto',
-            borderRight: `1px solid ${hw.border}`, background: hw.bgElevated, padding: 6,
-          }}>
-            {matches.length === 0 && (
-              <div style={{ fontSize: 10, color: hw.textFaint, padding: 8 }}>
-                Nothing in the manual mentions that.
-              </div>
-            )}
-            {matches.map(i => (
-              <div
-                key={i}
-                onClick={() => setActive(i)}
-                style={{
-                  padding: '6px 8px', fontSize: 11, cursor: 'pointer',
-                  borderRadius: hw.radius.sm,
-                  color: i === shown ? hw.textPrimary : hw.textMuted,
-                  background: i === shown ? 'rgba(255,255,255,0.06)' : 'transparent',
-                  borderLeft: `2px solid ${i === shown ? hw.accent : 'transparent'}`,
-                }}
-              >
-                {all[i].title}
-              </div>
-            ))}
-          </div>
-
-          <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '16px 20px', fontSize: 12 }}>
-            {section && (
-              <>
-                <h2 style={{ fontSize: 15, margin: '0 0 12px' }}>{section.title}</h2>
-                <Body lines={section.lines} />
-              </>
-            )}
-          </div>
+        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '16px 20px', fontSize: 12 }}>
+          {section && (
+            <>
+              <h2 style={{ fontSize: 15, margin: '0 0 12px' }}>{section.title}</h2>
+              <Body lines={section.lines} />
+            </>
+          )}
         </div>
       </div>
-    </div>
+    </DialogFrame>
   )
 }
 
-function btn() {
-  return {
-    padding: '3px 10px', fontSize: 10, background: 'transparent',
-    border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
-    color: hw.textSecondary, cursor: 'pointer',
-  } as const
-}
