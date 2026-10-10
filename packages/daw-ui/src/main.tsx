@@ -15,6 +15,7 @@ import { listenForTrackChanges } from './stores/trackStore'
 import { startRackSync } from './stores/rackSync'
 import './fonts'
 import './mockup.css'
+import './rework.css'
 
 // A detached panel window (open_panel_window command) loads a plain
 // index.html and receives its panel + context via an injected global

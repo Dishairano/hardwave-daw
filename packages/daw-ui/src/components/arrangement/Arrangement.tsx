@@ -403,10 +403,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ? Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
       : scrollX
 
-    // Background — solid mockup-canvas color (#15091a). Replaces the earlier
-    // pure-black fill so the playlist matches the mockup look. The .fl-pl-grid
-    // parent has a gradient too, but the mockup expects this color to cover it.
-    ctx.fillStyle = '#15091a'
+    // Background: neutral near-black, the same base as the rest of the
+    // shell (rework.css). It was a purple tint (#15091a).
+    ctx.fillStyle = '#0e0e11'
     ctx.fillRect(0, 0, w, h)
 
     // Horizontal track-row separators — match mockup's .fl-pl-canvas

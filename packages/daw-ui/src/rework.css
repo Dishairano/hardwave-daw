@@ -1,0 +1,25 @@
+/*
+ * rework.css: the per-component restyle (proposal, October 2026).
+ *
+ * Loaded after mockup.css. The layout stays as it is; this file changes
+ * how each part looks: readable type (Inter for words, mono only for
+ * numbers, nothing under 11 px), a neutral black base instead of the
+ * purple tint, and track colour where it tells you something.
+ */
+
+/* === Base === */
+.fl-app, .fl-floating {
+  --bg: #0a0a0b;
+  --panel: #0e0e10;
+  --panel-2: #141417;
+  --panel-3: #1b1b20;
+  --panel-4: #232329;
+  --text: #ececf0;
+  --text-muted: #a8a8b2;
+  --text-dim: #74747e;
+  --border: rgba(255,255,255,0.08);
+  --border-strong: rgba(255,255,255,0.14);
+  --sans: Inter, 'Segoe UI', system-ui, sans-serif;
+}
+.fl-app { background: var(--bg); }
+.fl-app .fl-body { background: var(--bg); }

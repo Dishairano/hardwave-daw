@@ -11,6 +11,7 @@
 import './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
 import '../fonts'
 import '../mockup.css' // the real top bar uses the fl-* classes from here
+import '../rework.css'
 
 import React from 'react'
 import ReactDOM from 'react-dom/client'
