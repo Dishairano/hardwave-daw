@@ -263,8 +263,9 @@ function Harness() {
     case 'reference':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <ReferencePanel onClose={noop} />
         </div>
@@ -272,8 +273,9 @@ function Harness() {
     case 'scripts':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <ScriptsPanel onClose={noop} />
         </div>
@@ -288,8 +290,9 @@ function Harness() {
       })
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
         </div>
       )
@@ -297,8 +300,9 @@ function Harness() {
     case 'stems':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Raw Drop" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Raw Drop">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <StemsDialog trackId="t" clipId="c" clipName="Vocal bounce" onClose={noop} />
         </div>
@@ -312,8 +316,9 @@ function Harness() {
       }, 300)
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Raw Drop" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Raw Drop">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <PerformanceTest onClose={noop} onOpenTestSong={noop} />
         </div>
@@ -321,8 +326,9 @@ function Harness() {
     case 'newproject':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <TemplateDialog onPick={noop} onCancel={noop} />
         </div>
@@ -330,8 +336,9 @@ function Harness() {
     case 'workspace':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <WorkspaceSongs onClose={noop} />
         </div>
@@ -345,8 +352,9 @@ function Harness() {
       }
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Raw Drop" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Raw Drop">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <CollabPanel onClose={noop} />
         </div>
@@ -354,8 +362,9 @@ function Harness() {
     case 'collab':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <CollabPanel onClose={noop} />
         </div>
@@ -363,8 +372,9 @@ function Harness() {
     case 'session':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <SessionView onClose={noop} />
         </div>
@@ -372,8 +382,9 @@ function Harness() {
     case 'spectral':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <SpectralEditor trackId="track-1" clipId="clip-1" onClose={noop} />
         </div>
@@ -381,8 +392,9 @@ function Harness() {
     case 'modulation':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <ModulationPanel onClose={noop} />
         </div>
@@ -390,8 +402,9 @@ function Harness() {
     case 'manual':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <ManualWindow onClose={noop} />
         </div>
@@ -399,8 +412,9 @@ function Harness() {
     case 'midifx':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <MidiFxPanel trackId="t-lead" onClose={noop} />
         </div>
@@ -408,8 +422,9 @@ function Harness() {
     case 'presets':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <PresetBrowser onClose={noop} />
         </div>
@@ -417,8 +432,9 @@ function Harness() {
     case 'macros':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <MacroPanel onClose={noop} />
         </div>
@@ -432,8 +448,9 @@ function Harness() {
       focusSettingsTab((new URLSearchParams(location.search).get('tab') || 'audio') as SettingsTab)
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
           <FloatingWindow panelId="settings" title="Settings" dockable={false}
             actions={<DetachButton panelId="settings" />} onClose={noop}>
@@ -449,8 +466,9 @@ function Harness() {
       if (y) setTimeout(() => usePlaylistScrollStore.getState().setY(y), 600)
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <div className="fl-playlist" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <div className="fl-pl-body" style={{ ['--row-h' as never]: '56px' }}>
               <HwPlaylistTracks />
@@ -468,8 +486,9 @@ function Harness() {
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
           {/* The REAL top bar (HwTopbar + HwSecondRow). */}
-          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} />
-          <HwSecondRow projectName="Untitled" />
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
           <Arrangement onSetHint={noop} />
         </div>
       )

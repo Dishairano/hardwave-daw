@@ -23,3 +23,199 @@
 }
 .fl-app { background: var(--bg); }
 .fl-app .fl-body { background: var(--bg); }
+
+/* === Header bar: row 1 (logo, menu, views, project, system) === */
+.fl-app .fl-topbar {
+  height: 38px;
+  position: relative;
+  background: #0c0c0e;
+  padding: 0 6px 0 4px;
+  gap: 6px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.fl-app .fl-logo { font-size: 12.5px; letter-spacing: 2.4px; padding: 0 10px 0 8px; }
+.fl-app .fl-menu {
+  gap: 2px;
+  font-size: 12.5px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
+  border-left: 0;
+  padding: 0;
+}
+.fl-app .fl-menu span { padding: 5px 9px; border-radius: 6px; }
+.fl-app .fl-menu span:hover,
+.fl-app .fl-menu span.open { color: #fff; background: rgba(255,255,255,0.07); }
+.fl-app .fl-panel-btns {
+  height: 28px;
+  margin-left: 8px;
+  padding: 3px;
+  gap: 2px;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.fl-app .fl-panel-btn {
+  height: 100%;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.fl-app .fl-panel-btn:hover { color: #fff; background: rgba(255,255,255,0.06); }
+.fl-app .fl-panel-btn.on { color: #fff; background: #2a2a31; border: 0; box-shadow: none; }
+.fl-app .fl-topbar-spacer { flex: 0 0 8px; }
+.fl-app .fl-project {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.fl-app .fl-topbar-perf { border-left: 0; gap: 10px; }
+.fl-app .fl-perf { border: 0; font-family: var(--sans); font-size: 11px; color: var(--text-muted); gap: 12px; }
+.fl-app .fl-perf-stack { flex-direction: row; align-items: center; gap: 6px; }
+.fl-app .fl-perf-stack small { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--text-dim); }
+.fl-app .fl-perf-bar { width: 40px; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; }
+.fl-app .fl-midi-led { height: 24px; border-radius: 12px; padding: 0 10px; gap: 6px; }
+.fl-app .fl-midi-led .label { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--text-muted); }
+
+/* === Header bar: row 2 (mode, pattern, transport, tempo, time, tools, hint) === */
+.fl-app .fl-toolrow {
+  height: 52px;
+  padding: 0 10px;
+  gap: 8px;
+  background: #111114;
+  font-family: var(--sans);
+}
+.fl-app .fl-toolsep { height: 24px; margin: 0 2px; background: var(--border); }
+.fl-app .fl-mode-toggle {
+  height: 34px;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 9px;
+  background: #000;
+  border: 1px solid var(--border);
+}
+.fl-app .fl-mode-toggle button {
+  border: 0;
+  border-radius: 6px;
+  padding: 0 12px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--text-dim);
+}
+.fl-app .fl-mode-toggle button.active { background: #2a2a31; color: #fff; }
+.fl-app .fl-pat-pill {
+  height: 34px;
+  min-width: 170px;
+  border-radius: 9px;
+  background: #000;
+  border: 1px solid var(--border);
+  font-family: var(--sans);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+.fl-app .fl-pat-pill .name { color: #d8b4fe; }
+.fl-app .fl-pat-pill .nav { font-size: 14px; color: var(--text-dim); padding: 0 4px; }
+.fl-app .fl-trans { border: 0; gap: 4px; padding: 0; margin-left: 0; }
+.fl-app .fl-toolrow .fl-trans { margin-left: 0; }
+.fl-app .fl-trans-btn {
+  width: 36px;
+  height: 34px;
+  border-radius: 9px;
+  background: #1b1b20;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.fl-app .fl-trans-btn:hover { background: #24242a; color: #fff; border-color: var(--border-strong); }
+/* Play: the one button that matters most, always in Hardwave red. */
+.fl-app .fl-trans-btn[title^="Play"] { width: 44px; background: #dc2626; border-color: #dc2626; color: #fff; }
+.fl-app .fl-trans-btn[title^="Play"]:hover { background: #ef4444; border-color: #ef4444; }
+.fl-app .fl-trans-btn.play { background: #ef4444; border-color: #fca5a5; box-shadow: 0 0 14px rgba(239,68,68,0.45); color: #fff; }
+.fl-app .fl-trans-btn[title^="Record"] { color: #f87171; }
+.fl-app .fl-trans-btn.rec { background: rgba(220,38,38,0.2); border-color: rgba(239,68,68,0.6); color: #fca5a5; }
+.fl-app .fl-trans-btn.on { background: rgba(255,255,255,0.1); border-color: var(--border-strong); color: #fff; }
+.fl-app .fl-bpm,
+.fl-app .fl-clock {
+  height: 38px;
+  margin-left: 0;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: #000;
+  border: 1px solid var(--border);
+}
+.fl-app .fl-bpm small,
+.fl-app .fl-clock-stack small {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+.fl-app .fl-bpm b,
+.fl-app .fl-clock-stack b { font-size: 17px; line-height: 1.15; }
+.fl-app .fl-bpm b { color: #fff; }
+.fl-app .fl-toolrow > .fl-mini-btn,
+.fl-app .fl-toolrow > div > .fl-mini-btn { font-family: var(--sans) !important; font-size: 11.5px !important; letter-spacing: 0.3px !important; border-radius: 9px; height: 34px !important; }
+.fl-app .fl-action-row {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: #0a0a0c;
+  border: 1px solid var(--border);
+}
+.fl-app .fl-action-row .fl-mini-btn {
+  width: 32px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+}
+.fl-app .fl-action-row .fl-mini-btn:hover { background: rgba(255,255,255,0.07); color: #fff; }
+.fl-app .fl-action-row .fl-mini-btn.on { background: rgba(220,38,38,0.18); color: #fca5a5; }
+.fl-app .fl-mini-btn .lbl { font-family: var(--sans); font-size: 12px; font-weight: 600; margin-left: 6px; }
+.fl-app .fl-action-row .fl-mini-btn:has(.lbl) { width: auto; padding: 0 10px; color: var(--text); }
+
+/* The live hint now sits at the end of the tool row instead of its own row. */
+.fl-app .fl-toolrow > .fl-hint-row {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  justify-content: flex-end;
+}
+.fl-app .fl-toolrow .fl-hint {
+  min-width: 0;
+  max-width: 420px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--sans);
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--text-dim);
+}
+.fl-app .fl-toolrow .fl-hint.active { color: var(--text); background: none; }
+.fl-app .fl-hint-sync { font-family: var(--sans); font-size: 10.5px; letter-spacing: 0.4px; }
+.fl-app .fl-hint-tsig { font-family: var(--mono); font-size: 11.5px; height: 24px; padding: 0 10px; border-radius: 12px; }
