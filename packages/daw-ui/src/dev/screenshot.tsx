@@ -38,6 +38,7 @@ import { PianoRoll } from '../components/piano-roll/PianoRoll'
 import { MixerPanel } from '../components/mixer/MixerPanel'
 import { useTrackStore, type TrackWithClips, type ClipInfo } from '../stores/trackStore'
 import { useTransportStore } from '../stores/transportStore'
+import { usePatternStore } from '../stores/patternStore'
 import { useTempoMapStore } from '../stores/tempoMapStore'
 import { meterSegments } from '../utils/meter'
 import { SetupWizard } from '../components/SetupWizard'
@@ -62,6 +63,27 @@ function BrowserShot() {
     setReady(true)
   }, [])
   return ready ? <Browser /> : null
+}
+
+/** The channel rack with a drum pattern in it, so the steps show. */
+function RackShot() {
+  React.useEffect(() => {
+    const t = setTimeout(() => {
+      const tracks = useTrackStore.getState().tracks
+      const rows = [[0, 4, 8, 12], [0], [2, 6, 10, 14], [0, 3, 6, 8, 11, 14], [12, 13, 14, 15], [8, 9], [0, 2, 4, 6, 8, 10, 12, 14]]
+      const vels = [1, 0.9, 0.8, 0.85, 0.6, 0.75, 0.55]
+      const steps: Record<string, number[]> = {}
+      tracks.forEach((tr, i) => {
+        const on = rows[i % rows.length]
+        steps[tr.id] = Array.from({ length: 16 }, (_, k) => (on.includes(k) ? (i % 7 === 6 ? (k % 4 === 0 ? 1 : 0.45) : vels[i % 7]) : 0))
+      })
+      const s = usePatternStore.getState()
+      const activeId = s.activeId ?? s.patterns[0]?.id
+      usePatternStore.setState({ patterns: s.patterns.map(p => (p.id === activeId ? { ...p, steps: { ...p.steps, ...steps } } : p)) })
+    }, 300)
+    return () => clearTimeout(t)
+  }, [])
+  return <ChannelRack />
 }
 
 /** Renders the SetupWizard opened on the audio step for UI screenshots. */
@@ -250,7 +272,7 @@ function Harness() {
     case 'mixer':
       return <Full><MixerPanel /></Full>
     case 'channelrack':
-      return <Full><ChannelRack /></Full>
+      return <Full><RackShot /></Full>
     case 'pianoroll': {
       // SHOT_CC=cc1 opens a controller lane under the notes.
       const lane = new URLSearchParams(location.search).get('cc')

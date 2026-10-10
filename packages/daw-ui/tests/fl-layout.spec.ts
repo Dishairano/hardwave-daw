@@ -98,7 +98,7 @@ test.describe('Channel Rack — FL Studio layout', () => {
     await expect(rack.getByRole('button', { name: 'MIDI' })).toBeVisible()
 
     // Swing label
-    await expect(page.getByText('SWG')).toBeVisible()
+    await expect(page.getByTestId('rack-swing')).toBeVisible()
 
     // Step count
     await expect(page.getByText('Steps')).toBeVisible()
@@ -150,8 +150,8 @@ test.describe('Default panel state — FL Studio defaults', () => {
   })
 
   test('Channel Rack is hidden by default', async ({ page }) => {
-    // SWG label should NOT be visible (it's inside channel rack)
-    await expect(page.getByText('SWG')).not.toBeVisible()
+    // Swing label should NOT be visible (it's inside channel rack)
+    await expect(page.getByTestId('rack-swing')).not.toBeVisible()
   })
 
   test('Mixer is hidden by default', async ({ page }) => {
@@ -188,17 +188,17 @@ test.describe('Keyboard shortcuts — FL Studio bindings', () => {
 
   test('F6 toggles Channel Rack', async ({ page }) => {
     // Channel Rack hidden by default
-    await expect(page.getByText('SWG')).not.toBeVisible()
+    await expect(page.getByTestId('rack-swing')).not.toBeVisible()
 
     // Show it
     await page.keyboard.press('F6')
     await page.waitForTimeout(300)
-    await expect(page.getByText('SWG')).toBeVisible()
+    await expect(page.getByTestId('rack-swing')).toBeVisible()
 
     // Hide it
     await page.keyboard.press('F6')
     await page.waitForTimeout(300)
-    await expect(page.getByText('SWG')).not.toBeVisible()
+    await expect(page.getByTestId('rack-swing')).not.toBeVisible()
   })
 
   test('F7 toggles Piano Roll', async ({ page }) => {
