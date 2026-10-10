@@ -10,6 +10,7 @@ use thiserror::Error;
 pub use rtrb;
 
 pub mod denormals;
+pub mod upsample;
 
 #[cfg(target_os = "windows")]
 mod wasapi_exclusive;
@@ -50,6 +51,32 @@ pub trait AudioCallback: Send + 'static {
     /// Called on the real-time audio thread with output buffer to fill.
     /// `output` is interleaved stereo (L, R, L, R, ...).
     fn process(&mut self, output: &mut [f32], num_frames: usize, num_channels: u16);
+}
+
+/// The callback as the stream runs it: as it is, or raised to the device's
+/// rate when that is a multiple of the engine's.
+enum Raised<C: AudioCallback> {
+    Plain(C),
+    Up(Box<upsample::Upsampled<C>>),
+}
+
+impl<C: AudioCallback> Raised<C> {
+    fn new(inner: C, factor: usize, block: usize) -> Self {
+        if factor > 1 {
+            Raised::Up(Box::new(upsample::Upsampled::new(inner, factor, block)))
+        } else {
+            Raised::Plain(inner)
+        }
+    }
+}
+
+impl<C: AudioCallback> AudioCallback for Raised<C> {
+    fn process(&mut self, output: &mut [f32], num_frames: usize, num_channels: u16) {
+        match self {
+            Raised::Plain(c) => c.process(output, num_frames, num_channels),
+            Raised::Up(c) => c.process(output, num_frames, num_channels),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +231,13 @@ pub struct AudioDeviceManager {
     input_active_buffer_size: u32,
     /// Latency the running streams report.
     latency: Arc<StreamLatency>,
+    /// The device's rate over the engine's (1, 2 or 4): when Windows has an
+    /// output at 192 kHz and 48 was asked for, the engine runs at 48 and the
+    /// callback raises it (see `upsample`).
+    output_factor: u32,
+    /// The rate `negotiate_output_rate` last settled on, so a second call
+    /// with nothing changed keeps the factor it found.
+    negotiated_rate: u32,
 }
 
 impl AudioDeviceManager {
@@ -262,7 +296,20 @@ impl AudioDeviceManager {
             input_active_sample_rate: 0,
             input_active_buffer_size: 0,
             latency: Arc::new(StreamLatency::default()),
+            output_factor: 1,
+            negotiated_rate: 0,
         }
+    }
+
+    /// The rate the engine runs at: the device's, or a half or a quarter of
+    /// it (see `output_factor`).
+    pub fn engine_rate(&self) -> u32 {
+        self.sample_rate / self.output_factor.max(1)
+    }
+
+    /// The device's rate over the engine's.
+    pub fn output_factor(&self) -> u32 {
+        self.output_factor.max(1)
     }
 
     /// Latency the running streams report, shared with the callbacks.
@@ -429,17 +476,36 @@ impl AudioDeviceManager {
     /// `start()` so the rate is final before any downstream state is built.
     pub fn negotiate_output_rate(&mut self) -> Result<u32, AudioIoError> {
         let device = self.resolve_output_device()?;
+        // Asked again with nothing changed since the last time (start()
+        // checks once more): keep what was settled, factor included.
+        if self.negotiated_rate != 0 && self.sample_rate == self.negotiated_rate {
+            return Ok(self.sample_rate);
+        }
+        let requested = self.sample_rate;
+        self.output_factor = 1;
         if !self.is_rate_supported(&device, self.sample_rate) {
             if let Ok(default_config) = device.default_output_config() {
                 let fallback = default_config.sample_rate().0;
-                log::warn!(
-                    "Requested sample rate {} not supported, falling back to {}",
-                    self.sample_rate,
-                    fallback
-                );
+                self.output_factor = upsample::factor_for(requested, fallback);
+                if self.output_factor > 1 {
+                    log::warn!(
+                        "Requested sample rate {} not supported; the device runs at {}, so the mix runs at {} and is raised {}x",
+                        requested,
+                        fallback,
+                        fallback / self.output_factor,
+                        self.output_factor
+                    );
+                } else {
+                    log::warn!(
+                        "Requested sample rate {} not supported, falling back to {}",
+                        requested,
+                        fallback
+                    );
+                }
                 self.sample_rate = fallback;
             }
         }
+        self.negotiated_rate = self.sample_rate;
         Ok(self.sample_rate)
     }
 
@@ -453,16 +519,23 @@ impl AudioDeviceManager {
         // audio rather than a stream init error.
         let _ = self.negotiate_output_rate()?;
         let device = self.resolve_output_device()?;
+        // At a raised rate the engine renders blocks of `buffer_size` at its
+        // own rate and the device is asked for the same time in its frames,
+        // so the latency is what was chosen.
+        let factor = self.output_factor();
+        let device_buffer = self.buffer_size * factor;
+        let callback = Raised::new(callback, factor as usize, self.buffer_size as usize);
 
         let resolved_name = device.name().unwrap_or_default();
         let exclusive_requested =
             self.wasapi_exclusive && self.host.id().name().eq_ignore_ascii_case("WASAPI");
         log::info!(
-            "Starting audio: device={}, sr={}, buf={}, exclusive={}",
+            "Starting audio: device={}, sr={}, buf={}, exclusive={}, engine at {} Hz",
             resolved_name,
             self.sample_rate,
-            self.buffer_size,
+            device_buffer,
             exclusive_requested,
+            self.engine_rate(),
         );
         self.active_device_name = Some(resolved_name.clone());
 
@@ -487,7 +560,7 @@ impl AudioDeviceManager {
                 // The exclusive stream reports no timestamps; one buffer is
                 // what an exclusive endpoint holds.
                 self.latency
-                    .set_output(frames_to_nanos(self.buffer_size as usize, self.sample_rate));
+                    .set_output(frames_to_nanos(device_buffer as usize, self.sample_rate));
                 return Ok(());
             }
             self.active_exclusive = false;
@@ -518,14 +591,14 @@ impl AudioDeviceManager {
         let config = StreamConfig {
             channels: stream_channels,
             sample_rate: SampleRate(self.sample_rate),
-            buffer_size: cpal::BufferSize::Fixed(self.buffer_size),
+            buffer_size: cpal::BufferSize::Fixed(device_buffer),
         };
         // Scratch for the scatter path, allocated once here rather than
         // in the callback, which must not allocate.
         let mut scatter: Vec<f32> = if stream_channels == 2 {
             Vec::new()
         } else {
-            vec![0.0; self.buffer_size as usize * 2]
+            vec![0.0; device_buffer as usize * 2]
         };
         let running = Arc::clone(&self.running);
         let stream_error = Arc::clone(&self.stream_error);

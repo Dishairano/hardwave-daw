@@ -648,7 +648,7 @@ impl DawEngine {
     /// when the engine isn't started yet. Needed by the recording
     /// pipeline to write the right WAV header.
     pub fn current_sample_rate(&self) -> u32 {
-        let sr = self.audio_device.sample_rate;
+        let sr = self.audio_device.engine_rate();
         if sr > 0 {
             sr
         } else {
@@ -672,7 +672,10 @@ impl DawEngine {
             .negotiate_output_rate()
             .map_err(|e| e.to_string())?;
 
-        let sample_rate = self.audio_device.sample_rate;
+        // The rate the mix runs at, which is a half or a quarter of the
+        // device's when Windows has the output at 96 or 192 kHz (the
+        // callback raises it; see hardwave_audio_io::upsample).
+        let sample_rate = self.audio_device.engine_rate();
         let buffer_size = self.audio_device.buffer_size;
 
         // Any audio buffer previously loaded at a different rate would play
@@ -919,7 +922,7 @@ impl DawEngine {
         path: &std::path::Path,
         source_id: &str,
     ) -> Result<hardwave_dsp::AudioFileInfo, String> {
-        let target_sr = self.audio_device.sample_rate;
+        let target_sr = self.audio_device.engine_rate();
         let (info, channels) = hardwave_dsp::AudioFileReader::read_resampled(path, Some(target_sr))
             .map_err(|e| e.to_string())?;
 
@@ -1094,7 +1097,7 @@ impl DawEngine {
     ) -> AudioSourceLoader {
         AudioSourceLoader {
             pool: self.audio_pool.clone(),
-            target_sr: self.audio_device.sample_rate,
+            target_sr: self.audio_device.engine_rate(),
             project_dir,
             trusted: self.trusted_servers.lock().clone(),
         }
