@@ -21,7 +21,8 @@ const single = arg && ALL.includes(arg)
 const panels = single ? [arg] : ALL
 const singleOut = single ? process.argv[3] : null
 
-const BASE = 'http://localhost:5173/screenshot.html'
+const PORT = process.env.SHOT_PORT || '5173'
+const BASE = `http://localhost:${PORT}/screenshot.html`
 const CHROME =
   process.env.CHROMIUM_PATH ||
   ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'].find((p) => existsSync(p))
@@ -38,7 +39,7 @@ async function waitForServer(url, ms = 30000) {
 // Its own process group, so stopping it stops vite too and not only the
 // npm wrapper: a vite left behind keeps the port and serves stale code to
 // every later run.
-const vite = spawn('npm', ['run', 'dev'], { cwd: process.cwd(), stdio: 'inherit', detached: true })
+const vite = spawn('npm', ['run', 'dev', '--', '--port', PORT, '--strictPort'], { cwd: process.cwd(), stdio: 'inherit', detached: true })
 let browser
 try {
   await waitForServer(BASE)
