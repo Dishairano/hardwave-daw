@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from 'react'
+import { memo, useCallback, useMemo, type CSSProperties } from 'react'
 import { useSendStore, type SendInfo } from '../../../stores/sendStore'
 import { usePerfMetersStore } from '../../../stores/perfMetersStore'
 import { Knob } from '../../primitives/Knob'
@@ -203,6 +203,9 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   return (
     <div
       className={'mx-strip ' + colorClass + (selected ? ' selected' : '') + sepClass}
+      // The track's own colour, for the strip's cap. colorClass only knows
+      // named tags, so a hex colour from the track never showed.
+      style={color && /^#[0-9a-f]{6}$/i.test(color) ? ({ ['--strip-color' as string]: color } as CSSProperties) : undefined}
       onClick={onClick}
       data-track-id={trackId}
       data-idx={index}

@@ -30,7 +30,8 @@ import { useMultiTouchGestures } from '../../../hooks/useMultiTouchGestures'
  * event target is inside one of them.
  */
 
-const STRIP_W = 64
+// Keep in step with --mx-strip-w in mixer-v2.css (the rework sets 84 px).
+const STRIP_W = 84
 const OVERSCAN = 8
 
 // Spring physics
@@ -260,7 +261,8 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
             height: '100%',
           }}
         >
-          +
+          <span>+</span>
+          <small>Add track</small>
         </button>
       </div>
     </div>
