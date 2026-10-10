@@ -21,3 +21,13 @@
 - Line one track up with another. A kick recorded with two mics is the same hit a few milliseconds apart, and the gap eats the low end. The gap is measured from the audio and taken out with the track's own delay, polarity included, so nothing on the timeline moves.
 - internal: nodes are grouped into levels so two nodes that run together can never have an edge between them, and a pool of threads stays alive between blocks; the engine test renders the same song on one core and on four and compares every sample.
 - internal: builds on the Windows gate machine start between 03:00 and 07:30 only, guarded in release.sh and in the workflow.
+
+### Interface
+- A reworked interface on the same layout: a neutral base, words in Inter and numbers in a mono face, so names and values read at a glance.
+- Playlist clips you can read: the clip title bar and its text are legible on every colour. The waveforms themselves are unchanged.
+- Track headers with mute, solo and record on every playlist track.
+- The header is two readable rows instead of three, and it fits any window width: groups that do not fit move into a More menu instead of overlapping.
+- The browser has tabs with words, icons and a real volume slider.
+- The channel rack shows steps in the channel's colour and beats you can see.
+- All twenty dialogs share one frame: the same title bar, close button and footer.
+- The window fits at every display scale, and the FPS meter no longer breaks the interface when turned on.
