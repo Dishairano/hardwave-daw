@@ -47,6 +47,7 @@ import { usePerfMetersStore, startPerfMeters } from '../stores/perfMetersStore'
 import type { ActionId } from '../stores/shortcutsStore'
 import { invoke } from '@tauri-apps/api/core'
 import type { MobilePanel } from './MobileTabBar'
+import { PriorityRow, PriorityGroup, PriorityOverflowSlot } from './ui/PriorityRow'
 
 interface HwAppProps {
   showBrowser: boolean
@@ -279,8 +280,11 @@ export function HwTopbar({
         TitleBar had it; the HwApp port lost it). Tauri only starts a
         drag when the mousedown lands on the attributed element itself,
         so the menus/buttons inside keep working. */}
-    <div className="fl-topbar" data-tauri-drag-region>
+    <PriorityRow className="fl-topbar" data-tauri-drag-region moreTitle="More">
+      <PriorityGroup id="logo" priority={Infinity} drag>
       <div className="fl-logo" data-tauri-drag-region>HARD<span>WAVE</span></div>
+      </PriorityGroup>
+      <PriorityGroup id="menu" priority={40}>
       {menus && menus.length > 0 ? (
         <HwTopMenu menus={menus} />
       ) : (
@@ -293,6 +297,8 @@ export function HwTopbar({
           ))}
         </div>
       )}
+      </PriorityGroup>
+      <PriorityGroup id="views" priority={90}>
       {/* Panel access — FL-style F5/F6/F7/F9 toggles. Active = panel open. */}
       <div className="fl-panel-btns" role="toolbar" aria-label="Panels">
         <button
@@ -320,13 +326,21 @@ export function HwTopbar({
           title="Mixer (F9)"
         >Mixer</button>
       </div>
-      <div className="fl-topbar-spacer" />
-      {projectName && <div className="fl-project" data-tauri-drag-region>{projectName}</div>}
+      </PriorityGroup>
+      {projectName && (
+        <PriorityGroup id="project" priority={10} flexible minWidth="content" drag>
+          <div className="fl-project" data-tauri-drag-region>{projectName}</div>
+        </PriorityGroup>
+      )}
       {/* Perf meters (CPU/MEM) + MIDI activity — Option B top-right cluster. */}
+      <PriorityGroup id="perf" priority={20}>
       <div className="fl-topbar-perf">
         <HwPerfCluster />
         <HwMidiActivityLed />
       </div>
+      </PriorityGroup>
+      <PriorityOverflowSlot />
+      <PriorityGroup id="window" priority={Infinity}>
       <div className="fl-win-ctl">
         <i onClick={onWindowMin} title="Minimize">
           <svg className="ic" width="12" height="12" viewBox="0 0 16 16" fill="none">
@@ -344,12 +358,16 @@ export function HwTopbar({
           </svg>
         </i>
       </div>
-    </div>
+      </PriorityGroup>
+    </PriorityRow>
 
-    {/* Row 2 — Ship 1 toolbar layout per approved mockup */}
-    <div className="fl-toolrow">
+    {/* Row 2 — the toolbar. A PriorityRow: on a narrow window the
+        lowest-priority groups move into the More menu, nothing is
+        squeezed or drawn over anything else. */}
+    <PriorityRow className="fl-toolrow" moreTitle="More tools">
       {/* PAT / SONG mode toggle. Right-click on PAT toggles Channel
           Rack visibility; right-click on SONG toggles Playlist. */}
+      <PriorityGroup id="mode" priority={80}>
       <div className="fl-mode-toggle">
         <button
           className={patternMode ? 'active' : ''}
@@ -364,18 +382,18 @@ export function HwTopbar({
           title="Song mode · right-click toggles Playlist"
         >SONG</button>
       </div>
-
-      <span className="fl-toolsep" />
+      </PriorityGroup>
 
       {/* Pattern pill with prev/next arrows */}
+      <PriorityGroup id="pattern" priority={70}>
       <div className="fl-pat-pill" title="Active pattern · click arrows to nav">
         <span className="nav" onClick={() => prevPattern()} title="Previous pattern">‹</span>
         <span className="name">{activePattern?.name || 'Pattern 1'}</span>
         <span className="nav" onClick={() => nextPattern()} title="Next pattern">›</span>
       </div>
+      </PriorityGroup>
 
-      <span className="fl-toolsep" />
-
+      <PriorityGroup id="transport" priority={Infinity}>
       {/* Transport cluster: REC · STOP · PLAY · LOOP · PUNCH · METR */}
       <div className="fl-trans">
         <div className={`fl-trans-btn ${recording ? 'rec' : ''}`} title="Record (R) · double-click cancels in-flight take" onClick={() => toggleRecording()}>
@@ -413,9 +431,9 @@ export function HwTopbar({
           </svg>
         </div>
       </div>
+      </PriorityGroup>
 
-      <span className="fl-toolsep" />
-
+      <PriorityGroup id="tempo" priority={95}>
       {/* BPM — two drag zones (integer + decimal), click for edit, RMB
           for menu. FL Studio parity: vertical drag on the integer
           portion of the readout adjusts whole BPM (step 1, Ctrl=fine
@@ -481,19 +499,19 @@ export function HwTopbar({
         style={{ width: 'auto', height: 30, padding: '0 11px', fontSize: 10, fontWeight: 700, letterSpacing: 0.4, fontFamily: 'var(--mono)' }}
         title="Tap tempo · right-click opens Tempo Tapper modal"
       >TAP</button>
-
-      <span className="fl-toolsep" />
+      </PriorityGroup>
 
       {/* Clock — Min:Sec only */}
+      <PriorityGroup id="clock" priority={90}>
       <div className="fl-clock" title="Playhead position">
         <div className="fl-clock-stack red">
           <small>MIN : SEC</small>
           <b><HwClockText /></b>
         </div>
       </div>
+      </PriorityGroup>
 
-      <span className="fl-toolsep" />
-
+      <PriorityGroup id="edit" priority={60}>
       {/* Action icon row — Save / Save-as / Render / Cut / Copy / Paste / Duplicate.
           Save-as flashes as the FL 5/10/30-minute save reminder
           would; the flash class is wired via the projectDirty store
@@ -537,9 +555,9 @@ export function HwTopbar({
           </svg>
         </button>
       </div>
+      </PriorityGroup>
 
-      <span className="fl-toolsep" />
-
+      <PriorityGroup id="record" priority={50}>
       {/* Recording toggle cluster. A button here only exists once the
           behaviour behind it does. Wait-for-input + blend-record returned
           2026-07-08, step editing 2026-09-17 when the typing keyboard
@@ -645,9 +663,13 @@ export function HwTopbar({
           </svg>
         </button>
       </div>
+      </PriorityGroup>
 
+      {/* The live hint; the first to go when the window is narrow. */}
+      <PriorityGroup id="hint" priority={30} flexible minWidth={150}>
       {children}
-    </div>
+      </PriorityGroup>
+    </PriorityRow>
     </>
   )
 }

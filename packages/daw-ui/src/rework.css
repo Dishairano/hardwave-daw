@@ -71,9 +71,8 @@
 }
 .fl-app .fl-panel-btn:hover { color: #fff; background: rgba(255,255,255,0.06); }
 .fl-app .fl-panel-btn.on { color: #fff; background: #2a2a31; border: 0; box-shadow: none; }
-.fl-app .fl-topbar-spacer { flex: 0 0 8px; }
 .fl-app .fl-project {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   text-align: center;
   overflow: hidden;
@@ -195,7 +194,7 @@
 .fl-app .fl-action-row .fl-mini-btn:has(.lbl) { width: auto; padding: 0 10px; color: var(--text); }
 
 /* The live hint now sits at the end of the tool row instead of its own row. */
-.fl-app .fl-toolrow > .fl-hint-row {
+.fl-app .fl-toolrow .fl-hint-row {
   flex: 1;
   min-width: 0;
   height: auto;
@@ -436,3 +435,40 @@ input[type="range"].fl-range::-webkit-slider-thumb { -webkit-appearance: none; w
 .hw-muted { color: #a8a8b2; }
 .hw-faint { color: #74747e; }
 .hw-tag { white-space: nowrap; margin-left: 8px; padding: 2px 7px; border-radius: 999px; background: rgba(255,255,255,0.07); color: #8a8a94; font-size: 10.5px; font-weight: 600; }
+
+/* === Priority rows (components/ui/PriorityRow.tsx) ===
+ * Both header rows. Groups keep their size; on a narrow window the
+ * lowest-priority groups move into the More menu instead. */
+.hw-prow { display: flex; align-items: center; min-width: 0; position: relative; }
+.hw-pgroup { display: flex; align-items: center; gap: inherit; flex: 0 0 auto; min-width: 0; }
+.hw-pgroup.flexible { flex: 1 1 0; min-width: 0; overflow: hidden; }
+/* After the views, free space goes right, so the window buttons stay in
+   the corner when the project name has left the row. */
+.fl-app .fl-topbar .hw-pgroup[data-group="views"] { margin-right: auto; }
+.fl-app .fl-toolrow .hw-pgroup[data-group="hint"] { margin-left: 2px; }
+.hw-prow-more-host { position: relative; flex: 0 0 auto; -webkit-app-region: no-drag; }
+.hw-prow-more {
+  width: 30px; height: 30px; padding: 0; border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1); background: #1b1b20; color: #a8a8b2;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.fl-app .fl-topbar .hw-prow-more { width: 28px; height: 28px; }
+.hw-prow-more:hover, .hw-prow-more.on { background: #26262c; color: #fff; border-color: rgba(255,255,255,0.18); }
+.hw-prow-pop {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 300;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  padding: 10px; min-width: 200px; max-width: calc(100vw - 24px);
+  background: #141417; border: 1px solid rgba(255,255,255,0.14); border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  font-family: Inter, 'Segoe UI', system-ui, sans-serif; font-size: 12.5px; color: #ececf0;
+}
+.hw-prow-pop .hw-pgroup { gap: 8px; flex-wrap: wrap; max-width: 100%; }
+.hw-prow-pop .fl-menu { flex-direction: column; align-items: stretch; }
+.hw-prow-pop .fl-menu span { padding: 7px 10px; }
+.hw-prow-pop .fl-menu-dropdown { top: 0; left: 100%; margin-left: 4px; }
+.hw-prow-pop .fl-hint-row { justify-content: flex-start; }
+.hw-prow-pop .fl-project { width: auto; text-align: left; }
+/* A narrow hint group keeps only the sync light and the meter; the
+   text comes back when there is room for a few words of it. */
+.fl-app .fl-toolrow .hw-pgroup[data-group="hint"] { container-type: inline-size; }
+@container (max-width: 240px) { .fl-app .fl-toolrow .fl-hint { display: none; } }
