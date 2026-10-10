@@ -55,6 +55,10 @@ const ALLOWED: &[(&str, &str)] = &[
         "replaces the whole project; the history is cleared with it",
     ),
     (
+        "import_flp",
+        "opens an FL Studio project as a new song through open_project_blocking; the history is cleared with it",
+    ),
+    (
         "load_project",
         "replaces the whole project; the history is cleared with it",
     ),
