@@ -309,3 +309,77 @@
 input[type="range"].fl-range { -webkit-appearance: none; appearance: none; height: 16px; background: transparent; cursor: pointer; }
 input[type="range"].fl-range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.12); }
 input[type="range"].fl-range::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border-radius: 50%; background: #ececf0; border: 0; box-shadow: 0 1px 3px rgba(0,0,0,.5); }
+
+/* === Mixer (v2, the default) === */
+.mx-v2-root.mx-v2-root {
+  --mx-strip-w: 84px;
+  --mx-bg: #0a0a0b;
+  --mx-surface: #0e0e10;
+  --mx-muted: #a8a8b2;
+  --mx-dim: #74747e;
+  --mx-line: #232328;
+}
+.mx-v2-root .mx-strip { background: #141417; }
+.mx-v2-root .mx-strip:hover { background: #18181c; }
+/* Cap in the track's colour with the number; name under it, horizontal. */
+.mx-v2-root .mx-s-num { display: contents; }
+.mx-v2-root .mx-s-num-idx {
+  order: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--strip-color, #3a3a44) 78%, #000);
+  color: #fff;
+  font: 700 11px Inter, 'Segoe UI', system-ui, sans-serif;
+}
+.mx-v2-root .mx-strip.master .mx-s-num-idx { background: #b91c1c; }
+.mx-v2-root .mx-strip.selected { box-shadow: inset 0 0 0 1.5px #fff; background: #1a1a1f; }
+.mx-v2-root .mx-s-name {
+  order: 1;
+  height: auto;
+  min-height: 34px;
+  writing-mode: horizontal-tb;
+  transform: none;
+  padding: 6px 6px 2px;
+  font: 600 12px Inter, 'Segoe UI', system-ui, sans-serif;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #ececf0 !important;
+  text-align: center;
+  justify-content: center;
+  line-height: 1.2;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+/* Mute, solo and arm always visible, under the name. */
+.mx-v2-root .mx-s-pills {
+  order: 2;
+  position: static;
+  opacity: 1;
+  background: none;
+  gap: 3px;
+  padding: 4px 0 6px;
+}
+.mx-v2-root .mx-pill { width: 22px; height: 20px; font: 700 10.5px Inter, 'Segoe UI', system-ui, sans-serif; border-radius: 5px; background: #1e1e23; border-color: rgba(255,255,255,0.1); color: var(--mx-muted); }
+.mx-v2-root .mx-pill-m.on { background: #52525b; border-color: #52525b; }
+.mx-v2-root .mx-pill-r.on { background: #dc2626; border-color: #dc2626; color: #fff; }
+.mx-v2-root .mx-s-knob-row { order: 3; background: transparent; padding: 6px 6px 4px; gap: 4px; }
+.mx-v2-root .mx-klabel { font: 600 10px Inter, 'Segoe UI', system-ui, sans-serif; letter-spacing: 0.02em; color: var(--mx-dim); margin-top: 2px; }
+.mx-v2-root .mx-s-fader-meter { order: 4; }
+.mx-v2-root .mx-s-db { order: 5; font-size: 11px; color: #d4d4d8; background: #0e0e10; padding: 5px 0; }
+.mx-v2-root .mx-s-out { order: 6; font: 500 10.5px Inter, 'Segoe UI', system-ui, sans-serif; letter-spacing: 0; padding: 4px 6px 6px; }
+.mx-v2-root .hw-db-scale span { font-size: 9.5px; }
+.mx-v2-root .mx-add-strip { flex-direction: column; gap: 6px; font-size: 22px; color: var(--mx-dim); background: #111114; }
+.mx-v2-root .mx-add-strip small { font: 600 11px Inter, 'Segoe UI', system-ui, sans-serif; }
+.mx-v2-root .hw-sends-dots { order: 7; }
+.mx-v2-root .mx-strip > div[title^="This track is using"] { order: 2; font-size: 10.5px !important; }
+.mx-v2-root .mx-strip.master .mx-s-name { letter-spacing: 0; color: #fecaca !important; }
+.mx-v2-root .mx-fx-routing-head h4,
+.mx-v2-root .mx-fx-slots h4 { font: 700 11px Inter, 'Segoe UI', system-ui, sans-serif; letter-spacing: 0.04em; color: var(--mx-muted); }
+.mx-v2-root .mx-fx-head-name { letter-spacing: 0; font-size: 14px; }
+.mx-v2-root .mx-fx-slot { font-size: 12px; }
+.mx-v2-root .mx-fx-slot-name { letter-spacing: 0; }
