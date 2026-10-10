@@ -1,12 +1,17 @@
 # Proves the Azure Trusted Signing setup works, without making a release:
 # a tiny program is compiled on a Windows runner and signed the same way
 # the release signs the DAW (scripts/sign-windows.ps1), then Windows
-# checks the signature. Run it by hand after changing anything in Azure
-# or in the six repository values (docs/CODE_SIGNING.md).
+# checks the signature. Run it after changing anything in Azure or in the
+# six repository values (docs/CODE_SIGNING.md): push a tag named
+# signing-check-<anything> (a manual run only works once this file is on
+# the default branch).
 name: Signing check
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'signing-check-*'
 
 permissions:
   contents: read
