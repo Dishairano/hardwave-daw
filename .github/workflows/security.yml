@@ -112,6 +112,10 @@ jobs:
           && echo "b5b704018b63e0f151c17a057ac53b5111e1db545d1b9f72fee79f08a545931c  cargo-fuzz.tgz" | sha256sum -c -
           && mkdir -p cargo-fuzz-bin && tar xzf cargo-fuzz.tgz -C cargo-fuzz-bin
           && install -m755 "$(find cargo-fuzz-bin -name cargo-fuzz -type f | head -1)" "$HOME/.cargo/bin/cargo-fuzz"
+      # The audio crates link ALSA through alsa-sys, whose build script
+      # needs the headers and pkg-config; the runner image has neither.
+      - name: System libraries the audio crates link
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libasound2-dev pkg-config
       - name: Build the targets
         working-directory: fuzz
         run: cargo +nightly fuzz build -O --target x86_64-unknown-linux-gnu
