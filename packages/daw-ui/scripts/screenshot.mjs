@@ -15,7 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute']
 const arg = process.argv[2]
 const single = arg && ALL.includes(arg)
 const panels = single ? [arg] : ALL

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
+import { DialogFrame } from './ui/DialogFrame'
+import { btn } from './ui/dialogStyles'
 
 interface SpectrumAnalyzerProps {
   onClose: () => void
@@ -241,121 +243,92 @@ export function SpectrumAnalyzer({ onClose }: SpectrumAnalyzerProps) {
   }, [hover, sampleRate, freqScale])
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 9800,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div
-        style={{
-          width: 680, maxWidth: '94vw',
-          background: hw.bg, color: hw.textPrimary,
-          border: `1px solid ${hw.border}`, borderRadius: hw.radius.lg,
-          overflow: 'hidden',
-        }}
-      >
-        <div style={{
-          padding: '8px 12px', display: 'flex', alignItems: 'center',
-          gap: 12, background: hw.bgElevated, borderBottom: `1px solid ${hw.border}`,
-        }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>Spectrum Analyzer</div>
-          <div style={{ fontSize: 9, color: hw.textFaint }}>
-            Master bus · {sampleRate} Hz · {fftSize}-point FFT
-          </div>
-          <div style={{ flex: 1 }} />
-          <button onClick={resetPeaks} style={btnStyle(false)}>Reset peaks</button>
-          <button onClick={() => setFreeze(v => !v)} style={btnStyle(freeze)}>
+    <DialogFrame
+      title="Spectrum Analyzer"
+      subtitle={`Master bus · ${sampleRate} Hz · ${fftSize}-point FFT`}
+      onClose={onClose}
+      width={680}
+      headerActions={<>
+          <button onClick={resetPeaks} style={btn(false)}>Reset peaks</button>
+          <button onClick={() => setFreeze(v => !v)} style={btn(freeze)}>
             {freeze ? 'Frozen' : 'Freeze'}
           </button>
-          <button onClick={onClose} style={btnStyle(false)}>Close</button>
-        </div>
+      </>}
+    >
+      <canvas
+        ref={canvasRef}
+        width={680}
+        height={320}
+        style={{ width: '100%', height: 320, background: '#0a0a0e', display: 'block', cursor: 'crosshair' }}
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          setHover({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+        }}
+        onMouseLeave={() => setHover(null)}
+      />
 
-        <canvas
-          ref={canvasRef}
-          width={680}
-          height={320}
-          style={{ width: '100%', height: 320, background: '#0a0a0e', display: 'block', cursor: 'crosshair' }}
-          onMouseMove={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect()
-            setHover({ x: e.clientX - rect.left, y: e.clientY - rect.top })
-          }}
-          onMouseLeave={() => setHover(null)}
-        />
-
-        {hoverInfo && (
-          <div style={{
-            padding: '4px 12px', fontSize: 10, color: hw.textSecondary,
-            background: hw.bgElevated, borderTop: `1px solid ${hw.border}`,
-            fontVariantNumeric: 'tabular-nums',
-          }}>
-            {hoverInfo.freq >= 1000
-              ? `${(hoverInfo.freq / 1000).toFixed(2)} kHz`
-              : `${hoverInfo.freq.toFixed(1)} Hz`}
-            &nbsp;· {hoverInfo.db.toFixed(1)} dB
-          </div>
-        )}
-
+      {hoverInfo && (
         <div style={{
-          padding: '8px 12px', borderTop: `1px solid ${hw.border}`,
-          background: hw.bgElevated, display: 'flex', alignItems: 'center',
-          gap: 12, flexWrap: 'wrap',
+          padding: '4px 12px', fontSize: 12, color: hw.textSecondary,
+          background: hw.bgElevated, borderTop: `1px solid ${hw.border}`,
+          fontVariantNumeric: 'tabular-nums',
         }}>
-          <LabeledSelect label="FFT" value={String(fftSize)}
-            onChange={v => setFftSize(parseInt(v, 10) as FftSize)}
-            options={[['1024','1024'],['2048','2048'],['4096','4096'],['8192','8192']]} />
-
-          <LabeledSelect label="Window" value={windowType}
-            onChange={v => setWindowType(v as WindowType)}
-            options={[['hanning','Hanning'],['blackman-harris','Blackman-Harris'],['flat-top','Flat-top']]} />
-
-          <LabeledSelect label="Style" value={displayStyle}
-            onChange={v => setDisplayStyle(v as DisplayStyle)}
-            options={[['line','Line'],['bars','Bars']]} />
-
-          <LabeledSelect label="Scale" value={freqScale}
-            onChange={v => setFreqScale(v as FreqScale)}
-            options={[['log','Log'],['linear','Linear']]} />
-
-          <LabeledSelect label="Channels" value={channelMode}
-            onChange={v => setChannelMode(v as ChannelMode)}
-            options={[['lr','L / R'],['mid-side','Mid / Side']]} />
-
-          <label style={labelStyle}>
-            <span>Smooth</span>
-            <input type="range" min={0} max={0.95} step={0.05} value={smoothing}
-              onChange={e => setSmoothing(parseFloat(e.target.value))}
-              style={{ width: 80 }} />
-            <span style={{ color: hw.textPrimary, fontVariantNumeric: 'tabular-nums', minWidth: 28 }}>
-              {smoothing.toFixed(2)}
-            </span>
-          </label>
-
-          <label style={labelStyle}>
-            <input type="checkbox" checked={peakHold} onChange={e => setPeakHold(e.target.checked)} />
-            <span>Peak hold</span>
-          </label>
+          {hoverInfo.freq >= 1000
+            ? `${(hoverInfo.freq / 1000).toFixed(2)} kHz`
+            : `${hoverInfo.freq.toFixed(1)} Hz`}
+          &nbsp;· {hoverInfo.db.toFixed(1)} dB
         </div>
+      )}
+
+      <div style={{
+        padding: '8px 12px', borderTop: `1px solid ${hw.border}`,
+        background: hw.bgElevated, display: 'flex', alignItems: 'center',
+        gap: 12, flexWrap: 'wrap',
+      }}>
+        <LabeledSelect label="FFT" value={String(fftSize)}
+          onChange={v => setFftSize(parseInt(v, 10) as FftSize)}
+          options={[['1024','1024'],['2048','2048'],['4096','4096'],['8192','8192']]} />
+
+        <LabeledSelect label="Window" value={windowType}
+          onChange={v => setWindowType(v as WindowType)}
+          options={[['hanning','Hanning'],['blackman-harris','Blackman-Harris'],['flat-top','Flat-top']]} />
+
+        <LabeledSelect label="Style" value={displayStyle}
+          onChange={v => setDisplayStyle(v as DisplayStyle)}
+          options={[['line','Line'],['bars','Bars']]} />
+
+        <LabeledSelect label="Scale" value={freqScale}
+          onChange={v => setFreqScale(v as FreqScale)}
+          options={[['log','Log'],['linear','Linear']]} />
+
+        <LabeledSelect label="Channels" value={channelMode}
+          onChange={v => setChannelMode(v as ChannelMode)}
+          options={[['lr','L / R'],['mid-side','Mid / Side']]} />
+
+        <label style={labelStyle}>
+          <span>Smooth</span>
+          <input type="range" min={0} max={0.95} step={0.05} value={smoothing}
+            onChange={e => setSmoothing(parseFloat(e.target.value))}
+            style={{ width: 80 }} />
+          <span style={{ color: hw.textPrimary, fontVariantNumeric: 'tabular-nums', minWidth: 28 }}>
+            {smoothing.toFixed(2)}
+          </span>
+        </label>
+
+        <label style={labelStyle}>
+          <input type="checkbox" checked={peakHold} onChange={e => setPeakHold(e.target.checked)} />
+          <span>Peak hold</span>
+        </label>
       </div>
-    </div>
+    </DialogFrame>
   )
 }
 
 const labelStyle = {
-  fontSize: 10, color: hw.textSecondary,
+  fontSize: 12, color: hw.textSecondary,
   display: 'flex', gap: 6, alignItems: 'center',
 } as const
 
-function btnStyle(active: boolean) {
-  return {
-    padding: '3px 10px', fontSize: 10, background: 'transparent',
-    border: `1px solid ${active ? hw.accent : hw.border}`, borderRadius: hw.radius.sm,
-    color: active ? hw.accent : hw.textSecondary, cursor: 'pointer',
-    transition: 'color 0.15s, border-color 0.15s',
-  } as const
-}
 
 function LabeledSelect({ label, value, onChange, options }: {
   label: string; value: string; onChange: (v: string) => void; options: [string, string][];
@@ -364,7 +337,7 @@ function LabeledSelect({ label, value, onChange, options }: {
     <label style={labelStyle}>
       <span>{label}</span>
       <select value={value} onChange={e => onChange(e.target.value)} style={{
-        fontSize: 10, padding: '2px 6px', background: hw.bg,
+        fontSize: 12, padding: '2px 6px', background: hw.bg,
         border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
         color: hw.textPrimary,
       }}>

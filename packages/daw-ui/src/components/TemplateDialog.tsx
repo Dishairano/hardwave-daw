@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { hw } from '../theme'
 import { useUserTemplateStore } from '../stores/userTemplateStore'
+import { DialogFrame } from './ui/DialogFrame'
 
 export type BuiltInTemplateId = 'blank' | 'beat4' | 'vocal' | 'mixing'
 export type StarterId = 'hardstyle' | 'rawstyle' | 'frenchcore' | 'uptempo'
@@ -68,28 +69,8 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
   }
 
   return createPortal(
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 10000,
-      background: 'rgba(0,0,0,0.6)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      <div style={{
-        background: hw.bg,
-        border: `1px solid ${hw.border}`,
-        borderRadius: hw.radius.lg,
-        padding: 20,
-        width: 560,
-        maxWidth: '90vw',
-        maxHeight: '90vh',
-        overflowY: 'auto',
-        boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
-      }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: hw.textPrimary, marginBottom: 4 }}>
-          New project
-        </div>
-        <div style={{ fontSize: 12, color: hw.textMuted, marginBottom: 16 }}>
-          Choose a template to start from.
-        </div>
+    <DialogFrame title="New project" subtitle="Choose a template to start from." onClose={onCancel} width={600}>
+      <div style={{ padding: 20, overflowY: 'auto' }}>
 
         <div style={{
           fontSize: 10, fontWeight: 600, color: hw.textFaint,
@@ -245,7 +226,7 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
           </button>
         </div>
       </div>
-    </div>,
+    </DialogFrame>,
     document.body,
   )
 }

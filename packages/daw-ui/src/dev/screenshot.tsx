@@ -16,6 +16,13 @@ import '../rework.css'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { HwTopbar, HwSecondRow, HwPlaylistTracks } from '../components/HwApp'
+import { HistoryPanel } from '../components/HistoryPanel'
+import { LoudnessMeter } from '../components/LoudnessMeter'
+import { Oscilloscope } from '../components/Oscilloscope'
+import { SpectrumAnalyzer } from '../components/SpectrumAnalyzer'
+import { MidiMappingsPanel } from '../components/MidiMappingsPanel'
+import { TuneDialog } from '../components/arrangement/TuneDialog'
+import { MidiRouteDialog } from '../components/arrangement/MidiRouteDialog'
 import { usePlaylistScrollStore } from '../stores/playlistScrollStore'
 import { MacroPanel } from '../components/MacroPanel'
 import { PresetBrowser } from '../components/PresetBrowser'
@@ -185,6 +192,31 @@ useTrackStore.setState({
 // ---- render ---------------------------------------------------------------
 
 const noop = () => {}
+
+/** The playlist with one more dialog over it, for the dialog shots. */
+function Over({ children, project = 'Untitled' }: { children: React.ReactNode; project?: string }) {
+  return (
+    <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+      <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName={project}>
+        <HwSecondRow />
+      </HwTopbar>
+      <Arrangement onSetHint={noop} />
+      {children}
+    </div>
+  )
+}
+
+/** The Tune and MIDI-route dialogs need a track: the first MIDI track, else the first. */
+function TuneShot() {
+  const t = useTrackStore(s => s.tracks.find(x => (x.kind || '').toLowerCase() === 'midi') ?? s.tracks[0])
+  if (!t) return null
+  return <TuneDialog trackId={t.id} clipId={t.clips[0]?.id ?? ''} onClose={noop} />
+}
+function MidiRouteShot() {
+  const t = useTrackStore(s => s.tracks.find(x => (x.kind || '').toLowerCase() === 'midi') ?? s.tracks[0])
+  if (!t) return null
+  return <MidiRouteDialog trackId={t.id} onClose={noop} />
+}
 const panel = new URLSearchParams(location.search).get('panel') || 'playlist'
 
 // ?timesig=3 or ?timesig=7/8 seeds the project's signature, and
@@ -319,6 +351,20 @@ function Harness() {
         </div>
       )
     }
+    case 'history':
+      return <Over><HistoryPanel onClose={noop} /></Over>
+    case 'loudness':
+      return <Over><LoudnessMeter onClose={noop} /></Over>
+    case 'oscilloscope':
+      return <Over><Oscilloscope onClose={noop} /></Over>
+    case 'spectrum':
+      return <Over><SpectrumAnalyzer onClose={noop} /></Over>
+    case 'midimappings':
+      return <Over><MidiMappingsPanel onClose={noop} /></Over>
+    case 'tune':
+      return <Over><TuneShot /></Over>
+    case 'midiroute':
+      return <Over><MidiRouteShot /></Over>
     case 'stems':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>

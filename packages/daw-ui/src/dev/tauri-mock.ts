@@ -610,6 +610,10 @@ const mock: TauriInternals = {
         return { device: 'Focusrite Scarlett 2i2', channels: 2 }
       case 'get_wasapi_exclusive':
         return { enabled: false, available: true }
+      case 'list_midi_mappings':
+        return []
+      case 'midi_learn_status':
+        return { learning: false, target: null, lastLearned: null }
       case 'list_midi_outputs':
         return ['Microsoft GS Wavetable Synth']
       case 'get_midi_clock_status':
