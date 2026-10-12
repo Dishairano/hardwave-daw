@@ -16,7 +16,8 @@
 //! samples, with a list of what could not be carried.
 
 use crate::fl_import::{
-    FlChannel, FlChannelKind, FlChannelSettings, FlClipContent, FlNote, FlPlaylistClip, FlProject,
+    FlChannel, FlChannelKind, FlChannelSettings, FlClipContent, FlMixerSlot, FlMixerTrack, FlNote,
+    FlPlaylistClip, FlProject, FlRoute,
 };
 
 /// Event id boundaries: below 64 is one byte, below 128 two, below
@@ -82,6 +83,32 @@ const CH_LEVELS: u8 = TEXT + 27; // 219
 /// The arrangement starts: no channel event comes after it, while the
 /// mixer's plug-ins further on use the same name events as channels do.
 const ARRANGEMENT_NEW: u8 = WORD + 35; // 99
+/// FL 25 and later: the channel's mixer insert, two bytes, as FL 25 has
+/// five hundred of them. Older files used this id for something else.
+const CH_ROUTED_TO_FL25: u8 = WORD + 40; // 104
+
+// The mixer. An insert's events run from its name, when it has one, to
+// its output; its flags are the one event every insert has.
+const INSERT_NAME: u8 = TEXT + 12; // 204
+/// Polarity, swap, effects on, enabled, solo: four bytes from byte 4.
+const INSERT_FLAGS: u8 = TEXT + 44; // 236
+const INSERT_POLARITY: u32 = 1 << 0;
+const INSERT_SWAP: u32 = 1 << 1;
+const INSERT_EFFECTS_ON: u32 = 1 << 2;
+const INSERT_ENABLED: u32 = 1 << 3;
+const INSERT_SOLO: u32 = 1 << 12;
+/// One byte per insert, set where this one sends its sound.
+const INSERT_ROUTING: u8 = TEXT + 43; // 235
+/// The insert's audio output, its last event.
+const INSERT_OUTPUT: u8 = DWORD + 19; // 147
+/// An effect slot's number in the insert. It closes the slot: the plug-in
+/// events just before it are the slot's (an empty slot has none).
+const SLOT_INDEX: u8 = WORD + 34; // 98
+/// A plug-in's own data.
+const PLUGIN_DATA: u8 = TEXT + 21; // 213
+/// Every insert's fader, pan, separation, send levels and EQ, and every
+/// slot's switch and mix, as 12-byte records.
+const MIXER_PARAMS: u8 = TEXT + 33; // 225
 
 /// Why a file could not be read.
 #[derive(Debug, Clone, PartialEq)]
@@ -255,8 +282,100 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
 
     let mut tempo_seen = false;
     let (mut coarse, mut fine) = (None::<u16>, 0u16);
+    let mut fl_major = 0u32;
+    // The mixer: a name waiting for its insert, the insert being read, the
+    // plug-in waiting for its slot number, and the parameter list, read once
+    // every insert is known.
+    let mut insert_name: Option<String> = None;
+    let mut current_insert: Option<usize> = None;
+    let mut pending_slot: Option<FlMixerSlot> = None;
+    let mut mixer_params: Option<&[u8]> = None;
     for event in events(body)? {
+        // A plug-in event inside an insert is a slot's, not a channel's.
+        if current_insert.is_some() {
+            match (event.id, pending_slot.as_mut()) {
+                (PLUGIN_INTERNAL_NAME, _) => {
+                    pending_slot = Some(FlMixerSlot {
+                        index: 0,
+                        plugin: text(event.data),
+                        name: None,
+                        enabled: true,
+                        mix: 12_800,
+                        data: Vec::new(),
+                    });
+                    continue;
+                }
+                (CH_DISPLAY_NAME, Some(slot)) => {
+                    let name = text(event.data);
+                    slot.name = (!name.is_empty()).then_some(name);
+                    continue;
+                }
+                (PLUGIN_DATA, Some(slot)) => {
+                    slot.data = event.data.to_vec();
+                    continue;
+                }
+                _ => {}
+            }
+        }
         match event.id {
+            FL_VERSION => {
+                fl_major = text_ascii(event.data)
+                    .split('.')
+                    .next()
+                    .and_then(|m| m.trim().parse().ok())
+                    .unwrap_or(0);
+            }
+            CH_ROUTED_TO_FL25 if fl_major >= 25 => {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    channel.settings.mixer_insert = u16_at(event.data, 0) as i32;
+                }
+            }
+            INSERT_NAME => insert_name = Some(text(event.data)),
+            INSERT_FLAGS => {
+                current_channel = None;
+                pending_slot = None;
+                let flags = u32_at(event.data, 4);
+                current_insert = Some(project.mixer.len());
+                project.mixer.push(FlMixerTrack {
+                    index: project.mixer.len() as u32,
+                    name: insert_name.take().unwrap_or_default(),
+                    enabled: flags & INSERT_ENABLED != 0,
+                    effects_enabled: flags & INSERT_EFFECTS_ON != 0,
+                    polarity_inverted: flags & INSERT_POLARITY != 0,
+                    swap_stereo: flags & INSERT_SWAP != 0,
+                    solo: flags & INSERT_SOLO != 0,
+                    ..Default::default()
+                });
+            }
+            SLOT_INDEX => {
+                let slot = pending_slot.take();
+                if let (Some(insert), Some(mut slot)) =
+                    (current_insert.and_then(|i| project.mixer.get_mut(i)), slot)
+                {
+                    slot.index = u16_at(event.data, 0) as u32;
+                    insert.slots.push(slot);
+                }
+            }
+            INSERT_ROUTING => {
+                pending_slot = None;
+                if let Some(insert) = current_insert.and_then(|i| project.mixer.get_mut(i)) {
+                    insert.routes = event
+                        .data
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, on)| **on != 0)
+                        .map(|(to, _)| FlRoute {
+                            to: to as u32,
+                            level: 12_800,
+                        })
+                        .collect();
+                }
+            }
+            INSERT_OUTPUT => {
+                pending_slot = None;
+                insert_name = None;
+            }
+            MIXER_PARAMS => mixer_params = Some(event.data),
             TEMPO_COARSE => coarse = Some(u16_at(event.data, 0)),
             TEMPO_FINE => fine = u16_at(event.data, 0),
             PROJ_TEMPO => {
@@ -424,6 +543,9 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
         }
     }
 
+    if let Some(data) = mixer_params {
+        read_mixer_params(&mut project.mixer, data);
+    }
     project.pattern_names = pattern_names;
     if !tempo_seen {
         if let Some(c) = coarse.filter(|c| *c > 0) {
@@ -468,6 +590,73 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
         });
     }
     Ok(project)
+}
+
+/// The mixer's parameter list: per record, four bytes we do not need, the
+/// parameter (a byte, then a byte of flags, the top bit set for a plug-in's
+/// own parameter), where it is (two bytes: the insert from bit 6, the slot
+/// below), and the value.
+///
+/// Where the inserts start differs by version (FL 24 counts from 0x2000,
+/// FL 25 from 0x7000, with the song's own settings below either), so the
+/// master is the lowest place that has an insert's fader.
+fn read_mixer_params(mixer: &mut [FlMixerTrack], data: &[u8]) {
+    const SLOT_ENABLED: u8 = 0;
+    const SLOT_MIX: u8 = 1;
+    const ROUTE_LEVEL: std::ops::RangeInclusive<u8> = 64..=191;
+    const VOLUME: u8 = 192;
+    const PAN: u8 = 193;
+    const SEPARATION: u8 = 194;
+    const EQ_GAIN: std::ops::RangeInclusive<u8> = 208..=210;
+
+    let records: Vec<(u8, u16, i32)> = data
+        .as_chunks::<12>()
+        .0
+        .iter()
+        .filter(|r| r[5] & 0x80 == 0)
+        .map(|r| (r[4], u16_at(r, 6), i32_at(r, 8)))
+        .collect();
+    let Some(master) = records
+        .iter()
+        .filter(|(param, ..)| *param == VOLUME)
+        .map(|(_, at, _)| at >> 6)
+        .min()
+    else {
+        return;
+    };
+    for (param, at, value) in records {
+        let Some(number) = (at >> 6).checked_sub(master) else {
+            continue;
+        };
+        let Some(insert) = mixer.get_mut(number as usize) else {
+            continue;
+        };
+        let slot = (at & 0x3F) as u32;
+        match param {
+            SLOT_ENABLED | SLOT_MIX => {
+                if let Some(s) = insert.slots.iter_mut().find(|s| s.index == slot) {
+                    if param == SLOT_ENABLED {
+                        s.enabled = value != 0;
+                    } else {
+                        s.mix = value;
+                    }
+                }
+            }
+            p if ROUTE_LEVEL.contains(&p) => {
+                let to = (p - ROUTE_LEVEL.start()) as u32;
+                if let Some(route) = insert.routes.iter_mut().find(|r| r.to == to) {
+                    route.level = value;
+                }
+            }
+            VOLUME => insert.volume = value,
+            PAN => insert.pan = value,
+            SEPARATION => insert.stereo_separation = value,
+            p if EQ_GAIN.contains(&p) => {
+                insert.eq_gains[(p - EQ_GAIN.start()) as usize] = value;
+            }
+            _ => {}
+        }
+    }
 }
 
 /// A playlist item that names a channel rather than a pattern.
@@ -980,6 +1169,127 @@ mod tests {
         let project = parse(&writer.finish(96)).expect("it should read");
         assert_eq!(project.channels[0].name, "Full Track Render");
         assert_eq!(project.channels[0].plugin_name, None);
+    }
+
+    /// One record of the mixer's parameter list.
+    fn mixer_param(param: u8, flags: u8, at: u16, value: i32) -> Vec<u8> {
+        let mut out = vec![0, 0, 0, 0, param, flags];
+        out.extend_from_slice(&at.to_le_bytes());
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn the_mixer_comes_across_with_its_levels_routes_and_effects() {
+        // FL 24 counts its inserts from 0x2000 in the parameter list, FL 25
+        // from 0x7000; the song's own settings sit at 0x4000 in both.
+        for first in [0x2000u16, 0x7000] {
+            let at = |insert: u16, slot: u16| first + insert * 64 + slot;
+            let mut writer = Writer::new();
+            writer.event(CH_NEW, &0u16.to_le_bytes());
+            writer.text(CH_DISPLAY_NAME, "Lead");
+            // The master, with an EQ in its first slot and the second empty.
+            // A slot's number comes after its plug-in.
+            writer.event(INSERT_FLAGS, &[0, 0, 0, 0, 0x0C, 0, 0, 0, 0, 0, 0, 0]);
+            writer.text(PLUGIN_INTERNAL_NAME, "Fruity Parametric EQ 2");
+            writer.event(PLUGIN_DATA, &[8, 0, 0, 0]);
+            writer.event(SLOT_INDEX, &0u16.to_le_bytes());
+            writer.event(SLOT_INDEX, &1u16.to_le_bytes());
+            writer.event(INSERT_ROUTING, &[0, 0, 0]);
+            writer.event(INSERT_OUTPUT, &0u32.to_le_bytes());
+            // Insert 1: polarity flipped, to the master and to insert 2.
+            writer.text(INSERT_NAME, "Leads");
+            writer.event(INSERT_FLAGS, &[0, 0, 0, 0, 0x0D, 0, 0, 0, 0, 0, 0, 0]);
+            writer.event(SLOT_INDEX, &0u16.to_le_bytes());
+            writer.text(PLUGIN_INTERNAL_NAME, "Fruity Wrapper");
+            writer.text(CH_DISPLAY_NAME, "Sylenth1");
+            writer.event(SLOT_INDEX, &1u16.to_le_bytes());
+            writer.event(INSERT_ROUTING, &[1, 0, 1]);
+            writer.event(INSERT_OUTPUT, &u32::MAX.to_le_bytes());
+            // Insert 2: switched off, effects bypassed, soloed.
+            writer.text(INSERT_NAME, "Group");
+            writer.event(INSERT_FLAGS, &[0, 0, 0, 0, 0, 0x10, 0, 0, 0, 0, 0, 0]);
+            writer.event(INSERT_ROUTING, &[1]);
+            writer.event(INSERT_OUTPUT, &u32::MAX.to_le_bytes());
+            let mut params = Vec::new();
+            params.extend(mixer_param(0, 0, 0x4000, 12_800));
+            params.extend(mixer_param(192, 31, at(0, 0), 12_800));
+            params.extend(mixer_param(0, 31, at(0, 0), 0));
+            params.extend(mixer_param(1, 31, at(0, 0), 6_400));
+            params.extend(mixer_param(192, 31, at(1, 0), 10_000));
+            params.extend(mixer_param(193, 31, at(1, 0), -3_200));
+            params.extend(mixer_param(194, 31, at(1, 0), 32));
+            params.extend(mixer_param(64, 31, at(1, 0), 0));
+            params.extend(mixer_param(66, 31, at(1, 0), 6_400));
+            params.extend(mixer_param(208, 31, at(1, 0), -300));
+            // A plug-in's own parameter on insert 1: not the fader.
+            params.extend(mixer_param(192, 0x80, at(1, 0), 1));
+            params.extend(mixer_param(192, 31, at(2, 0), 16_000));
+            writer.event(MIXER_PARAMS, &params);
+            let project = parse(&writer.finish(96)).expect("it should read");
+
+            assert_eq!(project.channels[0].name, "Lead", "slots name no channel");
+            let [master, leads, group] = &project.mixer[..] else {
+                panic!("three inserts, read {:?}", project.mixer);
+            };
+            assert_eq!(master.slots.len(), 1, "the empty slot is not kept");
+            let eq = &master.slots[0];
+            assert_eq!(eq.plugin, "Fruity Parametric EQ 2");
+            assert_eq!(eq.data, vec![8, 0, 0, 0]);
+            assert!(!eq.enabled);
+            assert_eq!(eq.mix, 6_400);
+
+            assert_eq!(leads.index, 1);
+            assert_eq!(leads.name, "Leads");
+            assert!(leads.polarity_inverted && leads.enabled && leads.effects_enabled);
+            assert_eq!(
+                (leads.volume, leads.pan, leads.stereo_separation),
+                (10_000, -3_200, 32)
+            );
+            assert_eq!(leads.eq_gains, [-300, 0, 0]);
+            assert_eq!(
+                leads.routes,
+                vec![
+                    FlRoute { to: 0, level: 0 },
+                    FlRoute {
+                        to: 2,
+                        level: 6_400
+                    }
+                ]
+            );
+            assert_eq!(leads.slots[0].label(), "Sylenth1");
+            assert_eq!(leads.slots[0].index, 1, "slot 0 was empty");
+
+            assert_eq!(group.name, "Group");
+            assert!(!group.enabled && !group.effects_enabled && group.solo);
+            assert_eq!(group.volume, 16_000);
+            assert_eq!(
+                group.routes,
+                vec![FlRoute {
+                    to: 0,
+                    level: 12_800
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn fl_25_names_a_channel_s_insert_in_two_bytes() {
+        let mut writer = Writer::new();
+        writer.event(FL_VERSION, b"25.2.3.5171\0");
+        writer.event(CH_NEW, &0u16.to_le_bytes());
+        writer.event(CH_ROUTED_TO_FL25, &300u16.to_le_bytes());
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.channels[0].settings.mixer_insert, 300);
+
+        // Before FL 25 the same id meant something else.
+        let mut writer = Writer::new();
+        writer.event(FL_VERSION, b"24.2.2.4646\0");
+        writer.event(CH_NEW, &0u16.to_le_bytes());
+        writer.event(CH_ROUTED_TO, &[7]);
+        writer.event(CH_ROUTED_TO_FL25, &300u16.to_le_bytes());
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.channels[0].settings.mixer_insert, 7);
     }
 
     #[test]

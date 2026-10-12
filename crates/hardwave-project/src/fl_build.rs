@@ -15,8 +15,9 @@
 //! file's length. They are handed back as fix-ups to finish there.
 
 use crate::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve, MidiClipRef};
-use crate::fl_import::{FlChannel, FlChannelKind, FlClipContent, FlProject};
+use crate::fl_import::{FlChannel, FlChannelKind, FlClipContent, FlMixerTrack, FlProject, FlRoute};
 use crate::project::Project;
+use crate::track::TrackKind;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The song, and what is still to be done to it once the samples load.
@@ -26,7 +27,22 @@ pub struct FlBuild {
     pub audio_fixups: Vec<AudioFixup>,
     /// Sampler channels and the sample each one plays.
     pub sampler_samples: Vec<SamplerSample>,
+    /// Built-in effects standing in for FL's, to be given their settings.
+    pub native_effects: Vec<NativeEffect>,
     pub report: FlBuildReport,
+}
+
+/// The built-in EQ, which FL's Parametric EQ 2 comes across as.
+pub const NATIVE_EQ: &str = "hardwave.native.eq";
+
+/// A built-in effect standing in for one of FL's. Its slot is on the track
+/// already; its state is made where the plug-ins live, from a fresh one with
+/// these parameters set (by id, as automation addresses them).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeEffect {
+    pub slot_id: String,
+    pub plugin_id: &'static str,
+    pub params: Vec<(u32, f64)>,
 }
 
 /// A sampler channel's sample, with what FL did to it.
@@ -132,8 +148,19 @@ pub struct FlBuildReport {
     /// come across yet.
     pub sample_fades_left_behind: Vec<String>,
     /// Playlist tracks holding samples from channels panned, swapped or
-    /// inverted differently, which a track here cannot be all at once.
+    /// inverted differently, or routed to different inserts, which a track
+    /// here cannot be all at once.
     pub mixed_lanes: Vec<String>,
+    /// FL mixer inserts that came across as tracks.
+    pub mixer_inserts: usize,
+    /// Effects in the mixer that could not come across, as "insert: effect".
+    pub effects_left_behind: Vec<String>,
+    /// Inserts whose sound went nowhere in FL (every route at zero, as for
+    /// a sidechain only): muted here, since a track always plays out.
+    pub silent_inserts: Vec<String>,
+    /// Inserts sending on to several places, the main one below 100 %: the
+    /// main route plays at full level here.
+    pub route_levels_left_behind: Vec<String>,
 }
 
 /// FL's channel volume knob (0 to 12800) in dB, 100 % being 0 dB.
@@ -160,6 +187,22 @@ pub fn fl_audio_clip_gain_db(raw: u32) -> f64 {
 /// FL's pan knob (0 to 12800, 6400 the centre) as -1 to 1.
 pub fn fl_pan(raw: i32) -> f64 {
     ((raw as f64 - 6_400.0) / 6_400.0).clamp(-1.0, 1.0)
+}
+
+/// An insert's pan knob (-6400 to 6400) as -1 to 1.
+fn fl_insert_pan(raw: i32) -> f64 {
+    (raw as f64 / 6_400.0).clamp(-1.0, 1.0)
+}
+
+/// An insert's stereo separation (64 mono, 0 as recorded, -64 fully
+/// separated) on our 0 (mono) to 2 (twice as wide) scale.
+fn fl_separation(raw: i32) -> f64 {
+    (1.0 - raw as f64 / 64.0).clamp(0.0, 2.0)
+}
+
+/// The insert a channel plays into; FL's master is 0, and so is "none".
+fn channel_insert(channel: &FlChannel) -> u32 {
+    channel.settings.mixer_insert.max(0) as u32
 }
 
 /// A sample channel's pitch in semitones: its pitch knob, the stretch
@@ -208,6 +251,8 @@ pub fn build_project(
     };
     let track_off = |fl_track: u32| fl.playlist_tracks_off.contains(&fl_track);
     let mut row = 0usize;
+    // Each track made, with the FL insert it plays into.
+    let mut sources: Vec<(String, u32)> = Vec::new();
 
     // An instrument track per channel that plays notes, on the first rows.
     let playing: BTreeSet<u32> = fl
@@ -229,6 +274,7 @@ pub fn build_project(
         let id = project.claim_row(row, &name, true);
         report.instrument_tracks += 1;
         if let Some(channel) = fl.channels.get(channel_index as usize) {
+            sources.push((id.clone(), channel_insert(channel)));
             let settings = &channel.settings;
             if let Some(track) = project.track_mut(&id) {
                 track.volume_db = fl_volume_db(settings.volume);
@@ -382,6 +428,7 @@ pub fn build_project(
                 )
             })
             .collect();
+        let mut agree = true;
         if let Some(first) = settings.first().copied() {
             if settings.iter().all(|s| *s == first) {
                 if let Some(track) = project.track_mut(&track_id) {
@@ -390,8 +437,32 @@ pub fn build_project(
                     track.phase_invert = first.2;
                 }
             } else {
-                report.mixed_lanes.push(lane_name.clone());
+                agree = false;
             }
+        }
+        // The lane plays into the insert most of its clips' channels go to.
+        let mut clips_per_insert: BTreeMap<u32, usize> = BTreeMap::new();
+        for clip in &clips {
+            if let FlClipContent::AudioSample { channel_index, .. } = &clip.content {
+                let insert = fl
+                    .channels
+                    .get(*channel_index as usize)
+                    .map(channel_insert)
+                    .unwrap_or(0);
+                *clips_per_insert.entry(insert).or_default() += 1;
+            }
+        }
+        if clips_per_insert.len() > 1 {
+            agree = false;
+        }
+        if let Some((&insert, _)) = clips_per_insert
+            .iter()
+            .max_by_key(|(i, n)| (**n, std::cmp::Reverse(**i)))
+        {
+            sources.push((track_id.clone(), insert));
+        }
+        if !agree {
+            report.mixed_lanes.push(lane_name.clone());
         }
         if track_off(fl_track) {
             if let Some(track) = project.track_mut(&track_id) {
@@ -466,13 +537,264 @@ pub fn build_project(
         }
     }
 
+    let native_effects = build_mixer(fl, &mut project, &mut row, &sources, &mut report);
+
     report.missing_samples = missing.into_iter().collect();
     FlBuild {
         project,
         audio_fixups,
         sampler_samples,
+        native_effects,
         report,
     }
+}
+
+/// FL's mixer. Every track made so far plays into the insert its channel
+/// was routed to; the inserts that sound reaches become tracks of their own
+/// after the playlist's rows, with FL's fader, pan and switches, and send on
+/// where FL sent them. Insert 0 is the master.
+fn build_mixer(
+    fl: &FlProject,
+    project: &mut Project,
+    row: &mut usize,
+    sources: &[(String, u32)],
+    report: &mut FlBuildReport,
+) -> Vec<NativeEffect> {
+    let mut native = Vec::new();
+    let inserts: BTreeMap<u32, &FlMixerTrack> = fl.mixer.iter().map(|m| (m.index, m)).collect();
+    // The routes that carry sound: FL makes a route at zero for a sidechain.
+    let live = |m: &FlMixerTrack| -> Vec<FlRoute> {
+        m.routes
+            .iter()
+            .filter(|r| {
+                r.level > 0 && r.to != m.index && (r.to == 0 || inserts.contains_key(&r.to))
+            })
+            .copied()
+            .collect()
+    };
+    let mut reached = BTreeSet::new();
+    let mut queue: Vec<u32> = sources.iter().map(|(_, insert)| *insert).collect();
+    while let Some(insert) = queue.pop() {
+        let Some(m) = inserts.get(&insert) else {
+            continue;
+        };
+        if insert != 0 && reached.insert(insert) {
+            queue.extend(live(m).iter().map(|r| r.to));
+        }
+    }
+
+    let name_of = |m: &FlMixerTrack| -> String {
+        if m.name.is_empty() {
+            format!("Insert {}", m.index)
+        } else {
+            m.name.clone()
+        }
+    };
+    let mut insert_track: BTreeMap<u32, String> = BTreeMap::new();
+    for insert in &reached {
+        *row += 1;
+        let id = project.claim_row(*row, &name_of(inserts[insert]), false);
+        insert_track.insert(*insert, id);
+    }
+    report.mixer_inserts = insert_track.len();
+    let track_of = |insert: u32| insert_track.get(&insert).cloned();
+
+    for (track_id, insert) in sources {
+        if let Some(track) = project.track_mut(track_id) {
+            track.output_bus = track_of(*insert);
+        }
+    }
+
+    // Inserts something plays its whole output into are groups; the ones
+    // only sent to are returns.
+    let mut fed: BTreeSet<u32> = sources.iter().map(|(_, insert)| *insert).collect();
+    let levels = |track: &mut crate::track::Track, m: &FlMixerTrack| {
+        track.volume_db = fl_volume_db(m.volume.max(0) as u32);
+        track.pan = fl_insert_pan(m.pan);
+        track.stereo_separation = fl_separation(m.stereo_separation);
+        track.muted = !m.enabled;
+        track.soloed = m.solo;
+        track.phase_invert = m.polarity_inverted;
+        track.swap_lr = m.swap_stereo;
+    };
+    if let Some(master) = inserts.get(&0) {
+        if let Some(track) = project
+            .tracks
+            .iter_mut()
+            .find(|t| matches!(t.kind, TrackKind::Master))
+        {
+            levels(track, master);
+            track.inserts = effects(master, "Master", &mut native, report);
+        }
+    }
+    for (insert, track_id) in &insert_track {
+        let m = inserts[insert];
+        let name = name_of(m);
+        let routes = live(m);
+        let main = if routes.iter().any(|r| r.to == 0) {
+            None
+        } else {
+            routes
+                .iter()
+                .find(|r| r.level == 12_800)
+                .or(routes.first())
+                .copied()
+        };
+        if let Some(main) = main {
+            fed.insert(main.to);
+        }
+        let Some(track) = project.track_mut(track_id) else {
+            continue;
+        };
+        levels(track, m);
+        if routes.is_empty() {
+            track.muted = true;
+            report.silent_inserts.push(name.clone());
+        }
+        if let Some(main) = main {
+            track.output_bus = track_of(main.to);
+            if main.level != 12_800 {
+                if routes.len() == 1 {
+                    // Its only route comes after its fader: the same as a
+                    // fader that much lower.
+                    track.volume_db =
+                        (track.volume_db + fl_volume_db(main.level as u32)).max(-100.0);
+                } else {
+                    report.route_levels_left_behind.push(name.clone());
+                }
+            }
+        }
+        track.sends = routes
+            .iter()
+            .filter(|r| r.to != 0 && Some(**r) != main)
+            .filter_map(|r| {
+                Some(crate::mixer::Send {
+                    target: track_of(r.to)?,
+                    gain_db: fl_volume_db(r.level as u32),
+                    pre_fader: false,
+                    enabled: true,
+                })
+            })
+            .collect();
+        track.inserts = effects(m, &name, &mut native, report);
+    }
+    for (insert, track_id) in &insert_track {
+        if let Some(track) = project.track_mut(track_id) {
+            track.kind = if fed.contains(insert) {
+                TrackKind::Bus
+            } else {
+                TrackKind::Return
+            };
+        }
+    }
+    native
+}
+
+/// An insert's effects that have a built-in counterpart, as slots, in FL's
+/// order; the rest are named in the report.
+fn effects(
+    m: &FlMixerTrack,
+    name: &str,
+    native: &mut Vec<NativeEffect>,
+    report: &mut FlBuildReport,
+) -> Vec<crate::track::PluginSlot> {
+    let mut slots = Vec::new();
+    for slot in &m.slots {
+        let Some((plugin_id, params)) = native_counterpart(slot) else {
+            report
+                .effects_left_behind
+                .push(format!("{name}: {}", slot.label()));
+            continue;
+        };
+        let slot_id = uuid::Uuid::new_v4().to_string();
+        slots.push(crate::track::PluginSlot {
+            id: slot_id.clone(),
+            plugin_id: plugin_id.to_string(),
+            enabled: slot.enabled && m.effects_enabled,
+            state: None,
+            sidechain_source: None,
+            wet: (slot.mix as f32 / 12_800.0).clamp(0.0, 1.0),
+        });
+        native.push(NativeEffect {
+            slot_id,
+            plugin_id,
+            params,
+        });
+    }
+    if m.eq_gains.iter().any(|g| *g != 0) {
+        report
+            .effects_left_behind
+            .push(format!("{name}: the insert's own EQ"));
+    }
+    slots
+}
+
+/// The built-in effect that stands in for an FL one, with its settings.
+fn native_counterpart(
+    slot: &crate::fl_import::FlMixerSlot,
+) -> Option<(&'static str, Vec<(u32, f64)>)> {
+    match slot.plugin.as_str() {
+        "Fruity Parametric EQ 2" => Some((NATIVE_EQ, parametric_eq_2(&slot.data)?)),
+        _ => None,
+    }
+}
+
+/// FL's Parametric EQ 2 as the built-in EQ's parameters.
+///
+/// Its data is a version, then for each of the seven bands its gain (in
+/// hundredths of a dB), frequency, width, type and slope, then the main
+/// level. The frequency runs 20 Hz to 20 kHz evenly in octaves over 0 to
+/// 65536. FL's widths are its own measure; the Q for a bell or shelf follows
+/// the reading DawVert uses, and a cut is a plain 24 dB one, ours.
+fn parametric_eq_2(data: &[u8]) -> Option<Vec<(u32, f64)>> {
+    // The built-in EQ's parameters: four per band, then the output gain,
+    // then each band's shape.
+    const OUTPUT_GAIN: u32 = 28;
+    const SHAPE: u32 = 29;
+    const LOW_CUT: f64 = 0.0;
+    const LOW_SHELF: f64 = 1.0;
+    const BELL: f64 = 2.0;
+    const NOTCH: f64 = 3.0;
+    const HIGH_SHELF: f64 = 4.0;
+    const HIGH_CUT: f64 = 5.0;
+
+    let words: Vec<i32> = data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|w| i32::from_le_bytes(*w))
+        .collect();
+    if words.len() < 37 {
+        return None;
+    }
+    let bell_q = |width: f64| 1.0 / ((width + 0.01) * 3.0);
+    let shelf_q = |width: f64| (1.0 - width) * 1.2;
+    let mut params = Vec::new();
+    for band in 0..7 {
+        let gain = words[1 + band] as f64 / 100.0;
+        let freq = 20.0 * 1000f64.powf(words[8 + band] as f64 / 65_536.0);
+        let width = words[15 + band] as f64 / 65_536.0;
+        // 0 is off; 2, a band pass, has no counterpart here.
+        let (shape, q, on) = match words[22 + band] {
+            1 => (HIGH_CUT, std::f64::consts::FRAC_1_SQRT_2, true),
+            3 => (LOW_CUT, std::f64::consts::FRAC_1_SQRT_2, true),
+            4 => (NOTCH, bell_q(width), true),
+            5 => (LOW_SHELF, shelf_q(width), gain != 0.0),
+            6 => (BELL, bell_q(width), gain != 0.0),
+            7 => (HIGH_SHELF, shelf_q(width), gain != 0.0),
+            _ => (BELL, 1.0, false),
+        };
+        let base = band as u32 * 4;
+        params.extend([
+            (base, if on { 1.0 } else { 0.0 }),
+            (base + 1, freq.clamp(20.0, 20_000.0)),
+            (base + 2, gain.clamp(-24.0, 24.0)),
+            (base + 3, q.clamp(0.1, 10.0)),
+            (SHAPE + band as u32, shape),
+        ]);
+    }
+    params.push((OUTPUT_GAIN, (words[36] as f64 / 100.0).clamp(-24.0, 24.0)));
+    Some(params)
 }
 
 #[cfg(test)]
@@ -882,5 +1204,213 @@ mod tests {
         .apply(&mut later, 96_000, 48_000);
         assert_eq!(later.source_start, 36_000);
         assert_eq!(later.source_end, 84_000);
+    }
+
+    fn mixer_song() -> FlProject {
+        let mut fl = song();
+        // The screech plays into insert 1, the kick render into 2, the 808
+        // into 3 and the lost vocal into 7.
+        fl.channels[0].settings.mixer_insert = 1;
+        fl.channels[1].settings.mixer_insert = 2;
+        fl.channels[2].settings.mixer_insert = 3;
+        fl.channels[4].settings.mixer_insert = 7;
+        let insert = |index: u32, name: &str, routes: Vec<FlRoute>| FlMixerTrack {
+            index,
+            name: name.into(),
+            routes,
+            ..Default::default()
+        };
+        let to = |to, level| FlRoute { to, level };
+        fl.mixer = vec![
+            FlMixerTrack {
+                volume: 10_000,
+                ..insert(0, "", vec![])
+            },
+            // Into the group only: the route to the master is at zero.
+            FlMixerTrack {
+                volume: 10_000,
+                pan: 3_200,
+                stereo_separation: 64,
+                polarity_inverted: true,
+                ..insert(1, "Screech", vec![to(0, 0), to(4, 12_800)])
+            },
+            // To the master, and sent to the reverb at half.
+            insert(2, "", vec![to(0, 12_800), to(5, 6_400)]),
+            // Its one route at half: the same as its fader that much lower.
+            insert(3, "808", vec![to(4, 6_400)]),
+            insert(4, "Group", vec![to(0, 12_800)]),
+            insert(5, "Reverb", vec![to(0, 12_800)]),
+            // Nothing plays into it.
+            insert(6, "Unused", vec![to(0, 12_800)]),
+            // Sends nowhere: a sidechain source only.
+            insert(7, "Ghost", vec![to(0, 0)]),
+        ];
+        fl
+    }
+
+    #[test]
+    fn the_mixer_s_inserts_become_tracks_routed_as_in_fl() {
+        let built = build_project(&mixer_song(), "Mixer", &here);
+        let p = &built.project;
+        let by_name = |name: &str| {
+            p.tracks
+                .iter()
+                .find(|t| t.name == name && matches!(t.kind, TrackKind::Bus | TrackKind::Return))
+                .unwrap_or_else(|| panic!("no insert track {name}"))
+        };
+        let screech = by_name("Screech");
+        let group = by_name("Group");
+        let reverb = by_name("Reverb");
+        let insert_2 = by_name("Insert 2");
+        let eight = by_name("808");
+        let ghost = by_name("Ghost");
+        assert!(
+            p.tracks.iter().all(|t| t.name != "Unused"),
+            "nothing reaches it"
+        );
+        assert_eq!(built.report.mixer_inserts, 6);
+
+        // The tracks play into their channels' inserts.
+        assert_eq!(
+            p.track("insert-001").unwrap().output_bus.as_ref(),
+            Some(&screech.id)
+        );
+        assert_eq!(
+            p.track("insert-002").unwrap().output_bus.as_ref(),
+            Some(&eight.id)
+        );
+        assert_eq!(
+            p.track("insert-003").unwrap().output_bus.as_ref(),
+            Some(&insert_2.id)
+        );
+        assert_eq!(
+            p.track("insert-004").unwrap().output_bus.as_ref(),
+            Some(&ghost.id)
+        );
+
+        assert_eq!(screech.output_bus.as_ref(), Some(&group.id));
+        assert!(screech.sends.is_empty(), "the silent route is no send");
+        assert!((screech.volume_db - fl_volume_db(10_000)).abs() < 1e-9);
+        assert_eq!(screech.pan, 0.5);
+        assert_eq!(screech.stereo_separation, 0.0);
+        assert!(screech.phase_invert);
+
+        assert_eq!(insert_2.output_bus, None);
+        assert_eq!(insert_2.sends.len(), 1);
+        assert_eq!(insert_2.sends[0].target, reverb.id);
+        assert!((insert_2.sends[0].gain_db - fl_volume_db(6_400)).abs() < 1e-9);
+        assert!(!insert_2.sends[0].pre_fader);
+
+        assert_eq!(eight.output_bus.as_ref(), Some(&group.id));
+        assert!((eight.volume_db - fl_volume_db(6_400)).abs() < 1e-9);
+
+        assert!(matches!(group.kind, TrackKind::Bus));
+        assert!(matches!(reverb.kind, TrackKind::Return), "only sent to");
+        assert!(ghost.muted);
+        assert_eq!(built.report.silent_inserts, vec!["Ghost".to_string()]);
+
+        let master = p
+            .tracks
+            .iter()
+            .find(|t| matches!(t.kind, TrackKind::Master))
+            .unwrap();
+        assert!((master.volume_db - fl_volume_db(10_000)).abs() < 1e-9);
+    }
+
+    /// A Parametric EQ 2's data: every band a bell at 0 dB in the middle of
+    /// the range at FL's default width, then `set` on top.
+    fn parametric_eq_2_data(set: &[(usize, i32)]) -> Vec<u8> {
+        let mut words = vec![0i32; 88];
+        words[0] = 8;
+        for band in 0..7 {
+            words[8 + band] = 32_768;
+            words[15 + band] = 25_412;
+            words[22 + band] = 6;
+        }
+        for (at, value) in set {
+            words[*at] = *value;
+        }
+        words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn parametric_eq_2_comes_across_as_the_built_in_eq() {
+        let mut fl = mixer_song();
+        let slot = |index, plugin: &str, data| crate::fl_import::FlMixerSlot {
+            index,
+            plugin: plugin.into(),
+            name: None,
+            enabled: true,
+            mix: 12_800,
+            data,
+        };
+        // Band 4 up 6 dB, band 1 a low cut, band 7 off; the main level down 3.
+        let eq = parametric_eq_2_data(&[(4, 600), (22, 3), (28, 0), (36, -300)]);
+        fl.mixer[0].slots = vec![
+            crate::fl_import::FlMixerSlot {
+                mix: 6_400,
+                ..slot(0, "Fruity Parametric EQ 2", eq.clone())
+            },
+            slot(3, "Maximus", Vec::new()),
+        ];
+        fl.mixer[4].slots = vec![slot(0, "Fruity Parametric EQ 2", eq)];
+        fl.mixer[4].effects_enabled = false;
+        fl.mixer[4].eq_gains = [0, 150, 0];
+        let built = build_project(&fl, "Mixer", &here);
+        let p = &built.project;
+
+        let master = p
+            .tracks
+            .iter()
+            .find(|t| matches!(t.kind, TrackKind::Master))
+            .unwrap();
+        assert_eq!(
+            master.inserts.len(),
+            1,
+            "Maximus has nothing to stand in for it"
+        );
+        assert_eq!(master.inserts[0].plugin_id, NATIVE_EQ);
+        assert!(master.inserts[0].enabled);
+        assert_eq!(master.inserts[0].wet, 0.5);
+        let group = p.tracks.iter().find(|t| t.name == "Group").unwrap();
+        assert!(
+            !group.inserts[0].enabled,
+            "the insert's effects are off in FL"
+        );
+        assert_eq!(
+            built.report.effects_left_behind,
+            vec![
+                "Master: Maximus".to_string(),
+                "Group: the insert's own EQ".into()
+            ]
+        );
+
+        let effect = built
+            .native_effects
+            .iter()
+            .find(|e| e.slot_id == master.inserts[0].id)
+            .unwrap();
+        let value = |id: u32| {
+            effect
+                .params
+                .iter()
+                .rev()
+                .find(|(p, _)| *p == id)
+                .map(|(_, v)| *v)
+                .unwrap()
+        };
+        // Band 4: on, 6 dB, at 632 Hz (halfway in octaves from 20 Hz to 20 kHz).
+        assert_eq!(value(12), 1.0);
+        assert_eq!(value(14), 6.0);
+        assert!((value(13) - 632.46).abs() < 0.01);
+        assert_eq!(value(29 + 3), 2.0, "a bell");
+        // Band 1: a cut is on whatever its gain.
+        assert_eq!(value(0), 1.0);
+        assert_eq!(value(29), 0.0, "a low cut");
+        // Band 2: a bell at 0 dB does nothing, so it stays off.
+        assert_eq!(value(4), 0.0);
+        // Band 7: off in FL.
+        assert_eq!(value(24), 0.0);
+        assert_eq!(value(28), -3.0, "the main level");
     }
 }

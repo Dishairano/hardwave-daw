@@ -176,14 +176,119 @@ pub enum FlClipContent {
     },
 }
 
-/// Parsed mixer track — volume / pan / routing only.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// An insert in FL's mixer: where channels play into, where the effects
+/// sit, and where it sends its sound on. Values are FL's own; the import
+/// turns them into ours.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlMixerTrack {
+    /// Its number in FL's mixer; 0 is the master.
+    pub index: u32,
+    /// Empty when it has FL's default name ("Insert 3").
     pub name: String,
-    pub volume_db: f32,
-    pub pan: f32,
-    pub muted: bool,
-    pub routes_to: Vec<u32>,
+    /// Off is FL's mute switch on the insert.
+    pub enabled: bool,
+    /// All its effect slots on or bypassed at once.
+    pub effects_enabled: bool,
+    pub polarity_inverted: bool,
+    pub swap_stereo: bool,
+    pub solo: bool,
+    /// The fader, 12800 at 100 % (0 dB), 16000 at the top.
+    pub volume: i32,
+    /// The pan knob, -6400 (left) to 6400 (right).
+    pub pan: i32,
+    /// Stereo separation: 64 is mono, 0 as recorded, -64 fully separated.
+    pub stereo_separation: i32,
+    /// The gains of the insert's own three-band EQ, in hundredths of a dB.
+    pub eq_gains: [i32; 3],
+    /// Where it sends its sound, with the level of each.
+    pub routes: Vec<FlRoute>,
+    /// The effect slots that hold a plug-in.
+    pub slots: Vec<FlMixerSlot>,
+}
+
+impl Default for FlMixerTrack {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            name: String::new(),
+            enabled: true,
+            effects_enabled: true,
+            polarity_inverted: false,
+            swap_stereo: false,
+            solo: false,
+            volume: 12_800,
+            pan: 0,
+            stereo_separation: 0,
+            eq_gains: [0; 3],
+            routes: Vec::new(),
+            slots: Vec::new(),
+        }
+    }
+}
+
+/// A route from one insert to another.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FlRoute {
+    /// The insert it goes to; 0 is the master.
+    pub to: u32,
+    /// The send level, on the fader's scale (12800 is 0 dB). 0 carries no
+    /// sound: FL makes those for sidechains.
+    pub level: i32,
+}
+
+/// An effect slot in an insert, with the plug-in in it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlMixerSlot {
+    /// Its place in the insert, 0 to 9.
+    pub index: u32,
+    /// What FL calls the plug-in ("Fruity Parametric EQ 2"; "Fruity
+    /// Wrapper" for anyone else's).
+    pub plugin: String,
+    /// The name it was given, when it has one.
+    pub name: Option<String>,
+    pub enabled: bool,
+    /// Dry/wet, 0 to 12800 (fully wet).
+    pub mix: i32,
+    /// The plug-in's own data: its settings, in its own format.
+    #[serde(skip)]
+    pub data: Vec<u8>,
+}
+
+impl FlMixerSlot {
+    /// The name to show: the one it was given, the name of the plug-in in
+    /// FL's wrapper, or FL's own name for it.
+    pub fn label(&self) -> String {
+        self.name
+            .clone()
+            .or_else(|| (self.plugin == WRAPPER).then(|| wrapped_plugin_name(&self.data))?)
+            .unwrap_or_else(|| self.plugin.clone())
+    }
+}
+
+/// What FL calls the wrapper it puts anyone else's plug-in in.
+pub const WRAPPER: &str = "Fruity Wrapper";
+
+/// The name of the plug-in in FL's wrapper. The wrapper's data is four
+/// bytes, then chunks: a kind (four bytes), a length (eight) and that many
+/// bytes. Kind 54 is the plug-in's name.
+pub fn wrapped_plugin_name(data: &[u8]) -> Option<String> {
+    const NAME: u32 = 54;
+    let mut at = 4usize;
+    while let Some(head) = data.get(at..at + 12) {
+        let kind = u32::from_le_bytes(head[0..4].try_into().ok()?);
+        let len = usize::try_from(u64::from_le_bytes(head[4..12].try_into().ok()?)).ok()?;
+        at += 12;
+        let body = data.get(at..at.checked_add(len)?)?;
+        if kind == NAME {
+            let name = String::from_utf8_lossy(body)
+                .trim_end_matches('\0')
+                .trim()
+                .to_string();
+            return (!name.is_empty()).then_some(name);
+        }
+        at += len;
+    }
+    None
 }
 
 /// Parsed `.flp` project — the raw import result.
@@ -476,10 +581,7 @@ mod tests {
             }],
             mixer: vec![FlMixerTrack {
                 name: "Master".into(),
-                volume_db: -6.0,
-                pan: 0.0,
-                muted: false,
-                routes_to: Vec::new(),
+                ..Default::default()
             }],
             pattern_notes: Vec::new(),
             pattern_names: Vec::new(),
@@ -554,5 +656,36 @@ mod tests {
         });
         let report = summarize_import(&project, &default_plugin_mappings());
         assert_eq!(report.imported_automation_clips, 1);
+    }
+
+    /// FL's wrapper data with these chunks after its four leading bytes.
+    fn wrapper(chunks: &[(u32, &[u8])]) -> Vec<u8> {
+        let mut out = vec![12, 0, 0, 0];
+        for (kind, body) in chunks {
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&(body.len() as u64).to_le_bytes());
+            out.extend_from_slice(body);
+        }
+        out
+    }
+
+    #[test]
+    fn a_wrapped_plug_in_goes_by_its_own_name() {
+        let slot = |name: Option<&str>, data| FlMixerSlot {
+            index: 0,
+            plugin: WRAPPER.into(),
+            name: name.map(String::from),
+            enabled: true,
+            mix: 12_800,
+            data,
+        };
+        let data = wrapper(&[(1, &[0; 4]), (54, b"Serum2"), (56, b"Xfer Records")]);
+        assert_eq!(slot(None, data.clone()).label(), "Serum2");
+        assert_eq!(slot(Some("Lead synth"), data).label(), "Lead synth");
+        // Data that says it is longer than it is gives no name, not a crash.
+        let mut lying = wrapper(&[(54, b"Serum2")]);
+        lying[8] = 0xFF;
+        assert_eq!(slot(None, lying).label(), WRAPPER);
+        assert_eq!(slot(None, Vec::new()).label(), WRAPPER);
     }
 }

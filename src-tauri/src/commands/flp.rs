@@ -8,12 +8,13 @@
 //! What comes across is the song: the tempo, an instrument track per
 //! channel that plays notes (a sampler channel with its sample in the
 //! built-in sampler), every sample on the playlist where FL had it at its
-//! channel's level, pan, pitch, direction and stretch, and the playlist's
-//! track names and switches. It opens as a song of its own, like a
-//! .hwp. What cannot come across is everything a plug-in holds: FL
-//! stores a plug-in's state as its own blob, and nothing outside FL can
-//! mean anything by it. The report says what was left behind rather
-//! than letting it be found later.
+//! channel's level, pan, pitch, direction and stretch, the playlist's
+//! track names and switches, and the mixer: every insert the sound passes
+//! through as a track of its own, with its fader, pan, switches and
+//! routes, and FL's Parametric EQ 2 as the built-in EQ. It opens as a song
+//! of its own, like a .hwp. What cannot come across yet is what other
+//! plug-ins hold: FL stores a plug-in's state as its own blob. The report
+//! says what was left behind rather than letting it be found later.
 
 use hardwave_project::clip::ClipContent;
 use serde::Serialize;
@@ -127,6 +128,16 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
         }
     }
 
+    // FL effects with a built-in counterpart: a fresh one, set as FL had
+    // it, saved as the slot's state.
+    let mut effects_failed = 0usize;
+    for effect in &built.native_effects {
+        match native_state(effect) {
+            Some(state) => project.set_plugin_state(effect.slot_id.clone(), "native", state),
+            None => effects_failed += 1,
+        }
+    }
+
     let fixups = built.audio_fixups;
     crate::commands::project::open_project_blocking(app, project, None, move |song, pool| {
         apply_fixups(song, pool, &fixups)
@@ -182,10 +193,44 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
             list_of(&r.mixed_lanes)
         ));
     }
+    if !r.effects_left_behind.is_empty() {
+        left_behind.push(format!(
+            "{} mixer effect{} with nothing built in to stand in for {} ({})",
+            r.effects_left_behind.len(),
+            if r.effects_left_behind.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            if r.effects_left_behind.len() == 1 {
+                "it"
+            } else {
+                "them"
+            },
+            list_of(&r.effects_left_behind)
+        ));
+    }
+    if effects_failed > 0 {
+        left_behind.push(format!(
+            "{effects_failed} EQ setting{} that could not be made",
+            if effects_failed == 1 { "" } else { "s" }
+        ));
+    }
+    if !r.silent_inserts.is_empty() {
+        left_behind.push(format!(
+            "{}, which sent nothing on in FL (a sidechain only, or nowhere): muted here",
+            list_of(&r.silent_inserts)
+        ));
+    }
+    if !r.route_levels_left_behind.is_empty() {
+        left_behind.push(format!(
+            "the send level of the main route on {}, which plays at full level here",
+            list_of(&r.route_levels_left_behind)
+        ));
+    }
     if r.automation_clips > 0 {
         left_behind.push(format!("{} automation clips", r.automation_clips));
     }
-    left_behind.push("the mixer: effects, routing and levels".into());
 
     Ok(FlpImportReport {
         bpm: r.bpm,
@@ -195,6 +240,18 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
         samples: r.missing_samples,
         left_behind,
     })
+}
+
+/// The state of a built-in effect set up as an FL one was.
+fn native_state(effect: &hardwave_project::fl_build::NativeEffect) -> Option<Vec<u8>> {
+    let descriptor = hardwave_native_plugins::native_plugin_descriptors()
+        .into_iter()
+        .find(|d| d.id == effect.plugin_id)?;
+    let mut plugin = crate::commands::plugins::instantiate_plugin(&descriptor).ok()?;
+    for (id, value) in &effect.params {
+        plugin.set_parameter_value(*id, *value);
+    }
+    Some(plugin.get_state())
 }
 
 /// "a, b, c" for up to five names, then "and n more".
@@ -398,6 +455,49 @@ mod tests {
         assert!(found.ends_with("Kick 16.wav"));
         assert!(finder.find("C:\\nowhere\\other.wav").is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_fl_eq_s_settings_reach_the_built_in_eq() {
+        use hardwave_native_plugins::NativeEq;
+        use hardwave_plugin_host::types::HostedPlugin;
+        use hardwave_project::fl_import::{FlMixerSlot, FlMixerTrack, FlProject};
+
+        assert_eq!(hardwave_project::fl_build::NATIVE_EQ, NativeEq::ID);
+        // A Parametric EQ 2: version 8, band 4 up 6 dB, every band a bell
+        // at 632 Hz, the main level down 3 dB.
+        let mut words = vec![0i32; 88];
+        words[0] = 8;
+        for band in 0..7 {
+            words[8 + band] = 32_768;
+            words[15 + band] = 25_412;
+            words[22 + band] = 6;
+        }
+        words[4] = 600;
+        words[36] = -300;
+        let fl = FlProject {
+            mixer: vec![FlMixerTrack {
+                slots: vec![FlMixerSlot {
+                    index: 0,
+                    plugin: "Fruity Parametric EQ 2".into(),
+                    name: None,
+                    enabled: true,
+                    mix: 12_800,
+                    data: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let built = hardwave_project::fl_build::build_project(&fl, "eq", &|_| None);
+        let state = native_state(&built.native_effects[0]).expect("an EQ is made");
+        let mut eq = NativeEq::new();
+        eq.set_state(&state).expect("its own state reads back");
+        assert_eq!(eq.get_parameter_value(12), 1.0, "band 4 on");
+        assert_eq!(eq.get_parameter_value(14), 6.0);
+        assert!((eq.get_parameter_value(13) - 632.46).abs() < 0.01);
+        assert_eq!(eq.get_parameter_value(4), 0.0, "band 2 at 0 dB stays off");
+        assert_eq!(eq.get_parameter_value(28), -3.0);
     }
 
     #[test]
