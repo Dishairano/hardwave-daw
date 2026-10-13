@@ -151,17 +151,34 @@ mod tests {
         .unwrap_err()
     }
 
+    /// A path on a local drive, as this system writes one: "/home/p/..." is
+    /// not absolute on Windows (it is the root of whichever drive is
+    /// current), and "C:\..." is not on the others.
+    #[cfg(windows)]
+    const LOCAL: &str = r"C:\Users\p";
+    #[cfg(not(windows))]
+    const LOCAL: &str = "/home/p";
+
     #[test]
     fn samples_beside_the_song_and_on_local_drives_open() {
         assert_eq!(
             ok("Raw Drop Samples/Kick.wav"),
-            PathBuf::from("/songs/Raw Drop/Raw Drop Samples/Kick.wav")
+            Path::new("/songs/Raw Drop").join("Raw Drop Samples/Kick.wav")
         );
-        assert_eq!(
-            ok("/home/p/Samples/Kick.WAV"),
-            PathBuf::from("/home/p/Samples/Kick.WAV")
-        );
+        let local = format!("{LOCAL}/Samples/Kick.WAV");
+        assert_eq!(ok(&local), PathBuf::from(&local));
         assert!(check(r"\\NAS\samples\kick.wav", None, &["nas".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn another_system_s_absolute_path_is_not_this_one_s() {
+        // The other system's form names no file here; it is refused, not
+        // read as somewhere under the song or the current drive.
+        #[cfg(windows)]
+        let foreign = "/home/p/Samples/Kick.wav";
+        #[cfg(not(windows))]
+        let foreign = r"C:\Users\p\Samples\Kick.wav";
+        assert_eq!(refused(foreign), Refusal::LeavesTheProjectFolder);
     }
 
     #[test]
@@ -213,7 +230,7 @@ mod tests {
 
     #[test]
     fn a_video_follows_the_same_rules() {
-        assert!(check_video("/films/cut.mp4", None, &[]).is_ok());
+        assert!(check_video(&format!("{LOCAL}/films/cut.mp4"), None, &[]).is_ok());
         assert_eq!(
             check_video(r"\\x.example\s\cut.mp4", None, &[]),
             Err(Refusal::UntrustedServer("x.example".into()))
