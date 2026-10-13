@@ -1,5 +1,6 @@
 use crate::AppState;
 use hardwave_engine::{DawEngine, OfflineRender};
+use hardwave_project::track::TrackKind;
 use hardwave_project::Project;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use std::fs::{self, File};
@@ -30,6 +31,59 @@ fn build_offline_insert_factory(
             .get(plugin_id)
             .and_then(|d| super::plugins::load_hosted(d).ok())
     }
+}
+
+/// Narrow a render's copy of the song to one track, for a bounce or a
+/// consolidate. The other tracks are excluded from the mix rather than
+/// muted, so they still key its sidechains. The master's inserts and fader
+/// are stood down and the track plays straight into it: what comes out goes
+/// back onto a track that plays through the master and its bus again. With
+/// `keep_effects` false the track's own effects, fader and sends go too and
+/// only an instrument stays: a consolidated clip stays on the track and
+/// would otherwise be run through them twice.
+fn isolate_track_for_render(
+    proj: &mut Project,
+    target: &str,
+    keep_effects: bool,
+    is_instrument: &dyn Fn(&str) -> bool,
+) {
+    for t in proj.tracks.iter_mut() {
+        if matches!(t.kind, TrackKind::Master) {
+            t.inserts.clear();
+            t.volume_db = 0.0;
+            t.pan = 0.0;
+            continue;
+        }
+        t.stem_excluded = t.id != target;
+        if t.id != target {
+            continue;
+        }
+        t.output_bus = None;
+        if !keep_effects {
+            t.inserts.retain(|s| is_instrument(&s.plugin_id));
+            t.sends.clear();
+            t.volume_db = 0.0;
+            t.pan = 0.0;
+        }
+    }
+}
+
+/// The ids of the plug-ins that make sound from notes, as the scanner knows
+/// them: what a consolidated pattern clip keeps.
+fn instrument_ids(engine: &DawEngine) -> std::collections::HashSet<String> {
+    engine
+        .plugin_scanner
+        .lock()
+        .plugins()
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.category,
+                hardwave_plugin_host::types::PluginCategory::Instrument
+            )
+        })
+        .map(|d| d.id.clone())
+        .collect()
 }
 
 /// Prepare a render under the engine's lock, let go of the lock, then
@@ -1285,6 +1339,7 @@ pub async fn consolidate_track_range(
             };
 
             let target = track_id.clone();
+            let instruments = instrument_ids(&engine_guard);
             let completed = render_unlocked(
                 engine_guard,
                 &out_path,
@@ -1293,10 +1348,11 @@ pub async fn consolidate_track_range(
                 start_samples,
                 &cancel,
                 |_, _| {},
+                // The glued clip stays on this track, through its effects
+                // and fader and on to the master: the render has none of
+                // them, only the instrument that plays its notes.
                 move |proj: &mut Project| {
-                    for t in proj.tracks.iter_mut() {
-                        t.stem_excluded = t.id != target;
-                    }
+                    isolate_track_for_render(proj, &target, false, &|id| instruments.contains(id))
                 },
             )?;
             if !completed {
@@ -1421,14 +1477,10 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
                 0,
                 &cancel,
                 |_, _| {},
-                move |proj: &mut Project| {
-                    // Exclude the others rather than muting them, the same way
-                    // stems do: a muted track stops feeding sidechains and
-                    // sends, which changes what the bounced track sounds like.
-                    for t in proj.tracks.iter_mut() {
-                        t.stem_excluded = t.id != target;
-                    }
-                },
+                // Through its own effects and fader, which the new track
+                // does without, and not through its bus or the master,
+                // which the new track plays into again.
+                move |proj: &mut Project| isolate_track_for_render(proj, &target, true, &|_| true),
             )?;
             if !completed {
                 let _ = fs::remove_file(&out_path);
@@ -1447,7 +1499,16 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
     let new_track_id = {
         let engine = state.engine.lock();
         let mut project = engine.project.lock();
-        project.add_audio_track(format!("{track_name} (bounced)"))
+        // Into the same bus as the original, so the bus's effects still
+        // shape it; the render left them out.
+        let bus = project
+            .track(&source_track_id)
+            .and_then(|t| t.output_bus.clone());
+        let id = project.add_audio_track(format!("{track_name} (bounced)"));
+        if let Some(t) = project.track_mut(&id) {
+            t.output_bus = bus;
+        }
+        id
     };
     crate::commands::audio::import_audio_file_blocking(
         state.clone(),
@@ -1770,14 +1831,9 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
             0,
             &cancel,
             |_, _| {},
-            move |proj: &mut Project| {
-                // Excluded rather than muted, the same way stems do it: a
-                // muted track stops feeding sidechains and sends, which
-                // changes what the frozen track sounds like.
-                for t in proj.tracks.iter_mut() {
-                    t.stem_excluded = t.id != target;
-                }
-            },
+            // Through its own effects, which rest while it is frozen, and
+            // not through its bus or the master, which it still plays into.
+            move |proj: &mut Project| isolate_track_for_render(proj, &target, true, &|_| true),
         )?;
         if !completed {
             let _ = fs::remove_file(&out_path);
@@ -1848,4 +1904,82 @@ pub fn list_frozen_tracks(state: State<AppState>) -> Vec<String> {
         .filter(|t| t.frozen)
         .map(|t| t.id.clone())
         .collect()
+}
+
+#[cfg(test)]
+mod isolate_tests {
+    use super::isolate_track_for_render;
+    use hardwave_project::track::{PluginSlot, TrackKind};
+    use hardwave_project::Project;
+
+    fn slot(id: &str) -> PluginSlot {
+        PluginSlot {
+            id: id.into(),
+            plugin_id: id.into(),
+            enabled: true,
+            state: None,
+            sidechain_source: None,
+            wet: 1.0,
+        }
+    }
+
+    /// A kick track with a synth and an EQ, turned down and panned, into a
+    /// bus; a limiter and a lowered fader on the master.
+    fn song() -> (Project, String) {
+        let mut p = Project::default();
+        let master = p
+            .tracks
+            .iter_mut()
+            .find(|t| matches!(t.kind, TrackKind::Master))
+            .expect("a master");
+        master.inserts.push(slot("fx.limiter"));
+        master.volume_db = -3.0;
+        let id = p.add_midi_track("Kick".into());
+        let t = p.track_mut(&id).expect("the kick");
+        t.inserts = vec![slot("synth.kick"), slot("fx.eq")];
+        t.volume_db = -6.0;
+        t.pan = 0.3;
+        t.output_bus = Some("insert-001".into());
+        (p, id)
+    }
+
+    fn master(p: &Project) -> &hardwave_project::track::Track {
+        p.tracks
+            .iter()
+            .find(|t| matches!(t.kind, TrackKind::Master))
+            .expect("a master")
+    }
+
+    #[test]
+    fn a_consolidate_keeps_only_the_instrument_and_plays_straight_into_a_bare_master() {
+        let (mut p, id) = song();
+        isolate_track_for_render(&mut p, &id, false, &|pid| pid.starts_with("synth."));
+        let t = p.track(&id).expect("the kick");
+        let kept: Vec<&str> = t.inserts.iter().map(|s| s.plugin_id.as_str()).collect();
+        assert_eq!(kept, ["synth.kick"]);
+        assert_eq!((t.volume_db, t.pan, t.output_bus.clone()), (0.0, 0.0, None));
+        assert!(!t.stem_excluded);
+        assert!(master(&p).inserts.is_empty());
+        assert_eq!(master(&p).volume_db, 0.0);
+        assert!(
+            p.tracks
+                .iter()
+                .filter(|t| !matches!(t.kind, TrackKind::Master) && t.id != id)
+                .all(|t| t.stem_excluded),
+            "every other track is left out of the mix"
+        );
+    }
+
+    #[test]
+    fn a_bounce_keeps_the_track_s_own_effects_and_fader() {
+        let (mut p, id) = song();
+        isolate_track_for_render(&mut p, &id, true, &|_| false);
+        let t = p.track(&id).expect("the kick");
+        assert_eq!(t.inserts.len(), 2);
+        assert_eq!(
+            (t.volume_db, t.pan, t.output_bus.clone()),
+            (-6.0, 0.3, None)
+        );
+        assert!(master(&p).inserts.is_empty());
+    }
 }
