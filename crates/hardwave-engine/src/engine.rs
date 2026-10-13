@@ -2687,11 +2687,14 @@ impl EngineCallback {
         // connect send edges once every track node has been inserted.
         let mut track_id_to_node: HashMap<String, crate::graph::NodeId> = HashMap::new();
 
-        // Determine if any track is soloed — if so, mute all non-soloed tracks
-        let any_soloed = project
-            .tracks
-            .iter()
-            .any(|t| t.soloed && t.kind.is_audio_bearing());
+        // While any track is soloed, the tracks not heard are muted: the
+        // soloed ones are heard with their way out and what feeds them.
+        let solo_audible = hardwave_project::mixer::solo_audible(&project.tracks);
+        let silenced_by_solo = |track: &hardwave_project::track::Track| {
+            solo_audible
+                .as_ref()
+                .is_some_and(|heard| !heard.contains(&track.id) && !track.solo_safe)
+        };
 
         // Reconcile the per-track meter map with the current tracks: reuse existing
         // Arcs where possible, create new ones, drop meters for removed tracks.
@@ -2757,8 +2760,7 @@ impl EngineCallback {
                     track.pan as f32,
                     track.stereo_separation as f32,
                 );
-                let effective_mute_midi =
-                    track.muted || vca_muted || (any_soloed && !track.soloed && !track.solo_safe);
+                let effective_mute_midi = track.muted || vca_muted || silenced_by_solo(track);
                 midi_node.set_muted(effective_mute_midi);
                 midi_node.set_soloed(track.soloed);
                 // Map the project's NativeInstrument enum to the
@@ -2965,8 +2967,7 @@ impl EngineCallback {
                 hardwave_project::vca::offset_for(&project.vcas, &track.id);
             node.set_volume_db(track.volume_db + vca_gain_db);
             node.set_pan(track.pan);
-            let effective_mute =
-                track.muted || vca_muted || (any_soloed && !track.soloed && !track.solo_safe);
+            let effective_mute = track.muted || vca_muted || silenced_by_solo(track);
             node.set_muted(effective_mute);
             node.set_soloed(track.soloed);
             node.set_phase_invert(track.phase_invert);
