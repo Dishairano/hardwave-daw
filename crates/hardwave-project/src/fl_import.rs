@@ -21,6 +21,10 @@ pub struct FlChannel {
     /// Its level, pan, pitch and sample settings.
     #[serde(default)]
     pub settings: FlChannelSettings,
+    /// Its plug-in's own data: for "Fruity Wrapper", the plug-in it wraps
+    /// and that plug-in's settings (`read_wrapper`).
+    #[serde(skip)]
+    pub plugin_data: Vec<u8>,
 }
 
 /// A channel's settings as FL stores them, in FL's own units. What they
@@ -268,27 +272,154 @@ impl FlMixerSlot {
 /// What FL calls the wrapper it puts anyone else's plug-in in.
 pub const WRAPPER: &str = "Fruity Wrapper";
 
-/// The name of the plug-in in FL's wrapper. The wrapper's data is four
-/// bytes, then chunks: a kind (four bytes), a length (eight) and that many
-/// bytes. Kind 54 is the plug-in's name.
+/// The kinds of plug-in FL's wrapper holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlPluginFormat {
+    Vst2,
+    Vst3,
+    Clap,
+}
+
+/// A plug-in in FL's wrapper: what it is, and its settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlWrappedPlugin {
+    pub name: String,
+    pub vendor: String,
+    pub format: FlPluginFormat,
+    /// An instrument rather than an effect.
+    pub instrument: bool,
+    /// Where it was on the computer that saved the song.
+    pub file: String,
+    /// A CLAP's own id.
+    pub clap_id: Option<String>,
+    /// For a VST3, its component's state: what a host gets from getState and
+    /// gives back to setState. Empty when FL kept none, and for VST2 and
+    /// CLAP, whose state is not read.
+    pub state: Vec<u8>,
+}
+
+/// The chunks FL's wrapper data is made of, from `at`: a kind (four bytes),
+/// a length (eight) and that many bytes. Stops at the first chunk that does
+/// not fit.
+fn wrapper_chunks(data: &[u8], mut at: usize) -> Vec<(u32, &[u8])> {
+    let mut out = Vec::new();
+    while let Some(head) = data.get(at..at.saturating_add(12)) {
+        let kind = u32::from_le_bytes([head[0], head[1], head[2], head[3]]);
+        let len = u64::from_le_bytes([
+            head[4], head[5], head[6], head[7], head[8], head[9], head[10], head[11],
+        ]);
+        at += 12;
+        let Some(body) = usize::try_from(len)
+            .ok()
+            .and_then(|len| data.get(at..at.checked_add(len)?))
+        else {
+            break;
+        };
+        out.push((kind, body));
+        at += body.len();
+    }
+    out
+}
+
+fn chunk_text(body: &[u8]) -> String {
+    String::from_utf8_lossy(body)
+        .trim_end_matches('\0')
+        .trim()
+        .to_string()
+}
+
+/// FL's wrapper data with these chunks after its four leading bytes.
+#[cfg(test)]
+pub(crate) fn test_wrapper(chunks: &[(u32, &[u8])]) -> Vec<u8> {
+    let mut out = vec![12, 0, 0, 0];
+    for (kind, body) in chunks {
+        out.extend_from_slice(&kind.to_le_bytes());
+        out.extend_from_slice(&(body.len() as u64).to_le_bytes());
+        out.extend_from_slice(body);
+    }
+    out
+}
+
+/// FL's wrapper around a VST3 called `name`, its component's state `state`
+/// (none when empty), as FL 24 to 26 write it.
+#[cfg(test)]
+pub(crate) fn test_vst3_wrapper(name: &str, instrument: bool, state: &[u8]) -> Vec<u8> {
+    let kind: u32 = if instrument { 8 } else { 7 };
+    let mut info = kind.to_le_bytes().to_vec();
+    info.extend_from_slice(&[0; 8]);
+    // The state: four bytes, then a 64-byte chunk FL keeps for itself, the
+    // component's state, the controller's, and the parameter ids.
+    let mut vst3 = test_wrapper(&[(1, &[0; 64]), (3, state), (2, b"controller"), (4, &[0; 8])]);
+    vst3[..4].copy_from_slice(&1u32.to_le_bytes());
+    let file = format!("C:\\Program Files\\Common Files\\VST3\\{name}.vst3");
+    let mut chunks: Vec<(u32, &[u8])> =
+        vec![(50, &info), (54, name.as_bytes()), (55, file.as_bytes())];
+    if !state.is_empty() {
+        chunks.push((53, &vst3));
+    }
+    chunks.push((56, b"Vendor"));
+    test_wrapper(&chunks)
+}
+
+/// The name of the plug-in in FL's wrapper.
 pub fn wrapped_plugin_name(data: &[u8]) -> Option<String> {
     const NAME: u32 = 54;
-    let mut at = 4usize;
-    while let Some(head) = data.get(at..at + 12) {
-        let kind = u32::from_le_bytes(head[0..4].try_into().ok()?);
-        let len = usize::try_from(u64::from_le_bytes(head[4..12].try_into().ok()?)).ok()?;
-        at += 12;
-        let body = data.get(at..at.checked_add(len)?)?;
-        if kind == NAME {
-            let name = String::from_utf8_lossy(body)
-                .trim_end_matches('\0')
-                .trim()
-                .to_string();
-            return (!name.is_empty()).then_some(name);
-        }
-        at += len;
-    }
-    None
+    wrapper_chunks(data, 4)
+        .into_iter()
+        .find(|(kind, _)| *kind == NAME)
+        .map(|(_, body)| chunk_text(body))
+        .filter(|name| !name.is_empty())
+}
+
+/// What FL's wrapper holds. Its data is four bytes, then chunks: 50 says
+/// what kind of plug-in it is (0 and 4 a VST2 effect and instrument, 7 and
+/// 8 a VST3, 11 and 12 a CLAP), 53 is its state, 54 its name, 55 its file,
+/// 56 its vendor, 58 a CLAP's id. A VST3's state is four bytes and chunks of
+/// the same shape again, the component's state in chunk 3.
+pub fn read_wrapper(data: &[u8]) -> Option<FlWrappedPlugin> {
+    const INFO: u32 = 50;
+    const STATE: u32 = 53;
+    const NAME: u32 = 54;
+    const FILE: u32 = 55;
+    const VENDOR: u32 = 56;
+    const CLAP_ID: u32 = 58;
+    const VST3_COMPONENT: u32 = 3;
+
+    let chunks = wrapper_chunks(data, 4);
+    let get = |want: u32| {
+        chunks
+            .iter()
+            .find(|(kind, _)| *kind == want)
+            .map(|(_, b)| *b)
+    };
+    let info = get(INFO)?;
+    let (format, instrument) = match u32::from_le_bytes(info.get(..4)?.try_into().ok()?) {
+        0 => (FlPluginFormat::Vst2, false),
+        4 => (FlPluginFormat::Vst2, true),
+        7 => (FlPluginFormat::Vst3, false),
+        8 => (FlPluginFormat::Vst3, true),
+        11 => (FlPluginFormat::Clap, false),
+        12 => (FlPluginFormat::Clap, true),
+        _ => return None,
+    };
+    let name = get(NAME).map(chunk_text).filter(|n| !n.is_empty())?;
+    let state = match (format, get(STATE)) {
+        (FlPluginFormat::Vst3, Some(state)) => wrapper_chunks(state, 4)
+            .into_iter()
+            .find(|(kind, _)| *kind == VST3_COMPONENT)
+            .map(|(_, body)| body.to_vec())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    Some(FlWrappedPlugin {
+        name,
+        vendor: get(VENDOR).map(chunk_text).unwrap_or_default(),
+        format,
+        instrument,
+        file: get(FILE).map(chunk_text).unwrap_or_default(),
+        clap_id: get(CLAP_ID).map(chunk_text).filter(|id| !id.is_empty()),
+        state,
+    })
 }
 
 /// Parsed `.flp` project — the raw import result.
@@ -531,6 +662,7 @@ mod tests {
             time_sig_denominator: 4,
             channels: vec![
                 FlChannel {
+                    plugin_data: Vec::new(),
                     name: "Kick".into(),
                     sample_path: Some("/samples/kick.wav".into()),
                     plugin_name: None,
@@ -539,6 +671,7 @@ mod tests {
                     settings: FlChannelSettings::default(),
                 },
                 FlChannel {
+                    plugin_data: Vec::new(),
                     name: "Sytrus Lead".into(),
                     sample_path: None,
                     plugin_name: Some("Sytrus".into()),
@@ -547,6 +680,7 @@ mod tests {
                     settings: FlChannelSettings::default(),
                 },
                 FlChannel {
+                    plugin_data: Vec::new(),
                     name: "Harmor Pad".into(),
                     sample_path: None,
                     plugin_name: Some("Harmor".into()),
@@ -555,6 +689,7 @@ mod tests {
                     settings: FlChannelSettings::default(),
                 },
                 FlChannel {
+                    plugin_data: Vec::new(),
                     name: "Mystery Plugin".into(),
                     sample_path: None,
                     plugin_name: Some("WeirdOne".into()),
@@ -658,16 +793,7 @@ mod tests {
         assert_eq!(report.imported_automation_clips, 1);
     }
 
-    /// FL's wrapper data with these chunks after its four leading bytes.
-    fn wrapper(chunks: &[(u32, &[u8])]) -> Vec<u8> {
-        let mut out = vec![12, 0, 0, 0];
-        for (kind, body) in chunks {
-            out.extend_from_slice(&kind.to_le_bytes());
-            out.extend_from_slice(&(body.len() as u64).to_le_bytes());
-            out.extend_from_slice(body);
-        }
-        out
-    }
+    use super::test_wrapper as wrapper;
 
     #[test]
     fn a_wrapped_plug_in_goes_by_its_own_name() {
@@ -687,5 +813,51 @@ mod tests {
         lying[8] = 0xFF;
         assert_eq!(slot(None, lying).label(), WRAPPER);
         assert_eq!(slot(None, Vec::new()).label(), WRAPPER);
+    }
+
+    #[test]
+    fn a_wrapped_vst3_comes_with_its_component_state() {
+        let p = read_wrapper(&super::test_vst3_wrapper("Serum2", true, b"component")).unwrap();
+        assert_eq!(p.name, "Serum2");
+        assert_eq!(p.vendor, "Vendor");
+        assert_eq!(p.format, FlPluginFormat::Vst3);
+        assert!(p.instrument);
+        assert!(p.file.ends_with("Serum2.vst3"));
+        assert_eq!(
+            p.state, b"component",
+            "the component's, not the controller's"
+        );
+
+        let effect = read_wrapper(&super::test_vst3_wrapper("OTT", false, b"")).unwrap();
+        assert!(!effect.instrument);
+        assert!(effect.state.is_empty(), "FL kept none");
+    }
+
+    #[test]
+    fn vst2_and_clap_say_what_they_are_without_their_state() {
+        let info = |kind: u32| kind.to_le_bytes().to_vec();
+        let vst2 = wrapper(&[
+            (50, &info(4)),
+            (53, &[0xF7, 0xFF, 0xFF, 0xFF]),
+            (54, b"Serum"),
+        ]);
+        let p = read_wrapper(&vst2).unwrap();
+        assert_eq!((p.format, p.instrument), (FlPluginFormat::Vst2, true));
+        assert!(p.state.is_empty());
+        let clap = wrapper(&[
+            (50, &info(11)),
+            (54, b"Surge XT Effects"),
+            (58, b"org.surge-synth-team.surge-xt-fx"),
+        ]);
+        let p = read_wrapper(&clap).unwrap();
+        assert_eq!(p.format, FlPluginFormat::Clap);
+        assert_eq!(
+            p.clap_id.as_deref(),
+            Some("org.surge-synth-team.surge-xt-fx")
+        );
+        // A kind FL has not written, or no name: nothing to go on.
+        assert!(read_wrapper(&wrapper(&[(50, &info(99)), (54, b"X")])).is_none());
+        assert!(read_wrapper(&wrapper(&[(50, &info(7))])).is_none());
+        assert!(read_wrapper(&[]).is_none());
     }
 }

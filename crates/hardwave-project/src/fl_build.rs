@@ -15,7 +15,10 @@
 //! file's length. They are handed back as fix-ups to finish there.
 
 use crate::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve, MidiClipRef};
-use crate::fl_import::{FlChannel, FlChannelKind, FlClipContent, FlMixerTrack, FlProject, FlRoute};
+use crate::fl_import::{
+    read_wrapper, FlChannel, FlChannelKind, FlClipContent, FlMixerTrack, FlPluginFormat, FlProject,
+    FlRoute, FlWrappedPlugin, WRAPPER,
+};
 use crate::project::Project;
 use crate::track::TrackKind;
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,7 +32,99 @@ pub struct FlBuild {
     pub sampler_samples: Vec<SamplerSample>,
     /// Built-in effects standing in for FL's, to be given their settings.
     pub native_effects: Vec<NativeEffect>,
+    /// Other people's plug-ins, to be found on this computer.
+    pub external_plugins: Vec<ExternalPlugin>,
     pub report: FlBuildReport,
+}
+
+/// Someone else's plug-in from FL: its slot is on its track, set as FL had
+/// it. Whether it is on this computer is found out where the plug-ins are
+/// known; until then the slot names it by `candidates[0]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternalPlugin {
+    pub track_id: String,
+    pub slot_id: String,
+    /// Where it was in FL, for the report: a channel, or "insert: plug-in".
+    pub place: String,
+    pub plugin: FlWrappedPlugin,
+    /// The ids it may have here, most likely first.
+    pub candidates: Vec<String>,
+    /// It plays its track's notes: without it the track stays muted.
+    pub plays_track: bool,
+}
+
+/// The ids a plug-in from FL may have in our plug-in list: by its name, and
+/// by its file's name, the way the scanner names them. A VST2 is looked for
+/// as its VST3.
+fn plugin_ids(plugin: &FlWrappedPlugin) -> Vec<String> {
+    let id = |s: &str| s.to_lowercase().replace(' ', "-");
+    let stem = plugin
+        .file
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or("")
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let mut ids = match plugin.format {
+        FlPluginFormat::Clap => {
+            let mut ids: Vec<String> = plugin.clap_id.iter().map(|c| format!("clap:{c}")).collect();
+            ids.push(format!("clap:{}", id(&plugin.name)));
+            ids
+        }
+        FlPluginFormat::Vst2 | FlPluginFormat::Vst3 => {
+            vec![
+                format!("vst3:{}", id(&plugin.name)),
+                format!("vst3:{}", id(&stem)),
+            ]
+        }
+    };
+    ids.dedup();
+    ids.retain(|i| !i.ends_with(':'));
+    ids
+}
+
+/// A slot for someone else's plug-in, and what is left to find out about it.
+/// Its settings come when FL kept them (a VST3's state); one that comes
+/// without them is put in switched off, rather than playing its defaults
+/// where FL played something else.
+fn external_slot(
+    plugin: FlWrappedPlugin,
+    track_id: &str,
+    place: String,
+    enabled: bool,
+    wet: f32,
+    plays_track: bool,
+    report: &mut FlBuildReport,
+) -> (crate::track::PluginSlot, ExternalPlugin) {
+    let candidates = plugin_ids(&plugin);
+    let carried = !plugin.state.is_empty();
+    if !carried {
+        report.plugins_without_settings.push(match plugin.format {
+            FlPluginFormat::Vst2 => format!("{place} (VST2 in FL)"),
+            _ => place.clone(),
+        });
+    }
+    let slot_id = uuid::Uuid::new_v4().to_string();
+    (
+        crate::track::PluginSlot {
+            id: slot_id.clone(),
+            plugin_id: candidates.first().cloned().unwrap_or_default(),
+            enabled: enabled && carried,
+            state: None,
+            sidechain_source: None,
+            wet,
+        },
+        ExternalPlugin {
+            track_id: track_id.to_string(),
+            slot_id,
+            place,
+            plugin,
+            candidates,
+            plays_track,
+        },
+    )
 }
 
 /// The built-in EQ, which FL's Parametric EQ 2 comes across as.
@@ -161,6 +256,9 @@ pub struct FlBuildReport {
     /// Inserts sending on to several places, the main one below 100 %: the
     /// main route plays at full level here.
     pub route_levels_left_behind: Vec<String>,
+    /// Other people's plug-ins that came without their settings (a VST2, a
+    /// CLAP, or a VST3 FL kept none for): put in switched off.
+    pub plugins_without_settings: Vec<String>,
 }
 
 /// FL's channel volume knob (0 to 12800) in dB, 100 % being 0 dB.
@@ -234,6 +332,7 @@ pub fn build_project(
     let seconds_per_tick = 60.0 / (fl.bpm.max(1.0) as f64 * hardwave_midi::PPQ as f64);
     let mut audio_fixups = Vec::new();
     let mut sampler_samples = Vec::new();
+    let mut external_plugins = Vec::new();
     let mut missing = BTreeSet::new();
     let mut find = |path: &str| -> Option<String> {
         let found = resolve(path);
@@ -299,6 +398,22 @@ pub fn build_project(
                     }
                     if settings.fade_in > 0 || settings.fade_out > 0 {
                         report.sample_fades_left_behind.push(name.clone());
+                    }
+                }
+                (FlChannelKind::Instrument, _)
+                    if channel.plugin_name.as_deref() == Some(WRAPPER)
+                        && read_wrapper(&channel.plugin_data).is_some() =>
+                {
+                    let plugin = read_wrapper(&channel.plugin_data).expect("checked above");
+                    let carried = !plugin.state.is_empty();
+                    let (slot, external) =
+                        external_slot(plugin, &id, name.clone(), true, 1.0, true, &mut report);
+                    external_plugins.push(external);
+                    if let Some(track) = project.track_mut(&id) {
+                        track.inserts.insert(0, slot);
+                        // Without its settings it would play its default
+                        // sound where FL played the song's.
+                        track.muted |= !carried;
                     }
                 }
                 (FlChannelKind::Instrument | FlChannelKind::Layer, _) => {
@@ -537,7 +652,14 @@ pub fn build_project(
         }
     }
 
-    let native_effects = build_mixer(fl, &mut project, &mut row, &sources, &mut report);
+    let native_effects = build_mixer(
+        fl,
+        &mut project,
+        &mut row,
+        &sources,
+        &mut external_plugins,
+        &mut report,
+    );
 
     report.missing_samples = missing.into_iter().collect();
     FlBuild {
@@ -545,6 +667,7 @@ pub fn build_project(
         audio_fixups,
         sampler_samples,
         native_effects,
+        external_plugins,
         report,
     }
 }
@@ -558,6 +681,7 @@ fn build_mixer(
     project: &mut Project,
     row: &mut usize,
     sources: &[(String, u32)],
+    external: &mut Vec<ExternalPlugin>,
     report: &mut FlBuildReport,
 ) -> Vec<NativeEffect> {
     let mut native = Vec::new();
@@ -624,7 +748,8 @@ fn build_mixer(
             .find(|t| matches!(t.kind, TrackKind::Master))
         {
             levels(track, master);
-            track.inserts = effects(master, "Master", &mut native, report);
+            let id = track.id.clone();
+            track.inserts = effects(master, "Master", &id, &mut native, external, report);
         }
     }
     for (insert, track_id) in &insert_track {
@@ -676,7 +801,7 @@ fn build_mixer(
                 })
             })
             .collect();
-        track.inserts = effects(m, &name, &mut native, report);
+        track.inserts = effects(m, &name, track_id, &mut native, external, report);
     }
     for (insert, track_id) in &insert_track {
         if let Some(track) = project.track_mut(track_id) {
@@ -690,16 +815,32 @@ fn build_mixer(
     native
 }
 
-/// An insert's effects that have a built-in counterpart, as slots, in FL's
-/// order; the rest are named in the report.
+/// An insert's effects as slots, in FL's order: FL's own as their built-in
+/// counterparts where there is one, other people's as themselves. The rest
+/// are named in the report.
 fn effects(
     m: &FlMixerTrack,
     name: &str,
+    track_id: &str,
     native: &mut Vec<NativeEffect>,
+    external: &mut Vec<ExternalPlugin>,
     report: &mut FlBuildReport,
 ) -> Vec<crate::track::PluginSlot> {
     let mut slots = Vec::new();
     for slot in &m.slots {
+        let wet = (slot.mix as f32 / 12_800.0).clamp(0.0, 1.0);
+        let wrapped = (slot.plugin == WRAPPER)
+            .then(|| read_wrapper(&slot.data))
+            .flatten();
+        if let Some(plugin) = wrapped {
+            let place = format!("{name}: {}", slot.label());
+            let enabled = slot.enabled && m.effects_enabled;
+            let (slot, plugin) =
+                external_slot(plugin, track_id, place, enabled, wet, false, report);
+            slots.push(slot);
+            external.push(plugin);
+            continue;
+        }
         let Some((plugin_id, params)) = native_counterpart(slot) else {
             report
                 .effects_left_behind
@@ -713,7 +854,7 @@ fn effects(
             enabled: slot.enabled && m.effects_enabled,
             state: None,
             sidechain_source: None,
-            wet: (slot.mix as f32 / 12_800.0).clamp(0.0, 1.0),
+            wet,
         });
         native.push(NativeEffect {
             slot_id,
@@ -809,6 +950,7 @@ mod tests {
         plugin: Option<&str>,
     ) -> FlChannel {
         FlChannel {
+            plugin_data: Vec::new(),
             name: name.into(),
             sample_path: sample.map(String::from),
             plugin_name: plugin.map(String::from),
@@ -1412,5 +1554,75 @@ mod tests {
         // Band 7: off in FL.
         assert_eq!(value(24), 0.0);
         assert_eq!(value(28), -3.0, "the main level");
+    }
+
+    #[test]
+    fn other_people_s_plug_ins_come_with_their_settings() {
+        use crate::fl_import::{test_vst3_wrapper, FlMixerSlot};
+        let mut fl = mixer_song();
+        // The screech plays Serum2, with its patch; the 808 is a VST2
+        // instrument now, whose patch cannot come.
+        let screech = &mut fl.channels[0];
+        screech.plugin_data = test_vst3_wrapper("Serum2", true, b"the patch");
+        let vst2 = crate::fl_import::test_wrapper(&[
+            (50, &4u32.to_le_bytes()),
+            (54, b"Serum"),
+            (55, b"C:\\VstPlugins\\Serum_x64.dll"),
+        ]);
+        fl.channels[2] = channel("808", FlChannelKind::Instrument, None, Some(WRAPPER));
+        fl.channels[2].plugin_data = vst2;
+        fl.channels[2].settings.mixer_insert = 3;
+        // The group has Pro-Q 4 with its settings, at half mix.
+        fl.mixer[4].slots = vec![FlMixerSlot {
+            index: 2,
+            plugin: WRAPPER.into(),
+            name: None,
+            enabled: true,
+            mix: 6_400,
+            data: test_vst3_wrapper("FabFilter Pro-Q 4", false, b"bands"),
+        }];
+        let built = build_project(&fl, "Plug-ins", &here);
+        let p = &built.project;
+
+        let serum = p.track("insert-001").unwrap();
+        assert!(!serum.muted, "its sound comes with it");
+        assert_eq!(serum.inserts[0].plugin_id, "vst3:serum2");
+        assert!(serum.inserts[0].enabled);
+        let serum_plugin = built
+            .external_plugins
+            .iter()
+            .find(|e| e.slot_id == serum.inserts[0].id)
+            .unwrap();
+        assert!(serum_plugin.plays_track);
+        assert_eq!(serum_plugin.plugin.state, b"the patch");
+
+        let eight = p.track("insert-002").unwrap();
+        assert!(
+            eight.muted,
+            "a VST2's patch cannot come, so it would play the wrong sound"
+        );
+        assert_eq!(
+            eight.inserts[0].plugin_id, "vst3:serum",
+            "looked for as its VST3"
+        );
+        assert!(!eight.inserts[0].enabled);
+        assert_eq!(
+            built.report.plugins_without_settings,
+            vec!["808 (VST2 in FL)".to_string()]
+        );
+        assert!(built.report.plugins_left_behind.is_empty());
+
+        let group = p.tracks.iter().find(|t| t.name == "Group").unwrap();
+        assert_eq!(group.inserts[0].plugin_id, "vst3:fabfilter-pro-q-4");
+        assert_eq!(group.inserts[0].wet, 0.5);
+        let pro_q = built
+            .external_plugins
+            .iter()
+            .find(|e| e.slot_id == group.inserts[0].id)
+            .unwrap();
+        assert_eq!(pro_q.place, "Group: FabFilter Pro-Q 4");
+        assert_eq!(pro_q.candidates, vec!["vst3:fabfilter-pro-q-4".to_string()]);
+        assert!(!pro_q.plays_track);
+        assert!(built.report.effects_left_behind.is_empty());
     }
 }

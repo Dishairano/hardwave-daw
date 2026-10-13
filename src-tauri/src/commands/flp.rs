@@ -11,10 +11,12 @@
 //! channel's level, pan, pitch, direction and stretch, the playlist's
 //! track names and switches, and the mixer: every insert the sound passes
 //! through as a track of its own, with its fader, pan, switches and
-//! routes, and FL's Parametric EQ 2 as the built-in EQ. It opens as a song
-//! of its own, like a .hwp. What cannot come across yet is what other
-//! plug-ins hold: FL stores a plug-in's state as its own blob. The report
-//! says what was left behind rather than letting it be found later.
+//! routes, FL's Parametric EQ 2 as the built-in EQ, and other people's
+//! VST3 instruments and effects with their settings. It opens as a song
+//! of its own, like a .hwp. What cannot come across is what FL's own
+//! instruments and most of its effects hold, and a VST2's or CLAP's
+//! settings. The report says what was left behind rather than letting it
+//! be found later.
 
 use hardwave_project::clip::ClipContent;
 use serde::Serialize;
@@ -138,6 +140,19 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
         }
     }
 
+    // Other people's plug-ins: found among the ones on this computer by the
+    // ids the build expects, and given FL's settings. One that is not here
+    // keeps its slot and settings, so it loads once it is installed (the
+    // missing plug-ins banner says so); a track it played stays muted.
+    let available: std::collections::HashSet<String> = {
+        use tauri::Manager;
+        let state = app.state::<crate::AppState>();
+        let engine = state.engine.lock();
+        let scanner = engine.plugin_scanner.lock();
+        scanner.plugins().iter().map(|p| p.id.clone()).collect()
+    };
+    let not_here = carry_plugins(&mut project, &built.external_plugins, &available);
+
     let fixups = built.audio_fixups;
     crate::commands::project::open_project_blocking(app, project, None, move |song, pool| {
         apply_fixups(song, pool, &fixups)
@@ -173,6 +188,28 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
             "{} sampler sample{} could not be read",
             samplers_failed.len(),
             if samplers_failed.len() == 1 { "" } else { "s" }
+        ));
+    }
+    if !not_here.is_empty() {
+        let names: Vec<String> = not_here
+            .iter()
+            .map(|(name, n)| {
+                if *n == 1 {
+                    name.clone()
+                } else {
+                    format!("{name} ({n}x)")
+                }
+            })
+            .collect();
+        left_behind.push(format!(
+            "plug-ins that are not on this computer: {}. Their slots and settings are in the song and load once they are installed",
+            list_of(&names)
+        ));
+    }
+    if !r.plugins_without_settings.is_empty() {
+        left_behind.push(format!(
+            "the settings of {}: switched off until you set them",
+            list_of(&r.plugins_without_settings)
         ));
     }
     if !r.plugins_left_behind.is_empty() {
@@ -240,6 +277,47 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
         samples: r.missing_samples,
         left_behind,
     })
+}
+
+/// Put other people's plug-ins from FL in their slots: the id they have on
+/// this computer, and FL's settings. Returns the ones not here, by name, with
+/// how many slots each. A track one of those plays stays muted.
+fn carry_plugins(
+    project: &mut hardwave_project::Project,
+    plugins: &[hardwave_project::fl_build::ExternalPlugin],
+    available: &std::collections::HashSet<String>,
+) -> std::collections::BTreeMap<String, usize> {
+    let mut not_here: std::collections::BTreeMap<String, usize> = Default::default();
+    for external in plugins {
+        let found = external
+            .candidates
+            .iter()
+            .find(|id| available.contains(*id))
+            .cloned();
+        if let Some(track) = project.track_mut(&external.track_id) {
+            match &found {
+                Some(id) => {
+                    if let Some(slot) = track.inserts.iter_mut().find(|s| s.id == external.slot_id)
+                    {
+                        slot.plugin_id = id.clone();
+                    }
+                }
+                None if external.plays_track => track.muted = true,
+                None => {}
+            }
+        }
+        if found.is_none() {
+            *not_here.entry(external.plugin.name.clone()).or_default() += 1;
+        }
+        if !external.plugin.state.is_empty() {
+            project.set_plugin_state(
+                external.slot_id.clone(),
+                "vst3",
+                external.plugin.state.clone(),
+            );
+        }
+    }
+    not_here
 }
 
 /// The state of a built-in effect set up as an FL one was.
@@ -498,6 +576,80 @@ mod tests {
         assert!((eq.get_parameter_value(13) - 632.46).abs() < 0.01);
         assert_eq!(eq.get_parameter_value(4), 0.0, "band 2 at 0 dB stays off");
         assert_eq!(eq.get_parameter_value(28), -3.0);
+    }
+
+    #[test]
+    fn plug_ins_on_this_computer_get_their_settings_and_the_rest_are_named() {
+        use hardwave_project::fl_build::ExternalPlugin;
+        use hardwave_project::fl_import::{FlPluginFormat, FlWrappedPlugin};
+        use hardwave_project::track::PluginSlot;
+
+        let mut project = hardwave_project::Project::default();
+        let plugin = |name: &str, state: &[u8]| FlWrappedPlugin {
+            name: name.into(),
+            vendor: String::new(),
+            format: FlPluginFormat::Vst3,
+            instrument: false,
+            file: String::new(),
+            clap_id: None,
+            state: state.to_vec(),
+        };
+        let mut plugins = Vec::new();
+        for (track, slot, name, candidates, plays) in [
+            ("insert-001", "s1", "Serum2", vec!["vst3:serum2"], true),
+            ("insert-002", "s2", "Sylenth1", vec!["vst3:sylenth1"], true),
+            (
+                "insert-003",
+                "s3",
+                "FabFilter Pro-Q 4",
+                vec!["vst3:x", "vst3:pro-q-4"],
+                false,
+            ),
+            ("insert-003", "s4", "OTT", vec!["vst3:ott"], false),
+        ] {
+            project.track_mut(track).unwrap().inserts.push(PluginSlot {
+                id: slot.into(),
+                plugin_id: candidates[0].into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 1.0,
+            });
+            plugins.push(ExternalPlugin {
+                track_id: track.into(),
+                slot_id: slot.into(),
+                place: name.into(),
+                plugin: plugin(name, name.as_bytes()),
+                candidates: candidates.into_iter().map(String::from).collect(),
+                plays_track: plays,
+            });
+        }
+        let available: std::collections::HashSet<String> = ["vst3:serum2", "vst3:pro-q-4"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let not_here = carry_plugins(&mut project, &plugins, &available);
+
+        assert!(!project.track("insert-001").unwrap().muted);
+        assert!(
+            project.track("insert-002").unwrap().muted,
+            "its synth is not here"
+        );
+        let effects = &project.track("insert-003").unwrap().inserts;
+        assert_eq!(
+            effects[0].plugin_id, "vst3:pro-q-4",
+            "found by its second id"
+        );
+        assert_eq!(
+            effects[1].plugin_id, "vst3:ott",
+            "kept, to load once installed"
+        );
+        assert_eq!(project.plugin_state("s1").unwrap().chunk, b"Serum2");
+        assert_eq!(project.plugin_state("s2").unwrap().chunk, b"Sylenth1");
+        assert_eq!(
+            not_here.into_iter().collect::<Vec<_>>(),
+            vec![("OTT".to_string(), 1), ("Sylenth1".to_string(), 1)]
+        );
     }
 
     #[test]

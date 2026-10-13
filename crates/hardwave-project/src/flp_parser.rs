@@ -394,6 +394,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 }
                 if project.channels.len() <= index {
                     project.channels.resize_with(index + 1, || FlChannel {
+                        plugin_data: Vec::new(),
                         name: String::new(),
                         sample_path: None,
                         plugin_name: None,
@@ -438,6 +439,11 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
             | CH_PARAMETERS | CH_LEVELS => {
                 if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
                     read_channel_setting(&mut channel.settings, event.id, event.data, &scale_f);
+                }
+            }
+            PLUGIN_DATA => {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    channel.plugin_data = event.data.to_vec();
                 }
             }
             ARRANGEMENT_NEW => current_channel = None,

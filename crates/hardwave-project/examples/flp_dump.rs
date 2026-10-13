@@ -157,6 +157,25 @@ fn main() {
         println!("   effects left: {}", r.effects_left_behind.len());
         println!("   silent inserts: {:?}", r.silent_inserts);
         println!("   route levels left: {:?}", r.route_levels_left_behind);
+        println!("   without settings: {:?}", r.plugins_without_settings);
+        let carried: Vec<String> = built
+            .external_plugins
+            .iter()
+            .map(|e| {
+                format!(
+                    "{} [{:?}{}, {} bytes] -> {}",
+                    e.place,
+                    e.plugin.format,
+                    if e.plays_track { " instrument" } else { "" },
+                    e.plugin.state.len(),
+                    e.candidates.join(" | ")
+                )
+            })
+            .collect();
+        println!("   other people's plug-ins ({}):", carried.len());
+        for c in carried {
+            println!("     {c}");
+        }
         for track in &built.project.tracks {
             let audio: Vec<_> = track
                 .clips
