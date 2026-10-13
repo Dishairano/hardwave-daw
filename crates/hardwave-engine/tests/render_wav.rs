@@ -86,6 +86,7 @@ fn stretch_preserves_pitch() {
                     // Legacy shape on purpose: empty means the engine falls back
                     // to reading source_path as the file location.
                     source_file: String::new(),
+                    treatment: Default::default(),
                 };
                 t.clips.push(ClipPlacement {
                     content: ClipContent::Audio(clip),
@@ -276,6 +277,7 @@ fn pitch_shift_preserves_duration() {
                         // Legacy shape on purpose: empty means the engine falls back
                         // to reading source_path as the file location.
                         source_file: String::new(),
+                        treatment: Default::default(),
                     }),
                     track_id: track_id.clone(),
                     position_ticks: 0,
@@ -367,6 +369,7 @@ fn stretch_bake_is_explicit_and_off_the_audio_thread() {
                     // Legacy shape on purpose: empty means the engine falls back
                     // to reading source_path as the file location.
                     source_file: String::new(),
+                    treatment: Default::default(),
                 }),
                 track_id: track_id.clone(),
                 position_ticks: 0,
@@ -439,6 +442,7 @@ fn async_stretch_bake_lands_and_does_not_stampede() {
                     // Legacy shape on purpose: empty means the engine falls back
                     // to reading source_path as the file location.
                     source_file: String::new(),
+                    treatment: Default::default(),
                 }),
                 track_id: track_id.clone(),
                 position_ticks: 0,
@@ -579,6 +583,7 @@ fn a_recorded_take_comes_back_in_the_bounce_at_its_position() {
                     fade_in_curve: FadeCurve::Linear,
                     fade_out_curve: FadeCurve::Linear,
                     source_file: String::new(),
+                    treatment: Default::default(),
                 }),
                 track_id: track_id.clone(),
                 position_ticks: one_second_of_ticks,
@@ -655,6 +660,7 @@ fn render_rate_does_not_detune_audio_clips() {
                         // Legacy shape on purpose: empty means the engine falls back
                         // to reading source_path as the file location.
                         source_file: String::new(),
+                        treatment: Default::default(),
                     }),
                     track_id: track_id.clone(),
                     position_ticks: 0,

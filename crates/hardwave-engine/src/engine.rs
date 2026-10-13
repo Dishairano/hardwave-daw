@@ -51,7 +51,9 @@ impl Drop for InflightRelease<'_> {
 /// warp markers define their own piecewise source map and take precedence.
 /// Returns the effective (stretch, semitones) when a bake applies.
 fn bake_params(audio_clip: &hardwave_project::clip::AudioClip) -> Option<(f64, f64)> {
-    if !audio_clip.warp_markers.is_empty() {
+    // A warped clip follows its markers, and a resampled one plays like a
+    // tape: neither is baked.
+    if !audio_clip.warp_markers.is_empty() || audio_clip.treatment.resample {
         return None;
     }
     let stretch = if audio_clip.stretch_ratio <= 0.01 {
@@ -3019,10 +3021,35 @@ impl EngineCallback {
                             tempo_map.tick_to_samples(clip.position_ticks, sample_rate);
                         let timeline_end = tempo_map
                             .tick_to_samples(clip.position_ticks + clip.length_ticks, sample_rate);
+                        // Normalising and taking the DC offset off need the
+                        // sample's levels, worked out once in the pool.
+                        let treatment = audio_clip.treatment;
+                        let levels = (treatment.normalize || treatment.remove_dc)
+                            .then(|| self.audio_pool.level_stats(&audio_clip.source_path))
+                            .flatten();
+                        let normalise = match (treatment.normalize, levels) {
+                            (true, Some(l)) => {
+                                let peak = if treatment.remove_dc {
+                                    l.peak_without_dc
+                                } else {
+                                    l.peak
+                                };
+                                if peak > 1e-6 {
+                                    1.0 / peak
+                                } else {
+                                    1.0
+                                }
+                            }
+                            _ => 1.0,
+                        };
+                        let treat = crate::track_node::ClipTreat::new(
+                            &treatment,
+                            levels.map(|l| l.dc).unwrap_or([0.0; 2]),
+                        );
                         let gain = if audio_clip.gain_db <= -100.0 {
                             0.0
                         } else {
-                            10.0_f64.powf(audio_clip.gain_db / 20.0) as f32
+                            10.0_f64.powf(audio_clip.gain_db / 20.0) as f32 * normalise
                         };
                         let fade_in_samples =
                             tempo_map.tick_to_samples(audio_clip.fade_in_ticks, sample_rate);
@@ -3047,7 +3074,10 @@ impl EngineCallback {
                         // their own piecewise source map and take precedence below.
                         // The track-level pitch/fine-tune offset stays a resample, so
                         // it remains a varispeed control.
+                        // Resample is the varispeed path on purpose: like a
+                        // tape, a longer clip plays lower.
                         let needs_bake = audio_clip.warp_markers.is_empty()
+                            && !treatment.resample
                             && ((stretch - 1.0).abs() > 1e-4
                                 || audio_clip.pitch_semitones.abs() > 1e-4);
                         let baked = if needs_bake {
@@ -3131,6 +3161,7 @@ impl EngineCallback {
                             reversed: audio_clip.reversed,
                             source_step,
                             warp,
+                            treat,
                         })
                     }
                     _ => None,
@@ -4105,6 +4136,7 @@ mod offline_insert_tests {
                     // Legacy shape on purpose: empty means the engine falls back
                     // to reading source_path as the file location.
                     source_file: String::new(),
+                    treatment: Default::default(),
                 }),
                 track_id: id.clone(),
                 position_ticks: 0,
@@ -4122,6 +4154,84 @@ mod offline_insert_tests {
         }
         drop(project);
         engine
+    }
+
+    /// The loudest sample of the silenced sine's song rendered dry (no
+    /// plug-in factory), after `change` is done to its clip.
+    fn dry_peak(change: impl Fn(&mut AudioClip)) -> f32 {
+        let engine = build_engine_with_silenced_sine();
+        {
+            let mut project = engine.project.lock();
+            for track in &mut project.tracks {
+                for placement in &mut track.clips {
+                    if let ClipContent::Audio(clip) = &mut placement.content {
+                        change(clip);
+                    }
+                }
+                track.inserts.clear();
+            }
+        }
+        let mut peak = 0.0f32;
+        engine
+            .render_offline_with(
+                48_000,
+                24_000,
+                0,
+                None,
+                |_| {},
+                |block| {
+                    for &s in block {
+                        peak = peak.max(s.abs());
+                    }
+                    true
+                },
+            )
+            .expect("it renders");
+        peak
+    }
+    #[test]
+    fn a_normalised_clip_plays_its_peak_at_full_scale() {
+        // The sine peaks at 0.5: normalised, it plays twice as loud.
+        let plain = dry_peak(|_| {});
+        let normalised = dry_peak(|c| c.treatment.normalize = true);
+        assert!(plain > 0.1);
+        assert!(
+            (normalised / plain - 2.0).abs() < 0.02,
+            "{plain} -> {normalised}"
+        );
+        // Turned down 6 dB first, it still comes up to the same place.
+        let quieter = dry_peak(|c| {
+            c.treatment.normalize = true;
+            c.gain_db = -6.0;
+        });
+        assert!((quieter / normalised - 0.501).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_resampled_clip_is_not_baked() {
+        let mut clip = AudioClip {
+            id: "c".into(),
+            name: "c".into(),
+            source_path: "s".into(),
+            source_hash: String::new(),
+            source_start: 0,
+            source_end: 10,
+            gain_db: 0.0,
+            fade_in_ticks: 0,
+            fade_out_ticks: 0,
+            muted: false,
+            reversed: false,
+            pitch_semitones: 0.0,
+            stretch_ratio: 2.0,
+            warp_markers: Vec::new(),
+            fade_in_curve: FadeCurve::Linear,
+            fade_out_curve: FadeCurve::Linear,
+            source_file: String::new(),
+            treatment: Default::default(),
+        };
+        assert_eq!(bake_params(&clip), Some((2.0, 0.0)), "stretched: baked");
+        clip.treatment.resample = true;
+        assert_eq!(bake_params(&clip), None, "like a tape: played at speed");
     }
 
     /// The CPU meter is only worth having if the number is real, so these
@@ -4209,6 +4319,7 @@ mod offline_insert_tests {
                         fade_in_curve: FadeCurve::Linear,
                         fade_out_curve: FadeCurve::Linear,
                         source_file: wav.to_string_lossy().into_owned(),
+                        treatment: Default::default(),
                     }),
                     track_id: track.clone(),
                     position_ticks: 0,
@@ -4295,6 +4406,7 @@ mod offline_insert_tests {
                     // Legacy shape on purpose: empty means the engine falls back
                     // to reading source_path as the file location.
                     source_file: String::new(),
+                    treatment: Default::default(),
                 }),
                 track_id: id.clone(),
                 position_ticks: 0,
@@ -4366,6 +4478,7 @@ mod offline_insert_tests {
                     // Legacy shape on purpose: empty means the engine falls back
                     // to reading source_path as the file location.
                     source_file: String::new(),
+                    treatment: Default::default(),
                 }),
                 track_id: id2.clone(),
                 position_ticks: 0,

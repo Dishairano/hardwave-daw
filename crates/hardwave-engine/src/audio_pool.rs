@@ -43,10 +43,50 @@ impl AudioBuffer {
     }
 }
 
+/// A buffer's levels, for normalising it and taking a DC offset off: each
+/// channel's average, and the loudest peak with and without that average.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LevelStats {
+    pub peak: f32,
+    pub peak_without_dc: f32,
+    pub dc: [f32; 2],
+}
+
+impl AudioBuffer {
+    /// Its levels. Reads the whole buffer twice; the pool keeps the answer.
+    pub fn level_stats(&self) -> LevelStats {
+        let mut dc = [0.0f32; 2];
+        for (c, ch) in self.channels.iter().take(2).enumerate() {
+            if !ch.is_empty() {
+                dc[c] = (ch.iter().map(|v| *v as f64).sum::<f64>() / ch.len() as f64) as f32;
+            }
+        }
+        if self.channels.len() == 1 {
+            dc[1] = dc[0];
+        }
+        let (mut peak, mut peak_without_dc) = (0.0f32, 0.0f32);
+        for (c, ch) in self.channels.iter().take(2).enumerate() {
+            for v in ch {
+                peak = peak.max(v.abs());
+                peak_without_dc = peak_without_dc.max((v - dc[c]).abs());
+            }
+        }
+        LevelStats {
+            peak,
+            peak_without_dc,
+            dc,
+        }
+    }
+}
+
 struct PoolInner {
     buffers: HashMap<String, Arc<AudioBuffer>>,
     order: VecDeque<String>,
     bytes_used: u64,
+    /// Each buffer's levels, worked out once, with the buffer they were
+    /// worked out from (by address): a buffer replaced under the same id
+    /// gets its own.
+    levels: HashMap<String, (usize, LevelStats)>,
 }
 
 impl PoolInner {
@@ -55,6 +95,7 @@ impl PoolInner {
             buffers: HashMap::new(),
             order: VecDeque::new(),
             bytes_used: 0,
+            levels: HashMap::new(),
         }
     }
 }
@@ -125,9 +166,28 @@ impl AudioPool {
         self.inner.read().buffers.get(id).cloned()
     }
 
+    /// A buffer's levels (`LevelStats`), worked out the first time they are
+    /// asked for. Not for the audio thread: the first ask reads the buffer.
+    pub fn level_stats(&self, id: &str) -> Option<LevelStats> {
+        let buffer = self.get(id)?;
+        let address = Arc::as_ptr(&buffer) as usize;
+        if let Some((at, stats)) = self.inner.read().levels.get(id) {
+            if *at == address {
+                return Some(*stats);
+            }
+        }
+        let stats = buffer.level_stats();
+        self.inner
+            .write()
+            .levels
+            .insert(id.to_string(), (address, stats));
+        Some(stats)
+    }
+
     /// Remove a buffer by ID.
     pub fn remove(&self, id: &str) {
         let mut inner = self.inner.write();
+        inner.levels.remove(id);
         if let Some(old) = inner.buffers.remove(id) {
             inner.bytes_used = inner.bytes_used.saturating_sub(old.bytes());
         }
@@ -331,5 +391,35 @@ mod tests {
         pool.insert("a".into(), buf(1));
         assert!(pool.contains("a"));
         assert_eq!(pool.stats().entry_count, 1);
+    }
+
+    #[test]
+    fn levels_are_worked_out_once_per_buffer() {
+        let pool = AudioPool::new();
+        pool.insert(
+            "a".into(),
+            AudioBuffer {
+                channels: vec![vec![0.5, 0.7, 0.3], vec![-0.2, -0.2, -0.2]],
+                sample_rate: 48_000,
+                num_frames: 3,
+            },
+        );
+        let s = pool.level_stats("a").unwrap();
+        assert!((s.dc[0] - 0.5).abs() < 1e-6 && (s.dc[1] + 0.2).abs() < 1e-6);
+        assert!((s.peak - 0.7).abs() < 1e-6);
+        assert!((s.peak_without_dc - 0.2).abs() < 1e-6);
+        // Replaced under the same id: its own levels, not the old ones.
+        pool.insert(
+            "a".into(),
+            AudioBuffer {
+                channels: vec![vec![0.1, -0.1]],
+                sample_rate: 48_000,
+                num_frames: 2,
+            },
+        );
+        let s = pool.level_stats("a").unwrap();
+        assert_eq!(s.dc, [0.0, 0.0]);
+        assert!((s.peak - 0.1).abs() < 1e-6);
+        assert!(pool.level_stats("missing").is_none());
     }
 }

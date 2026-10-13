@@ -257,6 +257,46 @@ pub struct ClipRegion {
     /// timing anchors win over pitch/stretch knobs (resample warp
     /// repitches per segment, varispeed-style — v1 semantics).
     pub warp: Vec<WarpSegment>,
+    /// The clip's pan, polarity, stereo swap and DC offset, worked out at
+    /// rebuild so the audio thread only multiplies.
+    pub treat: ClipTreat,
+}
+
+/// Per-sample treatment of a clip: each channel's average to take off, the
+/// channels swapped or not, then a gain per side (pan and polarity).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipTreat {
+    pub dc: [f32; 2],
+    pub swap: bool,
+    pub gain_l: f32,
+    pub gain_r: f32,
+}
+
+impl Default for ClipTreat {
+    fn default() -> Self {
+        Self {
+            dc: [0.0; 2],
+            swap: false,
+            gain_l: 1.0,
+            gain_r: 1.0,
+        }
+    }
+}
+
+impl ClipTreat {
+    /// From a clip's treatment, with its sample's average per channel when
+    /// it is to be taken off. Pan is a balance: the far side comes down and
+    /// the centre stays at full level, as a stereo sample is panned in FL.
+    pub fn new(t: &hardwave_project::clip::SampleTreatment, dc: [f32; 2]) -> Self {
+        let pan = t.pan.clamp(-1.0, 1.0) as f32;
+        let polarity = if t.polarity_inverted { -1.0 } else { 1.0 };
+        Self {
+            dc: if t.remove_dc { dc } else { [0.0; 2] },
+            swap: t.swap_stereo,
+            gain_l: (1.0 - pan).min(1.0) * polarity,
+            gain_r: (1.0 + pan).min(1.0) * polarity,
+        }
+    }
 }
 
 /// One precomputed warp segment. For into-clip timeline samples at or
@@ -1186,19 +1226,21 @@ impl AudioNode for TrackNode {
                 }
 
                 let scaled_gain = clip.gain * env;
+                let t = &clip.treat;
                 let l0 = audio_buf.sample(0, idx0);
                 let l1 = audio_buf.sample(0, idx1);
-                let l = (l0 + (l1 - l0) * frac) * scaled_gain;
+                let l = l0 + (l1 - l0) * frac - t.dc[0];
                 let r = if num_channels > 1 {
                     let r0 = audio_buf.sample(1, idx0);
                     let r1 = audio_buf.sample(1, idx1);
-                    (r0 + (r1 - r0) * frac) * scaled_gain
+                    r0 + (r1 - r0) * frac - t.dc[1]
                 } else {
                     l
                 };
+                let (l, r) = if t.swap { (r, l) } else { (l, r) };
 
-                out_l[frame] += l;
-                out_r[frame] += r;
+                out_l[frame] += l * scaled_gain * t.gain_l;
+                out_r[frame] += r * scaled_gain * t.gain_r;
             }
         }
 
@@ -1550,6 +1592,106 @@ mod tests {
         // loops rather than playing once.
         let later = block(&mut node, 96_000 + 720, 256);
         assert!(later.iter().any(|s| *s != 0.0), "the loop should repeat");
+    }
+
+    /// A clip of a steady stereo signal (left 0.5, right 0.1) treated as
+    /// `treat`, one block of it, as (left, right) at the block's middle.
+    fn treated(treat: ClipTreat) -> (f32, f32) {
+        let pool = AudioPool::new();
+        pool.insert(
+            "s".to_string(),
+            crate::audio_pool::AudioBuffer {
+                channels: vec![vec![0.5; 4800], vec![0.1; 4800]],
+                sample_rate: 48_000,
+                num_frames: 4800,
+            },
+        );
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), pool, meter);
+        node.set_clips(vec![ClipRegion {
+            source_id: "s".into(),
+            timeline_start: 0,
+            timeline_end: 4800,
+            source_offset: 0,
+            gain: 1.0,
+            muted: false,
+            fade_in_samples: 0,
+            fade_out_samples: 0,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            reversed: false,
+            source_step: 1.0,
+            warp: Vec::new(),
+            treat,
+        }]);
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            position_ticks: 0,
+            buffer_size: 256,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: 0,
+            playing: true,
+        };
+        let mut outputs = vec![vec![0.0f32; 256]; 4];
+        node.process(&[], &mut outputs, &[], &mut Vec::new(), &ctx);
+        (outputs[0][128], outputs[1][128])
+    }
+
+    #[test]
+    fn a_clip_s_treatment_is_heard() {
+        use hardwave_project::clip::SampleTreatment;
+        let (l, r) = treated(ClipTreat::default());
+        assert!(l > 0.0 && r > 0.0);
+        let ratio = l / r;
+        assert!(
+            (ratio - 5.0).abs() < 1e-3,
+            "as recorded, left is five times right"
+        );
+
+        let swapped = treated(ClipTreat::new(
+            &SampleTreatment {
+                swap_stereo: true,
+                ..Default::default()
+            },
+            [0.0; 2],
+        ));
+        assert!((swapped.0 - r).abs() < 1e-6 && (swapped.1 - l).abs() < 1e-6);
+
+        let flipped = treated(ClipTreat::new(
+            &SampleTreatment {
+                polarity_inverted: true,
+                ..Default::default()
+            },
+            [0.0; 2],
+        ));
+        assert!((flipped.0 + l).abs() < 1e-6 && (flipped.1 + r).abs() < 1e-6);
+
+        let left = treated(ClipTreat::new(
+            &SampleTreatment {
+                pan: -1.0,
+                ..Default::default()
+            },
+            [0.0; 2],
+        ));
+        assert!(
+            (left.0 - l).abs() < 1e-6,
+            "panned left, the left side stays"
+        );
+        assert_eq!(left.1, 0.0, "and the right is gone");
+
+        // A steady signal is all DC: with it taken off, nothing is left.
+        let no_dc = treated(ClipTreat::new(
+            &SampleTreatment {
+                remove_dc: true,
+                ..Default::default()
+            },
+            [0.5, 0.1],
+        ));
+        assert!(no_dc.0.abs() < 1e-6 && no_dc.1.abs() < 1e-6);
+        // Asked for without a DC known, it takes nothing off.
+        let off = ClipTreat::new(&SampleTreatment::default(), [0.5, 0.1]);
+        assert_eq!(off.dc, [0.0; 2]);
     }
 
     #[test]

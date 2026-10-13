@@ -671,6 +671,7 @@ pub fn build_project(
                 fade_out_curve: FadeCurve::default(),
                 warp_markers: Vec::new(),
                 source_file: file,
+                treatment: Default::default(),
             };
             let stretch = settings.stretch;
             audio_fixups.push(AudioFixup {
@@ -1644,6 +1645,7 @@ mod tests {
             fade_out_curve: FadeCurve::default(),
             warp_markers: Vec::new(),
             source_file: String::new(),
+            treatment: Default::default(),
         }
     }
 

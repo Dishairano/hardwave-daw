@@ -212,6 +212,7 @@ mod comp_tests {
                 fade_in_curve: Default::default(),
                 fade_out_curve: Default::default(),
                 source_file: format!("/takes/{source}"),
+                treatment: Default::default(),
             }),
             track_id: "t1".to_string(),
             position_ticks: position,

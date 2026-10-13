@@ -559,6 +559,7 @@ mod untrusted_projects {
                 fade_in_curve: Default::default(),
                 fade_out_curve: Default::default(),
                 source_file: file.into(),
+                treatment: Default::default(),
             }),
             track_id: "t".into(),
             position_ticks: 0,

@@ -605,6 +605,7 @@ mod tests {
                 fade_in_curve: Default::default(),
                 fade_out_curve: Default::default(),
                 source_file: file.into(),
+                treatment: Default::default(),
             }),
             track_id: id.clone(),
             position_ticks: 0,

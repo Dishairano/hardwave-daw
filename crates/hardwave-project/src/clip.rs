@@ -68,11 +68,34 @@ pub struct AudioClip {
     /// existed, which the engine falls back to handling by treating
     /// `source_path` as a path.
     ///
-    /// MUST STAY LAST, like `Project::timeline_state`: .hwp is MessagePack
-    /// written by `rmp_serde::to_vec`, which encodes a struct positionally, so
-    /// a field inserted anywhere else shifts every field after it.
+    /// Fields added later come after this one, like `Project::timeline_state`:
+    /// .hwp is MessagePack written by `rmp_serde::to_vec`, which encodes a
+    /// struct positionally, so a field inserted before an older one shifts
+    /// every field after it.
     #[serde(default)]
     pub source_file: String,
+    /// What is done to the sample as it plays: its pan, polarity, stereo
+    /// swap, normalising, DC offset and whether it plays like a tape. FL keeps
+    /// these per channel; here they belong to the clip.
+    #[serde(default)]
+    pub treatment: SampleTreatment,
+}
+
+/// What is done to a clip's sample as it plays, on top of its gain, pitch,
+/// stretch and fades. All off is the sample as recorded.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct SampleTreatment {
+    /// -1 is left, 1 right.
+    pub pan: f64,
+    pub polarity_inverted: bool,
+    pub swap_stereo: bool,
+    /// Brought up so its loudest peak reaches full scale.
+    pub normalize: bool,
+    /// Each channel's average taken off, so it sits on zero.
+    pub remove_dc: bool,
+    /// Speed and pitch move together, like a tape: a longer clip plays
+    /// lower. Off, length and pitch are set apart.
+    pub resample: bool,
 }
 
 /// One warp anchor: timeline tick ↔ source sample.

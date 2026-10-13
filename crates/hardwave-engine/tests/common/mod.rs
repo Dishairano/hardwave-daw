@@ -62,6 +62,7 @@ pub fn make_audio_clip(source_id: impl Into<String>, num_frames: u64) -> AudioCl
         // Legacy shape on purpose: empty means the engine falls back
         // to reading source_path as the file location.
         source_file: String::new(),
+        treatment: Default::default(),
     }
 }
 
