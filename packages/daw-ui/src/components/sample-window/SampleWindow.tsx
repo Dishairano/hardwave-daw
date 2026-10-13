@@ -147,6 +147,9 @@ function SampleWindowFor({ trackId, clipId }: { trackId: string; clipId: string 
     return invokeOrToast('set_sample_settings', { trackId, clipId, settings, snapshot }, { message: 'Changing the sample failed', retry: false })
   }
   const change = (patch: Partial<Values>, done: boolean, label: string) => {
+    // A click on a knob that did not turn it is not a change.
+    const same = v !== null && Object.entries(patch).every(([k, val]) => v[k as keyof Values] === val)
+    if (done && !gesture.current && same) return
     setV((prev) => (prev ? { ...prev, ...patch } : prev))
     pending.current = { ...pending.current, ...settingsOf(patch) }
     const first = !gesture.current

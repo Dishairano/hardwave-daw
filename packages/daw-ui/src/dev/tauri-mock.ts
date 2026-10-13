@@ -122,10 +122,16 @@ const mockListeners = new Map<string, Array<(e: { event: string; id: number; pay
   for (const h of mockListeners.get(event) ?? []) h({ event, id: 0, payload })
 }
 
+/** Every command the app sent, for a spec to check what a control does:
+ *  `window.__hwMockCalls`. */
+const mockCalls: Array<{ cmd: string; args?: Record<string, unknown> }> = []
+;(window as unknown as { __hwMockCalls?: typeof mockCalls }).__hwMockCalls = mockCalls
+
 const mock: TauriInternals = {
   transformCallback: (cb) => cb,
   unregisterCallback: () => {},
   invoke: async (cmd, args) => {
+    mockCalls.push({ cmd, args })
     switch (cmd) {
       case 'get_file_peaks': {
         // A decaying shape, so the browser's thumbnails can be photographed.
@@ -484,8 +490,13 @@ const mock: TauriInternals = {
       // or the app never leaves the splash and all UI specs fail.
       case 'get_track_with_clips':
         return null
-      case 'get_tracks':
       case 'get_tracks_with_clips':
+        // The harness can seed a session for the app to reload after a
+        // change (window.__hwMockTracks); the plain app boots empty.
+        return (window as unknown as { __hwMockTracks?: unknown[] }).__hwMockTracks ?? []
+      case 'set_sample_settings':
+        return 1
+      case 'get_tracks':
       case 'find_missing_plugins':
       case 'scan_plugins':
       case 'get_plugins':

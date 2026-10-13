@@ -582,6 +582,8 @@ function Harness() {
           }),
         })
         useSampleWindowStore.getState().open(track.id, clip.id)
+        // A change reloads the session; give the mock this one to hand back.
+        ;(window as unknown as { __hwMockTracks?: unknown }).__hwMockTracks = useTrackStore.getState().tracks
       }
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
