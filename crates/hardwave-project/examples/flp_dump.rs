@@ -163,6 +163,21 @@ fn main() {
             r.sample_fades_left_behind.join(", ")
         );
         println!("   mixed lanes: {}", r.mixed_lanes.join(", "));
+        // Clips carrying their channel's pan, swap or polarity themselves
+        // (their lane's channels differ), and samples set to play as a tape.
+        let (mut own_pan, mut tapes) = (0, 0);
+        for t in &built.project.tracks {
+            for c in &t.clips {
+                if let hardwave_project::clip::ClipContent::Audio(a) = &c.content {
+                    let tr = a.treatment;
+                    own_pan += usize::from(tr.pan != 0.0 || tr.swap_stereo || tr.polarity_inverted);
+                }
+            }
+        }
+        for f in &built.audio_fixups {
+            tapes += usize::from(f.resample);
+        }
+        println!("   clips panned on their own: {own_pan}, tape clips: {tapes}");
         let (mut faded, mut own_volume) = (0, std::collections::BTreeSet::new());
         for c in &fl.playlist_clips {
             if let FlClipContent::AudioSample {

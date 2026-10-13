@@ -227,7 +227,7 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
     }
     if !r.mixed_lanes.is_empty() {
         left_behind.push(format!(
-            "pan, stereo swap and polarity on {}, whose samples are set differently from each other",
+            "the routing of {}, whose samples play into different mixer inserts; it plays into the one most of them use",
             list_of(&r.mixed_lanes)
         ));
     }

@@ -109,6 +109,24 @@ fn default_stretch_ratio() -> f64 {
     1.0
 }
 
+impl AudioClip {
+    /// How much longer than its file the sample lasts as it plays: the
+    /// stretch, and in resample also the pitch, as a tape played faster is
+    /// higher and shorter.
+    pub fn time_factor(&self) -> f64 {
+        let stretch = if self.stretch_ratio <= 0.01 {
+            1.0
+        } else {
+            self.stretch_ratio
+        };
+        if self.treatment.resample {
+            stretch / 2f64.powf(self.pitch_semitones / 12.0)
+        } else {
+            stretch
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MidiClipRef {
     pub id: ClipId,

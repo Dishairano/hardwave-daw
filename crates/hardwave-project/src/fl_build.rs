@@ -14,7 +14,7 @@
 //! FL's TIME knob, and where a reversed clip reads from all need the
 //! file's length. They are handed back as fix-ups to finish there.
 
-use crate::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve, MidiClipRef};
+use crate::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve, MidiClipRef, SampleTreatment};
 use crate::fl_import::{
     read_wrapper, FlChannel, FlChannelKind, FlClipContent, FlMixerTrack, FlPluginFormat, FlProject,
     FlRoute, FlWrappedPlugin, WRAPPER,
@@ -188,19 +188,13 @@ impl AudioFixup {
             Some(fit) if fit > 0.0 => fit / file_seconds,
             _ => 1.0,
         } * self.multiplier;
-        let (stretch, pitch) = if self.resample {
-            // A tape: raising the pitch plays it faster, and playing it
-            // longer lowers it.
-            (
-                length * 2f64.powf(-self.pitch_semitones / 12.0),
-                self.pitch_semitones - 12.0 * length.log2(),
-            )
-        } else {
-            (length, self.pitch_semitones)
-        };
-        clip.stretch_ratio = stretch.clamp(0.1, 10.0);
-        clip.pitch_semitones = pitch.clamp(-48.0, 48.0);
-        let stretch = clip.stretch_ratio;
+        // In FL's Resample mode the clip plays as a tape, as it does here
+        // with resample on: raising the pitch plays it faster, and playing
+        // it longer lowers it. The knobs keep FL's values.
+        clip.stretch_ratio = length.clamp(0.1, 10.0);
+        clip.pitch_semitones = self.pitch_semitones.clamp(-48.0, 48.0);
+        clip.treatment.resample = self.resample;
+        let stretch = clip.time_factor();
 
         // In the sample as played (stretched), in its frames.
         let played_frames = frames as f64 * stretch;
@@ -249,9 +243,9 @@ pub struct FlBuildReport {
     /// Channels using FL's quick fade knobs on their sample, which do not
     /// come across yet.
     pub sample_fades_left_behind: Vec<String>,
-    /// Playlist tracks holding samples from channels panned, swapped or
-    /// inverted differently, or routed to different inserts, which a track
-    /// here cannot be all at once.
+    /// Playlist tracks holding samples from channels routed to different
+    /// inserts, where a track here plays into one. (Channels panned,
+    /// swapped or inverted differently each keep theirs on their clips.)
     pub mixed_lanes: Vec<String>,
     /// FL mixer inserts that came across as tracks.
     pub mixer_inserts: usize,
@@ -562,8 +556,10 @@ pub fn build_project(
                 .push((track_id.clone(), gain));
         }
 
-        // Pan, stereo swap and polarity belong to the channel in FL and to
-        // the track here: they come across when the lane's channels agree.
+        // Pan, stereo swap and polarity belong to the channel in FL. When
+        // the lane's channels agree they go on the track, where a lane of
+        // one channel also gets that channel's pan automation. When they
+        // do not, each clip carries its own channel's, as FL plays it.
         let settings: Vec<_> = channels
             .iter()
             .filter_map(|c| fl.channels.get(*c as usize))
@@ -576,6 +572,7 @@ pub fn build_project(
             })
             .collect();
         let mut agree = true;
+        let mut per_clip = false;
         if let Some(first) = settings.first().copied() {
             if settings.iter().all(|s| *s == first) {
                 if let Some(track) = project.track_mut(&track_id) {
@@ -584,7 +581,7 @@ pub fn build_project(
                     track.phase_invert = first.2;
                 }
             } else {
-                agree = false;
+                per_clip = true;
             }
         }
         // The lane plays into the insert most of its clips' channels go to.
@@ -671,7 +668,16 @@ pub fn build_project(
                 fade_out_curve: FadeCurve::default(),
                 warp_markers: Vec::new(),
                 source_file: file,
-                treatment: Default::default(),
+                treatment: if per_clip {
+                    SampleTreatment {
+                        pan: fl_pan(settings.pan),
+                        swap_stereo: settings.swap_stereo,
+                        polarity_inverted: settings.polarity_inverted,
+                        ..Default::default()
+                    }
+                } else {
+                    SampleTreatment::default()
+                },
             };
             let stretch = settings.stretch;
             audio_fixups.push(AudioFixup {
@@ -1595,10 +1601,29 @@ mod tests {
     fn lanes_whose_channels_disagree_are_named() {
         let mut fl = lane_song();
         fl.channels[4].settings.pan = 0;
+        fl.channels[4].settings.polarity_inverted = true;
+        fl.channels[4].settings.mixer_insert = 3;
         fl.playlist_clips[3].track_index = 5;
         let built = build_project(&fl, "Industrial", &here);
         assert_eq!(built.report.mixed_lanes, vec!["Track 5".to_string()]);
-        assert_eq!(built.project.track("insert-003").unwrap().pan, 0.0);
+        // The track stays centred; each clip pans as its own channel.
+        let lane = built.project.track("insert-003").unwrap();
+        assert_eq!(lane.pan, 0.0);
+        assert!(!lane.phase_invert);
+        let treatments: Vec<_> = lane
+            .clips
+            .iter()
+            .filter_map(|c| match &c.content {
+                ClipContent::Audio(a) => Some((a.name.clone(), a.treatment)),
+                _ => None,
+            })
+            .collect();
+        assert!(treatments
+            .iter()
+            .any(|(_, t)| t.pan == 0.5 && !t.polarity_inverted));
+        assert!(treatments
+            .iter()
+            .any(|(_, t)| t.pan == -1.0 && t.polarity_inverted));
     }
 
     #[test]
@@ -1663,7 +1688,10 @@ mod tests {
         assert!((clip.stretch_ratio - 2.0).abs() < 1e-9);
         assert_eq!(clip.pitch_semitones, 1.0, "a stretch mode keeps the pitch");
 
-        // The same in Resample: a tape at half speed, an octave down.
+        assert!(!clip.treatment.resample);
+
+        // The same in Resample: a tape, twice as long and so an octave down,
+        // with FL's knobs as they were.
         let mut tape = blank_clip();
         AudioFixup {
             fit_seconds: Some(4.0),
@@ -1671,8 +1699,10 @@ mod tests {
             ..fixup()
         }
         .apply(&mut tape, 96_000, 48_000);
+        assert!(tape.treatment.resample);
         assert!((tape.stretch_ratio - 2.0).abs() < 1e-9);
-        assert!((tape.pitch_semitones + 12.0).abs() < 1e-9);
+        assert_eq!(tape.pitch_semitones, 0.0);
+        assert!((tape.time_factor() - 2.0).abs() < 1e-9);
 
         // Resample with only the pitch knob: up an octave plays twice as fast.
         let mut up = blank_clip();
@@ -1682,8 +1712,9 @@ mod tests {
             ..fixup()
         }
         .apply(&mut up, 96_000, 48_000);
-        assert!((up.stretch_ratio - 0.5).abs() < 1e-9);
+        assert_eq!(up.stretch_ratio, 1.0);
         assert!((up.pitch_semitones - 12.0).abs() < 1e-9);
+        assert!((up.time_factor() - 0.5).abs() < 1e-9);
     }
 
     #[test]
@@ -1699,6 +1730,22 @@ mod tests {
         .apply(&mut clip, 96_000, 48_000);
         assert_eq!(clip.source_start, 24_000);
         assert_eq!(clip.source_end, 48_000, "one second of timeline later");
+    }
+
+    #[test]
+    fn a_tape_s_offsets_count_in_the_file_at_its_speed() {
+        // Up an octave in Resample the sample plays twice as fast: a
+        // quarter second into it is half a second into the file.
+        let mut clip = blank_clip();
+        AudioFixup {
+            start_ms: 250.0,
+            resample: true,
+            pitch_semitones: 12.0,
+            ..fixup()
+        }
+        .apply(&mut clip, 96_000, 48_000);
+        assert_eq!(clip.source_start, 24_000);
+        assert_eq!(clip.source_end, 96_000, "the rest of the file");
     }
 
     #[test]
