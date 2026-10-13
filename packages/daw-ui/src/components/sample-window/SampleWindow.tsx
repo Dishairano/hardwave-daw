@@ -100,6 +100,9 @@ const MODE_HINT: Record<(typeof MODES)[number], string> = {
 const ms = (v: number) => (v <= 0 ? '0 ms' : v < 1000 ? `${v < 10 ? v.toFixed(1) : Math.round(v)} ms` : `${(v / 1000).toFixed(2)} s`)
 const db = (v: number) => (v <= -60 ? '-inf dB' : `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`)
 const NOT_YET = 'Not in this version yet'
+/** How much longer than its file the sample lasts: the stretch, and in
+ *  resample also the pitch (AudioClip::time_factor). */
+const timeFactor = (v: Values) => v.stretch / (v.resample ? Math.pow(2, v.pitch / 12) : 1)
 const FOR_SAMPLER = 'For sampler channels; comes with them'
 
 export function SampleWindow() {
@@ -167,7 +170,7 @@ function SampleWindowFor({ trackId, clipId }: { trackId: string; clipId: string 
   const seconds = clip.sourceFrames && clip.sourceRate ? clip.sourceFrames / clip.sourceRate : 0
   const beatSec = 60 / Math.max(1, bpm)
   const naturalBeats = seconds / beatSec
-  const beatsNow = naturalBeats * v.stretch
+  const beatsNow = naturalBeats * timeFactor(v)
   const fileName = (clip.sourceFile || clip.source_id).split(/[\\/]/).pop() || clip.name
   const output = track.outputBus ? tracks.find((t) => t.id === track.outputBus) : null
   const trackNumber = tracks.filter((t) => t.kind !== 'Master').findIndex((t) => t.id === track.id) + 1
@@ -279,7 +282,8 @@ function SampleWindowFor({ trackId, clipId }: { trackId: string; clipId: string 
                   onChange={(t, done) => {
                     // Whole quarter beats, as FL's TIME knob counts.
                     const beats = Math.max(0.25, Math.round(t * 64 * 4) / 4)
-                    change({ stretch: Math.max(0.25, Math.min(4, beats / naturalBeats)) }, done, 'Fit sample to time')
+                    const pitchSpeed = v.resample ? Math.pow(2, v.pitch / 12) : 1
+                    change({ stretch: Math.max(0.25, Math.min(4, (beats / naturalBeats) * pitchSpeed)) }, done, 'Fit sample to time')
                   }}
                   onReset={() => change({ stretch: 1 }, true, 'Fit sample to time')}
                 />
@@ -347,9 +351,9 @@ function SampleView({ clip, values, color, bpm, seconds }: { clip: ClipInfo; val
   const region = useMemo(() => {
     const rate = clip.sourceRate || 48_000
     const start = (clip.sourceStart ?? 0) / rate
-    const playsFor = (clip.length_ticks / PPQ) * (60 / Math.max(1, bpm)) / Math.max(0.01, values.stretch)
+    const playsFor = (clip.length_ticks / PPQ) * (60 / Math.max(1, bpm)) / Math.max(0.01, timeFactor(values))
     return { start, end: Math.min(seconds || start + playsFor, start + playsFor) }
-  }, [clip.sourceRate, clip.sourceStart, clip.length_ticks, bpm, values.stretch, seconds])
+  }, [clip.sourceRate, clip.sourceStart, clip.length_ticks, bpm, values, seconds])
 
   useLayoutEffect(() => {
     const c = cv.current
@@ -394,8 +398,8 @@ function SampleView({ clip, values, color, bpm, seconds }: { clip: ClipInfo; val
     g.fillRect(0, ruler, X(region.start), h - ruler)
     g.fillRect(X(region.end), ruler, w - X(region.end), h - ruler)
     g.strokeStyle = 'rgba(236,236,240,.7)'; g.lineWidth = 1.2
-    const fin = values.fadeInMs / 1000 / Math.max(0.01, values.stretch)
-    const fout = values.fadeOutMs / 1000 / Math.max(0.01, values.stretch)
+    const fin = values.fadeInMs / 1000 / Math.max(0.01, timeFactor(values))
+    const fout = values.fadeOutMs / 1000 / Math.max(0.01, timeFactor(values))
     if (fin > 0) { g.beginPath(); g.moveTo(X(region.start), h); g.lineTo(X(region.start + fin), ruler); g.stroke() }
     if (fout > 0) { g.beginPath(); g.moveTo(X(region.end - fout), ruler); g.lineTo(X(region.end), h); g.stroke() }
     g.lineWidth = 1
@@ -426,7 +430,7 @@ function SampleView({ clip, values, color, bpm, seconds }: { clip: ClipInfo; val
       const a = Math.max(Math.abs(peaks[i][0]), Math.abs(peaks[i][1])) * (oh / 2 - 5)
       og.fillRect((i / n) * ow, oh / 2 - a, Math.max(1, ow / n), a * 2)
     }
-  }, [peaks, values.reversed, values.fadeInMs, values.fadeOutMs, values.stretch, region, color, bpm, seconds])
+  }, [peaks, values, region, color, bpm, seconds])
 
   return (
     <div className="sw-view">

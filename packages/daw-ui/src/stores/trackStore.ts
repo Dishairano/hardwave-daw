@@ -60,6 +60,9 @@ export interface ClipInfo {
   reversed: boolean
   pitchSemitones: number
   stretchRatio: number
+  /** How much longer than its file the sample lasts on the timeline: the
+   *  stretch, and in resample also the pitch. Absent from older mocks. */
+  timeFactor?: number
   fadeInCurve: FadeCurveKind
   fadeOutCurve: FadeCurveKind
   /** Take lane. 0 unless the takes on this track have been spread out. */

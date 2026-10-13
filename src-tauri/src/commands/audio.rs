@@ -177,6 +177,7 @@ pub(crate) fn track_clips_to_info(
                     reversed: ac.reversed,
                     pitch_semitones: ac.pitch_semitones,
                     stretch_ratio: ac.stretch_ratio,
+                    time_factor: ac.time_factor(),
                     warp_markers: ac.warp_markers.clone(),
                     fade_in_curve: fade_curve_name(ac.fade_in_curve),
                     fade_out_curve: fade_curve_name(ac.fade_out_curve),
@@ -209,6 +210,7 @@ pub(crate) fn track_clips_to_info(
                 reversed: false,
                 pitch_semitones: 0.0,
                 stretch_ratio: 1.0,
+                time_factor: 1.0,
                 warp_markers: Vec::new(),
                 fade_in_curve: "linear".into(),
                 fade_out_curve: "linear".into(),
@@ -434,6 +436,10 @@ pub struct ClipInfo {
     pitch_semitones: f64,
     #[serde(rename = "stretchRatio")]
     stretch_ratio: f64,
+    /// How much longer than its file the sample lasts on the timeline:
+    /// the stretch, and in resample also the pitch.
+    #[serde(rename = "timeFactor")]
+    time_factor: f64,
     /// Piecewise timeline→source warp anchors (empty = plain stretch).
     #[serde(rename = "warpMarkers")]
     warp_markers: Vec<hardwave_project::clip::WarpMarker>,

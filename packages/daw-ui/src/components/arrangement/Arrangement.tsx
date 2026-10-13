@@ -118,7 +118,7 @@ const waveformPending = new Set<string>()
 function fileWidthPx(clip: ClipInfo, pxPerTick: number, bpm: number): number {
   if (clip.sourceFrames && clip.sourceRate) {
     const pxPerSec = pxPerTick * (bpm / 60) * PPQ
-    const stretch = clip.stretchRatio > 0 ? clip.stretchRatio : 1
+    const stretch = clip.timeFactor ?? (clip.stretchRatio > 0 ? clip.stretchRatio : 1)
     return (clip.sourceFrames / clip.sourceRate) * stretch * pxPerSec
   }
   return clip.length_ticks * pxPerTick
@@ -966,7 +966,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       let pxPerBucket = w / n
       if (clip.sourceFrames && clip.sourceRate) {
         const pxPerSec = pxPerTick * (bpm / 60) * PPQ
-        const stretch = clip.stretchRatio > 0 ? clip.stretchRatio : 1
+        const stretch = clip.timeFactor ?? (clip.stretchRatio > 0 ? clip.stretchRatio : 1)
         pxPerBucket = (clip.sourceFrames / clip.sourceRate / n) * stretch * pxPerSec
         originX = x - ((clip.sourceStart ?? 0) / clip.sourceRate) * stretch * pxPerSec
       }
