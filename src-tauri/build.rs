@@ -73,9 +73,32 @@ fn main() {
         .map(|c| &*Box::leak(c.into_boxed_str()))
         .collect();
     let names: &'static [&'static str] = Box::leak(names.into_boxed_slice());
+    embed_windows_manifest();
     tauri_build::try_build(
         tauri_build::Attributes::new()
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest())
             .app_manifest(tauri_build::AppManifest::new().commands(names)),
     )
     .expect("tauri build");
+}
+
+/// The Windows manifest asking for version 6 of the common controls, which
+/// the app's dependencies import from. Tauri puts it in a resource that only
+/// the app's own .exe is linked with, so the library's test program loaded
+/// the old controls and stopped before its first test with
+/// STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139): every gate run on the PC failed
+/// that way from 10 October. Handed to the linker instead, it is in every
+/// program built here, tests included; it is the same file Tauri embeds.
+fn embed_windows_manifest() {
+    let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if !(windows && msvc) {
+        return;
+    }
+    let manifest = std::env::current_dir()
+        .expect("build script directory")
+        .join("windows-app-manifest.xml");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
 }
