@@ -36,6 +36,7 @@ import { CrashRecoveryDialog, type CrashChoice } from './components/CrashRecover
 import { ShortcutsPanel } from './components/ShortcutsPanel'
 import { HelpOverlay } from './components/HelpOverlay'
 import { SampleEditor } from './components/sample-editor/SampleEditor'
+import { SampleWindow } from './components/sample-window/SampleWindow'
 import { useSampleEditorStore } from './stores/sampleEditorStore'
 import { BeatSlicer } from './components/beat-slicer/BeatSlicer'
 import { useBeatSlicerStore } from './stores/beatSlicerStore'
@@ -2441,6 +2442,7 @@ export function App() {
       <HelpOverlay open={showHelp} onClose={() => setShowHelp(false)} />
       <TrackTemplateManager open={showTrackTemplateManager} onClose={() => setShowTrackTemplateManager(false)} />
       {sampleEditorPath && <SampleEditor path={sampleEditorPath} onClose={closeSampleEditor} />}
+      <SampleWindow />
       {beatSlicerPath && <BeatSlicer path={beatSlicerPath} onClose={closeBeatSlicer} />}
       {showLoudness && <LoudnessMeter onClose={() => setShowLoudness(false)} />}
       {showOscilloscope && <Oscilloscope onClose={() => setShowOscilloscope(false)} />}

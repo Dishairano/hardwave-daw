@@ -57,6 +57,8 @@ import { useMidiCcStore } from '../stores/midiCcStore'
 import { FloatingWindow, DetachButton } from '../components/FloatingWindow'
 import { AudioSettings, focusSettingsTab, type SettingsTab } from '../components/settings/AudioSettings'
 import { HwPluginWindow } from '../components/plugins/HwPluginWindow'
+import { SampleWindow } from '../components/sample-window/SampleWindow'
+import { useSampleWindowStore } from '../stores/sampleWindowStore'
 
 /** Browser panel with a sample library added to Places and two folders open. */
 function BrowserShot() {
@@ -555,6 +557,39 @@ function Harness() {
               </div>
             </div>
           </div>
+        </div>
+      )
+    }
+    case 'samplewindow': {
+      // The sample window on the playlist's first audio clip, set up as an
+      // imported FL sample would be: quieter, a fade out, its DC taken off.
+      const st = useTrackStore.getState()
+      const track = st.tracks.find((t) => t.clips.some((c) => c.kind.toLowerCase() === 'audio'))
+      const clip = track?.clips.find((c) => c.kind.toLowerCase() === 'audio')
+      if (track && clip && !useSampleWindowStore.getState().target) {
+        useTrackStore.setState({
+          tracks: st.tracks.map((t) => t.id !== track.id ? t : {
+            ...t,
+            clips: t.clips.map((c) => c.id !== clip.id ? c : {
+              ...c,
+              gainDb: -4,
+              fadeOutMs: 375,
+              sourceFrames: Math.round(3.2 * 48000),
+              sourceRate: 48000,
+              sourceFile: 'C:\\Samples\\Crash #1.wav',
+              treatment: { pan: 0, polarityInverted: false, swapStereo: false, normalize: false, removeDc: true, resample: false },
+            }),
+          }),
+        })
+        useSampleWindowStore.getState().open(track.id, clip.id)
+      }
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
+          <Arrangement onSetHint={noop} />
+          <SampleWindow />
         </div>
       )
     }

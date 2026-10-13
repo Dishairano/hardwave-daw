@@ -8,6 +8,7 @@ import { useCollabStore } from '../../stores/collabStore'
 import { SpectralEditor } from './SpectralEditor'
 import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo, FadeCurveKind } from '../../stores/trackStore'
+import { useSampleWindowStore } from '../../stores/sampleWindowStore'
 import { invoke } from '@tauri-apps/api/core'
 import { useTransportStore, snapToTicks } from '../../stores/transportStore'
 import { useShallow } from 'zustand/react/shallow'
@@ -1786,6 +1787,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     if (hit.clip.kind === 'midi') {
       useTrackStore.getState().setActiveMidiClip(hit.trackId, hit.clip.id)
       window.dispatchEvent(new CustomEvent('daw:openPianoRoll'))
+    } else if (hit.clip.kind === 'audio') {
+      // A sample's settings, as FL opens a sample's channel settings.
+      useSampleWindowStore.getState().open(hit.trackId, hit.clip.id)
     }
   }, [hitTest, getScrollOffset])
 

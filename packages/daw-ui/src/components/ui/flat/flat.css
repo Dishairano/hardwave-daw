@@ -1,0 +1,255 @@
+/*
+ * Flat building blocks for the DAW's own windows, in the direction the
+ * founder approved on 13 October 2026 (the sample window, version D): FL's
+ * layout and grid, the DAW's colours from rework.css, no gradients or glows.
+ * Two surface steps, a thin border, the Hardwave red as the one accent, the
+ * track's colour for its sound.
+ */
+.hwf {
+  --hwf-page: #0a0a0b;
+  --hwf-win: #0e0e10;
+  --hwf-hdr: #0c0c0e;
+  --hwf-panel: #141417;
+  --hwf-field: #1b1b20;
+  --hwf-knob: #232329;
+  --hwf-line: rgba(255, 255, 255, 0.08);
+  --hwf-line2: rgba(255, 255, 255, 0.14);
+  --hwf-txt: #ececf0;
+  --hwf-sub: #a8a8b2;
+  --hwf-dim: #74747e;
+  --hwf-red: #dc2626;
+  --hwf-red2: #ef4444;
+  font: 13px/1.35 Inter, 'Segoe UI', system-ui, sans-serif;
+  color: var(--hwf-txt);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A label under a knob, a section's small caps. */
+.hwf-lab {
+  font: 600 11px Inter, 'Segoe UI', system-ui, sans-serif;
+  letter-spacing: 0.03em;
+  color: var(--hwf-dim);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* --- panel --- */
+.hwf-panel {
+  background: var(--hwf-panel);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--hwf-line);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.hwf-panel-title {
+  padding: 10px 12px 0;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--hwf-txt);
+}
+.hwf-panel-body {
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* --- knob --- */
+.hwf-knob {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  cursor: ns-resize;
+  min-width: 0;
+  user-select: none;
+  touch-action: none;
+}
+.hwf-knob canvas { display: block; }
+.hwf-knob:hover .hwf-lab { color: var(--hwf-sub); }
+.hwf-knob.is-off { opacity: 0.35; cursor: default; }
+.hwf-knob.is-off:hover .hwf-lab { color: var(--hwf-dim); }
+/* Knobs in equal columns, so every row of them lines up. */
+.hwf-krow {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: start;
+}
+
+/* --- check --- */
+.hwf-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.hwf-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--hwf-sub);
+  cursor: pointer;
+  white-space: nowrap;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+}
+.hwf-check i {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex: none;
+  background: var(--hwf-field);
+  box-shadow: inset 0 0 0 1px var(--hwf-line2);
+  display: grid;
+  place-items: center;
+}
+.hwf-check.is-on { color: var(--hwf-txt); }
+.hwf-check.is-on i { background: var(--hwf-red); box-shadow: none; }
+.hwf-check.is-on i::after {
+  content: '';
+  width: 6px;
+  height: 3px;
+  border-left: 1.6px solid #fff;
+  border-bottom: 1.6px solid #fff;
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+.hwf-check:hover:not(:disabled) { color: var(--hwf-txt); }
+.hwf-check:disabled { opacity: 0.35; cursor: default; }
+
+/* --- select --- */
+.hwf-select {
+  position: relative;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 28px 0 10px;
+  border-radius: 5px;
+  background: var(--hwf-field);
+  box-shadow: inset 0 0 0 1px var(--hwf-line);
+  font: 500 13px Inter, 'Segoe UI', system-ui, sans-serif;
+  color: var(--hwf-txt);
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 0;
+  border: 0;
+  text-align: left;
+}
+.hwf-select > span { overflow: hidden; text-overflow: ellipsis; }
+.hwf-select::after {
+  content: '';
+  position: absolute;
+  right: 11px;
+  top: 11px;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--hwf-sub);
+  border-bottom: 1.5px solid var(--hwf-sub);
+  transform: rotate(45deg);
+}
+.hwf-select:hover:not(:disabled) { box-shadow: inset 0 0 0 1px var(--hwf-line2); }
+.hwf-select:disabled { opacity: 0.35; cursor: default; }
+.hwf-menu {
+  position: absolute;
+  left: 0;
+  top: 32px;
+  min-width: 100%;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border-radius: 6px;
+  background: var(--hwf-field);
+  box-shadow: 0 0 0 1px var(--hwf-line2), 0 12px 28px rgba(0, 0, 0, 0.6);
+}
+.hwf-menu button {
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: var(--hwf-sub);
+  font: 13px Inter, 'Segoe UI', system-ui, sans-serif;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.hwf-menu button:hover { background: var(--hwf-knob); color: var(--hwf-txt); }
+.hwf-menu button.is-on { color: var(--hwf-red2); }
+
+/* --- switch (on / off) --- */
+.hwf-switch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.hwf-switch i {
+  width: 30px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--hwf-red);
+  position: relative;
+}
+.hwf-switch i::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 16px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.12s;
+}
+.hwf-switch.is-off i { background: var(--hwf-knob); }
+.hwf-switch.is-off i::after { left: 2px; background: var(--hwf-sub); }
+
+/* --- number box --- */
+.hwf-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.hwf-box > div {
+  height: 30px;
+  min-width: 40px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 5px;
+  background: var(--hwf-field);
+  box-shadow: inset 0 0 0 1px var(--hwf-line);
+  font: 600 15px Inter, 'Segoe UI', system-ui, sans-serif;
+  color: var(--hwf-txt);
+  font-variant-numeric: tabular-nums;
+}
+.hwf-box > div small {
+  font: 500 12px Inter, 'Segoe UI', system-ui, sans-serif;
+  color: var(--hwf-sub);
+  max-width: 110px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hwf-box.is-wheel { cursor: ns-resize; }
+
+/* --- the hint that follows the mouse --- */
+.hwf-tip {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--hwf-field);
+  box-shadow: 0 0 0 1px var(--hwf-line2), 0 6px 16px rgba(0, 0, 0, 0.5);
+  font: 500 12px Inter, 'Segoe UI', system-ui, sans-serif;
+  color: var(--hwf-txt);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}

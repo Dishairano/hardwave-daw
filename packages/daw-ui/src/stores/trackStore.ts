@@ -69,6 +69,20 @@ export interface ClipInfo {
   /** The loaded file's length in frames and its rate; 0 when not loaded. */
   sourceFrames?: number
   sourceRate?: number
+  /** What is done to the sample as it plays (the sample window's settings). */
+  treatment?: {
+    pan: number
+    polarityInverted: boolean
+    swapStereo: boolean
+    normalize: boolean
+    removeDc: boolean
+    resample: boolean
+  }
+  /** Where the file is on disk. */
+  sourceFile?: string
+  /** The fades in time, at the tempo where the clip sits. */
+  fadeInMs?: number
+  fadeOutMs?: number
 }
 
 export interface InsertInfo {
