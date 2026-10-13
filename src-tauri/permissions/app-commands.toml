@@ -332,6 +332,7 @@ permissions = [
   "allow-stop-audio-preview",
   "allow-set-preview-volume",
   "allow-set-clip-gain",
+  "allow-set-sample-settings",
   "allow-set-clip-fades",
   "allow-set-clip-fade-curves",
   "allow-toggle-clip-reverse",

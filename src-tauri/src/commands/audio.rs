@@ -107,6 +107,7 @@ pub(crate) fn import_audio_file_blocking(
         // without this the project keeps no record of the file and every clip
         // reloads silent.
         source_file: path.to_string_lossy().into_owned(),
+        treatment: Default::default(),
     };
 
     let placement = hardwave_project::clip::ClipPlacement {
@@ -148,6 +149,7 @@ pub(crate) fn import_audio_file_blocking(
 pub(crate) fn track_clips_to_info(
     track: &hardwave_project::Track,
     pool: &hardwave_engine::audio_pool::AudioPool,
+    tempo: &hardwave_project::tempo::TempoMap,
 ) -> Vec<ClipInfo> {
     track
         .clips
@@ -182,6 +184,15 @@ pub(crate) fn track_clips_to_info(
                     source_start: ac.source_start,
                     source_frames,
                     source_rate,
+                    treatment: TreatmentInfo::from(&ac.treatment),
+                    source_file: ac.source_file.clone(),
+                    fade_in_ms: fade_ms(tempo, clip.position_ticks, ac.fade_in_ticks, true),
+                    fade_out_ms: fade_ms(
+                        tempo,
+                        clip.position_ticks + clip.length_ticks,
+                        ac.fade_out_ticks,
+                        false,
+                    ),
                 }
             }
             hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
@@ -205,9 +216,191 @@ pub(crate) fn track_clips_to_info(
                 source_start: 0,
                 source_frames: 0,
                 source_rate: 0,
+                treatment: TreatmentInfo::default(),
+                source_file: String::new(),
+                fade_in_ms: 0.0,
+                fade_out_ms: 0.0,
             },
         })
         .collect()
+}
+
+/// A fade's length in milliseconds at the song's tempo where it is: a fade
+/// in runs forward from `at`, a fade out back from it.
+fn fade_ms(tempo: &hardwave_project::tempo::TempoMap, at: u64, ticks: u64, forward: bool) -> f64 {
+    const RATE: f64 = 48_000.0;
+    let (a, b) = if forward {
+        (at, at + ticks)
+    } else {
+        (at.saturating_sub(ticks), at)
+    };
+    (tempo.tick_to_samples(b, RATE) - tempo.tick_to_samples(a, RATE)) as f64 / RATE * 1000.0
+}
+
+/// A fade of `ms` milliseconds as ticks at the song's tempo where it is,
+/// the other way round from `fade_ms`.
+fn fade_ticks(tempo: &hardwave_project::tempo::TempoMap, at: u64, ms: f64, forward: bool) -> u64 {
+    const RATE: f64 = 48_000.0;
+    let span = (ms.max(0.0) / 1000.0 * RATE).round() as u64;
+    let here = tempo.tick_to_samples(at, RATE);
+    if forward {
+        tempo.samples_to_tick(here + span, RATE).saturating_sub(at)
+    } else {
+        at.saturating_sub(tempo.samples_to_tick(here.saturating_sub(span), RATE))
+    }
+}
+
+/// A clip's treatment as the sample window reads it.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TreatmentInfo {
+    pan: f64,
+    polarity_inverted: bool,
+    swap_stereo: bool,
+    normalize: bool,
+    remove_dc: bool,
+    resample: bool,
+}
+
+impl From<&hardwave_project::clip::SampleTreatment> for TreatmentInfo {
+    fn from(t: &hardwave_project::clip::SampleTreatment) -> Self {
+        Self {
+            pan: t.pan,
+            polarity_inverted: t.polarity_inverted,
+            swap_stereo: t.swap_stereo,
+            normalize: t.normalize,
+            remove_dc: t.remove_dc,
+            resample: t.resample,
+        }
+    }
+}
+
+/// What the sample window changes. Each is optional: only what is given
+/// changes. FL keeps these per channel, so they go to every clip of the
+/// sample, wherever it is in the song.
+#[derive(serde::Deserialize, Default, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SampleSettings {
+    muted: Option<bool>,
+    gain_db: Option<f64>,
+    pan: Option<f64>,
+    pitch_semitones: Option<f64>,
+    stretch_ratio: Option<f64>,
+    resample: Option<bool>,
+    reversed: Option<bool>,
+    polarity_inverted: Option<bool>,
+    swap_stereo: Option<bool>,
+    normalize: Option<bool>,
+    remove_dc: Option<bool>,
+    fade_in_ms: Option<f64>,
+    fade_out_ms: Option<f64>,
+}
+
+/// Change the settings of a sample: every clip that plays the same file as
+/// `clip_id`. Returns how many clips changed. A knob being dragged sends
+/// `snapshot: false` on every move and true once, at the start, so a drag is
+/// one step to undo, not hundreds.
+#[tauri::command]
+pub fn set_sample_settings(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    settings: SampleSettings,
+    snapshot: Option<bool>,
+) -> Result<usize, String> {
+    if snapshot != Some(false) {
+        state.engine.lock().snapshot_before_mutation();
+    }
+    let engine = state.engine.lock();
+    let changed = {
+        let mut project = engine.project.lock();
+        apply_sample_settings(&mut project, &track_id, &clip_id, &settings)?
+    };
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(changed)
+}
+
+/// `set_sample_settings` without the engine, so it can be tested.
+pub(crate) fn apply_sample_settings(
+    project: &mut hardwave_project::Project,
+    track_id: &str,
+    clip_id: &str,
+    s: &SampleSettings,
+) -> Result<usize, String> {
+    use hardwave_project::clip::ClipContent;
+    let source = project
+        .track(track_id)
+        .and_then(|t| {
+            t.clips.iter().find_map(|c| match &c.content {
+                ClipContent::Audio(ac) if ac.id == clip_id => Some(ac.source_path.clone()),
+                _ => None,
+            })
+        })
+        .ok_or_else(|| format!("Audio clip not found: {clip_id}"))?;
+    let tempo = project.tempo_map.clone();
+    let mut changed = 0;
+    for track in &mut project.tracks {
+        for placement in &mut track.clips {
+            let (position, length) = (placement.position_ticks, placement.length_ticks);
+            let ClipContent::Audio(ac) = &mut placement.content else {
+                continue;
+            };
+            if ac.source_path != source {
+                continue;
+            }
+            if let Some(v) = s.muted {
+                ac.muted = v;
+            }
+            if let Some(v) = s.gain_db {
+                ac.gain_db = v.clamp(-60.0, 12.0);
+            }
+            if let Some(v) = s.pan {
+                ac.treatment.pan = v.clamp(-1.0, 1.0);
+            }
+            if let Some(v) = s.pitch_semitones {
+                ac.pitch_semitones = clamp_clip_pitch_semitones(v);
+            }
+            if let Some(v) = s.stretch_ratio {
+                ac.stretch_ratio = clamp_clip_stretch_ratio(v);
+            }
+            if let Some(v) = s.resample {
+                ac.treatment.resample = v;
+            }
+            if let Some(v) = s.reversed {
+                ac.reversed = v;
+            }
+            if let Some(v) = s.polarity_inverted {
+                ac.treatment.polarity_inverted = v;
+            }
+            if let Some(v) = s.swap_stereo {
+                ac.treatment.swap_stereo = v;
+            }
+            if let Some(v) = s.normalize {
+                ac.treatment.normalize = v;
+            }
+            if let Some(v) = s.remove_dc {
+                ac.treatment.remove_dc = v;
+            }
+            // Fades in time, as FL's knobs are, made ticks for each clip at
+            // the tempo where it sits; together never longer than the clip.
+            if let Some(ms) = s.fade_in_ms {
+                ac.fade_in_ticks = fade_ticks(&tempo, position, ms, true).min(length);
+            }
+            if let Some(ms) = s.fade_out_ms {
+                ac.fade_out_ticks = fade_ticks(&tempo, position + length, ms, false).min(length);
+            }
+            if ac.fade_in_ticks + ac.fade_out_ticks > length {
+                if s.fade_out_ms.is_some() {
+                    ac.fade_in_ticks = length - ac.fade_out_ticks;
+                } else {
+                    ac.fade_out_ticks = length - ac.fade_in_ticks;
+                }
+            }
+            changed += 1;
+        }
+    }
+    Ok(changed)
 }
 
 /// Get clips for a specific track.
@@ -216,7 +409,7 @@ pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo
     let engine = state.engine.lock();
     let project = engine.project.lock();
     match project.track(&track_id) {
-        Some(t) => track_clips_to_info(t, &engine.audio_pool),
+        Some(t) => track_clips_to_info(t, &engine.audio_pool, &project.tempo_map),
         None => vec![],
     }
 }
@@ -259,6 +452,16 @@ pub struct ClipInfo {
     source_frames: u64,
     #[serde(rename = "sourceRate")]
     source_rate: u32,
+    /// Pan, polarity, swap, normalise, DC and resample, for the sample window.
+    treatment: TreatmentInfo,
+    /// Where the file is, for the sample window to name it.
+    #[serde(rename = "sourceFile")]
+    source_file: String,
+    /// The fades in time, at the tempo where the clip sits.
+    #[serde(rename = "fadeInMs")]
+    fade_in_ms: f64,
+    #[serde(rename = "fadeOutMs")]
+    fade_out_ms: f64,
 }
 
 fn fade_curve_name(curve: hardwave_project::clip::FadeCurve) -> String {
@@ -624,6 +827,103 @@ pub fn set_clip_stretch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn audio(id: &str, source: &str) -> hardwave_project::clip::AudioClip {
+        hardwave_project::clip::AudioClip {
+            id: id.into(),
+            name: id.into(),
+            source_path: source.into(),
+            source_hash: String::new(),
+            source_start: 0,
+            source_end: 0,
+            gain_db: 0.0,
+            fade_in_ticks: 0,
+            fade_out_ticks: 0,
+            muted: false,
+            reversed: false,
+            pitch_semitones: 0.0,
+            stretch_ratio: 1.0,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            warp_markers: Vec::new(),
+            source_file: String::new(),
+            treatment: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_sample_s_settings_reach_every_clip_of_it_and_no_other() {
+        use hardwave_project::clip::{ClipContent, ClipPlacement};
+        let mut project = hardwave_project::Project::default();
+        let beat = hardwave_midi::PPQ;
+        let place = |track: &str, clip: hardwave_project::clip::AudioClip, at: u64| ClipPlacement {
+            content: ClipContent::Audio(clip),
+            track_id: track.into(),
+            position_ticks: at,
+            length_ticks: 4 * beat,
+            lane: 0,
+        };
+        project.track_mut("insert-001").unwrap().clips.push(place(
+            "insert-001",
+            audio("a", "crash"),
+            0,
+        ));
+        project.track_mut("insert-002").unwrap().clips.push(place(
+            "insert-002",
+            audio("b", "crash"),
+            8 * beat,
+        ));
+        project.track_mut("insert-002").unwrap().clips.push(place(
+            "insert-002",
+            audio("c", "kick"),
+            0,
+        ));
+        let bpm = project.tempo_map.bpm_at(0);
+        let settings = SampleSettings {
+            gain_db: Some(-4.0),
+            pan: Some(-0.5),
+            normalize: Some(true),
+            resample: Some(true),
+            // One beat, at the song's tempo.
+            fade_out_ms: Some(60_000.0 / bpm),
+            ..Default::default()
+        };
+        let changed = apply_sample_settings(&mut project, "insert-001", "a", &settings).unwrap();
+        assert_eq!(changed, 2, "both crashes, on two tracks");
+        let clip =
+            |p: &hardwave_project::Project, t: &str, i: usize| match &p.track(t).unwrap().clips[i]
+                .content
+            {
+                ClipContent::Audio(a) => a.clone(),
+                _ => unreachable!(),
+            };
+        for c in [
+            clip(&project, "insert-001", 0),
+            clip(&project, "insert-002", 0),
+        ] {
+            assert_eq!(c.gain_db, -4.0);
+            assert_eq!(c.treatment.pan, -0.5);
+            assert!(c.treatment.normalize && c.treatment.resample);
+            assert!(
+                c.fade_out_ticks.abs_diff(beat) <= 1,
+                "{} ticks",
+                c.fade_out_ticks
+            );
+        }
+        let kick = clip(&project, "insert-002", 1);
+        assert_eq!(kick.gain_db, 0.0, "another sample is left alone");
+        assert!(!kick.treatment.normalize);
+
+        // A fade longer than the clip makes room: the other fade gives way.
+        let long = SampleSettings {
+            fade_in_ms: Some(10_000.0),
+            ..Default::default()
+        };
+        apply_sample_settings(&mut project, "insert-001", "a", &long).unwrap();
+        let c = clip(&project, "insert-001", 0);
+        assert_eq!(c.fade_in_ticks + c.fade_out_ticks, 4 * beat);
+        assert!(apply_sample_settings(&mut project, "insert-001", "nope", &long).is_err());
+    }
 
     #[test]
     fn pitch_clamp_covers_two_octaves_each_way() {

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-sample-settings"
+description = "Enables the set_sample_settings command without any pre-configured scope."
+commands.allow = ["set_sample_settings"]
+
+[[permission]]
+identifier = "deny-set-sample-settings"
+description = "Denies the set_sample_settings command without any pre-configured scope."
+commands.deny = ["set_sample_settings"]
