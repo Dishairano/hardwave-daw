@@ -409,13 +409,17 @@ fn urlencode(value: &str) -> String {
 /// other machine cannot use this one's paths anyway, and they say
 /// things about this machine (an account name, a folder layout) that
 /// are not the other person's business.
+///
+/// A song travels between systems, so a path counts as some machine's by
+/// any system's rules, not this one's: on Windows "/home/..." is not
+/// absolute and on a Mac "C:\Users\..." is not, and each was sent whole.
 pub fn prepared_for_sending(project: &hardwave_project::Project) -> hardwave_project::Project {
     use hardwave_project::clip::ClipContent;
     let mut copy = project.clone();
     let reduce = |path: &mut String| {
-        if std::path::Path::new(path.as_str()).is_absolute() || path.starts_with("\\\\") {
-            if let Some(name) = std::path::Path::new(path.as_str()).file_name() {
-                *path = name.to_string_lossy().into_owned();
+        if is_machine_path(path) {
+            if let Some(name) = path.rsplit(['/', '\\']).find(|part| !part.is_empty()) {
+                *path = name.to_string();
             }
         }
     };
@@ -438,6 +442,17 @@ pub fn prepared_for_sending(project: &hardwave_project::Project) -> hardwave_pro
         reduce(&mut video.path);
     }
     copy
+}
+
+/// A path that points somewhere on a particular computer, on any system:
+/// "/home/...", "~/...", "C:\..." or "C:/...", "\\server\share". A path
+/// relative to the song ("Song Samples/kick.wav") is not.
+fn is_machine_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    path.starts_with('/')
+        || path.starts_with('\\')
+        || path.starts_with("~/")
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
 }
 
 /// What the service says first.
@@ -599,6 +614,13 @@ mod tests {
         let t = project.track_mut(&id).unwrap();
         t.clips.push(clip("/home/dishaion/Secret Project/vox.wav"));
         t.clips.push(clip("Song Samples/kick.wav"));
+        // Paths from the other systems count the same on this one.
+        t.clips
+            .push(clip("C:\\Users\\dishaion\\Secret Project\\snare.wav"));
+        t.clips.push(clip("D:/Packs/clap.wav"));
+        t.clips.push(clip("\\\\studio-nas\\Samples\\hat.wav"));
+        t.clips.push(clip("~/Music/ride.wav"));
+        t.clips.push(clip("Song Samples\\crash.wav"));
         let sent = prepared_for_sending(&project);
         let files: Vec<String> = sent
             .track(&id)
@@ -612,7 +634,15 @@ mod tests {
             .collect();
         assert_eq!(
             files,
-            vec!["vox.wav".to_string(), "Song Samples/kick.wav".to_string()]
+            vec![
+                "vox.wav".to_string(),
+                "Song Samples/kick.wav".into(),
+                "snare.wav".into(),
+                "clap.wav".into(),
+                "hat.wav".into(),
+                "ride.wav".into(),
+                "Song Samples\\crash.wav".into(),
+            ]
         );
     }
 
