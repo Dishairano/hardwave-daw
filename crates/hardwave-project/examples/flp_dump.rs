@@ -72,6 +72,16 @@ fn main() {
             "   playlist clips {} (pattern {pat}, audio {audio}, automation {auto})",
             fl.playlist_clips.len()
         );
+        for link in &fl.automation_links {
+            let ch = fl.channels.get(link.channel as usize);
+            println!(
+                "     automation {} {:?} ({} points) -> {:?}",
+                link.channel,
+                ch.map(|c| c.name.as_str()).unwrap_or("?"),
+                ch.map(|c| c.automation.len()).unwrap_or(0),
+                link.target
+            );
+        }
         println!("   mixer inserts {}", fl.mixer.len());
         for m in &fl.mixer {
             let default_routes =
@@ -158,6 +168,22 @@ fn main() {
         println!("   silent inserts: {:?}", r.silent_inserts);
         println!("   route levels left: {:?}", r.route_levels_left_behind);
         println!("   without settings: {:?}", r.plugins_without_settings);
+        println!(
+            "   automation: {} clips came across, curves straightened: {}, left behind: {:?}",
+            r.automation_clips, r.automation_curves_straightened, r.automation_left_behind
+        );
+        for track in &built.project.tracks {
+            for clip in &track.automation_clips {
+                println!(
+                    "     {} @{} len {} {:?} {} points",
+                    track.name,
+                    clip.start_tick,
+                    clip.length_ticks,
+                    clip.target,
+                    clip.lane.points.len()
+                );
+            }
+        }
         let carried: Vec<String> = built
             .external_plugins
             .iter()

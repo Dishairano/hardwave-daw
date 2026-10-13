@@ -25,6 +25,60 @@ pub struct FlChannel {
     /// and that plug-in's settings (`read_wrapper`).
     #[serde(skip)]
     pub plugin_data: Vec<u8>,
+    /// For an automation clip's channel, its points.
+    #[serde(default)]
+    pub automation: Vec<FlAutomationPoint>,
+}
+
+/// A point of an automation clip.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FlAutomationPoint {
+    /// From the start of the clip's data, in our ticks.
+    pub tick: u64,
+    /// Where the knob is, 0 to 1 across its range.
+    pub value: f64,
+    /// The bend of the curve into this point.
+    pub tension: f32,
+}
+
+/// What an automation clip moves. FL names a knob by where it is: on a
+/// channel, on a mixer insert, or on a plug-in in either; anything else
+/// (the song's tempo, a send level) is `Other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FlAutomationTarget {
+    ChannelVolume(u32),
+    ChannelPan(u32),
+    ChannelPitch(u32),
+    /// A parameter of the channel's plug-in, by FL's index.
+    ChannelPlugin {
+        channel: u32,
+        param: u32,
+    },
+    InsertVolume(u32),
+    InsertPan(u32),
+    InsertSeparation(u32),
+    SlotEnabled {
+        insert: u32,
+        slot: u32,
+    },
+    SlotMix {
+        insert: u32,
+        slot: u32,
+    },
+    /// A parameter of the plug-in in an insert's slot, by FL's index.
+    SlotPlugin {
+        insert: u32,
+        slot: u32,
+        param: u32,
+    },
+    Other,
+}
+
+/// An automation clip's channel and the knob it moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlAutomationLink {
+    pub channel: u32,
+    pub target: FlAutomationTarget,
 }
 
 /// A channel's settings as FL stores them, in FL's own units. What they
@@ -177,6 +231,9 @@ pub enum FlClipContent {
     Automation {
         channel_index: u32,
         target: String,
+        /// Where the placement starts in the clip's data, in our ticks.
+        #[serde(default)]
+        offset_ticks: u64,
     },
 }
 
@@ -296,6 +353,9 @@ pub struct FlWrappedPlugin {
     /// gives back to setState. Empty when FL kept none, and for VST2 and
     /// CLAP, whose state is not read.
     pub state: Vec<u8>,
+    /// For a VST3, its parameters' ids in FL's order: FL automates a
+    /// plug-in's parameter by its place in this list.
+    pub param_ids: Vec<u32>,
 }
 
 /// The chunks FL's wrapper data is made of, from `at`: a kind (four bytes),
@@ -349,7 +409,11 @@ pub(crate) fn test_vst3_wrapper(name: &str, instrument: bool, state: &[u8]) -> V
     info.extend_from_slice(&[0; 8]);
     // The state: four bytes, then a 64-byte chunk FL keeps for itself, the
     // component's state, the controller's, and the parameter ids.
-    let mut vst3 = test_wrapper(&[(1, &[0; 64]), (3, state), (2, b"controller"), (4, &[0; 8])]);
+    let ids: Vec<u8> = [3u32, 0, 7, 0x7072_6F67]
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect();
+    let mut vst3 = test_wrapper(&[(1, &[0; 64]), (3, state), (2, b"controller"), (4, &ids)]);
     vst3[..4].copy_from_slice(&1u32.to_le_bytes());
     let file = format!("C:\\Program Files\\Common Files\\VST3\\{name}.vst3");
     let mut chunks: Vec<(u32, &[u8])> =
@@ -384,6 +448,7 @@ pub fn read_wrapper(data: &[u8]) -> Option<FlWrappedPlugin> {
     const VENDOR: u32 = 56;
     const CLAP_ID: u32 = 58;
     const VST3_COMPONENT: u32 = 3;
+    const VST3_PARAM_IDS: u32 = 4;
 
     let chunks = wrapper_chunks(data, 4);
     let get = |want: u32| {
@@ -403,14 +468,27 @@ pub fn read_wrapper(data: &[u8]) -> Option<FlWrappedPlugin> {
         _ => return None,
     };
     let name = get(NAME).map(chunk_text).filter(|n| !n.is_empty())?;
-    let state = match (format, get(STATE)) {
-        (FlPluginFormat::Vst3, Some(state)) => wrapper_chunks(state, 4)
-            .into_iter()
-            .find(|(kind, _)| *kind == VST3_COMPONENT)
-            .map(|(_, body)| body.to_vec())
-            .unwrap_or_default(),
+    let vst3 = match (format, get(STATE)) {
+        (FlPluginFormat::Vst3, Some(state)) => wrapper_chunks(state, 4),
         _ => Vec::new(),
     };
+    let vst3_chunk = |want: u32| vst3.iter().find(|(kind, _)| *kind == want).map(|(_, b)| *b);
+    let state = vst3_chunk(VST3_COMPONENT)
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default();
+    // A count, then that many ids.
+    let param_ids = vst3_chunk(VST3_PARAM_IDS)
+        .map(|body| {
+            let words: Vec<u32> = body
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|w| u32::from_le_bytes(*w))
+                .collect();
+            let count = words.first().copied().unwrap_or(0) as usize;
+            words.into_iter().skip(1).take(count).collect()
+        })
+        .unwrap_or_default();
     Some(FlWrappedPlugin {
         name,
         vendor: get(VENDOR).map(chunk_text).unwrap_or_default(),
@@ -419,6 +497,7 @@ pub fn read_wrapper(data: &[u8]) -> Option<FlWrappedPlugin> {
         file: get(FILE).map(chunk_text).unwrap_or_default(),
         clap_id: get(CLAP_ID).map(chunk_text).filter(|id| !id.is_empty()),
         state,
+        param_ids,
     })
 }
 
@@ -446,6 +525,13 @@ pub struct FlProject {
     /// Playlist tracks switched off in FL, by track number.
     #[serde(default)]
     pub playlist_tracks_off: Vec<u32>,
+    /// Playlist tracks soloed in FL. A solo switches every other track off,
+    /// so while one is soloed the switches say nothing else.
+    #[serde(default)]
+    pub playlist_tracks_solo: Vec<u32>,
+    /// Which knob each automation clip moves.
+    #[serde(default)]
+    pub automation_links: Vec<FlAutomationLink>,
 }
 
 /// Plugin mapping — translate an FL native plugin name into a
@@ -663,6 +749,7 @@ mod tests {
             channels: vec![
                 FlChannel {
                     plugin_data: Vec::new(),
+                    automation: Vec::new(),
                     name: "Kick".into(),
                     sample_path: Some("/samples/kick.wav".into()),
                     plugin_name: None,
@@ -672,6 +759,7 @@ mod tests {
                 },
                 FlChannel {
                     plugin_data: Vec::new(),
+                    automation: Vec::new(),
                     name: "Sytrus Lead".into(),
                     sample_path: None,
                     plugin_name: Some("Sytrus".into()),
@@ -681,6 +769,7 @@ mod tests {
                 },
                 FlChannel {
                     plugin_data: Vec::new(),
+                    automation: Vec::new(),
                     name: "Harmor Pad".into(),
                     sample_path: None,
                     plugin_name: Some("Harmor".into()),
@@ -690,6 +779,7 @@ mod tests {
                 },
                 FlChannel {
                     plugin_data: Vec::new(),
+                    automation: Vec::new(),
                     name: "Mystery Plugin".into(),
                     sample_path: None,
                     plugin_name: Some("WeirdOne".into()),
@@ -722,6 +812,8 @@ mod tests {
             pattern_names: Vec::new(),
             playlist_track_names: Vec::new(),
             playlist_tracks_off: Vec::new(),
+            automation_links: Vec::new(),
+            playlist_tracks_solo: Vec::new(),
         }
     }
 
@@ -786,6 +878,7 @@ mod tests {
             content: FlClipContent::Automation {
                 channel_index: 0,
                 target: "master-volume".into(),
+                offset_ticks: 0,
             },
             muted: false,
         });
@@ -827,6 +920,7 @@ mod tests {
             p.state, b"component",
             "the component's, not the controller's"
         );
+        assert_eq!(p.param_ids, vec![0, 7, 0x7072_6F67]);
 
         let effect = read_wrapper(&super::test_vst3_wrapper("OTT", false, b"")).unwrap();
         assert!(!effect.instrument);

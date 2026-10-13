@@ -11,12 +11,13 @@
 //! channel's level, pan, pitch, direction and stretch, the playlist's
 //! track names and switches, and the mixer: every insert the sound passes
 //! through as a track of its own, with its fader, pan, switches and
-//! routes, FL's Parametric EQ 2 as the built-in EQ, and other people's
-//! VST3 instruments and effects with their settings. It opens as a song
-//! of its own, like a .hwp. What cannot come across is what FL's own
-//! instruments and most of its effects hold, and a VST2's or CLAP's
-//! settings. The report says what was left behind rather than letting it
-//! be found later.
+//! routes, FL's Parametric EQ 2 as the built-in EQ, other people's VST3
+//! instruments and effects with their settings, and the automation clips
+//! moving any of those. It opens as a song of its own, like a .hwp. What
+//! cannot come across is what FL's own instruments and most of its
+//! effects hold, a VST2's or CLAP's settings, and automation of knobs with
+//! no counterpart here. The report says what was left behind rather than
+//! letting it be found later.
 
 use hardwave_project::clip::ClipContent;
 use serde::Serialize;
@@ -265,8 +266,15 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
             list_of(&r.route_levels_left_behind)
         ));
     }
-    if r.automation_clips > 0 {
-        left_behind.push(format!("{} automation clips", r.automation_clips));
+    if !r.automation_left_behind.is_empty() {
+        left_behind.push(format!(
+            "automation of {}, which moves something that has no counterpart here",
+            list_of(&r.automation_left_behind)
+        ));
+    }
+    if r.automation_curves_straightened {
+        left_behind
+            .push("the curves in automation clips: they run straight between their points".into());
     }
 
     Ok(FlpImportReport {
@@ -593,6 +601,7 @@ mod tests {
             file: String::new(),
             clap_id: None,
             state: state.to_vec(),
+            param_ids: Vec::new(),
         };
         let mut plugins = Vec::new();
         for (track, slot, name, candidates, plays) in [

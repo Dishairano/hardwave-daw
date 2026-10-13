@@ -16,8 +16,9 @@
 //! samples, with a list of what could not be carried.
 
 use crate::fl_import::{
-    FlChannel, FlChannelKind, FlChannelSettings, FlClipContent, FlMixerSlot, FlMixerTrack, FlNote,
-    FlPlaylistClip, FlProject, FlRoute,
+    FlAutomationLink, FlAutomationPoint, FlAutomationTarget, FlChannel, FlChannelKind,
+    FlChannelSettings, FlClipContent, FlMixerSlot, FlMixerTrack, FlNote, FlPlaylistClip, FlProject,
+    FlRoute,
 };
 
 /// Event id boundaries: below 64 is one byte, below 128 two, below
@@ -47,8 +48,10 @@ const CH_DISPLAY_NAME: u8 = TEXT + 11; // 203
 const PAT_NOTES: u8 = TEXT + 16 + 16; // 224
 const ARR_PLAYLIST: u8 = TEXT + 16 + 25; // 233
 /// A playlist track's settings: its number (from 1) in the first four
-/// bytes, and at byte 12 whether it is switched on.
+/// bytes, at byte 12 whether it is switched on, at byte 48 whether it is
+/// soloed. FL solos a track by switching every other one off.
 const TRACK_DATA: u8 = TEXT + 46; // 238
+const TRACK_SOLO_AT: usize = 48;
 /// The name given to the playlist track just before it.
 const TRACK_NAME: u8 = TEXT + 47; // 239
 /// The sizes FL has written a playlist item in: 32 bytes for years, then
@@ -109,6 +112,15 @@ const PLUGIN_DATA: u8 = TEXT + 21; // 213
 /// Every insert's fader, pan, separation, send levels and EQ, and every
 /// slot's switch and mix, as 12-byte records.
 const MIXER_PARAMS: u8 = TEXT + 33; // 225
+/// An automation clip's points, in its channel: a 21-byte head with the
+/// count in its last four bytes, then 24 bytes a point: how far after the
+/// one before it (beats, a double), the value (a double), the tension (a
+/// float), four more.
+const CH_AUTOMATION: u8 = TEXT + 42; // 234
+/// What a channel controls: its number at byte 2, at byte 8 the knob, as
+/// the mixer's parameter list names one (a place in the top two bytes, the
+/// parameter in the bottom two).
+const REMOTE_CONTROL: u8 = TEXT + 35; // 227
 
 /// Why a file could not be read.
 #[derive(Debug, Clone, PartialEq)]
@@ -290,6 +302,9 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     let mut current_insert: Option<usize> = None;
     let mut pending_slot: Option<FlMixerSlot> = None;
     let mut mixer_params: Option<&[u8]> = None;
+    // Automation clips' channels and the knob each moves, read once the
+    // mixer says where its inserts start.
+    let mut remote_controls: Vec<(u32, u32)> = Vec::new();
     for event in events(body)? {
         // A plug-in event inside an insert is a slot's, not a channel's.
         if current_insert.is_some() {
@@ -376,6 +391,14 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 insert_name = None;
             }
             MIXER_PARAMS => mixer_params = Some(event.data),
+            CH_AUTOMATION => {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    channel.automation = automation_points(event.data);
+                }
+            }
+            REMOTE_CONTROL if event.data.len() >= 12 => {
+                remote_controls.push((u32_at(event.data, 2), u32_at(event.data, 8)));
+            }
             TEMPO_COARSE => coarse = Some(u16_at(event.data, 0)),
             TEMPO_FINE => fine = u16_at(event.data, 0),
             PROJ_TEMPO => {
@@ -395,6 +418,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 if project.channels.len() <= index {
                     project.channels.resize_with(index + 1, || FlChannel {
                         plugin_data: Vec::new(),
+                        automation: Vec::new(),
                         name: String::new(),
                         sample_path: None,
                         plugin_name: None,
@@ -453,6 +477,9 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 current_track = Some(index);
                 if event.data.get(12) == Some(&0) {
                     project.playlist_tracks_off.push(index);
+                }
+                if event.data.get(TRACK_SOLO_AT) == Some(&1) {
+                    project.playlist_tracks_solo.push(index);
                 }
             }
             TRACK_NAME => {
@@ -549,9 +576,20 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
         }
     }
 
-    if let Some(data) = mixer_params {
-        read_mixer_params(&mut project.mixer, data);
-    }
+    let master = mixer_params.and_then(|data| read_mixer_params(&mut project.mixer, data));
+    // Without a parameter list, where the version puts the master.
+    let master = master.unwrap_or(if fl_major >= 25 {
+        0x7000 >> 6
+    } else {
+        0x2000 >> 6
+    });
+    project.automation_links = remote_controls
+        .into_iter()
+        .map(|(channel, knob)| FlAutomationLink {
+            channel,
+            target: automation_target(knob, master, project.mixer.len() as u32),
+        })
+        .collect();
     project.pattern_names = pattern_names;
     if !tempo_seen {
         if let Some(c) = coarse.filter(|c| *c > 0) {
@@ -575,9 +613,15 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
             continue;
         };
         let content = match (channel.kind, &channel.sample_path) {
+            // An automation item's start field is beats into the clip.
             (FlChannelKind::Automation, _) => FlClipContent::Automation {
                 channel_index,
                 target: channel.name.clone(),
+                offset_ticks: if start_ms > 0.0 {
+                    (start_ms as f64 * hardwave_midi::PPQ as f64).round() as u64
+                } else {
+                    0
+                },
             },
             (_, Some(path)) => FlClipContent::AudioSample {
                 channel_index,
@@ -606,7 +650,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
 /// Where the inserts start differs by version (FL 24 counts from 0x2000,
 /// FL 25 from 0x7000, with the song's own settings below either), so the
 /// master is the lowest place that has an insert's fader.
-fn read_mixer_params(mixer: &mut [FlMixerTrack], data: &[u8]) {
+fn read_mixer_params(mixer: &mut [FlMixerTrack], data: &[u8]) -> Option<u16> {
     const SLOT_ENABLED: u8 = 0;
     const SLOT_MIX: u8 = 1;
     const ROUTE_LEVEL: std::ops::RangeInclusive<u8> = 64..=191;
@@ -622,14 +666,11 @@ fn read_mixer_params(mixer: &mut [FlMixerTrack], data: &[u8]) {
         .filter(|r| r[5] & 0x80 == 0)
         .map(|r| (r[4], u16_at(r, 6), i32_at(r, 8)))
         .collect();
-    let Some(master) = records
+    let master = records
         .iter()
         .filter(|(param, ..)| *param == VOLUME)
         .map(|(_, at, _)| at >> 6)
-        .min()
-    else {
-        return;
-    };
+        .min()?;
     for (param, at, value) in records {
         let Some(number) = (at >> 6).checked_sub(master) else {
             continue;
@@ -662,6 +703,83 @@ fn read_mixer_params(mixer: &mut [FlMixerTrack], data: &[u8]) {
             }
             _ => {}
         }
+    }
+    Some(master)
+}
+
+/// An automation clip's points, at their places in the clip.
+fn automation_points(data: &[u8]) -> Vec<FlAutomationPoint> {
+    const HEAD: usize = 21;
+    const POINT: usize = 24;
+    let count = u32_at(data, HEAD - 4) as usize;
+    let mut beats = 0.0f64;
+    data.get(HEAD..)
+        .unwrap_or(&[])
+        .as_chunks::<POINT>()
+        .0
+        .iter()
+        .take(count)
+        .map(|point| {
+            let double = |at: usize| {
+                f64::from_bits(u32_at(point, at) as u64 | (u32_at(point, at + 4) as u64) << 32)
+            };
+            let after = double(0);
+            if after.is_finite() && after > 0.0 {
+                beats += after;
+            }
+            let value = double(8);
+            FlAutomationPoint {
+                tick: (beats * hardwave_midi::PPQ as f64).round() as u64,
+                value: if value.is_finite() {
+                    value.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                },
+                tension: f32_at(point, 16),
+            }
+        })
+        .collect()
+}
+
+/// The knob a remote control names. Below 0x2000 the place is a channel,
+/// and the parameter its volume (0), pan (1), pitch (4) or, with the top
+/// bit set, one of its plug-in's. From `master` (the mixer's own count, as
+/// its parameter list has it) the place is an insert and slot, the
+/// parameter as in that list. The song's own knobs sit between.
+fn automation_target(knob: u32, master: u16, inserts: u32) -> FlAutomationTarget {
+    use FlAutomationTarget as T;
+    let place = (knob >> 16) as u16;
+    let param = (knob & 0xFFFF) as u16;
+    let plugin = (param & 0x8000 != 0).then_some((param & 0x7FFF) as u32);
+    if place < 0x2000 {
+        let channel = (place & 0x0FFF) as u32;
+        return match (plugin, param) {
+            (Some(param), _) => T::ChannelPlugin { channel, param },
+            (None, 0) => T::ChannelVolume(channel),
+            (None, 1) => T::ChannelPan(channel),
+            (None, 4) => T::ChannelPitch(channel),
+            _ => T::Other,
+        };
+    }
+    let Some(insert) = (place >> 6).checked_sub(master).map(u32::from) else {
+        return T::Other;
+    };
+    if insert >= inserts {
+        return T::Other;
+    }
+    let slot = (place & 0x3F) as u32;
+    match (plugin, param & 0xFF) {
+        (Some(param), _) => T::SlotPlugin {
+            insert,
+            slot,
+            param,
+        },
+        (None, 0) => T::SlotEnabled { insert, slot },
+        (None, 1) => T::SlotMix { insert, slot },
+        (None, 192) => T::InsertVolume(insert),
+        (None, 193) => T::InsertPan(insert),
+        (None, 194) => T::InsertSeparation(insert),
+        _ => T::Other,
     }
 }
 
@@ -1044,7 +1162,8 @@ mod tests {
             let mut items = Vec::new();
             items.extend(item(size, 0, 20481, 384, 1, (-1.0, -1.0)));
             items.extend(item(size, 96, 0, 24, 2, (12.5, 100.0)));
-            items.extend(item(size, 192, 1, 384, 3, (-1.0, -1.0)));
+            // An automation item's start field is beats into the clip.
+            items.extend(item(size, 192, 1, 384, 3, (2.0, 6.0)));
             // An instrument channel on the playlist has nothing to carry.
             items.extend(item(size, 0, 2, 96, 4, (0.0, 0.0)));
             writer.event(ARR_PLAYLIST, &items);
@@ -1072,7 +1191,7 @@ mod tests {
             assert_eq!(clips[1].track_index, 2);
             assert_eq!(clips[1].start_tick, hardwave_midi::PPQ);
             assert!(
-                matches!(&clips[2].content, FlClipContent::Automation { channel_index: 1, target } if target == "Filter cutoff")
+                matches!(&clips[2].content, FlClipContent::Automation { channel_index: 1, target, offset_ticks } if target == "Filter cutoff" && *offset_ticks == 2 * hardwave_midi::PPQ)
             );
         }
     }
@@ -1122,6 +1241,25 @@ mod tests {
         assert_eq!(project.playlist_tracks_off, vec![1]);
         assert!(!project.playlist_clips[0].muted);
         assert!(project.playlist_clips[1].muted);
+    }
+
+    #[test]
+    fn a_soloed_track_is_known_from_the_ones_its_solo_switched_off() {
+        // FL's 70-byte track data, as FL 26 writes it with track 2 soloed:
+        // every other track is switched off.
+        let track = |number: u32, on: bool, solo: bool| {
+            let mut d = track_data(number, on);
+            d.resize(70, 0);
+            d[TRACK_SOLO_AT] = solo as u8;
+            d
+        };
+        let mut writer = Writer::new();
+        writer.event(TRACK_DATA, &track(1, false, false));
+        writer.event(TRACK_DATA, &track(2, true, true));
+        writer.event(TRACK_DATA, &track(3, false, false));
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.playlist_tracks_solo, vec![2]);
+        assert_eq!(project.playlist_tracks_off, vec![1, 3]);
     }
 
     #[test]
@@ -1275,6 +1413,113 @@ mod tests {
                     to: 0,
                     level: 12_800
                 }]
+            );
+        }
+    }
+
+    /// An automation clip's data with these points: (beats after the one
+    /// before, value).
+    fn automation_data(points: &[(f64, f64)]) -> Vec<u8> {
+        let mut data = vec![0u8; 17];
+        data[0] = 1;
+        data.extend_from_slice(&(points.len() as u32).to_le_bytes());
+        for (after, value) in points {
+            data.extend_from_slice(&after.to_le_bytes());
+            data.extend_from_slice(&value.to_le_bytes());
+            data.extend_from_slice(&0.25f32.to_le_bytes());
+            data.extend_from_slice(&[0; 4]);
+        }
+        // FL writes more after the points (its LFO); none of it is read.
+        data.extend_from_slice(&[0xFF; 16]);
+        data
+    }
+
+    fn remote(channel: u32, knob: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 20];
+        data[2..6].copy_from_slice(&channel.to_le_bytes());
+        data[8..12].copy_from_slice(&knob.to_le_bytes());
+        data
+    }
+
+    #[test]
+    fn automation_clips_come_with_their_points_and_the_knob_they_move() {
+        use FlAutomationTarget as T;
+        // FL 24 counts its inserts from 0x2000, FL 25 from 0x7000.
+        for (version, first) in [
+            (&b"24.2.2.4646\0"[..], 0x2000u32),
+            (b"25.2.3.5171\0", 0x7000),
+        ] {
+            let knob =
+                |insert: u32, slot: u32, param: u32| ((first + insert * 64 + slot) << 16) | param;
+            let mut writer = Writer::new();
+            writer.event(FL_VERSION, version);
+            writer.event(CH_NEW, &0u16.to_le_bytes());
+            writer.event(CH_TYPE, &[5]);
+            writer.text(CH_DISPLAY_NAME, "Lead - Volume");
+            // A rise over four beats, a jump down where it ends, two beats on.
+            writer.event(
+                CH_AUTOMATION,
+                &automation_data(&[(0.0, 0.0), (4.0, 1.0), (0.0, 0.25), (2.0, 0.5)]),
+            );
+            writer.event(REMOTE_CONTROL, &remote(0, knob(1, 0, 0x1FC0)));
+            writer.event(REMOTE_CONTROL, &remote(1, knob(1, 2, 0x8005)));
+            writer.event(REMOTE_CONTROL, &remote(2, knob(1, 3, 0x1F00)));
+            writer.event(REMOTE_CONTROL, &remote(3, knob(0, 1, 0x1F01)));
+            writer.event(REMOTE_CONTROL, &remote(4, (3 << 16) | 4));
+            writer.event(REMOTE_CONTROL, &remote(5, (2 << 16) | 0x8000 | 447));
+            writer.event(REMOTE_CONTROL, &remote(6, (2 << 16) | 1));
+            // The song's own settings sit below the inserts.
+            writer.event(REMOTE_CONTROL, &remote(7, (0x4000 << 16) | 0x1F00));
+            for _ in 0..2 {
+                writer.event(INSERT_FLAGS, &[0, 0, 0, 0, 0x0C, 0, 0, 0, 0, 0, 0, 0]);
+                writer.event(INSERT_ROUTING, &[1]);
+                writer.event(INSERT_OUTPUT, &0u32.to_le_bytes());
+            }
+            writer.event(MIXER_PARAMS, &mixer_param(192, 31, first as u16, 12_800));
+            let project = parse(&writer.finish(96)).expect("it should read");
+
+            let beat = hardwave_midi::PPQ;
+            let points: Vec<(u64, f64)> = project.channels[0]
+                .automation
+                .iter()
+                .map(|p| (p.tick, p.value))
+                .collect();
+            assert_eq!(
+                points,
+                vec![(0, 0.0), (4 * beat, 1.0), (4 * beat, 0.25), (6 * beat, 0.5)]
+            );
+            assert_eq!(project.channels[0].automation[1].tension, 0.25);
+
+            let targets: Vec<(u32, T)> = project
+                .automation_links
+                .iter()
+                .map(|l| (l.channel, l.target))
+                .collect();
+            assert_eq!(
+                targets,
+                vec![
+                    (0, T::InsertVolume(1)),
+                    (
+                        1,
+                        T::SlotPlugin {
+                            insert: 1,
+                            slot: 2,
+                            param: 5
+                        }
+                    ),
+                    (2, T::SlotEnabled { insert: 1, slot: 3 }),
+                    (3, T::SlotMix { insert: 0, slot: 1 }),
+                    (4, T::ChannelPitch(3)),
+                    (
+                        5,
+                        T::ChannelPlugin {
+                            channel: 2,
+                            param: 447
+                        }
+                    ),
+                    (6, T::ChannelPan(2)),
+                    (7, T::Other),
+                ]
             );
         }
     }
