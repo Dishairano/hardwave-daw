@@ -5,6 +5,11 @@
 //! one does: progress lines, "done", four files. That keeps these tests
 //! about the service (who may use it, the line, the hand-back) and
 //! quick, while the real separator is measured on the server.
+//!
+//! Shell is there only on Unix, and so is the service: it runs on the
+//! server, never on a producer's Windows machine. On Windows these tests
+//! could only fail at "the separator could not start".
+#![cfg(unix)]
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
