@@ -35,10 +35,10 @@ use std::sync::Arc;
 use vst3::Steinberg::Vst::{
     BusDirections_, BusInfo, ControllerNumbers_, Event, Event_::EventTypes_, IAudioProcessor,
     IAudioProcessorTrait, IComponent, IComponentHandler, IComponentHandlerTrait, IComponentTrait,
-    IEditController, IEditControllerTrait, IEventList, IEventListTrait, IMidiMapping,
-    IMidiMappingTrait, IParamValueQueue, IParamValueQueueTrait, IParameterChanges,
-    IParameterChangesTrait, IUnitInfo, IUnitInfoTrait, IoModes_, MediaTypes_, NoteOffEvent,
-    NoteOnEvent, ParamID, ParamValue, PolyPressureEvent, ProcessContext,
+    IConnectionPoint, IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList,
+    IEventListTrait, IMidiMapping, IMidiMappingTrait, IParamValueQueue, IParamValueQueueTrait,
+    IParameterChanges, IParameterChangesTrait, IUnitInfo, IUnitInfoTrait, IoModes_, MediaTypes_,
+    NoteOffEvent, NoteOnEvent, ParamID, ParamValue, PolyPressureEvent, ProcessContext,
     ProcessContext_::StatesAndFlags_, ProcessModes_, ProcessSetup, ProgramListInfo,
     SymbolicSampleSizes_, ViewType,
 };
@@ -114,6 +114,10 @@ struct Vst3Inner {
     component: Option<ComPtr<IComponent>>,
     processor: Option<ComPtr<IAudioProcessor>>,
     controller: Option<ComPtr<IEditController>>,
+    /// The controller is a class of its own, connected to the component:
+    /// it hears the component's state on every load, and is disconnected
+    /// and terminated before the component.
+    separate_controller: bool,
     plug_view: Option<ComPtr<IPlugView>>,
     class_cid: TUID,
     sample_rate: f64,
@@ -356,11 +360,18 @@ impl Vst3PluginInstance {
         // 6. Query IAudioProcessor via queryInterface.
         let processor = component.cast::<IAudioProcessor>();
 
-        // 7. Query IEditController via queryInterface.
-        //    VST3 plugins with `kDistributable` use a separate controller
-        //    created via `createInstance` with the controller's CID; for
-        //    simplicity we only try the single-component path here.
-        let controller = component.cast::<IEditController>();
+        // 7. The controller: the component itself for many plug-ins, a
+        //    class of its own for the rest (every JUCE build among them:
+        //    Serum, Valhalla, OTT). Only the first was looked for, so the
+        //    others played but had no window, no parameters and no
+        //    automation.
+        let (controller, separate_controller) = match component.cast::<IEditController>() {
+            Some(controller) => (Some(controller), false),
+            None => match make_separate_controller(&factory, &component) {
+                Some(controller) => (Some(controller), true),
+                None => (None, false),
+            },
+        };
 
         // 8. Set IO mode to simple so the processor handles processing.
         unsafe {
@@ -434,6 +445,7 @@ impl Vst3PluginInstance {
             component: Some(component),
             processor,
             controller,
+            separate_controller,
             plug_view: None,
             class_cid,
             sample_rate: 48_000.0,
@@ -500,6 +512,12 @@ impl Drop for Vst3Inner {
                 unsafe { c.setActive(0) };
             }
         }
+        if self.separate_controller {
+            if let (Some(component), Some(controller)) = (&self.component, &self.controller) {
+                connect_controller(component, controller, false);
+                unsafe { controller.terminate() };
+            }
+        }
         if let Some(c) = &self.component {
             unsafe { c.terminate() };
         }
@@ -508,6 +526,71 @@ impl Drop for Vst3Inner {
         self.component.take();
         self.factory.take();
         self.library.take();
+    }
+}
+
+/// A plug-in's controller when it is a class of its own: made from the
+/// factory by the id the component gives, initialized, connected to the
+/// component both ways, and told the component's state so its knobs start
+/// where the sound is. None when the component names no controller or it
+/// cannot be made.
+fn make_separate_controller(
+    factory: &ComPtr<IPluginFactory>,
+    component: &ComPtr<IComponent>,
+) -> Option<ComPtr<IEditController>> {
+    let mut cid: TUID = [0; 16];
+    if unsafe { component.getControllerClassId(&mut cid) } != kResultOk
+        || cid.iter().all(|b| *b == 0)
+    {
+        return None;
+    }
+    let mut obj: *mut c_void = std::ptr::null_mut();
+    let iid = IEditController::IID;
+    let made = unsafe {
+        factory.createInstance(
+            cid.as_ptr() as FIDString,
+            iid.as_ptr() as FIDString,
+            &mut obj,
+        )
+    };
+    if made != kResultOk || obj.is_null() {
+        return None;
+    }
+    let controller = unsafe { ComPtr::<IEditController>::from_raw(obj as *mut IEditController) }?;
+    if unsafe { controller.initialize(std::ptr::null_mut()) } != kResultOk {
+        return None;
+    }
+    connect_controller(component, &controller, true);
+    let state = MemoryStream::new_writer();
+    if unsafe { component.getState(state.as_ibstream_ptr()) } == kResultOk {
+        let reader = MemoryStream::new_reader(state.take_bytes());
+        unsafe { controller.setComponentState(reader.as_ibstream_ptr()) };
+    }
+    Some(controller)
+}
+
+/// Connect a component and its separate controller to each other, or
+/// disconnect them: the two talk through these connections (meters, the
+/// state a JUCE controller asks its component for).
+fn connect_controller(
+    component: &ComPtr<IComponent>,
+    controller: &ComPtr<IEditController>,
+    on: bool,
+) {
+    let (Some(a), Some(b)) = (
+        component.cast::<IConnectionPoint>(),
+        controller.cast::<IConnectionPoint>(),
+    ) else {
+        return;
+    };
+    unsafe {
+        if on {
+            a.connect(b.as_ptr());
+            b.connect(a.as_ptr());
+        } else {
+            a.disconnect(b.as_ptr());
+            b.disconnect(a.as_ptr());
+        }
     }
 }
 
@@ -948,6 +1031,15 @@ impl HostedPlugin for Vst3PluginInstance {
         let res = unsafe { component.setState(stream_ptr) };
         if res != kResultOk {
             return Err(format!("setState failed ({res})"));
+        }
+        // A controller of its own does not see the component's state: told
+        // nothing, its window showed its defaults over the loaded sound, and
+        // the first knob touched sent those defaults to the audio.
+        if inner.separate_controller {
+            if let Some(controller) = &inner.controller {
+                let stream = MemoryStream::new_reader(bytes.to_vec());
+                unsafe { controller.setComponentState(stream.as_ibstream_ptr()) };
+            }
         }
         Ok(())
     }
