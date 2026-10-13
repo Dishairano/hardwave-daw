@@ -295,6 +295,8 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     let mut tempo_seen = false;
     let (mut coarse, mut fine) = (None::<u16>, 0u16);
     let mut fl_major = 0u32;
+    // Playlist items carry a clip's own fades and volume from FL 20.99.
+    let mut item_extras = false;
     // The mixer: a name waiting for its insert, the insert being read, the
     // plug-in waiting for its slot number, and the parameter list, read once
     // every insert is known.
@@ -334,11 +336,13 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
         }
         match event.id {
             FL_VERSION => {
-                fl_major = text_ascii(event.data)
+                let version = text_ascii(event.data);
+                let mut parts = version
                     .split('.')
-                    .next()
-                    .and_then(|m| m.trim().parse().ok())
-                    .unwrap_or(0);
+                    .map(|p| p.trim().parse::<u32>().unwrap_or(0));
+                fl_major = parts.next().unwrap_or(0);
+                let minor = parts.next().unwrap_or(0);
+                item_extras = (fl_major, minor) >= (20, 99);
             }
             CH_ROUTED_TO_FL25 if fl_major >= 25 => {
                 if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
@@ -560,6 +564,12 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                     } else {
                         let start_ms = f32_at(item, 24);
                         let end_ms = f32_at(item, 28);
+                        // A clip's own fades (milliseconds) and volume (a
+                        // factor): bytes 36, 44 and 52.
+                        let extra = |at: usize| {
+                            Some(f32_at(item, at))
+                                .filter(|v| item_extras && item.len() >= 60 && v.is_finite())
+                        };
                         channel_items.push(ChannelItem {
                             track_index,
                             start_tick: scale(position),
@@ -568,6 +578,9 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                             start_ms,
                             end_ms,
                             muted,
+                            fade_in_ms: extra(36).unwrap_or(0.0).max(0.0),
+                            fade_out_ms: extra(44).unwrap_or(0.0).max(0.0),
+                            volume: extra(52).unwrap_or(1.0).max(0.0),
                         });
                     }
                 }
@@ -608,6 +621,9 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
             start_ms,
             end_ms,
             muted,
+            fade_in_ms,
+            fade_out_ms,
+            volume,
         } = item;
         let Some(channel) = project.channels.get(channel_index as usize) else {
             continue;
@@ -628,6 +644,9 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 sample_path: path.clone(),
                 start_offset_ms: start_ms,
                 end_offset_ms: end_ms,
+                fade_in_ms,
+                fade_out_ms,
+                volume,
             },
             _ => continue,
         };
@@ -793,6 +812,9 @@ struct ChannelItem {
     start_ms: f32,
     end_ms: f32,
     muted: bool,
+    fade_in_ms: f32,
+    fade_out_ms: f32,
+    volume: f32,
 }
 
 /// One of a channel's settings events, read into its settings.
@@ -1181,10 +1203,13 @@ mod tests {
                     sample_path,
                     start_offset_ms,
                     end_offset_ms,
+                    volume,
+                    ..
                 } => {
                     assert_eq!(*channel_index, 0);
                     assert_eq!(sample_path, "C:\\kick.wav");
                     assert_eq!((*start_offset_ms, *end_offset_ms), (12.5, 100.0));
+                    assert_eq!(*volume, 1.0, "no version said, so no clip volume read");
                 }
                 other => panic!("{size}-byte items: expected audio, got {other:?}"),
             }
@@ -1193,6 +1218,43 @@ mod tests {
             assert!(
                 matches!(&clips[2].content, FlClipContent::Automation { channel_index: 1, target, offset_ticks } if target == "Filter cutoff" && *offset_ticks == 2 * hardwave_midi::PPQ)
             );
+        }
+    }
+
+    #[test]
+    fn a_clip_s_own_fades_and_volume_come_from_fl_20_99_on() {
+        for (version, read) in [
+            (&b"25.2.3.5171\0"[..], true),
+            (b"20.99.0.1\0", true),
+            (b"20.8.4.2576\0", false),
+        ] {
+            for size in PLAYLIST_ITEM_SIZES.into_iter().filter(|s| *s >= 60) {
+                let mut writer = Writer::new();
+                writer.event(FL_VERSION, version);
+                writer.event(CH_NEW, &0u16.to_le_bytes());
+                writer.event(CH_TYPE, &[4]);
+                writer.text(CH_SAMPLE, "C:\\kick.wav");
+                let mut clip = item(size, 0, 0, 384, 1, (-1.0, -1.0));
+                clip[36..40].copy_from_slice(&43.0f32.to_le_bytes());
+                clip[44..48].copy_from_slice(&375.0f32.to_le_bytes());
+                clip[52..56].copy_from_slice(&0.631f32.to_le_bytes());
+                writer.event(ARR_PLAYLIST, &clip);
+                let project = parse(&writer.finish(96)).expect("it should read");
+                let FlClipContent::AudioSample {
+                    fade_in_ms,
+                    fade_out_ms,
+                    volume,
+                    ..
+                } = project.playlist_clips[0].content
+                else {
+                    panic!("expected audio");
+                };
+                if read {
+                    assert_eq!((fade_in_ms, fade_out_ms, volume), (43.0, 375.0, 0.631));
+                } else {
+                    assert_eq!((fade_in_ms, fade_out_ms, volume), (0.0, 0.0, 1.0));
+                }
+            }
         }
     }
 

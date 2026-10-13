@@ -621,6 +621,9 @@ pub fn build_project(
                 channel_index,
                 sample_path,
                 start_offset_ms,
+                fade_in_ms,
+                fade_out_ms,
+                volume,
                 ..
             } = &clip.content
             else {
@@ -638,6 +641,18 @@ pub fn build_project(
             // can be found later.
             let file = find(sample_path).unwrap_or_else(|| sample_path.clone());
             let clip_id = uuid::Uuid::new_v4().to_string();
+            // The clip's own fades, in milliseconds, and its own volume on
+            // top of its channel's.
+            let length = clip.length_ticks.max(1);
+            let ticks =
+                |ms: f32| ((ms as f64 / 1000.0 / seconds_per_tick).round() as u64).min(length);
+            let fade_in_ticks = ticks(*fade_in_ms);
+            let fade_out_ticks = ticks(*fade_out_ms).min(length - fade_in_ticks);
+            let own_gain_db = if *volume > 0.0 {
+                20.0 * (*volume as f64).log10()
+            } else {
+                -100.0
+            };
             let audio = AudioClip {
                 id: clip_id.clone(),
                 name: channel_name(*channel_index),
@@ -645,9 +660,9 @@ pub fn build_project(
                 source_hash: String::new(),
                 source_start: 0,
                 source_end: 0,
-                gain_db: fl_audio_clip_gain_db(settings.volume),
-                fade_in_ticks: 0,
-                fade_out_ticks: 0,
+                gain_db: (fl_audio_clip_gain_db(settings.volume) + own_gain_db).max(-100.0),
+                fade_in_ticks,
+                fade_out_ticks,
                 muted: clip.muted || !settings.enabled,
                 reversed: settings.reversed,
                 pitch_semitones: 0.0,
@@ -1361,6 +1376,9 @@ mod tests {
                         sample_path: "C:\\packs\\kick.wav".into(),
                         start_offset_ms: 20.0,
                         end_offset_ms: 400.0,
+                        fade_in_ms: 0.0,
+                        fade_out_ms: 0.0,
+                        volume: 1.0,
                     },
                     muted: false,
                 },
@@ -1373,6 +1391,9 @@ mod tests {
                         sample_path: "C:\\packs\\kick.wav".into(),
                         start_offset_ms: -1.0,
                         end_offset_ms: -1.0,
+                        fade_in_ms: 0.0,
+                        fade_out_ms: 0.0,
+                        volume: 1.0,
                     },
                     muted: false,
                 },
@@ -1385,6 +1406,9 @@ mod tests {
                         sample_path: "D:\\gone\\vox.wav".into(),
                         start_offset_ms: -1.0,
                         end_offset_ms: -1.0,
+                        fade_in_ms: 0.0,
+                        fade_out_ms: 0.0,
+                        volume: 1.0,
                     },
                     muted: false,
                 },
@@ -2173,5 +2197,50 @@ mod tests {
             panic!("expected notes");
         };
         assert!(midi.clip.notes.iter().all(|n| !n.muted));
+    }
+
+    #[test]
+    fn a_clip_s_own_fades_and_volume_come_with_it() {
+        let mut fl = song();
+        let FlClipContent::AudioSample {
+            fade_in_ms,
+            fade_out_ms,
+            volume,
+            ..
+        } = &mut fl.playlist_clips[1].content
+        else {
+            panic!("expected audio");
+        };
+        // At 160 BPM a beat is 375 ms: a quarter beat in, half a beat out
+        // (the clip is a beat long), -4 dB.
+        *fade_in_ms = 93.75;
+        *fade_out_ms = 187.5;
+        *volume = 0.631;
+        let built = build_project(&fl, "Fades", &here);
+        let kicks = built.project.track("insert-003").unwrap();
+        let ClipContent::Audio(clip) = &kicks.clips[0].content else {
+            panic!("expected audio");
+        };
+        let beat = hardwave_midi::PPQ;
+        assert_eq!(
+            (clip.fade_in_ticks, clip.fade_out_ticks),
+            (beat / 4, beat / 2)
+        );
+        let channel_db = fl_audio_clip_gain_db(fl.channels[1].settings.volume);
+        assert!((clip.gain_db - channel_db - 20.0 * 0.631f64.log10()).abs() < 1e-6);
+        assert!((20.0 * 0.631f64.log10() + 4.0).abs() < 0.01);
+
+        // A fade longer than its clip fills the clip and no more.
+        let mut long = song();
+        if let FlClipContent::AudioSample { fade_out_ms, .. } = &mut long.playlist_clips[1].content
+        {
+            *fade_out_ms = 10_000.0;
+        }
+        let built = build_project(&long, "Fades", &here);
+        let ClipContent::Audio(clip) = &built.project.track("insert-003").unwrap().clips[0].content
+        else {
+            panic!("expected audio");
+        };
+        assert_eq!(clip.fade_out_ticks, long.playlist_clips[1].length_ticks);
     }
 }

@@ -227,6 +227,14 @@ pub enum FlClipContent {
         sample_path: String,
         start_offset_ms: f32,
         end_offset_ms: f32,
+        /// The clip's own fades, in milliseconds (FL 20.99 and later).
+        #[serde(default)]
+        fade_in_ms: f32,
+        #[serde(default)]
+        fade_out_ms: f32,
+        /// The clip's own volume, as a factor (FL 20.99 and later; 1 before).
+        #[serde(default = "unit_volume")]
+        volume: f32,
     },
     Automation {
         channel_index: u32,
@@ -235,6 +243,10 @@ pub enum FlClipContent {
         #[serde(default)]
         offset_ticks: u64,
     },
+}
+
+fn unit_volume() -> f32 {
+    1.0
 }
 
 /// An insert in FL's mixer: where channels play into, where the effects

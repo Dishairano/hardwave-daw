@@ -163,6 +163,22 @@ fn main() {
             r.sample_fades_left_behind.join(", ")
         );
         println!("   mixed lanes: {}", r.mixed_lanes.join(", "));
+        let (mut faded, mut own_volume) = (0, std::collections::BTreeSet::new());
+        for c in &fl.playlist_clips {
+            if let FlClipContent::AudioSample {
+                fade_in_ms,
+                fade_out_ms,
+                volume,
+                ..
+            } = &c.content
+            {
+                faded += (*fade_in_ms > 0.0 || *fade_out_ms > 0.0) as usize;
+                if *volume != 1.0 {
+                    own_volume.insert(format!("{:.1} dB", 20.0 * (*volume as f64).log10()));
+                }
+            }
+        }
+        println!("   clips with their own fades: {faded}; own volumes: {own_volume:?}");
         println!("   mixer inserts as tracks: {}", r.mixer_inserts);
         println!("   effects left: {}", r.effects_left_behind.len());
         println!("   silent inserts: {:?}", r.silent_inserts);
