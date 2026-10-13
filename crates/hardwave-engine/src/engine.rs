@@ -1937,20 +1937,44 @@ pub struct OfflineRender {
 }
 
 impl OfflineRender {
-    /// Render `total_samples` frames, handing each interleaved stereo block
-    /// to `on_block`; it returns false to stop early.
+    /// Render `total_samples` frames of the song from where the render was
+    /// prepared, handing each interleaved stereo block to `on_block`; it
+    /// returns false to stop early.
+    ///
+    /// The graph's plug-ins hold the sound back by their latency (a
+    /// limiter's lookahead, an oversampler), and compensation only lines
+    /// the tracks up with each other: the whole mix still comes out that
+    /// much late. The first frames out of the graph are dropped and as many
+    /// more are rendered at the end, so the song's first sample is the
+    /// file's first sample. A bounce used to start with that much silence
+    /// and land late by it.
     pub fn run(mut self, total_samples: u64, mut on_block: impl FnMut(&[f32]) -> bool) {
         let mut buf = vec![0.0_f32; self.buffer_size * 2];
         let mut remaining = total_samples;
+        // The frames still to drop: known once the first block has built the
+        // graph and measured its latency.
+        let mut to_drop: Option<u64> = None;
         while remaining > 0 {
-            let frames = remaining.min(self.buffer_size as u64) as usize;
+            let ahead = to_drop.unwrap_or(self.buffer_size as u64);
+            let frames = (remaining + ahead).min(self.buffer_size as u64) as usize;
             let slice = &mut buf[..frames * 2];
             slice.fill(0.0);
             self.callback.process(slice, frames, 2);
-            if !on_block(slice) {
+            let pending = *to_drop.get_or_insert_with(|| {
+                self.callback
+                    .graph_latency_samples
+                    .load(std::sync::atomic::Ordering::Relaxed) as u64
+            });
+            let dropped = pending.min(frames as u64) as usize;
+            to_drop = Some(pending - dropped as u64);
+            let kept = ((frames - dropped) as u64).min(remaining) as usize;
+            if kept == 0 {
+                continue;
+            }
+            if !on_block(&slice[dropped * 2..(dropped + kept) * 2]) {
                 break;
             }
-            remaining -= frames as u64;
+            remaining -= kept as u64;
         }
     }
 }
@@ -4154,6 +4178,141 @@ mod offline_insert_tests {
         }
         drop(project);
         engine
+    }
+
+    /// Delays its input by LAT frames and says so, as a lookahead limiter
+    /// does; at half level, so the render shows it was in the path.
+    const LAT: usize = 512;
+    struct Latent {
+        desc: PluginDescriptor,
+        hist: [Vec<f32>; 2],
+    }
+    impl HostedPlugin for Latent {
+        fn descriptor(&self) -> &PluginDescriptor {
+            &self.desc
+        }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            num_samples: usize,
+        ) {
+            for ch in 0..2 {
+                let inp: &[f32] = inputs.get(ch).copied().unwrap_or(&[]);
+                let hist = &mut self.hist[ch];
+                let Some(out) = outputs.get_mut(ch) else {
+                    continue;
+                };
+                out.clear();
+                for i in 0..num_samples {
+                    hist.push(inp.get(i).copied().unwrap_or(0.0));
+                    let n = hist.len();
+                    out.push(if n > LAT {
+                        hist[n - 1 - LAT] * 0.5
+                    } else {
+                        0.0
+                    });
+                }
+            }
+        }
+        fn get_parameter_count(&self) -> u32 {
+            0
+        }
+        fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _i: u32) -> f64 {
+            0.0
+        }
+        fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            LAT as u32
+        }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn a_render_starts_where_the_song_does_behind_a_plug_in_s_latency() {
+        // The sine through a plug-in that holds it back LAT frames. The
+        // render drops that much and renders that much more: the first
+        // frames of the file carry the sine, and the file is as long as
+        // asked. It used to open with LAT frames of silence.
+        let engine = build_engine_with_silenced_sine();
+        {
+            let mut project = engine.project.lock();
+            for track in &mut project.tracks {
+                for slot in &mut track.inserts {
+                    slot.plugin_id = "test.latent".into();
+                }
+            }
+        }
+        let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
+            (id == "test.latent").then(|| {
+                Box::new(Latent {
+                    desc: PluginDescriptor {
+                        id: "test.latent".into(),
+                        name: "Latent".into(),
+                        vendor: "t".into(),
+                        version: "1".into(),
+                        format: PluginFormat::Clap,
+                        path: std::path::PathBuf::from("<native>"),
+                        category: PluginCategory::Effect,
+                        num_inputs: 2,
+                        num_outputs: 2,
+                        has_midi_input: false,
+                        has_editor: false,
+                    },
+                    hist: [Vec::new(), Vec::new()],
+                }) as Box<dyn HostedPlugin>
+            })
+        };
+        let total = 24_000u64;
+        let mut out: Vec<f32> = Vec::new();
+        engine
+            .render_offline_with(
+                48_000,
+                total,
+                0,
+                Some(&factory),
+                |_| {},
+                |block| {
+                    out.extend_from_slice(block);
+                    true
+                },
+            )
+            .expect("it renders");
+        assert_eq!(out.len() as u64, total * 2, "as many frames as asked");
+        let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+        let head = peak(&out[..LAT * 2]);
+        let all = peak(&out);
+        // At half level (and -3 dB from the pan law) the plug-in was in the
+        // path; from the first frames, its latency was taken out.
+        assert!(
+            (0.15..0.2).contains(&all),
+            "the sine at half level through the plug-in, peak {all}"
+        );
+        assert!(
+            head > 0.15,
+            "the sine is heard from the first frames, peak {head}"
+        );
     }
 
     /// The loudest sample of the silenced sine's song rendered dry (no
