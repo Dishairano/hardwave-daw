@@ -862,12 +862,23 @@ function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = nu
     g.fillStyle = '#0a0a0b'; g.fillRect(0, ruler, w, h - ruler)
     g.fillStyle = 'rgba(255,255,255,.08)'; g.fillRect(0, ruler - 1, w, 1)
     const beat = 60 / Math.max(1, bpm)
+    // The length at the right of the ruler; bar numbers stop short of it
+    // so the two never print over each other.
+    const lengthLabel = seconds ? `${(seconds / beat).toFixed(1)} beats at ${Math.round(bpm)} BPM` : ''
+    g.font = '500 11px Inter, sans-serif'
+    const labelLeft = lengthLabel ? w - 10 - g.measureText(lengthLabel).width - 8 : w
     g.font = '600 11px Inter, sans-serif'
+    // Bars far enough apart to read: every bar, or every 2nd, 4th, ...
+    const barPx = (4 * beat / total) * w
+    const every = Math.max(1, Math.pow(2, Math.ceil(Math.log2(Math.max(1, 26 / Math.max(1, barPx))))))
     for (let t = 0, b = 0; t < total; t += beat, b++) {
       const x = Math.round(X(t)) + 0.5
       g.strokeStyle = b % 4 === 0 ? 'rgba(255,255,255,.08)' : 'rgba(255,255,255,.035)'
       g.beginPath(); g.moveTo(x, ruler); g.lineTo(x, h); g.stroke()
-      if (b % 4 === 0) { g.fillStyle = '#74747e'; g.fillText(String(b / 4 + 1), x + 4, 13) }
+      const bar = b / 4
+      if (b % 4 === 0 && bar % every === 0 && x + 4 + g.measureText(String(bar + 1)).width < labelLeft) {
+        g.fillStyle = '#74747e'; g.fillText(String(bar + 1), x + 4, 13)
+      }
     }
     const mid = ruler + (h - ruler) / 2
     const half = (h - ruler) / 2 - 4
@@ -920,9 +931,9 @@ function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = nu
     g.beginPath(); g.moveTo(sx - 0.5, ruler); g.lineTo(sx + 7, ruler); g.lineTo(sx - 0.5, ruler + 8); g.closePath(); g.fill()
     g.font = '600 11px Inter, sans-serif'
     g.fillText('Start', sx + 10, ruler + 12)
-    if (seconds) {
+    if (lengthLabel) {
       g.fillStyle = '#74747e'; g.font = '500 11px Inter, sans-serif'; g.textAlign = 'right'
-      g.fillText(`${(seconds / beat).toFixed(1)} beats at ${Math.round(bpm)} BPM`, w - 10, 13)
+      g.fillText(lengthLabel, w - 10, 13)
       g.textAlign = 'left'
     }
     if (!n) { g.fillStyle = '#74747e'; g.font = '500 12px Inter, sans-serif'; g.fillText(empty ?? 'The file is not loaded', 12, mid + 4) }
