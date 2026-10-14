@@ -72,8 +72,9 @@ pub struct AppState {
     /// the plug-in at its defaults, as if every knob had been lost. These
     /// are laid over whatever state the window does get.
     #[allow(clippy::type_complexity)]
-    pub slot_param_shadow:
-        Arc<Mutex<std::collections::HashMap<(String, String), std::collections::HashMap<u32, f64>>>>,
+    pub slot_param_shadow: Arc<
+        Mutex<std::collections::HashMap<(String, String), std::collections::HashMap<u32, f64>>>,
+    >,
     /// Where each insert logs the knob moves made in its own window.
     ///
     /// The queue above is drained by the plug-in on the audio path, so

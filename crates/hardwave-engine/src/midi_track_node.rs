@@ -1278,7 +1278,13 @@ impl AudioNode for MidiTrackNode {
                 ch[..want].fill(0.0);
             }
             self.clip_midi_scratch.clear();
-            clips.process(&[], &mut self.clip_out, &[], &mut self.clip_midi_scratch, ctx);
+            clips.process(
+                &[],
+                &mut self.clip_out,
+                &[],
+                &mut self.clip_midi_scratch,
+                ctx,
+            );
             let (cl, _) = crate::pan::gains(0.0, self.prefs.pan_law());
             let k = if cl > 1e-6 { 1.0 / cl } else { 1.0 };
             // The clips' node sizes its output to the block the context
@@ -2369,12 +2375,21 @@ mod mpe_tests {
         n.process(&inputs, &mut outputs, &[], &mut Vec::new(), &ctx);
         let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
         assert_eq!(peak(&outputs[0][..300]), 0.0, "nothing before the kick");
-        assert!(peak(&outputs[0][300..600]) > 0.05, "the kick right where its note is");
+        assert!(
+            peak(&outputs[0][300..600]) > 0.05,
+            "the kick right where its note is"
+        );
         // The next block carries the kick on, and does not fire it again.
-        let ctx2 = ProcessContext { position_samples: 4096, ..ctx };
+        let ctx2 = ProcessContext {
+            position_samples: 4096,
+            ..ctx
+        };
         let mut next = vec![vec![0.0f32; 4096]; 4];
         n.process(&inputs, &mut next, &[], &mut Vec::new(), &ctx2);
-        assert!(peak(&next[0][..64]) < peak(&outputs[0][300..364]), "the tail, not a new attack");
+        assert!(
+            peak(&next[0][..64]) < peak(&outputs[0][300..364]),
+            "the tail, not a new attack"
+        );
     }
 
     #[test]

@@ -976,9 +976,15 @@ unsafe impl Send for AudioDeviceManager {}
 /// mixes on.
 pub fn is_display_audio(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    ["display audio", "hdmi", "displayport", "nvidia high definition audio", "amd high definition audio"]
-        .iter()
-        .any(|k| n.contains(k))
+    [
+        "display audio",
+        "hdmi",
+        "displayport",
+        "nvidia high definition audio",
+        "amd high definition audio",
+    ]
+    .iter()
+    .any(|k| n.contains(k))
 }
 
 /// The output the DAW opens when none is chosen: Windows' default, unless

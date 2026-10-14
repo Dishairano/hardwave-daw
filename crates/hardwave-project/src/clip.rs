@@ -199,7 +199,10 @@ impl DeclickMode {
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|m| m.name().eq_ignore_ascii_case(name.trim()))
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|m| m.name().eq_ignore_ascii_case(name.trim()))
     }
 }
 

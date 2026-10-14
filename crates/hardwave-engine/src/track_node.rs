@@ -1275,7 +1275,8 @@ impl AudioNode for TrackNode {
                 let (l, r) = if t.swap { (r, l) } else { (l, r) };
                 // Fade stereo: left to right across the sample.
                 let (fl, fr) = if t.fade_stereo {
-                    let span = (t.window.1.min(audio_buf.num_frames as u64) - t.window.0).max(1) as f64;
+                    let span =
+                        (t.window.1.min(audio_buf.num_frames as u64) - t.window.0).max(1) as f64;
                     let x = ((source_pos - t.window.0 as f64) / span).clamp(0.0, 1.0) as f32;
                     (1.0 - x, x)
                 } else {
@@ -1800,8 +1801,16 @@ mod tests {
         };
         let g = pan_gain();
         let out: Vec<f32> = ramp_through(t, false).iter().map(|v| v / g).collect();
-        assert!((out[0] - 100.0).abs() < 1e-2, "starts at the window: {}", out[0]);
-        assert!((out[199] - 299.0).abs() < 1e-2, "reads up to its end: {}", out[199]);
+        assert!(
+            (out[0] - 100.0).abs() < 1e-2,
+            "starts at the window: {}",
+            out[0]
+        );
+        assert!(
+            (out[199] - 299.0).abs() < 1e-2,
+            "reads up to its end: {}",
+            out[199]
+        );
         assert_eq!(out[200], 0.0, "and nothing past it");
         assert_eq!(out[400], 0.0);
     }
@@ -1817,9 +1826,20 @@ mod tests {
         let left: Vec<f32> = ramp_through(t, false).iter().map(|v| v / g).collect();
         let right: Vec<f32> = ramp_through(t, true).iter().map(|v| v / g).collect();
         // Frame 500 is half way: both sides at half of the ramp's 500.
-        assert!((left[500] - 250.0).abs() < 2.0, "left half way down: {}", left[500]);
-        assert!((right[500] - 250.0).abs() < 2.0, "right half way up: {}", right[500]);
-        assert!(left[10] > 9.5 && right[10] < 0.2, "left full and right gone at the start");
+        assert!(
+            (left[500] - 250.0).abs() < 2.0,
+            "left half way down: {}",
+            left[500]
+        );
+        assert!(
+            (right[500] - 250.0).abs() < 2.0,
+            "right half way up: {}",
+            right[500]
+        );
+        assert!(
+            left[10] > 9.5 && right[10] < 0.2,
+            "left full and right gone at the start"
+        );
     }
 
     #[test]
@@ -1830,12 +1850,22 @@ mod tests {
             length: 0.5,
             ..Default::default()
         };
-        let w = ClipTreat::new(&t, [0.0; 2]).with_window(&t, 1000, None).window;
+        let w = ClipTreat::new(&t, [0.0; 2])
+            .with_window(&t, 1000, None)
+            .window;
         assert_eq!(w, (250, 625), "a quarter in, half of what is left");
-        let w = ClipTreat::new(&t, [0.0; 2]).with_window(&t, 1000, Some(400)).window;
+        let w = ClipTreat::new(&t, [0.0; 2])
+            .with_window(&t, 1000, Some(400))
+            .window;
         assert_eq!(w, (250, 400), "the trim cuts the tail sooner");
-        let w = ClipTreat::new(&t, [0.0; 2]).with_window(&t, 1000, Some(10)).window;
-        assert_eq!(w, (250, 250), "a trim before the start leaves nothing, never a negative span");
+        let w = ClipTreat::new(&t, [0.0; 2])
+            .with_window(&t, 1000, Some(10))
+            .window;
+        assert_eq!(
+            w,
+            (250, 250),
+            "a trim before the start leaves nothing, never a negative span"
+        );
     }
 
     #[test]

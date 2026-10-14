@@ -21,10 +21,10 @@
 
 use crate::format;
 use hardwave_midi::MidiEvent;
-use hardwave_project::clip::DeclickMode;
 use hardwave_plugin_host::types::{
     HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
 };
+use hardwave_project::clip::DeclickMode;
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
 
@@ -429,7 +429,9 @@ impl NativeSampler {
         self.p[id as usize] >= 0.5
     }
     fn root(&self) -> u8 {
-        (self.p[PARAM_ROOT as usize] * 127.0).round().clamp(0.0, 127.0) as u8
+        (self.p[PARAM_ROOT as usize] * 127.0)
+            .round()
+            .clamp(0.0, 127.0) as u8
     }
     fn pitch_semitones(&self) -> f32 {
         (self.p[PARAM_PITCH as usize] * 2.0 - 1.0) * PITCH_RANGE_ST
@@ -455,7 +457,8 @@ impl NativeSampler {
     fn region(&self, frames: usize) -> (f64, f64) {
         let frames = frames as f64;
         let start = self.p[PARAM_SAMPLE_START as usize].clamp(0.0, 1.0) as f64 * frames;
-        let mut end = start + self.p[PARAM_SAMPLE_LENGTH as usize].clamp(0.0, 1.0) as f64 * (frames - start);
+        let mut end =
+            start + self.p[PARAM_SAMPLE_LENGTH as usize].clamp(0.0, 1.0) as f64 * (frames - start);
         let trim = self.p[PARAM_TRIM as usize].clamp(0.0, 1.0);
         if trim > 0.0 && self.peak > 0.0 {
             let threshold = 10f32.powf(-60.0 * (1.0 - trim) / 20.0) * self.peak;
@@ -485,7 +488,9 @@ impl NativeSampler {
     /// the pitch knob, and the file's rate against the engine's.
     fn step_for(&self, note: u8, sample: &SampleData) -> f64 {
         let sr_ratio = sample.sample_rate as f64 / self.sample_rate.max(1.0) as f64;
-        pitch_ratio(note, self.root()) * 2.0_f64.powf(self.pitch_semitones() as f64 / 12.0) * sr_ratio
+        pitch_ratio(note, self.root())
+            * 2.0_f64.powf(self.pitch_semitones() as f64 / 12.0)
+            * sr_ratio
     }
 
     fn start_voice(&mut self, note: u8, velocity: f32) {
@@ -524,11 +529,7 @@ impl NativeSampler {
             }
         }
         if self.voices.len() >= MAX_VOICES {
-            let steal = self
-                .voices
-                .iter()
-                .position(|v| !v.held())
-                .unwrap_or(0);
+            let steal = self.voices.iter().position(|v| !v.held()).unwrap_or(0);
             self.voices.remove(steal);
         }
         let envelope = self.on(PARAM_ENVELOPE);
@@ -542,7 +543,8 @@ impl NativeSampler {
         };
         self.voices.push(Voice {
             pos: region_start
-                + self.p[PARAM_OFFSET as usize].clamp(0.0, 1.0) as f64 * (region_end - region_start),
+                + self.p[PARAM_OFFSET as usize].clamp(0.0, 1.0) as f64
+                    * (region_end - region_start),
             step,
             target_step: step,
             glide: 0.0,
@@ -608,7 +610,9 @@ impl NativeSampler {
                     s
                 })
                 .unwrap_or_default(),
-            params: (0..PARAM_COUNT).map(|id| (id, self.p[id as usize])).collect(),
+            params: (0..PARAM_COUNT)
+                .map(|id| (id, self.p[id as usize]))
+                .collect(),
             path: self.path.clone(),
         }
     }
@@ -910,7 +914,12 @@ impl HostedPlugin for NativeSampler {
     fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
         match id {
             PARAM_ROOT => Some((0..=127).map(note_name).collect()),
-            PARAM_DECLICK => Some(DeclickMode::ALL.iter().map(|m| m.name().to_string()).collect()),
+            PARAM_DECLICK => Some(
+                DeclickMode::ALL
+                    .iter()
+                    .map(|m| m.name().to_string())
+                    .collect(),
+            ),
             _ => None,
         }
     }
@@ -1118,7 +1127,10 @@ mod tests {
         assert_eq!(b.path, "C:\\packs\\ramp.wav");
         let decoded = decode_sample_state(&bytes).unwrap();
         assert_eq!(decoded.sample.frames(), 100);
-        assert_eq!(decoded.sample.base_note, 72, "the header names the root too");
+        assert_eq!(
+            decoded.sample.base_note, 72,
+            "the header names the root too"
+        );
     }
 
     #[test]
@@ -1180,9 +1192,17 @@ mod tests {
         let a = run(&mut s, &[note_on(60)], 50);
         assert!((a[10] - 10.0).abs() < 1e-3, "plays straight, got {}", a[10]);
         let b = run(&mut s, &[note_off(60)], 50);
-        assert!((b[10] - 60.0).abs() < 1e-3, "the key up changed nothing, got {}", b[10]);
+        assert!(
+            (b[10] - 60.0).abs() < 1e-3,
+            "the key up changed nothing, got {}",
+            b[10]
+        );
         let c = run(&mut s, &[], 200);
-        assert!((c[99] - 199.0).abs() < 1e-3, "reads to the last frame, got {}", c[99]);
+        assert!(
+            (c[99] - 199.0).abs() < 1e-3,
+            "reads to the last frame, got {}",
+            c[99]
+        );
         assert_eq!(c[100], 0.0, "and stops there");
         assert!(s.voices.is_empty());
     }
@@ -1192,11 +1212,23 @@ mod tests {
         let mut s = sampler_with(&dc_sample());
         set(&mut s, PARAM_ENVELOPE, 1.0);
         set(&mut s, PARAM_ATTACK, 0.0); // 0.1 ms
-        set(&mut s, PARAM_RELEASE, (0.001_f32 / RELEASE_MAX_S).sqrt() as f64); // 1 ms = 48 samples
+        set(
+            &mut s,
+            PARAM_RELEASE,
+            (0.001_f32 / RELEASE_MAX_S).sqrt() as f64,
+        ); // 1 ms = 48 samples
         let _ = run(&mut s, &[note_on(60)], 20);
         let out = run(&mut s, &[note_off(60)], 60);
-        assert!(out[0] > 0.4, "still sounding as the release starts, got {}", out[0]);
-        assert!(out[24] > 0.1 && out[24] < 0.4, "half way down, got {}", out[24]);
+        assert!(
+            out[0] > 0.4,
+            "still sounding as the release starts, got {}",
+            out[0]
+        );
+        assert!(
+            out[24] > 0.1 && out[24] < 0.4,
+            "half way down, got {}",
+            out[24]
+        );
         assert_eq!(out[55], 0.0, "gone after the release");
     }
 
@@ -1213,11 +1245,30 @@ mod tests {
         set(&mut s, PARAM_DECAY, k(0.001, DECAY_MAX_S)); // 48 down to
         set(&mut s, PARAM_SUSTAIN, 0.5); // half
         let out = run(&mut s, &[note_on(60)], 300);
-        assert!(out[..48].iter().all(|v| *v == 0.0), "silent through the delay");
-        assert!(out[48 + 24] > 0.2 && out[48 + 24] < 0.3, "half way up the attack: {}", out[72]);
-        assert!((out[48 + 48 + 20] - 0.5).abs() < 0.02, "held at the top: {}", out[116]);
-        assert!(out[48 + 48 + 48 + 24] > 0.3 && out[168] < 0.45, "half way down the decay: {}", out[168]);
-        assert!((out[280] - 0.25).abs() < 0.02, "sustaining at half: {}", out[280]);
+        assert!(
+            out[..48].iter().all(|v| *v == 0.0),
+            "silent through the delay"
+        );
+        assert!(
+            out[48 + 24] > 0.2 && out[48 + 24] < 0.3,
+            "half way up the attack: {}",
+            out[72]
+        );
+        assert!(
+            (out[48 + 48 + 20] - 0.5).abs() < 0.02,
+            "held at the top: {}",
+            out[116]
+        );
+        assert!(
+            out[48 + 48 + 48 + 24] > 0.3 && out[168] < 0.45,
+            "half way down the decay: {}",
+            out[168]
+        );
+        assert!(
+            (out[280] - 0.25).abs() < 0.02,
+            "sustaining at half: {}",
+            out[280]
+        );
     }
 
     #[test]
@@ -1230,7 +1281,11 @@ mod tests {
         // Up to 80, back to 50, and so on: never past 80, never below 50
         // once it has got there, and still going after 400 samples.
         assert!(out[79] > 78.0);
-        assert!(out[85] >= 50.0 && out[85] < 60.0, "wrapped to the loop start: {}", out[85]);
+        assert!(
+            out[85] >= 50.0 && out[85] < 60.0,
+            "wrapped to the loop start: {}",
+            out[85]
+        );
         assert!(out[200..].iter().all(|v| *v >= 49.0 && *v <= 80.0));
         assert_eq!(s.voices.len(), 1);
     }
@@ -1243,8 +1298,18 @@ mod tests {
         set(&mut s, PARAM_LOOP_START, 0.5);
         set(&mut s, PARAM_LOOP_END, 0.8);
         let out = run(&mut s, &[note_on(60)], 400);
-        assert!(out[85] < out[80], "reads backwards after the loop end: {} then {}", out[80], out[85]);
-        assert!(out[115] > out[112], "and forwards again after the loop start: {} then {}", out[112], out[115]);
+        assert!(
+            out[85] < out[80],
+            "reads backwards after the loop end: {} then {}",
+            out[80],
+            out[85]
+        );
+        assert!(
+            out[115] > out[112],
+            "and forwards again after the loop start: {} then {}",
+            out[112],
+            out[115]
+        );
         assert!(out[200..].iter().all(|v| *v >= 49.0 && *v <= 80.0));
     }
 
@@ -1263,7 +1328,11 @@ mod tests {
         let mut s = sampler_with(&ramp_sample(100));
         set(&mut s, PARAM_OFFSET, 0.25);
         let out = run(&mut s, &[note_on(60)], 4);
-        assert!((out[0] - 25.0).abs() < 1e-3, "starts a quarter in: {}", out[0]);
+        assert!(
+            (out[0] - 25.0).abs() < 1e-3,
+            "starts a quarter in: {}",
+            out[0]
+        );
     }
 
     #[test]
@@ -1283,7 +1352,11 @@ mod tests {
         let mut s = sampler_with(&ramp_sample(1000));
         let _ = run(&mut s, &[note_on(60)], 500);
         let out = run(&mut s, &[note_on(60)], 200);
-        assert!(out[150] < 200.0, "the retrigger reads from the start again: {}", out[150]);
+        assert!(
+            out[150] < 200.0,
+            "the retrigger reads from the start again: {}",
+            out[150]
+        );
         assert_eq!(s.voices.len(), 1);
     }
 
@@ -1298,7 +1371,10 @@ mod tests {
         let early = s.voices[0].step;
         assert!(early > 1.0 && early < 2.0, "on its way up: {early}");
         let _ = run(&mut s, &[], 48_000 / 4);
-        assert!((s.voices[0].step - 2.0).abs() < 1e-9, "arrived an octave up");
+        assert!(
+            (s.voices[0].step - 2.0).abs() < 1e-9,
+            "arrived an octave up"
+        );
     }
 
     #[test]
@@ -1308,10 +1384,16 @@ mod tests {
         assert!((s.voices[0].step - 2.0).abs() < 1e-6, "octave up → 2x step");
         set(&mut s, PARAM_ROOT, 72.0 / 127.0);
         s.start_voice(72, 1.0);
-        assert!((s.voices[1].step - 1.0).abs() < 1e-6, "on its root the sample plays as recorded");
+        assert!(
+            (s.voices[1].step - 1.0).abs() < 1e-6,
+            "on its root the sample plays as recorded"
+        );
         set(&mut s, PARAM_PITCH, 0.75); // +12 st of the 24 each way
         s.start_voice(72, 1.0);
-        assert!((s.voices[2].step - 2.0).abs() < 1e-6, "the pitch knob shifts the whole channel");
+        assert!(
+            (s.voices[2].step - 2.0).abs() < 1e-6,
+            "the pitch knob shifts the whole channel"
+        );
     }
 
     #[test]
@@ -1320,19 +1402,33 @@ mod tests {
         set(&mut s, PARAM_SAMPLE_START, 0.25);
         set(&mut s, PARAM_SAMPLE_LENGTH, 0.5);
         let out = run(&mut s, &[note_on(60)], 500);
-        assert!((out[0] - 250.0).abs() < 1e-3, "starts a quarter in: {}", out[0]);
-        assert!((out[374] - 624.0).abs() < 1e-3, "reads to the region's end: {}", out[374]);
+        assert!(
+            (out[0] - 250.0).abs() < 1e-3,
+            "starts a quarter in: {}",
+            out[0]
+        );
+        assert!(
+            (out[374] - 624.0).abs() < 1e-3,
+            "reads to the region's end: {}",
+            out[374]
+        );
         assert_eq!(out[375], 0.0, "and stops there");
         // The offset counts within the region.
         set(&mut s, PARAM_OFFSET, 0.5);
         let out = run(&mut s, &[note_on(60)], 4);
-        assert!((out[0] - 437.5).abs() < 1e-3, "half way into the region: {}", out[0]);
+        assert!(
+            (out[0] - 437.5).abs() < 1e-3,
+            "half way into the region: {}",
+            out[0]
+        );
     }
 
     #[test]
     fn the_trim_cuts_the_quiet_tail() {
         // Loud for 400 frames, a whisper for the rest.
-        let ch: Vec<f32> = (0..1000).map(|i| if i < 400 { 0.8 } else { 0.001 }).collect();
+        let ch: Vec<f32> = (0..1000)
+            .map(|i| if i < 400 { 0.8 } else { 0.001 })
+            .collect();
         let bytes = encode_sample_state(48_000, 60, vec![ch]);
         let mut s = sampler_with(&bytes);
         let out = run(&mut s, &[note_on(60)], 1000);
@@ -1355,7 +1451,11 @@ mod tests {
         let out = run(&mut s, &[note_on(60)], 900);
         // At frame 850, 50 into the crossfade: half of 850 and half of 450.
         assert!((out[850] - 650.0).abs() < 2.0, "blended: {}", out[850]);
-        assert!((out[799] - 799.0).abs() < 1.0, "untouched before the crossfade: {}", out[799]);
+        assert!(
+            (out[799] - 799.0).abs() < 1.0,
+            "untouched before the crossfade: {}",
+            out[799]
+        );
     }
 
     #[test]
@@ -1366,20 +1466,42 @@ mod tests {
         set(&mut s, PARAM_FADE_STEREO, 1.0);
         let mut out = vec![vec![0.0; 1000], vec![0.0; 1000]];
         s.process(&[], &mut out, &[note_on(60)], &mut Vec::new(), 1000);
-        assert!(out[0][500] > 0.45 && out[0][500] < 0.55, "left half way down: {}", out[0][500]);
-        assert!(out[1][500] > 0.45 && out[1][500] < 0.55, "right half way up: {}", out[1][500]);
+        assert!(
+            out[0][500] > 0.45 && out[0][500] < 0.55,
+            "left half way down: {}",
+            out[0][500]
+        );
+        assert!(
+            out[1][500] > 0.45 && out[1][500] < 0.55,
+            "right half way up: {}",
+            out[1][500]
+        );
         assert!(out[0][10] > 0.95 && out[1][10] < 0.05);
 
         let mut s = sampler_with(&bytes);
         set(&mut s, PARAM_DECLICK, 3.0 / 5.0); // Smooth: 10 ms in
-        assert_eq!(s.parameter_text(PARAM_DECLICK, 3.0 / 5.0).as_deref(), Some("Smooth"));
+        assert_eq!(
+            s.parameter_text(PARAM_DECLICK, 3.0 / 5.0).as_deref(),
+            Some("Smooth")
+        );
         let out = run(&mut s, &[note_on(60)], 600);
         assert!(out[0] < 0.01, "starts from nothing: {}", out[0]);
-        assert!(out[240] > 0.45 && out[240] < 0.55, "half way up at 5 ms: {}", out[240]);
-        assert!((out[500] - 1.0).abs() < 1e-3, "full after 10 ms: {}", out[500]);
+        assert!(
+            out[240] > 0.45 && out[240] < 0.55,
+            "half way up at 5 ms: {}",
+            out[240]
+        );
+        assert!(
+            (out[500] - 1.0).abs() < 1e-3,
+            "full after 10 ms: {}",
+            out[500]
+        );
         let mut s = sampler_with(&bytes);
         let out = run(&mut s, &[note_on(60)], 4);
-        assert!((out[0] - 1.0).abs() < 1e-3, "out only: the attack is left alone");
+        assert!(
+            (out[0] - 1.0).abs() < 1e-3,
+            "out only: the attack is left alone"
+        );
     }
 
     #[test]
@@ -1394,11 +1516,20 @@ mod tests {
         assert_eq!(shown(PARAM_CUT_ITSELF).as_deref(), Some("On"));
         assert_eq!(shown(PARAM_ROOT).as_deref(), Some("C4"));
         assert_eq!(shown(PARAM_PITCH).as_deref(), Some("0.00 st"));
-        assert_eq!(p.parameter_text(PARAM_PITCH, 1.0).as_deref(), Some("+24.00 st"));
+        assert_eq!(
+            p.parameter_text(PARAM_PITCH, 1.0).as_deref(),
+            Some("+24.00 st")
+        );
         assert_eq!(p.parameter_text(PARAM_ROOT, 0.0).as_deref(), Some("C-1"));
         // The floors the setter keeps show up in the text too.
-        assert_eq!(p.parameter_text(PARAM_ATTACK, 0.0).as_deref(), Some("0.10 ms"));
-        assert_eq!(p.parameter_text(PARAM_RELEASE, 1.0).as_deref(), Some("10.00 s"));
+        assert_eq!(
+            p.parameter_text(PARAM_ATTACK, 0.0).as_deref(),
+            Some("0.10 ms")
+        );
+        assert_eq!(
+            p.parameter_text(PARAM_RELEASE, 1.0).as_deref(),
+            Some("10.00 s")
+        );
         for id in 0..PARAM_COUNT {
             assert!(
                 p.parameter_text(id, 0.5).is_some(),

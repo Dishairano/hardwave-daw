@@ -2818,8 +2818,7 @@ impl EngineCallback {
                     let source_step = match self.audio_pool.get(&region_source_id) {
                         Some(buf)
                             if buf.sample_rate != 0
-                                && (buf.sample_rate as f64 - sample_rate).abs()
-                                    > f64::EPSILON =>
+                                && (buf.sample_rate as f64 - sample_rate).abs() > f64::EPSILON =>
                         {
                             source_step * (buf.sample_rate as f64 / sample_rate)
                         }
@@ -4357,10 +4356,17 @@ mod offline_insert_tests {
         }
         let mut out: Vec<f32> = Vec::new();
         engine
-            .render_offline_with(48_000, 12_000, 0, None, |_| {}, |b| {
-                out.extend_from_slice(b);
-                true
-            })
+            .render_offline_with(
+                48_000,
+                12_000,
+                0,
+                None,
+                |_| {},
+                |b| {
+                    out.extend_from_slice(b);
+                    true
+                },
+            )
             .expect("it renders");
         let peak = out[2048..].iter().fold(0.0f32, |m, &v| m.max(v.abs()));
         assert!(
@@ -4397,7 +4403,10 @@ mod offline_insert_tests {
             });
             if let Some(t) = project.track_mut(&id) {
                 t.clips.push(ClipPlacement {
-                    content: ClipContent::Midi(MidiClipRef { id: "c".into(), clip }),
+                    content: ClipContent::Midi(MidiClipRef {
+                        id: "c".into(),
+                        clip,
+                    }),
                     track_id: id.clone(),
                     position_ticks: 0,
                     length_ticks: 1920,
@@ -4407,10 +4416,17 @@ mod offline_insert_tests {
         }
         let mut out: Vec<f32> = Vec::new();
         engine
-            .render_offline_with(48_000, 24_000, 0, None, |_| {}, |b| {
-                out.extend_from_slice(b);
-                true
-            })
+            .render_offline_with(
+                48_000,
+                24_000,
+                0,
+                None,
+                |_| {},
+                |b| {
+                    out.extend_from_slice(b);
+                    true
+                },
+            )
             .expect("it renders");
         let first = out.iter().position(|v| v.abs() > 0.02).map(|i| i / 2);
         assert!(

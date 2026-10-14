@@ -476,7 +476,11 @@ mod tests {
         let pool = AudioPool::new();
         pool.insert("b".into(), b);
         assert_eq!(pool.trim_end("b", 0.5), Some(11));
-        assert_eq!(pool.trim_end("b", 0.5), Some(11), "the second ask is the cached one");
+        assert_eq!(
+            pool.trim_end("b", 0.5),
+            Some(11),
+            "the second ask is the cached one"
+        );
         assert_eq!(pool.trim_end("nope", 0.5), None);
     }
 }

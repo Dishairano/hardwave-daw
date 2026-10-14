@@ -1,5 +1,6 @@
 use crate::AppState;
 use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
+use hardwave_native_plugins::sampler;
 use hardwave_native_plugins::{
     NativeAutoFilter, NativeAutoPan, NativeBitcrush, NativeChorus, NativeClipper, NativeCompressor,
     NativeConvReverb, NativeDelay, NativeDistortion, NativeEq, NativeExciter, NativeFilter,
@@ -9,7 +10,6 @@ use hardwave_native_plugins::{
     NativeStutter, NativeSubBass, NativeTape, NativeTransient, NativeTremolo, NativeTripleOsc,
     NativeVibrato, NativeVocoder, NativeWavetable,
 };
-use hardwave_native_plugins::sampler;
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
 use hardwave_plugin_host::{
@@ -2132,15 +2132,23 @@ mod sampler_window_tests {
     #[test]
     fn the_window_gets_the_file_the_length_the_root_and_an_outline() {
         let ch: Vec<f32> = (0..100).map(|i| if i < 50 { 0.5 } else { -0.25 }).collect();
-        let bytes = sampler::encode_sample_state_from(44_100, 67, vec![ch], "D:\\kicks\\Induskick4.wav");
+        let bytes =
+            sampler::encode_sample_state_from(44_100, 67, vec![ch], "D:\\kicks\\Induskick4.wav");
         let s = sampler::decode_sample_state(&bytes).unwrap();
         let info = sampler_sample_info(&s, 4);
         assert_eq!(info.path, "D:\\kicks\\Induskick4.wav");
-        assert_eq!((info.frames, info.sample_rate, info.channels, info.root), (100, 44_100, 1, 67));
-        assert_eq!(info.peaks, vec![[0.0, 0.5], [0.0, 0.5], [-0.25, 0.0], [-0.25, 0.0]]);
+        assert_eq!(
+            (info.frames, info.sample_rate, info.channels, info.root),
+            (100, 44_100, 1, 67)
+        );
+        assert_eq!(
+            info.peaks,
+            vec![[0.0, 0.5], [0.0, 0.5], [-0.25, 0.0], [-0.25, 0.0]]
+        );
         // More buckets than frames: one per frame, never a division by nothing.
         assert_eq!(sampler_sample_info(&s, 10_000).peaks.len(), 100);
-        let empty = sampler::decode_sample_state(&sampler::encode_sample_state(48_000, 60, vec![])).unwrap();
+        let empty = sampler::decode_sample_state(&sampler::encode_sample_state(48_000, 60, vec![]))
+            .unwrap();
         assert!(sampler_sample_info(&empty, 8).peaks.is_empty());
     }
 }

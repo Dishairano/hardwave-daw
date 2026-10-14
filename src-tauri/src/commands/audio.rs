@@ -979,7 +979,11 @@ mod tests {
         apply_sample_settings(&mut project, "insert-001", "a", &more).unwrap();
         let t = clip(&project, "insert-001", 0).treatment;
         assert!(t.fade_stereo);
-        assert_eq!((t.start, t.length, t.trim), (0.25, 1.0, 0.4), "length is clamped to 1");
+        assert_eq!(
+            (t.start, t.length, t.trim),
+            (0.25, 1.0, 0.4),
+            "length is clamped to 1"
+        );
         assert_eq!(t.declick, hardwave_project::clip::DeclickMode::Smooth);
         let wrong = SampleSettings {
             declick: Some("Loud".into()),
