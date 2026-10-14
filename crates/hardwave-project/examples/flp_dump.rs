@@ -163,6 +163,34 @@ fn main() {
             r.sample_fades_left_behind.join(", ")
         );
         println!("   mixed lanes: {}", r.mixed_lanes.join(", "));
+        // Each sampler channel's setup as read: envelope knobs as fractions
+        // of FL's travel, then loop, voices and the sample's effects.
+        for (i, ch) in fl.channels.iter().enumerate() {
+            if ch.sample_path.is_none() {
+                continue;
+            }
+            let s = &ch.settings.sampler;
+            let env = s.envelope.map(|e| {
+                format!(
+                    "env {} del {:.3} att {:.3} hold {:.3} dec {:.3} sus {:.3} rel {:.3}",
+                    if e.enabled { "on" } else { "off" },
+                    e.delay,
+                    e.attack,
+                    e.hold,
+                    e.decay,
+                    e.sustain,
+                    e.release
+                )
+            });
+            println!(
+                "   sampler {i:>3} {:<24} {} | loop {} pp {} mono {} porta {} cut {} declick {} xfade {:.2} trim {:.2} start {:?} len {:?} fadeSt {} norm {} dc {} envs {}",
+                ch.name.chars().take(24).collect::<String>(),
+                env.unwrap_or_else(|| "no envelope".into()),
+                s.use_loop_points, s.ping_pong, s.mono, s.porta, s.cut_itself, s.declick,
+                s.crossfade, s.trim, s.start, s.length, s.fade_stereo, s.normalize, s.remove_dc,
+                s.envelope_events
+            );
+        }
         // Clips carrying their channel's pan, swap or polarity themselves
         // (their lane's channels differ), and samples set to play as a tape.
         let (mut own_pan, mut tapes) = (0, 0);
