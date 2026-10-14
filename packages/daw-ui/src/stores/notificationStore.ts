@@ -40,8 +40,17 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   notifications: [],
 
   push: (level, message, opts) => {
-    const id = newId()
     const sticky = opts?.sticky ?? level === 'error'
+    // The same sticky message again (an audio device dropping out every few
+    // seconds) stacks nothing: the one already up is kept, and is fresh.
+    if (sticky) {
+      const same = get().notifications.find((n) => n.sticky && n.level === level && n.message === message)
+      if (same) {
+        set((s) => ({ notifications: s.notifications.map((n) => (n === same ? { ...n, createdAt: Date.now(), detail: opts?.detail ?? n.detail } : n)) }))
+        return same.id
+      }
+    }
+    const id = newId()
     const n: Notification = {
       id, level, message,
       detail: opts?.detail,

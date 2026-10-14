@@ -65,6 +65,15 @@ pub struct AppState {
     #[allow(clippy::type_complexity)]
     pub slot_param_queues:
         Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
+    /// The last value the app sent each insert's parameters, by slot. A
+    /// window opening reads the live state from the audio thread; when
+    /// the audio thread is not running (the device dropped out, as the
+    /// founder's headphones did on 2026-10-14) it got nothing and showed
+    /// the plug-in at its defaults, as if every knob had been lost. These
+    /// are laid over whatever state the window does get.
+    #[allow(clippy::type_complexity)]
+    pub slot_param_shadow:
+        Arc<Mutex<std::collections::HashMap<(String, String), std::collections::HashMap<u32, f64>>>>,
     /// Where each insert logs the knob moves made in its own window.
     ///
     /// The queue above is drained by the plug-in on the audio path, so
@@ -276,6 +285,7 @@ pub fn run() {
         export_cancel: Arc::new(AtomicBool::new(false)),
         plugin_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        slot_param_shadow: Arc::new(Mutex::new(std::collections::HashMap::new())),
         control_surface: Arc::new(crate::control_surface::ControlSurface::new()),
         reference_meta: Arc::new(Mutex::new((f32::NEG_INFINITY, String::new()))),
         sandboxed_plugins: commands::plugins::sandboxed_set(

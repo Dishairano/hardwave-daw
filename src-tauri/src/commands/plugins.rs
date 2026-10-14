@@ -892,6 +892,10 @@ fn remove_plugin_from_track_body(
     };
     let _ = state.engine.lock().try_send_insert_command(cmd);
     state.engine.lock().drain_insert_graveyard();
+    state
+        .slot_param_shadow
+        .lock()
+        .remove(&(track_id.clone(), slot_id.clone()));
     state.slot_param_queues.lock().remove(&(track_id, slot_id));
     Ok(())
 }
@@ -1007,6 +1011,12 @@ pub fn set_plugin_parameter(
 ) -> Result<Option<String>, String> {
     // The value as text, for the control that moved it.
     let text = parameter_text_for_slot(&state, &track_id, &slot_id, param_id, value);
+    state
+        .slot_param_shadow
+        .lock()
+        .entry((track_id.clone(), slot_id.clone()))
+        .or_default()
+        .insert(param_id, value);
     // A sampler channel's settings live in its saved state, so the
     // project's copy follows the knob: an undo brings it back, a save keeps
     // it. The first move of a gesture takes the undo snapshot.
@@ -1290,8 +1300,22 @@ pub fn get_plugin_parameters(
             .and_then(|t| t.inserts.iter().find(|s| s.id == slot_id))
             .and_then(|s| s.state.clone())
     };
+    let had_live = live.is_some();
     if let Some(bytes) = live.or_else(saved) {
         let _ = plugin.set_state(&bytes);
+    }
+    // No answer from the audio thread (the device dropped out, the stream
+    // is down): the knobs the app sent are the best picture there is.
+    if !had_live {
+        if let Some(shadow) = state
+            .slot_param_shadow
+            .lock()
+            .get(&(track_id.clone(), slot_id.clone()))
+        {
+            for (&id, &v) in shadow {
+                plugin.set_parameter_value(id, v);
+            }
+        }
     }
     let count = plugin.get_parameter_count();
     let built_in = plugin_id.starts_with("hardwave.native.");
