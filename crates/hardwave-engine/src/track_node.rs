@@ -270,6 +270,12 @@ pub struct ClipTreat {
     pub swap: bool,
     pub gain_l: f32,
     pub gain_r: f32,
+    /// The part of the file that is the sample, in source frames: the
+    /// clip's positions count from `window.0`, and nothing from `window.1`
+    /// on is heard (sample start, length and trim).
+    pub window: (u64, u64),
+    /// The left channel fades out and the right fades in over the window.
+    pub fade_stereo: bool,
 }
 
 impl Default for ClipTreat {
@@ -279,6 +285,8 @@ impl Default for ClipTreat {
             swap: false,
             gain_l: 1.0,
             gain_r: 1.0,
+            window: (0, u64::MAX),
+            fade_stereo: false,
         }
     }
 }
@@ -295,7 +303,28 @@ impl ClipTreat {
             swap: t.swap_stereo,
             gain_l: (1.0 - pan).min(1.0) * polarity,
             gain_r: (1.0 + pan).min(1.0) * polarity,
+            window: (0, u64::MAX),
+            fade_stereo: t.fade_stereo,
         }
+    }
+
+    /// The window the sample is, for a file of `frames` frames: the start
+    /// and length shares of the treatment, and the tail cut at `trim_end`
+    /// when the treatment trims.
+    pub fn with_window(
+        mut self,
+        t: &hardwave_project::clip::SampleTreatment,
+        frames: u64,
+        trim_end: Option<u64>,
+    ) -> Self {
+        let start = (t.start.clamp(0.0, 1.0) * frames as f64).round() as u64;
+        let rest = frames.saturating_sub(start);
+        let mut end = start + (t.length.clamp(0.0, 1.0) * rest as f64).round() as u64;
+        if let Some(cut) = trim_end {
+            end = end.min(cut.max(start));
+        }
+        self.window = (start, end.max(start));
+        self
     }
 }
 
@@ -1204,6 +1233,13 @@ impl AudioNode for TrackNode {
                 if source_pos < 0.0 {
                     continue;
                 }
+                // The clip's positions count from where the sample starts
+                // in its file, and the sample ends where its window does.
+                let t = &clip.treat;
+                let source_pos = source_pos + t.window.0 as f64;
+                if source_pos >= t.window.1 as f64 {
+                    continue;
+                }
                 let idx0 = source_pos.floor() as usize;
                 if idx0 >= audio_buf.num_frames {
                     continue;
@@ -1226,7 +1262,6 @@ impl AudioNode for TrackNode {
                 }
 
                 let scaled_gain = clip.gain * env;
-                let t = &clip.treat;
                 let l0 = audio_buf.sample(0, idx0);
                 let l1 = audio_buf.sample(0, idx1);
                 let l = l0 + (l1 - l0) * frac - t.dc[0];
@@ -1238,9 +1273,17 @@ impl AudioNode for TrackNode {
                     l
                 };
                 let (l, r) = if t.swap { (r, l) } else { (l, r) };
+                // Fade stereo: left to right across the sample.
+                let (fl, fr) = if t.fade_stereo {
+                    let span = (t.window.1.min(audio_buf.num_frames as u64) - t.window.0).max(1) as f64;
+                    let x = ((source_pos - t.window.0 as f64) / span).clamp(0.0, 1.0) as f32;
+                    (1.0 - x, x)
+                } else {
+                    (1.0, 1.0)
+                };
 
-                out_l[frame] += l * scaled_gain * t.gain_l;
-                out_r[frame] += r * scaled_gain * t.gain_r;
+                out_l[frame] += l * scaled_gain * t.gain_l * fl;
+                out_r[frame] += r * scaled_gain * t.gain_r * fr;
             }
         }
 
@@ -1692,6 +1735,107 @@ mod tests {
         // Asked for without a DC known, it takes nothing off.
         let off = ClipTreat::new(&SampleTreatment::default(), [0.5, 0.1]);
         assert_eq!(off.dc, [0.0; 2]);
+    }
+
+    /// A clip of a ramp 0, 1, 2, ... treated as `treat`: one block, left
+    /// channel, so the output says which frame of the file was read.
+    fn ramp_through(treat: ClipTreat, fade_stereo_right: bool) -> Vec<f32> {
+        let pool = AudioPool::new();
+        let ramp: Vec<f32> = (0..1000).map(|i| i as f32).collect();
+        pool.insert(
+            "ramp".to_string(),
+            crate::audio_pool::AudioBuffer {
+                channels: vec![ramp.clone(), ramp],
+                sample_rate: 48_000,
+                num_frames: 1000,
+            },
+        );
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), pool, meter);
+        node.set_clips(vec![ClipRegion {
+            source_id: "ramp".into(),
+            timeline_start: 0,
+            timeline_end: 1000,
+            source_offset: 0,
+            gain: 1.0,
+            muted: false,
+            fade_in_samples: 0,
+            fade_out_samples: 0,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            reversed: false,
+            source_step: 1.0,
+            warp: Vec::new(),
+            treat,
+        }]);
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            buffer_size: 512,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: 0,
+            position_ticks: 0,
+            playing: true,
+        };
+        let mut outputs = vec![vec![0.0f32; 512]; 2];
+        let empty: Vec<f32> = vec![0.0; 512];
+        let inputs: Vec<&[f32]> = vec![&empty, &empty];
+        node.process(&inputs, &mut outputs, &[], &mut Vec::new(), &ctx);
+        outputs.swap_remove(if fade_stereo_right { 1 } else { 0 })
+    }
+
+    /// The pan law takes both sides down the same: the ramp's frame 1
+    /// through an untreated clip says by how much.
+    fn pan_gain() -> f32 {
+        ramp_through(ClipTreat::default(), false)[1]
+    }
+
+    #[test]
+    fn the_sample_s_window_moves_its_start_and_ends_it() {
+        // Sample start at frame 100 of the file: the clip's first frame
+        // reads frame 100. The window ends at 300: nothing after it.
+        let t = ClipTreat {
+            window: (100, 300),
+            ..Default::default()
+        };
+        let g = pan_gain();
+        let out: Vec<f32> = ramp_through(t, false).iter().map(|v| v / g).collect();
+        assert!((out[0] - 100.0).abs() < 1e-2, "starts at the window: {}", out[0]);
+        assert!((out[199] - 299.0).abs() < 1e-2, "reads up to its end: {}", out[199]);
+        assert_eq!(out[200], 0.0, "and nothing past it");
+        assert_eq!(out[400], 0.0);
+    }
+
+    #[test]
+    fn fade_stereo_goes_from_left_to_right_over_the_window() {
+        let t = ClipTreat {
+            window: (0, 1000),
+            fade_stereo: true,
+            ..Default::default()
+        };
+        let g = pan_gain();
+        let left: Vec<f32> = ramp_through(t, false).iter().map(|v| v / g).collect();
+        let right: Vec<f32> = ramp_through(t, true).iter().map(|v| v / g).collect();
+        // Frame 500 is half way: both sides at half of the ramp's 500.
+        assert!((left[500] - 250.0).abs() < 2.0, "left half way down: {}", left[500]);
+        assert!((right[500] - 250.0).abs() < 2.0, "right half way up: {}", right[500]);
+        assert!(left[10] > 9.5 && right[10] < 0.2, "left full and right gone at the start");
+    }
+
+    #[test]
+    fn the_window_comes_from_the_treatment_and_the_trim() {
+        use hardwave_project::clip::SampleTreatment;
+        let t = SampleTreatment {
+            start: 0.25,
+            length: 0.5,
+            ..Default::default()
+        };
+        let w = ClipTreat::new(&t, [0.0; 2]).with_window(&t, 1000, None).window;
+        assert_eq!(w, (250, 625), "a quarter in, half of what is left");
+        let w = ClipTreat::new(&t, [0.0; 2]).with_window(&t, 1000, Some(400)).window;
+        assert_eq!(w, (250, 400), "the trim cuts the tail sooner");
+        let w = ClipTreat::new(&t, [0.0; 2]).with_window(&t, 1000, Some(10)).window;
+        assert_eq!(w, (250, 250), "a trim before the start leaves nothing, never a negative span");
     }
 
     #[test]

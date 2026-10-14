@@ -83,7 +83,7 @@ pub struct AudioClip {
 
 /// What is done to a clip's sample as it plays, on top of its gain, pitch,
 /// stretch and fades. All off is the sample as recorded.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SampleTreatment {
     /// -1 is left, 1 right.
     pub pan: f64,
@@ -96,6 +96,111 @@ pub struct SampleTreatment {
     /// Speed and pitch move together, like a tape: a longer clip plays
     /// lower. Off, length and pitch are set apart.
     pub resample: bool,
+    /// The left channel fades out and the right fades in over the sample.
+    #[serde(default)]
+    pub fade_stereo: bool,
+    /// Where the sample begins, as a share of the file (0 = its first
+    /// frame): what comes before is cut away, as FL's SMP START does.
+    #[serde(default)]
+    pub start: f64,
+    /// How much of what remains after `start` is the sample, 0..1.
+    #[serde(default = "one")]
+    pub length: f64,
+    /// Cuts the sample's quiet tail. 0 is off; from there the threshold
+    /// rises from -60 dB under the peak (0.01) to the peak itself (1).
+    #[serde(default)]
+    pub trim: f64,
+    /// The tiny fades at a clip's edges when it has none of its own.
+    #[serde(default)]
+    pub declick: DeclickMode,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+impl Default for SampleTreatment {
+    fn default() -> Self {
+        Self {
+            pan: 0.0,
+            polarity_inverted: false,
+            swap_stereo: false,
+            normalize: false,
+            remove_dc: false,
+            resample: false,
+            fade_stereo: false,
+            start: 0.0,
+            length: 1.0,
+            trim: 0.0,
+            declick: DeclickMode::OutOnly,
+        }
+    }
+}
+
+impl SampleTreatment {
+    /// The amplitude under which the tail is cut, as a share of the
+    /// sample's peak, or `None` when trim is off: -60 dB at the first
+    /// step, the peak itself at the top.
+    pub fn trim_threshold(&self) -> Option<f64> {
+        let trim = self.trim.clamp(0.0, 1.0);
+        (trim > 0.0).then(|| 10f64.powf(-60.0 * (1.0 - trim) / 20.0))
+    }
+}
+
+/// FL's declicking modes: how a clip's edges are smoothed when the clip
+/// has no fades of its own. Each is a pair of tiny fades, in and out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeclickMode {
+    /// Only the end is smoothed; the attack is left as it is.
+    #[default]
+    OutOnly,
+    /// A hair at the start, so a transient keeps its edge.
+    Transient,
+    Generic,
+    Smooth,
+    /// Longer at both ends, for clips that overlap.
+    Crossfade,
+    /// The end lets go slowly, as a sample ringing past its clip would.
+    Bleeding,
+}
+
+impl DeclickMode {
+    pub const ALL: [DeclickMode; 6] = [
+        DeclickMode::OutOnly,
+        DeclickMode::Transient,
+        DeclickMode::Generic,
+        DeclickMode::Smooth,
+        DeclickMode::Crossfade,
+        DeclickMode::Bleeding,
+    ];
+
+    /// The fades it stands for, in milliseconds: in, out.
+    pub fn fades_ms(self) -> (f64, f64) {
+        match self {
+            DeclickMode::OutOnly => (0.0, 1.0),
+            DeclickMode::Transient => (0.3, 2.0),
+            DeclickMode::Generic => (2.0, 5.0),
+            DeclickMode::Smooth => (10.0, 20.0),
+            DeclickMode::Crossfade => (5.0, 5.0),
+            DeclickMode::Bleeding => (0.0, 8.0),
+        }
+    }
+
+    /// As FL names it.
+    pub fn name(self) -> &'static str {
+        match self {
+            DeclickMode::OutOnly => "Out only",
+            DeclickMode::Transient => "Transient",
+            DeclickMode::Generic => "Generic",
+            DeclickMode::Smooth => "Smooth",
+            DeclickMode::Crossfade => "Crossfade",
+            DeclickMode::Bleeding => "Bleeding",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|m| m.name().eq_ignore_ascii_case(name.trim()))
+    }
 }
 
 /// One warp anchor: timeline tick ↔ source sample.

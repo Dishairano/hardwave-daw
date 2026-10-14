@@ -53,6 +53,18 @@ pub struct LevelStats {
 }
 
 impl AudioBuffer {
+    /// The frame after the last one louder than `threshold` on any channel;
+    /// 0 when nothing is.
+    pub fn trim_end(&self, threshold: f32) -> u64 {
+        let mut end = 0usize;
+        for ch in &self.channels {
+            if let Some(last) = ch.iter().rposition(|v| v.abs() > threshold) {
+                end = end.max(last + 1);
+            }
+        }
+        end as u64
+    }
+
     /// Its levels. Reads the whole buffer twice; the pool keeps the answer.
     pub fn level_stats(&self) -> LevelStats {
         let mut dc = [0.0f32; 2];
@@ -87,6 +99,9 @@ struct PoolInner {
     /// worked out from (by address): a buffer replaced under the same id
     /// gets its own.
     levels: HashMap<String, (usize, LevelStats)>,
+    /// Where each buffer's tail falls under a threshold (the bits of the
+    /// threshold as the key), with the buffer's address, as `levels`.
+    trims: HashMap<(String, u32), (usize, u64)>,
 }
 
 impl PoolInner {
@@ -96,6 +111,7 @@ impl PoolInner {
             order: VecDeque::new(),
             bytes_used: 0,
             levels: HashMap::new(),
+            trims: HashMap::new(),
         }
     }
 }
@@ -184,10 +200,28 @@ impl AudioPool {
         Some(stats)
     }
 
+    /// The frame after the last one louder than `threshold` (a share of
+    /// full scale) on any channel: where the sample's tail is cut. Worked
+    /// out the first time it is asked for. Not for the audio thread.
+    pub fn trim_end(&self, id: &str, threshold: f32) -> Option<u64> {
+        let buffer = self.get(id)?;
+        let address = Arc::as_ptr(&buffer) as usize;
+        let key = (id.to_string(), threshold.to_bits());
+        if let Some((at, end)) = self.inner.read().trims.get(&key) {
+            if *at == address {
+                return Some(*end);
+            }
+        }
+        let end = buffer.trim_end(threshold);
+        self.inner.write().trims.insert(key, (address, end));
+        Some(end)
+    }
+
     /// Remove a buffer by ID.
     pub fn remove(&self, id: &str) {
         let mut inner = self.inner.write();
         inner.levels.remove(id);
+        inner.trims.retain(|(k, _), _| k != id);
         if let Some(old) = inner.buffers.remove(id) {
             inner.bytes_used = inner.bytes_used.saturating_sub(old.bytes());
         }
@@ -421,5 +455,28 @@ mod tests {
         assert_eq!(s.dc, [0.0, 0.0]);
         assert!((s.peak - 0.1).abs() < 1e-6);
         assert!(pool.level_stats("missing").is_none());
+    }
+
+    #[test]
+    fn the_tail_is_cut_where_it_falls_under_the_threshold() {
+        let mut left = vec![0.0f32; 100];
+        left[10] = 0.9;
+        left[50] = 0.05;
+        let mut right = vec![0.0f32; 100];
+        right[70] = 0.2;
+        let b = AudioBuffer {
+            channels: vec![left, right],
+            sample_rate: 48_000,
+            num_frames: 100,
+        };
+        assert_eq!(b.trim_end(0.5), 11, "only the peak is louder than half");
+        assert_eq!(b.trim_end(0.1), 71, "the right channel's blip counts");
+        assert_eq!(b.trim_end(0.01), 71);
+        assert_eq!(b.trim_end(0.95), 0, "nothing over the top: nothing left");
+        let pool = AudioPool::new();
+        pool.insert("b".into(), b);
+        assert_eq!(pool.trim_end("b", 0.5), Some(11));
+        assert_eq!(pool.trim_end("b", 0.5), Some(11), "the second ask is the cached one");
+        assert_eq!(pool.trim_end("nope", 0.5), None);
     }
 }

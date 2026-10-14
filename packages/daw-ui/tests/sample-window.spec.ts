@@ -28,10 +28,25 @@ test.describe('Sample window', () => {
     await expect(win.locator('.hwf-check', { hasText: 'Remove DC offset' })).toHaveClass(/is-on/)
     await expect(win.locator('.hwf-check', { hasText: 'Normalize' })).not.toHaveClass(/is-on/)
     // What is not built yet is switched off, and says so.
+    await expect(win.locator('.hwf-check', { hasText: 'Keep on disk' })).toBeDisabled()
+    // The loop knobs come with sampler channels.
+    const xfade = win.locator('.hwf-knob', { hasText: 'X-fade' })
+    await expect(xfade).toHaveClass(/is-off/)
+    await xfade.hover()
+    await expect(page.locator('.hwf-tip')).toContainText('sampler channels')
+  })
+
+  test('the sample\'s window, its trim, fade stereo and declicking are the sample\'s', async ({ page }) => {
+    const win = page.locator('.sw-win')
+    await win.locator('.hwf-check', { hasText: 'Fade stereo' }).click()
+    await win.locator('.sw-row', { hasText: 'Declicking mode' }).locator('.hwf-select').click()
+    await win.locator('.hwf-menu button', { hasText: 'Smooth' }).click()
     const trim = win.locator('.hwf-knob', { hasText: 'Trim' })
-    await expect(trim).toHaveClass(/is-off/)
     await trim.hover()
-    await expect(page.locator('.hwf-tip')).toContainText('not in this version yet')
+    await expect(page.locator('.hwf-tip')).toHaveText('Trim off')
+    const calls = await settingsCalls(page)
+    expect(calls.map((c) => c.args?.settings)).toEqual([{ fadeStereo: true }, { declick: 'Smooth' }])
+    for (const c of calls) expect(c.args?.snapshot).toBe(true)
   })
 
   test('a check box sends the setting for the sample as one undo step', async ({ page }) => {

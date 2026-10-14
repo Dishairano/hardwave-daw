@@ -129,8 +129,9 @@ function TrackBox({ track, tracks }: { track: TrackInfo; tracks: TrackInfo[] }) 
   return <FlatBox label="Track" value={trackNumber || '-'} small={output?.name ?? 'Master'} hint={`${track.name} plays into ${output?.name ?? 'the master'}; route it in the mixer`} />
 }
 
-/** What FL has on the first page that the DAW cannot do yet. */
-function ContentPanel() {
+/** What FL has on the first page: its load-time options, which the DAW
+ *  cannot do yet, and the declicking mode. */
+function ContentPanel({ declick, onDeclick }: { declick: Declick; onDeclick?: (d: Declick) => void }) {
   return (
     <FlatPanel title="Content">
       <div className="hwf-checks">
@@ -139,9 +140,9 @@ function ContentPanel() {
         <FlatCheck label="Resample" on={false} disabled hint={NOT_YET} />
         <FlatCheck label="Load slice markers" on={false} disabled hint={NOT_YET} />
       </div>
-      <div className="sw-row">
+      <div className="sw-row" title={onDeclick ? DECLICK_HINT[declick] : FOR_CLIPS}>
         <span className="sw-lead">Declicking mode</span>
-        <FlatSelect value="Out only" options={['Out only'] as const} disabled style={{ flex: 1 }} />
+        <FlatSelect value={declick} options={DECLICKS} onPick={onDeclick} disabled={!onDeclick} style={{ flex: 1 }} />
       </div>
     </FlatPanel>
   )
@@ -164,6 +165,11 @@ interface Values {
   removeDc: boolean
   fadeInMs: number
   fadeOutMs: number
+  fadeStereo: boolean
+  start: number
+  length: number
+  trim: number
+  declick: Declick
 }
 
 /** The command's own names for the same things. */
@@ -181,7 +187,25 @@ type Settings = Partial<{
   removeDc: boolean
   fadeInMs: number
   fadeOutMs: number
+  fadeStereo: boolean
+  start: number
+  length: number
+  trim: number
+  declick: Declick
 }>
+
+/** FL's declicking modes, as the engine names them. */
+const DECLICKS = ['Out only', 'Transient', 'Generic', 'Smooth', 'Crossfade', 'Bleeding'] as const
+type Declick = (typeof DECLICKS)[number]
+const DECLICK_HINT: Record<Declick, string> = {
+  'Out only': 'only the end is smoothed; the attack stays',
+  Transient: 'a hair at the start, so a transient keeps its edge',
+  Generic: 'short fades at both ends',
+  Smooth: 'longer fades at both ends',
+  Crossfade: 'for clips that overlap',
+  Bleeding: 'the end lets go slowly',
+}
+const asDeclick = (v: string | undefined): Declick => (DECLICKS as readonly string[]).includes(v ?? '') ? (v as Declick) : 'Out only'
 
 function valuesOf(clip: ClipInfo): Values {
   const t = clip.treatment
@@ -199,6 +223,11 @@ function valuesOf(clip: ClipInfo): Values {
     removeDc: t?.removeDc ?? false,
     fadeInMs: clip.fadeInMs ?? 0,
     fadeOutMs: clip.fadeOutMs ?? 0,
+    fadeStereo: t?.fadeStereo ?? false,
+    start: t?.start ?? 0,
+    length: t?.length ?? 1,
+    trim: t?.trim ?? 0,
+    declick: asDeclick(t?.declick),
   }
 }
 
@@ -217,6 +246,11 @@ function settingsOf(v: Partial<Values>): Settings {
   if (v.removeDc !== undefined) s.removeDc = v.removeDc
   if (v.fadeInMs !== undefined) s.fadeInMs = v.fadeInMs
   if (v.fadeOutMs !== undefined) s.fadeOutMs = v.fadeOutMs
+  if (v.fadeStereo !== undefined) s.fadeStereo = v.fadeStereo
+  if (v.start !== undefined) s.start = v.start
+  if (v.length !== undefined) s.length = v.length
+  if (v.trim !== undefined) s.trim = v.trim
+  if (v.declick !== undefined) s.declick = v.declick
   return s
 }
 
@@ -296,9 +330,11 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
   const beatsNow = naturalBeats * timeFactor(v)
   const fileName = baseName(clip.sourceFile || clip.source_id) || clip.name
   const rate = clip.sourceRate || 48_000
-  const regionStart = (clip.sourceStart ?? 0) / rate
+  // The clip's positions count from where the sample starts in its file.
+  const regionStart = v.start * seconds + (clip.sourceStart ?? 0) / rate
   const playsFor = (clip.length_ticks / PPQ) * beatSec / Math.max(0.01, timeFactor(v))
-  const region = { start: regionStart, end: Math.min(seconds || regionStart + playsFor, regionStart + playsFor) }
+  const windowEnd = (v.start + v.length * (1 - v.start)) * seconds
+  const region = { start: regionStart, end: Math.min(windowEnd || regionStart + playsFor, regionStart + playsFor) }
 
   return (
     <Frame
@@ -337,7 +373,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
               <span className="sw-file-name" title={clip.sourceFile || clip.source_id}>{fileName}</span>
             </div>
           </FlatPanel>
-          <ContentPanel />
+          <ContentPanel declick={v.declick} onDeclick={(d) => change({ declick: d }, true, `Declicking ${d}`)} />
           <FlatPanel title="Playback" grow>
             <div className="hwf-krow">
               <FlatKnob label="Offset" value={0} def={0} text="" disabled offText={FOR_SAMPLER} />
@@ -395,13 +431,23 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
               <FlatCheck label="Remove DC offset" on={v.removeDc} onToggle={() => change({ removeDc: !v.removeDc }, true, 'Remove DC offset')} />
               <FlatCheck label="Reverse polarity" on={v.polarityInverted} onToggle={() => change({ polarityInverted: !v.polarityInverted }, true, 'Reverse polarity')} />
               <FlatCheck label="Normalize" on={v.normalize} onToggle={() => change({ normalize: !v.normalize }, true, 'Normalize sample')} />
-              <FlatCheck label="Fade stereo" on={false} disabled hint={NOT_YET} />
+              <FlatCheck label="Fade stereo" on={v.fadeStereo} onToggle={() => change({ fadeStereo: !v.fadeStereo }, true, 'Fade stereo')} />
               <FlatCheck label="Reverse" on={v.reversed} onToggle={() => change({ reversed: !v.reversed }, true, 'Reverse sample')} />
               <FlatCheck label="Swap stereo" on={v.swapStereo} onToggle={() => change({ swapStereo: !v.swapStereo }, true, 'Swap stereo')} />
             </div>
             <div className="hwf-krow">
-              <FlatKnob label="Start" value={0} def={0} text="" disabled />
-              <FlatKnob label="Length" value={1} def={1} text="" disabled />
+              <FlatKnob
+                label="Start" value={v.start} def={0}
+                text={`Sample start ${seconds ? ms(v.start * seconds * 1000) : pct(v.start)}`}
+                onChange={(t, done) => change({ start: Math.round(t * 1000) / 1000 }, done, 'Sample start')}
+                onReset={() => change({ start: 0 }, true, 'Sample start')}
+              />
+              <FlatKnob
+                label="Length" value={v.length} def={1}
+                text={`Length ${pct(v.length)}${seconds ? ` (${ms(v.length * (1 - v.start) * seconds * 1000)})` : ''}`}
+                onChange={(t, done) => change({ length: Math.round(t * 1000) / 1000 }, done, 'Sample length')}
+                onReset={() => change({ length: 1 }, true, 'Sample length')}
+              />
               <FlatKnob
                 label="In" value={Math.sqrt(v.fadeInMs / 2000)} def={0}
                 text={`Fade in ${ms(v.fadeInMs)}`}
@@ -415,7 +461,12 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
                 onReset={() => change({ fadeOutMs: 0 }, true, 'Sample fade out')}
               />
               <FlatKnob label="X-fade" value={0} def={0} text="" disabled offText={FOR_SAMPLER} />
-              <FlatKnob label="Trim" value={0} def={0} text="" disabled />
+              <FlatKnob
+                label="Trim" value={v.trim} def={0}
+                text={v.trim > 0 ? `Trim the tail under ${Math.round(-60 * (1 - v.trim))} dB` : 'Trim off'}
+                onChange={(t, done) => change({ trim: Math.round(t * 1000) / 1000 }, done, 'Trim sample')}
+                onReset={() => change({ trim: 0 }, true, 'Trim sample')}
+              />
             </div>
           </FlatPanel>
         </div>
@@ -423,6 +474,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
 
       <SampleView
         peaks={peaks} seconds={seconds} bpm={bpm} color={color} region={region} loop={null}
+        window={{ start: v.start * seconds, end: (v.start + v.length * (1 - v.start)) * seconds }}
         fadeIn={v.fadeInMs / 1000 / Math.max(0.01, timeFactor(v))} fadeOut={v.fadeOutMs / 1000 / Math.max(0.01, timeFactor(v))}
         reversed={v.reversed}
       />
@@ -436,7 +488,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
 export const SP = {
   gain: 0, attack: 1, release: 2, delay: 3, hold: 4, decay: 5, sustain: 6, envelope: 7,
   offset: 8, loopStart: 9, loopEnd: 10, loop: 11, pingPong: 12, mono: 13, cutItself: 14, porta: 15,
-  root: 16, pitch: 17,
+  root: 16, pitch: 17, sampleStart: 18, sampleLength: 19, xfade: 20, trim: 21, fadeStereo: 22, declick: 23,
 } as const
 /** The time knobs run on a square law: seconds = knob² × the longest they go. */
 const TIME_MAX_S: Partial<Record<number, number>> = { [SP.attack]: 5, [SP.delay]: 5, [SP.hold]: 5, [SP.decay]: 10, [SP.release]: 10 }
@@ -550,6 +602,10 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
   const pitchSt = (p(SP.pitch) * 2 - 1) * PITCH_RANGE_ST
   const root = Math.round(p(SP.root) * 127)
   const loop = on(SP.loop)
+  // The sample is its region of the file: start, length (the trim's cut is the engine's).
+  const regionStart = p(SP.sampleStart) * seconds
+  const regionEnd = regionStart + p(SP.sampleLength) * (seconds - regionStart)
+  const regionSpan = Math.max(0, regionEnd - regionStart)
   const loopHint = 'Switch on "Use loop points" first'
   const timeKnob = (id: number, label: string, done: string) => (
     <FlatKnob
@@ -608,24 +664,27 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
                 <button type="button" className="sw-btn" onClick={() => void loadFile()} title="Load a sample into this channel">Load…</button>
               </div>
             </FlatPanel>
-            <ContentPanel />
+            <ContentPanel
+              declick={DECLICKS[Math.round(p(SP.declick) * (DECLICKS.length - 1))] ?? 'Out only'}
+              onDeclick={(d) => set(SP.declick, DECLICKS.indexOf(d) / (DECLICKS.length - 1), true, `Declicking ${d}`)}
+            />
             <FlatPanel title="Playback" grow>
               <div className="hwf-krow">
                 <FlatKnob
                   label="Offset" value={p(SP.offset)} def={def(SP.offset)}
-                  text={`Start offset ${pct(p(SP.offset))}${seconds ? ` (${ms(p(SP.offset) * seconds * 1000)})` : ''}`}
+                  text={`Start offset ${pct(p(SP.offset))}${seconds ? ` (${ms(p(SP.offset) * regionSpan * 1000)})` : ''}`}
                   onChange={(t, done) => set(SP.offset, Math.round(t * 1000) / 1000, done, 'Sample offset')}
                   onReset={() => set(SP.offset, 0, true, 'Sample offset')}
                 />
                 <FlatKnob
                   label="Loop start" value={p(SP.loopStart)} def={def(SP.loopStart)} disabled={!loop} offText={loopHint}
-                  text={`Loop start ${seconds ? ms(p(SP.loopStart) * seconds * 1000) : pct(p(SP.loopStart))}`}
+                  text={`Loop start ${seconds ? ms(p(SP.loopStart) * regionSpan * 1000) : pct(p(SP.loopStart))}`}
                   onChange={(t, done) => set(SP.loopStart, Math.round(Math.min(t, p(SP.loopEnd)) * 1000) / 1000, done, 'Loop start')}
                   onReset={() => set(SP.loopStart, 0, true, 'Loop start')}
                 />
                 <FlatKnob
                   label="Loop end" value={p(SP.loopEnd)} def={def(SP.loopEnd)} disabled={!loop} offText={loopHint}
-                  text={`Loop end ${seconds ? ms(p(SP.loopEnd) * seconds * 1000) : pct(p(SP.loopEnd))}`}
+                  text={`Loop end ${seconds ? ms(p(SP.loopEnd) * regionSpan * 1000) : pct(p(SP.loopEnd))}`}
                   onChange={(t, done) => set(SP.loopEnd, Math.round(Math.max(t, p(SP.loopStart)) * 1000) / 1000, done, 'Loop end')}
                   onReset={() => set(SP.loopEnd, 1, true, 'Loop end')}
                 />
@@ -657,17 +716,37 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
                 <FlatCheck label="Remove DC offset" on={false} disabled hint={NOT_YET} />
                 <FlatCheck label="Reverse polarity" on={false} disabled hint={NOT_YET} />
                 <FlatCheck label="Normalize" on={false} disabled hint={NOT_YET} />
-                <FlatCheck label="Fade stereo" on={false} disabled hint={NOT_YET} />
+                <FlatCheck label="Fade stereo" on={on(SP.fadeStereo)} onToggle={() => toggle(SP.fadeStereo, 'Fade stereo')} />
                 <FlatCheck label="Reverse" on={false} disabled hint={NOT_YET} />
                 <FlatCheck label="Swap stereo" on={false} disabled hint={NOT_YET} />
               </div>
               <div className="hwf-krow">
-                <FlatKnob label="Start" value={0} def={0} text="" disabled />
-                <FlatKnob label="Length" value={1} def={1} text="" disabled />
-                <FlatKnob label="In" value={0} def={0} text="" disabled />
-                <FlatKnob label="Out" value={0} def={0} text="" disabled />
-                <FlatKnob label="X-fade" value={0} def={0} text="" disabled />
-                <FlatKnob label="Trim" value={0} def={0} text="" disabled />
+                <FlatKnob
+                  label="Start" value={p(SP.sampleStart)} def={def(SP.sampleStart)}
+                  text={`Sample start ${seconds ? ms(p(SP.sampleStart) * seconds * 1000) : pct(p(SP.sampleStart))}`}
+                  onChange={(t, done) => set(SP.sampleStart, Math.round(t * 1000) / 1000, done, 'Sample start')}
+                  onReset={() => set(SP.sampleStart, 0, true, 'Sample start')}
+                />
+                <FlatKnob
+                  label="Length" value={p(SP.sampleLength)} def={def(SP.sampleLength)}
+                  text={`Length ${pct(p(SP.sampleLength))}`}
+                  onChange={(t, done) => set(SP.sampleLength, Math.round(t * 1000) / 1000, done, 'Sample length')}
+                  onReset={() => set(SP.sampleLength, 1, true, 'Sample length')}
+                />
+                <FlatKnob label="In" value={0} def={0} text="" disabled offText={FOR_CLIPS} />
+                <FlatKnob label="Out" value={0} def={0} text="" disabled offText={FOR_CLIPS} />
+                <FlatKnob
+                  label="X-fade" value={p(SP.xfade)} def={def(SP.xfade)} disabled={!loop} offText={loopHint}
+                  text={`Loop crossfade ${pct(p(SP.xfade))}`}
+                  onChange={(t, done) => set(SP.xfade, Math.round(t * 1000) / 1000, done, 'Loop crossfade')}
+                  onReset={() => set(SP.xfade, 0, true, 'Loop crossfade')}
+                />
+                <FlatKnob
+                  label="Trim" value={p(SP.trim)} def={def(SP.trim)}
+                  text={p(SP.trim) > 0 ? `Trim the tail under ${Math.round(-60 * (1 - p(SP.trim)))} dB` : 'Trim off'}
+                  onChange={(t, done) => set(SP.trim, Math.round(t * 1000) / 1000, done, 'Trim sample')}
+                  onReset={() => set(SP.trim, 0, true, 'Trim sample')}
+                />
               </div>
             </FlatPanel>
           </div>
@@ -676,8 +755,9 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
         <SampleView
           visible={page === 'sample'}
           peaks={sample?.peaks ?? []} seconds={seconds} bpm={bpm} color={color}
-          region={{ start: p(SP.offset) * seconds, end: seconds }}
-          loop={loop ? { start: p(SP.loopStart) * seconds, end: p(SP.loopEnd) * seconds } : null}
+          region={{ start: regionStart + p(SP.offset) * regionSpan, end: regionEnd }}
+          window={{ start: regionStart, end: regionEnd }}
+          loop={loop ? { start: regionStart + p(SP.loopStart) * regionSpan, end: regionStart + p(SP.loopEnd) * regionSpan } : null}
           fadeIn={0} fadeOut={0} reversed={false}
           empty={sample === null ? 'No sample yet: load one with the button above' : sample === undefined ? 'Loading…' : null}
         />
@@ -743,13 +823,15 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
 
 /** The sample, wide at the bottom: what plays of it, its fades, its loop,
  *  the song's bars over it, and an overview strip under it. */
-function SampleView({ peaks, seconds, bpm, color, region, loop, fadeIn, fadeOut, reversed, empty, visible = true }: {
+function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = null, fadeIn, fadeOut, reversed, empty, visible = true }: {
   peaks: number[][]
   seconds: number
   bpm: number
   color: string
   region: { start: number; end: number }
   loop: { start: number; end: number } | null
+  /** The part of the file that is the sample (sample start, length, trim). */
+  window?: { start: number; end: number } | null
   fadeIn: number
   fadeOut: number
   reversed: boolean
@@ -804,6 +886,18 @@ function SampleView({ peaks, seconds, bpm, color, region, loop, fadeIn, fadeOut,
     g.fillStyle = 'rgba(10,10,11,.6)'
     g.fillRect(0, ruler, X(region.start), h - ruler)
     g.fillRect(X(region.end), ruler, w - X(region.end), h - ruler)
+    if (win && (win.start > 0 || win.end < total)) {
+      // What is cut away by the sample's start, length and trim: hatched off.
+      g.fillStyle = 'rgba(10,10,11,.75)'
+      g.fillRect(0, ruler, X(win.start), h - ruler)
+      g.fillRect(X(win.end), ruler, w - X(win.end), h - ruler)
+      g.fillStyle = 'rgba(236,236,240,.35)'
+      for (const t of [win.start, win.end]) {
+        if (t <= 0 || t >= total) continue
+        const x = Math.round(X(t)) + 0.5
+        g.fillRect(x - 0.5, ruler, 1, h - ruler)
+      }
+    }
     if (loop && loop.end > loop.start) {
       // The loop in red, as FL draws it: its span tinted, its ends marked.
       g.fillStyle = 'rgba(220,38,38,.12)'
@@ -848,7 +942,7 @@ function SampleView({ peaks, seconds, bpm, color, region, loop, fadeIn, fadeOut,
       const a = Math.max(Math.abs(peaks[i][0]), Math.abs(peaks[i][1])) * (oh / 2 - 5)
       og.fillRect((i / n) * ow, oh / 2 - a, Math.max(1, ow / n), a * 2)
     }
-  }, [peaks, seconds, bpm, color, region.start, region.end, loopKey, fadeIn, fadeOut, reversed, empty, visible]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [peaks, seconds, bpm, color, region.start, region.end, loopKey, win?.start, win?.end, fadeIn, fadeOut, reversed, empty, visible]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="sw-view">

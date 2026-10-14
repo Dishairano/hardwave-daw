@@ -262,6 +262,14 @@ pub struct TreatmentInfo {
     normalize: bool,
     remove_dc: bool,
     resample: bool,
+    fade_stereo: bool,
+    /// Where the sample starts in its file and how much of the rest it is, 0..1.
+    start: f64,
+    length: f64,
+    /// 0 is off.
+    trim: f64,
+    /// As FL names it: "Out only", "Transient", "Generic", "Smooth", "Crossfade", "Bleeding".
+    declick: String,
 }
 
 impl From<&hardwave_project::clip::SampleTreatment> for TreatmentInfo {
@@ -273,6 +281,11 @@ impl From<&hardwave_project::clip::SampleTreatment> for TreatmentInfo {
             normalize: t.normalize,
             remove_dc: t.remove_dc,
             resample: t.resample,
+            fade_stereo: t.fade_stereo,
+            start: t.start,
+            length: t.length,
+            trim: t.trim,
+            declick: t.declick.name().to_string(),
         }
     }
 }
@@ -296,6 +309,14 @@ pub struct SampleSettings {
     remove_dc: Option<bool>,
     fade_in_ms: Option<f64>,
     fade_out_ms: Option<f64>,
+    fade_stereo: Option<bool>,
+    /// The sample's start in its file and its length from there, 0..1.
+    start: Option<f64>,
+    length: Option<f64>,
+    /// The tail trim, 0 (off) to 1.
+    trim: Option<f64>,
+    /// A declicking mode by its name; an unknown name is refused.
+    declick: Option<String>,
 }
 
 /// Change the settings of a sample: every clip that plays the same file as
@@ -383,6 +404,22 @@ pub(crate) fn apply_sample_settings(
             }
             if let Some(v) = s.remove_dc {
                 ac.treatment.remove_dc = v;
+            }
+            if let Some(v) = s.fade_stereo {
+                ac.treatment.fade_stereo = v;
+            }
+            if let Some(v) = s.start {
+                ac.treatment.start = v.clamp(0.0, 1.0);
+            }
+            if let Some(v) = s.length {
+                ac.treatment.length = v.clamp(0.0, 1.0);
+            }
+            if let Some(v) = s.trim {
+                ac.treatment.trim = v.clamp(0.0, 1.0);
+            }
+            if let Some(name) = &s.declick {
+                ac.treatment.declick = hardwave_project::clip::DeclickMode::from_name(name)
+                    .ok_or_else(|| format!("no declicking mode named {name}"))?;
             }
             // Fades in time, as FL's knobs are, made ticks for each clip at
             // the tempo where it sits; together never longer than the clip.
@@ -929,6 +966,26 @@ mod tests {
         let c = clip(&project, "insert-001", 0);
         assert_eq!(c.fade_in_ticks + c.fade_out_ticks, 4 * beat);
         assert!(apply_sample_settings(&mut project, "insert-001", "nope", &long).is_err());
+
+        // The sample's window, its tail trim, fade stereo and declicking.
+        let more = SampleSettings {
+            fade_stereo: Some(true),
+            start: Some(0.25),
+            length: Some(1.5),
+            trim: Some(0.4),
+            declick: Some("smooth".into()),
+            ..Default::default()
+        };
+        apply_sample_settings(&mut project, "insert-001", "a", &more).unwrap();
+        let t = clip(&project, "insert-001", 0).treatment;
+        assert!(t.fade_stereo);
+        assert_eq!((t.start, t.length, t.trim), (0.25, 1.0, 0.4), "length is clamped to 1");
+        assert_eq!(t.declick, hardwave_project::clip::DeclickMode::Smooth);
+        let wrong = SampleSettings {
+            declick: Some("Loud".into()),
+            ..Default::default()
+        };
+        assert!(apply_sample_settings(&mut project, "insert-001", "a", &wrong).is_err());
     }
 
     #[test]

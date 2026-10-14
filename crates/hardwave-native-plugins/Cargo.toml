@@ -12,11 +12,11 @@ hardwave-midi = { path = "../hardwave-midi" }
 raw-window-handle.workspace = true
 serde.workspace = true
 log.workspace = true
+# The sampler shares the declicking modes with the clips.
+hardwave-project = { path = "../hardwave-project" }
 
 [dev-dependencies]
-# Render-to-WAV proof test needs project types (PluginSlot, clips) to build a
-# project with an insert, and hound to write the rendered master to disk.
-hardwave-project = { path = "../hardwave-project" }
+# Render-to-WAV proof test needs hound to write the rendered master to disk.
 hound.workspace = true
 # The dump_params example prints JSON.
 serde_json.workspace = true

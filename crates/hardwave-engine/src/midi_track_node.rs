@@ -12,8 +12,9 @@
 
 use std::sync::{atomic::Ordering, Arc};
 
+use crate::audio_pool::AudioPool;
 use crate::graph::{AudioNode, ProcessContext};
-use crate::track_node::TrackMeterState;
+use crate::track_node::{ClipRegion, TrackMeterState, TrackNode};
 
 /// A single MIDI note pre-resolved to sample positions on the timeline.
 ///
@@ -239,6 +240,13 @@ pub struct MidiTrackNode {
     /// the classic cause of clicks at small buffer sizes.
     kick_l: Vec<f32>,
     kick_r: Vec<f32>,
+    /// The channel's audio clips (a consolidated part, a sample dropped on
+    /// it), played by a track node of their own and mixed into the dry
+    /// signal before the inserts, so they go through the same effects and
+    /// fader as the synth.
+    clips: Option<TrackNode>,
+    clip_out: Vec<Vec<f32>>,
+    clip_midi_scratch: Vec<hardwave_midi::MidiEvent>,
     rms_smooth: f32,
     /// Native instrument the track is voiced with. When set to
     /// [`Instrument::KickSynth`] the built-in sine voicing below is
@@ -328,6 +336,9 @@ impl MidiTrackNode {
             prefs: crate::audio_prefs::AudioPrefs::new(),
             kick_l: Vec::new(),
             kick_r: Vec::new(),
+            clips: None,
+            clip_out: Vec::new(),
+            clip_midi_scratch: Vec::new(),
             rms_smooth: 0.0,
             instrument: Instrument::BuiltinSine,
             waveform: Waveform::Sine,
@@ -350,6 +361,24 @@ impl MidiTrackNode {
                 self.kick = hardwave_dsp::kick_synth::KickSynth::new(sample_rate.max(1.0));
             }
         }
+    }
+
+    /// The channel's audio clips, as regions a track node plays. None
+    /// takes the node away again.
+    pub fn set_audio_clips(&mut self, pool: AudioPool, regions: Vec<ClipRegion>) {
+        if regions.is_empty() {
+            self.clips = None;
+            return;
+        }
+        let mut node = TrackNode::new(
+            format!("{}-clips", self.track_id),
+            self.name.clone(),
+            pool,
+            Arc::new(TrackMeterState::default()),
+        );
+        node.set_prefs(self.prefs.clone());
+        node.set_clips(regions);
+        self.clips = Some(node);
     }
 
     /// Set the built-in synth's oscillator shape. Audio thread picks it
@@ -1229,6 +1258,39 @@ impl AudioNode for MidiTrackNode {
             for buf in outputs.iter_mut() {
                 for s in buf.iter_mut() {
                     *s = 0.0;
+                }
+            }
+        }
+
+        // The channel's audio clips, into the dry signal. Their node pans
+        // them to the centre with the pan law, and the track pan applies
+        // the law again below: scaling by the centre gain keeps a clip
+        // level with the synth.
+        if let Some(clips) = self.clips.as_mut() {
+            let want = (ctx.buffer_size as usize).max(block_size);
+            if self.clip_out.len() < 2 {
+                self.clip_out = vec![Vec::new(), Vec::new()];
+            }
+            for ch in self.clip_out.iter_mut() {
+                if ch.len() < want {
+                    ch.resize(want, 0.0);
+                }
+                ch[..want].fill(0.0);
+            }
+            self.clip_midi_scratch.clear();
+            clips.process(&[], &mut self.clip_out, &[], &mut self.clip_midi_scratch, ctx);
+            let (cl, _) = crate::pan::gains(0.0, self.prefs.pan_law());
+            let k = if cl > 1e-6 { 1.0 / cl } else { 1.0 };
+            // The clips' node sizes its output to the block the context
+            // names, which can be shorter than these buffers (a render's
+            // last block).
+            let n = block_size
+                .min(self.clip_out[0].len())
+                .min(self.clip_out[1].len());
+            if let [left, right, ..] = outputs {
+                for i in 0..n {
+                    left[i] += self.clip_out[0][i] * k;
+                    right[i] += self.clip_out[1][i] * k;
                 }
             }
         }

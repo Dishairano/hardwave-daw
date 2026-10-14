@@ -80,6 +80,14 @@ export interface ClipInfo {
     normalize: boolean
     removeDc: boolean
     resample: boolean
+    fadeStereo?: boolean
+    /** Where the sample starts in its file and how much of the rest it is, 0..1. */
+    start?: number
+    length?: number
+    /** The tail trim, 0 (off) to 1. */
+    trim?: number
+    /** A declicking mode by FL's name. */
+    declick?: string
   }
   /** Where the file is on disk. */
   sourceFile?: string

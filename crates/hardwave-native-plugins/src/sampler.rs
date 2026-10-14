@@ -21,6 +21,7 @@
 
 use crate::format;
 use hardwave_midi::MidiEvent;
+use hardwave_project::clip::DeclickMode;
 use hardwave_plugin_host::types::{
     HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
 };
@@ -47,7 +48,19 @@ pub const PARAM_CUT_ITSELF: u32 = 14;
 pub const PARAM_PORTA: u32 = 15;
 pub const PARAM_ROOT: u32 = 16;
 pub const PARAM_PITCH: u32 = 17;
-pub const PARAM_COUNT: u32 = 18;
+/// Where the sample starts in its file and how much of the rest it is
+/// (FL's SMP START and length), 0..1 of the file.
+pub const PARAM_SAMPLE_START: u32 = 18;
+pub const PARAM_SAMPLE_LENGTH: u32 = 19;
+/// The loop's crossfade, as a share of the loop.
+pub const PARAM_XFADE: u32 = 20;
+/// Cuts the sample's quiet tail: 0 is off, then the threshold rises from
+/// -60 dB under the peak to the peak.
+pub const PARAM_TRIM: u32 = 21;
+pub const PARAM_FADE_STEREO: u32 = 22;
+/// FL's declicking mode: the tiny fades at a note's start and at a cut.
+pub const PARAM_DECLICK: u32 = 23;
+pub const PARAM_COUNT: u32 = 24;
 
 /// The time knobs run on a square law (fine near zero, as FL's do):
 /// seconds = knob² × the longest they go.
@@ -56,8 +69,11 @@ const DELAY_MAX_S: f32 = 5.0;
 const HOLD_MAX_S: f32 = 5.0;
 const DECAY_MAX_S: f32 = 10.0;
 const RELEASE_MAX_S: f32 = 10.0;
-/// A cut voice (mono, cut itself, a stolen voice) fades over this long.
+/// A cut voice (mono, cut itself, a stolen voice) fades at least this long.
 const CUT_FADE_S: f32 = 0.002;
+/// The tail profile keeps the loudest sample of every block this long, so
+/// the trim's cut is found without reading the audio again.
+const PROFILE_STEP: usize = 64;
 /// A note-off with the envelope off, on a looping sample, lets go over this long.
 const LOOP_STOP_S: f32 = 0.005;
 /// Porta slides from one note to the next over this long.
@@ -295,6 +311,10 @@ struct Voice {
     /// A voice that was cut fades out by this much per sample; 0 = not cut.
     cut: f32,
     cut_gain: f32,
+    /// The declicking fade at the start: how much it rises per sample
+    /// (0 = none) and where it is.
+    attack: f32,
+    attack_gain: f32,
 }
 
 impl Voice {
@@ -310,6 +330,10 @@ pub struct NativeSampler {
     sample: Option<SampleData>,
     /// The file the sample came from; what the window shows as its name.
     path: String,
+    /// The loudest sample of every `PROFILE_STEP` frames, and the loudest
+    /// of all: the trim finds its cut in these.
+    profile: Vec<f32>,
+    peak: f32,
     voices: Vec<Voice>,
     /// Every setting, 0..1, by parameter id.
     p: [f32; PARAM_COUNT as usize],
@@ -343,7 +367,29 @@ fn defaults() -> [f32; PARAM_COUNT as usize] {
     p[PARAM_CUT_ITSELF as usize] = 1.0;
     p[PARAM_ROOT as usize] = 60.0 / 127.0;
     p[PARAM_PITCH as usize] = 0.5;
+    p[PARAM_SAMPLE_LENGTH as usize] = 1.0;
     p
+}
+
+fn declick_of(v: f32) -> DeclickMode {
+    let n = DeclickMode::ALL.len();
+    DeclickMode::ALL[((v.clamp(0.0, 1.0) * (n - 1) as f32).round() as usize).min(n - 1)]
+}
+
+/// The loudest sample of every `PROFILE_STEP` frames over every channel,
+/// and the loudest of all.
+fn profile_of(sample: &SampleData) -> (Vec<f32>, f32) {
+    let frames = sample.frames();
+    let mut profile = vec![0.0f32; frames.div_ceil(PROFILE_STEP)];
+    let mut peak = 0.0f32;
+    for ch in &sample.channels {
+        for (i, chunk) in ch.chunks(PROFILE_STEP).enumerate() {
+            let m = chunk.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
+            profile[i] = profile[i].max(m);
+            peak = peak.max(m);
+        }
+    }
+    (profile, peak)
 }
 
 impl NativeSampler {
@@ -372,6 +418,8 @@ impl NativeSampler {
             active: false,
             sample: None,
             path: String::new(),
+            profile: Vec::new(),
+            peak: 0.0,
             voices: Vec::new(),
             p: defaults(),
         }
@@ -401,6 +449,38 @@ impl NativeSampler {
         (seconds * self.sample_rate).max(1.0) as f64
     }
 
+    /// The part of the file that is the sample, in frames: from the sample
+    /// start, as long as the length says, and no further than where the
+    /// trim cuts the tail.
+    fn region(&self, frames: usize) -> (f64, f64) {
+        let frames = frames as f64;
+        let start = self.p[PARAM_SAMPLE_START as usize].clamp(0.0, 1.0) as f64 * frames;
+        let mut end = start + self.p[PARAM_SAMPLE_LENGTH as usize].clamp(0.0, 1.0) as f64 * (frames - start);
+        let trim = self.p[PARAM_TRIM as usize].clamp(0.0, 1.0);
+        if trim > 0.0 && self.peak > 0.0 {
+            let threshold = 10f32.powf(-60.0 * (1.0 - trim) / 20.0) * self.peak;
+            let cut = self
+                .profile
+                .iter()
+                .rposition(|m| *m > threshold)
+                .map(|i| ((i + 1) * PROFILE_STEP) as f64)
+                .unwrap_or(0.0);
+            end = end.min(cut.min(frames));
+        }
+        (start, end.max(start))
+    }
+
+    fn declick(&self) -> DeclickMode {
+        declick_of(self.p[PARAM_DECLICK as usize])
+    }
+
+    /// How much a cut voice drops per sample: the declicking mode's fade
+    /// out, never shorter than the floor.
+    fn cut_step(&self) -> f32 {
+        let (_, out_ms) = self.declick().fades_ms();
+        1.0 / ((out_ms as f32 / 1000.0).max(CUT_FADE_S) * self.sample_rate).max(1.0)
+    }
+
     /// Frames per output sample for `note`: the distance from the root,
     /// the pitch knob, and the file's rate against the engine's.
     fn step_for(&self, note: u8, sample: &SampleData) -> f64 {
@@ -411,7 +491,14 @@ impl NativeSampler {
     fn start_voice(&mut self, note: u8, velocity: f32) {
         let Some(sample) = &self.sample else { return };
         let step = self.step_for(note, sample);
-        let frames = sample.frames();
+        let (region_start, region_end) = self.region(sample.frames());
+        let cut_step = self.cut_step();
+        let (attack_ms, _) = self.declick().fades_ms();
+        let attack = if attack_ms > 0.0 {
+            1.0 / ((attack_ms as f32 / 1000.0) * self.sample_rate).max(1.0)
+        } else {
+            0.0
+        };
         if self.on(PARAM_MONO) {
             if self.on(PARAM_PORTA) {
                 // Legato: the held note slides to the new one and keeps its
@@ -424,17 +511,15 @@ impl NativeSampler {
                     return;
                 }
             }
-            let sr = self.sample_rate;
             for v in self.voices.iter_mut() {
                 if v.cut == 0.0 {
-                    v.cut = 1.0 / (CUT_FADE_S * sr).max(1.0);
+                    v.cut = cut_step;
                 }
             }
         } else if self.on(PARAM_CUT_ITSELF) {
-            let sr = self.sample_rate;
             for v in self.voices.iter_mut() {
                 if v.cut == 0.0 {
-                    v.cut = 1.0 / (CUT_FADE_S * sr).max(1.0);
+                    v.cut = cut_step;
                 }
             }
         }
@@ -456,7 +541,8 @@ impl NativeSampler {
             (EnvStage::Attack, 0.0, 0)
         };
         self.voices.push(Voice {
-            pos: self.p[PARAM_OFFSET as usize].clamp(0.0, 1.0) as f64 * frames as f64,
+            pos: region_start
+                + self.p[PARAM_OFFSET as usize].clamp(0.0, 1.0) as f64 * (region_end - region_start),
             step,
             target_step: step,
             glide: 0.0,
@@ -469,6 +555,8 @@ impl NativeSampler {
             rel_dec: 0.0,
             cut: 0.0,
             cut_gain: 1.0,
+            attack,
+            attack_gain: if attack > 0.0 { 0.0 } else { 1.0 },
         });
     }
 
@@ -589,9 +677,19 @@ impl HostedPlugin for NativeSampler {
         let hold = self.samples(self.seconds(PARAM_HOLD)) as u64;
         let looping = self.on(PARAM_LOOP);
         let ping_pong = self.on(PARAM_PING_PONG);
-        let ls = self.p[PARAM_LOOP_START as usize].clamp(0.0, 1.0) as f64 * frames as f64;
-        let le = self.p[PARAM_LOOP_END as usize].clamp(0.0, 1.0) as f64 * frames as f64;
+        // The sample is its region of the file; the loop points and the
+        // offset count within it.
+        let (rs, re) = self.region(frames);
+        let span = (re - rs).max(1.0);
+        let ls = rs + self.p[PARAM_LOOP_START as usize].clamp(0.0, 1.0) as f64 * span;
+        let le = rs + self.p[PARAM_LOOP_END as usize].clamp(0.0, 1.0) as f64 * span;
         let loop_on = looping && le > ls + 1.0;
+        let xfade = if loop_on {
+            self.p[PARAM_XFADE as usize].clamp(0.0, 1.0) as f64 * (le - ls)
+        } else {
+            0.0
+        };
+        let fade_stereo = self.on(PARAM_FADE_STEREO);
 
         for i in 0..num_samples {
             let mut l = 0.0_f32;
@@ -660,17 +758,38 @@ impl HostedPlugin for NativeSampler {
                         continue;
                     }
                 }
-                if v.pos >= frames as f64 || v.pos < 0.0 {
+                if v.attack > 0.0 && v.attack_gain < 1.0 {
+                    v.attack_gain = (v.attack_gain + v.attack).min(1.0);
+                }
+                if v.pos >= re || v.pos < rs {
                     v.stage = EnvStage::Idle;
                     continue;
                 }
-                let g = v.env * v.cut_gain * v.velocity * gain;
-                let sl = Self::read(&sample, 0, v.pos);
-                let sr_s = if two_ch {
-                    Self::read(&sample, 1, v.pos)
-                } else {
-                    sl
-                };
+                let g = v.env * v.cut_gain * v.attack_gain * v.velocity * gain;
+                let (mut sl, mut sr_s) = (Self::read(&sample, 0, v.pos), 0.0);
+                if two_ch {
+                    sr_s = Self::read(&sample, 1, v.pos);
+                }
+                // Into the loop's crossfade: blend with what comes before
+                // the loop start, so the seam does not click.
+                if xfade > 0.0 && v.dir > 0.0 && v.pos > le - xfade {
+                    let other = v.pos - (le - ls);
+                    if other >= rs {
+                        let w = ((v.pos - (le - xfade)) / xfade).clamp(0.0, 1.0) as f32;
+                        sl = sl * (1.0 - w) + Self::read(&sample, 0, other) * w;
+                        if two_ch {
+                            sr_s = sr_s * (1.0 - w) + Self::read(&sample, 1, other) * w;
+                        }
+                    }
+                }
+                if !two_ch {
+                    sr_s = sl;
+                }
+                if fade_stereo {
+                    let x = ((v.pos - rs) / span).clamp(0.0, 1.0) as f32;
+                    sl *= 1.0 - x;
+                    sr_s *= x;
+                }
                 l += sl * g;
                 r += sr_s * g;
                 if v.glide != 0.0 {
@@ -727,6 +846,12 @@ impl HostedPlugin for NativeSampler {
             PARAM_PORTA => ("Porta", ""),
             PARAM_ROOT => ("Root note", ""),
             PARAM_PITCH => ("Pitch", "st"),
+            PARAM_SAMPLE_START => ("Sample start", ""),
+            PARAM_SAMPLE_LENGTH => ("Sample length", ""),
+            PARAM_XFADE => ("Loop crossfade", ""),
+            PARAM_TRIM => ("Trim", ""),
+            PARAM_FADE_STEREO => ("Fade stereo", ""),
+            PARAM_DECLICK => ("Declicking", ""),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -761,8 +886,17 @@ impl HostedPlugin for NativeSampler {
             PARAM_HOLD => format::secs(knob_seconds(v, HOLD_MAX_S, 0.0) as f64),
             PARAM_DECAY => format::secs(knob_seconds(v, DECAY_MAX_S, 0.001) as f64),
             PARAM_ENVELOPE | PARAM_LOOP | PARAM_PING_PONG | PARAM_MONO | PARAM_CUT_ITSELF
-            | PARAM_PORTA => format::on_off(v as f64),
-            PARAM_OFFSET | PARAM_LOOP_START | PARAM_LOOP_END => format::pct(v as f64),
+            | PARAM_PORTA | PARAM_FADE_STEREO => format::on_off(v as f64),
+            PARAM_OFFSET | PARAM_LOOP_START | PARAM_LOOP_END | PARAM_SAMPLE_START
+            | PARAM_SAMPLE_LENGTH | PARAM_XFADE => format::pct(v as f64),
+            PARAM_TRIM => {
+                if v <= 0.0 {
+                    "Off".to_string()
+                } else {
+                    format!("{:.0} dB", -60.0 * (1.0 - v))
+                }
+            }
+            PARAM_DECLICK => declick_of(v).name().to_string(),
             PARAM_ROOT => note_name((v * 127.0).round() as u8),
             PARAM_PITCH => {
                 let st = (v * 2.0 - 1.0) * PITCH_RANGE_ST;
@@ -774,7 +908,11 @@ impl HostedPlugin for NativeSampler {
     }
 
     fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
-        (id == PARAM_ROOT).then(|| (0..=127).map(note_name).collect())
+        match id {
+            PARAM_ROOT => Some((0..=127).map(note_name).collect()),
+            PARAM_DECLICK => Some(DeclickMode::ALL.iter().map(|m| m.name().to_string()).collect()),
+            _ => None,
+        }
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -805,6 +943,9 @@ impl HostedPlugin for NativeSampler {
                 if !s.path.is_empty() {
                     self.path = s.path;
                 }
+                let (profile, peak) = profile_of(&s.sample);
+                self.profile = profile;
+                self.peak = peak;
                 self.sample = Some(s.sample);
                 self.voices.clear();
                 Ok(())
@@ -1174,6 +1315,74 @@ mod tests {
     }
 
     #[test]
+    fn the_sample_is_its_region_of_the_file() {
+        let mut s = sampler_with(&ramp_sample(1000));
+        set(&mut s, PARAM_SAMPLE_START, 0.25);
+        set(&mut s, PARAM_SAMPLE_LENGTH, 0.5);
+        let out = run(&mut s, &[note_on(60)], 500);
+        assert!((out[0] - 250.0).abs() < 1e-3, "starts a quarter in: {}", out[0]);
+        assert!((out[374] - 624.0).abs() < 1e-3, "reads to the region's end: {}", out[374]);
+        assert_eq!(out[375], 0.0, "and stops there");
+        // The offset counts within the region.
+        set(&mut s, PARAM_OFFSET, 0.5);
+        let out = run(&mut s, &[note_on(60)], 4);
+        assert!((out[0] - 437.5).abs() < 1e-3, "half way into the region: {}", out[0]);
+    }
+
+    #[test]
+    fn the_trim_cuts_the_quiet_tail() {
+        // Loud for 400 frames, a whisper for the rest.
+        let ch: Vec<f32> = (0..1000).map(|i| if i < 400 { 0.8 } else { 0.001 }).collect();
+        let bytes = encode_sample_state(48_000, 60, vec![ch]);
+        let mut s = sampler_with(&bytes);
+        let out = run(&mut s, &[note_on(60)], 1000);
+        assert!(out[900].abs() > 0.0, "untrimmed, the whisper plays");
+        set(&mut s, PARAM_TRIM, 0.5); // -30 dB under the peak
+        let out = run(&mut s, &[note_on(60)], 1000);
+        assert!(out[300].abs() > 0.5, "the loud part plays");
+        assert_eq!(out[500], 0.0, "the whisper is cut: {}", out[500]);
+        assert_eq!(s.parameter_text(PARAM_TRIM, 0.5).as_deref(), Some("-30 dB"));
+        assert_eq!(s.parameter_text(PARAM_TRIM, 0.0).as_deref(), Some("Off"));
+    }
+
+    #[test]
+    fn the_loop_crossfade_blends_the_seam() {
+        let mut s = sampler_with(&ramp_sample(1000));
+        set(&mut s, PARAM_LOOP, 1.0);
+        set(&mut s, PARAM_LOOP_START, 0.5);
+        set(&mut s, PARAM_LOOP_END, 0.9);
+        set(&mut s, PARAM_XFADE, 0.25); // the last 100 frames of the 400-frame loop
+        let out = run(&mut s, &[note_on(60)], 900);
+        // At frame 850, 50 into the crossfade: half of 850 and half of 450.
+        assert!((out[850] - 650.0).abs() < 2.0, "blended: {}", out[850]);
+        assert!((out[799] - 799.0).abs() < 1.0, "untouched before the crossfade: {}", out[799]);
+    }
+
+    #[test]
+    fn fade_stereo_and_the_declicking_attack() {
+        let ch: Vec<f32> = vec![1.0; 1000];
+        let bytes = encode_sample_state(48_000, 60, vec![ch.clone(), ch]);
+        let mut s = sampler_with(&bytes);
+        set(&mut s, PARAM_FADE_STEREO, 1.0);
+        let mut out = vec![vec![0.0; 1000], vec![0.0; 1000]];
+        s.process(&[], &mut out, &[note_on(60)], &mut Vec::new(), 1000);
+        assert!(out[0][500] > 0.45 && out[0][500] < 0.55, "left half way down: {}", out[0][500]);
+        assert!(out[1][500] > 0.45 && out[1][500] < 0.55, "right half way up: {}", out[1][500]);
+        assert!(out[0][10] > 0.95 && out[1][10] < 0.05);
+
+        let mut s = sampler_with(&bytes);
+        set(&mut s, PARAM_DECLICK, 3.0 / 5.0); // Smooth: 10 ms in
+        assert_eq!(s.parameter_text(PARAM_DECLICK, 3.0 / 5.0).as_deref(), Some("Smooth"));
+        let out = run(&mut s, &[note_on(60)], 600);
+        assert!(out[0] < 0.01, "starts from nothing: {}", out[0]);
+        assert!(out[240] > 0.45 && out[240] < 0.55, "half way up at 5 ms: {}", out[240]);
+        assert!((out[500] - 1.0).abs() < 1e-3, "full after 10 ms: {}", out[500]);
+        let mut s = sampler_with(&bytes);
+        let out = run(&mut s, &[note_on(60)], 4);
+        assert!((out[0] - 1.0).abs() < 1e-3, "out only: the attack is left alone");
+    }
+
+    #[test]
     fn values_read_as_text() {
         let p = NativeSampler::new();
         let shown = |id: u32| p.parameter_text(id, p.get_parameter_value(id));
@@ -1198,5 +1407,8 @@ mod tests {
             assert!(p.get_parameter_info(id).is_some());
         }
         assert_eq!(p.parameter_options(PARAM_ROOT).map(|o| o.len()), Some(128));
+        assert_eq!(p.parameter_options(PARAM_DECLICK).map(|o| o.len()), Some(6));
+        assert_eq!(shown(PARAM_DECLICK).as_deref(), Some("Out only"));
+        assert_eq!(shown(PARAM_SAMPLE_LENGTH).as_deref(), Some("100 %"));
     }
 }

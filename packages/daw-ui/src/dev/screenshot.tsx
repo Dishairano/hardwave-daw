@@ -601,7 +601,7 @@ function Harness() {
               sourceFrames: Math.round(3.2 * 48000),
               sourceRate: 48000,
               sourceFile: 'C:\\Samples\\Crash #1.wav',
-              treatment: { pan: 0, polarityInverted: false, swapStereo: false, normalize: false, removeDc: true, resample: false },
+              treatment: { pan: 0, polarityInverted: false, swapStereo: false, normalize: false, removeDc: true, resample: false, fadeStereo: false, start: 0, length: 1, trim: 0, declick: 'Out only' },
             }),
           }),
         })

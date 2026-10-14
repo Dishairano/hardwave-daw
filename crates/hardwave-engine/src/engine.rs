@@ -2662,6 +2662,242 @@ impl EngineCallback {
 
     /// Rebuild the audio graph from the project state.
     /// Creates one TrackNode per non-master track, a MasterNode, and wires them together.
+    /// A track's audio clips as the regions its node plays, with fades,
+    /// stretch, warp and treatment worked out, and overlaps crossfaded.
+    /// Audio tracks play these in their own node; a MIDI track plays them
+    /// beside its synth, so a consolidated part or a dropped sample on a
+    /// channel is heard through the same inserts and fader.
+    fn audio_regions(
+        &self,
+        track: &hardwave_project::track::Track,
+        tempo_map: &hardwave_project::TempoMap,
+        sample_rate: f64,
+        track_pitch_factor: f64,
+    ) -> Vec<ClipRegion> {
+        // Convert clip placements to sample-based ClipRegions.
+        // Clips are visited in their project-defined order, then any overlap between
+        // adjacent audio clips is promoted to an equal-length crossfade: the earlier
+        // clip gets a fade-out across the overlap and the later clip gets a fade-in.
+        // User-authored fades take precedence when they are already longer than the
+        // auto-computed value.
+        // Frozen: the render, and nothing else. Live: everything but
+        // the render, which is parked on its own lane.
+        let clips_to_play = track.clips.iter().filter(|clip| {
+            let is_freeze = clip.lane == hardwave_project::clip::FREEZE_LANE;
+            if track.frozen {
+                is_freeze
+            } else {
+                !is_freeze
+            }
+        });
+        let mut regions: Vec<ClipRegion> = clips_to_play
+            .filter_map(|clip| match &clip.content {
+                hardwave_project::clip::ClipContent::Audio(audio_clip) => {
+                    let timeline_start =
+                        tempo_map.tick_to_samples(clip.position_ticks, sample_rate);
+                    let timeline_end = tempo_map
+                        .tick_to_samples(clip.position_ticks + clip.length_ticks, sample_rate);
+                    // Normalising and taking the DC offset off need the
+                    // sample's levels, worked out once in the pool.
+                    let treatment = audio_clip.treatment;
+                    let levels = (treatment.normalize || treatment.remove_dc)
+                        .then(|| self.audio_pool.level_stats(&audio_clip.source_path))
+                        .flatten();
+                    let normalise = match (treatment.normalize, levels) {
+                        (true, Some(l)) => {
+                            let peak = if treatment.remove_dc {
+                                l.peak_without_dc
+                            } else {
+                                l.peak
+                            };
+                            if peak > 1e-6 {
+                                1.0 / peak
+                            } else {
+                                1.0
+                            }
+                        }
+                        _ => 1.0,
+                    };
+                    // The sample's window: its start and length, and
+                    // its tail cut where it falls under the trim level.
+                    let frames = self
+                        .audio_pool
+                        .get(&audio_clip.source_path)
+                        .map(|b| b.num_frames as u64)
+                        .unwrap_or(u64::MAX);
+                    let trim_end = treatment.trim_threshold().and_then(|share| {
+                        let peak = self
+                            .audio_pool
+                            .level_stats(&audio_clip.source_path)
+                            .map(|l| l.peak)
+                            .unwrap_or(1.0);
+                        self.audio_pool
+                            .trim_end(&audio_clip.source_path, share as f32 * peak)
+                    });
+                    let treat = crate::track_node::ClipTreat::new(
+                        &treatment,
+                        levels.map(|l| l.dc).unwrap_or([0.0; 2]),
+                    )
+                    .with_window(&treatment, frames, trim_end);
+                    let gain = if audio_clip.gain_db <= -100.0 {
+                        0.0
+                    } else {
+                        10.0_f64.powf(audio_clip.gain_db / 20.0) as f32 * normalise
+                    };
+                    // A clip without fades of its own gets the tiny
+                    // ones its declicking mode stands for.
+                    let (declick_in, declick_out) = treatment.declick.fades_ms();
+                    let micro = |ms: f64| (ms / 1000.0 * sample_rate).round() as u64;
+                    let fade_in_samples = if audio_clip.fade_in_ticks > 0 {
+                        tempo_map.tick_to_samples(audio_clip.fade_in_ticks, sample_rate)
+                    } else {
+                        micro(declick_in)
+                    };
+                    let fade_out_samples = if audio_clip.fade_out_ticks > 0 {
+                        tempo_map.tick_to_samples(audio_clip.fade_out_ticks, sample_rate)
+                    } else {
+                        micro(declick_out)
+                    };
+                    let clip_pitch_factor = 2.0_f64.powf(audio_clip.pitch_semitones / 12.0);
+                    let pitch_factor = clip_pitch_factor * track_pitch_factor;
+                    let stretch = if audio_clip.stretch_ratio <= 0.01 {
+                        1.0
+                    } else {
+                        audio_clip.stretch_ratio
+                    };
+                    // Pitch-preserving stretch. A plain `source_step` resample
+                    // can only change duration and pitch *together* (varispeed:
+                    // stretch_ratio 2.0 also dropped an octave), so when a clip
+                    // asks for either, bake a stretched / pitch-shifted copy of
+                    // the source once and play it back at unity step. That makes
+                    // stretch_ratio change duration only and pitch_semitones
+                    // change pitch only, as their names promise.
+                    //
+                    // Warped clips keep the resample path — warp markers define
+                    // their own piecewise source map and take precedence below.
+                    // The track-level pitch/fine-tune offset stays a resample, so
+                    // it remains a varispeed control.
+                    // Resample is the varispeed path on purpose: like a
+                    // tape, a longer clip plays lower.
+                    let needs_bake = audio_clip.warp_markers.is_empty()
+                        && !treatment.resample
+                        && ((stretch - 1.0).abs() > 1e-4
+                            || audio_clip.pitch_semitones.abs() > 1e-4);
+                    let baked = if needs_bake {
+                        self.stretched_source(
+                            &audio_clip.source_path,
+                            stretch,
+                            audio_clip.pitch_semitones,
+                        )
+                    } else {
+                        None
+                    };
+                    // Baking stretches the whole source, so an in-source start
+                    // offset scales with the same ratio.
+                    let (region_source_id, region_source_offset, source_step) = match baked {
+                        Some(key) => (
+                            key,
+                            (audio_clip.source_start as f64 * stretch) as u64,
+                            track_pitch_factor,
+                        ),
+                        None => (
+                            audio_clip.source_path.clone(),
+                            audio_clip.source_start,
+                            pitch_factor / stretch,
+                        ),
+                    };
+                    // Rate-match the source to the rate we're rendering at.
+                    // Pool buffers are normalised to the *device* rate on
+                    // import, but an export renders at whatever rate the
+                    // user picked — so bouncing at 44.1 k from a 48 k
+                    // device read every audio clip 8.8% too slow (flat and
+                    // long) while MIDI/synth tracks, which are generated at
+                    // the render rate, stayed in tune. A mix would come out
+                    // with its samples and its synths in different keys.
+                    // Ratio is 1.0 during playback, where the two agree.
+                    let source_step = match self.audio_pool.get(&region_source_id) {
+                        Some(buf)
+                            if buf.sample_rate != 0
+                                && (buf.sample_rate as f64 - sample_rate).abs()
+                                    > f64::EPSILON =>
+                        {
+                            source_step * (buf.sample_rate as f64 / sample_rate)
+                        }
+                        _ => source_step,
+                    };
+                    // Warp markers → precomputed segments. Marker
+                    // ticks are clip-relative; going through the
+                    // tempo map (absolute tick → samples, minus the
+                    // clip start) keeps anchors honest under tempo
+                    // automation.
+                    let warp = if audio_clip.warp_markers.is_empty() {
+                        Vec::new()
+                    } else {
+                        let anchors: Vec<(u64, f64)> = audio_clip
+                            .warp_markers
+                            .iter()
+                            .map(|m| {
+                                let abs = tempo_map.tick_to_samples(
+                                    clip.position_ticks + m.clip_tick,
+                                    sample_rate,
+                                );
+                                (abs.saturating_sub(timeline_start), m.source_sample as f64)
+                            })
+                            .collect();
+                        crate::track_node::build_warp_segments(
+                            &anchors,
+                            source_step,
+                            audio_clip.source_start as f64,
+                        )
+                    };
+                    Some(ClipRegion {
+                        source_id: region_source_id,
+                        timeline_start,
+                        timeline_end,
+                        source_offset: region_source_offset,
+                        gain,
+                        muted: audio_clip.muted,
+                        fade_in_samples,
+                        fade_out_samples,
+                        fade_in_curve: audio_clip.fade_in_curve,
+                        fade_out_curve: audio_clip.fade_out_curve,
+                        reversed: audio_clip.reversed,
+                        source_step,
+                        warp,
+                        treat,
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+
+        // Apply auto-crossfade across overlapping, unmuted audio clips.
+        // We sort indices by timeline_start so adjacency maps to timeline order,
+        // without losing the original positions inside `regions`.
+        let mut order: Vec<usize> = (0..regions.len()).collect();
+        order.sort_by_key(|&i| regions[i].timeline_start);
+        for w in order.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            if regions[a].muted || regions[b].muted {
+                continue;
+            }
+            if regions[b].timeline_start < regions[a].timeline_end {
+                let overlap = regions[a]
+                    .timeline_end
+                    .saturating_sub(regions[b].timeline_start);
+                if overlap > 0 {
+                    if regions[a].fade_out_samples < overlap {
+                        regions[a].fade_out_samples = overlap;
+                    }
+                    if regions[b].fade_in_samples < overlap {
+                        regions[b].fade_in_samples = overlap;
+                    }
+                }
+            }
+        }
+        regions
+    }
+
     fn rebuild_graph(&mut self) {
         // RT-safety: this runs on the audio thread. If the UI currently
         // holds the project or meter-map lock we must NOT block — leave
@@ -2943,6 +3179,16 @@ impl EngineCallback {
                 midi_node.set_tuning(track.tuning.as_ref().map(|t| Box::new(t.table())));
                 midi_node.set_mpe(track.mpe);
                 midi_node.set_notes(note_regions);
+                // The channel's audio clips: a consolidated part, a sample
+                // dropped on it. They used to be silent here, so a
+                // consolidated kick on a MIDI channel played nothing.
+                let midi_pitch_factor = 2.0_f64.powf(
+                    (track.pitch_semitones as f64) / 12.0 + (track.fine_tune_cents as f64) / 1200.0,
+                );
+                let audio = self.audio_regions(track, tempo_map, sample_rate, midi_pitch_factor);
+                if !audio.is_empty() {
+                    midi_node.set_audio_clips(self.audio_pool.clone(), audio);
+                }
                 midi_node.set_controls(control_regions);
 
                 let node_id = self.graph.add_node(Box::new(midi_node));
@@ -3022,201 +3268,7 @@ impl EngineCallback {
                 (track.pitch_semitones as f64) / 12.0 + (track.fine_tune_cents as f64) / 1200.0;
             let track_pitch_factor = 2.0_f64.powf(track_pitch_offset);
 
-            // Convert clip placements to sample-based ClipRegions.
-            // Clips are visited in their project-defined order, then any overlap between
-            // adjacent audio clips is promoted to an equal-length crossfade: the earlier
-            // clip gets a fade-out across the overlap and the later clip gets a fade-in.
-            // User-authored fades take precedence when they are already longer than the
-            // auto-computed value.
-            // Frozen: the render, and nothing else. Live: everything but
-            // the render, which is parked on its own lane.
-            let clips_to_play = track.clips.iter().filter(|clip| {
-                let is_freeze = clip.lane == hardwave_project::clip::FREEZE_LANE;
-                if track.frozen {
-                    is_freeze
-                } else {
-                    !is_freeze
-                }
-            });
-            let mut regions: Vec<ClipRegion> = clips_to_play
-                .filter_map(|clip| match &clip.content {
-                    hardwave_project::clip::ClipContent::Audio(audio_clip) => {
-                        let timeline_start =
-                            tempo_map.tick_to_samples(clip.position_ticks, sample_rate);
-                        let timeline_end = tempo_map
-                            .tick_to_samples(clip.position_ticks + clip.length_ticks, sample_rate);
-                        // Normalising and taking the DC offset off need the
-                        // sample's levels, worked out once in the pool.
-                        let treatment = audio_clip.treatment;
-                        let levels = (treatment.normalize || treatment.remove_dc)
-                            .then(|| self.audio_pool.level_stats(&audio_clip.source_path))
-                            .flatten();
-                        let normalise = match (treatment.normalize, levels) {
-                            (true, Some(l)) => {
-                                let peak = if treatment.remove_dc {
-                                    l.peak_without_dc
-                                } else {
-                                    l.peak
-                                };
-                                if peak > 1e-6 {
-                                    1.0 / peak
-                                } else {
-                                    1.0
-                                }
-                            }
-                            _ => 1.0,
-                        };
-                        let treat = crate::track_node::ClipTreat::new(
-                            &treatment,
-                            levels.map(|l| l.dc).unwrap_or([0.0; 2]),
-                        );
-                        let gain = if audio_clip.gain_db <= -100.0 {
-                            0.0
-                        } else {
-                            10.0_f64.powf(audio_clip.gain_db / 20.0) as f32 * normalise
-                        };
-                        let fade_in_samples =
-                            tempo_map.tick_to_samples(audio_clip.fade_in_ticks, sample_rate);
-                        let fade_out_samples =
-                            tempo_map.tick_to_samples(audio_clip.fade_out_ticks, sample_rate);
-                        let clip_pitch_factor = 2.0_f64.powf(audio_clip.pitch_semitones / 12.0);
-                        let pitch_factor = clip_pitch_factor * track_pitch_factor;
-                        let stretch = if audio_clip.stretch_ratio <= 0.01 {
-                            1.0
-                        } else {
-                            audio_clip.stretch_ratio
-                        };
-                        // Pitch-preserving stretch. A plain `source_step` resample
-                        // can only change duration and pitch *together* (varispeed:
-                        // stretch_ratio 2.0 also dropped an octave), so when a clip
-                        // asks for either, bake a stretched / pitch-shifted copy of
-                        // the source once and play it back at unity step. That makes
-                        // stretch_ratio change duration only and pitch_semitones
-                        // change pitch only, as their names promise.
-                        //
-                        // Warped clips keep the resample path — warp markers define
-                        // their own piecewise source map and take precedence below.
-                        // The track-level pitch/fine-tune offset stays a resample, so
-                        // it remains a varispeed control.
-                        // Resample is the varispeed path on purpose: like a
-                        // tape, a longer clip plays lower.
-                        let needs_bake = audio_clip.warp_markers.is_empty()
-                            && !treatment.resample
-                            && ((stretch - 1.0).abs() > 1e-4
-                                || audio_clip.pitch_semitones.abs() > 1e-4);
-                        let baked = if needs_bake {
-                            self.stretched_source(
-                                &audio_clip.source_path,
-                                stretch,
-                                audio_clip.pitch_semitones,
-                            )
-                        } else {
-                            None
-                        };
-                        // Baking stretches the whole source, so an in-source start
-                        // offset scales with the same ratio.
-                        let (region_source_id, region_source_offset, source_step) = match baked {
-                            Some(key) => (
-                                key,
-                                (audio_clip.source_start as f64 * stretch) as u64,
-                                track_pitch_factor,
-                            ),
-                            None => (
-                                audio_clip.source_path.clone(),
-                                audio_clip.source_start,
-                                pitch_factor / stretch,
-                            ),
-                        };
-                        // Rate-match the source to the rate we're rendering at.
-                        // Pool buffers are normalised to the *device* rate on
-                        // import, but an export renders at whatever rate the
-                        // user picked — so bouncing at 44.1 k from a 48 k
-                        // device read every audio clip 8.8% too slow (flat and
-                        // long) while MIDI/synth tracks, which are generated at
-                        // the render rate, stayed in tune. A mix would come out
-                        // with its samples and its synths in different keys.
-                        // Ratio is 1.0 during playback, where the two agree.
-                        let source_step = match self.audio_pool.get(&region_source_id) {
-                            Some(buf)
-                                if buf.sample_rate != 0
-                                    && (buf.sample_rate as f64 - sample_rate).abs()
-                                        > f64::EPSILON =>
-                            {
-                                source_step * (buf.sample_rate as f64 / sample_rate)
-                            }
-                            _ => source_step,
-                        };
-                        // Warp markers → precomputed segments. Marker
-                        // ticks are clip-relative; going through the
-                        // tempo map (absolute tick → samples, minus the
-                        // clip start) keeps anchors honest under tempo
-                        // automation.
-                        let warp = if audio_clip.warp_markers.is_empty() {
-                            Vec::new()
-                        } else {
-                            let anchors: Vec<(u64, f64)> = audio_clip
-                                .warp_markers
-                                .iter()
-                                .map(|m| {
-                                    let abs = tempo_map.tick_to_samples(
-                                        clip.position_ticks + m.clip_tick,
-                                        sample_rate,
-                                    );
-                                    (abs.saturating_sub(timeline_start), m.source_sample as f64)
-                                })
-                                .collect();
-                            crate::track_node::build_warp_segments(
-                                &anchors,
-                                source_step,
-                                audio_clip.source_start as f64,
-                            )
-                        };
-                        Some(ClipRegion {
-                            source_id: region_source_id,
-                            timeline_start,
-                            timeline_end,
-                            source_offset: region_source_offset,
-                            gain,
-                            muted: audio_clip.muted,
-                            fade_in_samples,
-                            fade_out_samples,
-                            fade_in_curve: audio_clip.fade_in_curve,
-                            fade_out_curve: audio_clip.fade_out_curve,
-                            reversed: audio_clip.reversed,
-                            source_step,
-                            warp,
-                            treat,
-                        })
-                    }
-                    _ => None,
-                })
-                .collect();
-
-            // Apply auto-crossfade across overlapping, unmuted audio clips.
-            // We sort indices by timeline_start so adjacency maps to timeline order,
-            // without losing the original positions inside `regions`.
-            let mut order: Vec<usize> = (0..regions.len()).collect();
-            order.sort_by_key(|&i| regions[i].timeline_start);
-            for w in order.windows(2) {
-                let (a, b) = (w[0], w[1]);
-                if regions[a].muted || regions[b].muted {
-                    continue;
-                }
-                if regions[b].timeline_start < regions[a].timeline_end {
-                    let overlap = regions[a]
-                        .timeline_end
-                        .saturating_sub(regions[b].timeline_start);
-                    if overlap > 0 {
-                        if regions[a].fade_out_samples < overlap {
-                            regions[a].fade_out_samples = overlap;
-                        }
-                        if regions[b].fade_in_samples < overlap {
-                            regions[b].fade_in_samples = overlap;
-                        }
-                    }
-                }
-            }
-
+            let regions = self.audio_regions(track, tempo_map, sample_rate, track_pitch_factor);
             node.set_clips(regions);
 
             // This track's row of the launcher grid. Lengths are in
@@ -4247,6 +4299,74 @@ mod offline_insert_tests {
         fn has_editor(&self) -> bool {
             false
         }
+    }
+
+    #[test]
+    fn an_audio_clip_on_a_midi_channel_is_heard() {
+        // A consolidated kick lands on its MIDI channel as an audio clip; it
+        // played nothing (2026-10-14, the starter song's Kick Intro). It
+        // plays now, level with a clip on an audio track: the sine at half
+        // level through the track's pan law, nothing more.
+        use hardwave_project::track::NativeInstrument;
+        let engine = DawEngine::new();
+        let sr = 48_000u32;
+        let frames = sr as usize;
+        let ch: Vec<f32> = (0..frames)
+            .map(|n| (std::f32::consts::TAU * 220.0 * n as f32 / sr as f32).sin() * 0.5)
+            .collect();
+        engine.audio_pool.insert(
+            "sine".to_string(),
+            crate::AudioBuffer {
+                channels: vec![ch.clone(), ch],
+                sample_rate: sr,
+                num_frames: frames,
+            },
+        );
+        {
+            let mut project = engine.project.lock();
+            let id = project.add_midi_track("Kick".into());
+            if let Some(t) = project.track_mut(&id) {
+                t.instrument = NativeInstrument::KickSynth;
+                t.clips.push(ClipPlacement {
+                    content: ClipContent::Audio(AudioClip {
+                        id: "part".into(),
+                        name: "Kick consolidated".into(),
+                        source_path: "sine".into(),
+                        source_hash: String::new(),
+                        source_start: 0,
+                        source_end: frames as u64,
+                        gain_db: 0.0,
+                        fade_in_ticks: 0,
+                        fade_out_ticks: 0,
+                        muted: false,
+                        reversed: false,
+                        pitch_semitones: 0.0,
+                        stretch_ratio: 1.0,
+                        warp_markers: Vec::new(),
+                        fade_in_curve: FadeCurve::Linear,
+                        fade_out_curve: FadeCurve::Linear,
+                        source_file: String::new(),
+                        treatment: Default::default(),
+                    }),
+                    track_id: id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1920,
+                    lane: 0,
+                });
+            }
+        }
+        let mut out: Vec<f32> = Vec::new();
+        engine
+            .render_offline_with(48_000, 12_000, 0, None, |_| {}, |b| {
+                out.extend_from_slice(b);
+                true
+            })
+            .expect("it renders");
+        let peak = out[2048..].iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+        assert!(
+            (0.33..0.38).contains(&peak),
+            "the clip at half level through one pan law, peak {peak}"
+        );
     }
 
     #[test]
