@@ -86,6 +86,21 @@ export const usePluginCatalogStore = create<PluginCatalogState>((set, get) => ({
   ensureLoaded: async () => {
     const { loaded, loading } = get()
     if (loaded || loading) return
+    // The backend has the last scan's list at start (its cache, with the
+    // built-ins); that is the catalog until someone scans. The channel
+    // rack's picker used to say "No instruments found" on a fresh start,
+    // with 38 plug-ins loaded, because nothing had asked for them.
+    set({ loading: true, error: null })
+    try {
+      const plugins = await invoke<PluginDescriptor[]>('get_plugins')
+      if (plugins.length > 0) {
+        set({ plugins, loaded: true, loading: false })
+        return
+      }
+      set({ loading: false })
+    } catch {
+      set({ loading: false })
+    }
     await get().rescan()
   },
 

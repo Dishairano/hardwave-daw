@@ -55,6 +55,9 @@ export function ChannelRack() {
   // (native synth or a VST/CLAP instrument) to spawn a new channel, and
   // click a channel's instrument button to open that plug-in's editor.
   const allPlugins = usePluginCatalogStore(s => s.plugins)
+  // The picker lists the catalog; ask for it once, so a fresh start has
+  // the built-in synths and the sampler to offer.
+  useEffect(() => { void usePluginCatalogStore.getState().ensureLoaded() }, [])
   const catalogById = usePluginCatalogStore(s => s.byId)
   const addPluginToTrack = usePluginStore(s => s.addToTrack)
   const instrumentPlugins = useMemo(
