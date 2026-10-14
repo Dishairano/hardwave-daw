@@ -16,6 +16,7 @@ import { useMarkerStore } from '../../stores/markerStore'
 import { useClipGroupStore } from '../../stores/clipGroupStore'
 import { useTrackFolderStore } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
+import { useHistoryStore } from '../../stores/historyStore'
 import { usePickerStore } from '../../stores/pickerStore'
 import { usePlaylistToolStore } from '../../stores/playlistToolStore'
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
@@ -2464,6 +2465,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             push('info', 'Consolidating…')
             try {
               await invoke('consolidate_track_range', { trackId, startTicks: from, endTicks: to })
+              // The engine took its undo snapshot; the history names the step,
+              // or Edit > History would not show it.
+              useHistoryStore.getState().push('Consolidate clips')
               await useTrackStore.getState().fetchTracks()
               push('info', `Consolidated ${clips.length} clips into one`)
             } catch (e) {
