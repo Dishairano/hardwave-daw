@@ -147,42 +147,50 @@ impl SampleTreatment {
     }
 }
 
-/// FL's declicking modes: how a clip's edges are smoothed when the clip
-/// has no fades of its own. Each is a pair of tiny fades, in and out.
+/// FL's declicking modes, in FL's order (the order of the byte FL saves,
+/// 0 to 5): how a sample's edges are smoothed when the clip has no fades
+/// of its own. Each is a pair of tiny fades, in and out. "No bleeding"
+/// means a note does not ring on past its end.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeclickMode {
     /// Only the end is smoothed; the attack is left as it is.
     #[default]
+    // A name a test build wrote before the modes followed FL's list.
+    #[serde(alias = "Bleeding")]
     OutOnly,
-    /// A hair at the start, so a transient keeps its edge.
+    /// A hair at the start, so a transient keeps its edge; a short end.
+    TransientNoBleeding,
     Transient,
     Generic,
     Smooth,
     /// Longer at both ends, for clips that overlap.
     Crossfade,
-    /// The end lets go slowly, as a sample ringing past its clip would.
-    Bleeding,
 }
 
 impl DeclickMode {
     pub const ALL: [DeclickMode; 6] = [
         DeclickMode::OutOnly,
+        DeclickMode::TransientNoBleeding,
         DeclickMode::Transient,
         DeclickMode::Generic,
         DeclickMode::Smooth,
         DeclickMode::Crossfade,
-        DeclickMode::Bleeding,
     ];
+
+    /// The mode FL saved as `byte`, or None when FL has no such mode.
+    pub fn from_fl(byte: u8) -> Option<Self> {
+        Self::ALL.get(byte as usize).copied()
+    }
 
     /// The fades it stands for, in milliseconds: in, out.
     pub fn fades_ms(self) -> (f64, f64) {
         match self {
             DeclickMode::OutOnly => (0.0, 1.0),
-            DeclickMode::Transient => (0.3, 2.0),
+            DeclickMode::TransientNoBleeding => (0.3, 1.0),
+            DeclickMode::Transient => (0.3, 4.0),
             DeclickMode::Generic => (2.0, 5.0),
             DeclickMode::Smooth => (10.0, 20.0),
             DeclickMode::Crossfade => (5.0, 5.0),
-            DeclickMode::Bleeding => (0.0, 8.0),
         }
     }
 
@@ -190,11 +198,11 @@ impl DeclickMode {
     pub fn name(self) -> &'static str {
         match self {
             DeclickMode::OutOnly => "Out only",
+            DeclickMode::TransientNoBleeding => "Transient (no bleeding)",
             DeclickMode::Transient => "Transient",
             DeclickMode::Generic => "Generic",
             DeclickMode::Smooth => "Smooth",
             DeclickMode::Crossfade => "Crossfade",
-            DeclickMode::Bleeding => "Bleeding",
         }
     }
 
@@ -265,3 +273,33 @@ pub struct ClipPlacement {
 /// Out of the way of the take lanes, which count up from zero, so a
 /// frozen track's render never shows up as one more take to comp.
 pub const FREEZE_LANE: u32 = u32::MAX;
+
+#[cfg(test)]
+mod declick_tests {
+    use super::*;
+
+    #[test]
+    fn the_modes_are_fl_s_in_fl_s_order() {
+        let names: Vec<&str> = DeclickMode::ALL.iter().map(|m| m.name()).collect();
+        assert_eq!(
+            names,
+            [
+                "Out only",
+                "Transient (no bleeding)",
+                "Transient",
+                "Generic",
+                "Smooth",
+                "Crossfade"
+            ]
+        );
+        assert_eq!(DeclickMode::from_fl(4), Some(DeclickMode::Smooth));
+        assert_eq!(DeclickMode::from_fl(6), None);
+        assert_eq!(
+            DeclickMode::from_name("transient (no bleeding)"),
+            Some(DeclickMode::TransientNoBleeding)
+        );
+        // A project a test build saved with the old made-up name still opens.
+        let old: DeclickMode = serde_json::from_str("\"Bleeding\"").unwrap();
+        assert_eq!(old, DeclickMode::OutOnly);
+    }
+}

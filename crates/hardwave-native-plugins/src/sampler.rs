@@ -1479,9 +1479,9 @@ mod tests {
         assert!(out[0][10] > 0.95 && out[1][10] < 0.05);
 
         let mut s = sampler_with(&bytes);
-        set(&mut s, PARAM_DECLICK, 3.0 / 5.0); // Smooth: 10 ms in
+        set(&mut s, PARAM_DECLICK, 4.0 / 5.0); // Smooth: 10 ms in
         assert_eq!(
-            s.parameter_text(PARAM_DECLICK, 3.0 / 5.0).as_deref(),
+            s.parameter_text(PARAM_DECLICK, 4.0 / 5.0).as_deref(),
             Some("Smooth")
         );
         let out = run(&mut s, &[note_on(60)], 600);

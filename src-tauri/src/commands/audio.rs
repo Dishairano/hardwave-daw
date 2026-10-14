@@ -268,7 +268,7 @@ pub struct TreatmentInfo {
     length: f64,
     /// 0 is off.
     trim: f64,
-    /// As FL names it: "Out only", "Transient", "Generic", "Smooth", "Crossfade", "Bleeding".
+    /// As FL names it: "Out only", "Transient (no bleeding)", "Transient", "Generic", "Smooth", "Crossfade".
     declick: String,
 }
 

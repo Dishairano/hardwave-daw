@@ -194,16 +194,16 @@ type Settings = Partial<{
   declick: Declick
 }>
 
-/** FL's declicking modes, as the engine names them. */
-const DECLICKS = ['Out only', 'Transient', 'Generic', 'Smooth', 'Crossfade', 'Bleeding'] as const
+/** FL's declicking modes, in FL's order, as the engine names them. */
+const DECLICKS = ['Out only', 'Transient (no bleeding)', 'Transient', 'Generic', 'Smooth', 'Crossfade'] as const
 type Declick = (typeof DECLICKS)[number]
 const DECLICK_HINT: Record<Declick, string> = {
   'Out only': 'only the end is smoothed; the attack stays',
+  'Transient (no bleeding)': 'a hair at the start, a short end',
   Transient: 'a hair at the start, so a transient keeps its edge',
   Generic: 'short fades at both ends',
   Smooth: 'longer fades at both ends',
   Crossfade: 'for clips that overlap',
-  Bleeding: 'the end lets go slowly',
 }
 const asDeclick = (v: string | undefined): Declick => (DECLICKS as readonly string[]).includes(v ?? '') ? (v as Declick) : 'Out only'
 
