@@ -163,7 +163,10 @@ jobs:
       - name: Check the installer's signature
         shell: pwsh
         run: |
-          $exe = Get-ChildItem src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          # The workspace's target/ is at the repo root; look for the
+          # installer rather than name its folder.
+          $exe = Get-ChildItem -Path target -Recurse -Filter '*-setup.exe' | Where-Object { $_.FullName -match 'bundle[\\/]nsis' } | Select-Object -First 1
+          if (-not $exe) { throw 'no installer under target/' }
           $sig = Get-AuthenticodeSignature $exe.FullName
           Write-Host "$($exe.Name): $($sig.Status) $($sig.SignerCertificate.Subject)"
           if ($sig.Status -ne 'Valid') { Write-Warning 'the test build is not signed; SmartScreen will stop it' }
