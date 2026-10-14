@@ -672,15 +672,26 @@ pub fn build_project(
                 fade_out_curve: FadeCurve::default(),
                 warp_markers: Vec::new(),
                 source_file: file,
-                treatment: if per_clip {
-                    SampleTreatment {
-                        pan: fl_pan(settings.pan),
-                        swap_stereo: settings.swap_stereo,
-                        polarity_inverted: settings.polarity_inverted,
+                treatment: {
+                    // The sample's own effects, as FL keeps them on its
+                    // channel: they reach every clip of it.
+                    let fx = &settings.sampler;
+                    let mut t = SampleTreatment {
+                        normalize: fx.normalize,
+                        remove_dc: fx.remove_dc,
+                        fade_stereo: fx.fade_stereo,
+                        trim: fx.trim.clamp(0.0, 1.0) as f64,
+                        declick: crate::clip::DeclickMode::from_fl(fx.declick).unwrap_or_default(),
+                        start: fx.start.unwrap_or(0.0).clamp(0.0, 1.0) as f64,
+                        length: fx.length.unwrap_or(1.0).clamp(0.0, 1.0) as f64,
                         ..Default::default()
+                    };
+                    if per_clip {
+                        t.pan = fl_pan(settings.pan);
+                        t.swap_stereo = settings.swap_stereo;
+                        t.polarity_inverted = settings.polarity_inverted;
                     }
-                } else {
-                    SampleTreatment::default()
+                    t
                 },
             };
             let stretch = settings.stretch;
@@ -1600,6 +1611,38 @@ mod tests {
         );
         let screech = p.track("insert-001").unwrap();
         assert_eq!(format!("{:.1}", screech.volume_db), "-5.2");
+    }
+
+    #[test]
+    fn a_sample_s_own_effects_reach_its_audio_clips() {
+        let mut fl = lane_song();
+        for c in fl.channels.iter_mut() {
+            let fx = &mut c.settings.sampler;
+            fx.normalize = true;
+            fx.remove_dc = true;
+            fx.fade_stereo = true;
+            fx.trim = 0.5;
+            fx.declick = 4;
+            fx.length = Some(1.0);
+        }
+        let built = build_project(&fl, "Industrial", &here);
+        let kicks = built.project.track("insert-003").unwrap();
+        let ClipContent::Audio(a) = &kicks.clips[0].content else {
+            panic!("expected audio");
+        };
+        let t = a.treatment;
+        assert!(t.normalize && t.remove_dc && t.fade_stereo);
+        assert_eq!(t.trim, 0.5);
+        assert_eq!(t.declick, crate::clip::DeclickMode::Smooth);
+        assert_eq!((t.start, t.length), (0.0, 1.0));
+        // Left alone, a clip keeps FL's defaults: nothing precomputed.
+        let plain = build_project(&lane_song(), "Industrial", &here);
+        let ClipContent::Audio(b) = &plain.project.track("insert-003").unwrap().clips[0].content
+        else {
+            panic!("expected audio");
+        };
+        assert!(!b.treatment.normalize && b.treatment.trim == 0.0);
+        assert_eq!(b.treatment.declick, crate::clip::DeclickMode::OutOnly);
     }
 
     #[test]
