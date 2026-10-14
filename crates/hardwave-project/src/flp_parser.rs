@@ -17,8 +17,8 @@
 
 use crate::fl_import::{
     FlAutomationLink, FlAutomationPoint, FlAutomationTarget, FlChannel, FlChannelKind,
-    FlChannelSettings, FlClipContent, FlMixerSlot, FlMixerTrack, FlNote, FlPlaylistClip, FlProject,
-    FlRoute,
+    FlChannelSettings, FlClipContent, FlEnvelope, FlMixerSlot, FlMixerTrack, FlNote,
+    FlPlaylistClip, FlProject, FlRoute,
 };
 
 /// Event id boundaries: below 64 is one byte, below 128 two, below
@@ -72,8 +72,18 @@ const CH_ENABLED: u8 = 0;
 const CH_ROUTED_TO: u8 = 22;
 /// Sample settings flags: reverse is bit 1, swap stereo bit 8.
 const CH_FX_FLAGS: u8 = WORD + 6; // 70
+const FX_FADE_STEREO: u16 = 1 << 0;
 const FX_REVERSE: u16 = 1 << 1;
 const FX_SWAP_STEREO: u16 = 1 << 8;
+// A sampler channel's loop, voices and envelopes (layouts after PyFLP 2.2).
+const CH_PING_PONG: u8 = 20;
+const CH_CUT_GROUP: u8 = DWORD + 4; // 132: (cut, cut by)
+const CH_SAMPLER_FLAGS: u8 = DWORD + 15; // 143
+const SAMPLER_USES_LOOP_POINTS: u32 = 1 << 3;
+const CH_ENVELOPE: u8 = TEXT + 26; // 218: one per target, volume second
+const CH_POLYPHONY: u8 = TEXT + 29; // 221: max u32, slide u32, flags u8
+const POLY_MONO: u8 = 1 << 0;
+const POLY_PORTA: u8 = 1 << 1;
 const CH_FADE_OUT: u8 = WORD + 11; // 75
 const CH_FADE_IN: u8 = WORD + 12; // 76
 const CH_ROOT_NOTE: u8 = DWORD + 7; // 135
@@ -464,7 +474,8 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 }
             }
             CH_ENABLED | CH_ROUTED_TO | CH_FX_FLAGS | CH_FADE_IN | CH_FADE_OUT | CH_ROOT_NOTE
-            | CH_PARAMETERS | CH_LEVELS => {
+            | CH_PARAMETERS | CH_LEVELS | CH_PING_PONG | CH_CUT_GROUP | CH_SAMPLER_FLAGS
+            | CH_ENVELOPE | CH_POLYPHONY => {
                 if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
                     read_channel_setting(&mut channel.settings, event.id, event.data, &scale_f);
                 }
@@ -832,6 +843,37 @@ fn read_channel_setting(
             let flags = u16_at(data, 0);
             settings.reversed = flags & FX_REVERSE != 0;
             settings.swap_stereo = flags & FX_SWAP_STEREO != 0;
+            settings.sampler.fade_stereo = flags & FX_FADE_STEREO != 0;
+        }
+        CH_PING_PONG => settings.sampler.ping_pong = byte != 0,
+        CH_CUT_GROUP if data.len() >= 4 => {
+            let (cut, cut_by) = (u16_at(data, 0), u16_at(data, 2));
+            settings.sampler.cut_itself = cut != 0 && cut == cut_by;
+        }
+        CH_SAMPLER_FLAGS => {
+            settings.sampler.use_loop_points = u32_at(data, 0) & SAMPLER_USES_LOOP_POINTS != 0;
+        }
+        CH_POLYPHONY if data.len() >= 9 => {
+            settings.sampler.mono = data[8] & POLY_MONO != 0;
+            settings.sampler.porta = data[8] & POLY_PORTA != 0;
+        }
+        CH_ENVELOPE => {
+            let index = settings.sampler.envelope_events;
+            settings.sampler.envelope_events = index.saturating_add(1);
+            // The second is the volume envelope (pan, volume, mod X, mod Y, pitch).
+            if index == 1 && data.len() >= 32 {
+                // Time knobs run 100 to 65536, sustain 0 to 128.
+                let time = |at: usize| ((i32_at(data, at) - 100) as f32 / 65_436.0).clamp(0.0, 1.0);
+                settings.sampler.envelope = Some(FlEnvelope {
+                    enabled: i32_at(data, 4) != 0,
+                    delay: time(8),
+                    attack: time(12),
+                    hold: time(16),
+                    decay: time(20),
+                    sustain: (i32_at(data, 24) as f32 / 128.0).clamp(0.0, 1.0),
+                    release: time(28),
+                });
+            }
         }
         CH_FADE_IN => settings.fade_in = u16_at(data, 0),
         CH_FADE_OUT => settings.fade_out = u16_at(data, 0),
@@ -843,6 +885,27 @@ fn read_channel_setting(
         }
         CH_PARAMETERS => {
             settings.polarity_inverted = data.get(81).is_some_and(|b| *b != 0);
+            let sampler = &mut settings.sampler;
+            sampler.remove_dc = data.get(9).is_some_and(|b| *b != 0);
+            sampler.normalize = data.get(80).is_some_and(|b| *b != 0);
+            if let Some(mode) = data.get(83) {
+                sampler.declick = (*mode).min(5);
+            }
+            if data.len() >= 92 {
+                sampler.crossfade = (u32_at(data, 84) as f32 / 256.0).clamp(0.0, 1.0);
+                sampler.trim = (u32_at(data, 88) as f32 / 256.0).clamp(0.0, 1.0);
+            }
+            // Sample start and length: a log value and a marker that is 63
+            // when the value is one; anything else is not read.
+            let log_normal = |at: usize| -> Option<f32> {
+                if data.len() < at + 4 || u16_at(data, at + 2) != 63 {
+                    return None;
+                }
+                let v = u16_at(data, at) as f64;
+                (v > 0.0).then(|| (2f64.powf(v / 4096.0) / 2f64.powi(15)).clamp(0.0, 1.0) as f32)
+            };
+            sampler.start = log_normal(133);
+            sampler.length = log_normal(141);
             if data.len() >= 112 {
                 let time = f32_at(data, 96) as f64;
                 settings.stretch.time_ticks = if time.is_finite() && time > 0.0 {
@@ -1361,6 +1424,83 @@ mod tests {
         assert_eq!(s.stretch.pitch_cents, 224);
         assert_eq!(s.stretch.multiplier, 2.0);
         assert!(!s.stretch.is_resample());
+    }
+
+    #[test]
+    fn a_sampler_s_envelope_loop_voices_and_sample_effects_come_across() {
+        let mut writer = Writer::new();
+        writer.event(CH_NEW, &0u16.to_le_bytes());
+        writer.event(CH_TYPE, &[0]);
+        writer.event(CH_FX_FLAGS, &FX_FADE_STEREO.to_le_bytes());
+        writer.event(CH_PING_PONG, &[1]);
+        // Cut 3, cut by 3: the channel cuts itself.
+        let mut cut = 3u16.to_le_bytes().to_vec();
+        cut.extend_from_slice(&3u16.to_le_bytes());
+        writer.event(CH_CUT_GROUP, &cut);
+        writer.event(
+            CH_SAMPLER_FLAGS,
+            &(SAMPLER_USES_LOOP_POINTS | 1).to_le_bytes(),
+        );
+        let mut poly = vec![0u8; 9];
+        poly[8] = POLY_MONO | POLY_PORTA;
+        writer.event(CH_POLYPHONY, &poly);
+        // The pan envelope first, then the volume one.
+        let envelope = |enabled: i32, knobs: [i32; 6]| {
+            let mut e = 0i32.to_le_bytes().to_vec();
+            e.extend_from_slice(&enabled.to_le_bytes());
+            for k in knobs {
+                e.extend_from_slice(&k.to_le_bytes());
+            }
+            e.resize(68, 0);
+            e
+        };
+        writer.event(CH_ENVELOPE, &envelope(0, [100, 100, 100, 100, 0, 100]));
+        writer.event(
+            CH_ENVELOPE,
+            &envelope(1, [100, 32_818, 100, 65_536, 64, 16_459]),
+        );
+        writer.event(CH_ENVELOPE, &envelope(1, [65_536; 6]));
+        let mut params = vec![0u8; 168];
+        params[9] = 1; // remove DC
+        params[80] = 1; // normalize
+        params[83] = 4; // Smooth
+        params[84..88].copy_from_slice(&64u32.to_le_bytes()); // crossfade 25 %
+        params[88..92].copy_from_slice(&128u32.to_le_bytes()); // trim 50 %
+                                                               // Start at a quarter: 4096 * (log2(0.25) + 15) = 53248.
+        params[133..135].copy_from_slice(&53_248u16.to_le_bytes());
+        params[135..137].copy_from_slice(&63u16.to_le_bytes());
+        // A length with no marker is not read.
+        params[141..143].copy_from_slice(&53_248u16.to_le_bytes());
+        writer.event(CH_PARAMETERS, &params);
+
+        let project = parse(&writer.finish(96)).expect("it should read");
+        let s = &project.channels[0].settings.sampler;
+        assert!(s.fade_stereo && s.ping_pong && s.cut_itself && s.use_loop_points);
+        assert!(s.mono && s.porta);
+        let e = s.envelope.expect("the volume envelope");
+        assert!(e.enabled);
+        assert_eq!((e.delay, e.hold), (0.0, 0.0));
+        assert!(
+            (e.attack - 0.5).abs() < 1e-3,
+            "attack half way: {}",
+            e.attack
+        );
+        assert_eq!(e.decay, 1.0);
+        assert_eq!(e.sustain, 0.5);
+        assert!(
+            (e.release - 0.25).abs() < 1e-3,
+            "release a quarter: {}",
+            e.release
+        );
+        assert!(s.remove_dc && s.normalize);
+        assert_eq!(s.declick, 4);
+        assert_eq!((s.crossfade, s.trim), (0.25, 0.5));
+        assert!(
+            (s.start.unwrap() - 0.25).abs() < 1e-4,
+            "start {:?}",
+            s.start
+        );
+        assert_eq!(s.length, None);
     }
 
     #[test]

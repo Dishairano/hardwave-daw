@@ -85,8 +85,9 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
 
     // Sampler channels play their sample in the built-in sampler, which
     // keeps it as its state; the song's plug-ins are made from that when
-    // it opens. FL's reverse, stereo swap and polarity are done to the
-    // sample itself, as FL does them.
+    // it opens. FL's reverse, stereo swap, polarity, DC removal and
+    // normalize are done to the sample itself, as FL precomputes them; the
+    // channel's envelope, loop and voices become the sampler's settings.
     let mut samplers_failed = Vec::new();
     for sampler in &built.sampler_samples {
         match hardwave_dsp::audio_file::AudioFileReader::read(Path::new(&sampler.file)) {
@@ -102,11 +103,34 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
                         .iter_mut()
                         .for_each(|c| c.iter_mut().for_each(|v| *v = -*v));
                 }
-                let state = hardwave_native_plugins::sampler::encode_sample_state_from(
+                if sampler.setup.remove_dc {
+                    for c in channels.iter_mut() {
+                        if !c.is_empty() {
+                            let mean = c.iter().map(|v| *v as f64).sum::<f64>() / c.len() as f64;
+                            c.iter_mut().for_each(|v| *v -= mean as f32);
+                        }
+                    }
+                }
+                if sampler.setup.normalize {
+                    let peak = channels
+                        .iter()
+                        .flat_map(|c| c.iter())
+                        .fold(0.0f32, |m, v| m.max(v.abs()));
+                    if peak > 1e-6 {
+                        channels
+                            .iter_mut()
+                            .for_each(|c| c.iter_mut().for_each(|v| *v /= peak));
+                    }
+                }
+                let state = hardwave_native_plugins::sampler::encode_sample_state_with(
                     info.sample_rate,
                     sampler.root_note,
                     channels,
                     &sampler.file,
+                    hardwave_native_plugins::sampler::settings_from_fl(
+                        &sampler.setup,
+                        sampler.root_note,
+                    ),
                 );
                 let slot_id = uuid::Uuid::new_v4().to_string();
                 if let Some(track) = project.track_mut(&sampler.track_id) {

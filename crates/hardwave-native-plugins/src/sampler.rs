@@ -1012,6 +1012,81 @@ pub fn encode_sample_state_from(
     .to_bytes()
 }
 
+/// As `encode_sample_state_from`, with the settings the sampler starts
+/// with (parameter id and its 0..1 value): an FL import brings the
+/// channel's envelope, loop and voices this way.
+pub fn encode_sample_state_with(
+    sample_rate: u32,
+    base_note: u8,
+    channels: Vec<Vec<f32>>,
+    path: &str,
+    params: Vec<(u32, f32)>,
+) -> Vec<u8> {
+    let channels = if channels.is_empty() {
+        vec![Vec::new()]
+    } else {
+        channels
+    };
+    SamplerState {
+        sample: SampleData {
+            sample_rate,
+            base_note,
+            channels,
+        },
+        params,
+        path: path.to_string(),
+    }
+    .to_bytes()
+}
+
+/// The sampler's settings for an FL sampler channel: its volume envelope,
+/// loop, voices, declicking, crossfade, trim, fade stereo and the sample's
+/// start and length, and the root note. FL's knobs come as fractions of
+/// their travel; they land on the same fraction of this sampler's knobs.
+/// Normalize and DC removal are not settings here: the import does them
+/// to the sample itself, as it does reverse and polarity.
+pub fn settings_from_fl(
+    setup: &hardwave_project::fl_import::FlSamplerSetup,
+    root_note: u8,
+) -> Vec<(u32, f32)> {
+    let on = |b: bool| if b { 1.0 } else { 0.0 };
+    let mut p = vec![
+        (PARAM_ROOT, root_note.min(127) as f32 / 127.0),
+        (PARAM_LOOP, on(setup.use_loop_points)),
+        (PARAM_PING_PONG, on(setup.ping_pong)),
+        (PARAM_MONO, on(setup.mono)),
+        (PARAM_PORTA, on(setup.porta)),
+        (PARAM_CUT_ITSELF, on(setup.cut_itself)),
+        (
+            PARAM_DECLICK,
+            setup.declick.min(5) as f32 / (DeclickMode::ALL.len() - 1) as f32,
+        ),
+        (PARAM_XFADE, setup.crossfade.clamp(0.0, 1.0)),
+        (PARAM_TRIM, setup.trim.clamp(0.0, 1.0)),
+        (PARAM_FADE_STEREO, on(setup.fade_stereo)),
+    ];
+    if let Some(start) = setup.start {
+        p.push((PARAM_SAMPLE_START, start.clamp(0.0, 1.0)));
+    }
+    if let Some(length) = setup.length {
+        p.push((PARAM_SAMPLE_LENGTH, length.clamp(0.0, 1.0)));
+    }
+    match setup.envelope {
+        Some(e) => p.extend([
+            (PARAM_ENVELOPE, on(e.enabled)),
+            (PARAM_DELAY, e.delay.clamp(0.0, 1.0)),
+            (PARAM_ATTACK, e.attack.clamp(0.0, 1.0)),
+            (PARAM_HOLD, e.hold.clamp(0.0, 1.0)),
+            (PARAM_DECAY, e.decay.clamp(0.0, 1.0)),
+            (PARAM_SUSTAIN, e.sustain.clamp(0.0, 1.0)),
+            (PARAM_RELEASE, e.release.clamp(0.0, 1.0)),
+        ]),
+        // No envelope saved: FL plays the sample as it is.
+        None => p.push((PARAM_ENVELOPE, 0.0)),
+    }
+    p
+}
+
 /// What a sampler's state bytes hold, for whoever shows them.
 pub fn decode_sample_state(bytes: &[u8]) -> Option<SamplerState> {
     SamplerState::from_bytes(bytes)
@@ -1151,6 +1226,67 @@ mod tests {
         assert_eq!(p.root(), 72);
         assert!(with_parameter(&bare, PARAM_COUNT, 0.5).is_none());
         assert!(with_parameter(b"junk", PARAM_GAIN, 0.5).is_none());
+    }
+
+    #[test]
+    fn an_fl_sampler_channel_starts_with_its_own_settings() {
+        use hardwave_project::fl_import::{FlEnvelope, FlSamplerSetup};
+        let setup = FlSamplerSetup {
+            envelope: Some(FlEnvelope {
+                enabled: true,
+                delay: 0.0,
+                attack: 0.5,
+                hold: 0.0,
+                decay: 1.0,
+                sustain: 0.5,
+                release: 0.25,
+            }),
+            use_loop_points: true,
+            ping_pong: true,
+            mono: true,
+            porta: false,
+            cut_itself: false,
+            declick: 4,
+            crossfade: 0.25,
+            trim: 0.5,
+            start: Some(0.25),
+            length: None,
+            fade_stereo: true,
+            ..Default::default()
+        };
+        let ch = vec![0.5_f32; 100];
+        let bytes = encode_sample_state_with(
+            48_000,
+            62,
+            vec![ch],
+            "C:\\packs\\kick.wav",
+            settings_from_fl(&setup, 62),
+        );
+        let mut s = NativeSampler::new();
+        s.set_state(&bytes).unwrap();
+        assert_eq!(s.root(), 62, "the root comes along");
+        assert!(s.on(PARAM_ENVELOPE) && s.on(PARAM_LOOP) && s.on(PARAM_PING_PONG));
+        assert!(s.on(PARAM_MONO) && !s.on(PARAM_PORTA));
+        assert!(!s.on(PARAM_CUT_ITSELF), "FL's channel did not cut itself");
+        assert_eq!(s.declick(), DeclickMode::Smooth);
+        assert!(s.on(PARAM_FADE_STEREO));
+        let v = |id: u32| s.get_parameter_value(id) as f32;
+        assert_eq!(
+            (v(PARAM_ATTACK), v(PARAM_SUSTAIN), v(PARAM_RELEASE)),
+            (0.5, 0.5, 0.25)
+        );
+        assert_eq!((v(PARAM_XFADE), v(PARAM_TRIM)), (0.25, 0.5));
+        assert_eq!(v(PARAM_SAMPLE_START), 0.25);
+        assert_eq!(
+            v(PARAM_SAMPLE_LENGTH),
+            1.0,
+            "no length saved: the rest of the sample"
+        );
+        assert_eq!(s.path, "C:\\packs\\kick.wav");
+
+        // A channel FL saved without an envelope plays its sample as it is.
+        let plain = settings_from_fl(&FlSamplerSetup::default(), 60);
+        assert!(plain.contains(&(PARAM_ENVELOPE, 0.0)));
     }
 
     #[test]

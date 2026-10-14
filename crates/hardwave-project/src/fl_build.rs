@@ -151,6 +151,9 @@ pub struct SamplerSample {
     pub reversed: bool,
     pub swap_stereo: bool,
     pub polarity_inverted: bool,
+    /// Its envelope, loop, voices and the sample's effects, as FL has them;
+    /// the app turns these into the built-in sampler's settings.
+    pub setup: crate::fl_import::FlSamplerSetup,
 }
 
 /// What an audio clip still needs once its file is loaded.
@@ -401,6 +404,7 @@ pub fn build_project(
                             reversed: settings.reversed,
                             swap_stereo: settings.swap_stereo,
                             polarity_inverted: settings.polarity_inverted,
+                            setup: settings.sampler,
                         });
                     }
                     if settings.fade_in > 0 || settings.fade_out > 0 {
@@ -1512,6 +1516,7 @@ mod tests {
                 reversed: false,
                 swap_stereo: false,
                 polarity_inverted: false,
+                setup: Default::default(),
             }]
         );
         assert_eq!(

@@ -107,6 +107,80 @@ pub struct FlChannelSettings {
     pub fade_in: u16,
     pub fade_out: u16,
     pub stretch: FlStretch,
+    /// What a sampler channel does with its sample beyond the above: its
+    /// volume envelope, loop, voices and the sample's precomputed effects.
+    #[serde(default)]
+    pub sampler: FlSamplerSetup,
+}
+
+/// A sampler channel's envelope, loop, voices and sample effects, as
+/// fractions of FL's own knob ranges (0 to 1) where FL has a knob. The
+/// layouts follow PyFLP 2.2 (MIT), checked field by field against the
+/// events already read from real files (polarity at 81, stretch at 96).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FlSamplerSetup {
+    /// The volume envelope (FL's second envelope event; the first is pan).
+    pub envelope: Option<FlEnvelope>,
+    /// "Use loop points": loop the sample's own loop region (its WAV
+    /// loop), or the whole sample when it has none.
+    pub use_loop_points: bool,
+    pub ping_pong: bool,
+    pub mono: bool,
+    pub porta: bool,
+    /// The channel cuts itself: FL's cut group and cut-by group are the
+    /// same, non-zero group.
+    pub cut_itself: bool,
+    /// FL's declicking mode, 0 to 5 in FL's order.
+    pub declick: u8,
+    /// The loop crossfade, 0 to 1.
+    pub crossfade: f32,
+    /// The trim knob, 0 (off) to 1.
+    pub trim: f32,
+    /// Sample start and length, 0 to 1 of the file; None when FL kept
+    /// none (then the whole sample).
+    pub start: Option<f32>,
+    pub length: Option<f32>,
+    pub fade_stereo: bool,
+    pub normalize: bool,
+    pub remove_dc: bool,
+    /// How many envelope events this channel has had; the second is the
+    /// volume envelope. Reading state only.
+    #[serde(skip)]
+    pub envelope_events: u8,
+}
+
+impl Default for FlSamplerSetup {
+    fn default() -> Self {
+        Self {
+            envelope: None,
+            use_loop_points: false,
+            ping_pong: false,
+            mono: false,
+            porta: false,
+            cut_itself: false,
+            declick: 0,
+            crossfade: 0.0,
+            trim: 0.0,
+            start: None,
+            length: None,
+            fade_stereo: false,
+            normalize: false,
+            remove_dc: false,
+            envelope_events: 0,
+        }
+    }
+}
+
+/// FL's envelope knobs, each 0 to 1 of the knob's travel.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FlEnvelope {
+    pub enabled: bool,
+    pub delay: f32,
+    pub attack: f32,
+    pub hold: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
 }
 
 impl Default for FlChannelSettings {
@@ -124,6 +198,7 @@ impl Default for FlChannelSettings {
             fade_in: 0,
             fade_out: 0,
             stretch: FlStretch::default(),
+            sampler: FlSamplerSetup::default(),
         }
     }
 }
