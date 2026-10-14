@@ -900,11 +900,11 @@ impl AudioNode for MidiTrackNode {
         let mut peak_r = 0.0_f32;
         let mut energy_acc = 0.0_f32;
 
-        // KickSynth voicing: render the entire block into a temp
-        // buffer up-front, then mix it in below. The sine voicing
-        // takes the per-sample path inside the loop. We split the
-        // L/R mixing per-sample so volume + pan still apply uniformly
-        // regardless of which instrument is active.
+        // KickSynth voicing: render the block into a temp buffer up-front,
+        // then mix it in below. The sine voicing takes the per-sample path
+        // inside the loop. We split the L/R mixing per-sample so volume +
+        // pan still apply uniformly regardless of which instrument is
+        // active.
         if matches!(self.instrument, Instrument::KickSynth) {
             // Grows only when the device's buffer grows, not per block.
             if self.kick_l.len() < block_size {
@@ -915,9 +915,39 @@ impl AudioNode for MidiTrackNode {
             // has to be cleared or it would be heard again.
             self.kick_l[..block_size].fill(0.0);
             self.kick_r[..block_size].fill(0.0);
+            // The clip's kicks that fall in this block fire where they
+            // fall, and the block is rendered in pieces around them. The
+            // whole block used to be rendered first and the notes fired
+            // after it, in the loop below, so every kick came a block late:
+            // 21 ms at 1024 frames, in playback and in a render, which is
+            // where a consolidated kick got its opening silence.
+            let mut from = 0usize;
+            if ctx.playing {
+                let block_end = block_start.saturating_add(block_size as u64);
+                let mut idx = self.next_note_idx;
+                while idx < self.notes.len() && self.notes[idx].note_off_sample < block_start {
+                    idx += 1;
+                }
+                while idx < self.notes.len() && self.notes[idx].note_on_sample < block_end {
+                    let n = &self.notes[idx];
+                    idx += 1;
+                    // A kick is a transient: one that began before this
+                    // block is left alone, as the loop below leaves it.
+                    if n.muted || n.note_on_sample < block_start {
+                        continue;
+                    }
+                    let at = (n.note_on_sample - block_start) as usize;
+                    if at > from {
+                        self.kick
+                            .render_into(&mut self.kick_l[from..at], &mut self.kick_r[from..at]);
+                        from = at;
+                    }
+                    self.kick.note_on(n.pitch, n.velocity);
+                }
+            }
             self.kick.render_into(
-                &mut self.kick_l[..block_size],
-                &mut self.kick_r[..block_size],
+                &mut self.kick_l[from..block_size],
+                &mut self.kick_r[from..block_size],
             );
         }
 
@@ -1048,12 +1078,10 @@ impl AudioNode for MidiTrackNode {
                                 }
                             }
                             Instrument::KickSynth => {
-                                // A kick is a transient: starting one from
-                                // its middle is a click, so a truncated one
-                                // is left alone whatever the setting says.
-                                if !truncated {
-                                    self.kick.note_on(n.pitch, n.velocity);
-                                }
+                                // Fired above, where the block was rendered
+                                // around it; a truncated one (a transient
+                                // started from its middle is a click) was
+                                // left alone there whatever the setting says.
                             }
                         }
                     }
@@ -2250,6 +2278,41 @@ mod mpe_tests {
             .windows(2)
             .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
             .count()
+    }
+
+    #[test]
+    fn a_clip_kick_fires_where_it_falls_in_the_block_not_a_block_later() {
+        // The block used to be rendered before its notes fired, so a kick
+        // on sample 300 was heard from the next block on.
+        let mut n = node();
+        n.set_instrument(Instrument::KickSynth, 48_000.0);
+        n.set_notes(vec![MidiNoteRegion {
+            note_on_sample: 300,
+            note_off_sample: 1_000,
+            pitch: 36,
+            ..Default::default()
+        }]);
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            buffer_size: 4096,
+            tempo: 140.0,
+            time_sig: (4, 4),
+            position_samples: 0,
+            position_ticks: 0,
+            playing: true,
+        };
+        let mut outputs = vec![vec![0.0f32; 4096]; 4];
+        let empty: Vec<f32> = vec![0.0; 4096];
+        let inputs: Vec<&[f32]> = vec![&empty, &empty, &empty, &empty];
+        n.process(&inputs, &mut outputs, &[], &mut Vec::new(), &ctx);
+        let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+        assert_eq!(peak(&outputs[0][..300]), 0.0, "nothing before the kick");
+        assert!(peak(&outputs[0][300..600]) > 0.05, "the kick right where its note is");
+        // The next block carries the kick on, and does not fire it again.
+        let ctx2 = ProcessContext { position_samples: 4096, ..ctx };
+        let mut next = vec![vec![0.0f32; 4096]; 4];
+        n.process(&inputs, &mut next, &[], &mut Vec::new(), &ctx2);
+        assert!(peak(&next[0][..64]) < peak(&outputs[0][300..364]), "the tail, not a new attack");
     }
 
     #[test]

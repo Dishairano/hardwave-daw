@@ -4250,6 +4250,56 @@ mod offline_insert_tests {
     }
 
     #[test]
+    fn a_kick_at_the_first_tick_sounds_from_the_first_frames() {
+        // The starter song's kick sits on the first tick. Consolidated on
+        // the laptop (2026-10-14) its file opened with 21 ms of nothing:
+        // one 1024-frame block. A render has to carry the kick from its
+        // first frames.
+        use hardwave_midi::{MidiClip, MidiNote};
+        use hardwave_project::clip::MidiClipRef;
+        use hardwave_project::track::NativeInstrument;
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            let id = project.add_midi_track("Kick".into());
+            if let Some(t) = project.track_mut(&id) {
+                t.instrument = NativeInstrument::KickSynth;
+            }
+            let mut clip = MidiClip::new("c".into(), "kick".into(), 1920);
+            clip.notes.push(MidiNote {
+                start_tick: 0,
+                duration_ticks: 480,
+                pitch: 36,
+                velocity: 1.0,
+                channel: 0,
+                muted: false,
+                ..Default::default()
+            });
+            if let Some(t) = project.track_mut(&id) {
+                t.clips.push(ClipPlacement {
+                    content: ClipContent::Midi(MidiClipRef { id: "c".into(), clip }),
+                    track_id: id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1920,
+                    lane: 0,
+                });
+            }
+        }
+        let mut out: Vec<f32> = Vec::new();
+        engine
+            .render_offline_with(48_000, 24_000, 0, None, |_| {}, |b| {
+                out.extend_from_slice(b);
+                true
+            })
+            .expect("it renders");
+        let first = out.iter().position(|v| v.abs() > 0.02).map(|i| i / 2);
+        assert!(
+            matches!(first, Some(i) if i < 64),
+            "the kick sounds within the first frames; first loud frame {first:?}"
+        );
+    }
+
+    #[test]
     fn a_render_starts_where_the_song_does_behind_a_plug_in_s_latency() {
         // The sine through a plug-in that holds it back LAT frames. The
         // render drops that much and renders that much more: the first
