@@ -102,10 +102,11 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
                         .iter_mut()
                         .for_each(|c| c.iter_mut().for_each(|v| *v = -*v));
                 }
-                let state = hardwave_native_plugins::sampler::encode_sample_state(
+                let state = hardwave_native_plugins::sampler::encode_sample_state_from(
                     info.sample_rate,
                     sampler.root_note,
                     channels,
+                    &sampler.file,
                 );
                 let slot_id = uuid::Uuid::new_v4().to_string();
                 if let Some(track) = project.track_mut(&sampler.track_id) {

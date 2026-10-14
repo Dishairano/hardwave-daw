@@ -2,11 +2,22 @@
 //! the keyboard, polyphonically. The track's MIDI notes drive it (it's an
 //! `Instrument`-category plug-in, so the engine routes notes to it).
 //!
+//! It plays a sample the way FL's sampler channel does: from a start
+//! offset, looping between two points (straight or ping-pong) while the
+//! note is held, through a volume envelope with delay, attack, hold,
+//! decay, sustain and release when that envelope is switched on, and
+//! straight through to the end of the sample when it is off. A channel
+//! can be mono, cut itself on every new note, and slide between notes
+//! (porta). The root note says which key plays the sample as recorded;
+//! the pitch knob shifts the whole channel.
+//!
 //! Sample ingress reuses the existing plug-in-state path: the decoded
 //! audio *is* the plug-in's state. The `load_sampler` command decodes a
 //! file off the audio thread and ships the bytes via `SetState`, and the
 //! same bytes round-trip through project save/load — so a project with a
-//! sampler is self-contained (the sample travels with it).
+//! sampler is self-contained (the sample travels with it). The settings
+//! travel in the same bytes, after the audio, so a saved song plays back
+//! with the envelope and loop it was made with.
 
 use crate::format;
 use hardwave_midi::MidiEvent;
@@ -17,10 +28,47 @@ use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
 
 const MAX_VOICES: usize = 16;
-const PARAM_GAIN: u32 = 0;
-const PARAM_ATTACK: u32 = 1;
-const PARAM_RELEASE: u32 = 2;
-const PARAM_COUNT: u32 = 3;
+
+pub const PARAM_GAIN: u32 = 0;
+pub const PARAM_ATTACK: u32 = 1;
+pub const PARAM_RELEASE: u32 = 2;
+pub const PARAM_DELAY: u32 = 3;
+pub const PARAM_HOLD: u32 = 4;
+pub const PARAM_DECAY: u32 = 5;
+pub const PARAM_SUSTAIN: u32 = 6;
+pub const PARAM_ENVELOPE: u32 = 7;
+pub const PARAM_OFFSET: u32 = 8;
+pub const PARAM_LOOP_START: u32 = 9;
+pub const PARAM_LOOP_END: u32 = 10;
+pub const PARAM_LOOP: u32 = 11;
+pub const PARAM_PING_PONG: u32 = 12;
+pub const PARAM_MONO: u32 = 13;
+pub const PARAM_CUT_ITSELF: u32 = 14;
+pub const PARAM_PORTA: u32 = 15;
+pub const PARAM_ROOT: u32 = 16;
+pub const PARAM_PITCH: u32 = 17;
+pub const PARAM_COUNT: u32 = 18;
+
+/// The time knobs run on a square law (fine near zero, as FL's do):
+/// seconds = knob² × the longest they go.
+const ATTACK_MAX_S: f32 = 5.0;
+const DELAY_MAX_S: f32 = 5.0;
+const HOLD_MAX_S: f32 = 5.0;
+const DECAY_MAX_S: f32 = 10.0;
+const RELEASE_MAX_S: f32 = 10.0;
+/// A cut voice (mono, cut itself, a stolen voice) fades over this long.
+const CUT_FADE_S: f32 = 0.002;
+/// A note-off with the envelope off, on a looping sample, lets go over this long.
+const LOOP_STOP_S: f32 = 0.005;
+/// Porta slides from one note to the next over this long.
+const PORTA_S: f32 = 0.12;
+/// The pitch knob reaches this many semitones each way.
+const PITCH_RANGE_ST: f32 = 24.0;
+
+/// What the saved bytes carry after the audio: the settings, and the
+/// file the sample came from, so the window can name it.
+const TAIL_MAGIC: &[u8; 4] = b"HWSP";
+const TAIL_VERSION: u8 = 1;
 
 /// Decoded sample, addressable by MIDI note relative to `base_note`.
 #[derive(Clone, Default)]
@@ -34,7 +82,7 @@ pub struct SampleData {
 }
 
 impl SampleData {
-    fn frames(&self) -> usize {
+    pub fn frames(&self) -> usize {
         self.channels.first().map(|c| c.len()).unwrap_or(0)
     }
 
@@ -57,12 +105,12 @@ impl SampleData {
         out
     }
 
-    fn from_bytes(b: &[u8]) -> Option<Self> {
+    /// How many bytes the header and the audio take, when the header is
+    /// sound and the bytes hold what it says.
+    fn pcm_len(b: &[u8]) -> Option<usize> {
         if b.len() < 13 {
             return None;
         }
-        let base_note = b[0];
-        let sample_rate = u32::from_le_bytes(b[1..5].try_into().ok()?);
         let nch = u32::from_le_bytes(b[5..9].try_into().ok()?) as usize;
         let nfr = u32::from_le_bytes(b[9..13].try_into().ok()?) as usize;
         // The counts come from the saved state, which came from a file.
@@ -75,9 +123,16 @@ impl SampleData {
             .checked_mul(nfr)
             .and_then(|n| n.checked_mul(4))
             .and_then(|n| n.checked_add(13))?;
-        if b.len() != need {
-            return None;
-        }
+        (b.len() >= need).then_some(need)
+    }
+
+    /// The sample from the front of the bytes, and how many bytes it took.
+    fn from_bytes(b: &[u8]) -> Option<(Self, usize)> {
+        let need = Self::pcm_len(b)?;
+        let base_note = b[0];
+        let sample_rate = u32::from_le_bytes(b[1..5].try_into().ok()?);
+        let nch = u32::from_le_bytes(b[5..9].try_into().ok()?) as usize;
+        let nfr = u32::from_le_bytes(b[9..13].try_into().ok()?) as usize;
         let mut channels = Vec::with_capacity(nch);
         let mut off = 13;
         for _ in 0..nch {
@@ -89,17 +144,130 @@ impl SampleData {
             }
             channels.push(ch);
         }
-        Some(SampleData {
-            sample_rate,
-            base_note,
-            channels,
+        Some((
+            SampleData {
+                sample_rate,
+                base_note,
+                channels,
+            },
+            need,
+        ))
+    }
+}
+
+/// Everything a sampler's state bytes hold: the sample, the settings
+/// (parameter id and its 0..1 value) and the file the sample came from.
+/// Bytes from before the settings travelled carry only the sample; they
+/// still load, with the settings left as they are.
+#[derive(Clone, Default)]
+pub struct SamplerState {
+    pub sample: SampleData,
+    pub params: Vec<(u32, f32)>,
+    pub path: String,
+}
+
+/// The settings block that follows the audio.
+fn encode_tail(params: &[(u32, f32)], path: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(9 + params.len() * 8 + 2 + path.len());
+    out.extend_from_slice(TAIL_MAGIC);
+    out.push(TAIL_VERSION);
+    out.extend_from_slice(&(params.len() as u32).to_le_bytes());
+    for &(id, v) in params {
+        out.extend_from_slice(&id.to_le_bytes());
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    let path = path.as_bytes();
+    let len = path.len().min(u16::MAX as usize);
+    out.extend_from_slice(&(len as u16).to_le_bytes());
+    out.extend_from_slice(&path[..len]);
+    out
+}
+
+/// The settings and the file name behind the audio; nothing there means
+/// bytes from before the settings travelled.
+fn parse_tail(tail: &[u8]) -> Option<(Vec<(u32, f32)>, String)> {
+    if tail.is_empty() {
+        return Some((Vec::new(), String::new()));
+    }
+    // Anything after the sample is the settings block, whole, or the
+    // bytes are not ours.
+    if tail.len() < 4 + 1 + 4 || &tail[..4] != TAIL_MAGIC || tail[4] != TAIL_VERSION {
+        return None;
+    }
+    let n = u32::from_le_bytes(tail[5..9].try_into().ok()?) as usize;
+    if n > PARAM_COUNT as usize * 4 {
+        return None;
+    }
+    let mut off = 9;
+    let mut params = Vec::with_capacity(n);
+    for _ in 0..n {
+        if tail.len() < off + 8 {
+            return None;
+        }
+        let id = u32::from_le_bytes(tail[off..off + 4].try_into().ok()?);
+        let v = f32::from_le_bytes(tail[off + 4..off + 8].try_into().ok()?);
+        params.push((id, v));
+        off += 8;
+    }
+    if tail.len() < off + 2 {
+        return None;
+    }
+    let len = u16::from_le_bytes(tail[off..off + 2].try_into().ok()?) as usize;
+    off += 2;
+    if tail.len() < off + len {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&tail[off..off + len]).into_owned();
+    Some((params, path))
+}
+
+impl SamplerState {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = self.sample.to_bytes();
+        out.extend(encode_tail(&self.params, &self.path));
+        out
+    }
+
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        let (sample, used) = SampleData::from_bytes(b)?;
+        let (params, path) = parse_tail(&b[used..])?;
+        Some(SamplerState {
+            sample,
+            params,
+            path,
         })
     }
 }
 
-#[derive(Clone, Copy)]
+/// The same state bytes with one setting changed, without decoding the
+/// audio: the project's copy of a sampler follows its knobs this way, so
+/// an undo brings a knob back and a save keeps it.
+pub fn with_parameter(bytes: &[u8], id: u32, value: f32) -> Option<Vec<u8>> {
+    if id >= PARAM_COUNT {
+        return None;
+    }
+    let used = SampleData::pcm_len(bytes)?;
+    let (mut params, path) = parse_tail(&bytes[used..])?;
+    let value = value.clamp(0.0, 1.0);
+    match params.iter_mut().find(|(i, _)| *i == id) {
+        Some(p) => p.1 = value,
+        None => params.push((id, value)),
+    }
+    let mut out = bytes[..used].to_vec();
+    if id == PARAM_ROOT {
+        // The header names the root too, for whoever reads only that.
+        out[0] = (value * 127.0).round().clamp(0.0, 127.0) as u8;
+    }
+    out.extend(encode_tail(&params, &path));
+    Some(out)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EnvStage {
+    Delay,
     Attack,
+    Hold,
+    Decay,
     Sustain,
     Release,
     Idle,
@@ -110,10 +278,29 @@ struct Voice {
     pos: f64,
     /// Frames advanced per output sample (pitch ratio × SR conversion).
     step: f64,
+    /// Where a porta slide is heading, and how much `step` moves per
+    /// sample to get there (0 when not sliding).
+    target_step: f64,
+    glide: f64,
+    /// +1 forwards, -1 backwards (the way back of a ping-pong loop).
+    dir: f64,
     velocity: f32,
     note: u8,
     env: f32,
     stage: EnvStage,
+    /// Samples left in a timed stage (delay, hold).
+    left: u64,
+    /// How much the envelope drops per sample while releasing.
+    rel_dec: f32,
+    /// A voice that was cut fades out by this much per sample; 0 = not cut.
+    cut: f32,
+    cut_gain: f32,
+}
+
+impl Voice {
+    fn held(&self) -> bool {
+        self.cut == 0.0 && !matches!(self.stage, EnvStage::Release | EnvStage::Idle)
+    }
 }
 
 pub struct NativeSampler {
@@ -121,25 +308,42 @@ pub struct NativeSampler {
     sample_rate: f32,
     active: bool,
     sample: Option<SampleData>,
+    /// The file the sample came from; what the window shows as its name.
+    path: String,
     voices: Vec<Voice>,
-    gain: f32,
-    attack_ms: f32,
-    release_ms: f32,
+    /// Every setting, 0..1, by parameter id.
+    p: [f32; PARAM_COUNT as usize],
 }
 
-/// Attack in milliseconds (0.1..200) from the 0..1 knob. The setter and
-/// the text both use it so what is shown is what is set.
-fn attack_ms_from_norm(v: f32) -> f32 {
-    (v * 200.0).max(0.1)
-}
-
-/// Release in milliseconds (1..1000) from the 0..1 knob.
-fn release_ms_from_norm(v: f32) -> f32 {
-    (v * 1000.0).max(1.0)
+fn knob_seconds(v: f32, max_s: f32, floor_s: f32) -> f32 {
+    (v * v * max_s).max(floor_s)
 }
 
 fn pitch_ratio(note: u8, base: u8) -> f64 {
     2.0_f64.powf((note as f64 - base as f64) / 12.0)
+}
+
+fn note_name(n: u8) -> String {
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    format!("{}{}", NAMES[(n % 12) as usize], (n / 12) as i32 - 1)
+}
+
+fn defaults() -> [f32; PARAM_COUNT as usize] {
+    let mut p = [0.0; PARAM_COUNT as usize];
+    p[PARAM_GAIN as usize] = 1.0;
+    p[PARAM_ATTACK as usize] = (0.002_f32 / ATTACK_MAX_S).sqrt();
+    p[PARAM_RELEASE as usize] = (0.06_f32 / RELEASE_MAX_S).sqrt();
+    p[PARAM_DECAY as usize] = (0.5_f32 / DECAY_MAX_S).sqrt();
+    p[PARAM_SUSTAIN as usize] = 1.0;
+    p[PARAM_LOOP_END as usize] = 1.0;
+    // FL's sampler channel: the envelope is off and every new note cuts
+    // the one before, which is what a drum wants.
+    p[PARAM_CUT_ITSELF as usize] = 1.0;
+    p[PARAM_ROOT as usize] = 60.0 / 127.0;
+    p[PARAM_PITCH as usize] = 0.5;
+    p
 }
 
 impl NativeSampler {
@@ -150,7 +354,7 @@ impl NativeSampler {
             id: Self::ID.into(),
             name: "Hardwave Sampler".into(),
             vendor: "Hardwave".into(),
-            version: "1.0.0".into(),
+            version: "1.1.0".into(),
             format: PluginFormat::Clap,
             path: PathBuf::from("<native>"),
             category: PluginCategory::Instrument,
@@ -167,35 +371,126 @@ impl NativeSampler {
             sample_rate: 48_000.0,
             active: false,
             sample: None,
+            path: String::new(),
             voices: Vec::new(),
-            gain: 1.0,
-            attack_ms: 2.0,
-            release_ms: 60.0,
+            p: defaults(),
         }
+    }
+
+    fn on(&self, id: u32) -> bool {
+        self.p[id as usize] >= 0.5
+    }
+    fn root(&self) -> u8 {
+        (self.p[PARAM_ROOT as usize] * 127.0).round().clamp(0.0, 127.0) as u8
+    }
+    fn pitch_semitones(&self) -> f32 {
+        (self.p[PARAM_PITCH as usize] * 2.0 - 1.0) * PITCH_RANGE_ST
+    }
+    fn seconds(&self, id: u32) -> f32 {
+        let v = self.p[id as usize];
+        match id {
+            PARAM_ATTACK => knob_seconds(v, ATTACK_MAX_S, 0.0001),
+            PARAM_DELAY => knob_seconds(v, DELAY_MAX_S, 0.0),
+            PARAM_HOLD => knob_seconds(v, HOLD_MAX_S, 0.0),
+            PARAM_DECAY => knob_seconds(v, DECAY_MAX_S, 0.001),
+            PARAM_RELEASE => knob_seconds(v, RELEASE_MAX_S, 0.001),
+            _ => 0.0,
+        }
+    }
+    fn samples(&self, seconds: f32) -> f64 {
+        (seconds * self.sample_rate).max(1.0) as f64
+    }
+
+    /// Frames per output sample for `note`: the distance from the root,
+    /// the pitch knob, and the file's rate against the engine's.
+    fn step_for(&self, note: u8, sample: &SampleData) -> f64 {
+        let sr_ratio = sample.sample_rate as f64 / self.sample_rate.max(1.0) as f64;
+        pitch_ratio(note, self.root()) * 2.0_f64.powf(self.pitch_semitones() as f64 / 12.0) * sr_ratio
     }
 
     fn start_voice(&mut self, note: u8, velocity: f32) {
         let Some(sample) = &self.sample else { return };
-        // Pitch ratio × (sample SR / engine SR) so playback speed is
-        // correct regardless of the file's native rate.
-        let sr_ratio = sample.sample_rate as f64 / self.sample_rate.max(1.0) as f64;
-        let step = pitch_ratio(note, sample.base_note) * sr_ratio;
+        let step = self.step_for(note, sample);
+        let frames = sample.frames();
+        if self.on(PARAM_MONO) {
+            if self.on(PARAM_PORTA) {
+                // Legato: the held note slides to the new one and keeps its
+                // envelope where it is.
+                let glide_len = (PORTA_S * self.sample_rate).max(1.0) as f64;
+                if let Some(v) = self.voices.iter_mut().find(|v| v.held()) {
+                    v.target_step = step;
+                    v.glide = (step - v.step) / glide_len;
+                    v.note = note;
+                    return;
+                }
+            }
+            let sr = self.sample_rate;
+            for v in self.voices.iter_mut() {
+                if v.cut == 0.0 {
+                    v.cut = 1.0 / (CUT_FADE_S * sr).max(1.0);
+                }
+            }
+        } else if self.on(PARAM_CUT_ITSELF) {
+            let sr = self.sample_rate;
+            for v in self.voices.iter_mut() {
+                if v.cut == 0.0 {
+                    v.cut = 1.0 / (CUT_FADE_S * sr).max(1.0);
+                }
+            }
+        }
         if self.voices.len() >= MAX_VOICES {
             let steal = self
                 .voices
                 .iter()
-                .position(|v| matches!(v.stage, EnvStage::Idle | EnvStage::Release))
+                .position(|v| !v.held())
                 .unwrap_or(0);
             self.voices.remove(steal);
         }
+        let envelope = self.on(PARAM_ENVELOPE);
+        let delay = self.seconds(PARAM_DELAY);
+        let (stage, env, left) = if !envelope {
+            (EnvStage::Sustain, 1.0, 0)
+        } else if delay > 0.0 {
+            (EnvStage::Delay, 0.0, self.samples(delay) as u64)
+        } else {
+            (EnvStage::Attack, 0.0, 0)
+        };
         self.voices.push(Voice {
-            pos: 0.0,
+            pos: self.p[PARAM_OFFSET as usize].clamp(0.0, 1.0) as f64 * frames as f64,
             step,
+            target_step: step,
+            glide: 0.0,
+            dir: 1.0,
             velocity: velocity.clamp(0.0, 1.0),
             note,
-            env: 0.0,
-            stage: EnvStage::Attack,
+            env,
+            stage,
+            left,
+            rel_dec: 0.0,
+            cut: 0.0,
+            cut_gain: 1.0,
         });
+    }
+
+    fn release_note(&mut self, note: u8) {
+        let envelope = self.on(PARAM_ENVELOPE);
+        let looping = self.on(PARAM_LOOP);
+        let rel = self.samples(self.seconds(PARAM_RELEASE)) as f32;
+        let stop = self.samples(LOOP_STOP_S) as f32;
+        for v in self.voices.iter_mut() {
+            if v.note != note || !v.held() {
+                continue;
+            }
+            if envelope {
+                v.rel_dec = v.env.max(1e-6) / rel;
+                v.stage = EnvStage::Release;
+            } else if looping {
+                // No envelope: the sample plays to its end on its own, but
+                // a loop would never end, so the key does.
+                v.rel_dec = 1.0 / stop;
+                v.stage = EnvStage::Release;
+            }
+        }
     }
 
     /// Linearly-interpolated sample for channel `ch` at fractional `pos`.
@@ -204,12 +499,30 @@ impl NativeSampler {
             Some(d) => d,
             None => return 0.0,
         };
+        if pos < 0.0 {
+            return 0.0;
+        }
         let i = pos.floor() as usize;
         if i + 1 >= data.len() {
             return data.get(i).copied().unwrap_or(0.0);
         }
         let frac = (pos - i as f64) as f32;
         data[i] * (1.0 - frac) + data[i + 1] * frac
+    }
+
+    fn state(&self) -> SamplerState {
+        SamplerState {
+            sample: self
+                .sample
+                .clone()
+                .map(|mut s| {
+                    s.base_note = self.root();
+                    s
+                })
+                .unwrap_or_default(),
+            params: (0..PARAM_COUNT).map(|id| (id, self.p[id as usize])).collect(),
+            path: self.path.clone(),
+        }
     }
 }
 
@@ -252,12 +565,7 @@ impl HostedPlugin for NativeSampler {
                     self.start_voice(note, velocity)
                 }
                 MidiEvent::NoteOn { note, .. } | MidiEvent::NoteOff { note, .. } => {
-                    for v in self.voices.iter_mut() {
-                        if v.note == note && !matches!(v.stage, EnvStage::Release | EnvStage::Idle)
-                        {
-                            v.stage = EnvStage::Release;
-                        }
-                    }
+                    self.release_note(note)
                 }
                 _ => {}
             }
@@ -273,41 +581,90 @@ impl HostedPlugin for NativeSampler {
             return;
         }
         let two_ch = sample.channels.len() >= 2;
-        let atk = (self.attack_ms * 0.001 * self.sample_rate).max(1.0);
-        let rel = (self.release_ms * 0.001 * self.sample_rate).max(1.0);
-        let atk_inc = 1.0 / atk;
-        let rel_dec = 1.0 / rel;
+        let envelope = self.on(PARAM_ENVELOPE);
+        let gain = self.p[PARAM_GAIN as usize];
+        let sustain = self.p[PARAM_SUSTAIN as usize];
+        let atk_inc = 1.0 / self.samples(self.seconds(PARAM_ATTACK)) as f32;
+        let dec_dec = (1.0 - sustain) / self.samples(self.seconds(PARAM_DECAY)) as f32;
+        let hold = self.samples(self.seconds(PARAM_HOLD)) as u64;
+        let looping = self.on(PARAM_LOOP);
+        let ping_pong = self.on(PARAM_PING_PONG);
+        let ls = self.p[PARAM_LOOP_START as usize].clamp(0.0, 1.0) as f64 * frames as f64;
+        let le = self.p[PARAM_LOOP_END as usize].clamp(0.0, 1.0) as f64 * frames as f64;
+        let loop_on = looping && le > ls + 1.0;
 
         for i in 0..num_samples {
             let mut l = 0.0_f32;
             let mut r = 0.0_f32;
             for v in self.voices.iter_mut() {
-                if matches!(v.stage, EnvStage::Idle) {
+                if v.stage == EnvStage::Idle {
                     continue;
                 }
-                // Envelope.
-                match v.stage {
-                    EnvStage::Attack => {
-                        v.env += atk_inc;
-                        if v.env >= 1.0 {
-                            v.env = 1.0;
-                            v.stage = EnvStage::Sustain;
+                if envelope {
+                    match v.stage {
+                        EnvStage::Delay => {
+                            if v.left == 0 {
+                                v.stage = EnvStage::Attack;
+                            } else {
+                                v.left -= 1;
+                                continue;
+                            }
                         }
-                    }
-                    EnvStage::Release => {
-                        v.env -= rel_dec;
-                        if v.env <= 0.0 {
-                            v.env = 0.0;
-                            v.stage = EnvStage::Idle;
+                        EnvStage::Attack => {
+                            v.env += atk_inc;
+                            if v.env >= 1.0 {
+                                v.env = 1.0;
+                                v.stage = EnvStage::Hold;
+                                v.left = hold;
+                            }
                         }
+                        EnvStage::Hold => {
+                            if v.left == 0 {
+                                v.stage = EnvStage::Decay;
+                            } else {
+                                v.left -= 1;
+                            }
+                        }
+                        EnvStage::Decay => {
+                            v.env -= dec_dec;
+                            if v.env <= sustain {
+                                v.env = sustain;
+                                v.stage = EnvStage::Sustain;
+                            }
+                        }
+                        EnvStage::Sustain => v.env = sustain,
+                        EnvStage::Release => {
+                            v.env -= v.rel_dec;
+                            if v.env <= 0.0 {
+                                v.env = 0.0;
+                                v.stage = EnvStage::Idle;
+                                continue;
+                            }
+                        }
+                        EnvStage::Idle => continue,
                     }
-                    _ => {}
+                } else if v.stage == EnvStage::Release {
+                    v.env -= v.rel_dec;
+                    if v.env <= 0.0 {
+                        v.env = 0.0;
+                        v.stage = EnvStage::Idle;
+                        continue;
+                    }
+                } else {
+                    v.env = 1.0;
                 }
-                if v.pos as usize >= frames {
+                if v.cut > 0.0 {
+                    v.cut_gain -= v.cut;
+                    if v.cut_gain <= 0.0 {
+                        v.stage = EnvStage::Idle;
+                        continue;
+                    }
+                }
+                if v.pos >= frames as f64 || v.pos < 0.0 {
                     v.stage = EnvStage::Idle;
                     continue;
                 }
-                let g = v.env * v.velocity * self.gain;
+                let g = v.env * v.cut_gain * v.velocity * gain;
                 let sl = Self::read(&sample, 0, v.pos);
                 let sr_s = if two_ch {
                     Self::read(&sample, 1, v.pos)
@@ -316,12 +673,34 @@ impl HostedPlugin for NativeSampler {
                 };
                 l += sl * g;
                 r += sr_s * g;
-                v.pos += v.step;
+                if v.glide != 0.0 {
+                    v.step += v.glide;
+                    if (v.glide > 0.0 && v.step >= v.target_step)
+                        || (v.glide < 0.0 && v.step <= v.target_step)
+                    {
+                        v.step = v.target_step;
+                        v.glide = 0.0;
+                    }
+                }
+                v.pos += v.step * v.dir;
+                if loop_on {
+                    if v.dir > 0.0 && v.pos >= le {
+                        if ping_pong {
+                            v.dir = -1.0;
+                            v.pos = (le - (v.pos - le)).max(ls);
+                        } else {
+                            v.pos = ls + (v.pos - le) % (le - ls);
+                        }
+                    } else if v.dir < 0.0 && v.pos <= ls {
+                        v.dir = 1.0;
+                        v.pos = (ls + (ls - v.pos)).min(le);
+                    }
+                }
             }
             outputs[0][i] = l;
             outputs[1][i] = r;
         }
-        self.voices.retain(|v| !matches!(v.stage, EnvStage::Idle));
+        self.voices.retain(|v| v.stage != EnvStage::Idle);
     }
 
     fn get_parameter_count(&self) -> u32 {
@@ -329,16 +708,31 @@ impl HostedPlugin for NativeSampler {
     }
 
     fn get_parameter_info(&self, index: u32) -> Option<ParameterInfo> {
-        let (name, default, unit) = match index {
-            PARAM_GAIN => ("Gain", 1.0, ""),
-            PARAM_ATTACK => ("Attack", 2.0 / 200.0, "ms"),
-            PARAM_RELEASE => ("Release", 60.0 / 1000.0, "ms"),
+        let (name, unit) = match index {
+            PARAM_GAIN => ("Gain", ""),
+            PARAM_ATTACK => ("Attack", "ms"),
+            PARAM_RELEASE => ("Release", "ms"),
+            PARAM_DELAY => ("Delay", "ms"),
+            PARAM_HOLD => ("Hold", "ms"),
+            PARAM_DECAY => ("Decay", "ms"),
+            PARAM_SUSTAIN => ("Sustain", ""),
+            PARAM_ENVELOPE => ("Envelope", ""),
+            PARAM_OFFSET => ("Offset", ""),
+            PARAM_LOOP_START => ("Loop start", ""),
+            PARAM_LOOP_END => ("Loop end", ""),
+            PARAM_LOOP => ("Loop", ""),
+            PARAM_PING_PONG => ("Ping pong", ""),
+            PARAM_MONO => ("Mono", ""),
+            PARAM_CUT_ITSELF => ("Cut itself", ""),
+            PARAM_PORTA => ("Porta", ""),
+            PARAM_ROOT => ("Root note", ""),
+            PARAM_PITCH => ("Pitch", "st"),
             _ => return None,
         };
         Some(ParameterInfo {
             id: index,
             name: name.into(),
-            default_value: default,
+            default_value: defaults()[index as usize] as f64,
             min: 0.0,
             max: 1.0,
             unit: unit.into(),
@@ -347,21 +741,12 @@ impl HostedPlugin for NativeSampler {
     }
 
     fn get_parameter_value(&self, id: u32) -> f64 {
-        match id {
-            PARAM_GAIN => self.gain as f64,
-            PARAM_ATTACK => (self.attack_ms / 200.0).clamp(0.0, 1.0) as f64,
-            PARAM_RELEASE => (self.release_ms / 1000.0).clamp(0.0, 1.0) as f64,
-            _ => 0.0,
-        }
+        self.p.get(id as usize).copied().unwrap_or(0.0) as f64
     }
 
     fn set_parameter_value(&mut self, id: u32, value: f64) {
-        let v = value.clamp(0.0, 1.0) as f32;
-        match id {
-            PARAM_GAIN => self.gain = v,
-            PARAM_ATTACK => self.attack_ms = attack_ms_from_norm(v),
-            PARAM_RELEASE => self.release_ms = release_ms_from_norm(v),
-            _ => {}
+        if let Some(slot) = self.p.get_mut(id as usize) {
+            *slot = value.clamp(0.0, 1.0) as f32;
         }
     }
 
@@ -369,29 +754,58 @@ impl HostedPlugin for NativeSampler {
         // Same clamp as the setter, so the text names what the value sets.
         let v = value.clamp(0.0, 1.0) as f32;
         let text = match id {
-            PARAM_GAIN => format::pct(v as f64),
-            PARAM_ATTACK => format::ms(attack_ms_from_norm(v) as f64),
-            PARAM_RELEASE => format::ms(release_ms_from_norm(v) as f64),
+            PARAM_GAIN | PARAM_SUSTAIN => format::pct(v as f64),
+            PARAM_ATTACK => format::secs(knob_seconds(v, ATTACK_MAX_S, 0.0001) as f64),
+            PARAM_RELEASE => format::secs(knob_seconds(v, RELEASE_MAX_S, 0.001) as f64),
+            PARAM_DELAY => format::secs(knob_seconds(v, DELAY_MAX_S, 0.0) as f64),
+            PARAM_HOLD => format::secs(knob_seconds(v, HOLD_MAX_S, 0.0) as f64),
+            PARAM_DECAY => format::secs(knob_seconds(v, DECAY_MAX_S, 0.001) as f64),
+            PARAM_ENVELOPE | PARAM_LOOP | PARAM_PING_PONG | PARAM_MONO | PARAM_CUT_ITSELF
+            | PARAM_PORTA => format::on_off(v as f64),
+            PARAM_OFFSET | PARAM_LOOP_START | PARAM_LOOP_END => format::pct(v as f64),
+            PARAM_ROOT => note_name((v * 127.0).round() as u8),
+            PARAM_PITCH => {
+                let st = (v * 2.0 - 1.0) * PITCH_RANGE_ST;
+                format!("{}{:.2} st", if st > 0.0 { "+" } else { "" }, st)
+            }
             _ => return None,
         };
         Some(text)
     }
 
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        (id == PARAM_ROOT).then(|| (0..=127).map(note_name).collect())
+    }
+
     fn get_state(&self) -> Vec<u8> {
-        // The sample itself is the state, so a saved project carries it.
-        self.sample
-            .as_ref()
-            .map(|s| s.to_bytes())
-            .unwrap_or_default()
+        // The sample itself is the state, so a saved project carries it,
+        // with the settings and the file's name behind it.
+        if self.sample.is_none() {
+            return Vec::new();
+        }
+        self.state().to_bytes()
     }
 
     fn set_state(&mut self, bytes: &[u8]) -> Result<(), String> {
         if bytes.is_empty() {
             return Ok(());
         }
-        match SampleData::from_bytes(bytes) {
+        match SamplerState::from_bytes(bytes) {
             Some(s) => {
-                self.sample = Some(s);
+                // Bytes with settings bring their own; a bare sample (a
+                // new file, an old song) keeps the settings as they are,
+                // and names its root from the sample.
+                if s.params.is_empty() {
+                    self.p[PARAM_ROOT as usize] = s.sample.base_note as f32 / 127.0;
+                } else {
+                    for (id, v) in s.params {
+                        self.set_parameter_value(id, v as f64);
+                    }
+                }
+                if !s.path.is_empty() {
+                    self.path = s.path;
+                }
+                self.sample = Some(s.sample);
                 self.voices.clear();
                 Ok(())
             }
@@ -414,18 +828,43 @@ impl HostedPlugin for NativeSampler {
 /// Public helper for the `load_sampler` command: build the state bytes a
 /// `NativeSampler` expects from decoded channels. Other channel counts
 /// are folded to mono so the sampler always has at least one channel.
+/// The settings are not in these bytes: a sampler loading them keeps its
+/// own, as FL keeps a channel's envelope when a new sample drops in.
 pub fn encode_sample_state(sample_rate: u32, base_note: u8, channels: Vec<Vec<f32>>) -> Vec<u8> {
+    encode_sample_state_from(sample_rate, base_note, channels, "")
+}
+
+/// As `encode_sample_state`, naming the file the sample came from.
+pub fn encode_sample_state_from(
+    sample_rate: u32,
+    base_note: u8,
+    channels: Vec<Vec<f32>>,
+    path: &str,
+) -> Vec<u8> {
     let channels = if channels.is_empty() {
         vec![Vec::new()]
     } else {
         channels
     };
-    SampleData {
+    let sample = SampleData {
         sample_rate,
         base_note,
         channels,
+    };
+    if path.is_empty() {
+        return sample.to_bytes();
+    }
+    SamplerState {
+        sample,
+        params: Vec::new(),
+        path: path.to_string(),
     }
     .to_bytes()
+}
+
+/// What a sampler's state bytes hold, for whoever shows them.
+pub fn decode_sample_state(bytes: &[u8]) -> Option<SamplerState> {
+    SamplerState::from_bytes(bytes)
 }
 
 #[cfg(test)]
@@ -439,7 +878,7 @@ mod tests {
         lie.extend_from_slice(&u32::MAX.to_le_bytes());
         lie.extend_from_slice(&0u32.to_le_bytes());
         assert!(
-            SampleData::from_bytes(&lie).is_none(),
+            SamplerState::from_bytes(&lie).is_none(),
             "channels past any sample"
         );
         let mut wrap = vec![60u8];
@@ -447,9 +886,13 @@ mod tests {
         wrap.extend_from_slice(&2u32.to_le_bytes());
         wrap.extend_from_slice(&(1u32 << 31).to_le_bytes());
         assert!(
-            SampleData::from_bytes(&wrap).is_none(),
+            SamplerState::from_bytes(&wrap).is_none(),
             "frames the bytes do not hold"
         );
+        // Bytes behind the sample that are not a settings block.
+        let mut junk = dc_sample();
+        junk.extend_from_slice(b"what");
+        assert!(SamplerState::from_bytes(&junk).is_none());
     }
 
     fn dc_sample() -> Vec<u8> {
@@ -458,31 +901,123 @@ mod tests {
         encode_sample_state(48_000, 60, vec![ch.clone(), ch])
     }
 
+    /// A ramp 0, 1, 2, ... so the output says where the voice is reading.
+    fn ramp_sample(frames: usize) -> Vec<u8> {
+        let ch: Vec<f32> = (0..frames).map(|i| i as f32).collect();
+        encode_sample_state_from(48_000, 60, vec![ch], "C:\\packs\\ramp.wav")
+    }
+
+    fn sampler_with(bytes: &[u8]) -> NativeSampler {
+        let mut s = NativeSampler::new();
+        s.activate(48_000.0, 512).unwrap();
+        s.set_state(bytes).unwrap();
+        s
+    }
+
+    fn note_on(note: u8) -> MidiEvent {
+        MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note,
+            velocity: 1.0,
+        }
+    }
+    fn note_off(note: u8) -> MidiEvent {
+        MidiEvent::NoteOff {
+            timing: 0,
+            channel: 0,
+            note,
+            velocity: 0.0,
+        }
+    }
+
+    /// One block of `n` samples; the left channel comes back.
+    fn run(s: &mut NativeSampler, events: &[MidiEvent], n: usize) -> Vec<f32> {
+        let mut out = vec![vec![0.0; n], vec![0.0; n]];
+        s.process(&[], &mut out, events, &mut Vec::new(), n);
+        out.swap_remove(0)
+    }
+
+    fn set(s: &mut NativeSampler, id: u32, v: f64) {
+        s.set_parameter_value(id, v);
+    }
+
     #[test]
     fn state_round_trips() {
         let bytes = dc_sample();
-        let s = SampleData::from_bytes(&bytes).unwrap();
-        assert_eq!(s.sample_rate, 48_000);
-        assert_eq!(s.base_note, 60);
-        assert_eq!(s.channels.len(), 2);
-        assert_eq!(s.frames(), 100);
-        assert!((s.channels[0][0] - 0.5).abs() < 1e-6);
+        let s = SamplerState::from_bytes(&bytes).unwrap();
+        assert_eq!(s.sample.sample_rate, 48_000);
+        assert_eq!(s.sample.base_note, 60);
+        assert_eq!(s.sample.channels.len(), 2);
+        assert_eq!(s.sample.frames(), 100);
+        assert!((s.sample.channels[0][0] - 0.5).abs() < 1e-6);
+        assert!(s.params.is_empty(), "a bare sample carries no settings");
+        assert_eq!(s.path, "");
+    }
+
+    #[test]
+    fn the_settings_and_the_file_travel_with_the_sample() {
+        let mut a = sampler_with(&ramp_sample(100));
+        set(&mut a, PARAM_ENVELOPE, 1.0);
+        set(&mut a, PARAM_SUSTAIN, 0.25);
+        set(&mut a, PARAM_LOOP, 1.0);
+        set(&mut a, PARAM_LOOP_START, 0.2);
+        set(&mut a, PARAM_ROOT, 72.0 / 127.0);
+        let bytes = a.get_state();
+
+        let mut b = NativeSampler::new();
+        b.set_state(&bytes).unwrap();
+        for id in 0..PARAM_COUNT {
+            assert!(
+                (a.get_parameter_value(id) - b.get_parameter_value(id)).abs() < 1e-6,
+                "parameter {id} did not survive the state"
+            );
+        }
+        assert_eq!(b.root(), 72);
+        assert_eq!(b.path, "C:\\packs\\ramp.wav");
+        let decoded = decode_sample_state(&bytes).unwrap();
+        assert_eq!(decoded.sample.frames(), 100);
+        assert_eq!(decoded.sample.base_note, 72, "the header names the root too");
+    }
+
+    #[test]
+    fn a_knob_can_be_written_into_saved_bytes_without_the_audio() {
+        let bare = ramp_sample(50);
+        let once = with_parameter(&bare, PARAM_SUSTAIN, 0.3).unwrap();
+        let twice = with_parameter(&once, PARAM_ROOT, 72.0 / 127.0).unwrap();
+        let again = with_parameter(&twice, PARAM_SUSTAIN, 0.6).unwrap();
+        let s = SamplerState::from_bytes(&again).unwrap();
+        assert_eq!(s.sample.frames(), 50);
+        assert_eq!(s.path, "C:\\packs\\ramp.wav");
+        assert_eq!(s.sample.base_note, 72);
+        assert_eq!(s.params.len(), 2, "one entry per setting: {:?}", s.params);
+        assert!(s.params.contains(&(PARAM_SUSTAIN, 0.6)));
+        let mut p = NativeSampler::new();
+        p.set_state(&again).unwrap();
+        assert!((p.get_parameter_value(PARAM_SUSTAIN) - 0.6).abs() < 1e-6);
+        assert_eq!(p.root(), 72);
+        assert!(with_parameter(&bare, PARAM_COUNT, 0.5).is_none());
+        assert!(with_parameter(b"junk", PARAM_GAIN, 0.5).is_none());
+    }
+
+    #[test]
+    fn a_new_sample_keeps_the_channel_s_settings() {
+        let mut s = sampler_with(&ramp_sample(100));
+        set(&mut s, PARAM_ENVELOPE, 1.0);
+        set(&mut s, PARAM_MONO, 1.0);
+        // load_sampler ships a bare sample: the envelope and mono stay.
+        s.set_state(&dc_sample()).unwrap();
+        assert!(s.on(PARAM_ENVELOPE));
+        assert!(s.on(PARAM_MONO));
+        assert_eq!(s.root(), 60, "a bare sample names its own root");
+        assert_eq!(s.sample.as_ref().unwrap().frames(), 100);
     }
 
     #[test]
     fn plays_loaded_sample_on_note() {
-        let mut s = NativeSampler::new();
-        s.activate(48_000.0, 512).unwrap();
-        s.set_state(&dc_sample()).unwrap();
-        let mut out = vec![vec![0.0; 64], vec![0.0; 64]];
-        let notes = vec![MidiEvent::NoteOn {
-            timing: 0,
-            channel: 0,
-            note: 60, // base note → natural pitch
-            velocity: 1.0,
-        }];
-        s.process(&[], &mut out, &notes, &mut Vec::new(), 64);
-        let peak = out[0].iter().fold(0.0_f32, |a, &b| a.max(b.abs()));
+        let mut s = sampler_with(&dc_sample());
+        let out = run(&mut s, &[note_on(60)], 64);
+        let peak = out.iter().fold(0.0_f32, |a, &b| a.max(b.abs()));
         assert!(
             peak > 0.0,
             "loaded sample must sound on note-on, got {peak}"
@@ -493,15 +1028,149 @@ mod tests {
     fn silent_without_sample() {
         let mut s = NativeSampler::new();
         s.activate(48_000.0, 512).unwrap();
-        let mut out = vec![vec![0.0; 32], vec![0.0; 32]];
-        let notes = vec![MidiEvent::NoteOn {
-            timing: 0,
-            channel: 0,
-            note: 60,
-            velocity: 1.0,
-        }];
-        s.process(&[], &mut out, &notes, &mut Vec::new(), 32);
-        assert!(out[0].iter().all(|s| *s == 0.0));
+        let out = run(&mut s, &[note_on(60)], 32);
+        assert!(out.iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn without_the_envelope_the_sample_plays_to_its_end() {
+        // FL: a drum plays in full however short its note is.
+        let mut s = sampler_with(&ramp_sample(200));
+        let a = run(&mut s, &[note_on(60)], 50);
+        assert!((a[10] - 10.0).abs() < 1e-3, "plays straight, got {}", a[10]);
+        let b = run(&mut s, &[note_off(60)], 50);
+        assert!((b[10] - 60.0).abs() < 1e-3, "the key up changed nothing, got {}", b[10]);
+        let c = run(&mut s, &[], 200);
+        assert!((c[99] - 199.0).abs() < 1e-3, "reads to the last frame, got {}", c[99]);
+        assert_eq!(c[100], 0.0, "and stops there");
+        assert!(s.voices.is_empty());
+    }
+
+    #[test]
+    fn with_the_envelope_the_key_up_lets_go() {
+        let mut s = sampler_with(&dc_sample());
+        set(&mut s, PARAM_ENVELOPE, 1.0);
+        set(&mut s, PARAM_ATTACK, 0.0); // 0.1 ms
+        set(&mut s, PARAM_RELEASE, (0.001_f32 / RELEASE_MAX_S).sqrt() as f64); // 1 ms = 48 samples
+        let _ = run(&mut s, &[note_on(60)], 20);
+        let out = run(&mut s, &[note_off(60)], 60);
+        assert!(out[0] > 0.4, "still sounding as the release starts, got {}", out[0]);
+        assert!(out[24] > 0.1 && out[24] < 0.4, "half way down, got {}", out[24]);
+        assert_eq!(out[55], 0.0, "gone after the release");
+    }
+
+    #[test]
+    fn the_envelope_delays_attacks_holds_decays_and_sustains() {
+        let mut s = sampler_with(&dc_sample());
+        // The sample is 100 frames; loop it so the envelope has room.
+        set(&mut s, PARAM_LOOP, 1.0);
+        set(&mut s, PARAM_ENVELOPE, 1.0);
+        let k = |seconds: f32, max: f32| (seconds / max).sqrt() as f64;
+        set(&mut s, PARAM_DELAY, k(0.001, DELAY_MAX_S)); // 48 samples of nothing
+        set(&mut s, PARAM_ATTACK, k(0.001, ATTACK_MAX_S)); // 48 samples up
+        set(&mut s, PARAM_HOLD, k(0.001, HOLD_MAX_S)); // 48 at the top
+        set(&mut s, PARAM_DECAY, k(0.001, DECAY_MAX_S)); // 48 down to
+        set(&mut s, PARAM_SUSTAIN, 0.5); // half
+        let out = run(&mut s, &[note_on(60)], 300);
+        assert!(out[..48].iter().all(|v| *v == 0.0), "silent through the delay");
+        assert!(out[48 + 24] > 0.2 && out[48 + 24] < 0.3, "half way up the attack: {}", out[72]);
+        assert!((out[48 + 48 + 20] - 0.5).abs() < 0.02, "held at the top: {}", out[116]);
+        assert!(out[48 + 48 + 48 + 24] > 0.3 && out[168] < 0.45, "half way down the decay: {}", out[168]);
+        assert!((out[280] - 0.25).abs() < 0.02, "sustaining at half: {}", out[280]);
+    }
+
+    #[test]
+    fn a_loop_keeps_the_voice_alive_past_the_end() {
+        let mut s = sampler_with(&ramp_sample(100));
+        set(&mut s, PARAM_LOOP, 1.0);
+        set(&mut s, PARAM_LOOP_START, 0.5);
+        set(&mut s, PARAM_LOOP_END, 0.8);
+        let out = run(&mut s, &[note_on(60)], 400);
+        // Up to 80, back to 50, and so on: never past 80, never below 50
+        // once it has got there, and still going after 400 samples.
+        assert!(out[79] > 78.0);
+        assert!(out[85] >= 50.0 && out[85] < 60.0, "wrapped to the loop start: {}", out[85]);
+        assert!(out[200..].iter().all(|v| *v >= 49.0 && *v <= 80.0));
+        assert_eq!(s.voices.len(), 1);
+    }
+
+    #[test]
+    fn a_ping_pong_loop_turns_round() {
+        let mut s = sampler_with(&ramp_sample(100));
+        set(&mut s, PARAM_LOOP, 1.0);
+        set(&mut s, PARAM_PING_PONG, 1.0);
+        set(&mut s, PARAM_LOOP_START, 0.5);
+        set(&mut s, PARAM_LOOP_END, 0.8);
+        let out = run(&mut s, &[note_on(60)], 400);
+        assert!(out[85] < out[80], "reads backwards after the loop end: {} then {}", out[80], out[85]);
+        assert!(out[115] > out[112], "and forwards again after the loop start: {} then {}", out[112], out[115]);
+        assert!(out[200..].iter().all(|v| *v >= 49.0 && *v <= 80.0));
+    }
+
+    #[test]
+    fn a_key_up_stops_a_loop_even_without_the_envelope() {
+        let mut s = sampler_with(&dc_sample());
+        set(&mut s, PARAM_LOOP, 1.0);
+        let _ = run(&mut s, &[note_on(60)], 50);
+        let out = run(&mut s, &[note_off(60)], 400);
+        assert!(out[0] > 0.0);
+        assert!(out[399] == 0.0 && s.voices.is_empty(), "let go within 5 ms");
+    }
+
+    #[test]
+    fn the_offset_starts_the_sample_later() {
+        let mut s = sampler_with(&ramp_sample(100));
+        set(&mut s, PARAM_OFFSET, 0.25);
+        let out = run(&mut s, &[note_on(60)], 4);
+        assert!((out[0] - 25.0).abs() < 1e-3, "starts a quarter in: {}", out[0]);
+    }
+
+    #[test]
+    fn mono_plays_one_voice_and_cut_itself_restarts() {
+        let mut s = sampler_with(&ramp_sample(1000));
+        set(&mut s, PARAM_CUT_ITSELF, 0.0);
+        let _ = run(&mut s, &[note_on(60), note_on(64)], 10);
+        assert_eq!(s.voices.len(), 2, "polyphonic when neither is on");
+
+        let mut s = sampler_with(&ramp_sample(1000));
+        set(&mut s, PARAM_MONO, 1.0);
+        let _ = run(&mut s, &[note_on(60)], 10);
+        let _ = run(&mut s, &[note_on(64)], 200);
+        assert_eq!(s.voices.len(), 1, "the first voice was cut away");
+        assert_eq!(s.voices[0].note, 64);
+
+        let mut s = sampler_with(&ramp_sample(1000));
+        let _ = run(&mut s, &[note_on(60)], 500);
+        let out = run(&mut s, &[note_on(60)], 200);
+        assert!(out[150] < 200.0, "the retrigger reads from the start again: {}", out[150]);
+        assert_eq!(s.voices.len(), 1);
+    }
+
+    #[test]
+    fn porta_slides_the_held_note_to_the_new_one() {
+        let mut s = sampler_with(&ramp_sample(100_000));
+        set(&mut s, PARAM_MONO, 1.0);
+        set(&mut s, PARAM_PORTA, 1.0);
+        let _ = run(&mut s, &[note_on(60)], 10);
+        let _ = run(&mut s, &[note_on(72)], 10);
+        assert_eq!(s.voices.len(), 1, "no new voice: the held one slides");
+        let early = s.voices[0].step;
+        assert!(early > 1.0 && early < 2.0, "on its way up: {early}");
+        let _ = run(&mut s, &[], 48_000 / 4);
+        assert!((s.voices[0].step - 2.0).abs() < 1e-9, "arrived an octave up");
+    }
+
+    #[test]
+    fn the_root_note_and_the_pitch_knob_tune_the_channel() {
+        let mut s = sampler_with(&dc_sample());
+        s.start_voice(72, 1.0); // +12 semitones from the root (60)
+        assert!((s.voices[0].step - 2.0).abs() < 1e-6, "octave up → 2x step");
+        set(&mut s, PARAM_ROOT, 72.0 / 127.0);
+        s.start_voice(72, 1.0);
+        assert!((s.voices[1].step - 1.0).abs() < 1e-6, "on its root the sample plays as recorded");
+        set(&mut s, PARAM_PITCH, 0.75); // +12 st of the 24 each way
+        s.start_voice(72, 1.0);
+        assert!((s.voices[2].step - 2.0).abs() < 1e-6, "the pitch knob shifts the whole channel");
     }
 
     #[test]
@@ -511,31 +1180,23 @@ mod tests {
         assert_eq!(shown(PARAM_GAIN).as_deref(), Some("100 %"));
         assert_eq!(shown(PARAM_ATTACK).as_deref(), Some("2.00 ms"));
         assert_eq!(shown(PARAM_RELEASE).as_deref(), Some("60.0 ms"));
+        assert_eq!(shown(PARAM_SUSTAIN).as_deref(), Some("100 %"));
+        assert_eq!(shown(PARAM_ENVELOPE).as_deref(), Some("Off"));
+        assert_eq!(shown(PARAM_CUT_ITSELF).as_deref(), Some("On"));
+        assert_eq!(shown(PARAM_ROOT).as_deref(), Some("C4"));
+        assert_eq!(shown(PARAM_PITCH).as_deref(), Some("0.00 st"));
+        assert_eq!(p.parameter_text(PARAM_PITCH, 1.0).as_deref(), Some("+24.00 st"));
+        assert_eq!(p.parameter_text(PARAM_ROOT, 0.0).as_deref(), Some("C-1"));
         // The floors the setter keeps show up in the text too.
-        assert_eq!(
-            p.parameter_text(PARAM_ATTACK, 0.0).as_deref(),
-            Some("0.10 ms")
-        );
-        assert_eq!(
-            p.parameter_text(PARAM_RELEASE, 1.0).as_deref(),
-            Some("1.00 s")
-        );
+        assert_eq!(p.parameter_text(PARAM_ATTACK, 0.0).as_deref(), Some("0.10 ms"));
+        assert_eq!(p.parameter_text(PARAM_RELEASE, 1.0).as_deref(), Some("10.00 s"));
         for id in 0..PARAM_COUNT {
             assert!(
                 p.parameter_text(id, 0.5).is_some(),
                 "parameter {id} has no text"
             );
+            assert!(p.get_parameter_info(id).is_some());
         }
-    }
-
-    #[test]
-    fn higher_note_plays_faster() {
-        // An octave up should advance the read position twice as fast.
-        let mut s = NativeSampler::new();
-        s.activate(48_000.0, 512).unwrap();
-        s.set_state(&dc_sample()).unwrap();
-        s.start_voice(72, 1.0); // +12 semitones
-        let step = s.voices[0].step;
-        assert!((step - 2.0).abs() < 1e-6, "octave up → 2x step, got {step}");
+        assert_eq!(p.parameter_options(PARAM_ROOT).map(|o| o.len()), Some(128));
     }
 }

@@ -160,6 +160,9 @@
   border-radius: 6px;
   background: var(--hwf-field);
   box-shadow: 0 0 0 1px var(--hwf-line2), 0 12px 28px rgba(0, 0, 0, 0.6);
+  /* a long list (every note) scrolls instead of leaving the window */
+  max-height: 280px;
+  overflow-y: auto;
 }
 .hwf-menu button {
   padding: 6px 10px;

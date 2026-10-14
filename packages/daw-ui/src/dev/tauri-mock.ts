@@ -142,6 +142,14 @@ const mock: TauriInternals = {
       }
       case 'get_waveform_peaks':
         return synthPeaks((args?.numBuckets as number) ?? 256)
+      // A sampler channel's sample: a short kick, named after its file.
+      case 'get_sampler_sample':
+        return {
+          path: 'D:\\Kicks\\Induskick4.wav', frames: Math.round(0.62 * 48000), sampleRate: 48000, channels: 1, root: 60,
+          peaks: synthPeaks((args?.numBuckets as number) ?? 256).map((p) => [p[0], p[1]]),
+        }
+      case 'load_sampler':
+        return null
       case 'get_clip_controls': {
         // A mod-wheel swell so the controller lane can be photographed.
         const a = args as { kind?: string }

@@ -1,6 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from '../../stores/notificationStore'
+import { useSampleWindowStore } from '../../stores/sampleWindowStore'
 import { layoutFor, windowWidth } from './pluginLayouts'
+
+/** The built-in sampler: its window is the sample window. */
+export const SAMPLER_PLUGIN_ID = 'hardwave.native.sampler'
 
 export interface PluginWindowRequest {
   trackId: string
@@ -40,6 +44,12 @@ export function isBuiltIn(pluginId: string): boolean {
  */
 export function openPluginWindow(req: PluginWindowRequest): void {
   const fail = (e: unknown) => useNotificationStore.getState().push('error', `Could not open ${req.pluginName}: ${String(e)}`)
+  // A sampler channel gets the sample window, as FL opens a sampler
+  // channel's settings: the sample, its envelope, its loop.
+  if (req.pluginId === SAMPLER_PLUGIN_ID && !inDetachedWindow()) {
+    useSampleWindowStore.getState().openSampler(req.trackId, req.slotId)
+    return
+  }
   if (req.ownWindow) {
     if (inDetachedWindow()) {
       const layout = layoutFor(req.pluginId)

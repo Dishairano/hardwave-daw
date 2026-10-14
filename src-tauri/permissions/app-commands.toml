@@ -242,6 +242,7 @@ permissions = [
   "allow-set-plugin-parameter",
   "allow-get-plugin-parameters",
   "allow-load-sampler",
+  "allow-get-sampler-sample",
   "allow-get-gain-reduction",
   "allow-set-plugin-sidechain-source",
   "allow-find-missing-plugins",

@@ -554,6 +554,7 @@ pub fn run() {
             commands::plugins::set_plugin_parameter,
             commands::plugins::get_plugin_parameters,
             commands::plugins::load_sampler,
+            commands::plugins::get_sampler_sample,
             commands::plugins::get_gain_reduction,
             commands::plugins::set_plugin_sidechain_source,
             commands::plugins::find_missing_plugins,

@@ -9,6 +9,7 @@ use hardwave_native_plugins::{
     NativeStutter, NativeSubBass, NativeTape, NativeTransient, NativeTremolo, NativeTripleOsc,
     NativeVibrato, NativeVocoder, NativeWavetable,
 };
+use hardwave_native_plugins::sampler;
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
 use hardwave_plugin_host::{
@@ -1002,9 +1003,44 @@ pub fn set_plugin_parameter(
     slot_id: String,
     param_id: u32,
     value: f64,
+    snapshot: Option<bool>,
 ) -> Result<Option<String>, String> {
     // The value as text, for the control that moved it.
     let text = parameter_text_for_slot(&state, &track_id, &slot_id, param_id, value);
+    // A sampler channel's settings live in its saved state, so the
+    // project's copy follows the knob: an undo brings it back, a save keeps
+    // it. The first move of a gesture takes the undo snapshot.
+    {
+        let engine = state.engine.lock();
+        let is_sampler = {
+            let project = engine.project.lock();
+            project
+                .track(&track_id)
+                .and_then(|t| t.inserts.iter().find(|s| s.id == slot_id))
+                .is_some_and(|s| s.plugin_id == NativeSampler::ID)
+        };
+        if is_sampler {
+            if snapshot.unwrap_or(false) {
+                engine.snapshot_before_mutation();
+            }
+            let mut project = engine.project.lock();
+            let stored = project
+                .plugin_state(&slot_id)
+                .map(|e| e.chunk.clone())
+                .or_else(|| {
+                    project
+                        .track(&track_id)
+                        .and_then(|t| t.inserts.iter().find(|s| s.id == slot_id))
+                        .and_then(|s| s.state.clone())
+                });
+            if let Some(next) = stored
+                .as_deref()
+                .and_then(|b| sampler::with_parameter(b, param_id, value as f32))
+            {
+                project.set_plugin_state(slot_id.clone(), "native-sampler", next);
+            }
+        }
+    }
     // The other side of a room hears the knob too (live state is not in
     // the track's saved state, which is what travels otherwise).
     state
@@ -1345,8 +1381,13 @@ pub fn load_sampler(
         hardwave_dsp::audio_file::AudioFileReader::read(std::path::Path::new(&path))
             .map_err(|e| format!("decode {path}: {e:?}"))?;
     let base = base_note.unwrap_or(60);
-    let bytes =
-        hardwave_native_plugins::sampler::encode_sample_state(info.sample_rate, base, channels);
+    // The file's name travels with the sample, so the window can say it.
+    let bytes = hardwave_native_plugins::sampler::encode_sample_state_from(
+        info.sample_rate,
+        base,
+        channels,
+        &path,
+    );
     // Persist in the project (survives rebuild/reload + offline export).
     {
         let engine = state.engine.lock();
@@ -1365,6 +1406,78 @@ pub fn load_sampler(
         .try_send_insert_command(cmd)
         .map_err(|_| "insert command queue full or engine not started".to_string())?;
     Ok(())
+}
+
+/// What a sampler channel's window shows of its sample: the file it came
+/// from, its length, its root and a peak outline. Read from the slot's
+/// saved state, where the sample lives (it travels in the project, not in
+/// a file). `None` when the sampler holds no sample yet.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SamplerSampleInfo {
+    pub path: String,
+    pub frames: usize,
+    pub sample_rate: u32,
+    pub channels: usize,
+    pub root: u8,
+    /// Per bucket the lowest and highest sample over every channel.
+    pub peaks: Vec<[f32; 2]>,
+}
+
+#[tauri::command]
+pub fn get_sampler_sample(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    num_buckets: usize,
+) -> Result<Option<SamplerSampleInfo>, String> {
+    let bytes = {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        project
+            .plugin_state(&slot_id)
+            .map(|e| e.chunk.clone())
+            .or_else(|| {
+                project
+                    .track(&track_id)
+                    .and_then(|t| t.inserts.iter().find(|s| s.id == slot_id))
+                    .and_then(|s| s.state.clone())
+            })
+    };
+    let Some(bytes) = bytes.filter(|b| !b.is_empty()) else {
+        return Ok(None);
+    };
+    let s = sampler::decode_sample_state(&bytes)
+        .ok_or_else(|| "the sampler's state is not a sample".to_string())?;
+    Ok(Some(sampler_sample_info(&s, num_buckets)))
+}
+
+fn sampler_sample_info(s: &sampler::SamplerState, num_buckets: usize) -> SamplerSampleInfo {
+    let frames = s.sample.frames();
+    let n = num_buckets.clamp(1, 4096).min(frames.max(1));
+    let mut peaks = Vec::with_capacity(n);
+    if frames > 0 {
+        for b in 0..n {
+            let from = b * frames / n;
+            let to = ((b + 1) * frames / n).max(from + 1).min(frames);
+            let (mut lo, mut hi) = (0.0_f32, 0.0_f32);
+            for ch in &s.sample.channels {
+                for &v in &ch[from..to] {
+                    lo = lo.min(v);
+                    hi = hi.max(v);
+                }
+            }
+            peaks.push([lo, hi]);
+        }
+    }
+    SamplerSampleInfo {
+        path: s.path.clone(),
+        frames,
+        sample_rate: s.sample.sample_rate,
+        channels: s.sample.channels.len(),
+        root: s.sample.base_note,
+        peaks,
+    }
 }
 
 pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
@@ -1986,4 +2099,24 @@ pub fn restart_sandboxed_plugin(
         restarted += 1;
     }
     Ok(restarted)
+}
+
+#[cfg(test)]
+mod sampler_window_tests {
+    use super::*;
+
+    #[test]
+    fn the_window_gets_the_file_the_length_the_root_and_an_outline() {
+        let ch: Vec<f32> = (0..100).map(|i| if i < 50 { 0.5 } else { -0.25 }).collect();
+        let bytes = sampler::encode_sample_state_from(44_100, 67, vec![ch], "D:\\kicks\\Induskick4.wav");
+        let s = sampler::decode_sample_state(&bytes).unwrap();
+        let info = sampler_sample_info(&s, 4);
+        assert_eq!(info.path, "D:\\kicks\\Induskick4.wav");
+        assert_eq!((info.frames, info.sample_rate, info.channels, info.root), (100, 44_100, 1, 67));
+        assert_eq!(info.peaks, vec![[0.0, 0.5], [0.0, 0.5], [-0.25, 0.0], [-0.25, 0.0]]);
+        // More buckets than frames: one per frame, never a division by nothing.
+        assert_eq!(sampler_sample_info(&s, 10_000).peaks.len(), 100);
+        let empty = sampler::decode_sample_state(&sampler::encode_sample_state(48_000, 60, vec![])).unwrap();
+        assert!(sampler_sample_info(&empty, 8).peaks.is_empty());
+    }
 }

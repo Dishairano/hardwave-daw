@@ -560,6 +560,30 @@ function Harness() {
         </div>
       )
     }
+    case 'samplerwindow': {
+      // The sample window on a sampler channel: the first channel without
+      // audio clips gets the built-in sampler as its instrument. The IPC
+      // mock keys its parameter table on the slot id.
+      const st = useTrackStore.getState()
+      const track = st.tracks.find((t) => t.kind !== 'Master' && !t.clips.some((c) => c.kind.toLowerCase() === 'audio'))
+      if (track && !useSampleWindowStore.getState().target) {
+        const slot = { id: 'hardwave.native.sampler', pluginId: 'hardwave.native.sampler', pluginName: 'Hardwave Sampler', enabled: true, wet: 1, sidechainSource: null }
+        useTrackStore.setState({
+          tracks: st.tracks.map((t) => t.id !== track.id ? t : { ...t, name: 'Industrial Kick', color: '#d4a72c', inserts: [slot, ...(t.inserts ?? [])] }),
+        })
+        useSampleWindowStore.getState().openSampler(track.id, slot.id)
+        ;(window as unknown as { __hwMockTracks?: unknown }).__hwMockTracks = useTrackStore.getState().tracks
+      }
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
+          <Arrangement onSetHint={noop} />
+          <SampleWindow />
+        </div>
+      )
+    }
     case 'samplewindow': {
       // The sample window on the playlist's first audio clip, set up as an
       // imported FL sample would be: quieter, a fade out, its DC taken off.

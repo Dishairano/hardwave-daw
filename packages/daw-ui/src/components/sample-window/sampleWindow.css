@@ -82,3 +82,56 @@
 }
 .sw-wave { display: block; width: 100%; height: 150px; }
 .sw-overview { display: block; width: 100%; height: 20px; border-top: 1px solid var(--hwf-line); background: var(--hwf-win); }
+
+/* a page that is not shown keeps its state */
+.sw-page.is-hidden { display: none; }
+.sw-tab.is-pick { cursor: pointer; }
+.sw-tab.is-pick:hover svg { stroke: var(--hwf-txt); }
+
+/* the file row's button */
+.sw-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--hwf-field);
+  color: var(--hwf-sub);
+  font: 500 12px Inter, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sw-btn:hover { color: var(--hwf-txt); box-shadow: inset 0 0 0 1px var(--hwf-line2); }
+
+/* the envelope page */
+.sw-env {
+  position: relative;
+  height: 150px;
+  border-radius: 6px;
+  background: var(--hwf-page);
+  box-shadow: inset 0 0 0 1px var(--hwf-line);
+  overflow: hidden;
+}
+.sw-env canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.sw-targets {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--hwf-page);
+  box-shadow: inset 0 0 0 1px var(--hwf-line);
+}
+.sw-targets button {
+  height: 24px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--hwf-dim);
+  font: 600 11px Inter, sans-serif;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.sw-targets button:hover:not(:disabled) { color: var(--hwf-txt); }
+.sw-targets button.is-on { background: var(--hwf-knob); color: var(--hwf-txt); }
+.sw-targets button:disabled { cursor: default; opacity: 0.5; }
+.sw-cols.is-two { padding-top: 0; }
