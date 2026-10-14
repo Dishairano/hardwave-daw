@@ -388,7 +388,7 @@ impl AudioDeviceManager {
             .unwrap_or_default()
     }
 
-    /// Resolve the output device — selected by name, or system default.
+    /// Resolve the output device — selected by name, or the default.
     fn resolve_output_device(&self) -> Result<cpal::Device, AudioIoError> {
         if let Some(ref name) = self.selected_device {
             if let Ok(devices) = self.host.output_devices() {
@@ -403,9 +403,28 @@ impl AudioDeviceManager {
                 name
             );
         }
-        self.host
+        let default = self
+            .host
             .default_output_device()
-            .ok_or(AudioIoError::NoOutputDevice)
+            .ok_or(AudioIoError::NoOutputDevice)?;
+        let default_name = default.name().unwrap_or_default();
+        let names: Vec<String> = self
+            .host
+            .output_devices()
+            .map(|ds| ds.filter_map(|d| d.name().ok()).collect())
+            .unwrap_or_default();
+        let wanted = default_output_name(&default_name, &names);
+        if wanted == default_name {
+            return Ok(default);
+        }
+        log::info!(
+            "Windows' default output '{default_name}' is a display's; using '{wanted}' instead"
+        );
+        self.host
+            .output_devices()
+            .ok()
+            .and_then(|mut ds| ds.find(|d| d.name().ok().as_deref() == Some(wanted.as_str())))
+            .map_or(Ok(default), Ok)
     }
 
     /// Cheap fingerprint of currently-visible output devices. Used by the UI
@@ -427,13 +446,21 @@ impl AudioDeviceManager {
         hash
     }
 
-    /// List available output devices.
+    /// List available output devices. The one marked default is the one
+    /// the DAW opens when none is chosen: Windows' default, unless that is
+    /// a display's audio and a real output is there too.
     pub fn list_output_devices(&self) -> Vec<DeviceInfo> {
-        let default_name = self
+        let windows_default = self
             .host
             .default_output_device()
             .and_then(|d| d.name().ok())
             .unwrap_or_default();
+        let names: Vec<String> = self
+            .host
+            .output_devices()
+            .map(|ds| ds.filter_map(|d| d.name().ok()).collect())
+            .unwrap_or_default();
+        let default_name = default_output_name(&windows_default, &names);
 
         self.host
             .output_devices()
@@ -943,3 +970,63 @@ impl Default for AudioDeviceManager {
 // Safety: cpal::Stream is a handle to an OS audio thread — safe to move between threads.
 // The stream itself is only started/stopped from the engine thread.
 unsafe impl Send for AudioDeviceManager {}
+
+/// A monitor's or a graphics card's audio output: what Windows makes the
+/// default as soon as a screen with speakers is plugged in, and what nobody
+/// mixes on.
+pub fn is_display_audio(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    ["display audio", "hdmi", "displayport", "nvidia high definition audio", "amd high definition audio"]
+        .iter()
+        .any(|k| n.contains(k))
+}
+
+/// The output the DAW opens when none is chosen: Windows' default, unless
+/// that is a display's audio and another output exists; then the first
+/// output that is not a display's. The founder's laptop made its monitor
+/// the default, and the DAW played through the screen (2026-10-14).
+pub fn default_output_name(windows_default: &str, names: &[String]) -> String {
+    if !is_display_audio(windows_default) {
+        return windows_default.to_string();
+    }
+    names
+        .iter()
+        .find(|n| !is_display_audio(n))
+        .cloned()
+        .unwrap_or_else(|| windows_default.to_string())
+}
+
+#[cfg(test)]
+mod default_output_tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_display_s_audio_as_windows_default_gives_way_to_a_real_output() {
+        let all = names(&[
+            "S34C65xU (HD Audio Driver for Display Audio)",
+            "Luidsprekers (Realtek(R) Audio)",
+            "Hoofdtelefoon (Crusher Evo)",
+        ]);
+        assert_eq!(
+            default_output_name("S34C65xU (HD Audio Driver for Display Audio)", &all),
+            "Luidsprekers (Realtek(R) Audio)"
+        );
+        assert_eq!(
+            default_output_name("Hoofdtelefoon (Crusher Evo)", &all),
+            "Hoofdtelefoon (Crusher Evo)",
+            "a real default stays"
+        );
+        let only = names(&["LG ULTRAGEAR (NVIDIA High Definition Audio)"]);
+        assert_eq!(
+            default_output_name("LG ULTRAGEAR (NVIDIA High Definition Audio)", &only),
+            "LG ULTRAGEAR (NVIDIA High Definition Audio)",
+            "with nothing else the display's audio is all there is"
+        );
+        assert!(is_display_audio("Intel(R) Display Audio"));
+        assert!(!is_display_audio("Focusrite USB ASIO"));
+    }
+}
