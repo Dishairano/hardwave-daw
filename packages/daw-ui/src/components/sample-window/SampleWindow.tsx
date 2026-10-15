@@ -123,10 +123,31 @@ function Frame({ name, color, hasEnvelope, page, onPage, top, children }: {
 }
 
 /** The track's number and where it plays into, for the Track box. */
-function TrackBox({ track, tracks }: { track: TrackInfo; tracks: TrackInfo[] }) {
+/** A mixer insert's number (insert-007 is 7), or null for a track that
+ *  is not one of the mixer's numbered inserts. */
+export function insertNumber(id: string): number | null {
+  const m = /^insert-(\d+)$/.exec(id)
+  return m ? Number(m[1]) : null
+}
+
+/** What FL's TRACK box says: the mixer insert this channel's sound goes
+ *  through. A channel that is itself an insert (the starter song's Kick is
+ *  insert 1) shows its own number; any other channel shows the insert it
+ *  is routed to, or M when it plays straight into the master. It used to
+ *  count the channel's place among all tracks, so a channel added after
+ *  the 500 inserts read "501". */
+export function trackBoxValue(track: TrackInfo, tracks: TrackInfo[]): { value: string; name: string } {
+  const own = insertNumber(track.id)
   const output = track.outputBus ? tracks.find((t) => t.id === track.outputBus) : null
-  const trackNumber = tracks.filter((t) => t.kind !== 'Master').findIndex((t) => t.id === track.id) + 1
-  return <FlatBox label="Track" value={trackNumber || '-'} small={output?.name ?? 'Master'} hint={`${track.name} plays into ${output?.name ?? 'the master'}; route it in the mixer`} />
+  if (own !== null) return { value: String(own), name: output?.name ?? 'Master' }
+  if (!output || output.kind === 'Master') return { value: 'M', name: 'Master' }
+  const routed = insertNumber(output.id)
+  return { value: routed !== null ? String(routed) : '-', name: output.name }
+}
+
+function TrackBox({ track, tracks }: { track: TrackInfo; tracks: TrackInfo[] }) {
+  const { value, name } = trackBoxValue(track, tracks)
+  return <FlatBox label="Track" value={value} small={name} hint={`${track.name} plays into ${name === 'Master' ? 'the master' : name}; route it in the mixer`} />
 }
 
 /** What FL has on the first page: its load-time options, which the DAW
