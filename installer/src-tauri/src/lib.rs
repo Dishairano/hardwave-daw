@@ -245,9 +245,10 @@ async fn start_uninstall(
     #[cfg(windows)]
     {
         use tauri::Emitter;
-        let Some(dir) = uninstall::target(&mode.args) else {
+        let Some(dir) = uninstall::target() else {
             return Err(uninstall::Stop::NotInstalled.code());
         };
+        let removed = mode.removed.clone();
         tauri::async_runtime::spawn_blocking(move || {
             uninstall::remove(&dir, remove_settings, |step, message| {
                 let _ = app.emit(
@@ -257,6 +258,10 @@ async fn start_uninstall(
                         message: message.to_string(),
                     },
                 );
+            })
+            .map(|()| {
+                // This program and the folders go when the window closes.
+                *removed.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir);
             })
             .map_err(|stop| stop.code())
         })
@@ -270,49 +275,43 @@ async fn start_uninstall(
     }
 }
 
-/// How this run was started.
+/// How this run was started, and the folder it removed, if it did.
 struct LaunchMode {
     uninstall: bool,
     #[cfg_attr(not(windows), allow(dead_code))]
-    args: uninstall::Args,
+    removed: Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
 }
 
 // ─── Entry ───────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let args = uninstall::parse_args(std::env::args());
+    let exe = std::env::current_exe().ok();
+    let args = uninstall::parse_args(exe.as_deref(), std::env::args());
     #[cfg(windows)]
-    if args.uninstall {
-        // Windows cannot delete a running program, so the removal runs
-        // from a copy outside the install folder.
-        match uninstall::relocate(&args) {
-            Ok(true) => return,
-            Ok(false) => {}
-            Err(e) => eprintln!("hardwave-daw-uninstaller: {e}; removing from here"),
-        }
-        if args.quiet {
-            // For scripts: no window, only the app (never the settings).
-            let code = match uninstall::target(&args) {
-                Some(dir) => match uninstall::remove(&dir, false, |_, _| {}) {
-                    Ok(()) => 0,
-                    Err(stop) => {
-                        eprintln!("hardwave-daw-uninstaller: {}", stop.code());
-                        if stop == uninstall::Stop::DawRunning {
-                            2
-                        } else {
-                            1
-                        }
-                    }
-                },
-                None => {
-                    eprintln!("hardwave-daw-uninstaller: not-installed");
-                    1
+    if args.uninstall && args.quiet {
+        // For scripts: no window, only the app (never the settings).
+        let code = match uninstall::target() {
+            Some(dir) => match uninstall::remove(&dir, false, |_, _| {}) {
+                Ok(()) => {
+                    uninstall::clean_up_after(&dir);
+                    0
                 }
-            };
-            uninstall::clean_up_copy();
-            std::process::exit(code);
-        }
+                Err(stop) => {
+                    eprintln!("hardwave-daw-uninstaller: {}", stop.code());
+                    if stop == uninstall::Stop::DawRunning {
+                        2
+                    } else {
+                        1
+                    }
+                }
+            },
+            None => {
+                eprintln!("hardwave-daw-uninstaller: not-installed");
+                1
+            }
+        };
+        std::process::exit(code);
     }
     #[cfg(not(windows))]
     if args.uninstall {
@@ -320,6 +319,7 @@ pub fn run() {
         return;
     }
     let uninstalling = args.uninstall;
+    let removed = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -327,7 +327,7 @@ pub fn run() {
         .manage(InstallState::default())
         .manage(LaunchMode {
             uninstall: uninstalling,
-            args,
+            removed: removed.clone(),
         })
         .setup(move |app| {
             if uninstalling {
@@ -353,9 +353,9 @@ pub fn run() {
         .expect("error while running hardwave-daw-installer");
     app.run(move |_, event| {
         if let tauri::RunEvent::Exit = event {
-            if uninstalling {
-                #[cfg(windows)]
-                uninstall::clean_up_copy();
+            #[cfg(windows)]
+            if let Some(dir) = removed.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                uninstall::clean_up_after(&dir);
             }
         }
     });

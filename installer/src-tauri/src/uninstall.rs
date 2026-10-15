@@ -9,10 +9,13 @@
 //! It removes nothing NSIS knows how to remove. After the confirmation it
 //! runs NSIS's own `uninstall.exe` silently (the app, its built-in
 //! plug-ins, the shortcuts, the Windows Apps entry), then deletes what that
-//! leaves behind: NSIS's uninstaller and the folder, when empty. The DAW's
-//! settings go only when asked, and only the settings: presets,
-//! recordings, bounces and scripts live in the same folders and are the
-//! person's work.
+//! leaves behind: NSIS's uninstaller and, once this program has exited,
+//! itself and the folders, when empty. The DAW's settings go only when
+//! asked, and only the settings: presets, recordings, bounces and scripts
+//! live in the same folders and are the person's work.
+//!
+//! The folder it removes is always the one it sits in; nothing on the
+//! command line can point it anywhere else.
 
 use std::path::{Path, PathBuf};
 
@@ -30,18 +33,23 @@ const DAW_BUNDLE_ID: &str = "com.hardwave.daw";
 pub struct Args {
     pub uninstall: bool,
     pub quiet: bool,
-    /// Set when a copy outside the install folder was started for it.
-    pub install_dir: Option<PathBuf>,
 }
 
-pub fn parse_args(args: impl IntoIterator<Item = String>) -> Args {
-    let mut out = Args::default();
-    let mut args = args.into_iter().skip(1);
-    while let Some(arg) = args.next() {
+/// `exe` is this program's own path: run as the uninstaller (a
+/// double-click on it in the install folder), it is the removal window
+/// whatever the command line says.
+pub fn parse_args(exe: Option<&Path>, args: impl IntoIterator<Item = String>) -> Args {
+    let mut out = Args {
+        uninstall: exe
+            .and_then(|e| e.file_name())
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case(UNINSTALLER_NAME)),
+        quiet: false,
+    };
+    for arg in args.into_iter().skip(1) {
         match arg.as_str() {
             "--uninstall" => out.uninstall = true,
             "--quiet" => out.quiet = true,
-            "--install-dir" => out.install_dir = args.next().map(PathBuf::from),
             _ => {}
         }
     }
@@ -59,10 +67,11 @@ pub fn install_dir_of(exe: &Path) -> Option<PathBuf> {
     named_binaries.then(|| bin.parent().map(Path::to_path_buf))?
 }
 
-/// Whether `dir` is a DAW install: it holds the DAW and NSIS's uninstaller.
-/// Nothing is removed from a folder that is not.
-pub fn is_daw_install(dir: &Path) -> bool {
-    dir.join(DAW_EXE).is_file() && dir.join(NSIS_UNINSTALLER).is_file()
+/// Whether there is an install to remove in `dir`: NSIS's uninstaller is
+/// there. Not the DAW itself, which a broken install can be missing: the
+/// Windows Apps entry still has to be removable.
+pub fn can_remove(dir: &Path) -> bool {
+    dir.join(NSIS_UNINSTALLER).is_file()
 }
 
 /// The DAW's settings: its window's stored settings and recent files (the
@@ -121,50 +130,11 @@ mod windows_impl {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
 
-    /// Where a copy of this program runs while it removes the folder it
-    /// was started from: Windows cannot delete a running program. Local
-    /// app data rather than %TEMP%, which some managed PCs block programs
-    /// from running in.
-    fn relocation_dir() -> Option<PathBuf> {
-        dirs::data_local_dir().map(|d| d.join("Hardwave").join("Uninstall"))
-    }
-
-    /// When started from inside the install folder, start a copy from
-    /// outside it with the same request and say so; the caller then exits.
-    pub fn relocate(args: &Args) -> Result<bool, String> {
-        let exe = std::env::current_exe().map_err(|e| format!("own path: {e}"))?;
-        let Some(dir) = args.install_dir.clone().or_else(|| install_dir_of(&exe)) else {
-            return Ok(false);
-        };
-        if !exe.starts_with(&dir) {
-            return Ok(false);
-        }
-        let to_dir = relocation_dir().ok_or("no local app data folder")?;
-        std::fs::create_dir_all(&to_dir).map_err(|e| format!("{}: {e}", to_dir.display()))?;
-        let copy = to_dir.join(UNINSTALLER_NAME);
-        std::fs::copy(&exe, &copy).map_err(|e| format!("copy to {}: {e}", copy.display()))?;
-        let mut cmd = std::process::Command::new(&copy);
-        cmd.arg("--uninstall").arg("--install-dir").arg(&dir);
-        if args.quiet {
-            cmd.arg("--quiet");
-            // A script waits for the answer, so the copy's exit code is
-            // this one's.
-            let status = cmd.status().map_err(|e| format!("start the copy: {e}"))?;
-            std::process::exit(status.code().unwrap_or(1));
-        }
-        cmd.spawn().map_err(|e| format!("start the copy: {e}"))?;
-        Ok(true)
-    }
-
-    /// The install folder this run removes: the one it was handed, or the
-    /// one it sits in.
-    pub fn target(args: &Args) -> Option<PathBuf> {
-        let dir = args.install_dir.clone().or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|e| install_dir_of(&e))
-        })?;
-        is_daw_install(&dir).then_some(dir)
+    /// The install folder this program sits in, when there is an install
+    /// to remove there.
+    pub fn target() -> Option<PathBuf> {
+        let dir = install_dir_of(&std::env::current_exe().ok()?)?;
+        can_remove(&dir).then_some(dir)
     }
 
     /// Whether the DAW from this install folder is running, for this
@@ -223,7 +193,7 @@ mod windows_impl {
         remove_settings: bool,
         mut step: impl FnMut(usize, &str),
     ) -> Result<(), Stop> {
-        if !is_daw_install(dir) {
+        if !can_remove(dir) {
             return Err(Stop::NotInstalled);
         }
         step(0, "Checking that Hardwave DAW is closed");
@@ -248,11 +218,10 @@ mod windows_impl {
             )));
         }
         step(2, "Removed the shortcuts");
-        // What NSIS leaves when it runs in place: its own uninstaller and
-        // the folder. Only that file, and the folder only when empty.
+        // What NSIS leaves when it runs in place: its own uninstaller.
+        // This program and the folders go once it has exited
+        // (`clean_up_after`).
         let _ = std::fs::remove_file(dir.join(NSIS_UNINSTALLER));
-        let _ = std::fs::remove_dir(dir.join("binaries"));
-        let _ = std::fs::remove_dir(dir);
 
         step(3, "Removed it from Windows Apps");
         if remove_settings {
@@ -269,18 +238,22 @@ mod windows_impl {
         Ok(())
     }
 
-    /// When this run is the copy in local app data, delete it once it has
-    /// exited.
-    pub fn clean_up_copy() {
-        let (Ok(exe), Some(dir)) = (std::env::current_exe(), relocation_dir()) else {
+    /// After a removal: once this program has exited, delete it and the
+    /// install folders it leaves, each only when empty (`rmdir` without
+    /// `/s`). Windows cannot delete a running program, so a cmd that waits
+    /// two seconds does it.
+    pub fn clean_up_after(dir: &Path) {
+        let Ok(exe) = std::env::current_exe() else {
             return;
         };
-        if !exe.starts_with(&dir) {
+        if !exe.starts_with(dir) {
             return;
         }
         let cmd = format!(
-            "timeout /t 2 /nobreak > nul & del /f /q \"{}\"",
-            exe.display()
+            "timeout /t 2 /nobreak > nul & del /f /q \"{}\" & rmdir \"{}\" & rmdir \"{}\"",
+            exe.display(),
+            dir.join("binaries").display(),
+            dir.display()
         );
         let _ = std::process::Command::new("cmd.exe")
             .args(["/C", &cmd])
@@ -294,8 +267,10 @@ mod tests {
     use super::*;
 
     fn args(list: &[&str]) -> Args {
+        let launcher = Path::new("/downloads/HardwaveDAW-Setup.exe");
         parse_args(
-            std::iter::once("uninstaller".to_string()).chain(list.iter().map(|s| s.to_string())),
+            Some(launcher),
+            std::iter::once("setup".to_string()).chain(list.iter().map(|s| s.to_string())),
         )
     }
 
@@ -306,18 +281,12 @@ mod tests {
             args(&["--uninstall", "--quiet"]),
             Args {
                 uninstall: true,
-                quiet: true,
-                install_dir: None
+                quiet: true
             }
         );
-        assert_eq!(
-            args(&["--uninstall", "--install-dir", "C:/Programs/Hardwave DAW"]),
-            Args {
-                uninstall: true,
-                quiet: false,
-                install_dir: Some(PathBuf::from("C:/Programs/Hardwave DAW")),
-            }
-        );
+        // Run as the uninstaller, it is the removal window without asking.
+        let own = Path::new("/apps/Hardwave DAW/binaries").join(UNINSTALLER_NAME);
+        assert!(parse_args(Some(&own), ["x".to_string()]).uninstall);
     }
 
     #[test]
@@ -332,13 +301,12 @@ mod tests {
     }
 
     #[test]
-    fn only_a_folder_with_the_daw_and_its_uninstaller_is_an_install() {
+    fn an_install_is_removable_while_its_uninstaller_is_there() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!is_daw_install(dir.path()));
-        std::fs::write(dir.path().join(DAW_EXE), b"").unwrap();
-        assert!(!is_daw_install(dir.path()));
+        assert!(!can_remove(dir.path()));
+        // A broken install without the DAW still has to leave Windows Apps.
         std::fs::write(dir.path().join("uninstall.exe"), b"").unwrap();
-        assert!(is_daw_install(dir.path()));
+        assert!(can_remove(dir.path()));
     }
 
     #[test]
