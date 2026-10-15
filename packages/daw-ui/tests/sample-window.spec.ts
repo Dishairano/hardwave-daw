@@ -29,6 +29,10 @@ test.describe('Sample window', () => {
     await expect(win.locator('.hwf-check', { hasText: 'Normalize' })).not.toHaveClass(/is-on/)
     // What is not built yet is switched off, and says so.
     await expect(win.locator('.hwf-check', { hasText: 'Keep on disk' })).toBeDisabled()
+    // A clip's sample is resampled when it loads: on, and not a choice.
+    const resample = win.locator('.hwf-check', { hasText: /^Resample$/ })
+    await expect(resample).toHaveClass(/is-on/)
+    await expect(resample).toBeDisabled()
     // The loop knobs come with sampler channels.
     const xfade = win.locator('.hwf-knob', { hasText: 'X-fade' })
     await expect(xfade).toHaveClass(/is-off/)

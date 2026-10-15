@@ -192,7 +192,11 @@ function TrackBox({ track, tracks }: { track: TrackInfo; tracks: TrackInfo[] }) 
  *  declicking mode. Regions and slice markers are read from the file and
  *  drawn on the sample; keeping the file on disk and resampling on load
  *  are not in this version. */
-function ContentPanel({ declick, onDeclick, regions, slices, onRegions, onSlices, found }: {
+function ContentPanel({ declick, onDeclick, regions, slices, onRegions, onSlices, found, resampled }: {
+  /** Whether the sample is converted to the project's rate when it loads:
+   *  always for a clip (the audio pool does it), not for a sampler channel,
+   *  which converts as it plays. */
+  resampled: boolean
   declick: Declick
   onDeclick?: (d: Declick) => void
   regions: boolean
@@ -206,12 +210,17 @@ function ContentPanel({ declick, onDeclick, regions, slices, onRegions, onSlices
   return (
     <FlatPanel title="Content">
       <div className="hwf-checks">
-        <FlatCheck label="Keep on disk" on={false} disabled hint={NOT_YET} />
+        <FlatCheck label="Keep on disk" on={false} disabled hint="Samples load into memory; playing them from disk is not in this version yet" />
         <FlatCheck
           label="Load regions" on={regions} onToggle={onRegions}
           hint={found ? `The file has ${count(found.regions, 'region')} and loops` : 'Shows the regions and the loop the file carries'}
         />
-        <FlatCheck label="Resample" on={false} disabled hint={NOT_YET} />
+        <FlatCheck
+          label="Resample" on={resampled} disabled
+          hint={resampled
+            ? 'Always on for clips: the sample is converted to the project\'s rate when it loads'
+            : 'A sampler channel converts the rate as it plays; resampling on load is not in this version yet'}
+        />
         <FlatCheck
           label="Load slice markers" on={slices} onToggle={onSlices}
           hint={found ? `The file has ${count(found.points, 'marker')}` : 'Shows the slice markers the file carries'}
@@ -460,6 +469,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
             </div>
           </FlatPanel>
           <ContentPanel
+            resampled
             declick={v.declick} onDeclick={(d) => change({ declick: d }, true, `Declicking ${d}`)}
             regions={v.loadRegions} slices={v.loadSlices}
             onRegions={() => change({ loadRegions: !v.loadRegions }, true, v.loadRegions ? 'Hide regions' : 'Load regions')}
@@ -761,6 +771,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
               </div>
             </FlatPanel>
             <ContentPanel
+              resampled={false}
               declick={DECLICKS[Math.round(p(SP.declick) * (DECLICKS.length - 1))] ?? 'Out only'}
               onDeclick={(d) => set(SP.declick, DECLICKS.indexOf(d) / (DECLICKS.length - 1), true, `Declicking ${d}`)}
               regions={on(SP.loadRegions)} slices={on(SP.loadSlices)}
