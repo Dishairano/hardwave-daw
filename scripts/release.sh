@@ -289,6 +289,15 @@ while IFS= read -r hash || [[ -n "$hash" ]]; do
   if [ "$HAD_BULLETS" = "1" ] && [ -z "$BULLETS" ]; then
     continue
   fi
+  # A commit that marks its release lines with a prefix (feat:, fix: ...)
+  # uses plain "- " lines as prose: a list of causes in the message, often
+  # wrapped over two lines. Only the prefixed lines are release notes then.
+  # v0.261.0's preview announced "every node scanned every edge each block
+  # to find its inputs; each" that way.
+  RELEASE_PREFIX='^- (feat|feature|add|new|fix|bug|bugfix|improve|perf|refactor|ui|ux|chore):'
+  if printf '%s\n' "$BULLETS" | grep -qE "$RELEASE_PREFIX"; then
+    BULLETS=$(printf '%s\n' "$BULLETS" | grep -E "$RELEASE_PREFIX" || true)
+  fi
   if [ -n "$BULLETS" ]; then
     BULLETS=$(echo "$BULLETS" | grep -iv \
       -e 'rustfmt\|clippy\|sccache\|RUSTC_WRAPPER\|tformat\|trailing newline' \
