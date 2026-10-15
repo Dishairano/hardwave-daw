@@ -111,6 +111,15 @@ test.describe('Sample window on a sampler channel', () => {
     await expect(page.locator('.hwf-tip')).toHaveText('The file has 2 regions and loops')
   })
 
+  test('the sample\'s effects are the sampler\'s settings', async ({ page }) => {
+    const win = page.locator('.sw-win')
+    await win.locator('.hwf-check', { hasText: /^Reverse$/ }).click()
+    await win.locator('.hwf-check', { hasText: 'Normalize' }).click()
+    const calls = await paramCalls(page)
+    expect(calls.map((c) => [c.args?.paramId, c.args?.value])).toEqual([[28, 1], [26, 1]])
+    await expect(win.locator('.hwf-check', { hasText: /^Reverse$/ })).toHaveClass(/is-on/)
+  })
+
   test('Escape closes it', async ({ page }) => {
     await page.keyboard.press('Escape')
     await expect(page.locator('.sw-win')).toHaveCount(0)

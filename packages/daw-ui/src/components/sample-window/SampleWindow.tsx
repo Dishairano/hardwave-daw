@@ -583,6 +583,7 @@ export const SP = {
   offset: 8, loopStart: 9, loopEnd: 10, loop: 11, pingPong: 12, mono: 13, cutItself: 14, porta: 15,
   root: 16, pitch: 17, sampleStart: 18, sampleLength: 19, xfade: 20, trim: 21, fadeStereo: 22, declick: 23,
   loadRegions: 24, loadSlices: 25,
+  normalize: 26, removeDc: 27, reverse: 28, polarity: 29, swapStereo: 30,
 } as const
 /** The time knobs run on a square law: seconds = knob² × the longest they go. */
 const TIME_MAX_S: Partial<Record<number, number>> = { [SP.attack]: 5, [SP.delay]: 5, [SP.hold]: 5, [SP.decay]: 10, [SP.release]: 10 }
@@ -812,12 +813,12 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
             </FlatPanel>
             <FlatPanel title="Precomputed effects" grow>
               <div className="hwf-checks">
-                <FlatCheck label="Remove DC offset" on={false} disabled hint={NOT_YET} />
-                <FlatCheck label="Reverse polarity" on={false} disabled hint={NOT_YET} />
-                <FlatCheck label="Normalize" on={false} disabled hint={NOT_YET} />
+                <FlatCheck label="Remove DC offset" on={on(SP.removeDc)} onToggle={() => toggle(SP.removeDc, 'Remove DC offset')} />
+                <FlatCheck label="Reverse polarity" on={on(SP.polarity)} onToggle={() => toggle(SP.polarity, 'Reverse polarity')} />
+                <FlatCheck label="Normalize" on={on(SP.normalize)} onToggle={() => toggle(SP.normalize, 'Normalize sample')} />
                 <FlatCheck label="Fade stereo" on={on(SP.fadeStereo)} onToggle={() => toggle(SP.fadeStereo, 'Fade stereo')} />
-                <FlatCheck label="Reverse" on={false} disabled hint={NOT_YET} />
-                <FlatCheck label="Swap stereo" on={false} disabled hint={NOT_YET} />
+                <FlatCheck label="Reverse" on={on(SP.reverse)} onToggle={() => toggle(SP.reverse, 'Reverse sample')} />
+                <FlatCheck label="Swap stereo" on={on(SP.swapStereo)} onToggle={() => toggle(SP.swapStereo, 'Swap stereo')} />
               </div>
               <div className="hwf-krow">
                 <FlatKnob
@@ -858,7 +859,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
           window={{ start: regionStart, end: regionEnd }}
           markers={visibleMarkers(samplerMarkers, on(SP.loadRegions), on(SP.loadSlices))}
           loop={loop ? { start: regionStart + p(SP.loopStart) * regionSpan, end: regionStart + p(SP.loopEnd) * regionSpan } : null}
-          fadeIn={0} fadeOut={0} reversed={false}
+          fadeIn={0} fadeOut={0} reversed={on(SP.reverse)}
           empty={sample === null ? 'No sample yet: load one with the button above' : sample === undefined ? 'Loading…' : null}
         />
       </div>

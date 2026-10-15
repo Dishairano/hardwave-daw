@@ -64,7 +64,16 @@ pub const PARAM_DECLICK: u32 = 23;
 /// "load regions" and "load slice markers"); the sound does not change.
 pub const PARAM_LOAD_REGIONS: u32 = 24;
 pub const PARAM_LOAD_SLICES: u32 = 25;
-pub const PARAM_COUNT: u32 = 26;
+/// The sample's precomputed effects, as on an audio clip: brought up to
+/// full scale, its DC offset taken off, played backwards, its polarity
+/// turned, its sides swapped. Done as the sample is read; the sample
+/// itself is kept as it was loaded.
+pub const PARAM_NORMALIZE: u32 = 26;
+pub const PARAM_REMOVE_DC: u32 = 27;
+pub const PARAM_REVERSE: u32 = 28;
+pub const PARAM_POLARITY: u32 = 29;
+pub const PARAM_SWAP_STEREO: u32 = 30;
+pub const PARAM_COUNT: u32 = 31;
 
 /// The time knobs run on a square law (fine near zero, as FL's do):
 /// seconds = knob² × the longest they go.
@@ -293,6 +302,17 @@ enum EnvStage {
     Idle,
 }
 
+/// The sample's precomputed effects for one block (`sample_fx`).
+struct SampleFx {
+    reversed: bool,
+    /// The last frame, which a reversed read counts back from.
+    last: f64,
+    dc: [f32; 2],
+    /// Normalize and polarity together.
+    gain: f32,
+    swap: bool,
+}
+
 struct Voice {
     /// Fractional read position in source frames.
     pos: f64,
@@ -338,6 +358,10 @@ pub struct NativeSampler {
     /// of all: the trim finds its cut in these.
     profile: Vec<f32>,
     peak: f32,
+    /// Each channel's average, and the loudest sample with it taken off:
+    /// what DC removal and normalize need, worked out when a sample loads.
+    dc: [f32; 2],
+    peak_without_dc: f32,
     voices: Vec<Voice>,
     /// Every setting, 0..1, by parameter id.
     p: [f32; PARAM_COUNT as usize],
@@ -378,6 +402,27 @@ fn defaults() -> [f32; PARAM_COUNT as usize] {
 fn declick_of(v: f32) -> DeclickMode {
     let n = DeclickMode::ALL.len();
     DeclickMode::ALL[((v.clamp(0.0, 1.0) * (n - 1) as f32).round() as usize).min(n - 1)]
+}
+
+/// Each channel's average (the second channel's is the first's for a mono
+/// sample), and the loudest sample with it taken off.
+fn dc_of(sample: &SampleData) -> ([f32; 2], f32) {
+    let mut dc = [0.0f32; 2];
+    for (c, ch) in sample.channels.iter().take(2).enumerate() {
+        if !ch.is_empty() {
+            dc[c] = (ch.iter().map(|v| *v as f64).sum::<f64>() / ch.len() as f64) as f32;
+        }
+    }
+    if sample.channels.len() == 1 {
+        dc[1] = dc[0];
+    }
+    let mut peak = 0.0f32;
+    for (c, ch) in sample.channels.iter().take(2).enumerate() {
+        for v in ch {
+            peak = peak.max((v - dc[c]).abs());
+        }
+    }
+    (dc, peak)
 }
 
 /// The loudest sample of every `PROFILE_STEP` frames over every channel,
@@ -424,6 +469,8 @@ impl NativeSampler {
             path: String::new(),
             profile: Vec::new(),
             peak: 0.0,
+            dc: [0.0; 2],
+            peak_without_dc: 0.0,
             voices: Vec::new(),
             p: defaults(),
         }
@@ -466,12 +513,21 @@ impl NativeSampler {
         let trim = self.p[PARAM_TRIM as usize].clamp(0.0, 1.0);
         if trim > 0.0 && self.peak > 0.0 {
             let threshold = 10f32.powf(-60.0 * (1.0 - trim) / 20.0) * self.peak;
-            let cut = self
-                .profile
-                .iter()
-                .rposition(|m| *m > threshold)
-                .map(|i| ((i + 1) * PROFILE_STEP) as f64)
-                .unwrap_or(0.0);
+            // The tail is where the sample ends as it plays: played
+            // backwards, that is the start of the file.
+            let cut = if self.on(PARAM_REVERSE) {
+                self.profile
+                    .iter()
+                    .position(|m| *m > threshold)
+                    .map(|i| frames - (i * PROFILE_STEP) as f64)
+                    .unwrap_or(0.0)
+            } else {
+                self.profile
+                    .iter()
+                    .rposition(|m| *m > threshold)
+                    .map(|i| ((i + 1) * PROFILE_STEP) as f64)
+                    .unwrap_or(0.0)
+            };
             end = end.min(cut.min(frames));
         }
         (start, end.max(start))
@@ -587,6 +643,35 @@ impl NativeSampler {
         }
     }
 
+    /// The sample's effects as one block of numbers, for the read below.
+    fn sample_fx(&self, frames: usize) -> SampleFx {
+        let remove_dc = self.on(PARAM_REMOVE_DC);
+        let peak = if remove_dc {
+            self.peak_without_dc
+        } else {
+            self.peak
+        };
+        let normal = if self.on(PARAM_NORMALIZE) && peak > 1e-6 {
+            1.0 / peak
+        } else {
+            1.0
+        };
+        SampleFx {
+            reversed: self.on(PARAM_REVERSE),
+            last: frames.saturating_sub(1) as f64,
+            dc: if remove_dc { self.dc } else { [0.0; 2] },
+            gain: normal * if self.on(PARAM_POLARITY) { -1.0 } else { 1.0 },
+            swap: self.on(PARAM_SWAP_STEREO),
+        }
+    }
+
+    /// Channel `ch` at `pos` as it plays: `pos` counts in the played order
+    /// (backwards through the file when reversed), DC taken off when asked.
+    fn read_fx(sample: &SampleData, ch: usize, pos: f64, fx: &SampleFx) -> f32 {
+        let at = if fx.reversed { fx.last - pos } else { pos };
+        Self::read(sample, ch, at) - fx.dc[ch.min(1)]
+    }
+
     /// Linearly-interpolated sample for channel `ch` at fractional `pos`.
     fn read(sample: &SampleData, ch: usize, pos: f64) -> f32 {
         let data = match sample.channels.get(ch) {
@@ -698,6 +783,7 @@ impl HostedPlugin for NativeSampler {
             0.0
         };
         let fade_stereo = self.on(PARAM_FADE_STEREO);
+        let fx = self.sample_fx(frames);
 
         for i in 0..num_samples {
             let mut l = 0.0_f32;
@@ -774,9 +860,9 @@ impl HostedPlugin for NativeSampler {
                     continue;
                 }
                 let g = v.env * v.cut_gain * v.attack_gain * v.velocity * gain;
-                let (mut sl, mut sr_s) = (Self::read(&sample, 0, v.pos), 0.0);
+                let (mut sl, mut sr_s) = (Self::read_fx(&sample, 0, v.pos, &fx), 0.0);
                 if two_ch {
-                    sr_s = Self::read(&sample, 1, v.pos);
+                    sr_s = Self::read_fx(&sample, 1, v.pos, &fx);
                 }
                 // Into the loop's crossfade: blend with what comes before
                 // the loop start, so the seam does not click.
@@ -784,15 +870,19 @@ impl HostedPlugin for NativeSampler {
                     let other = v.pos - (le - ls);
                     if other >= rs {
                         let w = ((v.pos - (le - xfade)) / xfade).clamp(0.0, 1.0) as f32;
-                        sl = sl * (1.0 - w) + Self::read(&sample, 0, other) * w;
+                        sl = sl * (1.0 - w) + Self::read_fx(&sample, 0, other, &fx) * w;
                         if two_ch {
-                            sr_s = sr_s * (1.0 - w) + Self::read(&sample, 1, other) * w;
+                            sr_s = sr_s * (1.0 - w) + Self::read_fx(&sample, 1, other, &fx) * w;
                         }
                     }
                 }
                 if !two_ch {
                     sr_s = sl;
+                } else if fx.swap {
+                    std::mem::swap(&mut sl, &mut sr_s);
                 }
+                sl *= fx.gain;
+                sr_s *= fx.gain;
                 if fade_stereo {
                     let x = ((v.pos - rs) / span).clamp(0.0, 1.0) as f32;
                     sl *= 1.0 - x;
@@ -862,6 +952,11 @@ impl HostedPlugin for NativeSampler {
             PARAM_DECLICK => ("Declicking", ""),
             PARAM_LOAD_REGIONS => ("Load regions", ""),
             PARAM_LOAD_SLICES => ("Load slice markers", ""),
+            PARAM_NORMALIZE => ("Normalize", ""),
+            PARAM_REMOVE_DC => ("Remove DC offset", ""),
+            PARAM_REVERSE => ("Reverse", ""),
+            PARAM_POLARITY => ("Reverse polarity", ""),
+            PARAM_SWAP_STEREO => ("Swap stereo", ""),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -896,9 +991,9 @@ impl HostedPlugin for NativeSampler {
             PARAM_HOLD => format::secs(knob_seconds(v, HOLD_MAX_S, 0.0) as f64),
             PARAM_DECAY => format::secs(knob_seconds(v, DECAY_MAX_S, 0.001) as f64),
             PARAM_ENVELOPE | PARAM_LOOP | PARAM_PING_PONG | PARAM_MONO | PARAM_CUT_ITSELF
-            | PARAM_PORTA | PARAM_FADE_STEREO | PARAM_LOAD_REGIONS | PARAM_LOAD_SLICES => {
-                format::on_off(v as f64)
-            }
+            | PARAM_PORTA | PARAM_FADE_STEREO | PARAM_LOAD_REGIONS | PARAM_LOAD_SLICES
+            | PARAM_NORMALIZE | PARAM_REMOVE_DC | PARAM_REVERSE | PARAM_POLARITY
+            | PARAM_SWAP_STEREO => format::on_off(v as f64),
             PARAM_OFFSET | PARAM_LOOP_START | PARAM_LOOP_END | PARAM_SAMPLE_START
             | PARAM_SAMPLE_LENGTH | PARAM_XFADE => format::pct(v as f64),
             PARAM_TRIM => {
@@ -963,6 +1058,7 @@ impl HostedPlugin for NativeSampler {
                 let (profile, peak) = profile_of(&s.sample);
                 self.profile = profile;
                 self.peak = peak;
+                (self.dc, self.peak_without_dc) = dc_of(&s.sample);
                 self.sample = Some(s.sample);
                 self.voices.clear();
                 Ok(())
@@ -1051,8 +1147,8 @@ pub fn encode_sample_state_with(
 /// loop, voices, declicking, crossfade, trim, fade stereo and the sample's
 /// start and length, and the root note. FL's knobs come as fractions of
 /// their travel; they land on the same fraction of this sampler's knobs.
-/// Normalize and DC removal are not settings here: the import does them
-/// to the sample itself, as it does reverse and polarity.
+/// Normalize and DC removal come along as settings; reverse, polarity and
+/// swap stereo live on FL's channel and the import adds them the same way.
 pub fn settings_from_fl(
     setup: &hardwave_project::fl_import::FlSamplerSetup,
     root_note: u8,
@@ -1072,6 +1168,8 @@ pub fn settings_from_fl(
         (PARAM_XFADE, setup.crossfade.clamp(0.0, 1.0)),
         (PARAM_TRIM, setup.trim.clamp(0.0, 1.0)),
         (PARAM_FADE_STEREO, on(setup.fade_stereo)),
+        (PARAM_NORMALIZE, on(setup.normalize)),
+        (PARAM_REMOVE_DC, on(setup.remove_dc)),
     ];
     if let Some(start) = setup.start {
         p.push((PARAM_SAMPLE_START, start.clamp(0.0, 1.0)));
@@ -1646,6 +1744,66 @@ mod tests {
             (out[0] - 1.0).abs() < 1e-3,
             "out only: the attack is left alone"
         );
+    }
+
+    #[test]
+    fn the_sample_s_effects_are_done_as_it_plays() {
+        // A ramp on the left with an offset, a steady right side.
+        let left: Vec<f32> = (0..100).map(|i| i as f32 / 100.0 + 0.1).collect();
+        let right = vec![0.5f32; 100];
+        let bytes = encode_sample_state(48_000, 60, vec![left, right]);
+        let both = |s: &mut NativeSampler| {
+            let mut out = vec![vec![0.0; 50], vec![0.0; 50]];
+            s.process(&[], &mut out, &[note_on(60)], &mut Vec::new(), 50);
+            out
+        };
+        let mut s = sampler_with(&bytes);
+        let plain = both(&mut s);
+        assert!((plain[0][10] - 0.2).abs() < 1e-4, "plain: {}", plain[0][10]);
+
+        let mut s = sampler_with(&bytes);
+        set(&mut s, PARAM_REVERSE, 1.0);
+        let out = both(&mut s);
+        assert!(
+            (out[0][0] - 1.09).abs() < 1e-4,
+            "reversed starts at the end: {}",
+            out[0][0]
+        );
+        assert!((out[0][10] - 0.99).abs() < 1e-4);
+
+        let mut s = sampler_with(&bytes);
+        set(&mut s, PARAM_REMOVE_DC, 1.0);
+        let out = both(&mut s);
+        assert!(
+            out[1][10].abs() < 1e-4,
+            "a steady right side is all offset: {}",
+            out[1][10]
+        );
+        assert!(
+            (out[0][10] - (0.2 - 0.595)).abs() < 1e-3,
+            "the left loses its mean: {}",
+            out[0][10]
+        );
+
+        let mut s = sampler_with(&bytes);
+        set(&mut s, PARAM_NORMALIZE, 1.0);
+        let out = both(&mut s);
+        assert!(
+            (out[0][10] - 0.2 / 1.09).abs() < 1e-4,
+            "brought up to the peak: {}",
+            out[0][10]
+        );
+
+        let mut s = sampler_with(&bytes);
+        set(&mut s, PARAM_POLARITY, 1.0);
+        set(&mut s, PARAM_SWAP_STEREO, 1.0);
+        let out = both(&mut s);
+        assert!(
+            (out[0][10] + 0.5).abs() < 1e-4,
+            "right on the left, turned over: {}",
+            out[0][10]
+        );
+        assert!((out[1][10] + 0.2).abs() < 1e-4);
     }
 
     #[test]
