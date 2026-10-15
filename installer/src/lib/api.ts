@@ -54,3 +54,32 @@ export async function onProgress(
 ): Promise<UnlistenFn> {
   return listen<InstallProgress>("install://progress", (e) => handler(e.payload));
 }
+
+// ─── Removal (the same program, started with --uninstall) ────────────────────
+
+export type LaunchMode = "install" | "uninstall";
+
+export interface UninstallProgress {
+  /** Index of the step that just started, in uninstallSteps(). */
+  step: number;
+  message: string;
+}
+
+export async function launchMode(): Promise<LaunchMode> {
+  return invoke<LaunchMode>("launch_mode");
+}
+
+export async function uninstallSteps(): Promise<string[]> {
+  return invoke<string[]>("uninstall_steps");
+}
+
+/** Rejects with "daw-running", "not-installed" or a sentence. */
+export async function startUninstall(removeSettings: boolean): Promise<void> {
+  return invoke("start_uninstall", { removeSettings });
+}
+
+export async function onUninstallProgress(
+  handler: (p: UninstallProgress) => void
+): Promise<UnlistenFn> {
+  return listen<UninstallProgress>("uninstall://progress", (e) => handler(e.payload));
+}

@@ -369,12 +369,58 @@ jobs:
           tauriScript: tauri
           args: --target ${{ matrix.target }} --features jack --bundles ${{ matrix.tauri-bundles }}
 
+      # Custom branded launcher-style installer (the small Tauri app
+      # under `installer/`). Built with --no-bundle so we get the raw
+      # executable instead of yet another NSIS wrap. The launcher downloads
+      # the main DAW NSIS .exe at install time and runs it silently, so the
+      # user only ever sees the branded window. Rebuilt every release from
+      # this commit: it runs installers on people's machines.
+      #
+      # It is also the DAW's uninstaller: the DAW's installer carries it as
+      # binaries\hardwave-daw-uninstaller.exe and Windows Apps opens it with
+      # --uninstall. So it is built and signed before the bundle, and the
+      # same signed file is the HardwaveDAW-Setup.exe asset.
+      - name: Build Hardwave DAW launcher installer (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        working-directory: installer
+        run: |
+          npm install
+          npm run tauri:build -- --no-bundle
+
+      # Built with --no-bundle, so Tauri's signing never sees it: signed
+      # here, with the same script and the same rule (a release that
+      # cannot be signed stops).
+      - name: Sign the launcher and put it in the bundle (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: |
+          $exe = "installer/src-tauri/target/release/hardwave-daw-installer.exe"
+          if (-not (Test-Path $exe)) { throw "hardwave-daw-installer.exe not found" }
+          ./scripts/sign-windows.ps1 $exe
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item $exe src-tauri/binaries/hardwave-daw-uninstaller.exe -Force
+
       # The 32-bit helper. A plug-in that was never rebuilt for 64-bit
       # cannot be loaded by the app at all; it runs in here instead.
       # Built before the bundle so the installer can carry it.
       - name: Build the 32-bit plug-in helper (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
         run: |
           rustup target add i686-pc-windows-msvc
           # Its own linker setting: the LLVM lld-link we point the
@@ -383,9 +429,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
           Copy-Item target/i686-pc-windows-msvc/release/hardwave-plugin-bridge.exe `
             src-tauri/binaries/hardwave-plugin-bridge-x86.exe -Force
-          # It ships inside the installer without passing the signing
-          # script's check, so it is checked here.
-          ./scripts/check-windows-imports.ps1 src-tauri/binaries/hardwave-plugin-bridge-x86.exe
+          # It ships inside the installer, where Tauri's signing does not
+          # reach, so it is signed here (the script checks its imports
+          # first).
+          ./scripts/sign-windows.ps1 src-tauri/binaries/hardwave-plugin-bridge-x86.exe
 
       - name: Build Tauri app (Windows — with ASIO)
         if: matrix.platform == 'windows-latest'
@@ -417,25 +464,6 @@ jobs:
           tauriScript: tauri
           args: --target ${{ matrix.target }} --features asio --bundles ${{ matrix.tauri-bundles }}
 
-      # Custom branded launcher-style installer (the small Tauri app
-      # under `installer/`). Built with --no-bundle so we get the raw
-      # executable instead of yet another NSIS wrap; a separate rename
-      # step labels it "HardwaveDAW-Setup.exe" so the GitHub release
-      # asset list reads cleanly. The launcher downloads the main DAW
-      # NSIS .exe at install time and runs it silently — the user only
-      # ever interacts with the branded GUI.
-      # Rebuilt every release. Carrying the last published one forward
-      # saved minutes but meant one tampered download could ride into
-      # every later release; the launcher runs installers on people's
-      # machines, so it is always built from this commit.
-      - name: Build Hardwave DAW launcher installer (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: bash
-        working-directory: installer
-        run: |
-          npm install
-          npm run tauri:build -- --no-bundle
-
       - name: Stage HardwaveDAW-Setup.exe
         if: matrix.platform == 'windows-latest'
         shell: pwsh
@@ -444,21 +472,6 @@ jobs:
           if (-not $installerExe) { throw "hardwave-daw-installer.exe not found" }
           Copy-Item $installerExe.FullName "HardwaveDAW-Setup.exe"
           Get-Item HardwaveDAW-Setup.exe | Select-Object Name,Length
-
-      # Built with --no-bundle, so Tauri's signing never sees it: signed
-      # here, with the same script and the same rule (a release that
-      # cannot be signed stops).
-      - name: Sign HardwaveDAW-Setup.exe
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        env:
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
-          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
-        run: ./scripts/sign-windows.ps1 HardwaveDAW-Setup.exe
 
       - name: Upload HardwaveDAW-Setup.exe to release
         if: matrix.platform == 'windows-latest'

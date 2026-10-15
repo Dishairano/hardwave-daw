@@ -132,6 +132,33 @@ jobs:
         # Move this forward deliberately, together with the tauri crate.
         run: npm install -g @tauri-apps/cli@2.11.5
 
+      # The launcher is also the DAW's uninstaller (Windows Apps opens it
+      # with --uninstall), so a test build carries it the way a release
+      # does: built, signed, and put in the bundle as
+      # binaries\hardwave-daw-uninstaller.exe.
+      - name: Build the launcher (the uninstaller)
+        shell: bash
+        working-directory: installer
+        run: |
+          npm install
+          npm run tauri:build -- --no-bundle
+
+      - name: Sign the launcher and put it in the bundle
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: |
+          $exe = "installer/src-tauri/target/release/hardwave-daw-installer.exe"
+          if (-not (Test-Path $exe)) { throw "hardwave-daw-installer.exe not found" }
+          ./scripts/sign-windows.ps1 $exe
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item $exe src-tauri/binaries/hardwave-daw-uninstaller.exe -Force
+
       # Test builds never see the updater signing key: they are not
       # updates, so they carry no updater signature, and a test lane is
       # not a place for the key that every installed DAW trusts.

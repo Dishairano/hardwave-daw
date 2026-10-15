@@ -12,19 +12,17 @@
 //!
 //! Shortcuts and the uninstall registry entry are handled by the
 //! underlying NSIS installer on Windows, by the .app bundle on macOS,
-//! and by the .desktop file on Linux. The shortcut.rs / uninstall.rs
-//! modules are inherited from the Suite installer template and stay
-//! Windows-only — they're available for future use but not on the
-//! happy path.
+//! and by the .desktop file on Linux.
+//!
+//! On Windows the same program is the DAW's uninstaller: the installer
+//! carries it as `binaries\hardwave-daw-uninstaller.exe` and the Windows
+//! Apps entry starts it with `--uninstall` (see uninstall.rs).
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 mod install;
-#[cfg(windows)]
-mod shortcut;
-#[cfg(windows)]
 mod uninstall;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -213,35 +211,152 @@ fn quit(app: AppHandle) {
     app.exit(0);
 }
 
+/// Which window this run is: "install" or "uninstall".
+#[tauri::command]
+fn launch_mode(mode: State<'_, LaunchMode>) -> &'static str {
+    if mode.uninstall {
+        "uninstall"
+    } else {
+        "install"
+    }
+}
+
+/// The steps the removal window lists.
+#[tauri::command]
+fn uninstall_steps() -> Vec<&'static str> {
+    uninstall::STEPS.to_vec()
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UninstallProgress {
+    step: usize,
+    message: String,
+}
+
+/// Remove the DAW. Emits `uninstall://progress` per step. The error is
+/// "daw-running" when the DAW is open, "not-installed" when there is no
+/// install to remove, or a sentence.
+#[tauri::command]
+async fn start_uninstall(
+    app: AppHandle,
+    mode: State<'_, LaunchMode>,
+    remove_settings: bool,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use tauri::Emitter;
+        let Some(dir) = uninstall::target(&mode.args) else {
+            return Err(uninstall::Stop::NotInstalled.code());
+        };
+        tauri::async_runtime::spawn_blocking(move || {
+            uninstall::remove(&dir, remove_settings, |step, message| {
+                let _ = app.emit(
+                    "uninstall://progress",
+                    UninstallProgress {
+                        step,
+                        message: message.to_string(),
+                    },
+                );
+            })
+            .map_err(|stop| stop.code())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, mode, remove_settings);
+        Err(uninstall::Stop::NotInstalled.code())
+    }
+}
+
+/// How this run was started.
+struct LaunchMode {
+    uninstall: bool,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    args: uninstall::Args,
+}
+
 // ─── Entry ───────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Handle --uninstall flag: launch the uninstall path and exit.
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--uninstall") {
-        #[cfg(windows)]
-        {
-            if let Err(e) = uninstall::uninstall() {
-                eprintln!("Uninstall failed: {e}");
-                std::process::exit(1);
-            }
+    let args = uninstall::parse_args(std::env::args());
+    #[cfg(windows)]
+    if args.uninstall {
+        // Windows cannot delete a running program, so the removal runs
+        // from a copy outside the install folder.
+        match uninstall::relocate(&args) {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => eprintln!("hardwave-daw-uninstaller: {e}; removing from here"),
         }
+        if args.quiet {
+            // For scripts: no window, only the app (never the settings).
+            let code = match uninstall::target(&args) {
+                Some(dir) => match uninstall::remove(&dir, false, |_, _| {}) {
+                    Ok(()) => 0,
+                    Err(stop) => {
+                        eprintln!("hardwave-daw-uninstaller: {}", stop.code());
+                        if stop == uninstall::Stop::DawRunning {
+                            2
+                        } else {
+                            1
+                        }
+                    }
+                },
+                None => {
+                    eprintln!("hardwave-daw-uninstaller: not-installed");
+                    1
+                }
+            };
+            uninstall::clean_up_copy();
+            std::process::exit(code);
+        }
+    }
+    #[cfg(not(windows))]
+    if args.uninstall {
+        eprintln!("hardwave-daw-uninstaller: removing is for Windows; on this system remove the app as usual");
         return;
     }
+    let uninstalling = args.uninstall;
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(InstallState::default())
+        .manage(LaunchMode {
+            uninstall: uninstalling,
+            args,
+        })
+        .setup(move |app| {
+            if uninstalling {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_title("Remove Hardwave DAW");
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             fetch_latest_version,
             default_install_dir,
             start_install,
             cancel_install,
             launch_installed,
-            quit
+            quit,
+            launch_mode,
+            uninstall_steps,
+            start_uninstall
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running hardwave-daw-installer");
+    app.run(move |_, event| {
+        if let tauri::RunEvent::Exit = event {
+            if uninstalling {
+                #[cfg(windows)]
+                uninstall::clean_up_copy();
+            }
+        }
+    });
 }

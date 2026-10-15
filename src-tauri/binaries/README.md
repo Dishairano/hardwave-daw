@@ -6,3 +6,9 @@ in here and speak to the app over a pipe. CI builds it on Windows
 before the installer is bundled; this folder is otherwise empty, which
 is why the app treats a missing helper as "no helper" rather than an
 error.
+
+`hardwave-daw-uninstaller.exe` is the branded launcher from `installer/`,
+which is also the DAW's uninstaller. The installer points the Windows Apps
+entry at it (`--uninstall`, or `--uninstall --quiet` for scripts); CI
+builds and signs it before the bundle. Without it the entry falls back to
+NSIS's own uninstaller.

@@ -336,7 +336,13 @@ Function PageLeaveReinstall
       ExecWait '$R1' $0
     ${Else}
       ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
-      ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+      ; NSIS's own uninstaller: UninstallString may be the Hardwave removal
+      ; window, which does not take NSIS's arguments. Older installs have
+      ; no NsisUninstallString and their UninstallString is NSIS's.
+      ReadRegStr $R1 SHCTX "${UNINSTKEY}" "NsisUninstallString"
+      ${If} $R1 == ""
+        ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+      ${EndIf}
       ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
       ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
       StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
@@ -686,7 +692,18 @@ Section Install
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr SHCTX "${UNINSTKEY}" "Publisher" "${MANUFACTURER}"
   WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$\"$INSTDIR$\""
-  WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+  ; Windows Apps (and anything else that reads UninstallString) opens the
+  ; Hardwave removal window when the installer carries it; NSIS's own
+  ; uninstaller stays the one a reinstall runs (NsisUninstallString), as it
+  ; passes NSIS's own arguments. A build without the window keeps NSIS's.
+  WriteRegStr SHCTX "${UNINSTKEY}" "NsisUninstallString" "$\"$INSTDIR\uninstall.exe$\""
+  ${If} ${FileExists} "$INSTDIR\binaries\hardwave-daw-uninstaller.exe"
+    WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\binaries\hardwave-daw-uninstaller.exe$\" --uninstall"
+    WriteRegStr SHCTX "${UNINSTKEY}" "QuietUninstallString" "$\"$INSTDIR\binaries\hardwave-daw-uninstaller.exe$\" --uninstall --quiet"
+  ${Else}
+    WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+    DeleteRegValue SHCTX "${UNINSTKEY}" "QuietUninstallString"
+  ${EndIf}
   WriteRegDWORD SHCTX "${UNINSTKEY}" "NoModify" "1"
   WriteRegDWORD SHCTX "${UNINSTKEY}" "NoRepair" "1"
 
