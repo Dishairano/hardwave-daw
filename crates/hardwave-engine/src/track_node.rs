@@ -709,6 +709,19 @@ impl TrackNode {
 
     /// Whether the launcher has anything for this track, so the idle
     /// gate does not skip a track that is about to start.
+    /// A placeholder track: no clips, no plug-ins, no automation, nothing
+    /// routed into it and nothing in the launcher grid. It plays silence.
+    fn has_nothing_to_play(&self) -> bool {
+        self.clips.is_empty()
+            && self.chain.slots.is_empty()
+            && self.automation_lanes.is_empty()
+            && !self.receives_input
+            // A track whose only content is in the launcher grid still
+            // has work to do: the gate is about idle tracks, and one
+            // with a clip queued or playing is not idle.
+            && !self.session_has_work()
+    }
+
     fn session_has_work(&self) -> bool {
         if self.session_slots.is_empty() {
             return false;
@@ -1019,6 +1032,12 @@ impl AudioNode for TrackNode {
         self.chain.set_slot_sidechain(slot_id, active);
     }
 
+    /// Muted, stopped, or a placeholder: each of those leaves the track
+    /// silent before it reads its input or runs anything (see `process`).
+    fn idle(&self, ctx: &ProcessContext) -> bool {
+        self.muted || !ctx.playing || self.has_nothing_to_play()
+    }
+
     fn process(
         &mut self,
         inputs: &[&[f32]],
@@ -1080,15 +1099,7 @@ impl AudioNode for TrackNode {
         // Hence the chain.slots check below covers the monitoring case
         // implicitly: an armed track with no chain = nothing for us to
         // do; an armed track WITH chain = process for monitoring.
-        if self.clips.is_empty()
-            && self.chain.slots.is_empty()
-            && self.automation_lanes.is_empty()
-            && !self.receives_input
-            // A track whose only content is in the launcher grid still
-            // has work to do: the gate is about idle tracks, and one
-            // with a clip queued or playing is not idle.
-            && !self.session_has_work()
-        {
+        if self.has_nothing_to_play() {
             // Park the meter at silence so the UI doesn't show stale
             // values from a previous active block.
             use std::sync::atomic::Ordering;

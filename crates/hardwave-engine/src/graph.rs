@@ -39,6 +39,15 @@ pub trait AudioNode: Send {
     }
     fn reset(&mut self) {}
 
+    /// Whether this block leaves the node silent with nothing worth doing:
+    /// it reads no input and has nothing of its own to play. The graph
+    /// skips such a node, and the zeroing around it, for as long as its
+    /// output is already silent. A node that says so must, when processed,
+    /// write silence to every output channel. Default: never idle.
+    fn idle(&self, _ctx: &ProcessContext) -> bool {
+        false
+    }
+
     /// Tell a node that another track routes into it, so a bus with nothing
     /// of its own on it still mixes what reaches it. Only track nodes care.
     fn set_receives_input(&mut self, _receives: bool) {}
@@ -223,9 +232,25 @@ impl NodeScratch {
 pub struct AudioGraph {
     nodes: Vec<Box<dyn AudioNode>>,
     edges: Vec<Edge>,
+    /// Per node, the indices of the edges that end at it, in edge order.
+    /// A node gathers its inputs from these; scanning every edge for
+    /// every node made a block cost grow with the square of the track
+    /// count (a new song has 500 inserts). Rebuilt with the order.
+    incoming: Vec<Vec<usize>>,
+    /// Per node, whether its output buffer is known to be silent: it was
+    /// idle last block and wrote zeros. An idle node with a silent output
+    /// is skipped, and an edge from a silent node adds nothing. A new song
+    /// has 500 empty inserts; zeroing and summing all of them every block
+    /// cost more than the audio deadline on a small machine.
+    silent: Vec<bool>,
     /// Per-edge PDC delay lines, indexed 1:1 with `edges`.
     edge_delays: Vec<Option<EdgeDelayLine>>,
     processing_order: Vec<NodeId>,
+    /// Nodes or edges were added since the order was worked out. Adding
+    /// them only marks this; the order is worked out once, when the graph
+    /// is finished (`finalize_pdc`) or first run. Working it out on every
+    /// add cost a 500-track song a tenth of a second per rebuild.
+    order_dirty: bool,
     /// Pre-allocated buffers for intermediate data.
     buffers: Vec<Vec<Vec<f32>>>, // [node][channel][samples]
     /// Per-node scratch space — eliminates 5 allocations per node per
@@ -252,8 +277,11 @@ impl AudioGraph {
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
+            incoming: Vec::new(),
+            silent: Vec::new(),
             edge_delays: Vec::new(),
             processing_order: Vec::new(),
+            order_dirty: false,
             buffers: Vec::new(),
             scratch: Vec::new(),
             accepts_live_midi: Vec::new(),
@@ -285,7 +313,10 @@ impl AudioGraph {
             .push(vec![vec![0.0; self.buffer_size]; NODE_CHANNELS]);
         self.scratch.push(NodeScratch::new(self.buffer_size));
         self.accepts_live_midi.push(false);
-        self.rebuild_order();
+        // Its buffer starts at zero, but nothing has run it yet: the first
+        // block processes it either way.
+        self.silent.push(false);
+        self.order_dirty = true;
         id
     }
 
@@ -327,15 +358,18 @@ impl AudioGraph {
             compensation_samples: 0,
         });
         self.edge_delays.push(None);
-        self.rebuild_order();
+        self.order_dirty = true;
     }
 
     /// Remove all nodes and edges.
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.edges.clear();
+        self.incoming.clear();
+        self.silent.clear();
         self.edge_delays.clear();
         self.processing_order.clear();
+        self.order_dirty = false;
         self.buffers.clear();
         self.scratch.clear();
         self.accepts_live_midi.clear();
@@ -348,6 +382,7 @@ impl AudioGraph {
     /// source's arrival so parallel branches reach the dest sample-aligned
     /// against the slowest incoming path.
     pub fn finalize_pdc(&mut self) {
+        self.ensure_order();
         let n = self.nodes.len();
         if n == 0 {
             self.edge_delays.clear();
@@ -357,12 +392,11 @@ impl AudioGraph {
         // node's own latency) — same DP as `total_latency_samples`.
         let mut acc = vec![0u32; n];
         for &node_id in &self.processing_order {
-            let mut incoming_max = 0u32;
-            for edge in &self.edges {
-                if edge.dest == node_id {
-                    incoming_max = incoming_max.max(acc[edge.source]);
-                }
-            }
+            let incoming_max = self.incoming[node_id]
+                .iter()
+                .map(|&e| acc[self.edges[e].source])
+                .max()
+                .unwrap_or(0);
             acc[node_id] = incoming_max.saturating_add(self.nodes[node_id].latency_samples());
         }
         // For each edge, compute the pad samples needed so the source arrives
@@ -397,13 +431,39 @@ impl AudioGraph {
 
     /// Rebuild topological order using Kahn's algorithm.
     fn rebuild_order(&mut self) {
+        let (order, incoming) = self.order_and_incoming();
+        let n = self.nodes.len();
+        // Which nodes can run beside each other: a node sits one level
+        // past the highest level of anything feeding it, so two nodes
+        // in a level never have an edge between them.
+        let edges = &self.edges;
+        self.levels = crate::parallel::Levels::build(&order, n, |node| {
+            incoming[node].iter().map(|&e| edges[e].source).collect()
+        });
+        self.processing_order = order;
+        self.incoming = incoming;
+        self.order_dirty = false;
+    }
+
+    /// Work the order out now if anything was added since.
+    fn ensure_order(&mut self) {
+        if self.order_dirty {
+            self.rebuild_order();
+        }
+    }
+
+    /// The topological order (Kahn's algorithm) and, per node, the edges
+    /// that end at it.
+    fn order_and_incoming(&self) -> (Vec<NodeId>, Vec<Vec<usize>>) {
         let n = self.nodes.len();
         let mut in_degree = vec![0u32; n];
         let mut adjacency: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+        let mut incoming: Vec<Vec<usize>> = vec![Vec::new(); n];
 
-        for edge in &self.edges {
+        for (index, edge) in self.edges.iter().enumerate() {
             in_degree[edge.dest] += 1;
             adjacency[edge.source].push(edge.dest);
+            incoming[edge.dest].push(index);
         }
 
         let mut queue: Vec<NodeId> = (0..n).filter(|&i| in_degree[i] == 0).collect();
@@ -418,19 +478,7 @@ impl AudioGraph {
                 }
             }
         }
-
-        // Which nodes can run beside each other: a node sits one level
-        // past the highest level of anything feeding it, so two nodes
-        // in a level never have an edge between them.
-        let edges = &self.edges;
-        self.levels = crate::parallel::Levels::build(&order, n, |node| {
-            edges
-                .iter()
-                .filter(|e| e.dest == node)
-                .map(|e| e.source)
-                .collect()
-        });
-        self.processing_order = order;
+        (order, incoming)
     }
 
     /// Share the per-block work across a pool of threads.
@@ -464,6 +512,9 @@ impl AudioGraph {
     /// old per-block `src_vec` clone is gone — the audio thread does zero
     /// heap allocation in steady state.
     pub fn process(&mut self, ctx: &ProcessContext, midi_in: &[hardwave_midi::MidiEvent]) {
+        // Finished graphs have their order already (`finalize_pdc`); this
+        // only catches one run without it.
+        self.ensure_order();
         // More than one core, when a pool is attached and the graph is
         // wide enough to be worth it.
         if self.pool.is_some() && !self.levels.is_empty() {
@@ -478,6 +529,17 @@ impl AudioGraph {
 
         for order_idx in 0..order_len {
             let node_id = self.processing_order[order_idx];
+
+            // An idle node whose output is already silent has nothing to
+            // do this block. Not when a delay line feeds it: that line
+            // has to keep moving so it holds the right audio later.
+            let idle = self.nodes[node_id].idle(ctx)
+                && self.incoming[node_id]
+                    .iter()
+                    .all(|&e| matches!(self.edge_delays.get(e), None | Some(None)));
+            if idle && self.silent[node_id] {
+                continue;
+            }
 
             // Zero the scratch's input buffers in place — no realloc.
             for ch in &mut self.scratch[node_id].ch_bufs {
@@ -496,11 +558,16 @@ impl AudioGraph {
             {
                 let buffers = &self.buffers;
                 let edges = &self.edges;
+                let silent = &self.silent;
                 let edge_delays = &mut self.edge_delays;
                 let scratch = &mut self.scratch[node_id];
                 let buffer_size = self.buffer_size;
-                for (edge_idx, e) in edges.iter().enumerate() {
-                    if e.dest != node_id {
+                for &edge_idx in &self.incoming[node_id] {
+                    let e = &edges[edge_idx];
+                    // A silent source adds nothing, unless its edge delays
+                    // it: the line still has to take the silence in.
+                    let delayed = matches!(edge_delays.get(edge_idx), Some(Some(_)));
+                    if silent.get(e.source).copied().unwrap_or(false) && !delayed {
                         continue;
                     }
                     let src: &[f32] = match buffers.get(e.source).and_then(|b| b.get(e.source_port))
@@ -559,6 +626,8 @@ impl AudioGraph {
             // Zero copy — the persistent buffer becomes the next-block
             // scratch.outputs, which we'll .fill(0.0) on next call.
             std::mem::swap(&mut scratch.outputs, &mut self.buffers[node_id]);
+            // An idle node wrote silence (the trait's promise).
+            self.silent[node_id] = idle;
         }
     }
 
@@ -579,7 +648,10 @@ impl AudioGraph {
             scratch: self.scratch.as_mut_ptr(),
             buffers: self.buffers.as_mut_ptr(),
             edge_delays: self.edge_delays.as_mut_ptr(),
+            edge_delay_count: self.edge_delays.len(),
+            silent: self.silent.as_mut_ptr(),
             edges: &self.edges,
+            incoming: &self.incoming,
             accepts_live_midi: &self.accepts_live_midi,
             buffer_size: self.buffer_size,
             midi_in,
@@ -647,14 +719,20 @@ impl AudioGraph {
         if n == 0 {
             return 0;
         }
+        // Read before the graph is finished as well, so work the order out
+        // here when it is stale rather than read an old one.
+        let fresh = self.order_dirty.then(|| self.order_and_incoming());
+        let (order, incoming) = match &fresh {
+            Some((order, incoming)) => (order, incoming),
+            None => (&self.processing_order, &self.incoming),
+        };
         let mut acc = vec![0u32; n];
-        for &node_id in &self.processing_order {
-            let mut incoming_max = 0u32;
-            for edge in &self.edges {
-                if edge.dest == node_id {
-                    incoming_max = incoming_max.max(acc[edge.source]);
-                }
-            }
+        for &node_id in order {
+            let incoming_max = incoming[node_id]
+                .iter()
+                .map(|&e| acc[self.edges[e].source])
+                .max()
+                .unwrap_or(0);
             acc[node_id] = incoming_max.saturating_add(self.nodes[node_id].latency_samples());
         }
         acc.into_iter().max().unwrap_or(0)
@@ -674,7 +752,10 @@ struct NodeWork<'a> {
     scratch: *mut NodeScratch,
     buffers: *mut Vec<Vec<f32>>,
     edge_delays: *mut Option<EdgeDelayLine>,
+    edge_delay_count: usize,
+    silent: *mut bool,
     edges: &'a [Edge],
+    incoming: &'a [Vec<usize>],
     accepts_live_midi: &'a [bool],
     buffer_size: usize,
     midi_in: &'a [hardwave_midi::MidiEvent],
@@ -699,16 +780,38 @@ impl NodeWork<'_> {
         if node_id >= self.node_count {
             return;
         }
+        // The edge's delay line, if it has one. Bounded: the lines are
+        // made once the graph is finished, and a graph used before that
+        // has none.
+        let delay_of = |edge_idx: usize| -> Option<&mut Option<EdgeDelayLine>> {
+            (edge_idx < self.edge_delay_count)
+                .then(|| unsafe { &mut *self.edge_delays.add(edge_idx) })
+        };
+        // Same skip as the one-thread loop: an idle node with a silent
+        // output and no delay line feeding it has nothing to do.
+        let node = unsafe { &mut *self.nodes.add(node_id) };
+        let idle = node.idle(self.ctx)
+            && self.incoming[node_id]
+                .iter()
+                .all(|&e| delay_of(e).is_none_or(|d| d.is_none()));
+        let silent = unsafe { &mut *self.silent.add(node_id) };
+        if idle && *silent {
+            return;
+        }
         let scratch = unsafe { &mut *self.scratch.add(node_id) };
         for ch in &mut scratch.ch_bufs {
             ch.fill(0.0);
         }
 
-        for (edge_idx, e) in self.edges.iter().enumerate() {
-            if e.dest != node_id {
+        for &edge_idx in &self.incoming[node_id] {
+            let e = &self.edges[edge_idx];
+            if e.source >= self.node_count {
                 continue;
             }
-            if e.source >= self.node_count {
+            let delay = delay_of(edge_idx).and_then(|d| d.as_mut());
+            // A silent source adds nothing, unless a delay line has to
+            // take the silence in. Its flag was set in an earlier level.
+            if unsafe { *self.silent.add(e.source) } && delay.is_none() {
                 continue;
             }
             // The source is a node of an earlier level, which finished
@@ -718,8 +821,7 @@ impl NodeWork<'_> {
                 continue;
             };
             let n = src.len().min(self.buffer_size);
-            let delay = unsafe { &mut *self.edge_delays.add(edge_idx) };
-            let src_slice: &[f32] = if let Some(dl) = delay.as_mut() {
+            let src_slice: &[f32] = if let Some(dl) = delay {
                 dl.process(&src[..n], &mut scratch.delay_scratch[..n]);
                 &scratch.delay_scratch[..n]
             } else {
@@ -753,7 +855,6 @@ impl NodeWork<'_> {
         } else {
             &midi_empty
         };
-        let node = unsafe { &mut *self.nodes.add(node_id) };
         node.process(
             &input_refs,
             &mut scratch.outputs,
@@ -764,6 +865,7 @@ impl NodeWork<'_> {
 
         let buffers = unsafe { &mut *self.buffers.add(node_id) };
         std::mem::swap(&mut scratch.outputs, buffers);
+        *silent = idle;
     }
 }
 
@@ -799,6 +901,117 @@ mod tests {
             name: n,
             latency: l,
         })
+    }
+
+    /// A source that writes a constant, or silence while idle, and counts
+    /// the blocks it was run; and a sink that sums its input.
+    struct Source {
+        level: f32,
+        idle: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        runs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl AudioNode for Source {
+        fn name(&self) -> &str {
+            "source"
+        }
+        fn process(
+            &mut self,
+            _inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            _ctx: &ProcessContext,
+        ) {
+            use std::sync::atomic::Ordering::Relaxed;
+            self.runs.fetch_add(1, Relaxed);
+            let v = if self.idle.load(Relaxed) {
+                0.0
+            } else {
+                self.level
+            };
+            for ch in outputs.iter_mut() {
+                ch.fill(v);
+            }
+        }
+        fn idle(&self, _ctx: &ProcessContext) -> bool {
+            self.idle.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    struct Sum;
+
+    impl AudioNode for Sum {
+        fn name(&self) -> &str {
+            "sum"
+        }
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            _ctx: &ProcessContext,
+        ) {
+            outputs[0].copy_from_slice(inputs[0]);
+        }
+    }
+
+    fn ctx() -> ProcessContext {
+        ProcessContext {
+            sample_rate: 48_000.0,
+            buffer_size: 16,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: 0,
+            position_ticks: 0,
+            playing: true,
+        }
+    }
+
+    #[test]
+    fn an_idle_silent_node_is_skipped_and_the_sum_stays_right() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+        use std::sync::Arc;
+        let mut g = AudioGraph::new(16);
+        let idle = Arc::new(AtomicBool::new(true));
+        let quiet_runs = Arc::new(AtomicUsize::new(0));
+        let loud_runs = Arc::new(AtomicUsize::new(0));
+        let quiet = g.add_node(Box::new(Source {
+            level: 0.25,
+            idle: idle.clone(),
+            runs: quiet_runs.clone(),
+        }));
+        let loud = g.add_node(Box::new(Source {
+            level: 0.5,
+            idle: Arc::new(AtomicBool::new(false)),
+            runs: loud_runs.clone(),
+        }));
+        let sink = g.add_node(Box::new(Sum));
+        g.connect(quiet, 0, sink, 0);
+        g.connect(loud, 0, sink, 0);
+        g.finalize_pdc();
+
+        for _ in 0..4 {
+            g.process(&ctx(), &[]);
+        }
+        // Run once to write its silence, then left alone.
+        assert_eq!(quiet_runs.load(Relaxed), 1);
+        assert_eq!(loud_runs.load(Relaxed), 4);
+        assert!(g.node_output(sink).unwrap()[0].iter().all(|v| *v == 0.5));
+
+        // Once it has something to play it runs again, and is heard.
+        idle.store(false, Relaxed);
+        g.process(&ctx(), &[]);
+        assert_eq!(quiet_runs.load(Relaxed), 2);
+        assert!(g.node_output(sink).unwrap()[0].iter().all(|v| *v == 0.75));
+
+        // And idle again: one block to fall silent, then skipped.
+        idle.store(true, Relaxed);
+        g.process(&ctx(), &[]);
+        g.process(&ctx(), &[]);
+        assert_eq!(quiet_runs.load(Relaxed), 3);
+        assert!(g.node_output(sink).unwrap()[0].iter().all(|v| *v == 0.5));
     }
 
     #[test]
