@@ -1,33 +1,14 @@
-### Improvements
-- The audio work can be shared across cores. A song where one track costs more than a block's budget could not play however many cores the machine had, because the graph ran on the audio thread alone. Tracks that do not feed each other run at the same time now. Settings > Audio picks how many threads; it starts at one until you have tried it on your machine, and the render is the same either way.
-- Ableton Link. Settings > MIDI joins a session and says how many other apps are in it; the tempo and the start and stop are shared both ways with everything on the network that speaks Link.
-- Plug-ins are told where the song is. The stutter follows it: a Sync setting picks a note value, the slice follows the tempo, and a group starts where the bar does instead of drifting past it.
-- Mix against a record. Tools > Reference track loads a commercial track, measures its loudness, and plays it instead of your mix past the master chain and the master fader. Match loudness puts it where your mix sits, because comparing at two levels compares the levels.
-- Stems (Pro). Right-click an audio clip and choose Separate stems: drums, bass, vocals and the rest land on four tracks under it, lined up with the clip, which is muted.
-- Performance test. Tools > Performance test measures how many tracks your PC can play at your buffer size, and what switching on multi-core audio would add.
-- Starter songs. File > New project starts a hardstyle, rawstyle, frenchcore or uptempo song with a tuned kick, an offbeat bass and the sections marked, so pressing play makes a sound straight away.
-- Songs in Workspace. File > Save to Workspace puts the open song and the samples it uses in your Workspace, and File > Open from Workspace brings it back on any machine, samples beside it. Saving again only sends what changed.
-- Work on a song with someone else. Tools > Work together opens a room and gives you a code; they type it in and you are in the same song, with a shared playhead. The edits travel, not the audio, so you each hear your own machine at full quality. A guest who does not have the song yet asks for it once and starts from there. Opening a room is part of Pro, joining one is free.
-- Old 32-bit plug-ins work. A 64-bit program cannot load a 32-bit plug-in, and plenty of free ones from the 2000s were never rebuilt. They now run in a small helper that ships with the DAW, chosen automatically from the plug-in's own header, with one buffer of latency that is compensated.
-- Score to picture. Tools > Video plays a film or a game capture in the corner of the window, following the playhead, so a hit lands where the cut is. The film can be moved against the song by the bar, and its own sound is off until you ask for it.
-- Open an FL Studio project. File > Import FL Studio project reads a .flp: the tempo, a track per channel, and the notes of every pattern where the playlist puts them. Plug-ins and their settings cannot come across, and the message says so rather than leaving you to find out.
-- A clip launcher. Tools > Clip launcher is a grid of loops: a column per track, a row per scene. A clip starts on the next bar, a scene starts a whole row together, and the launch boundary is yours to pick from now to four bars.
-- Paint something out. A cough or a creak sits in its own patch of a spectrogram even when it is mixed in with everything else in time. Right-click an audio clip, choose "Paint something out", drag a box around it, and it is rubbed out at whatever strength you set.
-- Tune a take, note by note. Right-click an audio clip and choose "Tune this take": each note is moved by its own amount, with a strength, a key and a tolerance that leaves vibrato alone. The take keeps its length and its place, and the original file is kept.
-- Audio to MIDI. Right-click an audio clip and choose "Turn into notes": the pitch is followed and written as a MIDI clip on a new track under the audio, lined up with it. One voice at a time, so a sung line or a bassline rather than a mixdown.
-- Scripts. Tools > Scripts writes an edit once and runs it whenever: forty hats on the off-beat, every track down three dB. The language is Rhai, a run is one undo step however much it does, and Check says what a script would do without changing anything.
-- A phone can drive the DAW. Settings > MIDI switches on OSC: TouchOSC and the like reach the transport, the faders, the mutes and the tempo on port 9000. The packet reader existed and nothing listened; now something does.
-- A plug-in can run in a process of its own. Right-click it in the mixer and switch "Own process" on: a crash in it then takes that process and not the DAW, the slot goes quiet, the song keeps playing, and a message says which plug-in stopped. Costs one buffer of latency, compensated.
-- Line one track up with another. A kick recorded with two mics is the same hit a few milliseconds apart, and the gap eats the low end. The gap is measured from the audio and taken out with the track's own delay, polarity included, so nothing on the timeline moves.
-- internal: nodes are grouped into levels so two nodes that run together can never have an edge between them, and a pool of threads stays alive between blocks; the engine test renders the same song on one core and on four and compares every sample.
-- internal: builds on the Windows gate machine start between 03:00 and 07:30 only, guarded in release.sh and in the workflow.
+### New features
+- feat: Sample window: double-click an audio clip, or open a sampler channel, for the channel settings FL has: volume, pan, pitch, stretch, fades, normalize, DC offset, reverse, polarity, swap stereo, sample start and length, trim, fade stereo, declicking. Sampler channels add the volume envelope, offset, loop with crossfade, mono, cut itself, porta and root note. Every change is one undo step.
 
-### Interface
-- A reworked interface on the same layout: a neutral base, words in Inter and numbers in a mono face, so names and values read at a glance.
-- Playlist clips you can read: the clip title bar and its text are legible on every colour. The waveforms themselves are unchanged.
-- Track headers with mute, solo and record on every playlist track.
-- The header is two readable rows instead of three, and it fits any window width: groups that do not fit move into a More menu instead of overlapping.
-- The browser has tabs with words, icons and a real volume slider.
-- The channel rack shows steps in the channel's colour and beats you can see.
-- All twenty dialogs share one frame: the same title bar, close button and footer.
-- The window fits at every display scale, and the FPS meter no longer breaks the interface when turned on.
+### Bug fixes
+- fix: the declicking modes are FL's: Out only, Transient (no bleeding), Transient, Generic, Smooth, Crossfade
+- fix: the built-in kick played one buffer late (21 ms at 1024), in playback and in renders.
+- fix: a consolidated part or a sample dropped on a MIDI channel was silent.
+- fix: a bounce, freeze or consolidate started late by the plug-ins' latency and ran through the master twice.
+- fix: with no output chosen, the DAW played through a monitor's HDMI audio while a real output was there.
+- fix: a plug-in window opened after the audio device dropped out showed default settings.
+
+### Improvements
+- fix(sample window): bar numbers no longer print over the length
+- improve: Consolidate shows in Edit > History; sampler settings are saved with the project; the channel rack lists its instruments on a fresh start; the app has its icon.
