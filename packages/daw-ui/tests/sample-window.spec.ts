@@ -49,6 +49,21 @@ test.describe('Sample window', () => {
     for (const c of calls) expect(c.args?.snapshot).toBe(true)
   })
 
+  test('load regions and slice markers read the file and say what it holds', async ({ page }) => {
+    const win = page.locator('.sw-win')
+    await win.locator('.hwf-check', { hasText: 'Load regions' }).click()
+    await expect(win.locator('.hwf-check', { hasText: 'Load regions' })).toHaveClass(/is-on/)
+    await win.locator('.hwf-check', { hasText: 'Load slice markers' }).click()
+    const calls = await settingsCalls(page)
+    expect(calls.map((c) => c.args?.settings)).toEqual([{ loadRegions: true }, { loadSlices: true }])
+    const asked = await page.evaluate(() =>
+      ((window as unknown as { __hwMockCalls: Call[] }).__hwMockCalls).filter((c) => c.cmd === 'get_sample_markers').length,
+    )
+    expect(asked).toBeGreaterThan(0)
+    await win.locator('.hwf-check', { hasText: 'Load slice markers' }).hover()
+    await expect(page.locator('.hwf-tip')).toHaveText('The file has 1 marker')
+  })
+
   test('a check box sends the setting for the sample as one undo step', async ({ page }) => {
     await page.locator('.sw-win .hwf-check', { hasText: 'Normalize' }).click()
     await expect(page.locator('.sw-win .hwf-check', { hasText: 'Normalize' })).toHaveClass(/is-on/)

@@ -150,6 +150,16 @@ const mock: TauriInternals = {
         }
       case 'load_sampler':
         return null
+      // A file with a region, a slice marker and a loop.
+      case 'get_sample_markers':
+        return {
+          sampleRate: 48000,
+          markers: [
+            { kind: 'region', start: 9600, end: 38400, label: 'Intro' },
+            { kind: 'point', start: 76800, end: 76800, label: 'Drop' },
+            { kind: 'loop', start: 96000, end: 134400, label: '' },
+          ],
+        }
       case 'get_clip_controls': {
         // A mod-wheel swell so the controller lane can be photographed.
         const a = args as { kind?: string }

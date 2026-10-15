@@ -88,6 +88,9 @@ export interface ClipInfo {
     trim?: number
     /** A declicking mode by FL's name. */
     declick?: string
+    /** Show the file's regions and slice markers. */
+    loadRegions?: boolean
+    loadSlices?: boolean
   }
   /** Where the file is on disk. */
   sourceFile?: string

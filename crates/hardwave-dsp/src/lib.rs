@@ -46,6 +46,7 @@ pub mod synth_extras;
 pub mod synth_presets;
 pub mod synth_voicing;
 pub mod time_pitch;
+pub mod wav_markers;
 pub mod wavetable;
 pub mod wavetable_display;
 

@@ -270,6 +270,8 @@ pub struct TreatmentInfo {
     trim: f64,
     /// As FL names it: "Out only", "Transient (no bleeding)", "Transient", "Generic", "Smooth", "Crossfade".
     declick: String,
+    load_regions: bool,
+    load_slices: bool,
 }
 
 impl From<&hardwave_project::clip::SampleTreatment> for TreatmentInfo {
@@ -286,6 +288,8 @@ impl From<&hardwave_project::clip::SampleTreatment> for TreatmentInfo {
             length: t.length,
             trim: t.trim,
             declick: t.declick.name().to_string(),
+            load_regions: t.load_regions,
+            load_slices: t.load_slices,
         }
     }
 }
@@ -317,6 +321,8 @@ pub struct SampleSettings {
     trim: Option<f64>,
     /// A declicking mode by its name; an unknown name is refused.
     declick: Option<String>,
+    load_regions: Option<bool>,
+    load_slices: Option<bool>,
 }
 
 /// Change the settings of a sample: every clip that plays the same file as
@@ -416,6 +422,12 @@ pub(crate) fn apply_sample_settings(
             }
             if let Some(v) = s.trim {
                 ac.treatment.trim = v.clamp(0.0, 1.0);
+            }
+            if let Some(v) = s.load_regions {
+                ac.treatment.load_regions = v;
+            }
+            if let Some(v) = s.load_slices {
+                ac.treatment.load_slices = v;
             }
             if let Some(name) = &s.declick {
                 ac.treatment.declick = hardwave_project::clip::DeclickMode::from_name(name)
@@ -985,6 +997,14 @@ mod tests {
             "length is clamped to 1"
         );
         assert_eq!(t.declick, hardwave_project::clip::DeclickMode::Smooth);
+        let show = SampleSettings {
+            load_regions: Some(true),
+            load_slices: Some(true),
+            ..Default::default()
+        };
+        apply_sample_settings(&mut project, "insert-001", "a", &show).unwrap();
+        let t = clip(&project, "insert-001", 0).treatment;
+        assert!(t.load_regions && t.load_slices);
         let wrong = SampleSettings {
             declick: Some("Loud".into()),
             ..Default::default()

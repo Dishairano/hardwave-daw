@@ -113,6 +113,12 @@ pub struct SampleTreatment {
     /// The tiny fades at a clip's edges when it has none of its own.
     #[serde(default)]
     pub declick: DeclickMode,
+    /// Show the regions and the slice markers the file carries (FL's
+    /// "load regions" and "load slice markers").
+    #[serde(default)]
+    pub load_regions: bool,
+    #[serde(default)]
+    pub load_slices: bool,
 }
 
 fn one() -> f64 {
@@ -133,6 +139,8 @@ impl Default for SampleTreatment {
             length: 1.0,
             trim: 0.0,
             declick: DeclickMode::OutOnly,
+            load_regions: false,
+            load_slices: false,
         }
     }
 }

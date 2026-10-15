@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-sample-markers"
+description = "Enables the get_sample_markers command without any pre-configured scope."
+commands.allow = ["get_sample_markers"]
+
+[[permission]]
+identifier = "deny-get-sample-markers"
+description = "Denies the get_sample_markers command without any pre-configured scope."
+commands.deny = ["get_sample_markers"]

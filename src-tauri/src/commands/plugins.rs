@@ -1405,13 +1405,26 @@ pub fn load_sampler(
         hardwave_dsp::audio_file::AudioFileReader::read(std::path::Path::new(&path))
             .map_err(|e| format!("decode {path}: {e:?}"))?;
     let base = base_note.unwrap_or(60);
+    // The channel keeps the settings it had (its envelope, mono, the knobs
+    // turned before a sample was there); the root comes with the new
+    // sample, and so does its loop when the file carries one, as FL's "use
+    // loop points" plays the sample's own loop.
+    let frames = channels.first().map(|c| c.len()).unwrap_or(0);
+    let previous: Vec<(u32, f32)> = {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        project
+            .plugin_state(&slot_id)
+            .and_then(|e| sampler::decode_sample_state(&e.chunk))
+            .map(|s| s.params)
+            .unwrap_or_default()
+    };
+    let markers = hardwave_dsp::wav_markers::read_wav_markers(std::path::Path::new(&path))
+        .unwrap_or_default()
+        .markers;
+    let params = params_for_new_sample(previous, base, frames, &markers);
     // The file's name travels with the sample, so the window can say it.
-    let bytes = hardwave_native_plugins::sampler::encode_sample_state_from(
-        info.sample_rate,
-        base,
-        channels,
-        &path,
-    );
+    let bytes = sampler::encode_sample_state_with(info.sample_rate, base, channels, &path, params);
     // Persist in the project (survives rebuild/reload + offline export).
     {
         let engine = state.engine.lock();
@@ -1430,6 +1443,93 @@ pub fn load_sampler(
         .try_send_insert_command(cmd)
         .map_err(|_| "insert command queue full or engine not started".to_string())?;
     Ok(())
+}
+
+/// One marker a sample file carries (a cue point, a region, a loop), in
+/// frames of the file.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SampleMarkerInfo {
+    /// "point", "region" or "loop".
+    pub kind: &'static str,
+    pub start: u64,
+    pub end: u64,
+    pub label: String,
+}
+
+/// The settings a sampler starts a newly loaded sample with: the channel
+/// keeps the ones it had (its envelope, mono, the knobs turned before a
+/// sample was there); the root comes with the new sample, and so does its
+/// loop when the file carries one, as FL's "use loop points" plays the
+/// sample's own loop.
+fn params_for_new_sample(
+    mut params: Vec<(u32, f32)>,
+    root: u8,
+    frames: usize,
+    markers: &[hardwave_dsp::wav_markers::WavMarker],
+) -> Vec<(u32, f32)> {
+    let mut put = |id: u32, v: f32| match params.iter_mut().find(|(i, _)| *i == id) {
+        Some(p) => p.1 = v,
+        None => params.push((id, v)),
+    };
+    put(sampler::PARAM_ROOT, root.min(127) as f32 / 127.0);
+    let frames = frames.max(1) as f32;
+    if let Some(l) = markers
+        .iter()
+        .find(|m| m.kind == hardwave_dsp::wav_markers::MarkerKind::Loop)
+    {
+        put(
+            sampler::PARAM_LOOP_START,
+            (l.start as f32 / frames).clamp(0.0, 1.0),
+        );
+        put(
+            sampler::PARAM_LOOP_END,
+            (l.end as f32 / frames).clamp(0.0, 1.0),
+        );
+    }
+    params
+}
+
+/// A file's markers and the rate their frames count in.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SampleMarkersInfo {
+    pub sample_rate: u32,
+    pub markers: Vec<SampleMarkerInfo>,
+}
+
+/// The markers in a WAV file: what FL's "load regions" and "load slice
+/// markers" bring in. Only WAV files are read, and only their marker
+/// chunks; anything else has none.
+#[tauri::command]
+pub fn get_sample_markers(path: String) -> Result<SampleMarkersInfo, String> {
+    use hardwave_dsp::wav_markers::{read_wav_markers, MarkerKind};
+    let p = std::path::Path::new(&path);
+    let is_wav = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav") || e.eq_ignore_ascii_case("wave"));
+    if !is_wav {
+        return Ok(SampleMarkersInfo::default());
+    }
+    let read = read_wav_markers(p).map_err(|e| format!("reading {path}: {e}"))?;
+    Ok(SampleMarkersInfo {
+        sample_rate: read.sample_rate,
+        markers: read
+            .markers
+            .into_iter()
+            .map(|m| SampleMarkerInfo {
+                kind: match m.kind {
+                    MarkerKind::Point => "point",
+                    MarkerKind::Region => "region",
+                    MarkerKind::Loop => "loop",
+                },
+                start: m.start,
+                end: m.end,
+                label: m.label,
+            })
+            .collect(),
+    })
 }
 
 /// What a sampler channel's window shows of its sample: the file it came
@@ -2128,6 +2228,31 @@ pub fn restart_sandboxed_plugin(
 #[cfg(test)]
 mod sampler_window_tests {
     use super::*;
+
+    #[test]
+    fn a_new_sample_keeps_the_channel_s_settings_and_brings_its_root_and_loop() {
+        use hardwave_dsp::wav_markers::{MarkerKind, WavMarker};
+        let before = vec![(sampler::PARAM_ENVELOPE, 1.0), (sampler::PARAM_ROOT, 0.5)];
+        let loop_marker = WavMarker {
+            kind: MarkerKind::Loop,
+            start: 250,
+            end: 750,
+            label: String::new(),
+        };
+        let p = params_for_new_sample(before.clone(), 72, 1000, &[loop_marker]);
+        let get = |id: u32| p.iter().find(|(i, _)| *i == id).map(|(_, v)| *v);
+        assert_eq!(
+            get(sampler::PARAM_ENVELOPE),
+            Some(1.0),
+            "the envelope stays on"
+        );
+        assert_eq!(get(sampler::PARAM_ROOT), Some(72.0 / 127.0));
+        assert_eq!(get(sampler::PARAM_LOOP_START), Some(0.25));
+        assert_eq!(get(sampler::PARAM_LOOP_END), Some(0.75));
+        // No loop in the file: the loop knobs are not touched.
+        let p = params_for_new_sample(before, 60, 1000, &[]);
+        assert!(p.iter().all(|(i, _)| *i != sampler::PARAM_LOOP_START));
+    }
 
     #[test]
     fn the_window_gets_the_file_the_length_the_root_and_an_outline() {

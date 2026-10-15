@@ -45,6 +45,44 @@ const baseName = (path: string) => path.split(/[\\/]/).pop() || path
 
 type Page = 'sample' | 'envelope'
 
+/** The markers a WAV file carries, as `get_sample_markers` reads them. */
+interface FileMarkers {
+  sampleRate: number
+  markers: { kind: 'point' | 'region' | 'loop'; start: number; end: number; label: string }[]
+}
+/** A marker to draw, in seconds of the file. */
+interface DrawnMarker { kind: 'point' | 'region' | 'loop'; start: number; end: number; label: string }
+
+/** The file's markers, read once per file while either check is on. */
+function useSampleMarkers(path: string, enabled: boolean): FileMarkers | null {
+  const [found, setFound] = useState<FileMarkers | null>(null)
+  useEffect(() => {
+    if (!enabled || !path) { setFound(null); return }
+    let live = true
+    invoke<FileMarkers>('get_sample_markers', { path })
+      .then((m) => { if (live) setFound(m) })
+      .catch(() => { if (live) setFound({ sampleRate: 0, markers: [] }) })
+    return () => { live = false }
+  }, [path, enabled])
+  return found
+}
+
+function markerCounts(markers: FileMarkers['markers']) {
+  return {
+    regions: markers.filter((m) => m.kind !== 'point').length,
+    points: markers.filter((m) => m.kind === 'point').length,
+  }
+}
+
+/** What the checks ask to see: regions and loops, slice markers, in seconds. */
+function visibleMarkers(found: FileMarkers | null, regions: boolean, slices: boolean): DrawnMarker[] {
+  if (!found || found.sampleRate <= 0) return []
+  const sec = (f: number) => f / found.sampleRate
+  return found.markers
+    .filter((m) => (m.kind === 'point' ? slices : regions))
+    .map((m) => ({ kind: m.kind, start: sec(m.start), end: sec(m.end), label: m.label }))
+}
+
 export function SampleWindow() {
   const target = useSampleWindowStore((s) => s.target)
   if (!target) return null
@@ -150,16 +188,34 @@ function TrackBox({ track, tracks }: { track: TrackInfo; tracks: TrackInfo[] }) 
   return <FlatBox label="Track" value={value} small={name} hint={`${track.name} plays into ${name === 'Master' ? 'the master' : name}; route it in the mixer`} />
 }
 
-/** What FL has on the first page: its load-time options, which the DAW
- *  cannot do yet, and the declicking mode. */
-function ContentPanel({ declick, onDeclick }: { declick: Declick; onDeclick?: (d: Declick) => void }) {
+/** What FL has on the first page: its load-time options and the
+ *  declicking mode. Regions and slice markers are read from the file and
+ *  drawn on the sample; keeping the file on disk and resampling on load
+ *  are not in this version. */
+function ContentPanel({ declick, onDeclick, regions, slices, onRegions, onSlices, found }: {
+  declick: Declick
+  onDeclick?: (d: Declick) => void
+  regions: boolean
+  slices: boolean
+  onRegions?: () => void
+  onSlices?: () => void
+  /** What the file holds, for the hints: regions and loops, and points. */
+  found: { regions: number; points: number } | null
+}) {
+  const count = (n: number, one: string) => (n === 1 ? `1 ${one}` : `${n} ${one}s`)
   return (
     <FlatPanel title="Content">
       <div className="hwf-checks">
         <FlatCheck label="Keep on disk" on={false} disabled hint={NOT_YET} />
-        <FlatCheck label="Load regions" on={false} disabled hint={NOT_YET} />
+        <FlatCheck
+          label="Load regions" on={regions} onToggle={onRegions}
+          hint={found ? `The file has ${count(found.regions, 'region')} and loops` : 'Shows the regions and the loop the file carries'}
+        />
         <FlatCheck label="Resample" on={false} disabled hint={NOT_YET} />
-        <FlatCheck label="Load slice markers" on={false} disabled hint={NOT_YET} />
+        <FlatCheck
+          label="Load slice markers" on={slices} onToggle={onSlices}
+          hint={found ? `The file has ${count(found.points, 'marker')}` : 'Shows the slice markers the file carries'}
+        />
       </div>
       <div className="sw-row" title={onDeclick ? DECLICK_HINT[declick] : FOR_CLIPS}>
         <span className="sw-lead">Declicking mode</span>
@@ -191,6 +247,8 @@ interface Values {
   length: number
   trim: number
   declick: Declick
+  loadRegions: boolean
+  loadSlices: boolean
 }
 
 /** The command's own names for the same things. */
@@ -213,6 +271,8 @@ type Settings = Partial<{
   length: number
   trim: number
   declick: Declick
+  loadRegions: boolean
+  loadSlices: boolean
 }>
 
 /** FL's declicking modes, in FL's order, as the engine names them. */
@@ -249,6 +309,8 @@ function valuesOf(clip: ClipInfo): Values {
     length: t?.length ?? 1,
     trim: t?.trim ?? 0,
     declick: asDeclick(t?.declick),
+    loadRegions: t?.loadRegions ?? false,
+    loadSlices: t?.loadSlices ?? false,
   }
 }
 
@@ -272,6 +334,8 @@ function settingsOf(v: Partial<Values>): Settings {
   if (v.length !== undefined) s.length = v.length
   if (v.trim !== undefined) s.trim = v.trim
   if (v.declick !== undefined) s.declick = v.declick
+  if (v.loadRegions !== undefined) s.loadRegions = v.loadRegions
+  if (v.loadSlices !== undefined) s.loadSlices = v.loadSlices
   return s
 }
 
@@ -333,6 +397,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
   }
 
   const [peaks, setPeaks] = useState<number[][]>([])
+  const markers = useSampleMarkers(clip?.sourceFile || '', !!(v?.loadRegions || v?.loadSlices))
   useEffect(() => {
     if (!clip) return
     let live = true
@@ -394,7 +459,13 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
               <span className="sw-file-name" title={clip.sourceFile || clip.source_id}>{fileName}</span>
             </div>
           </FlatPanel>
-          <ContentPanel declick={v.declick} onDeclick={(d) => change({ declick: d }, true, `Declicking ${d}`)} />
+          <ContentPanel
+            declick={v.declick} onDeclick={(d) => change({ declick: d }, true, `Declicking ${d}`)}
+            regions={v.loadRegions} slices={v.loadSlices}
+            onRegions={() => change({ loadRegions: !v.loadRegions }, true, v.loadRegions ? 'Hide regions' : 'Load regions')}
+            onSlices={() => change({ loadSlices: !v.loadSlices }, true, v.loadSlices ? 'Hide slice markers' : 'Load slice markers')}
+            found={markers ? markerCounts(markers.markers) : null}
+          />
           <FlatPanel title="Playback" grow>
             <div className="hwf-krow">
               <FlatKnob label="Offset" value={0} def={0} text="" disabled offText={FOR_SAMPLER} />
@@ -495,6 +566,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
 
       <SampleView
         peaks={peaks} seconds={seconds} bpm={bpm} color={color} region={region} loop={null}
+        markers={visibleMarkers(markers, v.loadRegions, v.loadSlices)}
         window={{ start: v.start * seconds, end: (v.start + v.length * (1 - v.start)) * seconds }}
         fadeIn={v.fadeInMs / 1000 / Math.max(0.01, timeFactor(v))} fadeOut={v.fadeOutMs / 1000 / Math.max(0.01, timeFactor(v))}
         reversed={v.reversed}
@@ -510,6 +582,7 @@ export const SP = {
   gain: 0, attack: 1, release: 2, delay: 3, hold: 4, decay: 5, sustain: 6, envelope: 7,
   offset: 8, loopStart: 9, loopEnd: 10, loop: 11, pingPong: 12, mono: 13, cutItself: 14, porta: 15,
   root: 16, pitch: 17, sampleStart: 18, sampleLength: 19, xfade: 20, trim: 21, fadeStereo: 22, declick: 23,
+  loadRegions: 24, loadSlices: 25,
 } as const
 /** The time knobs run on a square law: seconds = knob² × the longest they go. */
 const TIME_MAX_S: Partial<Record<number, number>> = { [SP.attack]: 5, [SP.delay]: 5, [SP.hold]: 5, [SP.decay]: 10, [SP.release]: 10 }
@@ -601,6 +674,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
   const def = (id: number) => defaults[id] ?? 0
   const on = (id: number) => p(id) >= 0.5
   const toggle = (id: number, label: string) => set(id, on(id) ? 0 : 1, true, label)
+  const samplerMarkers = useSampleMarkers(sample?.path || '', on(SP.loadRegions) || on(SP.loadSlices))
   const seconds = sample ? sample.frames / Math.max(1, sample.sampleRate) : 0
 
   const loadFile = async () => {
@@ -688,6 +762,10 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
             <ContentPanel
               declick={DECLICKS[Math.round(p(SP.declick) * (DECLICKS.length - 1))] ?? 'Out only'}
               onDeclick={(d) => set(SP.declick, DECLICKS.indexOf(d) / (DECLICKS.length - 1), true, `Declicking ${d}`)}
+              regions={on(SP.loadRegions)} slices={on(SP.loadSlices)}
+              onRegions={() => toggle(SP.loadRegions, on(SP.loadRegions) ? 'Hide regions' : 'Load regions')}
+              onSlices={() => toggle(SP.loadSlices, on(SP.loadSlices) ? 'Hide slice markers' : 'Load slice markers')}
+              found={samplerMarkers ? markerCounts(samplerMarkers.markers) : null}
             />
             <FlatPanel title="Playback" grow>
               <div className="hwf-krow">
@@ -778,6 +856,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
           peaks={sample?.peaks ?? []} seconds={seconds} bpm={bpm} color={color}
           region={{ start: regionStart + p(SP.offset) * regionSpan, end: regionEnd }}
           window={{ start: regionStart, end: regionEnd }}
+          markers={visibleMarkers(samplerMarkers, on(SP.loadRegions), on(SP.loadSlices))}
           loop={loop ? { start: regionStart + p(SP.loopStart) * regionSpan, end: regionStart + p(SP.loopEnd) * regionSpan } : null}
           fadeIn={0} fadeOut={0} reversed={false}
           empty={sample === null ? 'No sample yet: load one with the button above' : sample === undefined ? 'Loading…' : null}
@@ -844,7 +923,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
 
 /** The sample, wide at the bottom: what plays of it, its fades, its loop,
  *  the song's bars over it, and an overview strip under it. */
-function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = null, fadeIn, fadeOut, reversed, empty, visible = true }: {
+function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = null, markers = [], fadeIn, fadeOut, reversed, empty, visible = true }: {
   peaks: number[][]
   seconds: number
   bpm: number
@@ -853,6 +932,8 @@ function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = nu
   loop: { start: number; end: number } | null
   /** The part of the file that is the sample (sample start, length, trim). */
   window?: { start: number; end: number } | null
+  /** The file's regions, loops and slice markers the checks ask to see. */
+  markers?: DrawnMarker[]
   fadeIn: number
   fadeOut: number
   reversed: boolean
@@ -864,6 +945,7 @@ function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = nu
   const cv = useRef<HTMLCanvasElement>(null)
   const overview = useRef<HTMLCanvasElement>(null)
   const loopKey = loop ? `${loop.start}/${loop.end}` : ''
+  const markerKey = markers.map((m) => `${m.kind}${m.start}-${m.end}`).join(',')
 
   useLayoutEffect(() => {
     const c = cv.current
@@ -930,6 +1012,33 @@ function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = nu
         g.fillRect(x - 0.5, ruler, 1, h - ruler)
       }
     }
+    // The file's own markers: regions as a band with their name, its loop
+    // outlined, slice markers as a line with theirs.
+    for (const m of markers) {
+      const x0 = X(m.start)
+      if (m.kind === 'point') {
+        g.fillStyle = 'rgba(236,236,240,.55)'
+        g.fillRect(Math.round(x0), ruler, 1, h - ruler)
+        if (m.label) { g.font = '500 10px Inter, sans-serif'; g.fillText(m.label, Math.round(x0) + 3, h - 6) }
+        continue
+      }
+      const x1 = X(m.end)
+      if (m.kind === 'region') {
+        g.fillStyle = 'rgba(236,236,240,.07)'
+        g.fillRect(x0, ruler, Math.max(1, x1 - x0), h - ruler)
+        g.fillStyle = 'rgba(236,236,240,.6)'
+        g.font = '500 10px Inter, sans-serif'
+        if (m.label) g.fillText(m.label, x0 + 4, ruler + 24)
+      } else {
+        g.strokeStyle = 'rgba(236,236,240,.45)'
+        g.setLineDash([4, 3])
+        g.strokeRect(x0 + 0.5, ruler + 0.5, Math.max(1, x1 - x0 - 1), h - ruler - 1)
+        g.setLineDash([])
+        g.fillStyle = 'rgba(236,236,240,.6)'
+        g.font = '500 10px Inter, sans-serif'
+        g.fillText('file loop', x0 + 4, ruler + 24)
+      }
+    }
     if (loop && loop.end > loop.start) {
       // The loop in red, as FL draws it: its span tinted, its ends marked.
       g.fillStyle = 'rgba(220,38,38,.12)'
@@ -974,7 +1083,7 @@ function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = nu
       const a = Math.max(Math.abs(peaks[i][0]), Math.abs(peaks[i][1])) * (oh / 2 - 5)
       og.fillRect((i / n) * ow, oh / 2 - a, Math.max(1, ow / n), a * 2)
     }
-  }, [peaks, seconds, bpm, color, region.start, region.end, loopKey, win?.start, win?.end, fadeIn, fadeOut, reversed, empty, visible]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [peaks, seconds, bpm, color, region.start, region.end, loopKey, markerKey, win?.start, win?.end, fadeIn, fadeOut, reversed, empty, visible]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="sw-view">

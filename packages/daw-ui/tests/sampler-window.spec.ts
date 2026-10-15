@@ -101,6 +101,16 @@ test.describe('Sample window on a sampler channel', () => {
     await expect(page.locator('.hwf-tip')).toHaveText('Sustain 100 %')
   })
 
+  test('load regions is the sampler\'s setting', async ({ page }) => {
+    await page.locator('.sw-win .hwf-check', { hasText: 'Load regions' }).click()
+    const calls = await paramCalls(page)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].args?.paramId).toBe(24)
+    expect(calls[0].args?.value).toBe(1)
+    await page.locator('.sw-win .hwf-check', { hasText: 'Load regions' }).hover()
+    await expect(page.locator('.hwf-tip')).toHaveText('The file has 2 regions and loops')
+  })
+
   test('Escape closes it', async ({ page }) => {
     await page.keyboard.press('Escape')
     await expect(page.locator('.sw-win')).toHaveCount(0)

@@ -60,7 +60,11 @@ pub const PARAM_TRIM: u32 = 21;
 pub const PARAM_FADE_STEREO: u32 = 22;
 /// FL's declicking mode: the tiny fades at a note's start and at a cut.
 pub const PARAM_DECLICK: u32 = 23;
-pub const PARAM_COUNT: u32 = 24;
+/// Show the file's regions and slice markers in the sample window (FL's
+/// "load regions" and "load slice markers"); the sound does not change.
+pub const PARAM_LOAD_REGIONS: u32 = 24;
+pub const PARAM_LOAD_SLICES: u32 = 25;
+pub const PARAM_COUNT: u32 = 26;
 
 /// The time knobs run on a square law (fine near zero, as FL's do):
 /// seconds = knob² × the longest they go.
@@ -856,6 +860,8 @@ impl HostedPlugin for NativeSampler {
             PARAM_TRIM => ("Trim", ""),
             PARAM_FADE_STEREO => ("Fade stereo", ""),
             PARAM_DECLICK => ("Declicking", ""),
+            PARAM_LOAD_REGIONS => ("Load regions", ""),
+            PARAM_LOAD_SLICES => ("Load slice markers", ""),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -890,7 +896,9 @@ impl HostedPlugin for NativeSampler {
             PARAM_HOLD => format::secs(knob_seconds(v, HOLD_MAX_S, 0.0) as f64),
             PARAM_DECAY => format::secs(knob_seconds(v, DECAY_MAX_S, 0.001) as f64),
             PARAM_ENVELOPE | PARAM_LOOP | PARAM_PING_PONG | PARAM_MONO | PARAM_CUT_ITSELF
-            | PARAM_PORTA | PARAM_FADE_STEREO => format::on_off(v as f64),
+            | PARAM_PORTA | PARAM_FADE_STEREO | PARAM_LOAD_REGIONS | PARAM_LOAD_SLICES => {
+                format::on_off(v as f64)
+            }
             PARAM_OFFSET | PARAM_LOOP_START | PARAM_LOOP_END | PARAM_SAMPLE_START
             | PARAM_SAMPLE_LENGTH | PARAM_XFADE => format::pct(v as f64),
             PARAM_TRIM => {
