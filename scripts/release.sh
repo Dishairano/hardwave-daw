@@ -225,7 +225,9 @@ echo "Version: $CURRENT -> $NEW_VERSION"
 #   - fix: ...        → Bug fixes
 #   - improve: ...    → Improvements (also: perf:, refactor:, ui:, ux:)
 # Bullets without a recognized prefix fall into Improvements.
-LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+# Only release tags (v1.2.3): test-build tags (fast-v...) sit on the same
+# commits and would otherwise cut the changelog down to nothing.
+LAST_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo "")
 FEATURES=""
 FIXES=""
 IMPROVEMENTS=""

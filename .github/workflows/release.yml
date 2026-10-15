@@ -108,7 +108,8 @@ jobs:
           fi
           if [ -z "$TAG_MSG" ] || [ "$TAG_MSG" = "$GITHUB_REF_NAME" ]; then
             # Fallback: generate from commits since previous tag
-            PREV_TAG=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
+            # Release tags only; test-build tags (fast-v...) share commits.
+            PREV_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
             if [ -n "$PREV_TAG" ]; then
               TAG_MSG=$(git log "${PREV_TAG}..${GITHUB_REF_NAME}" --pretty=format:"- %s" --no-merges | grep -v "^- Release\|^- v[0-9]" || echo "- Bug fixes and improvements")
             else
