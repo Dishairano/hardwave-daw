@@ -142,6 +142,11 @@ jobs:
         run: |
           npm install
           npm run tauri:build -- --no-bundle
+          # The DAW's build runs next, and the Tauri CLI checks its Rust
+          # crates against the npm packages of the first folder with a
+          # package.json it finds, which is this one. Left here, the
+          # launcher's packages fail the DAW's build on any version drift.
+          rm -rf node_modules
 
       - name: Sign the launcher and put it in the bundle
         shell: pwsh
