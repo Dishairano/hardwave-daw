@@ -24,6 +24,10 @@ $account  = $env:AZURE_TRUSTED_SIGNING_ACCOUNT
 $profile  = $env:AZURE_TRUSTED_SIGNING_PROFILE
 $isRelease = "$env:GITHUB_REF" -like 'refs/tags/v*'
 
+# First, whether it would start on a clean Windows at all: a binary that
+# needs the Visual C++ runtime is not signed, signing keys or not.
+& (Join-Path $PSScriptRoot 'check-windows-imports.ps1') $File
+
 function Skip-Or-Stop([string] $why) {
     if ($isRelease) {
         throw "sign-windows: $why, and this is a release ($env:GITHUB_REF_NAME): it must be signed"

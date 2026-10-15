@@ -6,3 +6,16 @@
 # CARGO_INCREMENTAL=0 via env, which overrides this).
 [build]
 incremental = true
+
+# Windows: link the C and C++ runtimes into our binaries. Windows carries
+# the C runtime (UCRT) but not the Visual C++ one (vcruntime140.dll,
+# msvcp140.dll); tauri-build already links vcruntime in for the app, but
+# Ableton Link's C++ was built against msvcp140.dll, so the DAW did not
+# start on a Windows without the Visual C++ Redistributable. With
+# crt-static the cc and cmake crates build C and C++ with /MT too.
+# scripts/check-windows-imports.ps1 refuses a binary that still needs it.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
