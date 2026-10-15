@@ -1295,18 +1295,18 @@ pub fn get_plugin_parameters(
     let saved = || {
         let engine = state.engine.lock();
         let project = engine.project.lock();
-        project
-            .track(&track_id)
-            .and_then(|t| t.inserts.iter().find(|s| s.id == slot_id))
-            .and_then(|s| s.state.clone())
+        saved_slot_state(&project, &track_id, &slot_id)
     };
     let had_live = live.is_some();
     if let Some(bytes) = live.or_else(saved) {
         let _ = plugin.set_state(&bytes);
     }
     // No answer from the audio thread (the device dropped out, the stream
-    // is down): the knobs the app sent are the best picture there is.
-    if !had_live {
+    // is down): the knobs the app sent are the best picture there is. Not
+    // for the sampler: its saved state follows every knob already, and a
+    // newly loaded sample or an undo replaces it, which the knobs sent
+    // before would then paint over.
+    if !had_live && plugin_id != NativeSampler::ID {
         if let Some(shadow) = state
             .slot_param_shadow
             .lock()
@@ -1445,6 +1445,27 @@ pub fn load_sampler(
     Ok(())
 }
 
+/// What a slot saved last: the project's copy of its plug-in state, where
+/// the app keeps it (a loaded sample, a knob on a sampler channel), or the
+/// slot's own copy from an older song.
+fn saved_slot_state(
+    project: &hardwave_project::Project,
+    track_id: &str,
+    slot_id: &str,
+) -> Option<Vec<u8>> {
+    project
+        .plugin_state(slot_id)
+        .map(|e| e.chunk.clone())
+        .filter(|b| !b.is_empty())
+        .or_else(|| {
+            project
+                .track(track_id)
+                .and_then(|t| t.inserts.iter().find(|s| s.id == slot_id))
+                .and_then(|s| s.state.clone())
+        })
+        .filter(|b| !b.is_empty())
+}
+
 /// One marker a sample file carries (a cue point, a region, a loop), in
 /// frames of the file.
 #[derive(Serialize)]
@@ -1558,17 +1579,9 @@ pub fn get_sampler_sample(
     let bytes = {
         let engine = state.engine.lock();
         let project = engine.project.lock();
-        project
-            .plugin_state(&slot_id)
-            .map(|e| e.chunk.clone())
-            .or_else(|| {
-                project
-                    .track(&track_id)
-                    .and_then(|t| t.inserts.iter().find(|s| s.id == slot_id))
-                    .and_then(|s| s.state.clone())
-            })
+        saved_slot_state(&project, &track_id, &slot_id)
     };
-    let Some(bytes) = bytes.filter(|b| !b.is_empty()) else {
+    let Some(bytes) = bytes else {
         return Ok(None);
     };
     let s = sampler::decode_sample_state(&bytes)
@@ -2228,6 +2241,21 @@ pub fn restart_sandboxed_plugin(
 #[cfg(test)]
 mod sampler_window_tests {
     use super::*;
+
+    #[test]
+    fn a_slot_s_saved_state_is_the_project_s_copy() {
+        // The sampler's state lives in the project's plug-in states, not on
+        // the slot: reading only the slot showed a loaded sample's loop as
+        // the defaults whenever the audio thread did not answer.
+        let mut project = hardwave_project::Project::default();
+        assert_eq!(saved_slot_state(&project, "track", "slot"), None);
+        project.set_plugin_state("slot".to_string(), "native-sampler", vec![1, 2, 3]);
+        assert_eq!(
+            saved_slot_state(&project, "track", "slot"),
+            Some(vec![1, 2, 3])
+        );
+        assert_eq!(saved_slot_state(&project, "track", "other"), None);
+    }
 
     #[test]
     fn a_new_sample_keeps_the_channel_s_settings_and_brings_its_root_and_loop() {
