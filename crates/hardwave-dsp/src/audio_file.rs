@@ -111,42 +111,41 @@ pub fn resample_channels(
     )
     .map_err(|e| AudioFileError::Decode(format!("resampler init: {e}")))?;
 
+    // The resampler's output runs `delay` frames behind its input. Kept as
+    // it came, every resampled sample played that much late (6.7 ms at
+    // 48 kHz to 44.1 kHz) and lost as much of its end. So the first `delay`
+    // frames are dropped, silence is fed after the last input until the
+    // whole tail is out, and the result is cut to the exact length.
     let input_frames = channels[0].len();
-    let mut out: Vec<Vec<f32>> = (0..num_channels).map(|_| Vec::new()).collect();
+    let ratio = dst_sr as f64 / src_sr as f64;
+    let expected = (input_frames as f64 * ratio).round() as usize;
+    let delay = resampler.output_delay();
+    let mut out: Vec<Vec<f32>> = (0..num_channels)
+        .map(|_| Vec::with_capacity(expected + delay + chunk_size * 2))
+        .collect();
+    let mut chunk: Vec<Vec<f32>> = vec![vec![0.0; chunk_size]; num_channels];
     let mut cursor = 0_usize;
-
-    while cursor + chunk_size <= input_frames {
-        let input_slices: Vec<&[f32]> = channels
-            .iter()
-            .map(|ch| &ch[cursor..cursor + chunk_size])
-            .collect();
+    while out[0].len() < expected + delay {
+        // The next block of input: the file while it lasts, then silence.
+        let have = input_frames.saturating_sub(cursor).min(chunk_size);
+        for (dst, src) in chunk.iter_mut().zip(channels) {
+            if have > 0 {
+                dst[..have].copy_from_slice(&src[cursor..cursor + have]);
+            }
+            dst[have..].fill(0.0);
+        }
+        let input_slices: Vec<&[f32]> = chunk.iter().map(|v| v.as_slice()).collect();
         let processed = resampler
             .process(&input_slices, None)
             .map_err(|e| AudioFileError::Decode(format!("resample: {e}")))?;
-        for (ch_idx, chunk) in processed.into_iter().enumerate() {
-            out[ch_idx].extend_from_slice(&chunk);
+        for (ch_idx, block) in processed.into_iter().enumerate() {
+            out[ch_idx].extend_from_slice(&block);
         }
         cursor += chunk_size;
     }
-    if cursor < input_frames {
-        let remaining = input_frames - cursor;
-        let padded: Vec<Vec<f32>> = channels
-            .iter()
-            .map(|ch| {
-                let mut v = ch[cursor..].to_vec();
-                v.resize(chunk_size, 0.0);
-                v
-            })
-            .collect();
-        let input_slices: Vec<&[f32]> = padded.iter().map(|v| v.as_slice()).collect();
-        if let Ok(processed) = resampler.process(&input_slices, None) {
-            let ratio = dst_sr as f64 / src_sr as f64;
-            let keep = (remaining as f64 * ratio).round() as usize;
-            for (ch_idx, chunk) in processed.into_iter().enumerate() {
-                let take = keep.min(chunk.len());
-                out[ch_idx].extend_from_slice(&chunk[..take]);
-            }
-        }
+    for ch in &mut out {
+        ch.drain(..delay.min(ch.len()));
+        ch.truncate(expected);
     }
     Ok(out)
 }
@@ -351,5 +350,65 @@ mod hostile_files {
         assert!(read(&wav(1, 1, 16)).is_err());
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
         assert!(resample_channels(&[vec![0.0; 16]], 4_294_967_291, 48_000).is_err());
+    }
+}
+
+#[cfg(test)]
+mod resampling {
+    use super::*;
+
+    /// Where the loudest sample sits within `range`.
+    fn peak_in(ch: &[f32], range: std::ops::Range<usize>) -> usize {
+        range
+            .max_by(|a, b| ch[*a].abs().total_cmp(&ch[*b].abs()))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_resampled_sample_keeps_its_timing_and_its_end() {
+        // A click near the start and one near the end. Before, both came
+        // out 6.7 ms late at 48 to 44.1 kHz and the last 10 ms were cut.
+        for (src, dst) in [
+            (48_000u32, 44_100u32),
+            (44_100, 48_000),
+            (96_000, 48_000),
+            (22_050, 48_000),
+        ] {
+            let n = src as usize * 2;
+            let mut ch = vec![0.0f32; n];
+            ch[1000] = 1.0;
+            ch[n - 2000] = 1.0;
+            let out = resample_channels(&[ch.clone(), ch], src, dst).unwrap();
+            let ratio = dst as f64 / src as f64;
+            let len = out[0].len();
+            assert_eq!(
+                len,
+                (n as f64 * ratio).round() as usize,
+                "{src}->{dst}: length"
+            );
+            assert_eq!(out[1].len(), len);
+            let first = peak_in(&out[0], 0..len / 2) as f64;
+            let last = peak_in(&out[0], len / 2..len) as f64;
+            assert!(
+                (first - 1000.0 * ratio).abs() <= 1.0,
+                "{src}->{dst}: first click at {first}"
+            );
+            assert!(
+                (last - (n - 2000) as f64 * ratio).abs() <= 1.0,
+                "{src}->{dst}: last click at {last}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_short_sample_comes_through_whole() {
+        // Shorter than one block of the resampler.
+        let ch: Vec<f32> = (0..300).map(|i| (i as f32 * 0.05).sin()).collect();
+        let out = resample_channels(&[ch], 48_000, 44_100).unwrap();
+        assert_eq!(
+            out[0].len(),
+            (300.0f64 * 44_100.0 / 48_000.0).round() as usize
+        );
+        assert!(out[0].iter().any(|v| v.abs() > 0.5), "the sound is there");
     }
 }
