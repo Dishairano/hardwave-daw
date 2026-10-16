@@ -8,6 +8,9 @@ edition.workspace = true
 default = []
 jack = ["hardwave-engine/jack"]
 asio = ["hardwave-engine/asio"]
+# The Dev Panel's commands (state dump, forced device error, test files).
+# On in debug builds and the signed test builds; never in a release.
+dev-tools = []
 
 [build-dependencies]
 tauri-build.workspace = true

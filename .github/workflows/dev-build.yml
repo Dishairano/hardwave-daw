@@ -50,7 +50,10 @@ jobs:
           cache: npm
           cache-dependency-path: packages/daw-ui/package-lock.json
 
+      # Dev builds carry the Dev Panel; releases do not.
       - name: Build frontend
+        env:
+          VITE_HW_DEV_TOOLS: "1"
         run: |
           cd packages/daw-ui
           npm ci
@@ -252,7 +255,7 @@ jobs:
         with:
           tagName: ''
           tauriScript: tauri
-          args: --target ${{ matrix.target }} --features jack --config src-tauri/tauri.unsigned.conf.json
+          args: --target ${{ matrix.target }} --features jack,dev-tools --config src-tauri/tauri.unsigned.conf.json
 
       - name: Build Windows (with ASIO)
         if: matrix.platform == 'windows-latest'
@@ -264,7 +267,7 @@ jobs:
         with:
           tagName: ''
           tauriScript: tauri
-          args: --target ${{ matrix.target }} --features asio --config src-tauri/tauri.unsigned.conf.json
+          args: --target ${{ matrix.target }} --features asio,dev-tools --config src-tauri/tauri.unsigned.conf.json
 
       - name: Build macOS
         if: matrix.platform == 'macos-latest'
@@ -274,7 +277,7 @@ jobs:
         with:
           tagName: ''
           tauriScript: tauri
-          args: --target ${{ matrix.target }} --config src-tauri/tauri.unsigned.conf.json
+          args: --target ${{ matrix.target }} --features dev-tools --config src-tauri/tauri.unsigned.conf.json
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

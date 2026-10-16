@@ -84,12 +84,16 @@ import { MobileTabBar, type MobilePanel } from './components/MobileTabBar'
 import { MissingPluginsBanner } from './components/MissingPluginsBanner'
 import { syncWaitForInput, useRecordingPrefsStore } from './stores/recordingPrefsStore'
 import { useMissingPluginsStore, type MissingPluginInfo } from './stores/missingPluginsStore'
-// Lazy: the DevPanel drags the whole in-app test harness (~7k lines)
-// with it — as a static import it sat in the STARTUP bundle for every
-// user. Now it's a separate chunk fetched on first Ctrl+Shift+D.
-const DevPanel = React.lazy(() =>
-  import('./dev/DevPanel').then(m => ({ default: m.DevPanel })),
-)
+// The Dev Panel (Ctrl+Shift+D) and its test harness are for development
+// and the signed test builds (VITE_HW_DEV_TOOLS=1), never a release: it
+// can run its test suites on the open song, and the Workspace's hidden
+// panel once exposed data it should not have. With the flag off at build
+// time the panel is not even in the bundle. Lazy where it is: the harness
+// is ~7k lines and used to sit in every user's startup bundle.
+const DEV_TOOLS = import.meta.env.DEV || import.meta.env.VITE_HW_DEV_TOOLS === '1'
+const DevPanel = DEV_TOOLS
+  ? React.lazy(() => import('./dev/DevPanel').then(m => ({ default: m.DevPanel })))
+  : null
 import { useTransportStore } from './stores/transportStore'
 import { startTimelineSync } from './stores/timelineState'
 import { useTrackStore } from './stores/trackStore'
@@ -1709,7 +1713,7 @@ export function App() {
       const tracks = useTrackStore.getState()
 
       // Dev-only shortcut — hardcoded, not user-rebindable.
-      if (e.code === 'KeyD' && e.ctrlKey && e.shiftKey) {
+      if (DEV_TOOLS && e.code === 'KeyD' && e.ctrlKey && e.shiftKey) {
         e.preventDefault()
         setShowDevPanel(v => !v)
         return
@@ -2489,7 +2493,7 @@ export function App() {
       {showTempoMap && <TempoMapDialog onClose={() => setShowTempoMap(false)} />}
       {showHistory && <HistoryPanel onClose={() => setShowHistory(false)} />}
       <PrecountOverlay />
-      {showDevPanel && (
+      {DevPanel && showDevPanel && (
         <Suspense fallback={null}>
           <DevPanel onClose={() => setShowDevPanel(false)} />
         </Suspense>
