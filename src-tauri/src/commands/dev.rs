@@ -1,8 +1,21 @@
-//! Dev-only commands used by the hidden Dev Panel to verify Phase 1 features.
+//! Commands for the Dev Panel (`packages/daw-ui/src/dev/`), the in-app
+//! test harness.
 //!
-//! These commands are NOT shipped in `master`. They live on the `dev` branch
-//! and are surgically removed before merging to `master`. See
-//! `packages/daw-ui/src/dev/` for the matching UI.
+//! They answer only in debug builds and builds with the `dev-tools` feature
+//! (the signed test builds); in a release each one refuses. A release used
+//! to carry them, and the panel behind Ctrl+Shift+D with them, although
+//! this comment said otherwise: the Workspace's hidden panel once exposed
+//! data it should not have, and this one can run its test suites on the
+//! song that is open.
+
+/// Refuse outside the builds the Dev Panel is for.
+fn dev_tools_only() -> Result<(), String> {
+    if cfg!(any(debug_assertions, feature = "dev-tools")) {
+        Ok(())
+    } else {
+        Err("the dev tools are not in this build".to_string())
+    }
+}
 
 use crate::AppState;
 use serde::Serialize;
@@ -55,7 +68,8 @@ pub struct DevTrackMeter {
 }
 
 #[tauri::command]
-pub fn dev_dump_state(state: State<AppState>) -> DevState {
+pub fn dev_dump_state(state: State<AppState>) -> Result<DevState, String> {
+    dev_tools_only()?;
     let mut engine = state.engine.lock();
     let t = engine.transport.clone();
     let meter = engine.master_meter();
@@ -71,7 +85,7 @@ pub fn dev_dump_state(state: State<AppState>) -> DevState {
     let packed = t.time_sig.load(Ordering::Relaxed);
     let (num, den) = hardwave_engine::transport::unpack_time_sig(packed);
 
-    DevState {
+    Ok(DevState {
         position_samples: t.position(),
         playing: t.is_playing(),
         recording: t.recording.load(Ordering::Relaxed),
@@ -105,21 +119,24 @@ pub fn dev_dump_state(state: State<AppState>) -> DevState {
                 pre_fader_peak_db: pre_fader,
             })
             .collect(),
-    }
+    })
 }
 
 /// Flip the audio-device stream_error atomic so the engine's health-poll
 /// recovery path runs for real.
 #[tauri::command]
-pub fn dev_force_device_error(state: State<AppState>) {
+pub fn dev_force_device_error(state: State<AppState>) -> Result<(), String> {
+    dev_tools_only()?;
     let engine = state.engine.lock();
     engine.audio_device_manager().inject_stream_error();
+    Ok(())
 }
 
 /// Resolve a bundled test-asset path to an absolute filesystem path that
 /// `import_audio_file` can load.
 #[tauri::command]
 pub fn dev_resolve_test_asset(app: AppHandle, name: String) -> Result<String, String> {
+    dev_tools_only()?;
     let path = app
         .path()
         .resolve(
@@ -134,13 +151,14 @@ pub fn dev_resolve_test_asset(app: AppHandle, name: String) -> Result<String, St
 
 /// List the test assets bundled with the dev build.
 #[tauri::command]
-pub fn dev_list_test_assets() -> Vec<&'static str> {
-    vec![
+pub fn dev_list_test_assets() -> Result<Vec<&'static str>, String> {
+    dev_tools_only()?;
+    Ok(vec![
         "sine_1khz_-6dbfs_stereo_5s.wav",
         "pink_noise_-12dbfs_10s.wav",
         "tone_burst_silence.wav",
         "stereo_pan_test.wav",
         "sine-440-1s.wav",
         "sine_44100.wav",
-    ]
+    ])
 }

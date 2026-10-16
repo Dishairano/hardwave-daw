@@ -76,11 +76,13 @@ jobs:
 
       - name: Frontend
         working-directory: packages/daw-ui
+        env:
+          VITE_HW_DEV_TOOLS: "1"
         run: npm ci && npm run build
 
       - name: Build the installer
         working-directory: src-tauri
-        run: npx --yes @tauri-apps/cli@2.11.5 build --target x86_64-pc-windows-msvc --features asio --bundles nsis --config tauri.unsigned.conf.json
+        run: npx --yes @tauri-apps/cli@2.11.5 build --target x86_64-pc-windows-msvc --features asio,dev-tools --bundles nsis --config tauri.unsigned.conf.json
 
       - name: Put it where the founder can find it
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect-test-installer.ps1

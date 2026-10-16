@@ -51,8 +51,12 @@ jobs:
         with:
           node-version: 20
 
+      # A test build carries the Dev Panel and its test files; a release
+      # does not (see src-tauri/src/commands/dev.rs).
       - name: Build frontend
         shell: bash
+        env:
+          VITE_HW_DEV_TOOLS: "1"
         run: |
           cd packages/daw-ui
           npm ci || npm install
@@ -190,7 +194,7 @@ jobs:
           AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
         # Inline instead of tauri.unsigned.conf.json: that file also drops
         # the signCommand, and this lane keeps it.
-        run: tauri build --target x86_64-pc-windows-msvc --features asio --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: tauri build --target x86_64-pc-windows-msvc --features asio,dev-tools --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false,"resources":["test_assets/*","binaries/*"]}}'
 
       - name: Check the installer's signature
         shell: pwsh

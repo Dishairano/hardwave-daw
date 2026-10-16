@@ -1,6 +1,10 @@
 {
   "bundle": {
     "createUpdaterArtifacts": false,
+    "resources": [
+      "test_assets/*",
+      "binaries/*"
+    ],
     "windows": {
       "signCommand": null
     }
