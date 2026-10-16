@@ -279,6 +279,16 @@ while IFS= read -r hash || [[ -n "$hash" ]]; do
   BULLETS=$(echo "$BODY" | grep '^\s*[-*]' | sed 's/^\s*//; s/^\*/-/' || true)
   HAD_BULLETS=0
   [ -n "$BULLETS" ] && HAD_BULLETS=1
+  # A commit that marks its release lines with a prefix (feat:, fix: ...,
+  # or internal:) uses plain "- " lines as prose: a list of causes in the
+  # message, often wrapped over two lines. Only the prefixed lines are
+  # release notes then. v0.261.0's preview announced "every node scanned
+  # every edge each block to find its inputs; each" that way, and then the
+  # causes listed beside an `- internal:` line.
+  RELEASE_PREFIX='^- (feat|feature|add|new|fix|bug|bugfix|improve|perf|refactor|ui|ux|chore|internal):'
+  if printf '%s\n' "$BULLETS" | grep -qE "$RELEASE_PREFIX"; then
+    BULLETS=$(printf '%s\n' "$BULLETS" | grep -E "$RELEASE_PREFIX" || true)
+  fi
   # `- internal:` is the explicit opt-out for a change inside a product commit
   # that users have no way to observe.
   BULLETS=$(printf '%s\n' "$BULLETS" | grep -v '^- internal:' || true)
@@ -288,15 +298,6 @@ while IFS= read -r hash || [[ -n "$hash" ]]; do
   # the struct" to users in exactly that way.
   if [ "$HAD_BULLETS" = "1" ] && [ -z "$BULLETS" ]; then
     continue
-  fi
-  # A commit that marks its release lines with a prefix (feat:, fix: ...)
-  # uses plain "- " lines as prose: a list of causes in the message, often
-  # wrapped over two lines. Only the prefixed lines are release notes then.
-  # v0.261.0's preview announced "every node scanned every edge each block
-  # to find its inputs; each" that way.
-  RELEASE_PREFIX='^- (feat|feature|add|new|fix|bug|bugfix|improve|perf|refactor|ui|ux|chore):'
-  if printf '%s\n' "$BULLETS" | grep -qE "$RELEASE_PREFIX"; then
-    BULLETS=$(printf '%s\n' "$BULLETS" | grep -E "$RELEASE_PREFIX" || true)
   fi
   if [ -n "$BULLETS" ]; then
     BULLETS=$(echo "$BULLETS" | grep -iv \
