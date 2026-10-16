@@ -241,7 +241,9 @@ mod windows_impl {
     /// After a removal: once this program has exited, delete it and the
     /// install folders it leaves, each only when empty (`rmdir` without
     /// `/s`). Windows cannot delete a running program, so a cmd that waits
-    /// two seconds does it.
+    /// three seconds does it. It waits with `ping`: `timeout` needs a
+    /// console and, started without one, quits at once, so the delete ran
+    /// while this program was still open and left it behind.
     pub fn clean_up_after(dir: &Path) {
         let Ok(exe) = std::env::current_exe() else {
             return;
@@ -250,7 +252,7 @@ mod windows_impl {
             return;
         }
         let cmd = format!(
-            "timeout /t 2 /nobreak > nul & del /f /q \"{}\" & rmdir \"{}\" & rmdir \"{}\"",
+            "ping -n 4 127.0.0.1 > nul & del /f /q \"{}\" & rmdir \"{}\" & rmdir \"{}\"",
             exe.display(),
             dir.join("binaries").display(),
             dir.display()
