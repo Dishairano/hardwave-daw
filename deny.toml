@@ -16,7 +16,20 @@ yanked = "deny"
 # come in under Tauri or GTK are reported but cannot be replaced from
 # here; they go when the framework moves on.
 unmaintained = "workspace"
-ignore = []
+ignore = [
+    # Every zip release below 9.0.3 was yanked (October 2026) over three
+    # high advisories in ZipArchive::extract and ZipStreamReader::extract:
+    # symlinks that point outside the destination, permissions applied
+    # through symlinks, and SUID/SGID bits kept (GHSA-4v9h-p7m9-rh26,
+    # GHSA-4684-h2q9-2vcp, GHSA-vv5m-jxxh-4627). Nothing of ours uses zip;
+    # tauri-plugin-updater does, on Windows only, and even its newest
+    # release (2.14.0) asks for zip ^4. It unpacks the update archive only
+    # after checking it against the DAW's minisign signature, so the
+    # archive is ours; and Windows has no Unix permission bits. Remove this
+    # when the updater moves to zip 9 or the updater artifacts stop being
+    # zips.
+    { crate = "zip@4.6.1", reason = "yanked; only under tauri-plugin-updater, which unpacks archives signed by us (see comment)" },
+]
 
 [licenses]
 # Licences that let us ship a closed-source, sold product.

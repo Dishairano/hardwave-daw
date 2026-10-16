@@ -45,7 +45,6 @@ semver = "1"
 # index.html for src/href asset references. We strip prefixes manually
 # rather than parse HTML — the regex is enough for Vite's emit format.
 regex = { version = "1", default-features = false, features = ["std"] }
-zip = { version = "4", default-features = false, features = ["deflate"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 url = "2"
