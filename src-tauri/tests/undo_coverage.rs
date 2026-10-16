@@ -132,6 +132,10 @@ fn is_a_getter(name: &str) -> bool {
 fn command_bodies(src: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for chunk in src.split("#[tauri::command]").skip(1) {
+        // A chunk runs to the next command, and the last one to the end of
+        // the file: its tests are not its body. A test that saved plug-in
+        // state once made the last command in plugins.rs look like an edit.
+        let chunk = chunk.split("#[cfg(test)]").next().unwrap_or(chunk);
         let Some(idx) = chunk.find("fn ") else {
             continue;
         };
