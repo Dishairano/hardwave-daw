@@ -17,6 +17,9 @@
 //! The folder it removes is always the one it sits in; nothing on the
 //! command line can point it anywhere else.
 
+// Removing is Windows-only: elsewhere only the tests use what follows.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 use std::path::{Path, PathBuf};
 
 /// The uninstaller's file name inside `<install dir>\binaries`.
@@ -220,7 +223,7 @@ mod windows_impl {
         step(2, "Removed the shortcuts");
         // What NSIS leaves when it runs in place: its own uninstaller.
         // This program and the folders go once it has exited
-        // (`clean_up_after`).
+        // (`clean_up_after`, below).
         let _ = std::fs::remove_file(dir.join(NSIS_UNINSTALLER));
 
         step(3, "Removed it from Windows Apps");
@@ -235,30 +238,36 @@ mod windows_impl {
                 }
             }
         }
+        clean_up_after(dir);
         Ok(())
     }
 
-    /// After a removal: once this program has exited, delete it and the
-    /// install folders it leaves, each only when empty (`rmdir` without
-    /// `/s`). Windows cannot delete a running program, so a cmd that waits
-    /// three seconds does it. It waits with `ping`: `timeout` needs a
-    /// console and, started without one, quits at once, so the delete ran
-    /// while this program was still open and left it behind.
-    pub fn clean_up_after(dir: &Path) {
+    /// After a removal: delete this program and the install folders it
+    /// leaves, each only when empty (`rmdir` without `/s`), as soon as it
+    /// has exited. Windows cannot delete a running program, so a hidden
+    /// cmd tries once a second for ten minutes (the window can stay open
+    /// on its last screen) and stops when the delete went through. Started
+    /// here, not when the app exits: a window run never got to its exit
+    /// handler's clean-up. It waits with `ping`, because `timeout` needs a
+    /// console and quits at once without one.
+    fn clean_up_after(dir: &Path) {
         let Ok(exe) = std::env::current_exe() else {
             return;
         };
         if !exe.starts_with(dir) {
             return;
         }
+        let exe = exe.display();
         let cmd = format!(
-            "ping -n 4 127.0.0.1 > nul & del /f /q \"{}\" & rmdir \"{}\" & rmdir \"{}\"",
-            exe.display(),
-            dir.join("binaries").display(),
-            dir.display()
+            "for /l %i in (1,1,600) do @(ping -n 2 127.0.0.1 >nul & del /f /q \"{exe}\" 2>nul & if not exist \"{exe}\" (rmdir \"{bin}\" 2>nul & rmdir \"{dir}\" 2>nul & exit))",
+            bin = dir.join("binaries").display(),
+            dir = dir.display(),
         );
+        // Passed as written: cmd reads its own command line, not the
+        // quoting Rust would add around one argument.
         let _ = std::process::Command::new("cmd.exe")
-            .args(["/C", &cmd])
+            .arg("/C")
+            .raw_arg(&cmd)
             .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
             .spawn();
     }
