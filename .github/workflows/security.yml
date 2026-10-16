@@ -46,6 +46,32 @@ jobs:
         with:
           command: check advisories bans licenses sources
 
+  # The launcher under installer/ has lock files of its own, and it is no
+  # small thing: it downloads and runs the DAW's installer, and it is the
+  # DAW's uninstaller. It went unchecked until rustls 0.23.45 and a
+  # yanked zip sat in its lock while the DAW's own were clean.
+  launcher-dependencies:
+    name: Launcher and uninstaller dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: installer/src-tauri/Cargo.toml
+          arguments: --config deny.toml
+          command: check advisories bans licenses sources
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      # What ships in the launcher. Its build tools (vite 5, tailwind 3)
+      # need major upgrades to clear their advisories and are audited
+      # once those are done.
+      - name: Audit the shipped packages
+        working-directory: installer
+        run: npm audit --omit=dev --audit-level=moderate
+
   ui-dependencies:
     name: UI dependencies (npm audit)
     runs-on: ubuntu-latest
