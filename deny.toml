@@ -29,6 +29,11 @@ ignore = [
     # when the updater moves to zip 9 or the updater artifacts stop being
     # zips.
     { crate = "zip@4.6.1", reason = "yanked; only under tauri-plugin-updater, which unpacks archives signed by us (see comment)" },
+    # The same three issues, published as RustSec advisories on the night
+    # of 17 Oct (they stopped that night's release). Same reasons as above.
+    { id = "RUSTSEC-2026-0367", reason = "SUID/SGID bits kept on extract: Unix only; the updater unpacks our own signed archive on Windows" },
+    { id = "RUSTSEC-2026-0368", reason = "symlinks outside the destination on extract: the updater unpacks our own signed archive" },
+    { id = "RUSTSEC-2026-0369", reason = "Unix permissions applied through symlinks on extract: Unix only; our own signed archive" },
 ]
 
 [licenses]
