@@ -29,6 +29,10 @@ pub enum ProbeOutcome {
     Ok,
     /// The child died. Carries whatever the operating system said.
     Crashed { detail: String },
+    /// The plug-in loaded but would not start: it reported that it could
+    /// not be loaded (the probe's exit code 1). Not a crash, and the
+    /// message must not say it was one.
+    Refused { detail: String },
     /// The child was still running when the timeout expired.
     TimedOut,
     /// The probe itself could not be run. Not the plug-in's fault, so this
@@ -58,6 +62,10 @@ impl ProbeOutcome {
                 "{plugin_name} crashed while loading, so it has been switched off to keep your project open. \
                  Reinstall it or update it, then re-enable it in the plug-in manager. ({detail})"
             )),
+            ProbeOutcome::Refused { detail } => Some(format!(
+                "{plugin_name} could not be loaded, so it has been switched off. \
+                 Reinstall it or update it, then re-enable it in the plug-in manager. ({detail})"
+            )),
             ProbeOutcome::TimedOut => Some(format!(
                 "{plugin_name} did not finish loading after {} seconds, so it has been switched off to keep \
                  the DAW responsive. It may be waiting for a licence check. Re-enable it in the plug-in manager.",
@@ -84,7 +92,7 @@ pub fn classify(result: ChildResult) -> ProbeOutcome {
         ChildResult::ExitedOk => ProbeOutcome::Ok,
         // The probe child reports a refusal to load with exit code 1 and a
         // message; anything else is the plug-in taking the process down.
-        ChildResult::ExitedWithCode(1) => ProbeOutcome::Crashed {
+        ChildResult::ExitedWithCode(1) => ProbeOutcome::Refused {
             detail: "the plug-in reported that it could not be loaded".to_string(),
         },
         ChildResult::ExitedWithCode(code) => ProbeOutcome::Crashed {
@@ -347,6 +355,29 @@ mod tests {
             None,
             "a changed plug-in is probed again"
         );
+    }
+
+    #[test]
+    fn a_plug_in_that_refuses_to_load_is_not_called_a_crash() {
+        // Exit code 1 is the probe saying the plug-in would not start (a
+        // CLAP factory that returned null, say). Calling that a crash sent
+        // people looking for a crash that never happened.
+        let outcome = classify(ChildResult::ExitedWithCode(1));
+        assert!(
+            matches!(outcome, ProbeOutcome::Refused { .. }),
+            "got {outcome:?}"
+        );
+        assert!(!outcome.is_safe_to_load());
+        let text = outcome.message("WideBoi").unwrap();
+        assert!(
+            text.contains("could not be loaded") && !text.contains("crashed"),
+            "{text}"
+        );
+        // Any other exit code is still the plug-in taking the process down.
+        assert!(matches!(
+            classify(ChildResult::ExitedWithCode(-1073741819)),
+            ProbeOutcome::Crashed { .. }
+        ));
     }
 
     #[test]

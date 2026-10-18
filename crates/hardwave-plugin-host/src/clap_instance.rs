@@ -149,7 +149,10 @@ impl ClapPluginInstance {
         host.host_data = &*host_ctx as *const ClapHostContext as *mut c_void;
         host.get_extension = clap_host_get_extension;
 
-        let plugin_id_c = CString::new(descriptor.id.as_bytes())
+        // The DAW keeps CLAP plug-ins under "clap:<id>"; the factory knows
+        // them by the id alone. Passing the DAW's form made every CLAP
+        // plug-in come back null, so none of them ever loaded.
+        let plugin_id_c = CString::new(factory_plugin_id(&descriptor.id).as_bytes())
             .map_err(|_| "plugin id contains interior NUL".to_string())?;
         let plugin = unsafe {
             ((*factory).create_plugin)(factory, &*host as *const _, plugin_id_c.as_ptr())
@@ -978,6 +981,12 @@ unsafe extern "C" fn state_reader_read(
     n as i64
 }
 
+/// The id a CLAP factory knows a plug-in by: the DAW's id without its
+/// "clap:" prefix.
+pub(crate) fn factory_plugin_id(daw_id: &str) -> &str {
+    daw_id.strip_prefix("clap:").unwrap_or(daw_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1043,5 +1052,21 @@ mod tests {
         let desc = descriptor_for(candidate);
         let result = ClapPluginInstance::load(desc);
         assert!(result.is_err(), "non-CLAP binary must be rejected");
+    }
+}
+
+#[cfg(test)]
+mod factory_id_tests {
+    use super::factory_plugin_id;
+
+    #[test]
+    fn the_factory_gets_the_plug_in_s_own_id() {
+        assert_eq!(
+            factory_plugin_id("clap:com.hardwavestudios.wideboi"),
+            "com.hardwavestudios.wideboi"
+        );
+        assert_eq!(factory_plugin_id("com.u-he.diva"), "com.u-he.diva");
+        // Only the leading prefix goes.
+        assert_eq!(factory_plugin_id("clap:clap:x"), "clap:x");
     }
 }
