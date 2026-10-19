@@ -926,14 +926,10 @@ pub fn run() {
                         // error banner. Previously both were log-only and
                         // audio just "moved" or died silently (P1-9).
                         match eng.poll_audio_health() {
-                            Ok(true) => {
-                                let (device, _, _) = eng.audio_config();
-                                let _ = app_handle.emit(
-                                    "audio-device-recovered",
-                                    device.unwrap_or_else(|| "system default output".into()),
-                                );
+                            Ok(Some(device)) => {
+                                let _ = app_handle.emit("audio-device-recovered", device);
                             }
-                            Ok(false) => {}
+                            Ok(None) => {}
                             Err(e) => {
                                 log::error!("Audio health check failed: {e}");
                                 let _ = app_handle.emit("audio-device-error", e);

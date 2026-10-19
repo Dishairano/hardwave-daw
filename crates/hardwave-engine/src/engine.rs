@@ -176,6 +176,10 @@ pub struct RecordingLatency {
 }
 
 pub struct DawEngine {
+    /// When audio was last restarted after its stream failed: a stream that
+    /// fails again soon after a restart on the same device moves to the
+    /// system default (see `poll_audio_health`).
+    last_audio_restart: Option<std::time::Instant>,
     pub transport: TransportState,
     pub project: Arc<Mutex<Project>>,
     pub plugin_scanner: Arc<Mutex<PluginScanner>>,
@@ -326,6 +330,7 @@ impl DawEngine {
         let (tx, rx) = bounded(256);
 
         Self {
+            last_audio_restart: None,
             transport: TransportState::default(),
             project: Arc::new(Mutex::new(Project::default())),
             plugin_scanner: Arc::new(Mutex::new(PluginScanner::new())),
@@ -1249,17 +1254,45 @@ impl DawEngine {
     /// transparently fall back to the system default device.
     ///
     /// Returns `Ok(true)` if a recovery restart happened.
-    pub fn poll_audio_health(&mut self) -> Result<bool, String> {
-        if self.audio_device.take_stream_error() {
-            log::warn!("Audio stream failed; falling back to default output device");
-            self.audio_device.stop();
-            // Clear the selected-device preference so resolve_output_device()
-            // picks the current system default on restart.
-            self.audio_device.selected_device = None;
-            self.start()?;
-            return Ok(true);
+    /// Restart audio when its stream has failed. Returns the device it now
+    /// plays on when that is a different one than before (the window says
+    /// so), or `None` when nothing failed or it is the same device.
+    ///
+    /// A failed stream is not a lost device. A remote-desktop reconnect, a
+    /// sample rate changed in Windows' sound settings, another program
+    /// taking the device: each ends the stream while the device is still
+    /// there. This used to drop the chosen device and move to the system
+    /// default every time, so audio left the interface for the laptop's
+    /// speakers. Now the chosen device is started again first (when it is
+    /// gone, starting it falls back to the default by itself); the default
+    /// is forced only when it will not start, or when it fails again within
+    /// five seconds of the last restart.
+    pub fn poll_audio_health(&mut self) -> Result<Option<String>, String> {
+        if !self.audio_device.take_stream_error() {
+            return Ok(None);
         }
-        Ok(false)
+        let before = self.audio_device.active_device_name().map(str::to_string);
+        self.audio_device.stop();
+        let failed_again = self
+            .last_audio_restart
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5));
+        self.last_audio_restart = Some(std::time::Instant::now());
+        if !failed_again && self.start().is_ok() {
+            let now = self.audio_device.active_device_name().map(str::to_string);
+            log::warn!(
+                "Audio stream failed; started again on {}",
+                now.as_deref().unwrap_or("the default output")
+            );
+            return Ok(moved_to(before, now));
+        }
+        log::warn!("Audio stream failed again; falling back to the default output device");
+        self.audio_device.stop();
+        // With no device chosen, resolve_output_device() opens the system
+        // default on restart.
+        self.audio_device.selected_device = None;
+        self.start()?;
+        let now = self.audio_device.active_device_name().map(str::to_string);
+        Ok(moved_to(before, now).or_else(|| Some("system default output".into())))
     }
 
     /// Get a reference to the audio device manager for device listing.
@@ -4999,6 +5032,39 @@ mod history_group_tests {
         assert_eq!(engine.history_sizes().0, 0, "an empty drag is not history");
         engine.snapshot_before_mutation();
         assert_eq!(engine.history_sizes().0, 1);
+    }
+}
+
+/// The device audio moved to after a restart, when it moved at all.
+fn moved_to(before: Option<String>, now: Option<String>) -> Option<String> {
+    if now == before {
+        None
+    } else {
+        Some(now.unwrap_or_else(|| "system default output".into()))
+    }
+}
+
+#[cfg(test)]
+mod device_restart_tests {
+    use super::moved_to;
+
+    #[test]
+    fn a_restart_on_the_same_device_says_nothing() {
+        let cable = Some("CABLE Input".to_string());
+        assert_eq!(moved_to(cable.clone(), cable), None);
+        assert_eq!(moved_to(None, None), None);
+    }
+
+    #[test]
+    fn a_move_to_another_device_names_it() {
+        assert_eq!(
+            moved_to(Some("Focusrite USB".into()), Some("Speakers".into())),
+            Some("Speakers".to_string())
+        );
+        assert_eq!(
+            moved_to(Some("Focusrite USB".into()), None),
+            Some("system default output".to_string())
+        );
     }
 }
 
