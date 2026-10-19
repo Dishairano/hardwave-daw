@@ -175,6 +175,16 @@ function fileWidthPx(clip: ClipInfo, pxPerTick: number, bpm: number): number {
   return clip.length_ticks * pxPerTick
 }
 
+/** How many buckets to split a clip's file into at this zoom: about one
+ *  per pixel, as a power of two so small zoom steps share one, and exactly
+ *  one per sample once a sample is a pixel or wider, which is where the
+ *  playlist draws the signal itself as a line. */
+function clipTier(clip: ClipInfo, pxPerTick: number, bpm: number): number {
+  const px = fileWidthPx(clip, pxPerTick, bpm)
+  if (clip.sourceFrames && px >= clip.sourceFrames) return clip.sourceFrames
+  return bucketTier(Math.max(100, Math.ceil(px)))
+}
+
 function bucketTier(desired: number): number {
   // Quantise to powers of two so we don't hammer the backend on tiny zoom changes.
   const clamped = Math.max(100, Math.min(1 << 24, Math.ceil(desired)))
@@ -389,7 +399,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       for (const track of audioTracks) {
         for (const clip of track.clips) {
           if (!clip.source_id) continue
-          const tier = Math.min(WHOLE_TIER, bucketTier(Math.max(100, Math.ceil(fileWidthPx(clip, pixelsPerTick, bpm)))))
+          const tier = Math.min(WHOLE_TIER, clipTier(clip, pixelsPerTick, bpm))
           const key = `${clip.source_id}:${tier}`
           if (waveformData.has(key) || waveformPending.has(key)) continue
           waveformPending.add(key)
@@ -1006,7 +1016,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // to any other tier we've already fetched so we render something during refetch.
     // Past WHOLE_TIER the buckets come in tiles (see wantTile), with the
     // whole-file waveform standing in for a tile still on its way.
-    const tier = bucketTier(Math.max(100, Math.ceil(fileWidthPx(clip, pxPerTick, bpm))))
+    const tier = clipTier(clip, pxPerTick, bpm)
     const tiled = tier > WHOLE_TIER
     let peaks = waveformData.get(`${clip.source_id}:${Math.min(tier, WHOLE_TIER)}`)
     if (!peaks) {
@@ -1067,7 +1077,47 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         }
       }
 
-      if (endJ > startJ) {
+      // One bucket per sample and two pixels or more apart: draw the signal
+      // itself as a line, as FL does when zoomed in that far. A one-sample
+      // bucket holds its sample as its max, or its min below zero, with
+      // the other end at 0, so the sample is min + max.
+      const sampleLine = n === clip.sourceFrames && pxPerBucket >= 2
+      if (sampleLine && endJ > startJ) {
+        const exactAt = (j: number): WavePeak | undefined =>
+          tiled ? waveformTiles.get(`${clip.source_id}:${tier}:${Math.floor(j / TILE)}`)?.[j % TILE] : whole[j]
+        ctx.lineWidth = 1.25
+        ctx.lineJoin = 'round'
+        let colour = ''
+        let open = false
+        const finish = () => { if (open) { ctx.strokeStyle = colour; ctx.stroke() } open = false }
+        for (let j = startJ; j < endJ; j++) {
+          const pk = exactAt(j)
+          // A tile still on its way leaves a gap rather than a wrong line.
+          if (!pk) { finish(); continue }
+          const centre = originX + (j + 0.5) * pxPerBucket
+          const cx = backwards ? 2 * x + w - centre : centre
+          const cy = midY - (pk[0] + pk[1]) * ampScale
+          const c = rgbColour(pk[3], pk[4], pk[5])
+          if (!open) {
+            ctx.beginPath()
+            ctx.moveTo(cx, cy)
+            colour = c
+            open = true
+          } else {
+            ctx.lineTo(cx, cy)
+            // The colour moves slowly (it holds over 30 ms), so a new
+            // stroke starts only where it changes.
+            if (c !== colour) {
+              ctx.strokeStyle = colour
+              ctx.stroke()
+              ctx.beginPath()
+              ctx.moveTo(cx, cy)
+              colour = c
+            }
+          }
+        }
+        finish()
+      } else if (endJ > startJ) {
         // FL Studio's Multiband look: one waveform, each column in the
         // colour of what sounds there (the backend mixes it from a low, a
         // mid and a high band, peaks[j][3..5]), so a kick's tail is red and
@@ -1082,7 +1132,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           const bot = midY - pk[0] * ampScale
           ctx.fillRect(bx, top, colW, Math.max(1, bot - top))
         }
+      }
 
+      if (endJ > startJ) {
         // Faint centre baseline.
         ctx.globalAlpha = 0.18
         ctx.strokeStyle = 'rgba(255,255,255,0.5)'

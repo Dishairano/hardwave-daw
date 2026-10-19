@@ -97,6 +97,16 @@ export function snapToTicks(snap: SnapValue, enabled: boolean): number {
   return base[snap] || PPQ_TICKS
 }
 
+
+/** The playlist's zoom range, as a multiple of 100 pixels per second. The
+ *  top used to be 16 (1600 px a second, a 48 kHz sample every 30th of a
+ *  pixel), so the waveform could never be seen down to its samples. FL
+ *  zooms in until single samples are several pixels apart; 4000 is about
+ *  8 pixels a sample at 48 kHz, where the playlist draws the signal itself
+ *  as a line. */
+export const MIN_HORIZONTAL_ZOOM = 0.1
+export const MAX_HORIZONTAL_ZOOM = 4000
+
 interface TransportState {
   playing: boolean
   recording: boolean
@@ -527,7 +537,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   setTrackHeight: (height) => set({ trackHeight: Math.min(200, Math.max(24, height)) }),
   setSnapValue: (v) => set({ snapValue: v, snapEnabled: v !== 'Off' ? true : false }),
   toggleSnap: () => set(s => ({ snapEnabled: !s.snapEnabled })),
-  setHorizontalZoom: (z) => set({ horizontalZoom: Math.max(0.1, Math.min(16, z)) }),
+  setHorizontalZoom: (z) => set({ horizontalZoom: Math.max(MIN_HORIZONTAL_ZOOM, Math.min(MAX_HORIZONTAL_ZOOM, z)) }),
   // Was `set({ horizontalZoom: 1 })`: a reset dressed as a fit, which is why
   // nothing ever called it. Fitting needs two facts, the song's length and
   // the width available, so the arrangement publishes its width and the song
@@ -544,7 +554,7 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     if (seconds <= 0) return
     // A small margin so the last clip does not touch the right edge.
     const target = (width * 0.97) / (seconds * PIXELS_PER_SECOND_BASE)
-    set({ horizontalZoom: Math.max(0.1, Math.min(16, target)) })
+    set({ horizontalZoom: Math.max(MIN_HORIZONTAL_ZOOM, Math.min(MAX_HORIZONTAL_ZOOM, target)) })
   },
   playlistViewportPx: 0,
   songEndTicks: 0,
