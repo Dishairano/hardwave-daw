@@ -1,13 +1,19 @@
 ### New features
-- feat: Sample window: double-click an audio clip, or open a sampler channel, for the channel settings FL has: volume, pan, pitch, stretch, fades, normalize, DC offset, reverse, polarity, swap stereo, sample start and length, trim, fade stereo, declicking. Sampler channels add the volume envelope, offset, loop with crossfade, mono, cut itself, porta and root note. Every change is one undo step.
+- feat: Hardwave DAW has its own removal window in Windows Apps: it says what stays and what goes, and keeps your projects, presets and recordings
+- feat: Normalize, Remove DC offset, Reverse, Reverse polarity and Swap stereo work on sampler channels
+- feat: Load regions and Load slice markers show a WAV file's markers in the sample window
+- feat: FL audio-clip channels keep normalize, remove DC, fade stereo, trim and declicking
+- feat: FL sampler channels keep their volume envelope, loop, mono, porta, cut itself, declicking, trim and fade stereo
 
 ### Bug fixes
-- fix: the built-in kick played one buffer late (21 ms at 1024), in playback and in renders.
-- fix: a consolidated part or a sample dropped on a MIDI channel was silent.
-- fix: a bounce, freeze or consolidate started late by the plug-ins' latency and ran through the master twice.
-- fix: with no output chosen, the DAW played through a monitor's HDMI audio while a real output was there.
-- fix: a plug-in window opened after the audio device dropped out showed default settings.
-- fix: security update of the TLS library (rustls 0.23.46, RUSTSEC-2026-0346 to 0349).
+- fix: CLAP plug-ins load in the DAW (every CLAP plug-in was refused before)
+- fix: a plug-in that will not start is no longer reported as a crash
+- fix: the release no longer carries the developers' test panel and test files
+- fix: samples at a different sample rate than your audio device play on time and no longer lose their last milliseconds
+- fix: playing a new or mostly empty song no longer stutters on slower PCs; empty mixer tracks use almost no CPU
+- fix: a sampler channel's window shows its real settings when the audio device is not running
+- fix: the DAW starts on a Windows PC that does not have the Visual C++ Redistributable
+- fix: the sample window's Resample and Keep on disk options say what the DAW does
+- fix: loading a sample into a sampler channel keeps its envelope and other settings, and takes the file's loop
+- fix: the sample window's Track box shows the mixer insert, not 501
 
-### Improvements
-- improve: Consolidate shows in Edit > History; sampler settings are saved with the project; the channel rack lists its instruments on a fresh start; the app has its icon.
