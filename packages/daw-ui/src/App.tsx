@@ -6,12 +6,6 @@ import { HwApp } from './components/HwApp'
 import type { MenuDef, MenuItem } from './components/HwTopMenu'
 import { usePatternStore } from './stores/patternStore'
 import { useUiPreferencesStore, UI_SCALE_OPTIONS, type UiScale } from './stores/uiPreferencesStore'
-import { TrackList } from './components/arrangement/TrackList'
-import { Arrangement } from './components/arrangement/Arrangement'
-import { MixerPanel } from './components/mixer/MixerPanel'
-import { Browser } from './components/browser/Browser'
-import { ChannelRack } from './components/channelrack/ChannelRack'
-import { PianoRoll } from './components/piano-roll/PianoRoll'
 import { Roadmap } from './components/roadmap/Roadmap'
 import { AudioSettings, focusSettingsTab } from './components/settings/AudioSettings'
 import { ThemePicker } from './components/settings/ThemePicker'
@@ -77,7 +71,6 @@ import { TempoMapDialog } from './components/TempoMapDialog'
 import { HistoryPanel } from './components/HistoryPanel'
 import { PrecountOverlay } from './components/transport/PrecountOverlay'
 import { invoke } from '@tauri-apps/api/core'
-import { usePanelLayoutStore } from './stores/panelLayoutStore'
 import { useAppDialogs } from './hooks/useAppDialogs'
 import { useIsMobile } from './hooks/useIsMobile'
 import { MobileTabBar, type MobilePanel } from './components/MobileTabBar'
@@ -97,6 +90,8 @@ const DevPanel = DEV_TOOLS
 import { useTransportStore } from './stores/transportStore'
 import { startTimelineSync } from './stores/timelineState'
 import { useTrackStore } from './stores/trackStore'
+import { useWorkspaceStore } from './stores/workspaceStore'
+import type { LayoutName, PanelKey } from './lib/workspaceLayout'
 import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
 import { useCollabStore } from './stores/collabStore'
@@ -664,6 +659,27 @@ export function App() {
     window.addEventListener('daw:openPianoRoll', onOpen)
     return () => window.removeEventListener('daw:openPianoRoll', onOpen)
   }, [])
+
+  // Panel layouts (View menu): a ready layout places the panels and says
+  // which of them show; the places live in the workspace store.
+  const workspaceLayout = useWorkspaceStore(s => s.layoutName)
+  const shownPanels = (): PanelKey[] => [
+    ...(showBrowser ? ['browser' as const] : []), ...(showChannelRack ? ['channelRack' as const] : []),
+    ...(showPlaylist ? ['playlist' as const] : []), ...(showPianoRoll ? ['pianoRoll' as const] : []),
+    ...(showMixer ? ['mixer' as const] : []),
+  ]
+  const applyPanelLayout = (name: LayoutName) => {
+    const shows = useWorkspaceStore.getState().applyLayout(name)
+    if (!shows) {
+      useNotificationStore.getState().push('info', 'No layout of your own yet', { detail: 'Place the panels, then View > Save this layout as my own.' })
+      return
+    }
+    setShowBrowser(shows.includes('browser'))
+    setShowChannelRack(shows.includes('channelRack'))
+    setShowPlaylist(shows.includes('playlist'))
+    setShowPianoRoll(shows.includes('pianoRoll'))
+    setShowMixer(shows.includes('mixer'))
+  }
 
   // Detachable panels: hide the inline copy when a panel is popped out into its
   // own OS window, and re-show it when that window docks back (or is closed via
@@ -2176,6 +2192,15 @@ export function App() {
           { label: `${showPianoRoll ? '✓ ' : '   '}Piano Roll`, shortcut: 'F7', action: () => setShowPianoRoll(v => !v) },
           { label: `${showMixer ? '✓ ' : '   '}Mixer`, shortcut: 'F9', action: () => setShowMixer(v => !v) },
           { separator: true, label: '' },
+          // Panel layouts: where the panels sit and which show. Each panel
+          // also moves, resizes, docks and detaches from its own title bar.
+          ...(['default', 'arrange', 'mix', 'free'] as const).map((name) => ({
+            label: `${workspaceLayout === name ? '✓ ' : '   '}Layout: ${name[0].toUpperCase()}${name.slice(1)}`,
+            action: () => applyPanelLayout(name),
+          })),
+          { label: `${workspaceLayout === 'mine' ? '✓ ' : '   '}Layout: My own`, action: () => applyPanelLayout('mine') },
+          { label: 'Save this layout as my own', action: () => useWorkspaceStore.getState().saveMine(shownPanels()) },
+          { separator: true, label: '' },
           {
             label: 'Fit song to window',
             action: () => useTransportStore.getState().zoomToFit(),
@@ -2412,18 +2437,6 @@ export function App() {
         />
       )}
 
-      <FloatingPanels
-        showBrowser={showBrowser}
-        showPlaylist={showPlaylist}
-        showChannelRack={showChannelRack}
-        showPianoRoll={showPianoRoll}
-        showMixer={showMixer}
-        onHideBrowser={() => setShowBrowser(false)}
-        onHidePlaylist={() => setShowPlaylist(false)}
-        onHideChannelRack={() => setShowChannelRack(false)}
-        onHidePianoRoll={() => setShowPianoRoll(false)}
-        onHideMixer={() => setShowMixer(false)}
-      />
 
       {/* Floating detached panels */}
       {showRoadmap && <Roadmap onClose={() => setShowRoadmap(false)} />}
@@ -2575,47 +2588,3 @@ export function App() {
   )
 }
 
-
-function FloatingPanels({
-  showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer,
-  onHideBrowser, onHidePlaylist, onHideChannelRack, onHidePianoRoll, onHideMixer,
-}: {
-  showBrowser: boolean; showPlaylist: boolean;
-  showChannelRack: boolean; showPianoRoll: boolean; showMixer: boolean;
-  onHideBrowser: () => void; onHidePlaylist: () => void;
-  onHideChannelRack: () => void; onHidePianoRoll: () => void; onHideMixer: () => void;
-}) {
-  const layout = usePanelLayoutStore(s => s.layout)
-  return (
-    <>
-      {showBrowser && layout.browser.floating && (
-        <FloatingWindow panelId="browser" title="Browser" onClose={onHideBrowser}>
-          <Browser />
-        </FloatingWindow>
-      )}
-      {showPlaylist && layout.playlist.floating && (
-        <FloatingWindow panelId="playlist" title="Playlist" onClose={onHidePlaylist}>
-          <div style={{ flex: 1, display: 'flex', minWidth: 0, overflow: 'hidden' }}>
-            <TrackList />
-            <Arrangement />
-          </div>
-        </FloatingWindow>
-      )}
-      {showChannelRack && layout.channelRack.floating && (
-        <FloatingWindow panelId="channelRack" title="Channel Rack" onClose={onHideChannelRack}>
-          <div style={{ flex: 1, minWidth: 0 }}><ChannelRack /></div>
-        </FloatingWindow>
-      )}
-      {showPianoRoll && layout.pianoRoll.floating && (
-        <FloatingWindow panelId="pianoRoll" title="Piano Roll" onClose={onHidePianoRoll}>
-          <div style={{ flex: 1, minWidth: 0 }}><PianoRoll /></div>
-        </FloatingWindow>
-      )}
-      {showMixer && layout.mixer.floating && (
-        <FloatingWindow panelId="mixer" title="Mixer" onClose={onHideMixer}>
-          <div style={{ flex: 1, minWidth: 0 }}><MixerPanel /></div>
-        </FloatingWindow>
-      )}
-    </>
-  )
-}

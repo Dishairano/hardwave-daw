@@ -15,7 +15,7 @@ import '../rework.css'
 
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { HwTopbar, HwSecondRow, HwPlaylistTracks } from '../components/HwApp'
+import { HwApp, HwTopbar, HwSecondRow, HwPlaylistTracks } from '../components/HwApp'
 import { HistoryPanel } from '../components/HistoryPanel'
 import { LoudnessMeter } from '../components/LoudnessMeter'
 import { Oscilloscope } from '../components/Oscilloscope'
@@ -401,6 +401,17 @@ function Harness() {
           </HwTopbar>
           <Arrangement onSetHint={noop} />
           <TemplateDialog onPick={noop} onCancel={noop} />
+        </div>
+      )
+    // The whole shell with the panels in the work area (moving, docking).
+    case 'panels':
+      return (
+        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <HwApp
+            showBrowser showPlaylist showChannelRack showPianoRoll={false} showMixer
+            isMobile={false} mobilePanel="playlist"
+            onToggleBrowser={noop} onTogglePlaylist={noop} onToggleChannelRack={noop} onTogglePianoRoll={noop} onToggleMixer={noop}
+          />
         </div>
       )
     case 'workspace':

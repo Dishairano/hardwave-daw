@@ -1,0 +1,120 @@
+/* The work area and its panel windows (approved mockup:
+   suite.hardwavestudios.com/daw-panels-mockup/). */
+
+.hw-ws {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background-color: #050507;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+.hw-ws-empty {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 1px;
+  color: var(--text-dim); text-transform: uppercase; pointer-events: none;
+}
+
+.hw-pf {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.hw-pf.docked, .hw-pf.max { border-radius: 0; box-shadow: none; }
+
+.hw-pf-bar {
+  height: 24px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 3px 0 4px;
+  background: linear-gradient(180deg, #0c0c10, #050507);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.hw-pf-bar:active { cursor: grabbing; }
+.hw-pf-title {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-width: 0; overflow: hidden; white-space: nowrap;
+  color: var(--text); letter-spacing: 1px; text-transform: uppercase; font-weight: 600;
+}
+.hw-pf-title .title { font-family: var(--mono); font-size: 10px; color: var(--text); letter-spacing: 1px; text-transform: uppercase; }
+.hw-pf-title .title b { color: var(--red); font-weight: 700; }
+.hw-pf-tag {
+  flex-shrink: 0;
+  font-size: 8.5px; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--text-dim); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px;
+}
+.hw-pf-sp { flex: 1; }
+.hw-pf-bar button {
+  all: unset;
+  cursor: pointer;
+  width: 22px; height: 18px;
+  border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.hw-pf-bar button:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.hw-pf-bar button.x:hover { background: rgba(220, 38, 38, 0.75); color: #fff; }
+
+.hw-pf-menu {
+  position: absolute; top: 24px; left: 3px; z-index: 20;
+  min-width: 190px; padding: 4px;
+  background: #0d0d11; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 7px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6);
+  font-size: 12px;
+}
+.hw-pf-menu button {
+  all: unset; cursor: pointer; display: flex; justify-content: space-between;
+  width: 100%; box-sizing: border-box; padding: 5px 9px; border-radius: 5px; color: var(--text-dim);
+}
+.hw-pf-menu button:hover { background: rgba(255, 255, 255, 0.07); color: var(--text); }
+.hw-pf-menu button.hl { color: var(--text); }
+.hw-pf-menu button.hl::after { content: '⧉'; color: var(--red); }
+.hw-pf-menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 2px; }
+
+.hw-pf-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* A panel's own container fills the frame (it used to size itself in the
+   fixed column). */
+.hw-pf-body > .fl-browser { width: auto; flex: 1; border-right: 0; }
+.hw-pf-body > .fl-playlist,
+.hw-pf-body > .fl-panel-host { flex: 1; min-height: 0; }
+
+.hw-pf-h { position: absolute; z-index: 10; touch-action: none; }
+.hw-pf-h.n, .hw-pf-h.s { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+.hw-pf-h.n { top: -3px; height: 5px; } .hw-pf-h.s { bottom: -2px; }
+.hw-pf-h.e, .hw-pf-h.w { top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+.hw-pf-h.e { right: -2px; } .hw-pf-h.w { left: -2px; }
+.hw-pf-h.ne, .hw-pf-h.nw, .hw-pf-h.se, .hw-pf-h.sw { width: 12px; height: 12px; }
+.hw-pf-h.ne { top: -2px; right: -2px; cursor: nesw-resize; }
+.hw-pf-h.sw { bottom: -2px; left: -2px; cursor: nesw-resize; }
+.hw-pf-h.nw { top: -2px; left: -2px; cursor: nwse-resize; }
+.hw-pf-h.se { bottom: -2px; right: -2px; cursor: nwse-resize; }
+
+.hw-ws-guide { position: absolute; z-index: 2000; background: var(--red); opacity: 0.85; pointer-events: none; }
+.hw-ws-zone {
+  position: absolute; z-index: 1999; pointer-events: none;
+  border: 2px solid var(--red); background: rgba(220, 38, 38, 0.13); border-radius: 7px;
+}

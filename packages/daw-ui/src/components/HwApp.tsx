@@ -36,7 +36,8 @@ import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
 import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
 import { ArrangementSwitcher } from './ArrangementSwitcher'
-import { usePanelLayoutStore } from '../stores/panelLayoutStore'
+import { Workspace } from './workspace/Workspace'
+import { detachPanel } from './FloatingWindow'
 import { useHoverInfoStore } from '../stores/hoverInfoStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useMetronomeStore } from '../stores/metronomeStore'
@@ -1698,80 +1699,24 @@ function FollowPlayheadButton() {
   )
 }
 
+/** The playlist's title in its panel bar: the arrangement, the pattern
+ *  and following the playhead. */
 function HwPlaylistHead() {
   const patterns = usePatternStore(s => s.patterns)
   const activeId = usePatternStore(s => s.activeId)
   const activePattern = patterns.find(p => p.id === activeId)
 
   return (
-    <div className="fl-pl-head">
-      <span className="title" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <svg className="ic" width="9" height="9" viewBox="0 0 16 16" fill="none">
-          <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-        Playlist ·
-        {/* Switchable arrangements (FL 20+ parity). The component +
-            backend commands existed end-to-end but were surfaced
-            NOWHERE — this line is what actually ships the feature. */}
-        <ArrangementSwitcher />
-        <span style={{ color: 'var(--text-dim)', margin: '0 4px' }}>›</span>
-        <b>{activePattern?.name || 'Pattern 1'}</b>
-        <FollowPlayheadButton />
-      </span>
-      <span style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center', color: 'var(--text-dim)' }}>
-        <svg className="ic" width="11" height="11" viewBox="0 0 16 16" fill="none">
-          <path d="M3 12.5h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-        </svg>
-        <svg className="ic" width="10" height="10" viewBox="0 0 16 16" fill="none">
-          <rect x="3.5" y="3.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.3"/>
-        </svg>
-        <svg className="ic" width="10" height="10" viewBox="0 0 16 16" fill="none">
-          <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-        </svg>
-      </span>
-    </div>
-  )
-}
-
-// ─── Generic FL panel header (cr / pr / mx) ─────────────────────────────────
-
-function HwPanelHead({
-  className,
-  title,
-  onClose,
-}: {
-  className: string
-  title: string
-  onClose?: () => void
-}) {
-  return (
-    <div className={className}>
-      <span className="title" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <svg className="ic" width="9" height="9" viewBox="0 0 16 16" fill="none">
-          <path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-        {title}
-      </span>
-      <span style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center', color: 'var(--text-dim)' }}>
-        <svg className="ic" width="11" height="11" viewBox="0 0 16 16" fill="none">
-          <path d="M3 12.5h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-        </svg>
-        <svg className="ic" width="10" height="10" viewBox="0 0 16 16" fill="none">
-          <rect x="3.5" y="3.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.3"/>
-        </svg>
-        <svg
-          className="ic"
-          width="10"
-          height="10"
-          viewBox="0 0 16 16"
-          fill="none"
-          style={{ cursor: onClose ? 'pointer' : 'default' }}
-          onClick={onClose}
-        >
-          <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-        </svg>
-      </span>
-    </div>
+    <span className="title" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      Playlist ·
+      {/* Switchable arrangements (FL 20+ parity). The component +
+          backend commands existed end-to-end but were surfaced
+          NOWHERE — this line is what actually ships the feature. */}
+      <ArrangementSwitcher />
+      <span style={{ color: 'var(--text-dim)', margin: '0 4px' }}>›</span>
+      <b>{activePattern?.name || 'Pattern 1'}</b>
+      <FollowPlayheadButton />
+    </span>
   )
 }
 
@@ -1789,6 +1734,7 @@ export function HwApp({
   onTogglePianoRoll,
   onToggleChannelRack,
   onToggleMixer,
+  onToggleBrowser,
   onTogglePlaylist,
   onOpenTempoTapper,
   onAction,
@@ -1828,11 +1774,6 @@ export function HwApp({
   // and the HTML track-name column (.fl-tr) via the --row-h CSS variable.
   const trackHeight = useTransportStore(s => s.trackHeight)
 
-  // Floating-panel state — when a panel is detached, App.tsx renders it in
-  // a FloatingWindow. We must NOT also render the inline version here, or
-  // the user sees the same panel twice (one detached, one inline). Persisted
-  // in localStorage by panelLayoutStore so this flag survives restarts.
-  const layout = usePanelLayoutStore(s => s.layout)
 
   // Mobile: single panel, minimal chrome. The slim grab strip keeps the
   // window movable — decorations are off, and a desktop window resized
@@ -1878,103 +1819,56 @@ export function HwApp({
       </HwTopbar>
 
       <div className="fl-body">
-        {showBrowser && !layout.browser.floating && (
-          <div className="fl-browser" data-testid="panel-browser">
-            <Browser />
-          </div>
-        )}
-
-        {showPlaylist && <HwPicker />}
-
-        {/* Center column: stacked docked panels */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-
-          {showChannelRack && !layout.channelRack.floating && (
-            <div
-              className="fl-cr"
-              data-testid="panel-channel-rack"
-              style={{
-                flex: showPlaylist || showPianoRoll ? undefined : 1,
-                height: showPlaylist || showPianoRoll ? '40%' : undefined,
-                minHeight: 140,
-                borderBottom: '1px solid var(--border)',
-              }}
-            >
-              <HwPanelHead
-                className="fl-cr-head"
-                title="Channel rack"
-                onClose={onToggleChannelRack}
-              />
-              <div className="fl-panel-host">
-                <ChannelRack />
-              </div>
-            </div>
-          )}
-
-          {showPianoRoll && !layout.pianoRoll.floating && (
-            <div
-              className="fl-pr"
-              data-testid="panel-piano-roll"
-              style={{
-                flex: showPlaylist ? undefined : 1,
-                height: showPlaylist ? '45%' : undefined,
-                minHeight: 200,
-                borderBottom: '1px solid var(--border)',
-              }}
-            >
-              <HwPanelHead
-                className="fl-pr-head"
-                title="Piano roll"
-                onClose={onTogglePianoRoll}
-              />
-              <div className="fl-panel-host">
-                <PianoRoll />
-              </div>
-            </div>
-          )}
-
-          {showPlaylist && !layout.playlist.floating && (
-            <div className="fl-playlist" data-testid="panel-playlist">
-              <HwPlaylistHead />
-              <HwPlaylistTools />
-              <div
-                className="fl-pl-body"
-                onMouseLeave={() => useHoverInfoStore.getState().clearInfo()}
-                style={{ ['--row-h' as any]: `${trackHeight}px` }}
-              >
-                <HwPlaylistTracks />
-                <div className="fl-pl-grid">
-                  <HwPlaylistRuler />
-                  <div className="fl-pl-canvas">
-                    <Arrangement onSetHint={(s) => useHoverInfoStore.getState().setInfo(s)} />
+        <Workspace
+          panels={[
+            {
+              key: 'browser', title: 'Browser', shown: showBrowser, testId: 'panel-browser',
+              onClose: () => onToggleBrowser?.(), onDetach: () => { void detachPanel('browser') },
+              content: <div className="fl-browser"><Browser /></div>,
+            },
+            {
+              key: 'channelRack', title: 'Channel rack', shown: showChannelRack, testId: 'panel-channel-rack',
+              onClose: () => onToggleChannelRack?.(), onDetach: () => { void detachPanel('channelRack') },
+              content: <div className="fl-panel-host"><ChannelRack /></div>,
+            },
+            {
+              key: 'pianoRoll', title: 'Piano roll', shown: showPianoRoll, testId: 'panel-piano-roll',
+              onClose: () => onTogglePianoRoll?.(), onDetach: () => { void detachPanel('pianoRoll') },
+              content: <div className="fl-panel-host"><PianoRoll /></div>,
+            },
+            {
+              key: 'playlist', title: 'Playlist', shown: showPlaylist, testId: 'panel-playlist',
+              head: <HwPlaylistHead />,
+              onClose: () => onTogglePlaylist?.(), onDetach: () => { void detachPanel('playlist') },
+              content: (
+                <div style={{ flex: 1, display: 'flex', minHeight: 0, minWidth: 0 }}>
+                  <HwPicker />
+                  <div className="fl-playlist">
+                    <HwPlaylistTools />
+                    <div
+                      className="fl-pl-body"
+                      onMouseLeave={() => useHoverInfoStore.getState().clearInfo()}
+                      style={{ ['--row-h' as any]: `${trackHeight}px` }}
+                    >
+                      <HwPlaylistTracks />
+                      <div className="fl-pl-grid">
+                        <HwPlaylistRuler />
+                        <div className="fl-pl-canvas">
+                          <Arrangement onSetHint={(s) => useHoverInfoStore.getState().setInfo(s)} />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          )}
-
-          {showMixer && !layout.mixer.floating && (
-            <div
-              className="fl-mx"
-              data-testid="panel-mixer"
-              style={{
-                height: showPlaylist || showChannelRack || showPianoRoll ? 220 : undefined,
-                flex: showPlaylist || showChannelRack || showPianoRoll ? undefined : 1,
-                borderTop: '1px solid var(--border)',
-              }}
-            >
-              <HwPanelHead
-                className="fl-mx-head"
-                title="Mixer"
-                onClose={onToggleMixer}
-              />
-              <div className="fl-panel-host">
-                <MixerPanel />
-              </div>
-            </div>
-          )}
-
-        </div>
+              ),
+            },
+            {
+              key: 'mixer', title: 'Mixer', shown: showMixer, testId: 'panel-mixer',
+              onClose: () => onToggleMixer?.(), onDetach: () => { void detachPanel('mixer') },
+              content: <div className="fl-panel-host"><MixerPanel /></div>,
+            },
+          ]}
+        />
       </div>
     </div>
   )
