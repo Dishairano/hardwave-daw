@@ -444,6 +444,22 @@ impl InsertChain {
     /// Remove a slot by id and return the freed `LiveSlot` for off-RT
     /// disposal. Caller is responsible for shipping it through the
     /// graveyard channel — the audio thread must not drop directly.
+    /// Every slot out, deactivated as `take_slot` leaves one, and into the
+    /// graveyard so none is freed on the audio thread. Keeps the slot list's
+    /// allocation for the song that comes next.
+    pub fn bury_all(&mut self, graveyard: &mut PluginGraveyardSender) {
+        for mut slot in self.slots.drain(..) {
+            slot.plugin.deactivate();
+            if let Err(slot) = graveyard.try_bury(slot) {
+                log::warn!(
+                    "insert chain: graveyard full, leaking slot {} drop to engine teardown",
+                    slot.slot_id
+                );
+                std::mem::forget(slot);
+            }
+        }
+    }
+
     pub fn take_slot(&mut self, slot_id: &str) -> Option<LiveSlot> {
         let idx = self.slots.iter().position(|s| s.slot_id == slot_id)?;
         let mut slot = self.slots.remove(idx);
@@ -668,6 +684,13 @@ pub enum InsertCommand {
         slot_id: String,
         index: usize,
     },
+    /// A different song came in (opened, imported or new): every live
+    /// plug-in on every track leaves for the graveyard. Sent down the same
+    /// queue as the new song's `Add`s, so it lands before them. Without it
+    /// a track id both songs have (the mixer inserts and the master have
+    /// fixed ids) kept the old song's plug-ins, and an old sampler went on
+    /// playing its sample in a song that does not have it.
+    ClearAll,
 }
 
 /// UI-side handle for queueing commands toward the audio thread.
@@ -690,9 +713,11 @@ impl InsertCommandReceiver {
 
 impl InsertCommand {
     /// The track id this command targets. Lets the audio-thread
-    /// dispatcher route in O(1) via a track_id → NodeId map.
-    pub fn target_track_id(&self) -> &str {
-        match self {
+    /// dispatcher route in O(1) via a track_id → NodeId map. `None` for
+    /// `ClearAll`, which is for every track.
+    pub fn target_track_id(&self) -> Option<&str> {
+        Some(match self {
+            InsertCommand::ClearAll => return None,
             InsertCommand::Add { track_id, .. }
             | InsertCommand::Remove { track_id, .. }
             | InsertCommand::Reorder { track_id, .. }
@@ -702,7 +727,7 @@ impl InsertCommand {
             | InsertCommand::SetParameterNormalized { track_id, .. }
             | InsertCommand::SetState { track_id, .. }
             | InsertCommand::LoadFactoryPreset { track_id, .. } => track_id,
-        }
+        })
     }
 }
 
@@ -880,6 +905,11 @@ impl InsertRouter {
                     chain.load_factory_preset(&slot_id, index);
                 }
             }
+            InsertCommand::ClearAll => {
+                for chain in self.chains.values_mut() {
+                    chain.bury_all(&mut self.graveyard);
+                }
+            }
         }
     }
 }
@@ -903,7 +933,7 @@ pub fn build_runtime(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use hardwave_midi::MidiEvent;
     use hardwave_plugin_host::types::{
@@ -1101,7 +1131,7 @@ mod tests {
         }
     }
 
-    fn make_gain_slot(id: &str, gain: f32, enabled: bool) -> (LiveSlot, Arc<AtomicU32>) {
+    pub(crate) fn make_gain_slot(id: &str, gain: f32, enabled: bool) -> (LiveSlot, Arc<AtomicU32>) {
         let counter = Arc::new(AtomicU32::new(0));
         let plugin: Box<dyn HostedPlugin> = Box::new(GainPlugin::new(gain, counter.clone()));
         let slot = LiveSlot {
@@ -1475,6 +1505,24 @@ mod tests {
         assert!(left.iter().all(|&v| (v - 1.0).abs() < 1e-6));
         assert_eq!(counter.load(Ordering::Relaxed), 1);
         assert_eq!(graveyard.drain_and_drop(), 0);
+    }
+
+    #[test]
+    fn router_clear_all_buries_every_chain() {
+        let (mut tx, mut rx, mut router, mut graveyard) = build_runtime(48_000.0, 512);
+        for (track, slot) in [("a", "s1"), ("a", "s2"), ("b", "s3")] {
+            let (slot, _) = make_gain_slot(slot, 2.0, true);
+            tx.try_send(InsertCommand::Add {
+                track_id: track.into(),
+                slot,
+            })
+            .ok()
+            .unwrap();
+        }
+        tx.try_send(InsertCommand::ClearAll).ok().unwrap();
+        router.drain(&mut rx);
+        assert!(router.chains.values().all(|c| c.slots.is_empty()));
+        assert_eq!(graveyard.drain_and_drop(), 3);
     }
 
     #[test]

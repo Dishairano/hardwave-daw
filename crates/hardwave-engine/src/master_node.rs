@@ -153,6 +153,7 @@ impl AudioNode for MasterNode {
             InsertCommand::LoadFactoryPreset { slot_id, index, .. } => {
                 self.chain.load_factory_preset(&slot_id, index);
             }
+            InsertCommand::ClearAll => self.chain.bury_all(graveyard),
         }
     }
 

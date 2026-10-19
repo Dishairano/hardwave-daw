@@ -33,6 +33,9 @@ pub fn new_project(state: State<AppState>) {
     engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
     apply_project_time_signature(&engine);
     engine.reset_history();
+    // The old song's plug-ins go: the new song's mixer inserts and master
+    // have the same ids, and kept them (an old sampler played on).
+    engine.clear_live_plugins();
     engine.rebuild_graph();
     {
         let mut m = state.midi_mappings.lock();
@@ -184,6 +187,11 @@ pub(crate) fn open_project_blocking(
             let mut project = engine.project.lock();
             *project = loaded;
         }
+        // The old song's plug-ins go before the new song's are created
+        // below: tracks with the same id in both songs (the mixer inserts,
+        // the master) kept them, and an old sampler played on in the new
+        // song. Same queue as the new plug-ins, so the order holds.
+        engine.clear_live_plugins();
         engine.transport.bpm.store(new_bpm, Ordering::Relaxed);
         engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
         // Without this a project written in 7/8 opened in 4/4 until playback
