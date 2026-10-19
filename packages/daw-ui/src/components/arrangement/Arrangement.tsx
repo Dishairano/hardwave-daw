@@ -25,6 +25,7 @@ import { useLogStore } from '../../dev/logStore'
 import { useMultiTouchGestures } from '../../hooks/useMultiTouchGestures'
 import { hw } from '../../theme'
 import { paintSlotOccupied, paintSlotTick } from './paint'
+import { zoomStep } from './zoom'
 import { useTempoMapStore } from '../../stores/tempoMapStore'
 import { gridLines } from '../../utils/meter'
 import { mixHex, hexLuma } from '../../lib/color'
@@ -2027,7 +2028,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const rect = containerRef.current?.getBoundingClientRect()
       const mouseX = rect ? Math.max(0, e.clientX - rect.left) : 0
       const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY
-      const step = Math.exp(-dy * 0.0014)
+      // Bigger steps when zoomed in far (see zoom.ts), judged at the zoom
+      // this frame will reach with what is already gathered.
+      const at = useTransportStore.getState().horizontalZoom * (zoomPending.current?.factor ?? 1)
+      const step = zoomStep(dy, at)
       const pending = zoomPending.current
       if (pending) {
         pending.factor *= step

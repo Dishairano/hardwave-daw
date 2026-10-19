@@ -37,6 +37,7 @@ import { usePickerStore } from '../stores/pickerStore'
 import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
 import { ArrangementSwitcher } from './ArrangementSwitcher'
 import { Workspace } from './workspace/Workspace'
+import { zoomStep } from './arrangement/zoom'
 import { detachPanel } from './FloatingWindow'
 import { useHoverInfoStore } from '../stores/hoverInfoStore'
 import { useProjectStore } from '../stores/projectStore'
@@ -1354,7 +1355,7 @@ function HwPlaylistTools() {
         title="Horizontal zoom: scroll to zoom, click to fit the song, double-click for 100%"
         onClick={() => zoomToFit()}
         onDoubleClick={() => setHorizontalZoom(1)}
-        onWheel={(e) => setHorizontalZoom(horizontalZoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15))}
+        onWheel={(e) => setHorizontalZoom(horizontalZoom * zoomStep(e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY, horizontalZoom))}
       >
         <small>H-ZOOM</small>{Math.round(horizontalZoom * 100)}%
       </button>
