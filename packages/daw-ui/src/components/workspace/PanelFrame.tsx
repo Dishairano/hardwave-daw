@@ -51,7 +51,7 @@ export function PanelFrame({ id, title, head, geometry, area, others, onHints, o
   useEffect(() => {
     if (!menu) return
     const close = (e: PointerEvent) => {
-      if (!(e.target as HTMLElement).closest?.('.hw-pf-menu, .hw-pf-menu-btn')) setMenu(false)
+      if (!(e.target as HTMLElement).closest?.('.hw-panel-menu, .hw-panel-menu-btn')) setMenu(false)
     }
     window.addEventListener('pointerdown', close)
     return () => window.removeEventListener('pointerdown', close)
@@ -143,25 +143,25 @@ export function PanelFrame({ id, title, head, geometry, area, others, onHints, o
   return (
     <div
       ref={frameRef}
-      className={`hw-pf${docked ? ' docked' : ''}${geometry.max ? ' max' : ''}`}
+      className={`hw-panel${docked ? ' docked' : ''}${geometry.max ? ' max' : ''}`}
       data-testid={testId}
       data-panel={id}
       style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex: geometry.max ? 500 + geometry.z : geometry.z }}
       onPointerDownCapture={() => front(id)}
     >
       <div
-        className="hw-pf-bar"
+        className="hw-panel-bar"
         onPointerDown={startDrag}
         onDoubleClick={(e) => {
           if (!(e.target as HTMLElement).closest('button, select, input, [data-nodrag]')) toggleMax(id)
         }}
       >
-        <button type="button" className="hw-pf-menu-btn" title="Panel menu" onClick={() => setMenu((m) => !m)}>
+        <button type="button" className="hw-panel-menu-btn" title="Panel menu" onClick={() => setMenu((m) => !m)}>
           <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
         </button>
-        <span className="hw-pf-title">{head ?? title}</span>
-        {(docked || geometry.max) && <span className="hw-pf-tag">{geometry.max ? 'max' : 'docked'}</span>}
-        <span className="hw-pf-sp" />
+        <span className="hw-panel-title">{head ?? title}</span>
+        {(docked || geometry.max) && <span className="hw-panel-tag">{geometry.max ? 'max' : 'docked'}</span>}
+        <span className="hw-panel-sp" />
         {onDetach && (
           <button type="button" title="Detached: open in its own window (another screen)" onClick={onDetach}>
             <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="5.5" width="8" height="8" rx="1" stroke="currentColor" strokeWidth="1.3" /><path d="M6 2.5h7.5V10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -175,7 +175,7 @@ export function PanelFrame({ id, title, head, geometry, area, others, onHints, o
         </button>
       </div>
       {menu && (
-        <div className="hw-pf-menu" role="menu">
+        <div className="hw-panel-menu" role="menu">
           {onDetach && <button type="button" className="hl" onClick={pick(onDetach)}>Detached</button>}
           <button type="button" onClick={pick(() => toggleMax(id))}>{geometry.max ? 'Restore' : 'Maximize'}</button>
           <hr />
@@ -188,9 +188,9 @@ export function PanelFrame({ id, title, head, geometry, area, others, onHints, o
           <button type="button" onClick={pick(onClose)}>Close</button>
         </div>
       )}
-      <div className="hw-pf-body">{children}</div>
+      <div className="hw-panel-body">{children}</div>
       {!geometry.max && DIRS.map((d) => (
-        <div key={d} className={`hw-pf-h ${d}`} onPointerDown={startResize(d)} />
+        <div key={d} className={`hw-panel-h ${d}`} onPointerDown={startResize(d)} />
       ))}
     </div>
   )

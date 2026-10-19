@@ -1,7 +1,12 @@
 /* The work area and its panel windows (approved mockup:
-   suite.hardwavestudios.com/daw-panels-mockup/). */
+   suite.hardwavestudios.com/daw-panels-mockup/). Classes are hw-panel*: hw-pf* belongs to the
+   plug-in picker's flyout, and sharing it hid the picker inside the mixer. */
 
+/* One layer of its own: the panels' order only counts among the panels. Without it a
+   maximized panel (z 500 and up), or any panel brought to the front often enough, sat above
+   the top bar's menus (z 200). */
 .hw-ws {
+  isolation: isolate;
   position: relative;
   flex: 1;
   min-width: 0;
@@ -19,7 +24,7 @@
   color: var(--text-dim); text-transform: uppercase; pointer-events: none;
 }
 
-.hw-pf {
+.hw-panel {
   position: absolute;
   display: flex;
   flex-direction: column;
@@ -29,9 +34,9 @@
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
   overflow: hidden;
 }
-.hw-pf.docked, .hw-pf.max { border-radius: 0; box-shadow: none; }
+.hw-panel.docked, .hw-panel.max { border-radius: 0; box-shadow: none; }
 
-.hw-pf-bar {
+.hw-panel-bar {
   height: 24px;
   flex-shrink: 0;
   display: flex;
@@ -47,21 +52,21 @@
   user-select: none;
   touch-action: none;
 }
-.hw-pf-bar:active { cursor: grabbing; }
-.hw-pf-title {
+.hw-panel-bar:active { cursor: grabbing; }
+.hw-panel-title {
   display: inline-flex; align-items: center; gap: 6px;
   min-width: 0; overflow: hidden; white-space: nowrap;
   color: var(--text); letter-spacing: 1px; text-transform: uppercase; font-weight: 600;
 }
-.hw-pf-title .title { font-family: var(--mono); font-size: 10px; color: var(--text); letter-spacing: 1px; text-transform: uppercase; }
-.hw-pf-title .title b { color: var(--red); font-weight: 700; }
-.hw-pf-tag {
+.hw-panel-title .title { font-family: var(--mono); font-size: 10px; color: var(--text); letter-spacing: 1px; text-transform: uppercase; }
+.hw-panel-title .title b { color: var(--red); font-weight: 700; }
+.hw-panel-tag {
   flex-shrink: 0;
   font-size: 8.5px; letter-spacing: 1px; text-transform: uppercase;
   color: var(--text-dim); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px;
 }
-.hw-pf-sp { flex: 1; }
-.hw-pf-bar button {
+.hw-panel-sp { flex: 1; }
+.hw-panel-bar button {
   all: unset;
   cursor: pointer;
   width: 22px; height: 18px;
@@ -70,26 +75,26 @@
   color: var(--text-dim);
   flex-shrink: 0;
 }
-.hw-pf-bar button:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
-.hw-pf-bar button.x:hover { background: rgba(220, 38, 38, 0.75); color: #fff; }
+.hw-panel-bar button:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.hw-panel-bar button.x:hover { background: rgba(220, 38, 38, 0.75); color: #fff; }
 
-.hw-pf-menu {
+.hw-panel-menu {
   position: absolute; top: 24px; left: 3px; z-index: 20;
   min-width: 190px; padding: 4px;
   background: #0d0d11; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 7px;
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6);
   font-size: 12px;
 }
-.hw-pf-menu button {
+.hw-panel-menu button {
   all: unset; cursor: pointer; display: flex; justify-content: space-between;
   width: 100%; box-sizing: border-box; padding: 5px 9px; border-radius: 5px; color: var(--text-dim);
 }
-.hw-pf-menu button:hover { background: rgba(255, 255, 255, 0.07); color: var(--text); }
-.hw-pf-menu button.hl { color: var(--text); }
-.hw-pf-menu button.hl::after { content: '⧉'; color: var(--red); }
-.hw-pf-menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 2px; }
+.hw-panel-menu button:hover { background: rgba(255, 255, 255, 0.07); color: var(--text); }
+.hw-panel-menu button.hl { color: var(--text); }
+.hw-panel-menu button.hl::after { content: '⧉'; color: var(--red); }
+.hw-panel-menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 2px; }
 
-.hw-pf-body {
+.hw-panel-body {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -98,20 +103,20 @@
 }
 /* A panel's own container fills the frame (it used to size itself in the
    fixed column). */
-.hw-pf-body > .fl-browser { width: auto; flex: 1; border-right: 0; }
-.hw-pf-body > .fl-playlist,
-.hw-pf-body > .fl-panel-host { flex: 1; min-height: 0; }
+.hw-panel-body > .fl-browser { width: auto; flex: 1; border-right: 0; }
+.hw-panel-body > .fl-playlist,
+.hw-panel-body > .fl-panel-host { flex: 1; min-height: 0; }
 
-.hw-pf-h { position: absolute; z-index: 10; touch-action: none; }
-.hw-pf-h.n, .hw-pf-h.s { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
-.hw-pf-h.n { top: -3px; height: 5px; } .hw-pf-h.s { bottom: -2px; }
-.hw-pf-h.e, .hw-pf-h.w { top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
-.hw-pf-h.e { right: -2px; } .hw-pf-h.w { left: -2px; }
-.hw-pf-h.ne, .hw-pf-h.nw, .hw-pf-h.se, .hw-pf-h.sw { width: 12px; height: 12px; }
-.hw-pf-h.ne { top: -2px; right: -2px; cursor: nesw-resize; }
-.hw-pf-h.sw { bottom: -2px; left: -2px; cursor: nesw-resize; }
-.hw-pf-h.nw { top: -2px; left: -2px; cursor: nwse-resize; }
-.hw-pf-h.se { bottom: -2px; right: -2px; cursor: nwse-resize; }
+.hw-panel-h { position: absolute; z-index: 10; touch-action: none; }
+.hw-panel-h.n, .hw-panel-h.s { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+.hw-panel-h.n { top: -3px; height: 5px; } .hw-panel-h.s { bottom: -2px; }
+.hw-panel-h.e, .hw-panel-h.w { top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+.hw-panel-h.e { right: -2px; } .hw-panel-h.w { left: -2px; }
+.hw-panel-h.ne, .hw-panel-h.nw, .hw-panel-h.se, .hw-panel-h.sw { width: 12px; height: 12px; }
+.hw-panel-h.ne { top: -2px; right: -2px; cursor: nesw-resize; }
+.hw-panel-h.sw { bottom: -2px; left: -2px; cursor: nesw-resize; }
+.hw-panel-h.nw { top: -2px; left: -2px; cursor: nwse-resize; }
+.hw-panel-h.se { bottom: -2px; right: -2px; cursor: nwse-resize; }
 
 .hw-ws-guide { position: absolute; z-index: 2000; background: var(--red); opacity: 0.85; pointer-events: none; }
 .hw-ws-zone {
