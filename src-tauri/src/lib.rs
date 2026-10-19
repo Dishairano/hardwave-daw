@@ -147,6 +147,7 @@ fn timed<R: tauri::Runtime>(
     move |invoke| {
         let command = invoke.message.command().to_string();
         let started = std::time::Instant::now();
+        backend_stats::command_started(&command);
         let handled = handler(invoke);
         backend_stats::note_command(&command, started.elapsed());
         handled
@@ -764,6 +765,9 @@ pub fn run() {
             diagnostics::diagnostics_info,
         ]))
         .setup(move |app| {
+            // Watch the main thread from the start, not only while the FPS
+            // meter is open: a stuck main thread has to leave a line in the log.
+            backend_stats::start_watchdog(app.handle().clone());
             log::info!("Hardwave DAW starting");
 
             // Lets the panic hook raise a frontend crash banner.
