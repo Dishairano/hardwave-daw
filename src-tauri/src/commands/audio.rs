@@ -1,4 +1,5 @@
 use crate::AppState;
+use hardwave_dsp::waveform_colour::WaveformColours;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::State;
@@ -1059,9 +1060,8 @@ pub fn toggle_clip_reverse(
     Ok(new_value)
 }
 
-/// Get downsampled waveform peaks for an audio source.
-/// Returns pairs of (min, max) per bucket for rendering.
-/// A small waveform for a file in the browser, without importing it.
+/// A small waveform for a file in the browser, without importing it: per
+/// bucket `[low, high, r, g, b]`, coloured as `get_waveform_peaks`.
 ///
 /// The browser listed sample packs as names. Picking a kick out of two
 /// hundred meant auditioning them one at a time, when the shape of the
@@ -1075,17 +1075,19 @@ pub fn get_file_peaks(
     state: State<AppState>,
     file_path: String,
     num_buckets: usize,
-) -> Result<Vec<[f32; 2]>, String> {
+) -> Result<Vec<[f32; 5]>, String> {
     let path = PathBuf::from(&file_path);
     let engine = state.engine.lock();
     let source_id = hardwave_engine::engine::source_id_for_path(&path.to_string_lossy());
     if !engine.audio_pool.contains(&source_id) {
         engine.load_audio_file_as(&path, &source_id)?;
     }
-    let buffer = engine
-        .audio_pool
+    let pool = engine.audio_pool.clone();
+    drop(engine);
+    let buffer = pool
         .get(&source_id)
         .ok_or_else(|| format!("could not read {file_path}"))?;
+    let colours = pool.waveform_colours(&source_id);
     let frames = buffer.num_frames;
     if frames == 0 || num_buckets == 0 {
         return Ok(Vec::new());
@@ -1110,94 +1112,172 @@ pub fn get_file_peaks(
                 high = sample;
             }
         }
-        out.push([low, high]);
+        let [r, g, b] = colours
+            .as_deref()
+            .and_then(|c| c.colour(start, end))
+            .unwrap_or([0; 3]);
+        out.push([low, high, f32::from(r), f32::from(g), f32::from(b)]);
         start = end;
     }
     Ok(out)
 }
 
+/// A file's waveform for drawing: per bucket `[min, max, rms, r, g, b]`.
+///
+/// * min and max are the outline (over the channels mixed to one),
+/// * rms is the loudness of the bucket,
+/// * r, g, b (0..255) is its colour the way FL Studio's Multiband waveforms
+///   colour it: the levels of a low, a mid and a high band over their sum
+///   (see `hardwave_dsp::waveform_colour`). Silence is 0, 0, 0.
+///
+/// The file is split into `num_buckets` even buckets. Zoomed in far, the
+/// playlist asks for millions of buckets but only the ones on screen:
+/// `first` and `count` pick that stretch, so deep zoom costs what one
+/// screen needs. The colours are worked out once per file and kept in the
+/// pool, so asking again only sums what each bucket covers.
 #[tauri::command]
 pub fn get_waveform_peaks(
     state: State<AppState>,
     source_id: String,
     num_buckets: usize,
-) -> Result<Vec<[f32; 4]>, String> {
-    let engine = state.engine.lock();
-    let buffer = engine
-        .audio_pool
+    first: Option<usize>,
+    count: Option<usize>,
+) -> Result<Vec<[f32; 6]>, String> {
+    // Read from the pool without holding the engine: the first ask for a
+    // file's colours reads all of it.
+    let pool = state.engine.lock().audio_pool.clone();
+    let buffer = pool
         .get(&source_id)
         .ok_or_else(|| format!("Source not found: {}", source_id))?;
+    let colours = pool.waveform_colours(&source_id);
+    let first = first.unwrap_or(0);
+    let range = first..first.saturating_add(count.unwrap_or(num_buckets));
+    Ok(waveform_peaks(
+        &buffer,
+        colours.as_deref(),
+        num_buckets,
+        range,
+    ))
+}
 
+/// Buckets `range` of the file split into `num_buckets` even buckets. A
+/// bucket covers at least one frame, so asking for more buckets than the
+/// file has frames repeats frames rather than leaving the end empty.
+fn waveform_peaks(
+    buffer: &hardwave_engine::audio_pool::AudioBuffer,
+    colours: Option<&WaveformColours>,
+    num_buckets: usize,
+    range: std::ops::Range<usize>,
+) -> Vec<[f32; 6]> {
     let num_frames = buffer.num_frames;
     if num_frames == 0 || num_buckets == 0 {
-        return Ok(vec![]);
+        return vec![];
     }
-
-    let bucket_size = (num_frames as f64 / num_buckets as f64).ceil() as usize;
-    let mut peaks = Vec::with_capacity(num_buckets);
-
-    // Each bucket is [min, max, rms, brightness]:
-    //   * min/max form the outer peak envelope (the transient "hair"),
-    //   * rms forms the brighter inner body — the two-layer waveform DAWs
-    //     like FL Studio / rekordbox draw,
-    //   * brightness (0..1) is a cheap spectral-tilt estimate driving the
-    //     frequency colour of the slice: 0 = low/bass (drawn red), 1 =
-    //     high/treble (drawn blue). We estimate it from the RMS of the
-    //     first difference (x[n]-x[n-1], a one-tap high-pass) relative to
-    //     the signal RMS — no FFT needed, and it tracks dominant frequency
-    //     well enough for a per-slice colour. Kick bodies read red, cymbal
-    //     / hat transients read blue.
-    let num_ch = buffer.channels.len();
-    let inv_ch = 1.0 / num_ch as f32;
-    for i in 0..num_buckets {
-        let start = i * bucket_size;
-        let end = ((i + 1) * bucket_size).min(num_frames);
-        if start >= num_frames {
-            peaks.push([0.0, 0.0, 0.0, 0.0]);
-            continue;
-        }
-
+    let range = range.start.min(num_buckets)..range.end.min(num_buckets);
+    let edge = |i: usize| (i as u128 * num_frames as u128 / num_buckets as u128) as usize;
+    let inv_ch = 1.0 / buffer.channels.len().max(1) as f32;
+    let mut peaks = Vec::with_capacity(range.len());
+    for i in range {
+        let start = edge(i).min(num_frames - 1);
+        let end = edge(i + 1).clamp(start + 1, num_frames);
         let mut min_val: f32 = 0.0;
         let mut max_val: f32 = 0.0;
         let mut sum_sq: f64 = 0.0;
-        let mut diff_sq: f64 = 0.0;
-
-        let mixed = |frame: usize| -> f32 {
-            let mut s = 0.0_f32;
-            for ch in 0..num_ch {
-                s += buffer.sample(ch, frame);
-            }
-            s * inv_ch
-        };
-
-        // Seed prev with the frame before the bucket (or the first sample)
-        // so the difference is continuous across bucket boundaries.
-        let mut prev = mixed(start.saturating_sub(1));
         for frame in start..end {
-            let sample = mixed(frame);
+            let mut sample = 0.0_f32;
+            for ch in 0..buffer.channels.len() {
+                sample += buffer.sample(ch, frame);
+            }
+            let sample = sample * inv_ch;
             min_val = min_val.min(sample);
             max_val = max_val.max(sample);
-            sum_sq += (sample as f64) * (sample as f64);
-            let d = (sample - prev) as f64;
-            diff_sq += d * d;
-            prev = sample;
+            sum_sq += f64::from(sample) * f64::from(sample);
         }
+        let rms = (sum_sq / (end - start) as f64).sqrt() as f32;
+        let [r, g, b] = colours.and_then(|c| c.colour(start, end)).unwrap_or([0; 3]);
+        peaks.push([
+            min_val,
+            max_val,
+            rms,
+            f32::from(r),
+            f32::from(g),
+            f32::from(b),
+        ]);
+    }
+    peaks
+}
 
-        let count = (end - start).max(1) as f64;
-        let rms = (sum_sq / count).sqrt();
-        let diff_rms = (diff_sq / count).sqrt();
-        // diff_rms/rms → 0 for a DC/low tone, ~2 near Nyquist. Fold into a
-        // 0..1 brightness: diff/(rms+diff) sits in 0..~0.66, so scale by
-        // 1.5 and clamp. Silence stays at 0 (waveform height is ~0 anyway).
-        let brightness = if rms + diff_rms > 1e-9 {
-            ((diff_rms / (rms + diff_rms)) * 1.5).clamp(0.0, 1.0) as f32
-        } else {
-            0.0
-        };
-        peaks.push([min_val, max_val, rms as f32, brightness]);
+#[cfg(test)]
+mod waveform_peak_tests {
+    use super::*;
+    use hardwave_engine::audio_pool::AudioBuffer;
+
+    fn buffer(channels: Vec<Vec<f32>>) -> AudioBuffer {
+        let num_frames = channels[0].len();
+        AudioBuffer {
+            channels,
+            sample_rate: 48_000,
+            num_frames,
+        }
     }
 
-    Ok(peaks)
+    #[test]
+    fn buckets_cover_the_whole_file_evenly() {
+        // A ramp: bucket i's max tells where in the file it reads.
+        let ramp: Vec<f32> = (0..1000).map(|i| i as f32 / 1000.0).collect();
+        let b = buffer(vec![ramp]);
+        for n in [7, 300, 1000, 4096] {
+            let peaks = waveform_peaks(&b, None, n, 0..n);
+            assert_eq!(peaks.len(), n);
+            // The last bucket reads the end of the file, however n divides it:
+            // rounding the bucket size up used to leave the end of the
+            // waveform empty and draw a short sample squeezed into its clip.
+            assert!(
+                peaks[n - 1][1] > 0.99,
+                "{n} buckets end at {}",
+                peaks[n - 1][1]
+            );
+            for (i, p) in peaks.iter().enumerate() {
+                let start = i * 1000 / n;
+                let end = ((i + 1) * 1000 / n).max(start + 1);
+                assert_eq!(p[1], (end - 1) as f32 / 1000.0, "bucket {i} of {n}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_stretch_of_buckets_is_the_same_as_that_part_of_the_whole() {
+        let wave: Vec<f32> = (0..5000)
+            .map(|i| ((i * 37 % 101) as f32 / 50.0) - 1.0)
+            .collect();
+        let b = buffer(vec![wave.clone(), wave]);
+        let all = waveform_peaks(&b, None, 9000, 0..9000);
+        assert_eq!(
+            waveform_peaks(&b, None, 9000, 2048..4096),
+            all[2048..4096].to_vec()
+        );
+        assert_eq!(
+            waveform_peaks(&b, None, 9000, 8000..20_000),
+            all[8000..].to_vec()
+        );
+        assert!(waveform_peaks(&b, None, 9000, 9500..9600).is_empty());
+    }
+
+    #[test]
+    fn a_bass_reads_red_and_a_hat_blue() {
+        let rate = 48_000.0;
+        let wave = |hz: f32| -> Vec<f32> {
+            (0..24_000)
+                .map(|i| (std::f32::consts::TAU * hz * i as f32 / rate).sin() * 0.5)
+                .collect()
+        };
+        for (hz, red) in [(50.0, true), (8000.0, false)] {
+            let b = buffer(vec![wave(hz)]);
+            let colours = WaveformColours::analyse(&b.channels, b.sample_rate);
+            let p = waveform_peaks(&b, Some(&colours), 4, 1..3)[0];
+            assert_eq!(p[3] > p[5], red, "{hz} Hz drew {:?}", &p[3..]);
+        }
+    }
 }
 
 /// Move a clip to a new position (in ticks).

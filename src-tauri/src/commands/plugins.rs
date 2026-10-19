@@ -1,4 +1,5 @@
 use crate::AppState;
+use hardwave_dsp::waveform_colour::WaveformColours;
 use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
 use hardwave_native_plugins::sampler;
 use hardwave_native_plugins::{
@@ -1565,8 +1566,10 @@ pub struct SamplerSampleInfo {
     pub sample_rate: u32,
     pub channels: usize,
     pub root: u8,
-    /// Per bucket the lowest and highest sample over every channel.
-    pub peaks: Vec<[f32; 2]>,
+    /// Per bucket the lowest and highest sample over every channel, then
+    /// its colour as red, green and blue (0..255), coloured the way FL
+    /// Studio's Multiband waveforms are (see `hardwave_dsp::waveform_colour`).
+    pub peaks: Vec<[f32; 5]>,
 }
 
 #[tauri::command]
@@ -1594,6 +1597,7 @@ fn sampler_sample_info(s: &sampler::SamplerState, num_buckets: usize) -> Sampler
     let n = num_buckets.clamp(1, 4096).min(frames.max(1));
     let mut peaks = Vec::with_capacity(n);
     if frames > 0 {
+        let colours = WaveformColours::analyse(&s.sample.channels, s.sample.sample_rate);
         for b in 0..n {
             let from = b * frames / n;
             let to = ((b + 1) * frames / n).max(from + 1).min(frames);
@@ -1604,7 +1608,8 @@ fn sampler_sample_info(s: &sampler::SamplerState, num_buckets: usize) -> Sampler
                     hi = hi.max(v);
                 }
             }
-            peaks.push([lo, hi]);
+            let [r, g, b] = colours.colour(from, to).unwrap_or([0; 3]);
+            peaks.push([lo, hi, f32::from(r), f32::from(g), f32::from(b)]);
         }
     }
     SamplerSampleInfo {
@@ -2295,9 +2300,11 @@ mod sampler_window_tests {
             (100, 44_100, 1, 67)
         );
         assert_eq!(
-            info.peaks,
+            info.peaks.iter().map(|p| [p[0], p[1]]).collect::<Vec<_>>(),
             vec![[0.0, 0.5], [0.0, 0.5], [-0.25, 0.0], [-0.25, 0.0]]
         );
+        // A step from 0.5 to -0.25 is mostly DC: coloured as low, so red.
+        assert!(info.peaks.iter().all(|p| p[2] > p[4]), "{:?}", info.peaks);
         // More buckets than frames: one per frame, never a division by nothing.
         assert_eq!(sampler_sample_info(&s, 10_000).peaks.len(), 100);
         let empty = sampler::decode_sample_state(&sampler::encode_sample_state(48_000, 60, vec![]))

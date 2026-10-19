@@ -8,19 +8,20 @@
  * imports it, and only screenshot.html loads that entry (dev server only).
  */
 
-// Synthetic waveform peaks: [min, max, rms, brightness]. Models a realistic
+// Synthetic waveform peaks: [min, max, rms, r, g, b]. Models a realistic
 // drum-loop-ish signal — several transient hits, each a bright onset (treble
 // → blue) decaying into a bass body (red), with per-sample jitter so the
 // waveform has the jagged detail of real audio rather than a smooth blob.
-function synthPeaks(n: number): [number, number, number, number][] {
+// The colour runs from FL's 50 Hz red to its 5 kHz blue by brightness.
+function synthPeaks(n: number, first = 0, count = n): [number, number, number, number, number, number][] {
   // Deterministic pseudo-random so screenshots are reproducible.
   const rand = (i: number) => {
     const x = Math.sin(i * 127.1 + 311.7) * 43758.5453
     return x - Math.floor(x)
   }
   const hits = [0.0, 0.18, 0.31, 0.5, 0.63, 0.75, 0.88]
-  const out: [number, number, number, number][] = []
-  for (let i = 0; i < n; i++) {
+  const out: [number, number, number, number, number, number][] = []
+  for (let i = first; i < Math.min(n, first + count); i++) {
     const t = i / Math.max(1, n)
     // Nearest preceding hit → transient envelope + brightness.
     let env = 0
@@ -40,7 +41,8 @@ function synthPeaks(n: number): [number, number, number, number][] {
     const max = amp
     const min = -amp * (0.82 + 0.18 * rand(i + 7))
     const rms = amp * (0.5 + 0.35 * rand(i + 13))
-    out.push([min, max, rms, bright])
+    const mix = (lo: number, hi: number) => Math.round(lo + (hi - lo) * bright)
+    out.push([min, max, rms, mix(190, 7), mix(57, 43), mix(7, 207)])
   }
   return out
 }
@@ -137,16 +139,18 @@ const mock: TauriInternals = {
         // A decaying shape, so the browser's thumbnails can be photographed.
         return Array.from({ length: 48 }, (_, i) => {
           const a = Math.exp(-i / 14) * (0.4 + 0.6 * Math.abs(Math.sin(i * 1.7)))
-          return [-a, a]
+          return [-a, a, 190, 57, 7]
         })
       }
-      case 'get_waveform_peaks':
-        return synthPeaks((args?.numBuckets as number) ?? 256)
+      case 'get_waveform_peaks': {
+        const n = (args?.numBuckets as number) ?? 256
+        return synthPeaks(n, (args?.first as number) ?? 0, (args?.count as number) ?? n)
+      }
       // A sampler channel's sample: a short kick, named after its file.
       case 'get_sampler_sample':
         return {
           path: 'D:\\Kicks\\Induskick4.wav', frames: Math.round(0.62 * 48000), sampleRate: 48000, channels: 1, root: 60,
-          peaks: synthPeaks((args?.numBuckets as number) ?? 256).map((p) => [p[0], p[1]]),
+          peaks: synthPeaks((args?.numBuckets as number) ?? 256).map((p) => [p[0], p[1], p[3], p[4], p[5]]),
         }
       case 'load_sampler':
         return null

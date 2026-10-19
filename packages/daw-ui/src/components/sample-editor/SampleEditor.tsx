@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { hw } from '../../theme'
+import { analyseColours, rgbColour, type WaveColours } from '../../lib/waveformColour'
 import { encodeWav } from '../../utils/wav'
 
 interface SampleEditorProps {
@@ -80,10 +81,14 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
   }, [])
 
   // ── Redraw waveform ────────────────────────────────────────────────────────
+  // The sample's colours (FL Studio's Multiband colouring), worked out again
+  // only when an edit changes the audio.
+  const colours = useMemo(() => (sample ? analyseColours(sample.channels, sample.sampleRate) : null), [sample])
+
   useEffect(() => {
-    if (!sample || !canvasRef.current) return
-    drawWaveform(canvasRef.current, sample, view, selection)
-  }, [sample, view, selection])
+    if (!sample || !colours || !canvasRef.current) return
+    drawWaveform(canvasRef.current, sample, colours, view, selection)
+  }, [sample, colours, view, selection])
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const pushUndo = useCallback((current: Sample) => {
@@ -660,7 +665,7 @@ function formatRange(samples: number, sampleRate: number): string {
   return `${sec.toFixed(2)} s`
 }
 
-function drawWaveform(canvas: HTMLCanvasElement, sample: Sample, view: Selection, sel: Selection) {
+function drawWaveform(canvas: HTMLCanvasElement, sample: Sample, colours: WaveColours, view: Selection, sel: Selection) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   const w = canvas.width
@@ -687,52 +692,20 @@ function drawWaveform(canvas: HTMLCanvasElement, sample: Sample, view: Selection
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
     ctx.fillRect(0, yMid, w, 1)
 
-    // Per-column min / max / rms.
-    const tops = new Float32Array(w)
-    const bots = new Float32Array(w)
-    const rmss = new Float32Array(w)
+    // One column per pixel, each in the colour of what sounds there.
     for (let x = 0; x < w; x++) {
       const s = startIdx + Math.floor(x * samplesPerPx)
-      const e = Math.min(ch.length, startIdx + Math.floor((x + 1) * samplesPerPx))
-      let min = 0, max = 0, sq = 0, cnt = 0
+      const e = Math.min(ch.length, Math.max(s + 1, startIdx + Math.floor((x + 1) * samplesPerPx)))
+      let min = 0, max = 0
       for (let i = s; i < e; i++) {
         const v = ch[i]
         if (v < min) min = v
         if (v > max) max = v
-        sq += v * v
-        cnt++
       }
-      tops[x] = max
-      bots[x] = min
-      rmss[x] = cnt > 0 ? Math.sqrt(sq / cnt) : 0
+      const col = colours.colour(s, e)
+      ctx.fillStyle = col ? rgbColour(col[0], col[1], col[2]) : hw.accentLight
+      ctx.fillRect(x, yMid - max * ampScale, 1, Math.max(1, (max - min) * ampScale))
     }
-
-    // Outer peak envelope — translucent transient "hair".
-    ctx.beginPath()
-    for (let x = 0; x < w; x++) {
-      const yT = yMid - tops[x] * ampScale
-      if (x === 0) ctx.moveTo(x, yT)
-      else ctx.lineTo(x, yT)
-    }
-    for (let x = w - 1; x >= 0; x--) ctx.lineTo(x, yMid - bots[x] * ampScale)
-    ctx.closePath()
-    ctx.fillStyle = hw.accentLight
-    ctx.globalAlpha = 0.4
-    ctx.fill()
-
-    // Inner RMS body — brighter, symmetric around the centre.
-    ctx.beginPath()
-    for (let x = 0; x < w; x++) {
-      const yT = yMid - rmss[x] * ampScale
-      if (x === 0) ctx.moveTo(x, yT)
-      else ctx.lineTo(x, yT)
-    }
-    for (let x = w - 1; x >= 0; x--) ctx.lineTo(x, yMid + rmss[x] * ampScale)
-    ctx.closePath()
-    ctx.fillStyle = hw.accent
-    ctx.globalAlpha = 0.95
-    ctx.fill()
-    ctx.globalAlpha = 1.0
   }
 
   // Selection overlay

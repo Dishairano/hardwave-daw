@@ -4,6 +4,7 @@
 //! reads immutably — no locks in the hot path. A byte-size cap with FIFO eviction
 //! keeps memory bounded across long sessions with many samples loaded.
 
+use hardwave_dsp::waveform_colour::WaveformColours;
 use parking_lot::RwLock;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -102,6 +103,8 @@ struct PoolInner {
     /// Where each buffer's tail falls under a threshold (the bits of the
     /// threshold as the key), with the buffer's address, as `levels`.
     trims: HashMap<(String, u32), (usize, u64)>,
+    /// Each buffer's waveform colours, with its address, as `levels`.
+    colours: HashMap<String, (usize, Arc<WaveformColours>)>,
 }
 
 impl PoolInner {
@@ -112,6 +115,7 @@ impl PoolInner {
             bytes_used: 0,
             levels: HashMap::new(),
             trims: HashMap::new(),
+            colours: HashMap::new(),
         }
     }
 }
@@ -166,6 +170,7 @@ impl AudioPool {
                 if let Some(old) = inner.buffers.remove(&oldest_id) {
                     inner.bytes_used = inner.bytes_used.saturating_sub(old.bytes());
                 }
+                inner.colours.remove(&oldest_id);
             } else {
                 break;
             }
@@ -217,10 +222,33 @@ impl AudioPool {
         Some(end)
     }
 
+    /// A buffer's waveform colours (FL Studio's Multiband colouring, see
+    /// `hardwave_dsp::waveform_colour`), worked out the first time they are
+    /// asked for. Not for the audio thread: the first ask reads the buffer.
+    pub fn waveform_colours(&self, id: &str) -> Option<Arc<WaveformColours>> {
+        let buffer = self.get(id)?;
+        let address = Arc::as_ptr(&buffer) as usize;
+        if let Some((at, colours)) = self.inner.read().colours.get(id) {
+            if *at == address {
+                return Some(colours.clone());
+            }
+        }
+        let colours = Arc::new(WaveformColours::analyse(
+            &buffer.channels,
+            buffer.sample_rate,
+        ));
+        self.inner
+            .write()
+            .colours
+            .insert(id.to_string(), (address, colours.clone()));
+        Some(colours)
+    }
+
     /// Remove a buffer by ID.
     pub fn remove(&self, id: &str) {
         let mut inner = self.inner.write();
         inner.levels.remove(id);
+        inner.colours.remove(id);
         inner.trims.retain(|(k, _), _| k != id);
         if let Some(old) = inner.buffers.remove(id) {
             inner.bytes_used = inner.bytes_used.saturating_sub(old.bytes());
@@ -300,6 +328,7 @@ impl AudioPool {
                 if let Some(old) = inner.buffers.remove(&oldest_id) {
                     inner.bytes_used = inner.bytes_used.saturating_sub(old.bytes());
                 }
+                inner.colours.remove(&oldest_id);
             } else {
                 break;
             }
@@ -455,6 +484,43 @@ mod tests {
         assert_eq!(s.dc, [0.0, 0.0]);
         assert!((s.peak - 0.1).abs() < 1e-6);
         assert!(pool.level_stats("missing").is_none());
+    }
+
+    #[test]
+    fn waveform_colours_are_worked_out_once_per_buffer() {
+        let pool = AudioPool::new();
+        let tone = |hz: f32| -> Vec<f32> {
+            (0..4800)
+                .map(|i| (std::f32::consts::TAU * hz * i as f32 / 48_000.0).sin() * 0.5)
+                .collect()
+        };
+        let insert = |hz: f32| {
+            pool.insert(
+                "a".into(),
+                AudioBuffer {
+                    channels: vec![tone(hz)],
+                    sample_rate: 48_000,
+                    num_frames: 4800,
+                },
+            )
+        };
+        insert(50.0);
+        let first = pool.waveform_colours("a").unwrap();
+        assert!(Arc::ptr_eq(&first, &pool.waveform_colours("a").unwrap()));
+        let red = first.colour(1000, 3800).unwrap();
+        // Replaced under the same id: its own colours, not the old ones.
+        insert(8000.0);
+        let blue = pool
+            .waveform_colours("a")
+            .unwrap()
+            .colour(1000, 3800)
+            .unwrap();
+        assert!(
+            red[0] > red[2] && blue[2] > blue[0],
+            "{red:?} then {blue:?}"
+        );
+        pool.remove("a");
+        assert!(pool.waveform_colours("a").is_none());
     }
 
     #[test]

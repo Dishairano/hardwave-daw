@@ -206,10 +206,14 @@ interface ImportedClip {
   length_ticks: number
 }
 
-// Cache waveform peaks per source_id
-// Each peak bucket is [min, max, rms]; min/max draw the outer envelope,
-// rms the brighter inner body (FL Studio / rekordbox style waveform).
-const waveformCache = new Map<string, [number, number, number, number][]>()
+/** One bucket of a file's waveform from `get_waveform_peaks`: its lowest
+ *  and highest sample, its loudness, and its colour as red, green and blue
+ *  (0..255; all zero is silence), the way FL Studio's Multiband waveforms
+ *  colour it. */
+export type WavePeak = [min: number, max: number, rms: number, r: number, g: number, b: number]
+
+// Waveform peaks per source and bucket count.
+const waveformCache = new Map<string, WavePeak[]>()
 
 interface TrackState {
   tracks: TrackWithClips[]
@@ -372,7 +376,7 @@ interface TrackState {
   autoCrossfadeOverlaps: (trackId?: string) => Promise<number>
   undo: () => Promise<boolean>
   redo: () => Promise<boolean>
-  getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<[number, number, number, number][]>
+  getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<WavePeak[]>
 }
 
 /// Build a fresh `tracksById` from a `tracks` array. Keep this in one
@@ -1137,7 +1141,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     if (waveformCache.has(cacheKey)) {
       return waveformCache.get(cacheKey)!
     }
-    const peaks = await invoke<[number, number, number, number][]>('get_waveform_peaks', { sourceId, numBuckets })
+    const peaks = await invoke<WavePeak[]>('get_waveform_peaks', { sourceId, numBuckets })
     waveformCache.set(cacheKey, peaks)
     return peaks
   },

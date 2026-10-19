@@ -7,7 +7,7 @@ import { StemsDialog } from './StemsDialog'
 import { useCollabStore } from '../../stores/collabStore'
 import { SpectralEditor } from './SpectralEditor'
 import { listen } from '@tauri-apps/api/event'
-import { useTrackStore, ClipInfo, FadeCurveKind } from '../../stores/trackStore'
+import { useTrackStore, ClipInfo, FadeCurveKind, WavePeak } from '../../stores/trackStore'
 import { useSampleWindowStore } from '../../stores/sampleWindowStore'
 import { invoke } from '@tauri-apps/api/core'
 import { useTransportStore, snapToTicks } from '../../stores/transportStore'
@@ -28,6 +28,7 @@ import { paintSlotOccupied, paintSlotTick } from './paint'
 import { useTempoMapStore } from '../../stores/tempoMapStore'
 import { gridLines } from '../../utils/meter'
 import { mixHex, hexLuma } from '../../lib/color'
+import { rgbColour } from '../../lib/waveformColour'
 
 const PPQ = 960
 const PIXELS_PER_SECOND_BASE = 100
@@ -104,7 +105,56 @@ interface ContextMenuState {
 
 // Cache keyed by `${sourceId}:${bucketTier}` so zooming in fetches a higher-resolution
 // peak set instead of upscaling the existing one.
-const waveformData = new Map<string, [number, number, number, number][]>()
+const waveformData = new Map<string, WavePeak[]>()
+
+/** Up to this many buckets a file's waveform comes in one piece. Zoomed in
+ *  further it comes in tiles of TILE buckets, only where the playlist shows
+ *  it, so the detail at deep zoom (down to single samples, as FL draws it)
+ *  costs what one screen needs. The whole-file waveform stands in while a
+ *  tile is on its way. */
+const WHOLE_TIER = 4096
+const TILE = 2048
+/** Tiles kept, oldest dropped first: a tile is about 100 kB. */
+const MAX_TILES = 256
+const waveformTiles = new Map<string, WavePeak[]>()
+const tilesPending = new Set<string>()
+const tileQueue = new Map<string, { sourceId: string; tier: number; tile: number }>()
+let tileTimer: number | undefined
+/** Set by the mounted playlist: draws again once tiles have arrived. */
+let tilesArrived: (() => void) | null = null
+
+/** Ask for one tile of a file's waveform. Asked while drawing, so the asks
+ *  wait until the zoom and the scroll have settled, and only the latest
+ *  zoom's tiles are fetched. */
+function wantTile(sourceId: string, tier: number, tile: number) {
+  const key = `${sourceId}:${tier}:${tile}`
+  if (waveformTiles.has(key) || tilesPending.has(key)) return
+  tileQueue.set(key, { sourceId, tier, tile })
+  window.clearTimeout(tileTimer)
+  tileTimer = window.setTimeout(fetchTiles, 120)
+}
+
+function fetchTiles() {
+  const latest = new Map<string, number>()
+  for (const t of tileQueue.values()) latest.set(t.sourceId, t.tier)
+  const asks = [...tileQueue.entries()].filter(([, t]) => latest.get(t.sourceId) === t.tier)
+  tileQueue.clear()
+  for (const [key, t] of asks) {
+    tilesPending.add(key)
+    invoke<WavePeak[]>('get_waveform_peaks', { sourceId: t.sourceId, numBuckets: t.tier, first: t.tile * TILE, count: TILE })
+      .then((peaks) => {
+        waveformTiles.set(key, peaks)
+        while (waveformTiles.size > MAX_TILES) {
+          const oldest = waveformTiles.keys().next().value
+          if (oldest === undefined) break
+          waveformTiles.delete(oldest)
+        }
+        tilesArrived?.()
+      })
+      .catch(() => {})
+      .finally(() => tilesPending.delete(key))
+  }
+}
 const FADE_HANDLE_PX = 10
 const HEADER_H = 14
 
@@ -127,8 +177,8 @@ function fileWidthPx(clip: ClipInfo, pxPerTick: number, bpm: number): number {
 
 function bucketTier(desired: number): number {
   // Quantise to powers of two so we don't hammer the backend on tiny zoom changes.
-  const clamped = Math.max(100, Math.min(4000, Math.ceil(desired)))
-  return 1 << Math.ceil(Math.log2(clamped))
+  const clamped = Math.max(100, Math.min(1 << 24, Math.ceil(desired)))
+  return 2 ** Math.ceil(Math.log2(clamped))
 }
 
 // Hardwave clip palette — vibrant on near-black
@@ -339,7 +389,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       for (const track of audioTracks) {
         for (const clip of track.clips) {
           if (!clip.source_id) continue
-          const tier = bucketTier(Math.max(100, Math.ceil(fileWidthPx(clip, pixelsPerTick, bpm))))
+          const tier = Math.min(WHOLE_TIER, bucketTier(Math.max(100, Math.ceil(fileWidthPx(clip, pixelsPerTick, bpm)))))
           const key = `${clip.source_id}:${tier}`
           if (waveformData.has(key) || waveformPending.has(key)) continue
           waveformPending.add(key)
@@ -350,7 +400,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
                 redrawQueued.current = true
                 requestAnimationFrame(() => {
                   redrawQueued.current = false
-                  forceRender((n) => n + 1)
+                  // The draw does not run on a render of its own: ask it.
+                  drawMainRef.current()
                 })
               }
             })
@@ -365,6 +416,18 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   // React render; the effect below re-makes it when what it draws changes.
   const drawMainRef = useRef<() => void>(() => {})
   const drawPlayheadRef = useRef<() => void>(() => {})
+  // Tiles of a deep-zoomed waveform arrive after the draw asked for them.
+  useEffect(() => {
+    tilesArrived = () => {
+      if (redrawQueued.current) return
+      redrawQueued.current = true
+      requestAnimationFrame(() => {
+        redrawQueued.current = false
+        drawMainRef.current()
+      })
+    }
+    return () => { tilesArrived = null }
+  }, [])
   useEffect(() => {
    const draw = () => {
     const canvas = canvasRef.current
@@ -941,14 +1004,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     // Waveform — pick the best available tier: prefer the current one, else fallback
     // to any other tier we've already fetched so we render something during refetch.
+    // Past WHOLE_TIER the buckets come in tiles (see wantTile), with the
+    // whole-file waveform standing in for a tile still on its way.
     const tier = bucketTier(Math.max(100, Math.ceil(fileWidthPx(clip, pxPerTick, bpm))))
-    let peaks = waveformData.get(`${clip.source_id}:${tier}`)
+    const tiled = tier > WHOLE_TIER
+    let peaks = waveformData.get(`${clip.source_id}:${Math.min(tier, WHOLE_TIER)}`)
     if (!peaks) {
       for (const [k, v] of waveformData) {
         if (k.startsWith(`${clip.source_id}:`)) { peaks = v; break }
       }
     }
-    if (peaks && peaks.length > 0 && !clip.muted) {
+    if ((peaks?.length || tiled) && !clip.muted) {
       ctx.save()
       ctx.beginPath()
       ctx.rect(x + 1, y + headerH, w - 2, h - headerH - 1)
@@ -957,7 +1023,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const waveArea = h - headerH - 2
       const midY = y + headerH + waveArea * 0.5
       const ampScale = waveArea * 0.46
-      const n = peaks.length
+      const whole = peaks ?? []
+      const n = tiled ? tier : whole.length
+      const peakAt = (j: number): WavePeak | undefined => {
+        if (tiled) {
+          const t = waveformTiles.get(`${clip.source_id}:${tier}:${Math.floor(j / TILE)}`)
+          if (t) return t[j % TILE]
+          return whole[Math.floor((j * whole.length) / n)]
+        }
+        return whole[j]
+      }
       // Where bucket j of the file sits. With the file's length known, the
       // file is laid out at the speed it plays and from where the clip
       // starts in it, so what is drawn is what is heard. It used to be
@@ -986,30 +1061,26 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const startJ = Math.max(0, Math.floor((from - originX) / pxPerBucket) - 1)
       const endJ = Math.min(n, Math.ceil((to - originX) / pxPerBucket) + 1)
 
+      if (tiled) {
+        for (let t = Math.floor(startJ / TILE); t <= Math.floor((endJ - 1) / TILE); t++) {
+          wantTile(clip.source_id, tier, t)
+        }
+      }
+
       if (endJ > startJ) {
-        // Frequency-coloured waveform. Each slice is tinted by its spectral
-        // brightness (peaks[j][3], 0..1): low/bass reads red, treble reads
-        // blue (see spectralColor). Drawn as per-column bars rather than a
-        // single filled path so the colour can vary along the clip — a kick
-        // body glows red, a cymbal's transient tips run blue.
-        // Whole-pixel column width — no sub-pixel overlap so the waveform
-        // stays crisp (FL Studio / rekordbox draw hard vertical peak lines,
-        // not soft blended blobs).
+        // FL Studio's Multiband look: one waveform, each column in the
+        // colour of what sounds there (the backend mixes it from a low, a
+        // mid and a high band, peaks[j][3..5]), so a kick's tail is red and
+        // its click purple-blue. Whole-pixel columns keep the outline crisp.
         const colW = Math.max(1, Math.ceil(pxPerBucket))
         for (let j = startJ; j < endJ; j++) {
           const bx = Math.floor(place(originX + j * pxPerBucket))
-          const pk = peaks[j]
-          ctx.fillStyle = spectralColor(pk[3])
-          // Outer min/max envelope — the transient "hair".
+          const pk = peakAt(j)
+          if (!pk) continue
+          ctx.fillStyle = rgbColour(pk[3], pk[4], pk[5])
           const top = midY - pk[1] * ampScale
           const bot = midY - pk[0] * ampScale
-          ctx.globalAlpha = 0.72
           ctx.fillRect(bx, top, colW, Math.max(1, bot - top))
-          // Inner RMS body — full-opacity, symmetric around the centre line
-          // so the loud part of the sound reads as a bright solid core.
-          const rms = pk[2] * ampScale
-          ctx.globalAlpha = 1.0
-          ctx.fillRect(bx, midY - rms, colW, Math.max(1, rms * 2))
         }
 
         // Faint centre baseline.
@@ -2836,28 +2907,6 @@ function MenuItem({
   )
 }
 
-
-// Maps a spectral-brightness value (0..1, from the waveform peak data) to a
-// frequency colour: low/bass → red, mids → green, treble → blue. A 3-stop
-// lerp (red → green → blue) so a kick body reads red and cymbal/hat
-// transients run blue, matching the reference look.
-function spectralColor(b: number): string {
-  const t = b < 0 ? 0 : b > 1 ? 1 : b
-  const lerp = (a: number, z: number, k: number) => a + (z - a) * k
-  let r: number, g: number, bl: number
-  if (t < 0.5) {
-    const k = t / 0.5
-    r = lerp(235, 74, k)
-    g = lerp(64, 200, k)
-    bl = lerp(52, 120, k)
-  } else {
-    const k = (t - 0.5) / 0.5
-    r = lerp(74, 66, k)
-    g = lerp(200, 135, k)
-    bl = lerp(120, 245, k)
-  }
-  return `rgb(${r | 0},${g | 0},${bl | 0})`
-}
 
 /** A MIDI number as a name, so a message can say "C3" rather than 48. */
 function noteName(pitch: number): string {

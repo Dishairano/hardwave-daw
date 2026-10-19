@@ -20,13 +20,14 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { invoke } from '@tauri-apps/api/core'
 import { invokeOrToast } from '../../api/invoke'
 import { useSampleWindowStore } from '../../stores/sampleWindowStore'
-import { useTrackStore, type ClipInfo, type TrackInfo } from '../../stores/trackStore'
+import { useTrackStore, type ClipInfo, type TrackInfo, type WavePeak } from '../../stores/trackStore'
 import { useTransportStore } from '../../stores/transportStore'
 import { useHistoryStore } from '../../stores/historyStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { PPQ } from '../../utils/meter'
 import { FlatBox, FlatCheck, FlatKnob, FlatPanel, FlatSelect, FlatSwitch } from '../ui/flat/Flat'
 import type { PluginParam } from '../plugins/pluginDraw'
+import { rgbColour } from '../../lib/waveformColour'
 import './sampleWindow.css'
 
 // ------------------------------------------------------------------ shared
@@ -410,8 +411,8 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
   useEffect(() => {
     if (!clip) return
     let live = true
-    invoke<number[][]>('get_waveform_peaks', { sourceId: clip.source_id, numBuckets: 700 })
-      .then((p) => { if (live) setPeaks(p) })
+    invoke<WavePeak[]>('get_waveform_peaks', { sourceId: clip.source_id, numBuckets: 700 })
+      .then((p) => { if (live) setPeaks(p.map(([lo, hi, , r, g, b]) => [lo, hi, r, g, b])) })
       .catch(() => { if (live) setPeaks([]) })
     return () => { live = false }
   }, [clip?.source_id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -575,7 +576,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
       </div>
 
       <SampleView
-        peaks={peaks} seconds={seconds} bpm={bpm} color={color} region={region} loop={null}
+        peaks={peaks} seconds={seconds} bpm={bpm} region={region} loop={null}
         markers={visibleMarkers(markers, v.loadRegions, v.loadSlices)}
         window={{ start: v.start * seconds, end: (v.start + v.length * (1 - v.start)) * seconds }}
         fadeIn={v.fadeInMs / 1000 / Math.max(0.01, timeFactor(v))} fadeOut={v.fadeOutMs / 1000 / Math.max(0.01, timeFactor(v))}
@@ -609,6 +610,7 @@ interface SamplerSampleInfo {
   sampleRate: number
   channels: number
   root: number
+  /** Per bucket: lowest and highest sample, then red, green and blue. */
   peaks: number[][]
 }
 
@@ -865,7 +867,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
 
         <SampleView
           visible={page === 'sample'}
-          peaks={sample?.peaks ?? []} seconds={seconds} bpm={bpm} color={color}
+          peaks={sample?.peaks ?? []} seconds={seconds} bpm={bpm}
           region={{ start: regionStart + p(SP.offset) * regionSpan, end: regionEnd }}
           window={{ start: regionStart, end: regionEnd }}
           markers={visibleMarkers(samplerMarkers, on(SP.loadRegions), on(SP.loadSlices))}
@@ -935,11 +937,12 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
 
 /** The sample, wide at the bottom: what plays of it, its fades, its loop,
  *  the song's bars over it, and an overview strip under it. */
-function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = null, markers = [], fadeIn, fadeOut, reversed, empty, visible = true }: {
+function SampleView({ peaks, seconds, bpm, region, loop, window: win = null, markers = [], fadeIn, fadeOut, reversed, empty, visible = true }: {
+  /** Per bucket: lowest and highest sample, then its colour as red, green
+   *  and blue (FL Studio's Multiband colouring, from the backend). */
   peaks: number[][]
   seconds: number
   bpm: number
-  color: string
   region: { start: number; end: number }
   loop: { start: number; end: number } | null
   /** The part of the file that is the sample (sample start, length, trim). */
@@ -1002,8 +1005,7 @@ function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = nu
       const p = reversed ? peaks[n - 1 - i] : peaks[i]
       const t = ((i + 0.5) / n) * total
       const inside = t >= region.start && t <= region.end
-      g.fillStyle = inside ? color : 'rgba(168,168,178,.18)'
-      g.globalAlpha = inside ? 0.9 : 1
+      g.fillStyle = inside ? rgbColour(p[2] ?? 0, p[3] ?? 0, p[4] ?? 0) : 'rgba(168,168,178,.18)'
       const top = mid - Math.max(0, p[1]) * half
       const bottom = mid - Math.min(0, p[0]) * half
       g.fillRect((i / n) * w, top, Math.max(1, w / n + 0.4), Math.max(1, bottom - top))
@@ -1090,12 +1092,13 @@ function SampleView({ peaks, seconds, bpm, color, region, loop, window: win = nu
     if (!og) return
     og.scale(dpr, dpr)
     og.fillStyle = '#1b1b20'; og.fillRect(0, 4, ow, oh - 8)
-    og.fillStyle = color; og.globalAlpha = 0.55
+    og.globalAlpha = 0.55
     for (let i = 0; i < n; i++) {
+      og.fillStyle = rgbColour(peaks[i][2] ?? 0, peaks[i][3] ?? 0, peaks[i][4] ?? 0)
       const a = Math.max(Math.abs(peaks[i][0]), Math.abs(peaks[i][1])) * (oh / 2 - 5)
       og.fillRect((i / n) * ow, oh / 2 - a, Math.max(1, ow / n), a * 2)
     }
-  }, [peaks, seconds, bpm, color, region.start, region.end, loopKey, markerKey, win?.start, win?.end, fadeIn, fadeOut, reversed, empty, visible]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [peaks, seconds, bpm, region.start, region.end, loopKey, markerKey, win?.start, win?.end, fadeIn, fadeOut, reversed, empty, visible]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="sw-view">

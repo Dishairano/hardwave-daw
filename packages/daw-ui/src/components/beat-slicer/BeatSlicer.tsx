@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { hw } from '../../theme'
+import { analyseColours, rgbColour, type WaveColours } from '../../lib/waveformColour'
 import { encodeWav } from '../../utils/wav'
 import { encodeSingleTrackMidi, type SmfNote } from '../../utils/midi'
 import { useTransportStore } from '../../stores/transportStore'
@@ -139,10 +140,13 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
     if (sample && slices.length === 0) runAutoDetect()
   }, [sample, slices.length, runAutoDetect])
 
+  // The sample's colours (FL Studio's Multiband colouring), worked out once.
+  const colours = useMemo(() => (sample ? analyseColours(sample.channels, sample.sampleRate) : null), [sample])
+
   useEffect(() => {
-    if (!sample || !canvasRef.current) return
-    drawWaveform(canvasRef.current, sample, slices, selectedSlice)
-  }, [sample, slices, selectedSlice])
+    if (!sample || !colours || !canvasRef.current) return
+    drawWaveform(canvasRef.current, sample, colours, slices, selectedSlice)
+  }, [sample, colours, slices, selectedSlice])
 
   useEffect(() => {
     if (!banner) return
@@ -656,7 +660,7 @@ function btnStyle(variant: 'primary' | 'accent' | 'ghost'): React.CSSProperties 
   return { ...base, background: 'transparent', borderColor: 'transparent', color: hw.textSecondary }
 }
 
-function drawWaveform(canvas: HTMLCanvasElement, sample: Sample, slices: Slice[], selected: number | null) {
+function drawWaveform(canvas: HTMLCanvasElement, sample: Sample, colours: WaveColours, slices: Slice[], selected: number | null) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   const dpr = window.devicePixelRatio || 1
@@ -683,23 +687,21 @@ function drawWaveform(canvas: HTMLCanvasElement, sample: Sample, slices: Slice[]
   ctx.lineTo(w, midY)
   ctx.stroke()
 
-  ctx.strokeStyle = hw.textSecondary
-  ctx.lineWidth = 1
-  ctx.beginPath()
+  // One column per pixel, each in the colour of what sounds there.
   const step = n / w
   for (let x = 0; x < w; x++) {
     const s = Math.floor(x * step)
-    const e = Math.min(n, Math.floor((x + 1) * step))
-    let min = 1, max = -1
+    const e = Math.min(n, Math.max(s + 1, Math.floor((x + 1) * step)))
+    let min = 0, max = 0
     for (let i = s; i < e; i++) {
       const v = ch[i]
       if (v < min) min = v
       if (v > max) max = v
     }
-    ctx.moveTo(x, midY - max * amp)
-    ctx.lineTo(x, midY - min * amp)
+    const c = colours.colour(s, e)
+    ctx.fillStyle = c ? rgbColour(c[0], c[1], c[2]) : hw.textSecondary
+    ctx.fillRect(x, midY - max * amp, 1, Math.max(1, (max - min) * amp))
   }
-  ctx.stroke()
 
   slices.forEach((sl, i) => {
     const x = (sl.start / n) * w
