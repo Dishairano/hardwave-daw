@@ -637,33 +637,14 @@ impl HostedPlugin for ClapPluginInstance {
         };
         let api_ptr = api.as_ptr() as *const c_char;
 
-        unsafe {
-            // Embedded (non-floating) view in the host's window.
-            if !((*gui).is_api_supported)(self.plugin, api_ptr, false) {
-                return false;
-            }
-            if !((*gui).create)(self.plugin, api_ptr, false) {
-                return false;
-            }
-            let window = ClapWindow {
-                api: api_ptr,
-                handle,
-            };
-            if !((*gui).set_parent)(self.plugin, &window) {
-                ((*gui).destroy)(self.plugin);
-                return false;
-            }
-            // Size the host window to the plugin's preferred size when it
-            // reports one; ignore failures (the window stays default-sized).
-            let mut w: u32 = 0;
-            let mut h: u32 = 0;
-            if ((*gui).get_size)(self.plugin, &mut w, &mut h) && w > 0 && h > 0 {
-                let _ = ((*gui).set_size)(self.plugin, w, h);
-            }
-            if !((*gui).show)(self.plugin) {
-                ((*gui).destroy)(self.plugin);
-                return false;
-            }
+        let window = ClapWindow {
+            api: api_ptr,
+            handle,
+        };
+        // SAFETY: `gui` is the plug-in's own gui extension and `self.plugin`
+        // the instance it belongs to, both alive for this call.
+        if !unsafe { open_embedded_gui(&*gui, self.plugin, &window, &self.descriptor.name) } {
+            return false;
         }
         self.gui_open = true;
         true
@@ -703,6 +684,48 @@ impl HostedPlugin for ClapPluginInstance {
     fn pending_params(&self) -> Option<SharedParamQueue> {
         Some(Arc::clone(&self.pending_params))
     }
+}
+
+/// Put a plug-in's editor into the host window `window` (embedded, not
+/// floating): create, parent, size, show. False when the plug-in cannot,
+/// with anything it built torn down again.
+///
+/// # Safety
+/// `gui` must be `plugin`'s gui extension and `window.api` a valid
+/// NUL-terminated CLAP window API name.
+unsafe fn open_embedded_gui(
+    gui: &ClapPluginGui,
+    plugin: *const ClapPlugin,
+    window: &ClapWindow,
+    name: &str,
+) -> bool {
+    if !(gui.is_api_supported)(plugin, window.api, false) {
+        return false;
+    }
+    if !(gui.create)(plugin, window.api, false) {
+        return false;
+    }
+    if !(gui.set_parent)(plugin, window) {
+        (gui.destroy)(plugin);
+        return false;
+    }
+    // Size the host window to the plugin's preferred size when it
+    // reports one; ignore failures (the window stays default-sized).
+    let mut w: u32 = 0;
+    let mut h: u32 = 0;
+    if (gui.get_size)(plugin, &mut w, &mut h) && w > 0 && h > 0 {
+        let _ = (gui.set_size)(plugin, w, h);
+    }
+    // For an embedded view `show` is only a request: the view is already
+    // in the host's window from set_parent. nih-plug, which our own
+    // plug-ins are built on, answers false for embedded editors ("this
+    // wouldn't make any sense for embedded editors"), and treating that as
+    // a failure destroyed the editor it had just built, so no CLAP of ours
+    // could show its window.
+    if !(gui.show)(plugin) {
+        log::debug!("{name}: gui.show answered false for an embedded view");
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,6 +1075,102 @@ mod tests {
         let desc = descriptor_for(candidate);
         let result = ClapPluginInstance::load(desc);
         assert!(result.is_err(), "non-CLAP binary must be rejected");
+    }
+}
+
+#[cfg(test)]
+mod gui_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    // A fake plug-in editor that answers `show` as nih-plug does (false)
+    // and counts what the host asks of it.
+    static CREATED: AtomicU32 = AtomicU32::new(0);
+    static DESTROYED: AtomicU32 = AtomicU32::new(0);
+    static PARENT_OK: AtomicU32 = AtomicU32::new(1);
+
+    unsafe extern "C" fn yes(_: *const ClapPlugin, _: *const c_char, _: bool) -> bool {
+        true
+    }
+    unsafe extern "C" fn create(_: *const ClapPlugin, _: *const c_char, _: bool) -> bool {
+        CREATED.fetch_add(1, Ordering::SeqCst);
+        true
+    }
+    unsafe extern "C" fn destroy(_: *const ClapPlugin) {
+        DESTROYED.fetch_add(1, Ordering::SeqCst);
+    }
+    unsafe extern "C" fn pref(_: *const ClapPlugin, _: *mut *const c_char, _: *mut bool) -> bool {
+        false
+    }
+    unsafe extern "C" fn scale(_: *const ClapPlugin, _: f64) -> bool {
+        false
+    }
+    unsafe extern "C" fn size(_: *const ClapPlugin, w: *mut u32, h: *mut u32) -> bool {
+        *w = 800;
+        *h = 500;
+        true
+    }
+    unsafe extern "C" fn no(_: *const ClapPlugin) -> bool {
+        false
+    }
+    unsafe extern "C" fn hints(_: *const ClapPlugin, _: *mut c_void) -> bool {
+        false
+    }
+    unsafe extern "C" fn adjust(_: *const ClapPlugin, _: *mut u32, _: *mut u32) -> bool {
+        false
+    }
+    unsafe extern "C" fn set_size(_: *const ClapPlugin, _: u32, _: u32) -> bool {
+        false
+    }
+    unsafe extern "C" fn parent(_: *const ClapPlugin, _: *const ClapWindow) -> bool {
+        PARENT_OK.load(Ordering::SeqCst) == 1
+    }
+    unsafe extern "C" fn title(_: *const ClapPlugin, _: *const c_char) {}
+
+    fn fake_gui() -> ClapPluginGui {
+        ClapPluginGui {
+            is_api_supported: yes,
+            get_preferred_api: pref,
+            create,
+            destroy,
+            set_scale: scale,
+            get_size: size,
+            can_resize: no,
+            get_resize_hints: hints,
+            adjust_size: adjust,
+            set_size,
+            set_parent: parent,
+            set_transient: parent,
+            suggest_title: title,
+            show: no,
+            hide: no,
+        }
+    }
+
+    #[test]
+    fn an_embedded_editor_stays_open_when_show_answers_false() {
+        let gui = fake_gui();
+        let window = ClapWindow {
+            api: c"win32".as_ptr(),
+            handle: ClapWindowHandle {
+                ptr: std::ptr::null_mut(),
+            },
+        };
+        let before = DESTROYED.load(Ordering::SeqCst);
+        PARENT_OK.store(1, Ordering::SeqCst);
+        assert!(unsafe { open_embedded_gui(&gui, std::ptr::null(), &window, "Fake") });
+        assert_eq!(
+            DESTROYED.load(Ordering::SeqCst),
+            before,
+            "the editor must not be torn down"
+        );
+
+        // A plug-in that cannot take the parent window is still a failure,
+        // and what it built is torn down.
+        PARENT_OK.store(0, Ordering::SeqCst);
+        assert!(!unsafe { open_embedded_gui(&gui, std::ptr::null(), &window, "Fake") });
+        assert_eq!(DESTROYED.load(Ordering::SeqCst), before + 1);
+        assert!(CREATED.load(Ordering::SeqCst) >= 2);
     }
 }
 
