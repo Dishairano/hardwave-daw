@@ -410,6 +410,28 @@ impl DawEngine {
         }
     }
 
+    /// A different song is coming in: have the audio thread drop every live
+    /// plug-in (`InsertCommand::ClearAll`) before the new song's own arrive.
+    /// Waits a moment for room in the queue rather than lose it, since the
+    /// old song's plug-ins would otherwise go on playing in the new one.
+    pub fn clear_live_plugins(&self) {
+        let mut cmd = crate::insert_chain::InsertCommand::ClearAll;
+        for _ in 0..50 {
+            if self.insert_command_sender.lock().is_none() {
+                // No audio thread yet, so no live plug-ins either.
+                return;
+            }
+            match self.try_send_insert_command(cmd) {
+                Ok(()) => return,
+                Err(back) => {
+                    cmd = back;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
+        log::warn!("clear_live_plugins: insert queue stayed full; old plug-ins may linger");
+    }
+
     /// Drop everything pending in the plug-in graveyard. Call on a
     /// non-RT cadence (UI tick, on quit, etc) so vacated plug-in
     /// instances actually run their destructors. Returns the number
@@ -2408,10 +2430,31 @@ impl EngineCallback {
     fn dispatch_one_insert_command(&mut self, cmd: crate::insert_chain::InsertCommand) {
         let sample_rate = self.sample_rate as f64;
         let buffer_size = self.graph.buffer_size_hint();
+        // A new song: every node's plug-ins go, and so does whatever was
+        // parked for the old song's tracks.
+        let Some(target) = cmd.target_track_id() else {
+            for parked in self.deferred_insert_commands.drain(..) {
+                if let crate::insert_chain::InsertCommand::Add { mut slot, .. } = parked {
+                    slot.plugin.deactivate();
+                    if let Err(slot) = self.insert_graveyard_tx.try_bury(slot) {
+                        std::mem::forget(slot);
+                    }
+                }
+            }
+            for node in self.graph.iter_nodes_mut() {
+                node.apply_insert_command(
+                    crate::insert_chain::InsertCommand::ClearAll,
+                    &mut self.insert_graveyard_tx,
+                    sample_rate,
+                    buffer_size,
+                );
+            }
+            return;
+        };
         // Borrow the target id just long enough to look it up; after
         // `.copied()` the NodeId is owned and the borrow on `cmd`
         // ends, freeing it to move into apply_insert_command below.
-        let node_id = self.track_id_to_node.get(cmd.target_track_id()).copied();
+        let node_id = self.track_id_to_node.get(target).copied();
         let Some(node_id) = node_id else {
             // No node for this track yet. If a rebuild is still pending
             // (deferred by try_lock contention) the node will appear in
@@ -2425,7 +2468,7 @@ impl EngineCallback {
             } else {
                 log::warn!(
                     "insert chain: no TrackNode for track_id {}; dropping command",
-                    cmd.target_track_id()
+                    cmd.target_track_id().unwrap_or_default()
                 );
             }
             return;
@@ -5093,6 +5136,63 @@ mod rt_safety_tests {
         assert!(
             rx.try_recv().is_ok(),
             "snapshot request must be serviced on the first uncontended block"
+        );
+    }
+
+    #[test]
+    fn a_new_song_takes_the_old_songs_plug_ins_off_shared_track_ids() {
+        use crate::insert_chain::{tests::make_gain_slot, InsertCommand};
+        // Two songs both have the mixer insert "insert-001" (a fixed id).
+        let project_arc = Arc::new(Mutex::new(Project::default()));
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
+        let shared = "insert-001".to_string();
+        assert!(cb.track_id_to_node.contains_key(&shared));
+        let slots_on = |cb: &mut EngineCallback, id: &str| -> Vec<String> {
+            let node_id = cb.track_id_to_node[id];
+            let node = cb.graph.node_mut(node_id).unwrap();
+            let chain = node.take_chain();
+            let ids = chain
+                .as_ref()
+                .map(|c| c.slots.iter().map(|s| s.slot_id.clone()).collect())
+                .unwrap_or_default();
+            if let Some(chain) = chain {
+                node.restore_chain(chain);
+            }
+            ids
+        };
+        let mut out = vec![0.0f32; 512];
+
+        // The old song's sampler on the shared insert.
+        let (old, _) = make_gain_slot("old-sampler", 1.0, true);
+        cmd_tx
+            .try_send(InsertCommand::Add {
+                track_id: shared.clone(),
+                slot: old,
+            })
+            .ok()
+            .unwrap();
+        cb.process(&mut out, 256, 2);
+        assert_eq!(slots_on(&mut cb, &shared), vec!["old-sampler".to_string()]);
+
+        // Opening the new song: clear, swap the song, rebuild, then the new
+        // song's own plug-in for the same track id.
+        cmd_tx.try_send(InsertCommand::ClearAll).ok().unwrap();
+        *project_arc.lock() = Project::default();
+        cb.needs_rebuild = true;
+        let (new, _) = make_gain_slot("new-synth", 1.0, true);
+        cmd_tx
+            .try_send(InsertCommand::Add {
+                track_id: shared.clone(),
+                slot: new,
+            })
+            .ok()
+            .unwrap();
+        cb.process(&mut out, 256, 2);
+        cb.process(&mut out, 256, 2);
+        assert_eq!(
+            slots_on(&mut cb, &shared),
+            vec!["new-synth".to_string()],
+            "the old song's plug-in must not survive into the new song"
         );
     }
 
