@@ -1,9 +1,7 @@
 ### New features
-- feat: waveforms are coloured the way FL Studio's Multiband waveforms are (bass red, mids green, highs blue, mixed by what sounds), in the playlist, sample window, sampler, browser, beat slicer and sample editor
-- feat: zoomed in far, the playlist draws the waveform down to single samples instead of stretching it into blocks
+- feat: every panel (playlist, channel rack, piano roll, browser, mixer) can be moved, resized, docked against an edge, maximized and detached into its own window, as in FL, and the layout is remembered
+- feat: View menu layouts: Default, Arrange, Mix, Free, and one of your own
 
 ### Bug fixes
-- fix: opening, importing or starting a new song no longer keeps playing the previous song's plug-ins and samples
-- fix: opening a plug-in's or a panel's window twice in quick succession shows the window instead of an error
-- fix: a short sample zoomed in far is no longer drawn squeezed into part of its clip
+- fix: CLAP plug-ins' editors open in the DAW (our own CLAPs closed their window straight away)
 
