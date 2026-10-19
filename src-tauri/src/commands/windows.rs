@@ -9,7 +9,15 @@
 //! needs no new sync plumbing for playback/meters. Mirrors the proven
 //! `WebviewWindowBuilder` usage in `commands/plugins.rs` (plugin editors).
 
+use std::sync::Mutex;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+
+/// Held while a panel window is looked up and built. The command is async,
+/// so two opens of the same panel (a double-click, or a click that arrives
+/// twice after a remote-desktop reconnect) could both find no window and
+/// both build one; the second then failed with "a webview with label
+/// `panel-...` already exists", seen once on the test VM.
+static OPENING: Mutex<()> = Mutex::new(());
 
 fn label_for(panel: &str) -> String {
     // One window per panel id; keep the label to a safe alphanumeric slug so
@@ -65,10 +73,9 @@ pub async fn open_panel_window(
     };
     let plugin_window = slug == "pluginControls";
 
+    let _one_at_a_time = OPENING.lock().unwrap_or_else(|e| e.into_inner());
     // Re-clicking detach on an already-open panel just focuses its window.
-    if let Some(existing) = app.get_webview_window(&label) {
-        let _ = existing.show();
-        let _ = existing.set_focus();
+    if focus_existing(&app, &label) {
         return Ok(label);
     }
 
@@ -117,7 +124,7 @@ pub async fn open_panel_window(
     } else {
         (1100.0, 720.0, 480.0, 320.0)
     };
-    WebviewWindowBuilder::new(&app, &label, url)
+    match WebviewWindowBuilder::new(&app, &label, url)
         .title(window_title)
         // Frameless like the main DAW window (no OS "Hardwave DAW" title bar);
         // the panel renders its own thin drag/close bar.
@@ -127,9 +134,22 @@ pub async fn open_panel_window(
         .min_inner_size(min_w, min_h)
         .resizable(true)
         .build()
-        .map_err(|e| format!("Failed to open panel window: {e}"))?;
+    {
+        Ok(_) => Ok(label),
+        // Built after all, by an open this lock does not cover: show that one.
+        Err(_) if focus_existing(&app, &label) => Ok(label),
+        Err(e) => Err(format!("Failed to open panel window: {e}")),
+    }
+}
 
-    Ok(label)
+/// Show and focus the panel window with this label, if there is one.
+fn focus_existing(app: &AppHandle, label: &str) -> bool {
+    let Some(existing) = app.get_webview_window(label) else {
+        return false;
+    };
+    let _ = existing.show();
+    let _ = existing.set_focus();
+    true
 }
 
 /// Close a detached panel window (used when a panel is re-docked).
