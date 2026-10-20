@@ -1,3 +1,3 @@
-### Bug fixes
-- fix: when the audio stream drops (for example after a remote-desktop reconnect or a change in Windows' sound settings), the DAW restarts on your chosen device instead of switching to the system default
-
+### Improvements
+- The panels used the class names of the plug-in picker's flyout (hw-pf). The picker took the
+- A maximized panel (z 500 and up), or a panel brought to the front often enough, sat above
