@@ -68,8 +68,27 @@ pub fn make_area(
     ))
 }
 
+/// Destroy an area made by [`make_area`], on the thread that made it, once its plug-in's GUI
+/// is closed: the window it was in is kept for the next plug-in (plugin_window_pool).
+#[cfg(windows)]
+pub fn destroy_area(area: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyWindow, IsWindow};
+    let hwnd = area as windows_sys::Win32::Foundation::HWND;
+    // SAFETY: an area of ours; one already gone with its window fails IsWindow.
+    unsafe {
+        if IsWindow(hwnd) != 0 {
+            DestroyWindow(hwnd);
+        }
+    }
+}
+
 #[cfg(windows)]
 impl PluginArea {
+    /// The area's window handle, for [`destroy_area`].
+    pub fn handle(&self) -> isize {
+        self.child as isize
+    }
+
     /// Size the area to the editor and the window to the bar plus the area.
     pub fn fit(&self, window: &tauri::WebviewWindow, width: u32, height: u32) {
         use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOP, SWP_NOACTIVATE};

@@ -408,27 +408,28 @@ pub async fn open_plugin_editor(
     track_id: Option<String>,
     slot_id: Option<String>,
 ) -> Result<String, String> {
-    // On Windows the window shows our bar above the plug-in, which is a page
-    // of the app, so the label sits inside the panel-* permission. One
-    // window per slot.
+    // On Windows the window shows our bar above the plug-in, a page of the
+    // app, and comes from plugin_window_pool: one made ahead, or one an
+    // earlier editor closed. One window per slot.
     #[cfg(windows)]
-    let window_label = {
-        let key: String = slot_id
-            .as_deref()
-            .unwrap_or(&window_label)
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric())
-            .take(64)
-            .collect();
-        format!("panel-pluginEditor-{key}")
-    };
+    let slot_key: String = slot_id
+        .as_deref()
+        .unwrap_or(&window_label)
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(64)
+        .collect();
     // A second click on Show GUI brings the open window forward. This was
     // checked after a whole new plug-in instance had been loaded, which
     // was then thrown away.
-    if let Some(existing) = app.get_webview_window(&window_label) {
+    #[cfg(windows)]
+    let existing = crate::plugin_window_pool::open_window(&app, &slot_key);
+    #[cfg(not(windows))]
+    let existing = app.get_webview_window(&window_label);
+    if let Some(existing) = existing {
         let _ = existing.show();
         let _ = existing.set_focus();
-        return Ok(window_label);
+        return Ok(existing.label().to_string());
     }
 
     let (descriptor, shared_queue) = {
@@ -492,55 +493,48 @@ pub async fn open_plugin_editor(
     // made there never started its page, and a plug-in whose editor is a
     // WebView2 (every Hardwave plug-in) waited on it for ever. Show GUI did
     // nothing.
-    let builder = {
-        // Windows: the app's own page, which draws the bar with the
-        // plug-in's name and presets; the plug-in goes in an area below it
-        // (plugin_window_host). Elsewhere the plug-in fills the window.
-        #[cfg(windows)]
-        {
-            let q = |v: &str| -> String {
-                v.chars()
-                    .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '))
-                    .collect::<String>()
-                    .replace(' ', "%20")
-            };
-            let params = format!(
-                "trackId={}&slotId={}&pluginId={}&name={}",
-                q(track_id.as_deref().unwrap_or("")),
-                q(slot_id.as_deref().unwrap_or("")),
-                q(&plugin_id),
-                q(&descriptor.name)
-            );
-            let init = format!(
-                "(function(){{window.__HW_PANEL__={{panel:\"pluginHeader\",params:\"{params}\"}};}})();"
-            );
-            let url = app
-                .get_webview_window("main")
-                .and_then(|w| w.url().ok())
-                .map(tauri::WebviewUrl::External)
-                .unwrap_or_else(|| tauri::WebviewUrl::App("index.html".into()));
-            tauri::WebviewWindowBuilder::new(&app, &window_label, url).initialization_script(&init)
-        }
-        #[cfg(not(windows))]
-        {
-            tauri::WebviewWindowBuilder::new(
-                &app,
-                &window_label,
-                tauri::WebviewUrl::App("about:blank".into()),
-            )
-        }
-    };
     // Each step of opening is timed and logged once the window is up: a plug-in
     // window that holds up the app should say which step did it.
     let opened_at = std::time::Instant::now();
-    let editor_window = builder
-        .title(descriptor.name.clone())
-        .inner_size(600.0, 400.0 + crate::plugin_window_host::HEADER_CSS_PX)
-        .resizable(true)
-        .always_on_top(true)
-        .build()
-        .map_err(|e| format!("Failed to open editor window: {e}"))?;
+    // Windows: the app's own page, which draws the bar with the plug-in's
+    // name and presets; the plug-in goes in an area below it
+    // (plugin_window_host). Elsewhere the plug-in fills the window.
+    #[cfg(windows)]
+    let (editor_window, reused) = {
+        let q = |v: &str| -> String {
+            v.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '))
+                .collect::<String>()
+                .replace(' ', "%20")
+        };
+        let params = format!(
+            "trackId={}&slotId={}&pluginId={}&name={}",
+            q(track_id.as_deref().unwrap_or("")),
+            q(slot_id.as_deref().unwrap_or("")),
+            q(&plugin_id),
+            q(&descriptor.name)
+        );
+        crate::plugin_window_pool::take_or_make(&app, &params, &descriptor.name).await?
+    };
+    #[cfg(windows)]
+    let window_label = editor_window.label().to_string();
+    #[cfg(not(windows))]
+    let editor_window = tauri::WebviewWindowBuilder::new(
+        &app,
+        &window_label,
+        tauri::WebviewUrl::App("about:blank".into()),
+    )
+    .title(descriptor.name.clone())
+    .inner_size(600.0, 400.0 + crate::plugin_window_host::HEADER_CSS_PX)
+    .resizable(true)
+    .always_on_top(true)
+    .build()
+    .map_err(|e| format!("Failed to open editor window: {e}"))?;
     let window_ms = opened_at.elapsed().as_millis();
+    #[cfg(windows)]
+    let window_kind = if reused { "ready" } else { "new" };
+    #[cfg(not(windows))]
+    let window_kind = "new";
 
     // The plug-in and its GUI on the main thread, where a plug-in GUI has
     // to live, posted to it rather than run inside a callback.
@@ -605,7 +599,7 @@ pub async fn open_plugin_editor(
                     }
                     let editor_ms = step.elapsed().as_millis();
                     log::info!(
-                        "{}: editor window in {window_ms} ms; on the main thread: plug-in loaded in {load_ms} ms, state in {state_ms} ms, area in {area_ms} ms, plug-in editor in {editor_ms} ms",
+                        "{}: editor window ({window_kind}) in {window_ms} ms; on the main thread: plug-in loaded in {load_ms} ms, state in {state_ms} ms, area in {area_ms} ms, plug-in editor in {editor_ms} ms",
                         descriptor.name
                     );
                     // The window takes the size the editor asks for, not
@@ -615,6 +609,11 @@ pub async fn open_plugin_editor(
                     {
                         let (w, h) = size.unwrap_or((600, 400));
                         area.fit(&window, w, h);
+                        crate::plugin_window_pool::editor_opened(&slot_key, &window, area.handle());
+                        if reused {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
                     }
                     #[cfg(not(windows))]
                     if let Some((w, h)) = size {
@@ -643,6 +642,8 @@ pub async fn open_plugin_editor(
 
     // Closing the window closes the plug-in's GUI with it. Nothing did
     // this before, so the app kept a GUI attached to a window that was gone.
+    // On Windows the pool does this, and keeps the window.
+    #[cfg(not(windows))]
     {
         let app = app.clone();
         let label = window_label.clone();

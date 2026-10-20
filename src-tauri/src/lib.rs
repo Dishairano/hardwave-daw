@@ -19,6 +19,7 @@ mod plugin_describe;
 mod plugin_probe;
 mod plugin_sandbox;
 mod plugin_window_host;
+mod plugin_window_pool;
 mod prefs;
 mod process_memory;
 mod scripting;
@@ -768,6 +769,16 @@ pub fn run() {
             // Watch the main thread from the start, not only while the FPS
             // meter is open: a stuck main thread has to leave a line in the log.
             backend_stats::start_watchdog(app.handle().clone());
+            // One plug-in window made while the app starts, so the first
+            // editor does not wait for its window (plugin_window_pool).
+            #[cfg(windows)]
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(6));
+                    tauri::async_runtime::block_on(plugin_window_pool::prepare(handle));
+                });
+            }
             log::info!("Hardwave DAW starting");
 
             // Lets the panic hook raise a frontend crash banner.
@@ -1041,13 +1052,22 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             match event {
-                tauri::WindowEvent::CloseRequested { .. } => {
+                // Only the main window: this ran for every window, so closing a
+                // plug-in or panel window cleared the marker and a crash after
+                // it was not noticed on the next launch.
+                tauri::WindowEvent::CloseRequested { .. } if window.label() == "main" => {
                     // Reliable clean-shutdown hook: clear the alive marker so
                     // the next launch does not mistake this for a crash.
                     if let Ok(dir) = window.app_handle().path().app_cache_dir() {
                         let marker = dir.join("autosaves").join("session.alive");
                         let _ = std::fs::remove_file(marker);
                     }
+                }
+                // Plug-in windows kept hidden for later would keep the app
+                // running with nothing on screen.
+                #[cfg(windows)]
+                tauri::WindowEvent::Destroyed if window.label() == "main" => {
+                    plugin_window_pool::close_all(window.app_handle());
                 }
                 tauri::WindowEvent::DragDrop(drag_event) => {
                     // Native-side drag-drop bridge. On Windows + WebView2 with

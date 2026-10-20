@@ -116,16 +116,7 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
 
   // A third-party plug-in's window on Windows: this page is only the bar
   // along its top; the plug-in fills the area below it.
-  if (panel === 'pluginHeader') {
-    return (
-      <PluginWindowBar
-        trackId={params.get('trackId') ?? ''}
-        slotId={params.get('slotId') ?? ''}
-        pluginId={params.get('pluginId') ?? ''}
-        pluginName={params.get('name') ?? 'Plug-in'}
-      />
-    )
-  }
+  if (panel === 'pluginHeader') return <PluginHeaderPage initial={params} />
 
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: '#08080c', overflow: 'hidden' }}>
@@ -159,5 +150,30 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
         {ready ? view() : <div style={{ margin: 'auto', color: hw.textFaint, fontSize: 12 }}>Loading…</div>}
       </div>
     </div>
+  )
+}
+
+/**
+ * The bar of a plug-in's window on Windows. The window may have been made
+ * ahead, or kept from an earlier plug-in (plugin_window_pool in the backend),
+ * so the backend says which plug-in it is for now; no plug-in, an empty bar.
+ */
+function PluginHeaderPage({ initial }: { initial: URLSearchParams }) {
+  const [params, setParams] = useState(initial)
+  useEffect(() => {
+    const unlisten = getCurrentWindow().listen<string>('daw:pluginHeader', (e) => {
+      setParams(new URLSearchParams(e.payload))
+    })
+    return () => { void unlisten.then((stop) => stop()) }
+  }, [])
+  if (!params.get('pluginId')) return <div style={{ height: '100vh', background: '#0c0c11' }} />
+  return (
+    <PluginWindowBar
+      key={`${params.get('slotId')}:${params.get('pluginId')}`}
+      trackId={params.get('trackId') ?? ''}
+      slotId={params.get('slotId') ?? ''}
+      pluginId={params.get('pluginId') ?? ''}
+      pluginName={params.get('name') ?? 'Plug-in'}
+    />
   )
 }
