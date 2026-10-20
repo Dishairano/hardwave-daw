@@ -1,3 +1,4 @@
 ### Improvements
-- The panels used the class names of the plug-in picker's flyout (hw-pf). The picker took the
-- A maximized panel (z 500 and up), or a panel brought to the front often enough, sat above
+- fix(plug-ins): a closed plug-in window is kept for the next one
+- perf(plug-ins): open a plug-in window without waiting for a new WebView2
+- diag(plug-ins): log how long each step of opening a plug-in window takes
