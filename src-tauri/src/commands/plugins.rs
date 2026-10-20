@@ -471,6 +471,7 @@ pub async fn open_plugin_editor(
     // The window's plug-in is a second instance beside the one that plays.
     // It opened at the plug-in's defaults, so the window showed settings
     // the song was not using. It starts from the playing slot's state.
+    let state_from_slot = std::time::Instant::now();
     let slot_state = match (track_id.clone(), slot_id.clone()) {
         (Some(t), Some(s)) => {
             let app = app.clone();
@@ -493,6 +494,7 @@ pub async fn open_plugin_editor(
     // made there never started its page, and a plug-in whose editor is a
     // WebView2 (every Hardwave plug-in) waited on it for ever. Show GUI did
     // nothing.
+    let slot_state_ms = state_from_slot.elapsed().as_millis();
     // Each step of opening is timed and logged once the window is up: a plug-in
     // window that holds up the app should say which step did it.
     let opened_at = std::time::Instant::now();
@@ -599,7 +601,7 @@ pub async fn open_plugin_editor(
                     }
                     let editor_ms = step.elapsed().as_millis();
                     log::info!(
-                        "{}: editor window ({window_kind}) in {window_ms} ms; on the main thread: plug-in loaded in {load_ms} ms, state in {state_ms} ms, area in {area_ms} ms, plug-in editor in {editor_ms} ms",
+                        "{}: slot state in {slot_state_ms} ms (engine locked), editor window ({window_kind}) in {window_ms} ms; on the main thread: plug-in loaded in {load_ms} ms, state in {state_ms} ms, area in {area_ms} ms, plug-in editor in {editor_ms} ms",
                         descriptor.name
                     );
                     // The window takes the size the editor asks for, not
@@ -666,8 +668,8 @@ pub fn close_plugin_editor(
     state: State<'_, AppState>,
     window_label: String,
 ) -> Result<(), String> {
-    let mut editors = state.plugin_editors.lock();
-    if let Some(mut hosted) = editors.remove(&window_label) {
+    let hosted = state.plugin_editors.lock().remove(&window_label);
+    if let Some(mut hosted) = hosted {
         hosted.close_editor();
     }
     if let Some(window) = app.get_webview_window(&window_label) {

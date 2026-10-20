@@ -60,6 +60,10 @@ export function PanelWindow({ panel, params }: { panel: string; params: URLSearc
   // its inline copy back, on the channel this one had selected. Closing
   // with × or the OS left the main window with no mixer at all.
   useEffect(() => {
+    // A plug-in's window is not a panel, and the backend keeps it for the
+    // next plug-in instead of closing it (plugin_window_pool). Listening
+    // here made the page destroy the window whatever the backend decided.
+    if (panel === 'pluginHeader') return
     let unlisten: (() => void) | undefined
     getCurrentWindow()
       .onCloseRequested(async () => {
