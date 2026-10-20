@@ -75,6 +75,26 @@ pub fn note_command(command: &str, took: Duration) {
 /// thread freezes every window and command, and Windows waits on it during
 /// a log-on or a remote-desktop reconnect ("Welcome" hangs), so it has to
 /// say what it was stuck in.
+/// How long the main thread has to be stuck before its stack goes into the log.
+const STACK_AFTER: Duration = Duration::from_secs(5);
+
+/// The main thread's frames, into the log, at most `thread_stack::PER_RUN` times a run.
+fn log_main_thread_stack(stuck_for: Duration) {
+    static TAKEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let Some(main) = crate::thread_stack::main_thread() else {
+        return;
+    };
+    if TAKEN.fetch_add(1, Ordering::Relaxed) >= crate::thread_stack::PER_RUN {
+        return;
+    }
+    let frames = crate::thread_stack::capture(main);
+    log::warn!(
+        "main thread stuck for {:.0} s, at: {}",
+        stuck_for.as_secs_f32(),
+        crate::thread_stack::describe(&frames)
+    );
+}
+
 fn stuck_message(stuck_for: Duration, running: Option<(&str, Duration)>) -> String {
     let doing = match running {
         Some((command, for_)) => format!("in command {command} for {:.1} s", for_.as_secs_f32()),
@@ -95,6 +115,8 @@ pub fn start_watchdog(app: tauri::AppHandle) {
     if STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
+    // Called on the main thread: keep a handle to it, so a long freeze can say where it is.
+    crate::thread_stack::remember_main_thread();
     let spawned = std::thread::Builder::new()
         .name("main-thread-watchdog".into())
         .spawn(move || loop {
@@ -114,7 +136,13 @@ pub fn start_watchdog(app: tauri::AppHandle) {
                 Ok(lag) => lag,
                 Err(_) => {
                     let mut next_note = Duration::from_secs(2);
+                    let mut stack_taken = false;
                     let lag = loop {
+                        // Once per freeze, five seconds in: where the main thread is.
+                        if !stack_taken && asked.elapsed() >= STACK_AFTER {
+                            stack_taken = true;
+                            log_main_thread_stack(asked.elapsed());
+                        }
                         if asked.elapsed() >= next_note {
                             let r = running().lock().clone();
                             log::warn!(

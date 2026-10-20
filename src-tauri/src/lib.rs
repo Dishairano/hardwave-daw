@@ -26,6 +26,7 @@ mod scripting;
 #[cfg(test)]
 mod security_tests;
 mod stems_client;
+mod thread_stack;
 mod window_guard;
 mod workspace_cloud;
 
