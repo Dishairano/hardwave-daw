@@ -1,4 +1,8 @@
-# Fast gate on the founder's Windows PC.
+# Fast gate on Windows, on the test VM (HW-TEST-WIN).
+#
+# Until 21 Oct 2026 this ran on the founder's own workstation, and only in a
+# night window so it never took his CPU. It now runs on the test VM's runner,
+# so it runs on every push at any hour.
 #
 # The long engine tests (stress, render proofs, functional smoke) are
 # #[ignore]d and run on GitHub's machines instead, in the Functional Smoke
@@ -12,7 +16,7 @@
 # This runs on every push to the working branch so a tag is only ever cut on
 # a tree that has already been proven green. It deliberately does NOT gate the
 # release: release.yml keeps its own Lint & Test job on a GitHub runner, so a
-# tag still works when the PC is off.
+# tag still works when the VM is busy or off.
 name: Gate
 
 on:
@@ -31,11 +35,13 @@ permissions:
 
 jobs:
   gate:
-    runs-on: [self-hosted, Windows, hardwave-daw]
-    timeout-minutes: 45
-    # cmd, not PowerShell: the PC has no pwsh, and its execution policy
-    # refuses to run the .ps1 files Actions writes for every step. cmd needs
-    # no machine change. Steps stay one command each so a failure cannot hide
+    runs-on: [self-hosted, Windows, hw-test-win]
+    # The VM has 4 cores and shares them with the plug-in runners; a cold
+    # build there takes far longer than on the workstation did.
+    timeout-minutes: 120
+    # cmd, not PowerShell: pwsh is not installed, and Windows PowerShell's
+    # execution policy refuses the .ps1 files Actions writes for every step.
+    # cmd needs no machine change. Steps stay one command each so a failure cannot hide
     # behind a later success.
     defaults:
       run:
@@ -44,11 +50,7 @@ jobs:
       CARGO_NET_RETRY: 10
       CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
       RUST_BACKTRACE: 1
-      # The gate used to be held to six of the i9's twenty threads so it
-      # could run while the founder worked. It only runs in the night
-      # window now, or when he asks for it, so it takes the whole machine
-      # and is done in a fraction of the time. Cargo and the test harness
-      # both default to one job per core.
+      # Cargo and the test harness both default to one job per core.
       #
       # Line tables only, not full debug info: most of a warm build on
       # Windows is writing and linking debug info nobody reads in a gate,
@@ -56,24 +58,6 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
-      # The PC is the founder's own workstation. Builds run at night only,
-      # between 03:00 and 08:00 his time, so the gate never takes the CPU
-      # while he is working on it. Outside the window the job stops here
-      # rather than building: a gate that did not run must not look like a
-      # gate that passed, so this fails rather than skipping green.
-      # The founder's machine is the runner, so builds stay in the
-      # night window unless he says otherwise. The override is a
-      # repository variable rather than something only he can set on
-      # the machine, so a release he has asked for can go now.
-      - name: Build window
-        env:
-          HW_BUILD_ANYTIME: ${{ vars.HW_BUILD_ANYTIME }}
-        run: >-
-          powershell -NoProfile -ExecutionPolicy Bypass -Command "$h = [int](Get-Date).Hour;
-          if ($env:HW_BUILD_ANYTIME -eq '1') { 'building outside the window, by request'; exit 0 };
-          if ($h -lt 3 -or $h -ge 8) { Write-Host ('It is {0}:00 here. Builds run between 03:00 and 08:00; nothing was built.' -f $h); exit 1 };
-          ('{0}:00, inside the window' -f $h)"
-
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # First run doubles as a machine census: how much this box can take
       # (build jobs, whether it can host heavier work later).
