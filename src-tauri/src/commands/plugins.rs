@@ -530,6 +530,9 @@ pub async fn open_plugin_editor(
             )
         }
     };
+    // Each step of opening is timed and logged once the window is up: a plug-in
+    // window that holds up the app should say which step did it.
+    let opened_at = std::time::Instant::now();
     let editor_window = builder
         .title(descriptor.name.clone())
         .inner_size(600.0, 400.0 + crate::plugin_window_host::HEADER_CSS_PX)
@@ -537,6 +540,7 @@ pub async fn open_plugin_editor(
         .always_on_top(true)
         .build()
         .map_err(|e| format!("Failed to open editor window: {e}"))?;
+    let window_ms = opened_at.elapsed().as_millis();
 
     // The plug-in and its GUI on the main thread, where a plug-in GUI has
     // to live, posted to it rather than run inside a callback.
@@ -549,6 +553,7 @@ pub async fn open_plugin_editor(
         app.clone()
             .run_on_main_thread(move || {
                 let attach = || -> Result<(), String> {
+                    let step = std::time::Instant::now();
                     let mut hosted: Box<dyn HostedPlugin> = match descriptor.format {
                         PluginFormat::Vst3 => Box::new(
                             match shared_queue {
@@ -571,6 +576,8 @@ pub async fn open_plugin_editor(
                             .map_err(|e| e.to_string())?,
                         ),
                     };
+                    let load_ms = step.elapsed().as_millis();
+                    let step = std::time::Instant::now();
                     if let Some(bytes) = slot_state.as_deref() {
                         if let Err(e) = hosted.set_state(bytes) {
                             log::warn!(
@@ -579,6 +586,8 @@ pub async fn open_plugin_editor(
                             );
                         }
                     }
+                    let state_ms = step.elapsed().as_millis();
+                    let step = std::time::Instant::now();
                     #[cfg(windows)]
                     let (parent, area) = crate::plugin_window_host::make_area(&window)?;
                     #[cfg(not(windows))]
@@ -586,12 +595,19 @@ pub async fn open_plugin_editor(
                         .window_handle()
                         .map_err(|e| format!("window handle unavailable: {e}"))?
                         .as_raw();
+                    let area_ms = step.elapsed().as_millis();
+                    let step = std::time::Instant::now();
                     if !hosted.open_editor(parent) {
                         return Err(format!(
                             "{} has no window this host can show",
                             descriptor.name
                         ));
                     }
+                    let editor_ms = step.elapsed().as_millis();
+                    log::info!(
+                        "{}: editor window in {window_ms} ms; on the main thread: plug-in loaded in {load_ms} ms, state in {state_ms} ms, area in {area_ms} ms, plug-in editor in {editor_ms} ms",
+                        descriptor.name
+                    );
                     // The window takes the size the editor asks for, not
                     // a fixed 600 by 400 that cut most editors off.
                     let size = hosted.editor_size();
