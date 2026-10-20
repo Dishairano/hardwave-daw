@@ -10,6 +10,7 @@ mod control_surface;
 mod diagnostics;
 mod endpoints;
 mod frontend_updater;
+mod main_window;
 mod midi_clock;
 mod midi_map;
 mod midi_sync;
@@ -767,6 +768,8 @@ pub fn run() {
             diagnostics::diagnostics_info,
         ]))
         .setup(move |app| {
+            // No main window (WebView2 did not start): start again or say why, never run unseen.
+            main_window::ensure(app.handle());
             // Watch the main thread from the start, not only while the FPS
             // meter is open: a stuck main thread has to leave a line in the log.
             backend_stats::start_watchdog(app.handle().clone());
