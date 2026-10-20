@@ -57,6 +57,10 @@ jobs:
       # and backtraces still name the file and line.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      # No incremental data: the VM's disk is shared with five plug-in
+      # runners, and on 21 Oct a gate failed writing it when the disk filled.
+      # A gate builds each commit once, so incremental saves little here.
+      CARGO_INCREMENTAL: 0
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # First run doubles as a machine census: how much this box can take
