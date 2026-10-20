@@ -169,6 +169,9 @@ pub fn run() {
     unsafe {
         std::env::set_var("HARDWAVE_HOST", "hardwave-daw");
     }
+    // The main-window try count an earlier start passed on; read and cleared here for the same
+    // reason (main_window).
+    main_window::take_try();
 
     // Crash probe: this same binary, re-run with --probe-plugin, loads one
     // plug-in and exits. Handled before anything else starts, so the process
@@ -318,6 +321,8 @@ pub fn run() {
     // Copied out before the setup closure, which outlives `prefs`.
     let osc_on_at_launch = prefs.osc_enabled;
 
+    // Building the main window can hang in WebView2; a guard says so instead of running unseen.
+    main_window::guard();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
