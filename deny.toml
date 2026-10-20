@@ -34,6 +34,14 @@ ignore = [
     { id = "RUSTSEC-2026-0367", reason = "SUID/SGID bits kept on extract: Unix only; the updater unpacks our own signed archive on Windows" },
     { id = "RUSTSEC-2026-0368", reason = "symlinks outside the destination on extract: the updater unpacks our own signed archive" },
     { id = "RUSTSEC-2026-0369", reason = "Unix permissions applied through symlinks on extract: Unix only; our own signed archive" },
+    # RUSTSEC-2026-0381 (21 Oct 2026, distrusted emSign roots): webpki-roots 0.26.11 holds no
+    # certificates of its own. Its whole source is `pub use parent::TLS_SERVER_ROOTS` from
+    # webpki-roots 1.x, which Cargo.lock pins at 1.0.10, the patched release; RustSec flags the
+    # 0.26 line by version number only. Only tokio-tungstenite 0.24 still asks for 0.26. The
+    # ignore is by advisory id (a crate entry here only covers yanked crates), so it would also
+    # hide a downgrade of webpki-roots 1.x or webpki-root-certs below 1.0.10: keep both at 1.0.10
+    # or later. Remove this when tokio-tungstenite moves to webpki-roots 1.
+    { id = "RUSTSEC-2026-0381", reason = "only flags the webpki-roots 0.26.11 shim, which re-exports 1.x pinned at the patched 1.0.10 (see comment)" },
 ]
 
 [licenses]
