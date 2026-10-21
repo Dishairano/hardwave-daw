@@ -75,6 +75,9 @@ function keyOf(trackId: string, target: AutomationTargetInfo): string {
 // Plain setInterval rather than window.setInterval: the store is also
 // loaded in tests, which run without a window.
 let knobPoll: ReturnType<typeof setInterval> | null = null
+// A drain still waiting for its answer: the next tick skips rather than
+// piling another request behind it while the app's main thread is busy.
+let draining = false
 
 function startKnobPolling() {
   if (knobPoll !== null) return
@@ -86,9 +89,12 @@ function startKnobPolling() {
       stopKnobPolling()
       return
     }
+    if (draining) return
+    draining = true
     invoke<{ trackId: string; slotId: string; paramId: number; value: number }[]>(
       'drain_plugin_knob_moves',
     )
+      .finally(() => { draining = false })
       .then(moves => {
         if (!Array.isArray(moves) || moves.length === 0) return
         if (!store.isRecording()) return

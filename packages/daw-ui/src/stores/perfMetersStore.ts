@@ -115,9 +115,14 @@ export function startPerfMeters(): () => void {
   // A sandboxed plug-in whose process has gone. Its slot is already
   // quiet and the song is still playing, which is only useful if the
   // app says which plug-in it was. Once each: the command clears what
-  // it hands over.
+  // it hands over. Not shared like the reads (sharedReads), so a call still
+  // waiting for its answer keeps the next one from piling up behind it.
+  let takingCrashes = false
   const crashId = window.setInterval(() => {
+    if (takingCrashes) return
+    takingCrashes = true
     invoke<{ pluginId: string; message: string }[]>('take_sandbox_crashes')
+      .finally(() => { takingCrashes = false })
       .then(rows => {
         if (rows.length === 0) return
         void import('./notificationStore').then(({ useNotificationStore }) => {
