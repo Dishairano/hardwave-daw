@@ -186,6 +186,11 @@ jobs:
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
+          # Symbols for this lane only: the freeze log on a test machine gives
+          # offsets into hardwave-daw.exe, and the PDB published below turns
+          # them into function names and lines. Releases stay stripped.
+          CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"
+          CARGO_PROFILE_RELEASE_STRIP: "none"
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -223,6 +228,9 @@ jobs:
             --notes "Rolling debug build — do not use as a normal release." \
             2>/dev/null || true
           gh release upload fast-build "Hardwave.DAW_fast_x64-setup.exe" --clobber
+          # The symbols of the exe in that installer, for the freeze log.
+          pdb=$(find . -path '*x86_64-pc-windows-msvc/release/hardwave_daw.pdb' -not -path './node_modules/*' | head -1)
+          if [ -n "$pdb" ]; then cp "$pdb" hardwave_daw.pdb && gh release upload fast-build hardwave_daw.pdb --clobber; else echo "no PDB found"; fi
           gh release edit fast-build --notes "Rolling debug build from \`$GITHUB_REF_NAME\` @ \`${GITHUB_SHA::8}\` (v$ver, $(date -u +%Y-%m-%dT%H:%MZ)). Do not use as a normal release."
           echo "Published: https://github.com/$GITHUB_REPOSITORY/releases/download/fast-build/Hardwave.DAW_fast_x64-setup.exe"
 
