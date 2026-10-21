@@ -1,5 +1,5 @@
 ### Bug fixes
-- fix: adding a plug-in and opening a project try new plug-ins in the background; the window used to wait for each try, up to ten seconds on a busy computer
+- fix: a plug-in that keeps working while it loads on a busy computer gets up to a minute instead of ten seconds; one that does nothing for ten seconds is still stopped
 
 ### Improvements
-- fix(plugins): try a new plug-in off the main thread before loading it
+- fix(plugins): a slow plug-in on a busy computer is no longer switched off
