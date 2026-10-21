@@ -41,6 +41,10 @@ pub use prefs::AudioPrefs;
 /// Shared engine state accessible from Tauri commands.
 pub struct AppState {
     pub engine: Arc<Mutex<DawEngine>>,
+    /// The engine's MIDI input manager, the same one as `engine.midi_input`. Kept here so its
+    /// users never take the engine lock to reach it: waiting for this lock while holding the
+    /// engine's kept the whole app waiting on a MIDI port scan (freeze log, test VM, 21 Oct 2026).
+    pub midi_input: Arc<Mutex<hardwave_midi::MidiInputManager>>,
     /// Flipped by `cancel_export` to halt an in-progress offline render.
     /// The export command clears it on entry and checks it each block.
     pub export_cancel: Arc<AtomicBool>,
@@ -288,8 +292,10 @@ pub fn run() {
     let midi_timecode = Arc::new(MidiTimecodeState::with_output(Arc::clone(
         &midi_clock.output,
     )));
+    let midi_input = Arc::clone(&engine.midi_input);
     let state = AppState {
         engine: Arc::new(Mutex::new(engine)),
+        midi_input,
         export_cancel: Arc::new(AtomicBool::new(false)),
         plugin_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -815,6 +821,7 @@ pub fn run() {
                 Arc::clone(&state.midi_mappings),
                 Arc::clone(&state.control_surface),
                 Arc::clone(&state.midi_clock.output),
+                Arc::clone(&state.midi_input),
             );
 
             // MIDI Clock dispatcher: sends 24 PPQN clock ticks and
@@ -846,7 +853,11 @@ pub fn run() {
             // MIDI Clock sync dispatcher: observes clock ticks from the
             // MIDI input manager and, when sync is enabled, slaves the
             // transport BPM and play/stop state to the external master.
-            midi_sync::spawn_dispatcher(Arc::clone(&state.engine), Arc::clone(&state.midi_sync));
+            midi_sync::spawn_dispatcher(
+                Arc::clone(&state.engine),
+                Arc::clone(&state.midi_input),
+                Arc::clone(&state.midi_sync),
+            );
 
             // MIDI Time Code dispatcher: emits Quarter Frame messages at 4×fps
             // while playing and MTC send is enabled. Uses the same output
@@ -861,14 +872,14 @@ pub fn run() {
             // vanished. Desired set is maintained by open/close commands so
             // the user's choice survives unplug/replug.
             {
-                let engine_for_reconcile = Arc::clone(&state.engine);
+                // The ports are listed before the lock is taken: listing can take
+                // seconds on a busy machine, and everything that reads MIDI waits
+                // for this lock.
+                let midi_input = Arc::clone(&state.midi_input);
                 std::thread::spawn(move || loop {
                     std::thread::sleep(std::time::Duration::from_millis(2000));
-                    let mgr = {
-                        let eng = engine_for_reconcile.lock();
-                        Arc::clone(&eng.midi_input)
-                    };
-                    let _report = mgr.lock().reconcile();
+                    let available = hardwave_midi::MidiInputManager::available_ports();
+                    let _report = midi_input.lock().reconcile_with(&available);
                 });
             }
 

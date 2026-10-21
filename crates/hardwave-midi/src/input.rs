@@ -105,6 +105,12 @@ impl MidiInputManager {
     /// List available MIDI input port names. Returns an empty vec if the
     /// system has no MIDI subsystem (e.g. a Linux build without ALSA).
     pub fn list_ports(&self) -> Vec<String> {
+        Self::available_ports()
+    }
+
+    /// The MIDI inputs the system offers now. Needs no manager, so callers can ask it without
+    /// holding the manager's lock: on Windows the enumeration can take seconds on a busy machine.
+    pub fn available_ports() -> Vec<String> {
         let input = match MidiInput::new("hardwave-midi-scan") {
             Ok(i) => i,
             Err(e) => {
@@ -237,8 +243,13 @@ impl MidiInputManager {
     /// but not active, and drops active connections whose port has vanished
     /// from the system list. Called periodically by the hot-plug scanner.
     pub fn reconcile(&mut self) -> ReconcileReport {
+        let available = Self::available_ports();
+        self.reconcile_with(&available)
+    }
+
+    /// `reconcile` against ports listed beforehand with `available_ports`, outside the lock.
+    pub fn reconcile_with(&mut self, available: &[String]) -> ReconcileReport {
         let mut report = ReconcileReport::default();
-        let available = self.list_ports();
 
         // Drop active connections for ports that no longer exist.
         let active_names: Vec<String> = self.active.iter().map(|(n, _)| n.clone()).collect();

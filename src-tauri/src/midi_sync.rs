@@ -40,14 +40,15 @@ impl Default for MidiClockSyncState {
 /// Spawn the sync dispatcher. It drains the input manager's clock-sync
 /// snapshot every ~10 ms and, when enabled, writes the estimated BPM to
 /// `transport.bpm` and reacts to Start / Continue / Stop messages.
-pub fn spawn_dispatcher(engine: Arc<Mutex<DawEngine>>, state: Arc<MidiClockSyncState>) {
+pub fn spawn_dispatcher(
+    engine: Arc<Mutex<DawEngine>>,
+    midi_input: Arc<Mutex<hardwave_midi::MidiInputManager>>,
+    state: Arc<MidiClockSyncState>,
+) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(10));
-        let snapshot = {
-            let eng = engine.lock();
-            let mgr = eng.midi_input.lock();
-            mgr.take_clock_sync_snapshot()
-        };
+        // The input manager's own lock only, never while holding the engine's.
+        let snapshot = midi_input.lock().take_clock_sync_snapshot();
 
         if let Some(bpm) = snapshot.bpm_estimate {
             *state.last_bpm.lock() = Some(bpm);

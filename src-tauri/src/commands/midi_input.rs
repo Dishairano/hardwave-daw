@@ -17,30 +17,26 @@ pub struct MidiClockSyncStatus {
 }
 
 #[tauri::command]
-pub fn list_midi_inputs(state: State<AppState>) -> Vec<String> {
-    let engine = state.engine.lock();
-    let manager = engine.midi_input.lock();
-    manager.list_ports()
+pub fn list_midi_inputs(_state: State<AppState>) -> Vec<String> {
+    // No lock: listing can take seconds on a busy machine.
+    hardwave_midi::MidiInputManager::available_ports()
 }
 
 #[tauri::command]
 pub fn open_midi_input(state: State<AppState>, port_name: String) -> Result<(), String> {
-    let engine = state.engine.lock();
-    let mut manager = engine.midi_input.lock();
+    let mut manager = state.midi_input.lock();
     manager.open(&port_name)
 }
 
 #[tauri::command]
 pub fn close_midi_input(state: State<AppState>, port_name: String) {
-    let engine = state.engine.lock();
-    let mut manager = engine.midi_input.lock();
+    let mut manager = state.midi_input.lock();
     manager.close(&port_name);
 }
 
 #[tauri::command]
 pub fn close_all_midi_inputs(state: State<AppState>) {
-    let engine = state.engine.lock();
-    let mut manager = engine.midi_input.lock();
+    let mut manager = state.midi_input.lock();
     manager.close_all();
 }
 
@@ -75,14 +71,12 @@ pub fn midi_driver_status() -> MidiDriverStatus {
 /// their messages are dropped on arrival, so turning it back on is instant.
 #[tauri::command]
 pub fn set_midi_master_enabled(state: State<AppState>, enabled: bool) {
-    let engine = state.engine.lock();
-    engine.midi_input.lock().set_enabled(enabled);
+    state.midi_input.lock().set_enabled(enabled);
 }
 
 #[tauri::command]
 pub fn get_midi_master_enabled(state: State<AppState>) -> bool {
-    let engine = state.engine.lock();
-    let enabled = engine.midi_input.lock().is_enabled();
+    let enabled = state.midi_input.lock().is_enabled();
     enabled
 }
 
@@ -93,8 +87,7 @@ pub fn get_midi_master_enabled(state: State<AppState>) -> bool {
 /// is applied to incoming note-ons on that port.
 #[tauri::command]
 pub fn set_midi_velocity_curve(state: State<AppState>, port_name: String, curve: String) {
-    let engine = state.engine.lock();
-    let mut manager = engine.midi_input.lock();
+    let mut manager = state.midi_input.lock();
     manager.set_velocity_curve(
         &port_name,
         hardwave_midi::velocity::VelocityCurve::from_id(&curve),
@@ -104,8 +97,7 @@ pub fn set_midi_velocity_curve(state: State<AppState>, port_name: String, curve:
 /// The velocity curve in force for one port, as the id the UI uses.
 #[tauri::command]
 pub fn get_midi_velocity_curve(state: State<AppState>, port_name: String) -> String {
-    let engine = state.engine.lock();
-    let manager = engine.midi_input.lock();
+    let manager = state.midi_input.lock();
     manager.velocity_curve(&port_name).id().to_string()
 }
 
@@ -116,15 +108,14 @@ static LAST_MIDI_ACTIVITY: parking_lot::Mutex<Option<MidiActivitySnapshot>> =
 #[tauri::command]
 pub fn get_midi_activity(state: State<AppState>) -> MidiActivitySnapshot {
     // Five times a second for the MIDI light, from the window's own thread:
-    // never wait on the engine for it. Busy means the last reading.
-    let wait = crate::commands::engine::METER_POLL_WAIT;
-    let reading = state.engine.try_lock_for(wait).and_then(|engine| {
-        let manager = engine.midi_input.try_lock_for(wait)?;
-        Some(MidiActivitySnapshot {
+    // never wait for it. Busy means the last reading.
+    let reading = state
+        .midi_input
+        .try_lock_for(crate::commands::engine::METER_POLL_WAIT)
+        .map(|manager| MidiActivitySnapshot {
             open_ports: manager.open_port_names(),
             ms_since_last_event: manager.ms_since_last_event(),
-        })
-    });
+        });
     match reading {
         Some(reading) => {
             *LAST_MIDI_ACTIVITY.lock() = Some(reading.clone());
@@ -136,8 +127,7 @@ pub fn get_midi_activity(state: State<AppState>) -> MidiActivitySnapshot {
 
 #[tauri::command]
 pub fn get_midi_desired_ports(state: State<AppState>) -> Vec<String> {
-    let engine = state.engine.lock();
-    let manager = engine.midi_input.lock();
+    let manager = state.midi_input.lock();
     manager.desired_port_names()
 }
 
@@ -227,8 +217,7 @@ impl MidiEventDto {
 /// contention) so we silently no-op.
 #[tauri::command]
 pub fn inject_midi_event(state: State<AppState>, event: MidiEventDto) {
-    let engine = state.engine.lock();
-    let manager = engine.midi_input.lock();
+    let manager = state.midi_input.lock();
     manager.inject(event.into_event());
 }
 

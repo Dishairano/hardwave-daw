@@ -151,14 +151,13 @@ pub fn spawn_dispatcher(
     mappings: Arc<Mutex<MidiMappings>>,
     surface: crate::control_surface::SharedSurface,
     midi_out: Arc<Mutex<hardwave_midi::output::MidiOutputManager>>,
+    midi_input: Arc<Mutex<hardwave_midi::MidiInputManager>>,
 ) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(8));
-        let events = {
-            let eng = engine.lock();
-            let mgr = eng.midi_input.lock();
-            mgr.drain_events()
-        };
+        // The input manager's own lock only: holding the engine's while waiting for it kept
+        // everything else off the engine during a MIDI port scan.
+        let events = midi_input.lock().drain_events();
         if events.is_empty() {
             continue;
         }
