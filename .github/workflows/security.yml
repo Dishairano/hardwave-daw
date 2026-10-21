@@ -88,7 +88,10 @@ jobs:
 
   ui-content-policy:
     name: App window content policy
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest became Ubuntu 26.04 on 21 Oct 2026, and Playwright
+    # 1.58 cannot install Chromium there, which failed this check on every
+    # commit. Move back to ubuntu-latest once Playwright supports 26.04.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
