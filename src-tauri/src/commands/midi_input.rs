@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use tauri::State;
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Default)]
 pub struct MidiActivitySnapshot {
     pub open_ports: Vec<String>,
     pub ms_since_last_event: Option<u64>,
@@ -109,13 +109,28 @@ pub fn get_midi_velocity_curve(state: State<AppState>, port_name: String) -> Str
     manager.velocity_curve(&port_name).id().to_string()
 }
 
+/// The last activity reading, answered while the engine is busy.
+static LAST_MIDI_ACTIVITY: parking_lot::Mutex<Option<MidiActivitySnapshot>> =
+    parking_lot::const_mutex(None);
+
 #[tauri::command]
 pub fn get_midi_activity(state: State<AppState>) -> MidiActivitySnapshot {
-    let engine = state.engine.lock();
-    let manager = engine.midi_input.lock();
-    MidiActivitySnapshot {
-        open_ports: manager.open_port_names(),
-        ms_since_last_event: manager.ms_since_last_event(),
+    // Five times a second for the MIDI light, from the window's own thread:
+    // never wait on the engine for it. Busy means the last reading.
+    let wait = crate::commands::engine::METER_POLL_WAIT;
+    let reading = state.engine.try_lock_for(wait).and_then(|engine| {
+        let manager = engine.midi_input.try_lock_for(wait)?;
+        Some(MidiActivitySnapshot {
+            open_ports: manager.open_port_names(),
+            ms_since_last_event: manager.ms_since_last_event(),
+        })
+    });
+    match reading {
+        Some(reading) => {
+            *LAST_MIDI_ACTIVITY.lock() = Some(reading.clone());
+            reading
+        }
+        None => LAST_MIDI_ACTIVITY.lock().clone().unwrap_or_default(),
     }
 }
 

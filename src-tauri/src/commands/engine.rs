@@ -82,7 +82,13 @@ pub fn get_master_samples(state: State<AppState>, n_frames: u32) -> Vec<f32> {
     // The tap returns 2 samples per stereo frame, so request ceil(n / 2)
     // frames and truncate to exactly `n` returned samples.
     let frames_needed = n.div_ceil(2);
-    let mut out = state.engine.lock().master_tap_snapshot(frames_needed);
+    // Polled many times a second from the window's own thread while a scope
+    // is open: never wait on the engine for it. Busy means no samples this
+    // time, and the scope skips a frame.
+    let Some(engine) = state.engine.try_lock_for(METER_POLL_WAIT) else {
+        return Vec::new();
+    };
+    let mut out = engine.master_tap_snapshot(frames_needed);
     out.truncate(n);
     out
 }
@@ -285,7 +291,7 @@ pub fn get_track_load(state: State<AppState>) -> Vec<TrackLoad> {
 }
 
 /// How long a meter poll may wait for the engine before it gives up.
-const METER_POLL_WAIT: std::time::Duration = std::time::Duration::from_millis(15);
+pub(crate) const METER_POLL_WAIT: std::time::Duration = std::time::Duration::from_millis(15);
 
 /// The last load reading, answered while the engine is busy.
 static LAST_AUDIO_LOAD: parking_lot::Mutex<(f32, u32)> = parking_lot::const_mutex((0.0, 0));
