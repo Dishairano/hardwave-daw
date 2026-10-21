@@ -61,7 +61,14 @@ chrono.workspace = true
 vorbis_rs.workspace = true
 trash = "5"
 rhai = { version = "1.26.1", default-features = false, features = ["std", "sync"] }
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+# The room connection's TLS is set up in commands/collab.rs with the Mozilla
+# roots from webpki-roots 1.x. tokio-tungstenite's own rustls-tls-webpki-roots
+# feature brought in webpki-roots 0.26, which RustSec flags (RUSTSEC-2026-0381);
+# the system's store is no substitute on Windows, where roots such as ISRG
+# Root X2 arrive only when Windows itself asks for them.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "__rustls-tls"] }
+rustls = { version = "0.23", default-features = false }
+webpki-roots = "1"
 
 # Real process memory for the toolbar's MEM meter. The meter used to read the
 # WebView's JS heap, which says nothing about the sample pool, the audio graph

@@ -23,6 +23,19 @@ pub struct CollabJoined {
     pub caught_up: bool,
 }
 
+/// TLS for the room connection: the service's certificate is checked against
+/// the Mozilla roots built into the app (webpki-roots 1.x), as
+/// tokio-tungstenite's own `rustls-tls-webpki-roots` did before it brought in
+/// webpki-roots 0.26 (RUSTSEC-2026-0381).
+fn room_tls() -> tokio_tungstenite::Connector {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    tokio_tungstenite::Connector::Rustls(Arc::new(config))
+}
+
 /// Open a room, or join one with a code.
 ///
 /// Opening needs Pro and joining does not: the service decides that,
@@ -73,9 +86,14 @@ pub async fn start_collab(
         max_frame_size: Some(hardwave_room_limits::MAX_MESSAGE),
         ..Default::default()
     };
-    let (socket, _) = tokio_tungstenite::connect_async_with_config(request, Some(config), false)
-        .await
-        .map_err(|e| format!("could not reach the room service: {e}"))?;
+    let (socket, _) = tokio_tungstenite::connect_async_tls_with_config(
+        request,
+        Some(config),
+        false,
+        Some(room_tls()),
+    )
+    .await
+    .map_err(|e| format!("could not reach the room service: {e}"))?;
     let (mut writer, mut reader) = socket.split();
 
     // The service answers first: in, waiting for the host, or why not.
@@ -533,4 +551,39 @@ fn apply_track_state(
         });
     }
     crate::commands::plugins::tell_windows_track_changed(app, &new.id);
+}
+
+#[cfg(test)]
+mod room_tls_tests {
+    use super::room_tls;
+
+    /// The TLS set-up builds: rustls finds its crypto provider and the roots load.
+    #[test]
+    fn the_room_connection_has_its_tls() {
+        assert!(matches!(
+            room_tls(),
+            tokio_tungstenite::Connector::Rustls(_)
+        ));
+    }
+
+    /// The real handshake with the room service, without signing in: the service
+    /// answers 401, which proves the certificate was accepted. Needs the network.
+    #[ignore]
+    #[tokio::test]
+    async fn the_room_service_certificate_is_accepted() {
+        let result = tokio_tungstenite::connect_async_tls_with_config(
+            "wss://rooms.hardwavestudios.com/room",
+            None,
+            false,
+            Some(room_tls()),
+        )
+        .await;
+        match result {
+            Ok(_) => {}
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert!(response.status().is_client_error(), "{}", response.status())
+            }
+            Err(e) => panic!("TLS or connection failed: {e}"),
+        }
+    }
 }
