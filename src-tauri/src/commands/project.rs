@@ -224,6 +224,13 @@ pub(crate) fn open_project_blocking(
             total: 1,
         },
     );
+    // The project's plug-ins not tried yet are tried here, a few at a time,
+    // so their loads on the main thread below do not wait for each probe.
+    {
+        let state = app.state::<AppState>();
+        let descriptors = crate::commands::plugins::project_descriptors(&state);
+        crate::commands::plugins::probe_ahead(&state, &descriptors);
+    }
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     let for_main = app.clone();
     app.run_on_main_thread(move || {

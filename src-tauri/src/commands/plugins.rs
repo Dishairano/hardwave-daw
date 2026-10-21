@@ -733,6 +733,41 @@ pub(crate) fn may_load_in_process(descriptor: &PluginDescriptor) -> Result<(), S
     Ok(())
 }
 
+/// Probe ahead the plug-ins among `descriptors` that a load on the main thread
+/// would first try in a throwaway process (`instantiate_plugin`): not the
+/// built-in ones, not the sandboxed ones, not those built for another
+/// architecture. Blocks until all have answered, so call it off the main
+/// thread (see `plugin_probe::warm`).
+pub(crate) fn probe_ahead(state: &AppState, descriptors: &[PluginDescriptor]) {
+    let sandboxed = state.sandboxed_plugins.lock().clone();
+    let native = PathBuf::from("<native>");
+    let paths: Vec<PathBuf> = descriptors
+        .iter()
+        .filter(|d| {
+            d.path != native
+                && !sandboxed.contains(&d.id)
+                && hardwave_plugin_host::binary_arch::plugin_arch(&d.path).matches_host()
+        })
+        .map(|d| d.path.clone())
+        .collect();
+    if !paths.is_empty() {
+        crate::plugin_probe::warm(&paths);
+    }
+}
+
+/// The plug-ins on every track of the open project, for `probe_ahead`.
+pub(crate) fn project_descriptors(state: &AppState) -> Vec<PluginDescriptor> {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    let scanner = engine.plugin_scanner.lock();
+    project
+        .tracks
+        .iter()
+        .flat_map(|t| t.inserts.iter())
+        .filter_map(|slot| scanner.find(&slot.plugin_id).cloned())
+        .collect()
+}
+
 /// Build the plug-in for a slot, in a process of its own when the user
 /// has asked for that one to be sandboxed.
 ///
@@ -1929,18 +1964,41 @@ pub(crate) fn tell_windows_track_changed(app: &AppHandle, track_id: &str) {
     );
 }
 
-#[tauri::command]
+/// Off the main thread: the first load of a plug-in is tried in a throwaway
+/// process first, which can take seconds, and the window waited for it here
+/// (the freeze log on the test VM, 21 Oct 2026). That try now runs on this
+/// thread; only the load itself goes to the main thread, where plug-ins are
+/// made.
+#[tauri::command(async)]
 pub fn add_plugin_to_track(
     app: AppHandle,
-    state: State<AppState>,
     track_id: String,
     plugin_id: String,
 ) -> Result<String, String> {
-    let result = add_plugin_to_track_quietly(state, track_id.clone(), plugin_id);
-    if result.is_ok() {
-        tell_windows_track_changed(&app, &track_id);
+    {
+        let state = app.state::<AppState>();
+        let descriptor = {
+            let engine = state.engine.lock();
+            let scanner = engine.plugin_scanner.lock();
+            scanner.find(&plugin_id).cloned()
+        };
+        if let Some(descriptor) = descriptor {
+            probe_ahead(&state, &[descriptor]);
+        }
     }
-    result
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    let for_main = app.clone();
+    app.run_on_main_thread(move || {
+        let state = for_main.state::<AppState>();
+        let result = add_plugin_to_track_quietly(state, track_id.clone(), plugin_id);
+        if result.is_ok() {
+            tell_windows_track_changed(&for_main, &track_id);
+        }
+        let _ = tx.send(result);
+    })
+    .map_err(|e| format!("could not reach the main thread: {e}"))?;
+    rx.recv()
+        .map_err(|_| "adding the plug-in did not report back".to_string())?
 }
 
 #[tauri::command]

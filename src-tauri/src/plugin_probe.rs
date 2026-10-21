@@ -172,6 +172,38 @@ pub fn verdict_for(path: &Path) -> ProbeOutcome {
     outcome
 }
 
+/// Plug-ins tried at the same time by `warm`.
+const AT_ONCE: usize = 4;
+
+/// Try every plug-in in `paths` that has no verdict yet, a few at a time, and
+/// return once all have answered.
+///
+/// A load on the main thread probes a plug-in it has not seen before, and the
+/// window waits for that: up to a second or two normally, and on a busy
+/// machine the full timeout (the freeze log on the test VM, 21 Oct 2026). The
+/// callers that can (adding a plug-in, opening a project) warm the verdicts
+/// here first, off the main thread, so the load finds them waiting. Never call
+/// this on the main thread.
+pub fn warm(paths: &[PathBuf]) {
+    let todo: Vec<&PathBuf> = match shared_cache().lock() {
+        Ok(guard) => {
+            let mut seen = std::collections::HashSet::new();
+            paths
+                .iter()
+                .filter(|p| guard.get(p).is_none() && seen.insert(ProbeCache::key_for(p)))
+                .collect()
+        }
+        Err(_) => return,
+    };
+    for batch in todo.chunks(AT_ONCE) {
+        std::thread::scope(|scope| {
+            for path in batch {
+                scope.spawn(move || verdict_for(path));
+            }
+        });
+    }
+}
+
 /// Forget a plug-in's verdict so it is tried again, for the plug-in manager's
 /// "try again" after a reinstall.
 pub fn retry(path: &Path) {
