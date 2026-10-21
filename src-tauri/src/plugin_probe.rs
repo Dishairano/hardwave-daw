@@ -18,9 +18,16 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// A plug-in that hangs on load is as fatal as one that crashes, and some do:
-/// a licence dialog with no window, a network check with no timeout. Ten
-/// seconds is long enough for a slow sampler to map its library.
+/// a licence dialog with no window, a network check with no timeout. Hanging
+/// means doing nothing: a loader that has used no processor time for this long
+/// is stopped. Ten seconds is long enough for a slow sampler to map its library.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a loader that keeps working may take in all. On a busy computer a
+/// healthy plug-in can need more than `PROBE_TIMEOUT` of wall time just to get
+/// the processor: on the test VM at full load LoudLab was switched off every
+/// time (21 Oct 2026), though it was loading all along.
+pub const PROBE_LIMIT: Duration = Duration::from_secs(60);
 
 /// What the probe found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,9 +74,8 @@ impl ProbeOutcome {
                  Reinstall it or update it, then re-enable it in the plug-in manager. ({detail})"
             )),
             ProbeOutcome::TimedOut => Some(format!(
-                "{plugin_name} did not finish loading after {} seconds, so it has been switched off to keep \
-                 the DAW responsive. It may be waiting for a licence check. Re-enable it in the plug-in manager.",
-                PROBE_TIMEOUT.as_secs()
+                "{plugin_name} stopped making progress while loading, so it has been switched off to keep \
+                 the DAW responsive. It may be waiting for a licence check. Re-enable it in the plug-in manager."
             )),
         }
     }
@@ -243,10 +249,15 @@ pub fn probe_plugin(path: &Path) -> ProbeOutcome {
             }
         }
     };
-    run_probe_command(&exe, path, PROBE_TIMEOUT)
+    run_probe_command(&exe, path, PROBE_TIMEOUT, PROBE_LIMIT)
 }
 
-fn run_probe_command(exe: &Path, plugin: &Path, timeout: Duration) -> ProbeOutcome {
+fn run_probe_command(
+    exe: &Path,
+    plugin: &Path,
+    idle_limit: Duration,
+    limit: Duration,
+) -> ProbeOutcome {
     use std::process::{Command, Stdio};
 
     let child = match Command::new(exe)
@@ -267,22 +278,87 @@ fn run_probe_command(exe: &Path, plugin: &Path, timeout: Duration) -> ProbeOutco
         }
     };
 
-    supervise(child, timeout)
+    supervise(child, idle_limit, limit)
+}
+
+/// Whether a loader still running is given up on: when it has done no work for
+/// `idle_limit`, or has run for `limit` in all.
+fn give_up(ran: Duration, idle: Duration, idle_limit: Duration, limit: Duration) -> bool {
+    idle >= idle_limit || ran >= limit
+}
+
+/// Processor time the child has used so far, in units that only need to grow
+/// while it works. `None` where it cannot be read; then every moment counts as
+/// idle and the idle limit is plain wall time, as before.
+fn work_done(child: &std::process::Child) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::GetProcessTimes;
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: the child's own handle, alive while `child` is; four out-parameters we own.
+        let ok = unsafe {
+            GetProcessTimes(
+                child.as_raw_handle() as _,
+                &mut created,
+                &mut exited,
+                &mut kernel,
+                &mut user,
+            )
+        } != 0;
+        let ticks = |t: FILETIME| ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64;
+        ok.then(|| ticks(kernel) + ticks(user))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // utime and stime, fields 14 and 15, counted after the ")" that ends the name.
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", child.id())).ok()?;
+        let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+        let utime: u64 = fields.get(11)?.parse().ok()?;
+        let stime: u64 = fields.get(12)?.parse().ok()?;
+        Some(utime + stime)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = child;
+        None
+    }
 }
 
 /// Watch a running probe and decide what happened to it.
 ///
 /// Separate from spawning so the tests can supervise real processes that
 /// crash or hang, rather than only exercising the classification.
-fn supervise(mut child: std::process::Child, timeout: Duration) -> ProbeOutcome {
-    let deadline = std::time::Instant::now() + timeout;
+fn supervise(
+    mut child: std::process::Child,
+    idle_limit: Duration,
+    limit: Duration,
+) -> ProbeOutcome {
+    let started = std::time::Instant::now();
+    let mut last_work = work_done(&child);
+    let mut last_progress = started;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
                 return classify(result_from_status(status));
             }
             Ok(None) => {
-                if std::time::Instant::now() >= deadline {
+                let work = work_done(&child);
+                if work.is_some() && work > last_work {
+                    last_work = work;
+                    last_progress = std::time::Instant::now();
+                }
+                if give_up(
+                    started.elapsed(),
+                    last_progress.elapsed(),
+                    idle_limit,
+                    limit,
+                ) {
                     // Leaving it running would keep whatever the plug-in is
                     // waiting on alive for the rest of the session.
                     let _ = child.kill();
@@ -451,7 +527,11 @@ mod tests {
     fn a_process_killed_by_a_signal_is_reported_as_a_crash() {
         // SIGKILL leaves no exit code, which is exactly how a segfaulting
         // plug-in looks from the supervising side.
-        let outcome = supervise(spawn("kill -9 $$"), Duration::from_secs(5));
+        let outcome = supervise(
+            spawn("kill -9 $$"),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        );
         assert!(!outcome.is_safe_to_load(), "got {outcome:?}");
         assert!(
             matches!(outcome, ProbeOutcome::Crashed { .. }),
@@ -463,7 +543,11 @@ mod tests {
     #[test]
     fn a_child_that_hangs_is_killed_at_the_deadline() {
         let started = std::time::Instant::now();
-        let outcome = supervise(spawn("sleep 30"), Duration::from_millis(300));
+        let outcome = supervise(
+            spawn("sleep 30"),
+            Duration::from_millis(300),
+            Duration::from_secs(5),
+        );
         assert_eq!(outcome, ProbeOutcome::TimedOut);
         assert!(
             started.elapsed() < Duration::from_secs(5),
@@ -493,11 +577,43 @@ mod tests {
         );
     }
 
+    /// A busy loader is not idle: it is given up on only at the overall limit.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_loader_that_keeps_working_gets_more_time() {
+        let started = std::time::Instant::now();
+        let outcome = supervise(
+            spawn("while :; do :; done"),
+            Duration::from_millis(300),
+            Duration::from_millis(1500),
+        );
+        assert_eq!(outcome, ProbeOutcome::TimedOut);
+        assert!(
+            started.elapsed() >= Duration::from_millis(1400),
+            "stopped after {:?}, at the idle limit instead of the overall one",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_loader_is_given_up_on_when_idle_or_at_the_limit() {
+        use super::give_up;
+        let s = Duration::from_secs;
+        assert!(!give_up(s(5), s(2), s(10), s(60)));
+        assert!(give_up(s(12), s(10), s(10), s(60)));
+        assert!(!give_up(s(40), s(1), s(10), s(60)));
+        assert!(give_up(s(60), s(0), s(10), s(60)));
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_clean_child_is_allowed() {
         assert_eq!(
-            supervise(spawn("exit 0"), Duration::from_secs(5)),
+            supervise(
+                spawn("exit 0"),
+                Duration::from_secs(5),
+                Duration::from_secs(5)
+            ),
             ProbeOutcome::Ok
         );
     }
