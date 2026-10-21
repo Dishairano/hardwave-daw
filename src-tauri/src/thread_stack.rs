@@ -46,7 +46,7 @@ pub fn describe(frames: &[Frame]) -> String {
 }
 
 #[cfg(windows)]
-pub use windows_stack::{capture, main_thread, remember_main_thread};
+pub use windows_stack::{capture, main_thread, others, remember_main_thread};
 
 /// Elsewhere there is no stack to take; the watchdog says so in its log line.
 #[cfg(not(windows))]
@@ -62,21 +62,32 @@ pub fn capture(_thread: isize) -> Vec<Frame> {
     Vec::new()
 }
 
+#[cfg(not(windows))]
+pub fn others(_exe: &str) -> Vec<(String, Vec<Frame>)> {
+    Vec::new()
+}
+
 #[cfg(windows)]
 mod windows_stack {
     use super::Frame;
     use std::sync::OnceLock;
-    use windows_sys::Win32::Foundation::{HANDLE, HMODULE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, LocalFree, HANDLE, HMODULE, INVALID_HANDLE_VALUE,
+    };
     use windows_sys::Win32::System::Diagnostics::Debug::{
         GetThreadContext, RtlLookupFunctionEntry, RtlVirtualUnwind, CONTEXT, CONTEXT_FULL_AMD64,
         UNW_FLAG_NHANDLER,
+    };
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
     };
     use windows_sys::Win32::System::LibraryLoader::{
         GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentThreadId, OpenThread, ResumeThread, SuspendThread, THREAD_GET_CONTEXT,
+        GetCurrentProcessId, GetCurrentThreadId, GetThreadDescription, GetThreadPriority,
+        OpenThread, ResumeThread, SuspendThread, THREAD_GET_CONTEXT, THREAD_PRIORITY_NORMAL,
         THREAD_QUERY_INFORMATION, THREAD_SUSPEND_RESUME,
     };
 
@@ -84,6 +95,7 @@ mod windows_stack {
     const MAX_FRAMES: usize = 48;
 
     static MAIN: OnceLock<isize> = OnceLock::new();
+    static MAIN_ID: OnceLock<u32> = OnceLock::new();
 
     /// `GetThreadContext` wants the context on a 16-byte boundary, which the binding's own type
     /// does not ask for.
@@ -102,7 +114,88 @@ mod windows_stack {
         };
         if !handle.is_null() {
             let _ = MAIN.set(handle as isize);
+            // SAFETY: a plain call.
+            let _ = MAIN_ID.set(unsafe { GetCurrentThreadId() });
         }
+    }
+
+    /// The other threads of this process that are running code of `exe`, with their name and
+    /// frames: who holds what a stuck main thread waits for. Threads above normal priority (the
+    /// audio threads) are never stopped, so a snapshot cannot make the sound drop out.
+    pub fn others(exe: &str) -> Vec<(String, Vec<Frame>)> {
+        // SAFETY: plain calls; the snapshot handle is closed below.
+        let (me, pid, snapshot) = unsafe {
+            (
+                GetCurrentThreadId(),
+                GetCurrentProcessId(),
+                CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0),
+            )
+        };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Vec::new();
+        }
+        let main = MAIN_ID.get().copied();
+        let mut ids = Vec::new();
+        // SAFETY: a zeroed entry with its size set, as Thread32First asks.
+        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        // SAFETY: the snapshot and the entry above.
+        let mut more = unsafe { Thread32First(snapshot, &mut entry) } != 0;
+        while more {
+            let id = entry.th32ThreadID;
+            if entry.th32OwnerProcessID == pid && id != me && Some(id) != main {
+                ids.push(id);
+            }
+            // SAFETY: as above.
+            more = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
+        }
+        // SAFETY: the snapshot opened above, closed once.
+        unsafe { CloseHandle(snapshot) };
+
+        let mut found = Vec::new();
+        for id in ids {
+            // SAFETY: a plain call; the handle is closed below.
+            let handle = unsafe {
+                OpenThread(
+                    THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                    0,
+                    id,
+                )
+            };
+            if handle.is_null() {
+                continue;
+            }
+            // SAFETY: the handle just opened.
+            let priority = unsafe { GetThreadPriority(handle) };
+            if priority <= THREAD_PRIORITY_NORMAL {
+                let name = thread_name(handle).unwrap_or_else(|| format!("thread {id}"));
+                let frames = capture(handle as isize);
+                if frames.iter().any(|f| f.module.as_deref() == Some(exe)) {
+                    found.push((name, frames));
+                }
+            }
+            // SAFETY: the handle opened above, closed once.
+            unsafe { CloseHandle(handle) };
+        }
+        found
+    }
+
+    /// The name a thread was given (Rust's thread names arrive here), if any.
+    fn thread_name(thread: HANDLE) -> Option<String> {
+        let mut text: *mut u16 = std::ptr::null_mut();
+        // SAFETY: the out pointer is ours; the string it receives is freed with LocalFree.
+        let result = unsafe { GetThreadDescription(thread, &mut text) };
+        if result < 0 || text.is_null() {
+            return None;
+        }
+        // SAFETY: a 0-terminated string from GetThreadDescription.
+        let name = unsafe {
+            let len = (0..).take_while(|&i| *text.add(i) != 0).count();
+            String::from_utf16_lossy(std::slice::from_raw_parts(text, len))
+        };
+        // SAFETY: allocated by GetThreadDescription, freed once.
+        unsafe { LocalFree(text as _) };
+        (!name.is_empty()).then_some(name)
     }
 
     pub fn main_thread() -> Option<isize> {

@@ -93,6 +93,18 @@ fn log_main_thread_stack(stuck_for: Duration) {
         stuck_for.as_secs_f32(),
         crate::thread_stack::describe(&frames)
     );
+    // What the main thread may be waiting for: the other threads in our own code, each to the
+    // depth that names what it is doing.
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    for (name, frames) in crate::thread_stack::others(&exe) {
+        log::warn!(
+            "  meanwhile {name}: {}",
+            crate::thread_stack::describe(&frames[..frames.len().min(16)])
+        );
+    }
 }
 
 fn stuck_message(stuck_for: Duration, running: Option<(&str, Duration)>) -> String {

@@ -648,9 +648,11 @@ pub fn reset_project_working_time(state: State<AppState>) {
 }
 
 /// Increment the working-time counter. The UI calls this on a 30s
-/// cadence while the window has focus.
-#[tauri::command]
-pub fn tick_project_working_time(state: State<AppState>, seconds: u64) {
+/// cadence while the window has focus. Off the main thread: it waits for
+/// the engine, and a busy engine held the whole window here (the freeze log
+/// on the test VM under load, 21 Oct 2026).
+#[tauri::command(async)]
+pub fn tick_project_working_time(state: State<'_, AppState>, seconds: u64) {
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     project.metadata.working_time_seconds = project
