@@ -48,7 +48,9 @@ jobs:
   # green on 2026-07-07 (deep-research DAW-19); it caught the lost
   # window drag-region, so it gates releases like every other check.
   ui-tests:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest became Ubuntu 26.04 on 21 Oct 2026, where Playwright
+    # 1.58 cannot install Chromium. Move back once Playwright supports 26.04.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Node.js
