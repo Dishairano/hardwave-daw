@@ -1,5 +1,6 @@
 ### Bug fixes
-- fix: while the DAW is busy, the interface no longer piles up unanswered requests to the engine; on a loaded machine they grew WebView2's memory by gigabytes
+- fix: the room connection now checks the service's certificate against the patched root list (webpki-roots 1.0.10); the outdated copy flagged by RUSTSEC-2026-0381 is gone from the build
 
 ### Improvements
-- fix(ui): polls no longer pile up requests while the main thread is busy
+- fix(build): ask windows-sys for SystemInformation ourselves
+- fix(collab): room TLS from webpki-roots 1, the certificate exception goes
