@@ -691,6 +691,7 @@ export function App() {
   // Panel layouts (View menu): a ready layout places the panels and says
   // which of them show; the places live in the workspace store.
   const workspaceLayout = useWorkspaceStore(s => s.layoutName)
+  const followMode = useGeneralPrefsStore(s => s.followMode)
   const shownPanels = (): PanelKey[] => [
     ...(showBrowser ? ['browser' as const] : []), ...(showChannelRack ? ['channelRack' as const] : []),
     ...(showPlaylist ? ['playlist' as const] : []), ...(showPianoRoll ? ['pianoRoll' as const] : []),
@@ -2236,6 +2237,19 @@ export function App() {
           {
             label: 'Fit song to window',
             action: () => useTransportStore.getState().zoomToFit(),
+          },
+          { label: 'Zoom to selection', action: () => window.dispatchEvent(new CustomEvent('daw:zoomToSelection')) },
+          ...[4, 16, 64].map(bars => ({
+            label: `Zoom: ${bars} bars`,
+            action: () => useTransportStore.getState().zoomToBars(bars),
+          })),
+          {
+            label: `${followMode === 'continuous' ? '✓ ' : '   '}Follow: scroll smoothly`,
+            action: () => useGeneralPrefsStore.getState().setFollowMode('continuous'),
+          },
+          {
+            label: `${followMode === 'page' ? '✓ ' : '   '}Follow: a page at a time`,
+            action: () => useGeneralPrefsStore.getState().setFollowMode('page'),
           },
           { separator: true, label: '' },
           { label: 'Tempo tapper…', action: () => setShowTempoTapper(true) },

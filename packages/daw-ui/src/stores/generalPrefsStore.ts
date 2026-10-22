@@ -1,3 +1,4 @@
+import type { FollowMode } from '../components/arrangement/follow'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
@@ -31,6 +32,9 @@ interface GeneralPrefsState {
    * on a part further along is worse than losing sight of the playhead,
    * and the FOLLOW buttons turn it on for the moment you want it. */
   followPlayhead: boolean
+  /** How the playlist follows: sliding under the playhead, or a page at a
+   *  time (View > Follow). */
+  followMode: FollowMode
   /** What the playlist ruler counts in: bars, minutes and seconds, or
    *  timecode. Bars for music, the other two for picture and sound design,
    *  which had no way to read the timeline at all. */
@@ -42,6 +46,7 @@ interface GeneralPrefsState {
   setAnimationsEnabled: (v: boolean) => void
   setHighVisibility: (v: boolean) => void
   setFollowPlayhead: (v: boolean) => void
+  setFollowMode: (v: FollowMode) => void
   setRulerUnits: (v: 'bars' | 'time' | 'timecode') => void
   toggleFpsMeter: () => void
 }
@@ -53,12 +58,14 @@ export const useGeneralPrefsStore = create<GeneralPrefsState>()(
       animationsEnabled: true,
       highVisibility: false,
       followPlayhead: false,
+      followMode: 'continuous',
       rulerUnits: 'bars',
       showFpsMeter: false,
       setNoteNaming: (noteNaming) => set({ noteNaming }),
       setAnimationsEnabled: (animationsEnabled) => set({ animationsEnabled }),
       setHighVisibility: (highVisibility) => set({ highVisibility }),
       setFollowPlayhead: (followPlayhead) => set({ followPlayhead }),
+      setFollowMode: (followMode) => set({ followMode }),
       setRulerUnits: (rulerUnits) => set({ rulerUnits }),
       toggleFpsMeter: () => set((s) => ({ showFpsMeter: !s.showFpsMeter })),
     }),

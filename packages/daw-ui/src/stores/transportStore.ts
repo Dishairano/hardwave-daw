@@ -154,6 +154,8 @@ interface TransportState {
   setHorizontalZoom: (z: number) => void
   /** Fit the whole song into the playlist's width. */
   zoomToFit: () => void
+  /** Zoom so that `bars` bars fill the playlist's width. */
+  zoomToBars: (bars: number) => void
   /**
    * Playlist width in pixels and the tick the last clip ends on, both
    * published by the arrangement. Held here so a fit can be asked for from a
@@ -554,6 +556,15 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     const seconds = (endTicks / PPQ_TICKS) * (60 / bpm)
     if (seconds <= 0) return
     // A small margin so the last clip does not touch the right edge.
+    const target = (width * 0.97) / (seconds * PIXELS_PER_SECOND_BASE)
+    set({ horizontalZoom: Math.max(MIN_HORIZONTAL_ZOOM, Math.min(MAX_HORIZONTAL_ZOOM, target)) })
+  },
+  zoomToBars: (bars) => {
+    const { bpm, playlistViewportPx: width, timeSigNumerator, timeSigDenominator } = get()
+    if (width <= 0 || bpm <= 0 || bars <= 0) return
+    // A bar in quarter notes: 4 in 4/4, 3.5 in 7/8.
+    const quarters = timeSigNumerator * (4 / (timeSigDenominator || 4))
+    const seconds = bars * quarters * (60 / bpm)
     const target = (width * 0.97) / (seconds * PIXELS_PER_SECOND_BASE)
     set({ horizontalZoom: Math.max(MIN_HORIZONTAL_ZOOM, Math.min(MAX_HORIZONTAL_ZOOM, target)) })
   },
