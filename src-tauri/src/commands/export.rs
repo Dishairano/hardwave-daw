@@ -103,11 +103,125 @@ fn render_unlocked<F>(
 where
     F: FnMut(u64, u64),
 {
+    render_unlocked_measured(
+        engine,
+        out_path,
+        fmt,
+        total_samples,
+        start_samples,
+        cancel,
+        on_progress,
+        prepare,
+    )
+    .map(|loudness| loudness.is_some())
+}
+
+/// As `render_unlocked`, and say how loud the file came out: `None` when
+/// the render was cancelled.
+#[allow(clippy::too_many_arguments)]
+fn render_unlocked_measured<F>(
+    engine: parking_lot::MutexGuard<'_, DawEngine>,
+    out_path: &Path,
+    fmt: RenderFormat,
+    total_samples: u64,
+    start_samples: u64,
+    cancel: &Arc<AtomicBool>,
+    on_progress: F,
+    prepare: impl FnOnce(&mut Project),
+) -> Result<Option<FileLoudness>, String>
+where
+    F: FnMut(u64, u64),
+{
     let factory = offline_insert_factory(&engine);
     let render =
         engine.prepare_offline_render(fmt.sample_rate, start_samples, Some(&factory), prepare);
     drop(engine);
-    write_render(render, out_path, fmt, total_samples, cancel, on_progress)
+    let mut meter = LoudnessTap::new(fmt.sample_rate);
+    let completed = write_render(
+        render,
+        out_path,
+        fmt,
+        total_samples,
+        cancel,
+        &mut meter,
+        on_progress,
+    )?;
+    Ok(completed.then(|| meter.finish()))
+}
+
+/// How loud an exported file is: its sample peak, its true peak and its
+/// integrated loudness, for the notice after an export.
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FileLoudness {
+    pub peak_db: f32,
+    pub true_peak_db: f32,
+    pub lufs_integrated: Option<f32>,
+}
+
+/// Measures the samples on their way into the file: after normalizing and
+/// before dither and the encoder. Every format path hands it what it
+/// writes, so the notice describes the file, not the mix before it.
+struct LoudnessTap {
+    meter: hardwave_metering::ChannelMeter,
+    left: Vec<f32>,
+    right: Vec<f32>,
+    peak: f32,
+}
+
+impl LoudnessTap {
+    /// Frames the meter reads at a time.
+    const BLOCK: usize = 512;
+
+    fn new(sample_rate: u32) -> Self {
+        Self {
+            meter: hardwave_metering::ChannelMeter::new(sample_rate as f64),
+            left: Vec::with_capacity(Self::BLOCK),
+            right: Vec::with_capacity(Self::BLOCK),
+            peak: 0.0,
+        }
+    }
+
+    /// One sample of interleaved stereo; `channel` 0 is left.
+    fn push(&mut self, sample: f32, channel: usize) {
+        self.peak = self.peak.max(sample.abs());
+        if channel == 0 {
+            self.left.push(sample);
+        } else {
+            self.right.push(sample);
+            if self.right.len() == Self::BLOCK {
+                self.flush();
+            }
+        }
+    }
+
+    fn push_interleaved(&mut self, samples: &[f32]) {
+        for (i, &s) in samples.iter().enumerate() {
+            self.push(s, i & 1);
+        }
+    }
+
+    fn flush(&mut self) {
+        let n = self.left.len().min(self.right.len());
+        if n > 0 {
+            self.meter.process_block(&self.left[..n], &self.right[..n]);
+        }
+        self.left.clear();
+        self.right.clear();
+    }
+
+    fn finish(mut self) -> FileLoudness {
+        self.flush();
+        FileLoudness {
+            peak_db: if self.peak > 1e-9 {
+                20.0 * self.peak.log10()
+            } else {
+                -100.0
+            },
+            true_peak_db: self.meter.true_peak_db(),
+            lufs_integrated: self.meter.lufs_i(),
+        }
+    }
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -123,6 +237,9 @@ pub struct ExportResult {
     pub samples: u64,
     pub duration_secs: f64,
     pub cancelled: bool,
+    /// How loud the file came out; none when cancelled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loudness: Option<FileLoudness>,
 }
 
 #[derive(serde::Serialize)]
@@ -150,149 +267,16 @@ impl NormalizeMode {
     }
 }
 
-/// BS.1770 K-weighting biquad in Direct Form I (64-bit to preserve headroom
-/// across the pre-filter + RLB cascade).
-struct KBiquad {
-    b0: f64,
-    b1: f64,
-    b2: f64,
-    a1: f64,
-    a2: f64,
-    x1: f64,
-    x2: f64,
-    y1: f64,
-    y2: f64,
-}
-
-impl KBiquad {
-    fn new(b0: f64, b1: f64, b2: f64, a0: f64, a1: f64, a2: f64) -> Self {
-        Self {
-            b0: b0 / a0,
-            b1: b1 / a0,
-            b2: b2 / a0,
-            a1: a1 / a0,
-            a2: a2 / a0,
-            x1: 0.0,
-            x2: 0.0,
-            y1: 0.0,
-            y2: 0.0,
-        }
-    }
-
-    fn process(&mut self, x: f64) -> f64 {
-        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
-            - self.a1 * self.y1
-            - self.a2 * self.y2;
-        self.x2 = self.x1;
-        self.x1 = x;
-        self.y2 = self.y1;
-        self.y1 = y;
-        y
-    }
-}
-
-fn k_shelf(fs: f64) -> KBiquad {
-    let a = f64::powf(10.0, 3.999_843_853_973_347 / 40.0);
-    let w = 2.0 * std::f64::consts::PI * 1_681.974_450_955_533 / fs;
-    let alpha = w.sin() / (2.0 * 0.707_175_236_955_419_6);
-    let c = w.cos();
-    let sq = a.sqrt();
-    KBiquad::new(
-        a * ((a + 1.0) + (a - 1.0) * c + 2.0 * sq * alpha),
-        -2.0 * a * ((a - 1.0) + (a + 1.0) * c),
-        a * ((a + 1.0) + (a - 1.0) * c - 2.0 * sq * alpha),
-        (a + 1.0) - (a - 1.0) * c + 2.0 * sq * alpha,
-        2.0 * ((a - 1.0) - (a + 1.0) * c),
-        (a + 1.0) - (a - 1.0) * c - 2.0 * sq * alpha,
-    )
-}
-
-fn k_hpf(fs: f64) -> KBiquad {
-    let w = 2.0 * std::f64::consts::PI * 38.135_470_876_024_44 / fs;
-    let alpha = w.sin() / (2.0 * 0.500_327_037_323_877_3);
-    let c = w.cos();
-    KBiquad::new(
-        (1.0 + c) / 2.0,
-        -(1.0 + c),
-        (1.0 + c) / 2.0,
-        1.0 + alpha,
-        -2.0 * c,
-        1.0 - alpha,
-    )
-}
-
-/// Integrated loudness per ITU-R BS.1770-4: K-weight both channels, compute
-/// mean-square over 400 ms blocks with 75 % overlap (100 ms hop), gate
-/// absolute at -70 LUFS, then gate relative at integrated - 10 LU. Input
-/// buffer is interleaved stereo `[l0, r0, l1, r1, ...]`. Returns `None` when
-/// the buffer is too short for a single gated block.
+/// Integrated loudness (ITU-R BS.1770-4) of interleaved stereo, through the
+/// same meter the export notice and the mix check read, so a file
+/// normalized to a target reads that target. It had a K-filter of its own,
+/// with the audio-EQ-cookbook shelf in place of the standard's, and read a
+/// quarter LU low: a song normalized to -14 LUFS came out near -13.75.
+/// `None` when the audio is too short or too quiet to measure.
 fn integrated_lufs(buffer: &[f32], sample_rate: u32) -> Option<f32> {
-    let fs = sample_rate as f64;
-    let block = (0.4 * fs).round() as usize;
-    let hop = (0.1 * fs).round() as usize;
-    if block == 0 || hop == 0 {
-        return None;
-    }
-
-    let frames = buffer.len() / 2;
-    if frames < block {
-        return None;
-    }
-
-    let mut kl_shelf = k_shelf(fs);
-    let mut kl_hpf = k_hpf(fs);
-    let mut kr_shelf = k_shelf(fs);
-    let mut kr_hpf = k_hpf(fs);
-
-    let mut kl = vec![0.0_f64; frames];
-    let mut kr = vec![0.0_f64; frames];
-    for i in 0..frames {
-        let l = buffer[i * 2] as f64;
-        let r = buffer[i * 2 + 1] as f64;
-        kl[i] = kl_hpf.process(kl_shelf.process(l));
-        kr[i] = kr_hpf.process(kr_shelf.process(r));
-    }
-
-    let mut blocks_z: Vec<f64> = Vec::with_capacity((frames.saturating_sub(block)) / hop + 1);
-    let mut start = 0usize;
-    while start + block <= frames {
-        let mut sl = 0.0_f64;
-        let mut sr = 0.0_f64;
-        for i in 0..block {
-            let a = kl[start + i];
-            let b = kr[start + i];
-            sl += a * a;
-            sr += b * b;
-        }
-        let z = (sl + sr) / block as f64;
-        blocks_z.push(z);
-        start += hop;
-    }
-    if blocks_z.is_empty() {
-        return None;
-    }
-
-    // Absolute gate: L >= -70 LUFS <=> z >= 10^(-6.9309) after the -0.691 offset.
-    let abs_z = 10f64.powf((-70.0 - (-0.691)) / 10.0);
-    let pass_abs: Vec<f64> = blocks_z.iter().copied().filter(|&z| z >= abs_z).collect();
-    if pass_abs.is_empty() {
-        return None;
-    }
-
-    // Relative gate: -10 LU below integrated loudness of the abs-gated set.
-    let mean_abs = pass_abs.iter().sum::<f64>() / pass_abs.len() as f64;
-    let rel_lufs = -0.691 + 10.0 * mean_abs.log10() - 10.0;
-    let rel_z = 10f64.powf((rel_lufs - (-0.691)) / 10.0);
-
-    let pass_rel: Vec<f64> = pass_abs.into_iter().filter(|&z| z >= rel_z).collect();
-    if pass_rel.is_empty() {
-        return None;
-    }
-    let mean = pass_rel.iter().sum::<f64>() / pass_rel.len() as f64;
-    if mean <= 0.0 {
-        return None;
-    }
-    Some((-0.691 + 10.0 * mean.log10()) as f32)
+    let mut tap = LoudnessTap::new(sample_rate);
+    tap.push_interleaved(buffer);
+    tap.finish().lufs_integrated
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -493,6 +477,7 @@ fn write_render_flac<F>(
     fmt: RenderFormat,
     total_samples: u64,
     cancel: &Arc<AtomicBool>,
+    meter: &mut LoudnessTap,
     mut on_progress: F,
 ) -> Result<bool, String>
 where
@@ -558,6 +543,7 @@ where
     }
 
     on_progress((total_samples * 90) / 100, total_samples);
+    meter.push_interleaved(&buffer);
     write_flac_from_buffer(out_path, &buffer, fmt.sample_rate, fmt.bit_depth)?;
     on_progress(total_samples, total_samples);
     Ok(true)
@@ -727,6 +713,7 @@ fn write_render_mp3<F>(
     fmt: RenderFormat,
     total_samples: u64,
     cancel: &Arc<AtomicBool>,
+    meter: &mut LoudnessTap,
     mut on_progress: F,
 ) -> Result<bool, String>
 where
@@ -791,6 +778,7 @@ where
     }
 
     on_progress((total_samples * 90) / 100, total_samples);
+    meter.push_interleaved(&buffer);
     match fmt.mp3_vbr_quality {
         Some(quality) => {
             write_mp3_vbr_from_buffer(out_path, &buffer, fmt.sample_rate, quality)?;
@@ -874,6 +862,7 @@ fn write_render_ogg<F>(
     fmt: RenderFormat,
     total_samples: u64,
     cancel: &Arc<AtomicBool>,
+    meter: &mut LoudnessTap,
     mut on_progress: F,
 ) -> Result<bool, String>
 where
@@ -938,6 +927,7 @@ where
     }
 
     on_progress((total_samples * 90) / 100, total_samples);
+    meter.push_interleaved(&buffer);
     write_ogg_from_buffer(out_path, &buffer, fmt.sample_rate, fmt.ogg_quality)?;
     on_progress(total_samples, total_samples);
     Ok(true)
@@ -952,21 +942,46 @@ fn write_render<F>(
     fmt: RenderFormat,
     total_samples: u64,
     cancel: &Arc<AtomicBool>,
+    meter: &mut LoudnessTap,
     mut on_progress: F,
 ) -> Result<bool, String>
 where
     F: FnMut(u64, u64),
 {
     if is_flac_path(out_path) {
-        return write_render_flac(render, out_path, fmt, total_samples, cancel, on_progress);
+        return write_render_flac(
+            render,
+            out_path,
+            fmt,
+            total_samples,
+            cancel,
+            meter,
+            on_progress,
+        );
     }
 
     if is_mp3_path(out_path) {
-        return write_render_mp3(render, out_path, fmt, total_samples, cancel, on_progress);
+        return write_render_mp3(
+            render,
+            out_path,
+            fmt,
+            total_samples,
+            cancel,
+            meter,
+            on_progress,
+        );
     }
 
     if is_ogg_path(out_path) {
-        return write_render_ogg(render, out_path, fmt, total_samples, cancel, on_progress);
+        return write_render_ogg(
+            render,
+            out_path,
+            fmt,
+            total_samples,
+            cancel,
+            meter,
+            on_progress,
+        );
     }
 
     let spec = spec_for(fmt.bit_depth, fmt.sample_rate);
@@ -985,6 +1000,7 @@ where
                     return false;
                 }
                 for (i, &s) in block.iter().enumerate() {
+                    meter.push(s, i & 1);
                     if let Err(e) = write_sample_dithered(
                         &mut wav,
                         s,
@@ -1050,6 +1066,7 @@ where
                     return Ok(false);
                 }
                 let scaled = *s * gain;
+                meter.push(scaled, i & 1);
                 write_sample_dithered(
                     &mut wav,
                     scaled,
@@ -1122,6 +1139,7 @@ where
                     return Ok(false);
                 }
                 let scaled = *s * gain;
+                meter.push(scaled, i & 1);
                 write_sample_dithered(
                     &mut wav,
                     scaled,
@@ -1196,7 +1214,7 @@ pub async fn export_project_wav(
 
         let mut last_pct: i32 = -1;
         let app_for_progress = app.clone();
-        let completed = render_unlocked(
+        let loudness = render_unlocked_measured(
             engine_guard,
             Path::new(&out_path),
             fmt,
@@ -1218,6 +1236,7 @@ pub async fn export_project_wav(
             },
             |_| {},
         )?;
+        let completed = loudness.is_some();
 
         if !completed {
             let _ = fs::remove_file(&out_path);
@@ -1228,6 +1247,7 @@ pub async fn export_project_wav(
             samples: total_samples,
             duration_secs: total_samples as f64 / sample_rate as f64,
             cancelled: !completed,
+            loudness,
         })
     })
     .await
@@ -1981,5 +2001,66 @@ mod isolate_tests {
             (-6.0, 0.3, None)
         );
         assert!(master(&p).inserts.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod loudness_tests {
+    use super::{integrated_lufs, LoudnessTap};
+
+    /// Ten seconds of a 1 kHz sine at -6 dBFS on both sides, interleaved.
+    fn sine(sample_rate: u32) -> Vec<f32> {
+        let amp = 10f32.powf(-6.0 / 20.0);
+        (0..sample_rate as usize * 10)
+            .flat_map(|i| {
+                let v = amp
+                    * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sample_rate as f32).sin();
+                [v, v]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_notice_reads_a_known_sine_right() {
+        let samples = sine(48_000);
+        let mut tap = LoudnessTap::new(48_000);
+        tap.push_interleaved(&samples);
+        let l = tap.finish();
+        assert!((l.peak_db + 6.0).abs() < 0.05, "peak {}", l.peak_db);
+        assert!(
+            (l.true_peak_db + 6.0).abs() < 0.2,
+            "true peak {}",
+            l.true_peak_db
+        );
+        let lufs = l.lufs_integrated.expect("ten seconds is enough to measure");
+        assert!((lufs + 6.0).abs() < 0.3, "LUFS {lufs}");
+    }
+
+    /// One meter for both: a file normalized to a target reads the target.
+    #[test]
+    fn the_notice_agrees_with_what_lufs_normalizing_aimed_at() {
+        let samples = sine(44_100);
+        let mut tap = LoudnessTap::new(44_100);
+        tap.push_interleaved(&samples);
+        let shown = tap.finish().lufs_integrated.unwrap();
+        let aimed = integrated_lufs(&samples, 44_100).unwrap();
+        assert!(
+            (shown - aimed).abs() < 0.1,
+            "notice {shown} against normalize {aimed}"
+        );
+    }
+
+    #[test]
+    fn sample_by_sample_and_whole_buffers_measure_the_same() {
+        let samples = sine(48_000);
+        let mut whole = LoudnessTap::new(48_000);
+        whole.push_interleaved(&samples);
+        let mut one_by_one = LoudnessTap::new(48_000);
+        for (i, &s) in samples.iter().enumerate() {
+            one_by_one.push(s, i & 1);
+        }
+        let (a, b) = (whole.finish(), one_by_one.finish());
+        assert_eq!(a.peak_db, b.peak_db);
+        assert_eq!(a.lufs_integrated, b.lufs_integrated);
     }
 }

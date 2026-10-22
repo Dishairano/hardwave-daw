@@ -59,6 +59,7 @@ import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappings
 import { MacroPanel } from './components/MacroPanel'
 import { ManualWindow } from './components/ManualWindow'
 import { ModulationPanel } from './components/ModulationPanel'
+import { describeExport, type ExportOutcome } from './components/exportNotice'
 import { MixCheckDialog } from './components/MixCheckDialog'
 import { ReferencePanel } from './components/ReferencePanel'
 import { ScriptsPanel } from './components/ScriptsPanel'
@@ -1727,11 +1728,11 @@ export function App() {
     setShowExport(true)
   }, [])
 
-  const handleExportComplete = useCallback(async (result: { path: string; duration_secs: number }) => {
+  const handleExportComplete = useCallback(async (result: ExportOutcome) => {
     setShowExport(false)
     const notif = useNotificationStore.getState()
-    const dur = result.duration_secs.toFixed(1)
-    notif.push('info', `Exported ${dur}s to WAV`, { detail: result.path })
+    const { title, detail, over } = describeExport(result)
+    notif.push(over ? 'warning' : 'info', title, { detail })
     try {
       const { revealItemInDir } = await import('@tauri-apps/plugin-opener')
       await revealItemInDir(result.path)
