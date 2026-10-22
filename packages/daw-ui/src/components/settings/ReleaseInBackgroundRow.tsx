@@ -3,16 +3,15 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 
 /**
- * Let go of the audio device while another program is in front.
- *
- * An idle DAW holding the sound card made FL Studio hang when FL reset its
- * own device on the same card. On by default; off for someone who wants to
- * hear a MIDI keyboard through the DAW while working in another program.
+ * Let go of the audio device while another program is in front, for ASIO
+ * drivers that serve one program at a time. Off by default, so a MIDI
+ * keyboard played through the DAW keeps sounding while another program is in
+ * front.
  */
 export function ReleaseInBackgroundRow() {
   const [on, setOn] = useState<boolean | null>(null)
   useEffect(() => {
-    invoke<boolean>('get_release_device_in_background').then(setOn).catch(() => setOn(true))
+    invoke<boolean>('get_release_device_in_background').then(setOn).catch(() => setOn(false))
   }, [])
   if (on == null) return null
   const toggle = () => {
@@ -30,7 +29,7 @@ export function ReleaseInBackgroundRow() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span style={{ fontSize: 11, color: hw.textMuted }}>Free the sound card in the background</span>
         <span style={{ fontSize: 10, color: hw.textFaint }}>
-          When the song is stopped and another program is in front, so FL Studio or another DAW can use the same device
+          When the song is stopped and another program is in front, so another program can use an ASIO device that takes one program at a time
         </span>
       </div>
       <button
