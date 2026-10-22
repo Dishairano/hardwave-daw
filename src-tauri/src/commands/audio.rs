@@ -1804,10 +1804,14 @@ mod preview_tempo_tests {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlignmentResult {
-    /// How far the target was moved, in samples. Positive means it was
-    /// late and has been pulled forward.
+    /// How far the target was behind the reference, in samples, as it
+    /// played: positive means it was late.
     pub offset_samples: i64,
     pub offset_ms: f64,
+    /// True when the reference was held back instead of the target. A
+    /// track's delay can only make it later, so a late target is lined up
+    /// by delaying the track it is compared with.
+    pub reference_delayed: bool,
     /// How well the two agree once lined up, -1 to 1.
     pub correlation: f32,
     /// True when the target was also turned upside down, because the
@@ -1815,12 +1819,29 @@ pub struct AlignmentResult {
     pub polarity_flipped: bool,
 }
 
+/// The two tracks' delays that take out `offset` (how late the target
+/// plays behind the reference), keeping the reference's own delay when
+/// that is enough. Returns (target delay, reference delay).
+///
+/// This used to set the target's delay to the offset itself: a late
+/// target got later, and an early one was clamped to no delay at all.
+fn delays_for(offset: i64, reference_delay: i64) -> (i64, i64) {
+    let target = reference_delay - offset;
+    if target >= 0 {
+        (target, reference_delay)
+    } else {
+        // Later than the reference even with no delay of its own: hold
+        // the reference back by the rest.
+        (0, offset)
+    }
+}
+
 /// Line one track up with another.
 ///
 /// A kick recorded with a close mic and a room mic is the same hit
 /// twice, a few milliseconds apart, and mixed together the gap eats
 /// the low end. This measures the gap from the audio itself and takes
-/// it out with the track's own delay, so nothing on the timeline
+/// it out with the tracks' own delays, so nothing on the timeline
 /// moves and undoing it is one step.
 ///
 /// The first audio clip on each track is what gets compared: that is
@@ -1838,21 +1859,32 @@ pub fn align_track_to(
     let engine = state.engine.lock();
     let sample_rate = engine.current_sample_rate() as f64;
 
-    let source_of = |id: &str| -> Option<(String, u64)> {
+    // Each take's file, where in it the clip starts, and where the clip
+    // starts in the song, in samples.
+    let source_of = |id: &str| -> Option<(String, u64, u64)> {
         let project = engine.project.lock();
         let track = project.track(id)?;
         track.clips.iter().find_map(|clip| match &clip.content {
-            hardwave_project::clip::ClipContent::Audio(ac) => {
-                Some((ac.source_path.clone(), ac.source_start))
-            }
+            hardwave_project::clip::ClipContent::Audio(ac) => Some((
+                ac.source_path.clone(),
+                ac.source_start,
+                project
+                    .tempo_map
+                    .tick_to_samples(clip.position_ticks, sample_rate),
+            )),
             _ => None,
         })
     };
 
-    let (ref_source, ref_start) = source_of(&reference_track_id)
+    let (ref_source, ref_start, ref_at) = source_of(&reference_track_id)
         .ok_or_else(|| "that track has no audio on it".to_string())?;
-    let (tgt_source, tgt_start) =
+    let (tgt_source, tgt_start, tgt_at) =
         source_of(&track_id).ok_or_else(|| "this track has no audio on it".to_string())?;
+    // Compare the two from the same moment in the song, so the offset is
+    // how far apart they sound, not how far apart their files start.
+    let from = ref_at.max(tgt_at);
+    let ref_start = ref_start + (from - ref_at);
+    let tgt_start = tgt_start + (from - tgt_at);
 
     let ref_buf = engine
         .audio_pool
@@ -1894,16 +1926,25 @@ pub fn align_track_to(
 
     drop(engine);
     state.engine.lock().snapshot_before_mutation();
+    let reference_delayed;
     {
         let engine = state.engine.lock();
         let mut project = engine.project.lock();
+        // The measurement compares the audio, not what the mixer does with
+        // it, so the reference's delay is part of the answer.
+        let reference_delay = project
+            .track(&reference_track_id)
+            .map(|t| t.delay_samples)
+            .unwrap_or(0);
+        let (target_delay, new_reference_delay) = delays_for(found.offset_samples, reference_delay);
+        reference_delayed = new_reference_delay != reference_delay;
+        if let Some(reference) = project.track_mut(&reference_track_id) {
+            reference.delay_samples = new_reference_delay;
+        }
         let track = project
             .track_mut(&track_id)
             .ok_or_else(|| format!("Track not found: {track_id}"))?;
-        // The delay the track already had is part of the answer: the
-        // measurement compares the audio, not what the mixer is doing
-        // with it.
-        track.delay_samples = found.offset_samples;
+        track.delay_samples = target_delay;
         if found.polarity_flip {
             track.phase_invert = !track.phase_invert;
         }
@@ -1913,9 +1954,35 @@ pub fn align_track_to(
     Ok(AlignmentResult {
         offset_samples: found.offset_samples,
         offset_ms: found.offset_samples as f64 * 1000.0 / sample_rate,
+        reference_delayed,
         correlation: found.correlation,
         polarity_flipped: found.polarity_flip,
     })
+}
+
+#[cfg(test)]
+mod alignment_tests {
+    use super::delays_for;
+
+    #[test]
+    fn an_early_target_is_held_back_by_its_own_delay() {
+        // 40 samples early: delayed 40 to meet the reference.
+        assert_eq!(delays_for(-40, 0), (40, 0));
+    }
+
+    #[test]
+    fn a_late_target_is_met_by_holding_the_reference_back() {
+        // 40 samples late: it cannot play earlier, the reference waits.
+        assert_eq!(delays_for(40, 0), (0, 40));
+    }
+
+    #[test]
+    fn a_reference_delay_that_is_already_there_is_used_first() {
+        // The reference already waits 100: a target 40 late needs 60.
+        assert_eq!(delays_for(40, 100), (60, 100));
+        // And one 40 early needs 140.
+        assert_eq!(delays_for(-40, 100), (140, 100));
+    }
 }
 
 /// What a transcription found.
