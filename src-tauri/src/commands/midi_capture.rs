@@ -417,6 +417,7 @@ pub fn commit_recording_to_midi_clip(
                 position_ticks,
                 length_ticks,
                 lane: 0,
+                color: None,
             });
         }
         created.push(clip_id);
@@ -481,6 +482,7 @@ mod blend_tests {
             position_ticks: clip_pos,
             length_ticks: clip_len,
             lane: 0,
+            color: None,
         });
         t
     }

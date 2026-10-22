@@ -309,15 +309,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     bpm, sampleRate, setPosition, looping, loopStart, loopEnd,
     setLoop, toggleLoop,
     trackHeight, setTrackHeight, snapValue, snapEnabled, horizontalZoom, setHorizontalZoom,
-    clipColorOverrides, editCursorTicks, setEditCursor, setClipColor,
+    editCursorTicks, setEditCursor,
     punchEnabled, punchInTicks, punchOutTicks, setPunchIn, setPunchOut, clearPunch, setPunchRangeFromLoop,
   } = useTransportStore(useShallow((s) => ({
     bpm: s.bpm, sampleRate: s.sampleRate, setPosition: s.setPosition, looping: s.looping,
     loopStart: s.loopStart, loopEnd: s.loopEnd, setLoop: s.setLoop, toggleLoop: s.toggleLoop,
     trackHeight: s.trackHeight, setTrackHeight: s.setTrackHeight, snapValue: s.snapValue,
     snapEnabled: s.snapEnabled, horizontalZoom: s.horizontalZoom, setHorizontalZoom: s.setHorizontalZoom,
-    clipColorOverrides: s.clipColorOverrides, editCursorTicks: s.editCursorTicks,
-    setEditCursor: s.setEditCursor, setClipColor: s.setClipColor, punchEnabled: s.punchEnabled,
+    editCursorTicks: s.editCursorTicks,
+    setEditCursor: s.setEditCursor, punchEnabled: s.punchEnabled,
     punchInTicks: s.punchInTicks, punchOutTicks: s.punchOutTicks, setPunchIn: s.setPunchIn,
     setPunchOut: s.setPunchOut, clearPunch: s.clearPunch, setPunchRangeFromLoop: s.setPunchRangeFromLoop,
   })))
@@ -664,7 +664,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // instead of hiding behind each other.
       const laneCount = track.clips.reduce((max, c) => Math.max(max, (c.lane ?? 0) + 1), 1)
       for (const clip of track.clips) {
-        const color = clipColorOverrides[clip.id] || defaultColor
+        const color = clip.color || defaultColor
         drawClip(ctx, clip, color, y, scrollOffset, w, pixelsPerTick, clip.lane ?? 0, laneCount)
       }
     }
@@ -899,7 +899,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
    drawMainRef.current = draw
    draw()
    drawPlayheadRef.current()
-  }, [tracks, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, clipColorOverrides, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, sections, meterSegments, peer])
+  }, [tracks, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, sections, meterSegments, peer])
 
   // The playhead: one element over the arrangement, moved with a
   // transform straight from the transport store. No React render, no
@@ -2444,6 +2444,24 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
   }, [])
 
+  // The clip the context menu is for, and its colour. A colour picked there
+  // goes to every selected clip when the clicked one is part of the
+  // selection, as in FL Studio, and is saved with the song.
+  const menuClip = contextMenu
+    ? tracks.find(t => t.id === contextMenu.trackId)?.clips.find(c => c.id === contextMenu.clipId)
+    : undefined
+  const menuClipColor = menuClip?.color ?? null
+  const colorMenuClips = (color: string | null) => {
+    if (!contextMenu) return
+    const ids = selectedClipIds.has(contextMenu.clipId) ? selectedClipIds : new Set([contextMenu.clipId])
+    for (const track of tracks) {
+      const onTrack = track.clips.filter(c => ids.has(c.id)).map(c => c.id)
+      if (onTrack.length === 0) continue
+      useTrackStore.getState().setClipColor(track.id, onTrack, color)
+        .catch(e => useNotificationStore.getState().push('warning', 'Could not colour the clip', { detail: String(e) }))
+    }
+  }
+
   return (
     <div
       ref={containerRef}
@@ -2715,16 +2733,25 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             await setClipStretch(contextMenu.trackId, contextMenu.clipId, 1)
             setContextMenu(null)
           }} />
+          <MenuItem label="Rename…" onClick={() => {
+            const { trackId, clipId } = contextMenu
+            setContextMenu(null)
+            const name = window.prompt('Clip name:', menuClip?.name ?? '')?.trim()
+            if (name && name !== menuClip?.name) {
+              useTrackStore.getState().renameClip(trackId, clipId, name)
+                .catch(e => useNotificationStore.getState().push('warning', 'Could not rename the clip', { detail: String(e) }))
+            }
+          }} />
           <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
           <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
             Color
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 2, padding: '2px 6px 4px' }}>
             {CLIP_COLORS.map(c => {
-              const active = clipColorOverrides[contextMenu.clipId] === c
+              const active = menuClipColor === c.toLowerCase()
               return (
                 <button key={c} title={c}
-                  onClick={() => { setClipColor(contextMenu.clipId, c); setContextMenu(null) }}
+                  onClick={() => { colorMenuClips(c); setContextMenu(null) }}
                   style={{
                     width: 18, height: 18, borderRadius: 3, background: c,
                     border: active ? '2px solid #fff' : '1px solid rgba(255,255,255,0.12)',
@@ -2739,19 +2766,19 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             onClick={(e) => {
               const trigger = e?.currentTarget as HTMLElement | undefined
               const anchor = trigger?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0)
-              const clipId = contextMenu.clipId
+              const recolor = colorMenuClips
               useColorPickerStore.getState().open({
                 anchor,
-                current: clipColorOverrides[clipId] ?? null,
-                onPick: (c) => setClipColor(clipId, c),
-                onClear: () => setClipColor(clipId, null),
+                current: menuClipColor,
+                onPick: (c) => recolor(c),
+                onClear: () => recolor(null),
                 title: 'Clip color',
               })
               setContextMenu(null)
             }}
           />
           <MenuItem label="Clear color override" onClick={() => {
-            setClipColor(contextMenu.clipId, null)
+            colorMenuClips(null)
             setContextMenu(null)
           }} />
           <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />

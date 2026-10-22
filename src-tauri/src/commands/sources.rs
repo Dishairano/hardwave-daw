@@ -565,6 +565,7 @@ mod untrusted_projects {
             position_ticks: 0,
             length_ticks: 960,
             lane: 0,
+            color: None,
         }
     }
 

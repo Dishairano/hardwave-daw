@@ -93,6 +93,7 @@ pub fn add_audio_track_with_sine(
             // The clip stops naturally when source_end is reached.
             length_ticks: 100_000,
             lane: 0,
+            color: None,
         });
     }
     track_id

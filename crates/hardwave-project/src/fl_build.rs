@@ -506,6 +506,7 @@ pub fn build_project(
                     position_ticks: clip.start_tick,
                     length_ticks: clip.length_ticks.max(1),
                     lane: 0,
+                    color: None,
                 });
                 report.pattern_clips += 1;
             }
@@ -714,6 +715,7 @@ pub fn build_project(
                     position_ticks: clip.start_tick,
                     length_ticks: clip.length_ticks.max(1),
                     lane: 0,
+                    color: None,
                 });
                 report.audio_clips += 1;
             }

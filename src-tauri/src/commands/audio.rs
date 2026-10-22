@@ -117,6 +117,7 @@ pub(crate) fn import_audio_file_blocking(
         position_ticks: pos_ticks,
         length_ticks,
         lane: 0,
+        color: None,
     };
 
     {
@@ -183,6 +184,7 @@ pub(crate) fn track_clips_to_info(
                     fade_in_curve: fade_curve_name(ac.fade_in_curve),
                     fade_out_curve: fade_curve_name(ac.fade_out_curve),
                     lane: clip.lane,
+                    color: clip.color.clone(),
                     source_start: ac.source_start,
                     source_frames,
                     source_rate,
@@ -204,7 +206,7 @@ pub(crate) fn track_clips_to_info(
                 source_id: String::new(),
                 position_ticks: clip.position_ticks,
                 length_ticks: clip.length_ticks,
-                muted: false,
+                muted: mc.clip.muted,
                 gain_db: 0.0,
                 fade_in_ticks: 0,
                 fade_out_ticks: 0,
@@ -216,6 +218,7 @@ pub(crate) fn track_clips_to_info(
                 fade_in_curve: "linear".into(),
                 fade_out_curve: "linear".into(),
                 lane: clip.lane,
+                color: clip.color.clone(),
                 source_start: 0,
                 source_frames: 0,
                 source_rate: 0,
@@ -500,6 +503,9 @@ pub struct ClipInfo {
     /// Which take lane this piece sits on. 0 unless the takes on the
     /// track have been spread out for comping.
     lane: u32,
+    /// The clip's own colour (`#rrggbb`), or none for the track's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
     /// Where in its file the clip starts, in the loaded file's frames.
     #[serde(rename = "sourceStart")]
     source_start: u64,
@@ -918,6 +924,7 @@ mod tests {
             position_ticks: at,
             length_ticks: 4 * beat,
             lane: 0,
+            color: None,
         };
         project.track_mut("insert-001").unwrap().clips.push(place(
             "insert-001",
@@ -1601,6 +1608,119 @@ pub fn set_clip_muted(
     Ok(muted)
 }
 
+/// A clip colour as the interface sends it: `#rrggbb`, kept in lower case.
+fn clip_color(color: &str) -> Result<String, String> {
+    let hex = color.strip_prefix('#').unwrap_or("");
+    if hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(format!("#{}", hex.to_ascii_lowercase()))
+    } else {
+        Err(format!("Not a colour: {color}"))
+    }
+}
+
+/// A clip name as typed: trimmed, without control characters, at most 128
+/// characters. Empty is refused, since a clip shows its name on the timeline.
+fn clip_name(name: &str) -> Result<String, String> {
+    let clean: String = name
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(128)
+        .collect();
+    if clean.is_empty() {
+        Err("A clip needs a name.".into())
+    } else {
+        Ok(clean)
+    }
+}
+
+fn with_placement_mut<R>(
+    engine: &hardwave_engine::DawEngine,
+    track_id: &str,
+    clip_id: &str,
+    f: impl FnOnce(&mut hardwave_project::clip::ClipPlacement) -> R,
+) -> Result<R, String> {
+    let mut project = engine.project.lock();
+    let track = project
+        .track_mut(track_id)
+        .ok_or_else(|| format!("Track not found: {track_id}"))?;
+    let clip = track
+        .clips
+        .iter_mut()
+        .find(|c| match &c.content {
+            hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+            hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
+        })
+        .ok_or_else(|| format!("Clip not found: {clip_id}"))?;
+    Ok(f(clip))
+}
+
+/// Give clips a colour of their own, or `None` to go back to the track's.
+/// Saved with the song; it used to live only in the interface and was gone
+/// after a reload.
+#[tauri::command]
+pub fn set_clip_color(
+    state: State<AppState>,
+    track_id: String,
+    clip_ids: Vec<String>,
+    color: Option<String>,
+) -> Result<(), String> {
+    let color = color.as_deref().map(clip_color).transpose()?;
+    let engine = state.engine.lock();
+    engine.snapshot_before_mutation();
+    for clip_id in &clip_ids {
+        with_placement_mut(&engine, &track_id, clip_id, |c| c.color = color.clone())?;
+    }
+    Ok(())
+}
+
+/// Rename an audio or MIDI clip.
+#[tauri::command]
+pub fn rename_clip(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    name: String,
+) -> Result<String, String> {
+    let name = clip_name(&name)?;
+    let engine = state.engine.lock();
+    engine.snapshot_before_mutation();
+    with_placement_mut(&engine, &track_id, &clip_id, |c| match &mut c.content {
+        hardwave_project::clip::ClipContent::Audio(ac) => ac.name = name.clone(),
+        hardwave_project::clip::ClipContent::Midi(mc) => mc.clip.name = name.clone(),
+    })?;
+    Ok(name)
+}
+
+#[cfg(test)]
+mod clip_text_tests {
+    use super::{clip_color, clip_name};
+
+    #[test]
+    fn a_colour_is_six_hex_digits_after_a_hash() {
+        assert_eq!(clip_color("#ABCdef").unwrap(), "#abcdef");
+        for bad in [
+            "abcdef",
+            "#abc",
+            "#abcdefg",
+            "#ggg000",
+            "red",
+            "#12345\u{0}",
+        ] {
+            assert!(clip_color(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_name_is_trimmed_cleaned_and_capped() {
+        assert_eq!(clip_name("  Kick\tlayer\n ").unwrap(), "Kicklayer");
+        assert_eq!(clip_name(&"x".repeat(300)).unwrap().chars().count(), 128);
+        assert!(clip_name("   ").is_err());
+    }
+}
+
 /// Slide the audio inside a clip while the clip itself stays put.
 ///
 /// The slip tool was in the same state as mute: keybound, documented, and
@@ -2120,6 +2240,7 @@ pub fn audio_clip_to_midi(
             position_ticks,
             length_ticks,
             lane: 0,
+            color: None,
         };
         if let Some(track) = project.track_mut(&new_track_id) {
             track.clips.push(placement);

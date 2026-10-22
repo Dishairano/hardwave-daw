@@ -67,6 +67,8 @@ export interface ClipInfo {
   fadeOutCurve: FadeCurveKind
   /** Take lane. 0 unless the takes on this track have been spread out. */
   lane?: number
+  /** The clip's own colour (`#rrggbb`), saved with the song; absent for the track's. */
+  color?: string
   /** Where in its file the clip starts, in the loaded file's frames. */
   sourceStart?: number
   /** The loaded file's length in frames and its rate; 0 when not loaded. */
@@ -381,6 +383,9 @@ interface TrackState {
   toggleClipReverse: (trackId: string, clipId: string) => Promise<void>
   setClipPitch: (trackId: string, clipId: string, pitchSemitones: number) => Promise<void>
   setClipStretch: (trackId: string, clipId: string, stretchRatio: number) => Promise<void>
+  /** Colour clips on one track, or `null` to give them the track's colour back. */
+  setClipColor: (trackId: string, clipIds: string[], color: string | null) => Promise<void>
+  renameClip: (trackId: string, clipId: string, name: string) => Promise<void>
   autoCrossfadeOverlaps: (trackId?: string) => Promise<number>
   undo: () => Promise<boolean>
   redo: () => Promise<boolean>
@@ -1107,6 +1112,17 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   setClipStretch: async (trackId, clipId, stretchRatio) => {
     await mut('set_clip_stretch', { trackId, clipId, stretchRatio }, `Set clip stretch ${stretchRatio.toFixed(2)}×`)
     await get().fetchTracks()
+  },
+
+  setClipColor: async (trackId, clipIds, color) => {
+    if (clipIds.length === 0) return
+    await mut('set_clip_color', { trackId, clipIds, color }, color ? 'Colour clip' : 'Clear clip colour')
+    await get().refreshTrack(trackId)
+  },
+
+  renameClip: async (trackId, clipId, name) => {
+    await mut('rename_clip', { trackId, clipId, name }, `Rename clip to "${name}"`)
+    await get().refreshTrack(trackId)
   },
 
   autoCrossfadeOverlaps: async (trackId) => {
