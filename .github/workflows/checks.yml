@@ -1,0 +1,107 @@
+# The release gate, on GitHub's machines.
+#
+# release.sh used to run clippy and the whole test suite on web01 before
+# every tag: 20 to 35 minutes on 2 cores and 4 GB shared with the website,
+# long enough to push other builds out of memory. It now pushes the tree it is
+# about to release to the `release-check` branch and waits here instead; the
+# version is only bumped and tagged once this run is green, so a failing test
+# still costs no version number.
+#
+# The same checks release.yml's own jobs run after the tag (fmt, clippy, the
+# workspace tests, the frontend, the UI suite), so a tag that passed here does
+# not die there. The long #[ignore]d engine tests run in Functional Smoke and
+# in release.yml, as before.
+name: Checks
+
+on:
+  push:
+    branches:
+      - release-check
+  workflow_dispatch:
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint & Test (Linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri -> target
+          # The same cache as release.yml's Lint & Test, so each warms the other.
+          shared-key: release-lint-and-test
+          cache-on-failure: true
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            mold clang
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/daw-ui/package-lock.json
+      - name: Typecheck, unit tests, build
+        run: |
+          cd packages/daw-ui
+          npm ci
+          npm run typecheck
+          npm run test:unit
+          npm run build
+
+  ui-tests:
+    # Pinned for the same reason as in release.yml: Playwright 1.58 cannot
+    # install Chromium on Ubuntu 26.04.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/daw-ui/package-lock.json
+      - name: Run Playwright UI suite
+        run: |
+          cd packages/daw-ui
+          npm ci
+          npx playwright install chromium --with-deps
+          npx playwright test
