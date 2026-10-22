@@ -362,7 +362,30 @@ input[type="range"].fl-range::-webkit-slider-thumb { -webkit-appearance: none; w
   background: none;
   gap: 3px;
   padding: 4px 0 6px;
+  flex-wrap: wrap;
+  row-gap: 3px;
 }
+.mx-v2-root .mx-pill-in.on { background: #0e7490; border-color: #0e7490; color: #fff; }
+.mx-v2-root .mx-pill-safe.on { background: #a16207; border-color: #a16207; color: #fff; }
+/* Highest peak since the last click, with a light that stays red after a clip. */
+.mx-v2-root .mx-s-peak {
+  order: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 16px;
+  margin: 0 6px 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mx-dim);
+  font: 600 10px 'JetBrains Mono', ui-monospace, monospace;
+  cursor: pointer;
+}
+.mx-v2-root .mx-s-clip-led { width: 18px; height: 5px; border-radius: 2px; background: #26262c; }
+.mx-v2-root .mx-s-peak.clipped .mx-s-clip-led { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+.mx-v2-root .mx-s-peak.clipped .mx-s-peak-db { color: #f87171; }
 .mx-v2-root .mx-pill { width: 22px; height: 20px; font: 700 10.5px Inter, 'Segoe UI', system-ui, sans-serif; border-radius: 5px; background: #1e1e23; border-color: rgba(255,255,255,0.1); color: var(--mx-muted); }
 .mx-v2-root .mx-pill-m.on { background: #52525b; border-color: #52525b; }
 .mx-v2-root .mx-pill-r.on { background: #dc2626; border-color: #dc2626; color: #fff; }

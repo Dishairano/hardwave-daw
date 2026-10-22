@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, type CSSProperties } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useSendStore, type SendInfo } from '../../../stores/sendStore'
 import { usePerfMetersStore } from '../../../stores/perfMetersStore'
 import { Knob } from '../../primitives/Knob'
@@ -58,6 +58,37 @@ export interface ChannelStripProps {
  *   selector. Phase 4 replaces this with a canvas painted from a single
  *   global rAF loop.
  */
+/** The highest peak a strip has reached since it was last clicked, in dB.
+ *  The engine sends the level of every strip; only the old mixer kept a clip
+ *  light and the default one showed bare meters. Read without re-rendering
+ *  the strip on every meter tick: it only renders when a new highest comes. */
+function useHighestPeak(trackId: string, master: boolean): [number, () => void] {
+  const [highest, setHighest] = useState(-100)
+  const held = useRef(-100)
+  useEffect(() => useMeterStore.subscribe((s) => {
+    const m = s.tracks[trackId]
+    const db = master ? s.master.peak_db : Math.max(m?.peakL ?? -100, m?.peakR ?? -100)
+    if (db > held.current + 0.05) {
+      held.current = db
+      setHighest(db)
+    }
+  }), [trackId, master])
+  const reset = useCallback(() => {
+    held.current = -100
+    setHighest(-100)
+  }, [])
+  return [highest, reset]
+}
+
+function LockIcon() {
+  return (
+    <svg width="9" height="10" viewBox="0 0 9 10" aria-hidden="true">
+      <rect x="1" y="4.5" width="7" height="5" rx="1" fill="currentColor" />
+      <path d="M2.5 4.5V3a2 2 0 0 1 4 0v1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  )
+}
+
 export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps) {
   const { trackId, index, selected, onSelect, variant = 'insert', separator = 'none' } = props
 
@@ -78,6 +109,9 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const muted = useTrackMuted(trackId)
   const soloed = useTrackSoloed(trackId)
   const armed = useTrackArmed(trackId)
+  const soloSafe = useTrackStore((s) => s.tracksById[trackId]?.solo_safe ?? false)
+  const monitorInput = useTrackStore((s) => s.tracksById[trackId]?.monitorInput ?? true)
+  const [highestPeak, resetPeak] = useHighestPeak(trackId, variant === 'master')
   const showWidthKnob = useMixerSettingsStore((s) => s.showWidthKnob)
   // Where this channel goes, and its sends as the dots under it. The dots
   // were a fixed pattern before: every strip showed one send it did not have.
@@ -181,6 +215,29 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
     },
     [trackId],
   )
+  // Hearing the input while armed, and solo-safe: both had a button only in
+  // the old mixer and in the old track list's menu.
+  const onMonitor = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      useTrackStore.getState().setTrackMonitorInput(trackId, !monitorInput).catch(console.error)
+    },
+    [trackId, monitorInput],
+  )
+  const onSoloSafe = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      useTrackStore.getState().toggleSoloSafe(trackId).catch(console.error)
+    },
+    [trackId],
+  )
+  const onResetPeak = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      resetPeak()
+    },
+    [resetPeak],
+  )
 
   const isAudioOrMidi = kind === 'Audio' || kind === 'Midi'
 
@@ -237,6 +294,26 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
                 R
               </button>
             )}
+            {isAudioOrMidi && armed && (
+              <button
+                className={'mx-pill mx-pill-in' + (monitorInput ? ' on' : '')}
+                onClick={onMonitor}
+                title={monitorInput
+                  ? 'Hearing the input while armed. Click to record without hearing it'
+                  : 'Not hearing the input. Click to hear it while armed'}
+              >
+                IN
+              </button>
+            )}
+            <button
+              className={'mx-pill mx-pill-safe' + (soloSafe ? ' on' : '')}
+              onClick={onSoloSafe}
+              title={soloSafe
+                ? 'Solo-safe: soloing another track does not silence this one. Click to turn off'
+                : 'Solo-safe: keep this track playing when another is soloed'}
+            >
+              <LockIcon />
+            </button>
           </div>
         )}
       </div>
@@ -290,6 +367,20 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
           </div>
         )}
       </div>
+
+      {/* The highest peak since a click on it, red once it went over 0 dB:
+          a clip that happened while you looked away stays visible. */}
+      <button
+        type="button"
+        className={'mx-s-peak' + (highestPeak >= 0 ? ' clipped' : '')}
+        onClick={onResetPeak}
+        title={highestPeak > -100 ? 'Highest peak so far. Click to start again' : 'Highest peak'}
+      >
+        <span className="mx-s-clip-led" />
+        <span className="mx-s-peak-db">
+          {highestPeak <= -100 ? '-∞' : (highestPeak > 0 ? '+' : '') + highestPeak.toFixed(1)}
+        </span>
+      </button>
 
       <div className="mx-s-fader-meter">
         <div className="mx-fader-col">
