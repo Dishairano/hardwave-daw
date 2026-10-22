@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ExportOutcome } from './exportNotice'
 import { createPortal } from 'react-dom'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -24,7 +25,7 @@ export interface ExportSettings {
 interface Props {
   initial: ExportSettings
   onCancel: () => void
-  onComplete: (result: { path: string; duration_secs: number }) => void
+  onComplete: (result: ExportOutcome) => void
   onError: (message: string) => void
 }
 
@@ -312,11 +313,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     renderStartedAt.current = performance.now()
     const { startSamples, endSamples } = computeRenderBounds()
     try {
-      const result = await invoke<{
-        path: string
-        duration_secs: number
-        cancelled: boolean
-      }>('export_project_wav', {
+      const result = await invoke<ExportOutcome & { cancelled: boolean }>('export_project_wav', {
         path: finalPath,
         sampleRate,
         bitDepth,
