@@ -372,6 +372,7 @@ const mock: TauriInternals = {
       case 'set_channel_offsets':
         return null
       case 'drain_plugin_knob_moves':
+      case 'drain_midi_mapped_moves':
         return []
       case 'list_frozen_tracks':
         return ['t-bass']

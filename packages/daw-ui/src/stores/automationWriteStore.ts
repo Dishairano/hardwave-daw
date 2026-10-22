@@ -91,14 +91,15 @@ function startKnobPolling() {
     }
     if (draining) return
     draining = true
-    invoke<{ trackId: string; slotId: string; paramId: number; value: number }[]>(
-      'drain_plugin_knob_moves',
-    )
+    Promise.all([
+      invoke<{ trackId: string; slotId: string; paramId: number; value: number }[]>('drain_plugin_knob_moves')
+        .catch(() => []),
+      invoke<MappedMove[]>('drain_midi_mapped_moves').catch(() => []),
+    ])
       .finally(() => { draining = false })
-      .then(moves => {
-        if (!Array.isArray(moves) || moves.length === 0) return
+      .then(([knobs, mapped]) => {
         if (!store.isRecording()) return
-        for (const move of moves) {
+        for (const move of Array.isArray(knobs) ? knobs : []) {
           // Through writeFromControl, so the pass ends when the knob stops:
           // these moves opened a session that nothing ever closed, so they
           // were never written into a lane.
@@ -108,9 +109,39 @@ function startKnobPolling() {
             move.value,
           )
         }
+        // Controls a learned MIDI controller moved: the fader or knob moved
+        // and nothing wrote it into a lane.
+        for (const move of Array.isArray(mapped) ? mapped : []) {
+          const target = mappedTarget(move)
+          if (target) store.writeFromControl(move.trackId, target, move.value)
+        }
       })
       .catch(() => { /* no engine: nothing to follow */ })
   }, 60)
+}
+
+/** A control a mapped MIDI controller moved (`drain_midi_mapped_moves`). */
+interface MappedMove {
+  trackId: string
+  kind: 'track_volume' | 'track_pan' | 'track_mute' | 'plugin_param'
+  slotId?: string
+  paramId?: number
+  value: number
+}
+
+export function mappedTarget(move: MappedMove): AutomationTargetInfo | null {
+  switch (move.kind) {
+    case 'track_volume':
+    case 'track_pan':
+    case 'track_mute':
+      return { kind: move.kind }
+    case 'plugin_param':
+      return move.slotId != null && move.paramId != null
+        ? { kind: 'plugin_param', slotId: move.slotId, paramId: move.paramId }
+        : null
+    default:
+      return null
+  }
 }
 
 function stopKnobPolling() {
@@ -132,8 +163,13 @@ export const useAutomationWriteStore = create<AutomationWriteState>((set, get) =
     if (mode === 'off') {
       stopKnobPolling()
       invoke('drain_plugin_knob_moves').catch(() => {})
+      invoke('drain_midi_mapped_moves').catch(() => {})
     } else {
-      startKnobPolling()
+      // Moves made while nothing was recording are not part of this pass.
+      Promise.all([
+        invoke('drain_plugin_knob_moves').catch(() => {}),
+        invoke('drain_midi_mapped_moves').catch(() => {}),
+      ]).finally(startKnobPolling)
     }
   },
 

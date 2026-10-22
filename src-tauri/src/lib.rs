@@ -770,6 +770,7 @@ pub fn run() {
             commands::midi_learn::list_midi_mappings,
             commands::midi_learn::remove_midi_mapping,
             commands::midi_learn::clear_midi_mappings,
+            commands::midi_learn::drain_midi_mapped_moves,
             // MIDI Clock output
             commands::midi_output::list_midi_outputs,
             commands::midi_output::open_midi_output,
