@@ -348,12 +348,13 @@ pub fn get_pdc_enabled(state: State<AppState>) -> bool {
 #[tauri::command]
 pub fn set_pdc_enabled(state: State<AppState>, enabled: bool) {
     use std::sync::atomic::Ordering;
-    state
-        .engine
-        .lock()
+    let engine = state.engine.lock();
+    engine
         .transport
         .pdc_enabled
         .store(enabled, Ordering::Relaxed);
+    // The compensation is worked out when the graph is built.
+    engine.rebuild_graph();
 }
 
 #[tauri::command]

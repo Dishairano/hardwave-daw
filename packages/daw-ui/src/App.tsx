@@ -2230,7 +2230,13 @@ export function App() {
           // Switches — togglable runtime state mirrors FL's Switches section
           { label: `${typingKeyboardEnabled ? '✓ ' : '   '}Typing keyboard to piano`, shortcut: 'Ctrl+T', action: () => useTypingKeyboardStore.getState().toggle() },
           { label: `${metronomeEnabled ? '✓ ' : '   '}Metronome`, shortcut: 'Ctrl+M', action: () => useMetronomeStore.getState().toggleEnabled() },
-          { label: `${pdcEnabled ? '✓ ' : '   '}Plugin delay compensation`, action: () => setPdcEnabled(v => !v) },
+          // This flipped the tick and nothing else; the engine now aligns
+          // the tracks, or stops doing so, when it changes.
+          { label: `${pdcEnabled ? '✓ ' : '   '}Plugin delay compensation`, action: () => {
+            const next = !pdcEnabled
+            setPdcEnabled(next)
+            invoke('set_pdc_enabled', { enabled: next }).catch(() => setPdcEnabled(!next))
+          } },
           { label: `${useNewMixer ? '✓ ' : '   '}Experimental — FL Wide 2 mixer`, action: () => setUseNewMixer(!useNewMixer) },
           { separator: true, label: '' },
           // UI
