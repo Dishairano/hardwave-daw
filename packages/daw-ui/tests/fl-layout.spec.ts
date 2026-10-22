@@ -146,7 +146,7 @@ test.describe('Default panel state — FL Studio defaults', () => {
   })
 
   test('Playlist is visible by default', async ({ page }) => {
-    // Playlist/arrangement area should be rendered (TrackList + Arrangement canvas)
+    // Playlist/arrangement area should be rendered (track header + Arrangement canvas)
     const canvas = page.locator('canvas')
     expect(await canvas.count()).toBeGreaterThan(0)
   })

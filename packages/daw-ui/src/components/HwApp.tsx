@@ -16,6 +16,7 @@ import { useTrackFolderStore } from '../stores/trackFolderStore'
 import { usePlaylistScrollStore } from '../stores/playlistScrollStore'
 import { playlistTracks } from './arrangement/playlistRows'
 import React, { useState, useCallback, useEffect, useMemo } from 'react'
+import { TrackContextMenu } from './arrangement/TrackContextMenu'
 import { t, useLanguage } from '../i18n'
 import { Browser } from './browser/Browser'
 import { Arrangement } from './arrangement/Arrangement'
@@ -1404,6 +1405,7 @@ export function HwPlaylistTracks() {
   const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
   const selectedTrackId = useTrackStore(s => s.selectedTrackId)
   const selectTrack = useTrackStore(s => s.selectTrack)
+  const [trackMenu, setTrackMenu] = useState<{ trackId: string; x: number; y: number } | null>(null)
   const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
   // Which track currently has its KickSynth editor open, if any.
   // Editor pops up when the user double-clicks the instrument badge
@@ -1425,6 +1427,11 @@ export function HwPlaylistTracks() {
               // click; this one did not, so paste had nowhere to go but the
               // track of the last clip clicked.
               onClick={() => selectTrack(t.id)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                selectTrack(t.id)
+                setTrackMenu({ trackId: t.id, x: e.clientX, y: e.clientY })
+              }}
             >
               <span className="strip" />
               <span className="nm">
@@ -1517,6 +1524,9 @@ export function HwPlaylistTracks() {
           />
         )
       })()}
+      {trackMenu && (
+        <TrackContextMenu {...trackMenu} onClose={() => setTrackMenu(null)} />
+      )}
     </div>
   )
 }
