@@ -1272,12 +1272,27 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 options={[
                   { value: 'bars', label: 'Bars' },
                   { value: 'time', label: 'Minutes and seconds' },
-                  { value: 'timecode', label: 'Timecode (25 fps)' },
+                  { value: 'timecode', label: 'Timecode' },
+                  { value: 'samples', label: 'Samples' },
                 ]}
               />
             </SettingRow>
+            {generalPrefs.rulerUnits === 'timecode' && (
+              <SettingRow label="Timecode frame rate">
+                <Select
+                  value={String(generalPrefs.timecodeFps)}
+                  onChange={v => generalPrefs.setTimecodeFps(Number(v) as typeof generalPrefs.timecodeFps)}
+                  options={[
+                    { value: '24', label: '24 fps (film)' },
+                    { value: '25', label: '25 fps (PAL)' },
+                    { value: '30', label: '30 fps (NTSC, non-drop)' },
+                  ]}
+                />
+              </SettingRow>
+            )}
             <div style={{ fontSize: 9, color: hw.textFaint, margin: '-4px 0 10px' }}>
-              Bars for music. The other two are for work to picture, where a cue lands at a time, not a bar.
+              Bars for music. Time and timecode are for work to picture, where a cue lands at a time, not a bar;
+              samples for lining up sound to the sample. The frame rate also sets the MIDI timecode sent out.
             </div>
 
             {/* Whether the view chases the song. Off by default. */}

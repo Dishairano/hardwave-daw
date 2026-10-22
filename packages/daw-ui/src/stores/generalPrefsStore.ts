@@ -1,4 +1,6 @@
 import type { FollowMode } from '../components/arrangement/follow'
+import type { RulerUnits, TimecodeFps } from '../components/arrangement/rulerLabel'
+import { invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
@@ -38,7 +40,10 @@ interface GeneralPrefsState {
   /** What the playlist ruler counts in: bars, minutes and seconds, or
    *  timecode. Bars for music, the other two for picture and sound design,
    *  which had no way to read the timeline at all. */
-  rulerUnits: 'bars' | 'time' | 'timecode'
+  rulerUnits: RulerUnits
+  /** The frame rate timecode is counted in, on the ruler and in the MIDI
+   *  timecode sent out; the ruler always counted 25. */
+  timecodeFps: TimecodeFps
   /** The FPS meter overlay (Tools > Show FPS meter, Ctrl+Shift+F). */
   showFpsMeter: boolean
 
@@ -47,7 +52,8 @@ interface GeneralPrefsState {
   setHighVisibility: (v: boolean) => void
   setFollowPlayhead: (v: boolean) => void
   setFollowMode: (v: FollowMode) => void
-  setRulerUnits: (v: 'bars' | 'time' | 'timecode') => void
+  setRulerUnits: (v: RulerUnits) => void
+  setTimecodeFps: (v: TimecodeFps) => void
   toggleFpsMeter: () => void
 }
 
@@ -60,6 +66,7 @@ export const useGeneralPrefsStore = create<GeneralPrefsState>()(
       followPlayhead: false,
       followMode: 'continuous',
       rulerUnits: 'bars',
+      timecodeFps: 25,
       showFpsMeter: false,
       setNoteNaming: (noteNaming) => set({ noteNaming }),
       setAnimationsEnabled: (animationsEnabled) => set({ animationsEnabled }),
@@ -67,6 +74,11 @@ export const useGeneralPrefsStore = create<GeneralPrefsState>()(
       setFollowPlayhead: (followPlayhead) => set({ followPlayhead }),
       setFollowMode: (followMode) => set({ followMode }),
       setRulerUnits: (rulerUnits) => set({ rulerUnits }),
+      setTimecodeFps: (timecodeFps) => {
+        set({ timecodeFps })
+        // The timecode sent to other gear runs at the same rate.
+        invoke('set_midi_mtc_fps', { fps: timecodeFps }).catch(() => {})
+      },
       toggleFpsMeter: () => set((s) => ({ showFpsMeter: !s.showFpsMeter })),
     }),
     { name: 'hw-general-prefs' },
