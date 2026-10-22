@@ -1627,6 +1627,10 @@ impl DawEngine {
         prepare: impl FnOnce(&mut Project),
         on_block: impl FnMut(&[f32]) -> bool,
     ) -> Result<(), String> {
+        // A render runs plug-ins and tails like the audio thread does, on
+        // whatever thread asked for it: flush denormals for the length of
+        // it, then leave that thread as it was.
+        let _denormals = hardwave_audio_io::denormals::flush_denormals_while();
         if total_samples == 0 {
             return Ok(());
         }
