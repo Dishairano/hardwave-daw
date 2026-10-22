@@ -361,9 +361,9 @@ const timeFactor = (v: Values) => v.stretch / (v.resample ? Math.pow(2, v.pitch 
 function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
   const tracks = useTrackStore((s) => s.tracks)
   const bpm = useTransportStore((s) => s.bpm)
-  const colorOverride = useTransportStore((s) => s.clipColorOverrides[clipId])
   const track = tracks.find((t) => t.id === trackId)
   const clip = track?.clips.find((c) => c.id === clipId)
+  const colorOverride = clip?.color
 
   const [v, setV] = useState<Values | null>(() => (clip ? valuesOf(clip) : null))
   const [range, setRange] = useState(() => Math.max(2, Math.ceil(Math.abs(clip?.pitchSemitones ?? 0))))

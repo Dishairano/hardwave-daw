@@ -226,6 +226,7 @@ mod comp_tests {
             position_ticks: position,
             length_ticks: length,
             lane: 0,
+            color: None,
         }
     }
 

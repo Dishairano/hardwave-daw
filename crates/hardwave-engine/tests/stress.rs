@@ -122,6 +122,7 @@ fn engine_renders_pattern_with_1500_midi_notes() {
             position_ticks: 0,
             length_ticks,
             lane: 0,
+            color: None,
         });
     }
 

@@ -335,6 +335,8 @@ permissions = [
   "allow-cut-clips",
   "allow-paste-clips",
   "allow-set-clip-muted",
+  "allow-set-clip-color",
+  "allow-rename-clip",
   "allow-slip-clip",
   "allow-preview-audio-file",
   "allow-preview-audio-file-in-tempo",

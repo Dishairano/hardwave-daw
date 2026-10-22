@@ -142,6 +142,7 @@ pub fn create_midi_clip(
         position_ticks: position_ticks.unwrap_or(0),
         length_ticks: len,
         lane: 0,
+        color: None,
     };
 
     {

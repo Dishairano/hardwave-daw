@@ -263,6 +263,7 @@ fn kicksynth_instrument_produces_kick_audio() {
                 position_ticks: 0,
                 length_ticks: 1920,
                 lane: 0,
+                color: None,
             });
         }
     }
@@ -387,6 +388,7 @@ fn midi_clip_produces_sound() {
                 position_ticks: 0,
                 length_ticks: 1920,
                 lane: 0,
+                color: None,
             });
         }
     }
@@ -436,6 +438,7 @@ fn a_muted_pattern_clip_is_silent() {
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
+                    color: None,
                 });
             }
         }
@@ -967,6 +970,7 @@ fn a_send_level_lane_moves_the_send() {
                     position_ticks: 0,
                     length_ticks: 1_000_000,
                     lane: 0,
+                    color: None,
                 });
                 // Silent on its own fader, audible only through the send.
                 track.volume_db = -100.0;
@@ -2069,6 +2073,7 @@ fn a_routed_track_plays_the_notes_of_the_track_that_feeds_it() {
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
+                    color: None,
                 });
                 if routed {
                     track.midi_route_to = vec![target.clone()];
@@ -2129,6 +2134,7 @@ fn a_note_panned_left_is_louder_on_the_left() {
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
+                    color: None,
                 });
             }
         }
@@ -2187,6 +2193,7 @@ fn a_vca_group_rides_the_faders_of_its_members() {
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
+                    color: None,
                 });
             }
             if let Some((gain_db, muted)) = group {
@@ -2262,6 +2269,7 @@ fn an_arpeggiator_on_the_track_changes_what_the_instrument_plays() {
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
+                    color: None,
                 });
                 track.midi_fx = chain;
             }
@@ -2335,6 +2343,7 @@ fn a_frozen_track_plays_its_render_and_unfreezing_puts_the_part_back() {
         position_ticks: 0,
         length_ticks: 1_000_000,
         lane,
+        color: None,
     };
 
     // One bin of a Fourier transform: how much of one frequency is there.
@@ -2426,6 +2435,7 @@ fn a_track_in_another_tuning_plays_other_pitches() {
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
+                    color: None,
                 });
                 track.tuning = tuning;
             }
@@ -2517,6 +2527,7 @@ fn a_render_is_the_same_whether_it_uses_one_core_or_several() {
                         position_ticks: 0,
                         length_ticks: 1920,
                         lane: 0,
+                        color: None,
                     });
                     track.sends.push(MixerSend {
                         target: bus.clone(),
@@ -2603,6 +2614,7 @@ fn a_track_routed_to_an_empty_bus_is_heard() {
                 position_ticks: 0,
                 length_ticks: 1_000_000,
                 lane: 0,
+                color: None,
             });
             track.output_bus = Some(bus_id.clone());
         }
@@ -2669,6 +2681,7 @@ fn a_prepared_render_runs_without_the_engine() {
                 position_ticks: 0,
                 length_ticks: 1_000_000,
                 lane: 0,
+                color: None,
             });
         }
     }

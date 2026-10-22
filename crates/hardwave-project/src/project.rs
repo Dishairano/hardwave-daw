@@ -528,6 +528,7 @@ impl Project {
                 position_ticks: tick,
                 length_ticks: length,
                 lane: 0,
+                color: None,
             });
             placed += 1;
         }
@@ -1010,6 +1011,7 @@ mod tests {
             position_ticks: 0,
             length_ticks: 1920,
             lane: 0,
+            color: None,
         });
         p.save(&path).expect("save");
 

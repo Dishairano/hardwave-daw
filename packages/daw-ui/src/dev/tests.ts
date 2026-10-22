@@ -11,6 +11,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { devDumpState, devForceDeviceError, devResolveTestAsset, queryTestId, getMeterDb, clickCanvas, simulateKey } from './devApi'
 import { useTransportStore, snapToTicks } from '../stores/transportStore'
+import { useTrackStore } from '../stores/trackStore'
 import { PHASE3_TESTS } from './testsPhase3'
 import { PHASE4_TESTS } from './testsPhase4'
 import { PHASE5_TESTS } from './testsPhase5'
@@ -2111,17 +2112,25 @@ export const TESTS: TestDef[] = [
     kind: 'AUTO',
     phase: 2,
     phase1Item: 'Clip color override',
-    title: 'setClipColor stores override; passing null clears it',
-    instructions: 'Setting a hex color then clearing with null must leave the override map clean.',
+    title: 'A clip colour is saved in the song; null gives the track colour back',
+    instructions: 'Colours the first clip in the song, reads the tracks back from the engine, then clears it.',
     run: async ({ log }) => {
-      const s = useTransportStore.getState()
-      s.setClipColor('test-clip-xyz', '#abcdef')
-      const set1 = useTransportStore.getState().clipColorOverrides['test-clip-xyz']
-      s.setClipColor('test-clip-xyz', null)
-      const set2 = useTransportStore.getState().clipColorOverrides['test-clip-xyz']
+      const ts = useTrackStore.getState()
+      await ts.fetchTracks()
+      const track = useTrackStore.getState().tracks.find(t => t.clips.length > 0)
+      if (!track) {
+        log('info', 'no clip in the song to colour')
+        return { pass: false, note: 'add a clip first' }
+      }
+      const clipId = track.clips[0].id
+      const colorOf = () => useTrackStore.getState().tracks.find(t => t.id === track.id)?.clips.find(c => c.id === clipId)?.color
+      await ts.setClipColor(track.id, [clipId], '#ABCDEF')
+      const set1 = colorOf()
+      await ts.setClipColor(track.id, [clipId], null)
+      const set2 = colorOf()
       const ok = set1 === '#abcdef' && set2 === undefined
-      log(ok ? 'pass' : 'fail', 'override', { expected: '#abcdef then undefined', actual: `${set1} → ${set2}` })
-      return { pass: ok, note: 'set + clear round-trip' }
+      log(ok ? 'pass' : 'fail', 'clip colour', { expected: '#abcdef then none', actual: `${set1} → ${set2}` })
+      return { pass: ok, note: 'set + clear round-trip through the engine' }
     },
   },
 

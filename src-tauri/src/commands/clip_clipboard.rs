@@ -209,6 +209,7 @@ mod tests {
             position_ticks: position,
             length_ticks: 960,
             lane: 0,
+            color: None,
         }
     }
 
@@ -222,6 +223,7 @@ mod tests {
             position_ticks: position,
             length_ticks: 960,
             lane: 0,
+            color: None,
         }
     }
 

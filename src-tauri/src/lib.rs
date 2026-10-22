@@ -703,6 +703,8 @@ pub fn run() {
             commands::clip_clipboard::cut_clips,
             commands::clip_clipboard::paste_clips,
             commands::audio::set_clip_muted,
+            commands::audio::set_clip_color,
+            commands::audio::rename_clip,
             commands::audio::slip_clip,
             // Browser auditions through the engine's own output
             commands::audio::preview_audio_file,

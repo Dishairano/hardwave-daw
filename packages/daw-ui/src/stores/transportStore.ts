@@ -130,7 +130,6 @@ interface TransportState {
   snapValue: SnapValue
   snapEnabled: boolean
   horizontalZoom: number
-  clipColorOverrides: Record<string, string>
   editCursorTicks: number | null
   punchEnabled: boolean
   punchInTicks: number | null
@@ -163,7 +162,6 @@ interface TransportState {
   playlistViewportPx: number
   songEndTicks: number
   setPlaylistMetrics: (px: number, songEndTicks: number) => void
-  setClipColor: (clipId: string, color: string | null) => void
   setEditCursor: (ticks: number | null) => void
   togglePunch: () => void
   setPunchIn: (ticks: number | null) => void
@@ -414,7 +412,6 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   snapValue: '1/4',
   snapEnabled: true,
   horizontalZoom: 1,
-  clipColorOverrides: {},
   editCursorTicks: null,
   punchEnabled: false,
   punchInTicks: null,
@@ -569,11 +566,6 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     set({ playlistViewportPx: px, songEndTicks })
   },
   setEditCursor: (ticks) => set({ editCursorTicks: ticks == null ? null : Math.max(0, Math.floor(ticks)) }),
-  setClipColor: (clipId, color) => set(s => {
-    const next = { ...s.clipColorOverrides }
-    if (color == null) delete next[clipId]; else next[clipId] = color
-    return { clipColorOverrides: next }
-  }),
   togglePunch: () => {
     set({ punchEnabled: !get().punchEnabled })
     pushPunchToEngine()

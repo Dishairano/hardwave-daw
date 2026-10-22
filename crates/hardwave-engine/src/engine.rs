@@ -3204,6 +3204,7 @@ impl EngineCallback {
                             position_ticks: 0,
                             length_ticks: rack.length_ticks(),
                             lane: 0,
+                            color: None,
                         }
                     })
                 } else {
@@ -4338,6 +4339,7 @@ mod offline_insert_tests {
                 position_ticks: 0,
                 length_ticks: 1920,
                 lane: 0,
+                color: None,
             });
             t.inserts.push(PluginSlot {
                 id: "slot1".into(),
@@ -4472,6 +4474,7 @@ mod offline_insert_tests {
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
+                    color: None,
                 });
             }
         }
@@ -4558,6 +4561,7 @@ mod offline_insert_tests {
                     position_ticks: 0,
                     length_ticks: lengths.1,
                     lane: 0,
+                    color: None,
                 });
             }
         }
@@ -4669,6 +4673,7 @@ mod offline_insert_tests {
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
+                    color: None,
                 });
             }
         }
@@ -4928,6 +4933,7 @@ mod offline_insert_tests {
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
+                    color: None,
                 });
             }
             let path = dir.join("song.hwp");
@@ -5015,6 +5021,7 @@ mod offline_insert_tests {
                 position_ticks: 0,
                 length_ticks: 1920,
                 lane: 0,
+                color: None,
             };
             if let Some(t) = project.track_mut(&id) {
                 t.clips.push(clip("clip-live"));
@@ -5087,6 +5094,7 @@ mod offline_insert_tests {
                 position_ticks: 0,
                 length_ticks: 1920,
                 lane: 0,
+                color: None,
             };
             ghost.track_id = id2.clone();
             if let Some(t) = project.track_mut(&id2) {

@@ -94,6 +94,7 @@ fn stretch_preserves_pitch() {
                     position_ticks: 0,
                     length_ticks: 1_000_000,
                     lane: 0,
+                    color: None,
                 });
             }
         }
@@ -283,6 +284,7 @@ fn pitch_shift_preserves_duration() {
                     position_ticks: 0,
                     length_ticks: 1_000_000,
                     lane: 0,
+                    color: None,
                 });
             }
         }
@@ -375,6 +377,7 @@ fn stretch_bake_is_explicit_and_off_the_audio_thread() {
                 position_ticks: 0,
                 length_ticks: 1_000_000,
                 lane: 0,
+                color: None,
             });
         }
     }
@@ -448,6 +451,7 @@ fn async_stretch_bake_lands_and_does_not_stampede() {
                 position_ticks: 0,
                 length_ticks: 1_000_000,
                 lane: 0,
+                color: None,
             });
         }
     }
@@ -589,6 +593,7 @@ fn a_recorded_take_comes_back_in_the_bounce_at_its_position() {
                 position_ticks: one_second_of_ticks,
                 length_ticks: 1_000_000,
                 lane: 0,
+                color: None,
             });
         }
     }
@@ -666,6 +671,7 @@ fn render_rate_does_not_detune_audio_clips() {
                     position_ticks: 0,
                     length_ticks: 1_000_000,
                     lane: 0,
+                    color: None,
                 });
             }
         }

@@ -274,6 +274,12 @@ pub struct ClipPlacement {
     pub length_ticks: u64,
     /// Lane index for comping (0 = main lane).
     pub lane: u32,
+    /// The colour picked for this clip, as `#rrggbb`; none keeps the
+    /// track's colour. Copies and splits keep it, since they clone the
+    /// placement. It used to live only in the interface, so every clip
+    /// was back to its track's colour after a reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// The lane a freeze render sits on.
@@ -281,6 +287,41 @@ pub struct ClipPlacement {
 /// Out of the way of the take lanes, which count up from zero, so a
 /// frozen track's render never shows up as one more take to comp.
 pub const FREEZE_LANE: u32 = u32::MAX;
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    fn placement(color: Option<&str>) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Midi(MidiClipRef {
+                id: "c1".into(),
+                clip: hardwave_midi::MidiClip::new("m1".into(), "Lead".into(), 3840),
+            }),
+            track_id: "t1".into(),
+            position_ticks: 0,
+            length_ticks: 3840,
+            lane: 0,
+            color: color.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_clip_colour_is_kept_in_the_song() {
+        let json = serde_json::to_string(&placement(Some("#ff8800"))).unwrap();
+        let back: ClipPlacement = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.color.as_deref(), Some("#ff8800"));
+    }
+
+    #[test]
+    fn a_song_saved_before_clip_colours_still_opens() {
+        let mut value = serde_json::to_value(placement(None)).unwrap();
+        assert!(value.get("color").is_none(), "no colour, no field");
+        value.as_object_mut().unwrap().remove("color");
+        let back: ClipPlacement = serde_json::from_value(value).unwrap();
+        assert_eq!(back.color, None);
+    }
+}
 
 #[cfg(test)]
 mod declick_tests {
