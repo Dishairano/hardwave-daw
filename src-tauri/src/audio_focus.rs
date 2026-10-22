@@ -1,13 +1,16 @@
 //! Letting go of the audio device while another program is in front.
 //!
-//! An idle Hardwave DAW kept its audio output open, and FL Studio, set to FL
-//! Studio ASIO on the same sound card, hung for minutes when it reset its
-//! device (on loading a plug-in, on opening a menu): reproduced on the test
-//! VM on 22 Oct 2026, gone as soon as the DAW held no device. Like FL's own
-//! "Auto close device", the DAW now closes the device when the song is
-//! stopped and another program has been in front for a few seconds, and opens
+//! Many ASIO drivers serve one program at a time, so a DAW left open in the
+//! background keeps another program off the sound card. Like FL Studio's
+//! "Auto close device", the DAW can close the device when the song is
+//! stopped and another program has been in front for a few seconds, and open
 //! it again when one of its own windows comes forward or something asks to
-//! play.
+//! play. Off by default: with it on, a MIDI keyboard played through the DAW
+//! goes quiet while a tutorial plays in the browser.
+//!
+//! It was first written for an FL Studio hang on the test VM (22 Oct 2026)
+//! that looked like the held device; the hang came back with the device
+//! closed, so that was not the cause.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -16,8 +19,8 @@ use std::time::{Duration, Instant};
 use hardwave_engine::DawEngine;
 use parking_lot::Mutex;
 
-/// The setting, on unless switched off in Audio settings.
-static ENABLED: AtomicBool = AtomicBool::new(true);
+/// The setting, off unless switched on in Audio settings.
+static ENABLED: AtomicBool = AtomicBool::new(false);
 /// True while the device is closed because of this, so it is this that
 /// opens it again and not a device the person closed themselves.
 static RELEASED: AtomicBool = AtomicBool::new(false);
