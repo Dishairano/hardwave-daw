@@ -1,4 +1,5 @@
-//! Mackie Control and HUI: a desk with real faders driving the mixer.
+//! Mackie Control (MCU): a desk with real faders driving the mixer. HUI,
+//! which speaks a different protocol, is not handled yet.
 //!
 //! A control surface speaks ordinary MIDI, but not the MIDI Learn kind:
 //! the faders are pitch bend, one channel each, and the buttons are

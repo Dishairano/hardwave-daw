@@ -990,7 +990,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               </div>
             </SettingRow>
             <div style={{ fontSize: 10, color: hw.textFaint, margin: '-4px 0 12px' }}>
-              {tr('Mackie Control and HUI: eight faders with mute, solo and arm, the transport keys, and bank left and right. The scribble strips and the LED rings are not driven.')}
+              {tr('Mackie Control (MCU): eight faders with mute, solo and arm, the transport keys, and bank left and right. HUI is not supported yet, and the scribble strips and the LED rings are not driven.')}
             </div>
 
             {/* MIDI Inputs */}

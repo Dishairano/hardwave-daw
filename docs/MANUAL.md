@@ -186,10 +186,11 @@ Settings > MIDI also joins an Ableton Link session: the tempo and the
 start and stop are then shared with everything else on the network that
 speaks Link, and the row says how many other apps are in the session.
 
-Settings > MIDI switches on a Mackie Control or HUI desk: eight faders
+Settings > MIDI switches on a Mackie Control (MCU) desk: eight faders
 with mute, solo and arm, the transport keys, and bank left and right,
-with the faders and mute lights sent back so a motorised desk lines up
-with the mix. The scribble strips and the LED rings are not driven.
+with the faders and mute lights sent back when you change bank or mute
+from the desk. HUI is not supported yet, and the scribble strips and the
+LED rings are not driven.
 
 A MIDI track can also read MPE, from its own menu, so a controller can
 bend one note of a chord without bending the rest. And a track can take
@@ -365,8 +366,10 @@ DAW and speaks to it over a pipe.
 Nothing to switch on: the architecture is read out of the plug-in's
 own header, and one that does not match is sent to the helper. It
 costs one buffer of latency, reported so delay compensation lines the
-track up, and such a plug-in uses the generic parameter sheet rather
-than its own window. A crash in it takes the helper, not the song.
+track up. For now such a plug-in runs as an effect only: it has no
+window of its own, its knobs cannot be moved from the DAW, and an
+instrument in it stays silent. A crash in it takes the helper, not the
+song.
 
 ## 24. Working on a song together
 

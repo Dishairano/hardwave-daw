@@ -150,7 +150,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
               : `${insert.pluginName} will run inside the DAW again`,
             {
               detail: next
-                ? 'A crash in it cannot take the song with it. It costs one buffer of latency and uses the generic parameter sheet. Takes effect the next time it loads.'
+                ? 'A crash in it cannot take the song with it. It costs one buffer of latency, and for now it runs as an effect only: no window of its own, no knobs in the DAW, and an instrument in it stays silent. Takes effect the next time it loads.'
                 : 'Takes effect the next time it loads.',
             })
         })
@@ -284,7 +284,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
             disabled={!insert}
             title={sandboxed
               ? 'It runs in a process of its own: a crash cannot take the song with it, at the cost of one buffer of latency.'
-              : 'Run it in a process of its own, so a crash cannot take the song with it. Costs one buffer of latency, and it uses the generic parameter sheet rather than its own window.'}
+              : 'Run it in a process of its own, so a crash cannot take the song with it. Costs one buffer of latency, and for now it runs as an effect only: no window of its own, no knobs in the DAW, and an instrument in it stays silent.'}
           >
             {sandboxed ? 'Own process: on' : 'Own process: off'}
           </button>
