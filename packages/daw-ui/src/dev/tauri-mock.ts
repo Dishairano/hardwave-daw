@@ -343,7 +343,7 @@ const mock: TauriInternals = {
       case 'audio_clip_to_midi':
         return { trackId: 'track-new', clipId: 'clip-new', noteCount: 12, lowest: 48, highest: 67 }
       case 'align_track_to':
-        return { offsetSamples: 73, offsetMs: 1.52, correlation: 0.97, polarityFlipped: false }
+        return { offsetSamples: 73, offsetMs: 1.52, correlation: 0.97, polarityFlipped: false, referenceDelayed: true }
       case 'get_reference':
         return { loaded: true, playing: false, gainDb: -2.4, lufs: -8.1, name: 'Rawstyle reference' }
       case 'load_reference':

@@ -576,13 +576,17 @@ export function TrackList() {
                 if (!reference) return
                 try {
                   const result = await invoke<{
-                    offsetSamples: number; offsetMs: number; correlation: number; polarityFlipped: boolean
+                    offsetSamples: number; offsetMs: number; correlation: number; polarityFlipped: boolean; referenceDelayed: boolean
                   }>('align_track_to', { trackId: t.id, referenceTrackId: reference.id })
                   await useTrackStore.getState().fetchTracks()
+                  const gap = `${Math.abs(result.offsetMs).toFixed(2)} ms`
                   push('info', `"${t.name}" lined up with "${reference.name}"`, {
-                    detail: `${result.offsetMs >= 0 ? 'Pulled forward' : 'Pushed back'} `
-                      + `${Math.abs(result.offsetMs).toFixed(2)} ms`
-                      + `${result.polarityFlipped ? ', and turned upside down because the two agreed better that way' : ''}.`,
+                    detail: (result.offsetSamples === 0
+                      ? 'They were already in time'
+                      : result.offsetMs > 0
+                        ? `"${t.name}" was ${gap} late, so "${reference.name}" now waits for it`
+                        : `"${t.name}" was ${gap} early and now waits for "${reference.name}"`)
+                      + `${result.polarityFlipped ? ', and it was turned upside down because the two agreed better that way' : ''}.`,
                   })
                 } catch (e) {
                   push('warning', 'Could not line those up', { detail: String(e) })
