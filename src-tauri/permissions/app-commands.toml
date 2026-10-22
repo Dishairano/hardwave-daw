@@ -398,6 +398,7 @@ permissions = [
   "allow-list-midi-mappings",
   "allow-remove-midi-mapping",
   "allow-clear-midi-mappings",
+  "allow-drain-midi-mapped-moves",
   "allow-list-midi-outputs",
   "allow-open-midi-output",
   "allow-close-midi-output",
