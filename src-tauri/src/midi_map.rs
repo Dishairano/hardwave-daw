@@ -72,6 +72,77 @@ pub struct MidiMappings {
     pub mappings: Vec<MidiMapping>,
     pub learn: Option<MidiMapTarget>,
     pub last_learned: Option<MidiMapping>,
+    /// Controls moved by mapped controllers since the app last asked, for
+    /// automation write to record (see `drain_midi_mapped_moves`).
+    pub moves: Vec<MappedMove>,
+}
+
+/// A control a mapped MIDI controller moved, as automation write records
+/// it: which lane, and its value on that lane, 0 to 1.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MappedMove {
+    pub track_id: String,
+    /// "track_volume", "track_pan", "track_mute" or "plugin_param".
+    pub kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub param_id: Option<u32>,
+    pub value: f64,
+}
+
+/// Moves kept while nobody collects them (automation write is off): the
+/// newest, enough for a few seconds of a knob turned fast.
+const MOVES_KEPT: usize = 256;
+
+/// What a controller value does to a lane. Volume lanes run from -60 to
+/// +6 dB, so the -60 to 0 dB a controller covers is most of the lane, not
+/// all of it. The master volume has no lane of its own here: a mapped
+/// master knob moves the output level, which nothing records.
+pub fn mapped_move(target: &MidiMapTarget, value: f32) -> Option<MappedMove> {
+    let value = value.clamp(0.0, 1.0) as f64;
+    let on_track = |track_id: &Option<String>, kind: &'static str, v: f64| {
+        track_id.as_ref().map(|id| MappedMove {
+            track_id: id.clone(),
+            kind,
+            slot_id: None,
+            param_id: None,
+            value: v,
+        })
+    };
+    match target {
+        MidiMapTarget::MasterVolume => None,
+        MidiMapTarget::TrackVolume { track_id } => {
+            let db = -60.0 + value * 60.0;
+            on_track(track_id, "track_volume", (db + 60.0) / 66.0)
+        }
+        MidiMapTarget::TrackPan { track_id } => on_track(track_id, "track_pan", value),
+        MidiMapTarget::TrackMute { track_id } => {
+            on_track(track_id, "track_mute", if value > 0.5 { 1.0 } else { 0.0 })
+        }
+        MidiMapTarget::PluginParam {
+            track_id,
+            slot_id,
+            param_id,
+        } => Some(MappedMove {
+            track_id: track_id.clone(),
+            kind: "plugin_param",
+            slot_id: Some(slot_id.clone()),
+            param_id: Some(*param_id),
+            value,
+        }),
+    }
+}
+
+fn keep_move(mappings: &Mutex<MidiMappings>, target: &MidiMapTarget, value: f32) {
+    if let Some(mv) = mapped_move(target, value) {
+        let mut m = mappings.lock();
+        if m.moves.len() >= MOVES_KEPT {
+            m.moves.remove(0);
+        }
+        m.moves.push(mv);
+    }
 }
 
 impl MidiMappings {
@@ -93,8 +164,7 @@ impl MidiMappings {
         NEXT_ID.store(max_id + 1, Ordering::Relaxed);
         Self {
             mappings,
-            learn: None,
-            last_learned: None,
+            ..Self::default()
         }
     }
 
@@ -192,6 +262,7 @@ pub fn spawn_dispatcher(
                 };
                 log::info!("MIDI Learn captured CC {cc} → {:?}", mapping.target);
                 apply_cc(&engine, &mapping.target, value);
+                keep_move(&mappings, &mapping.target, value);
                 continue;
             }
 
@@ -205,6 +276,7 @@ pub fn spawn_dispatcher(
             };
             for target in applicable {
                 apply_cc(&engine, &target, value);
+                keep_move(&mappings, &target, value);
             }
         }
     });
@@ -502,5 +574,47 @@ mod target_tests {
         assert!(serde_json::to_string(&sent)
             .unwrap()
             .contains("\"trackId\":\"t\""));
+    }
+}
+
+#[cfg(test)]
+mod mapped_move_tests {
+    use super::{mapped_move, MidiMapTarget};
+
+    #[test]
+    fn a_learned_fader_lands_on_the_volume_lane_where_it_sounds() {
+        let target = MidiMapTarget::TrackVolume {
+            track_id: Some("t1".into()),
+        };
+        // Full controller is 0 dB, which sits at 60/66 of a -60..+6 dB lane.
+        let top = mapped_move(&target, 1.0).unwrap();
+        assert_eq!((top.track_id.as_str(), top.kind), ("t1", "track_volume"));
+        assert!((top.value - 60.0 / 66.0).abs() < 1e-9);
+        assert_eq!(mapped_move(&target, 0.0).unwrap().value, 0.0);
+    }
+
+    #[test]
+    fn pan_mute_and_plug_in_knobs_keep_their_values() {
+        let pan = MidiMapTarget::TrackPan {
+            track_id: Some("t1".into()),
+        };
+        assert_eq!(mapped_move(&pan, 0.25).unwrap().value, 0.25);
+        let mute = MidiMapTarget::TrackMute {
+            track_id: Some("t1".into()),
+        };
+        assert_eq!(mapped_move(&mute, 0.7).unwrap().value, 1.0);
+        let knob = MidiMapTarget::PluginParam {
+            track_id: "t1".into(),
+            slot_id: "s1".into(),
+            param_id: 7,
+        };
+        let mv = mapped_move(&knob, 0.4).unwrap();
+        assert_eq!((mv.slot_id.as_deref(), mv.param_id), (Some("s1"), Some(7)));
+    }
+
+    #[test]
+    fn nothing_to_record_without_a_track_or_for_the_master_level() {
+        assert!(mapped_move(&MidiMapTarget::TrackVolume { track_id: None }, 0.5).is_none());
+        assert!(mapped_move(&MidiMapTarget::MasterVolume, 0.5).is_none());
     }
 }

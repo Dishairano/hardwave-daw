@@ -1,4 +1,4 @@
-use crate::midi_map::{MidiMapTarget, MidiMapping};
+use crate::midi_map::{MappedMove, MidiMapTarget, MidiMapping};
 use crate::AppState;
 use serde::Serialize;
 use tauri::State;
@@ -54,4 +54,13 @@ pub fn clear_midi_mappings(state: State<AppState>) {
     let mut m = state.midi_mappings.lock();
     m.clear();
     m.save();
+}
+
+/// Hand over the controls mapped MIDI controllers moved since the last
+/// call, for automation write to record. A learned knob moved the fader or
+/// the plug-in parameter and nothing wrote it into a lane, however the
+/// write mode was set.
+#[tauri::command]
+pub fn drain_midi_mapped_moves(state: State<AppState>) -> Vec<MappedMove> {
+    std::mem::take(&mut state.midi_mappings.lock().moves)
 }

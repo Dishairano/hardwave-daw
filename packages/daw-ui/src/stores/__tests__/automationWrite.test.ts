@@ -93,3 +93,13 @@ describe('automation write', () => {
     expect(normalizePan(1)).toBe(1)
   })
 })
+
+describe('moves from a learned MIDI controller', () => {
+  it('go to the lane of what the controller moved', async () => {
+    const { mappedTarget } = await import('../automationWriteStore')
+    expect(mappedTarget({ trackId: 't1', kind: 'track_volume', value: 0.5 })).toEqual({ kind: 'track_volume' })
+    expect(mappedTarget({ trackId: 't1', kind: 'plugin_param', slotId: 's1', paramId: 3, value: 0.2 }))
+      .toEqual({ kind: 'plugin_param', slotId: 's1', paramId: 3 })
+    expect(mappedTarget({ trackId: 't1', kind: 'plugin_param', value: 0.2 })).toBeNull()
+  })
+})
