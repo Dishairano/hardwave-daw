@@ -57,9 +57,17 @@ pub struct AppState {
     pub midi_timecode: Arc<MidiTimecodeState>,
     /// Live plugin editor instances, keyed by the Tauri window label
     /// they're parented to. Dropping an entry closes the editor view.
-    pub plugin_editors: Arc<
+    pub plugin_editors:
+        Arc<Mutex<std::collections::HashMap<String, commands::plugins::OpenEditor>>>,
+    /// Each insert's own window, on the instance that plays, by (track, slot):
+    /// what `open_plugin_editor` opens instead of loading a second copy.
+    #[allow(clippy::type_complexity)]
+    pub slot_editors: Arc<
         Mutex<
-            std::collections::HashMap<String, Box<dyn hardwave_plugin_host::types::HostedPlugin>>,
+            std::collections::HashMap<
+                (String, String),
+                Arc<dyn hardwave_plugin_host::types::PluginEditor>,
+            >,
         >,
     >,
     /// Side-table mapping `(track_id, slot_id)` to the chain plug-in's
@@ -305,6 +313,7 @@ pub fn run() {
         midi_input,
         export_cancel: Arc::new(AtomicBool::new(false)),
         plugin_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        slot_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_shadow: Arc::new(Mutex::new(std::collections::HashMap::new())),
         control_surface: Arc::new(crate::control_surface::ControlSurface::new()),

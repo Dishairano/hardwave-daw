@@ -101,6 +101,100 @@ type GetPluginFactoryFn = unsafe extern "C" fn() -> *mut IPluginFactory;
 /// `Arc` so `Drop` runs even if a panic unwinds through process().
 pub struct Vst3PluginInstance {
     inner: Arc<Vst3Inner>,
+    /// The window side of this instance, shared with the app's main thread
+    /// (see `HostedPlugin::editor`).
+    editor: Arc<Mutex<Vst3EditorSide>>,
+}
+
+/// What the main thread needs for this instance's window: the controller,
+/// which VST3 has the host use from the interface thread while the
+/// processor runs on the audio thread, and the view while it is open.
+struct Vst3EditorSide {
+    controller: Option<ComPtr<IEditController>>,
+    view: Option<ComPtr<IPlugView>>,
+}
+
+/// The handle the app keeps for an instance's window.
+struct Vst3Editor(Arc<Mutex<Vst3EditorSide>>);
+
+impl PluginEditor for Vst3Editor {
+    fn open(&self, parent: raw_window_handle::RawWindowHandle) -> bool {
+        let mut side = self.0.lock();
+        if let Some(view) = side.view.take() {
+            unsafe { view.removed() };
+        }
+        let Some(controller) = side.controller.clone() else {
+            // The instance has gone.
+            return false;
+        };
+        side.view = attach_view(&controller, parent);
+        side.view.is_some()
+    }
+
+    fn size(&self) -> Option<(u32, u32)> {
+        view_size(self.0.lock().view.as_ref()?)
+    }
+
+    fn close(&self) {
+        if let Some(view) = self.0.lock().view.take() {
+            unsafe { view.removed() };
+        }
+    }
+}
+
+impl Drop for Vst3PluginInstance {
+    fn drop(&mut self) {
+        // The window goes before the instance, and the main thread's handle
+        // is left with nothing to call into.
+        let mut side = self.editor.lock();
+        if let Some(view) = side.view.take() {
+            unsafe { view.removed() };
+        }
+        side.controller = None;
+    }
+}
+
+/// Create the editor's view on `controller` and put it in the window
+/// `parent`. None when the plug-in has no view for this platform.
+fn attach_view(
+    controller: &ComPtr<IEditController>,
+    parent: raw_window_handle::RawWindowHandle,
+) -> Option<ComPtr<IPlugView>> {
+    let view_raw = unsafe { controller.createView(ViewType::kEditor) };
+    let view = unsafe { ComPtr::<IPlugView>::from_raw(view_raw) }?;
+    // Pick the platform type + native pointer from the handle.
+    use raw_window_handle::RawWindowHandle as Rwh;
+    let (handle_ptr, platform_type): (*mut c_void, FIDString) = match parent {
+        #[cfg(target_os = "windows")]
+        Rwh::Win32(h) => (h.hwnd.get() as *mut c_void, kPlatformTypeHWND),
+        #[cfg(target_os = "macos")]
+        Rwh::AppKit(h) => (h.ns_view.as_ptr(), kPlatformTypeNSView),
+        #[cfg(target_os = "linux")]
+        Rwh::Xlib(h) => (h.window as *mut c_void, kPlatformTypeX11EmbedWindowID),
+        #[cfg(target_os = "linux")]
+        Rwh::Xcb(h) => (
+            h.window.get() as usize as *mut c_void,
+            kPlatformTypeX11EmbedWindowID,
+        ),
+        _ => return None,
+    };
+    // Some plugins need isPlatformTypeSupported first.
+    if unsafe { view.isPlatformTypeSupported(platform_type) } != kResultOk {
+        return None;
+    }
+    if unsafe { view.attached(handle_ptr, platform_type) } != kResultOk {
+        return None;
+    }
+    Some(view)
+}
+
+fn view_size(view: &ComPtr<IPlugView>) -> Option<(u32, u32)> {
+    let mut rect: vst3::Steinberg::ViewRect = unsafe { std::mem::zeroed() };
+    if unsafe { view.getSize(&mut rect) } != kResultOk {
+        return None;
+    }
+    let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+    (w > 0 && h > 0).then_some((w as u32, h as u32))
 }
 
 /// Owned resources; dropped in reverse construction order:
@@ -479,7 +573,11 @@ impl Vst3PluginInstance {
             input_scratch: Vec::new(),
         });
 
-        Ok(Self { inner })
+        let editor = Arc::new(Mutex::new(Vst3EditorSide {
+            controller: inner.controller.clone(),
+            view: None,
+        }));
+        Ok(Self { inner, editor })
     }
 
     /// Returns the real `(num_inputs, num_outputs)` channel counts
@@ -1063,56 +1161,19 @@ impl HostedPlugin for Vst3PluginInstance {
         let Ok(inner) = self.inner_mut() else {
             return false;
         };
-        let Some(controller) = &inner.controller else {
-            return false;
-        };
         // Close any existing editor first.
         if let Some(view) = inner.plug_view.take() {
             unsafe { view.removed() };
         }
-        let view_name = ViewType::kEditor;
-        let view_raw = unsafe { controller.createView(view_name) };
-        let Some(view) = (unsafe { ComPtr::<IPlugView>::from_raw(view_raw) }) else {
+        let Some(controller) = &inner.controller else {
             return false;
         };
-        // Pick the platform type + native pointer from the handle.
-        use raw_window_handle::RawWindowHandle as Rwh;
-        let (handle_ptr, platform_type): (*mut c_void, FIDString) = match parent {
-            #[cfg(target_os = "windows")]
-            Rwh::Win32(h) => (h.hwnd.get() as *mut c_void, kPlatformTypeHWND),
-            #[cfg(target_os = "macos")]
-            Rwh::AppKit(h) => (h.ns_view.as_ptr(), kPlatformTypeNSView),
-            #[cfg(target_os = "linux")]
-            Rwh::Xlib(h) => (h.window as *mut c_void, kPlatformTypeX11EmbedWindowID),
-            #[cfg(target_os = "linux")]
-            Rwh::Xcb(h) => (
-                h.window.get() as usize as *mut c_void,
-                kPlatformTypeX11EmbedWindowID,
-            ),
-            _ => return false,
-        };
-        // Some plugins need isPlatformTypeSupported first.
-        let supported = unsafe { view.isPlatformTypeSupported(platform_type) };
-        if supported != kResultOk {
-            return false;
-        }
-        let attach_res = unsafe { view.attached(handle_ptr, platform_type) };
-        if attach_res != kResultOk {
-            return false;
-        }
-        inner.plug_view = Some(view);
-        true
+        inner.plug_view = attach_view(controller, parent);
+        inner.plug_view.is_some()
     }
 
     fn editor_size(&self) -> Option<(u32, u32)> {
-        let inner: &Vst3Inner = &self.inner;
-        let view = inner.plug_view.as_ref()?;
-        let mut rect: vst3::Steinberg::ViewRect = unsafe { std::mem::zeroed() };
-        if unsafe { view.getSize(&mut rect) } != kResultOk {
-            return None;
-        }
-        let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
-        (w > 0 && h > 0).then_some((w as u32, h as u32))
+        view_size(self.inner.plug_view.as_ref()?)
     }
 
     fn close_editor(&mut self) {
@@ -1126,6 +1187,11 @@ impl HostedPlugin for Vst3PluginInstance {
 
     fn has_editor(&self) -> bool {
         self.inner.descriptor.has_editor
+    }
+
+    fn editor(&self) -> Option<Arc<dyn PluginEditor>> {
+        (self.inner.descriptor.has_editor && self.inner.controller.is_some())
+            .then(|| Arc::new(Vst3Editor(Arc::clone(&self.editor))) as Arc<dyn PluginEditor>)
     }
 
     fn pending_params(&self) -> Option<crate::types::SharedParamQueue> {
