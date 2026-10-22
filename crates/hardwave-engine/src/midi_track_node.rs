@@ -202,6 +202,9 @@ pub struct MidiTrackNode {
     next_note_idx: usize,
     /// Where the last played block ended, to see the playhead go back.
     last_block_end: u64,
+    /// True for the first block played after the playhead moved anywhere
+    /// but straight on: a jump, a loop, or play from a new spot.
+    jumped: bool,
     /// Notes still held when the playhead went back, let go at the top of
     /// the next block (reused, so the audio thread does not allocate).
     jump_offs: Vec<u8>,
@@ -319,6 +322,7 @@ impl MidiTrackNode {
             bend_mul: 1.0,
             next_note_idx: 0,
             last_block_end: 0,
+            jumped: false,
             jump_offs: Vec::with_capacity(64),
             voices: Vec::new(),
             volume: 1.0,
@@ -890,14 +894,19 @@ impl AudioNode for MidiTrackNode {
         }
         let block_start = ctx.position_samples;
 
-        // The playhead went back: a loop, pattern mode starting the pattern
-        // again, or a jump. The schedule only ever walked forward, so the
-        // built-in synths played a loop once and then fell silent, and a
-        // note held across the loop end was never let go. Start the
-        // schedule over and release what was sounding.
+        // The playhead did not go straight on: a loop, pattern mode starting
+        // the pattern again, a jump, or play from another spot. The schedule
+        // only ever walked forward, so the built-in synths played a loop
+        // once and then fell silent, and a note held across the loop end was
+        // never let go. Start the schedule over and release what was
+        // sounding. A jump forward used to be missed, so a plug-in kept a
+        // note the playhead jumped past the end of: its note-off was in the
+        // part that was skipped.
         self.jump_offs.clear();
+        self.jumped = false;
         if ctx.playing {
-            if block_start < self.last_block_end {
+            if block_start != self.last_block_end {
+                self.jumped = true;
                 let at = self.last_block_end;
                 for n in &self.notes {
                     if !n.muted
@@ -1225,6 +1234,23 @@ impl AudioNode for MidiTrackNode {
         block_midi.extend_from_slice(&self.control_scratch);
         if ctx.playing {
             let block_end = block_start.saturating_add(block_size as u64);
+            // Notes the playhead landed inside of, for a plug-in instrument,
+            // as the built-in synth does with them: "play truncated notes"
+            // decides. A plug-in got nothing for them, so starting a song
+            // in the middle of a long pad or bass note played silence there.
+            if self.jumped && self.prefs.play_truncated_notes() {
+                for n in &self.notes {
+                    if !n.muted && n.note_on_sample < block_start && n.note_off_sample > block_start
+                    {
+                        block_midi.push(hardwave_midi::MidiEvent::NoteOn {
+                            timing: 0,
+                            channel: 0,
+                            note: n.pitch,
+                            velocity: n.velocity,
+                        });
+                    }
+                }
+            }
             for n in &self.notes {
                 if n.muted {
                     continue;
@@ -1247,6 +1273,13 @@ impl AudioNode for MidiTrackNode {
                 }
             }
         }
+
+        // In time order, as plug-ins expect: the notes above go in note
+        // order, so a note-off could come after a later note-on. Stable, so
+        // a note-off at the top of the block stays before the note-on that
+        // starts the same key again; insertion sort, so nothing is
+        // allocated here.
+        sort_by_timing(&mut block_midi);
 
         // If the chain hosts an instrument plug-in, it is the sound source:
         // discard the built-in synth's dry signal so the two don't double.
@@ -1486,6 +1519,18 @@ impl AudioNode for MidiTrackNode {
                 "midi track {} offline insert add failed: {e}",
                 self.track_id
             );
+        }
+    }
+}
+
+/// Order a block's events by their offset into the block, keeping events at
+/// the same offset in the order they were added.
+fn sort_by_timing(events: &mut [hardwave_midi::MidiEvent]) {
+    for i in 1..events.len() {
+        let mut j = i;
+        while j > 0 && events[j - 1].timing() > events[j].timing() {
+            events.swap(j - 1, j);
+            j -= 1;
         }
     }
 }
@@ -1775,6 +1820,203 @@ mod tests {
         assert!(
             flat < 1e-4,
             "instrument (DC) should replace the built-in sine, got delta={flat}"
+        );
+    }
+
+    /// An instrument plug-in that keeps every MIDI event it is given.
+    fn spy_instrument(
+        received: std::sync::Arc<std::sync::Mutex<Vec<MidiEvent>>>,
+    ) -> crate::insert_chain::LiveSlot {
+        use hardwave_plugin_host::types::{
+            HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+        };
+        struct Spy {
+            desc: PluginDescriptor,
+            received: std::sync::Arc<std::sync::Mutex<Vec<MidiEvent>>>,
+        }
+        impl HostedPlugin for Spy {
+            fn descriptor(&self) -> &PluginDescriptor {
+                &self.desc
+            }
+            fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+                Ok(())
+            }
+            fn deactivate(&mut self) {}
+            fn process(
+                &mut self,
+                _i: &[&[f32]],
+                outputs: &mut [Vec<f32>],
+                midi_in: &[MidiEvent],
+                _mo: &mut Vec<MidiEvent>,
+                n: usize,
+            ) {
+                self.received.lock().unwrap().extend_from_slice(midi_in);
+                for o in outputs.iter_mut() {
+                    o.clear();
+                    o.resize(n, 0.0);
+                }
+            }
+            fn get_parameter_count(&self) -> u32 {
+                0
+            }
+            fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+                None
+            }
+            fn get_parameter_value(&self, _i: u32) -> f64 {
+                0.0
+            }
+            fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+            fn get_state(&self) -> Vec<u8> {
+                Vec::new()
+            }
+            fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+                Ok(())
+            }
+            fn latency_samples(&self) -> u32 {
+                0
+            }
+            fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+                false
+            }
+            fn close_editor(&mut self) {}
+            fn has_editor(&self) -> bool {
+                false
+            }
+        }
+        crate::insert_chain::LiveSlot {
+            param_ranges: Vec::new(),
+            levels: Default::default(),
+            slot_id: "spy".into(),
+            plugin: Box::new(Spy {
+                desc: PluginDescriptor {
+                    id: "test.spy".into(),
+                    name: "Spy".into(),
+                    vendor: "t".into(),
+                    version: "1".into(),
+                    format: PluginFormat::Clap,
+                    path: std::path::PathBuf::from("<native>"),
+                    category: PluginCategory::Instrument,
+                    num_inputs: 0,
+                    num_outputs: 2,
+                    has_midi_input: true,
+                    has_editor: false,
+                },
+                received,
+            }),
+            enabled: true,
+            wet: 1.0,
+            sidechain_active: false,
+            gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+        }
+    }
+
+    /// A node with a spy instrument and one note, and what the spy got.
+    fn spied_node(
+        on: u64,
+        off: u64,
+        play_truncated: bool,
+    ) -> (
+        MidiTrackNode,
+        std::sync::Arc<std::sync::Mutex<Vec<MidiEvent>>>,
+    ) {
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut node = make_node();
+        node.push_offline_slot(spy_instrument(received.clone()), 48_000.0, 256);
+        let prefs = crate::audio_prefs::AudioPrefs::new();
+        prefs.set_play_truncated_notes(play_truncated);
+        node.set_prefs(prefs);
+        node.set_notes(vec![MidiNoteRegion {
+            note_on_sample: on,
+            note_off_sample: off,
+            pitch: 60,
+            velocity: 0.8,
+            muted: false,
+            ..Default::default()
+        }]);
+        (node, received)
+    }
+
+    fn play_block_at(node: &mut MidiTrackNode, pos: u64) {
+        let mut out = block_outputs(256);
+        let inputs: [&[f32]; 0] = [];
+        let ctx = ctx_at(48_000.0, 256, pos, true);
+        node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+    }
+
+    fn note_ons(events: &[MidiEvent]) -> Vec<(u32, u8)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                MidiEvent::NoteOn { timing, note, .. } => Some((*timing, *note)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_plug_in_gets_the_note_the_playhead_starts_inside_when_truncated_notes_play() {
+        let (mut node, received) = spied_node(0, 96_000, true);
+        play_block_at(&mut node, 24_000);
+        assert_eq!(note_ons(&received.lock().unwrap()), vec![(0, 60)]);
+        // Only once: the next block goes straight on.
+        play_block_at(&mut node, 24_256);
+        assert_eq!(note_ons(&received.lock().unwrap()).len(), 1);
+    }
+
+    #[test]
+    fn a_plug_in_gets_no_truncated_note_when_the_setting_is_off() {
+        let (mut node, received) = spied_node(0, 96_000, false);
+        play_block_at(&mut node, 24_000);
+        assert!(note_ons(&received.lock().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn a_jump_forward_past_a_held_note_ends_it_in_the_plug_in() {
+        let (mut node, received) = spied_node(0, 48_000, false);
+        play_block_at(&mut node, 0);
+        assert_eq!(note_ons(&received.lock().unwrap()), vec![(0, 60)]);
+        // Past the note's end: its note-off was in the part skipped.
+        play_block_at(&mut node, 96_000);
+        let got = received.lock().unwrap();
+        assert!(
+            got.iter()
+                .any(|e| matches!(e, MidiEvent::NoteOff { note: 60, .. })),
+            "the held note must be let go, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn events_go_to_plug_ins_in_time_order_and_ties_keep_their_order() {
+        let on = |timing, note| MidiEvent::NoteOn {
+            timing,
+            channel: 0,
+            note,
+            velocity: 1.0,
+        };
+        let off = |timing, note| MidiEvent::NoteOff {
+            timing,
+            channel: 0,
+            note,
+            velocity: 0.0,
+        };
+        let mut events = vec![on(100, 62), off(0, 60), on(0, 60), off(50, 61)];
+        super::sort_by_timing(&mut events);
+        let order: Vec<(u32, bool, u8)> = events
+            .iter()
+            .map(|e| match e {
+                MidiEvent::NoteOn { timing, note, .. } => (*timing, true, *note),
+                MidiEvent::NoteOff { timing, note, .. } => (*timing, false, *note),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (0, false, 60),
+                (0, true, 60),
+                (50, false, 61),
+                (100, true, 62)
+            ]
         );
     }
 
