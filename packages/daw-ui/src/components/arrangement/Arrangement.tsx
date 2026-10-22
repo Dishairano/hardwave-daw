@@ -1667,6 +1667,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     drag.currentMouseY = mouseY
     const dx = mouseX - drag.startMouseX
     const dTicks = Math.round(dx / pixelsPerTick)
+    // Alt held while moving or resizing a clip leaves the grid out, as in
+    // FL Studio, for placing a clip by ear.
+    const snapDrag = (ticks: number) => (e.altKey ? ticks : applySnap(ticks))
 
     const minLen = snapTicks > 0 ? snapTicks : PPQ
 
@@ -1764,7 +1767,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       return
     }
     if (drag.mode === 'move') {
-      const snapped = applySnap(Math.max(0, drag.originalPositionTicks + dTicks))
+      const snapped = snapDrag(Math.max(0, drag.originalPositionTicks + dTicks))
       const effectiveDelta = snapped - drag.originalPositionTicks
 
       // Cross-track move — hit-test the cursor's vertical position
@@ -1809,12 +1812,12 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     } else if (drag.mode === 'resize-right') {
       const newLen = Math.max(minLen, drag.originalLengthTicks + dTicks)
-      resizeClipLocal(drag.trackId, drag.clipId, applySnap(newLen))
+      resizeClipLocal(drag.trackId, drag.clipId, snapDrag(newLen))
     } else if (drag.mode === 'resize-left') {
       // Keep the right edge anchored; shift position and shrink length.
       const rightEdge = drag.originalPositionTicks + drag.originalLengthTicks
       let newPos = Math.max(0, drag.originalPositionTicks + dTicks)
-      newPos = applySnap(newPos)
+      newPos = snapDrag(newPos)
       if (newPos > rightEdge - minLen) newPos = rightEdge - minLen
       const newLen = rightEdge - newPos
       moveClipLocal(drag.trackId, drag.clipId, newPos)
@@ -2186,11 +2189,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         e.preventDefault()
         const step = e.key === 'ArrowRight' ? 1 : -1
         if ((e.ctrlKey || e.metaKey) && clipIndex >= 0) {
-          // Nudge by the snap value rather than walking the clips.
+          // Nudge by the snap value rather than walking the clips; with
+          // Shift, by one tick (about half a millisecond at 140 BPM). Every
+          // selected clip moves when the focused one is part of the
+          // selection, as one undo step.
           const clip = track.clips[clipIndex]
-          const by = snapTicks > 0 ? snapTicks : PPQ
+          const by = e.shiftKey ? 1 : snapTicks > 0 ? snapTicks : PPQ
+          const ids = ts.selectedClipIds.has(clip.id) ? ts.selectedClipIds : new Set([clip.id])
+          void ts.nudgeClips(ids, step * by)
           const to = Math.max(0, clip.position_ticks + step * by)
-          void ts.moveClip(track.id, clip.id, to)
           setSpokenFocus(`moved to bar ${Math.floor(to / (PPQ * 4)) + 1}`)
           return
         }

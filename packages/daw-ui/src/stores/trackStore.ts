@@ -314,6 +314,9 @@ interface TrackState {
   removeAutomationClipPoint: (trackId: string, clipId: string, pointIndex: number) => Promise<void>
   importAudioFile: (trackId: string, filePath: string, positionTicks?: number) => Promise<ImportedClip>
   moveClip: (trackId: string, clipId: string, newPositionTicks: number) => Promise<void>
+  /** Move clips by the same number of ticks, as one undo step. None goes
+   *  before the song start: the whole group stops there together. */
+  nudgeClips: (clipIds: Iterable<string>, deltaTicks: number) => Promise<void>
   /// Optimistic local-only update — mutates the clip's position in the
   /// store without an IPC round-trip or fetchTracks. Used during a
   /// drag's mousemove path so 60fps drag isn't bottlenecked by 500-track
@@ -895,6 +898,27 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   moveClip: async (trackId, clipId, newPositionTicks) => {
     await mut('move_clip', { trackId, clipId, newPositionTicks }, 'Move clip')
+    await get().fetchTracks()
+  },
+
+  nudgeClips: async (clipIds, deltaTicks) => {
+    const ids = new Set(clipIds)
+    const moves = get().tracks.flatMap(t =>
+      (t.clips ?? []).filter(c => ids.has(c.id)).map(c => ({ trackId: t.id, clip: c })))
+    if (moves.length === 0 || deltaTicks === 0) return
+    // Keep the clips' spacing: when the earliest would cross the song start,
+    // the whole group stops there.
+    const earliest = Math.min(...moves.map(m => m.clip.position_ticks))
+    const delta = Math.max(deltaTicks, -earliest)
+    if (delta === 0) return
+    await get().beginHistoryGroup()
+    try {
+      for (const { trackId, clip } of moves) {
+        await mut('move_clip', { trackId, clipId: clip.id, newPositionTicks: clip.position_ticks + delta }, 'Nudge clips')
+      }
+    } finally {
+      await get().endHistoryGroup(moves.length === 1 ? 'Nudge clip' : `Nudge ${moves.length} clips`)
+    }
     await get().fetchTracks()
   },
 
