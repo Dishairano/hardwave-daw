@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// id (native / VST3 / CLAP). Passed to `render_offline_with` so exports
 /// apply the same insert FX (EQ / comp / reverb / synth) as live playback
 /// — without it, bounces render dry.
-fn build_offline_insert_factory(
+pub(crate) fn offline_insert_factory(
     engine: &DawEngine,
 ) -> impl Fn(&str) -> Option<Box<dyn hardwave_plugin_host::types::HostedPlugin>> {
     let descriptors: std::collections::HashMap<String, hardwave_plugin_host::PluginDescriptor> =
@@ -103,7 +103,7 @@ fn render_unlocked<F>(
 where
     F: FnMut(u64, u64),
 {
-    let factory = build_offline_insert_factory(&engine);
+    let factory = offline_insert_factory(&engine);
     let render =
         engine.prepare_offline_render(fmt.sample_rate, start_samples, Some(&factory), prepare);
     drop(engine);

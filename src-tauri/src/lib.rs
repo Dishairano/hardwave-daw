@@ -670,6 +670,7 @@ pub fn run() {
             commands::engine::list_audio_hosts,
             commands::engine::get_audio_host,
             commands::engine::set_audio_host,
+            commands::mix_check::mix_check,
             commands::engine::get_release_device_in_background,
             commands::engine::set_release_device_in_background,
             commands::engine::get_wasapi_exclusive,
