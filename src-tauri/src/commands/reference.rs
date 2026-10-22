@@ -62,9 +62,12 @@ pub fn load_reference(state: State<AppState>, path: String) -> Result<ReferenceS
             .ok_or_else(|| "the file loaded but is not in the pool".to_string())?;
         let left = buffer.channels.first().map(|c| c.as_slice()).unwrap_or(&[]);
         let right = buffer.channels.get(1).map(|c| c.as_slice()).unwrap_or(left);
-        let stats = hardwave_dsp::loudness::measure(left, right, buffer.sample_rate as f32);
+        // The same meter as the mix's: a reference measured another way
+        // was put a quarter dB off the mix when matched to it.
+        let lufs = hardwave_metering::integrated_lufs(left, right, buffer.sample_rate as f64)
+            .unwrap_or(f32::NEG_INFINITY);
         engine.set_reference_source(Some(&source_id));
-        stats.integrated_lufs
+        lufs
     };
 
     *state.reference_meta.lock() = (lufs, name.clone());
