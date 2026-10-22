@@ -1,3 +1,4 @@
+import { labelGap, rulerLabel } from './rulerLabel'
 import { followScroll } from './follow'
 import { usePlaylistScrollStore } from '../../stores/playlistScrollStore'
 import { useDropTarget } from '../../lib/pointerDrag'
@@ -264,6 +265,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const followPlayhead = useGeneralPrefsStore(s => s.followPlayhead)
   const followMode = useGeneralPrefsStore(s => s.followMode)
   const rulerUnits = useGeneralPrefsStore(s => s.rulerUnits)
+  const timecodeFps = useGeneralPrefsStore(s => s.timecodeFps)
   // Named stretches of the song, drawn along the ruler so the arrangement
   // can be read at a glance instead of counted in bars.
   const [sections, setSections] = useState<{ id: string; name: string; startTicks: number; endTicks: number }[]>([])
@@ -572,24 +574,11 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // sound design, which had no way to read this timeline at all. The
       // seconds come from the same tick the bar line sits on, through the
       // project tempo, so the two readings never disagree.
-      const secondsAt = (tick: number) => (tick / PPQ) * (60 / Math.max(1, bpm))
-      const label = (line: { tick: number; bar: number }): string => {
-        if (rulerUnits === 'bars') return String(line.bar)
-        const total = secondsAt(line.tick)
-        const minutes = Math.floor(total / 60)
-        const seconds = total - minutes * 60
-        if (rulerUnits === 'time') {
-          return `${minutes}:${seconds.toFixed(1).padStart(4, '0')}`
-        }
-        // Timecode at 25 fps, the rate the MIDI timecode sender defaults to.
-        const whole = Math.floor(seconds)
-        const frames = Math.round((seconds - whole) * 25) % 25
-        const pad = (n: number) => String(n).padStart(2, '0')
-        return `${pad(minutes)}:${pad(whole)}:${pad(frames)}`
-      }
+      const label = (line: { tick: number; bar: number }): string =>
+        rulerLabel(line.tick, line.bar, rulerUnits, bpm, timecodeFps, sampleRate || 48000)
       // Time labels are wider than a bar number, so they need more room
       // before they start overlapping.
-      const gap = rulerUnits === 'bars' ? MIN_LABEL_GAP_PX : MIN_LABEL_GAP_PX * 2
+      const gap = labelGap(rulerUnits, MIN_LABEL_GAP_PX)
       for (const line of lines) {
         if (!line.isBar) continue
         const x = Math.floor(line.tick * pixelsPerTick - scrollOffset) + 4
@@ -901,7 +890,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
    drawMainRef.current = draw
    draw()
    drawPlayheadRef.current()
-  }, [tracks, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, followMode, sections, meterSegments, peer])
+  }, [tracks, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, timecodeFps, followMode, sections, meterSegments, peer])
 
   // The playhead: one element over the arrangement, moved with a
   // transform straight from the transport store. No React render, no
