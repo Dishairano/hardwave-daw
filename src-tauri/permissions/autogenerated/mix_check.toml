@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mix-check"
+description = "Enables the mix_check command without any pre-configured scope."
+commands.allow = ["mix_check"]
+
+[[permission]]
+identifier = "deny-mix-check"
+description = "Denies the mix_check command without any pre-configured scope."
+commands.deny = ["mix_check"]

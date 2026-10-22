@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-trim-clip-start"
+description = "Enables the trim_clip_start command without any pre-configured scope."
+commands.allow = ["trim_clip_start"]
+
+[[permission]]
+identifier = "deny-trim-clip-start"
+description = "Denies the trim_clip_start command without any pre-configured scope."
+commands.deny = ["trim_clip_start"]

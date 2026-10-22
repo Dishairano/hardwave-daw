@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-release-device-in-background"
+description = "Enables the get_release_device_in_background command without any pre-configured scope."
+commands.allow = ["get_release_device_in_background"]
+
+[[permission]]
+identifier = "deny-get-release-device-in-background"
+description = "Denies the get_release_device_in_background command without any pre-configured scope."
+commands.deny = ["get_release_device_in_background"]
