@@ -1627,10 +1627,6 @@ impl DawEngine {
         prepare: impl FnOnce(&mut Project),
         on_block: impl FnMut(&[f32]) -> bool,
     ) -> Result<(), String> {
-        // A render runs plug-ins and tails like the audio thread does, on
-        // whatever thread asked for it: flush denormals for the length of
-        // it, then leave that thread as it was.
-        let _denormals = hardwave_audio_io::denormals::flush_denormals_while();
         if total_samples == 0 {
             return Ok(());
         }
@@ -2008,6 +2004,11 @@ impl OfflineRender {
     /// file's first sample. A bounce used to start with that much silence
     /// and land late by it.
     pub fn run(mut self, total_samples: u64, mut on_block: impl FnMut(&[f32]) -> bool) {
+        // A render runs plug-ins and tails like the audio thread does, on
+        // whatever thread asked for it: flush denormals for the length of
+        // it, then leave that thread as it was. Every offline render (an
+        // export, a freeze, a bounce) comes through here.
+        let _denormals = hardwave_audio_io::denormals::flush_denormals_while();
         let mut buf = vec![0.0_f32; self.buffer_size * 2];
         let mut remaining = total_samples;
         // The frames still to drop: known once the first block has built the
