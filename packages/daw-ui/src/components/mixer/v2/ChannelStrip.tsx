@@ -20,6 +20,7 @@ import {
 } from '../../../stores/trackStore'
 import { useMixerSettingsStore } from '../../../stores/mixerSettingsStore'
 import { useMeterStore } from '../../../stores/meterStore'
+import { useVcaStore } from '../../../stores/vcaStore'
 import {
   normalizePan,
   normalizeVolumeDb,
@@ -112,6 +113,10 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const soloSafe = useTrackStore((s) => s.tracksById[trackId]?.solo_safe ?? false)
   const monitorInput = useTrackStore((s) => s.tracksById[trackId]?.monitorInput ?? true)
   const [highestPeak, resetPeak] = useHighestPeak(trackId, variant === 'master')
+  // The VCAs this track is in, as amber tags on its cap.
+  const vcaTagsKey = useVcaStore((s) =>
+    s.vcas.flatMap((v, i) => (v.members.includes(trackId) ? [`V${i + 1}`] : [])).join(','))
+  const vcaTags = useMemo(() => (vcaTagsKey ? vcaTagsKey.split(',') : []), [vcaTagsKey])
   const showWidthKnob = useMixerSettingsStore((s) => s.showWidthKnob)
   // Where this channel goes, and its sends as the dots under it. The dots
   // were a fixed pattern before: every strip showed one send it did not have.
@@ -268,7 +273,10 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
       data-idx={index}
     >
       <div className="mx-s-num">
-        <span className="mx-s-num-idx">{index}</span>
+        <span className="mx-s-num-idx">
+          {index}
+          {vcaTags.map(tag => <span key={tag} className="mx-vca-tag">{tag}</span>)}
+        </span>
         {variant !== 'master' && (
           <div className="mx-s-pills">
             <button
