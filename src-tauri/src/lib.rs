@@ -674,6 +674,9 @@ pub fn run() {
             commands::audio::delete_clip,
             commands::audio::duplicate_clip,
             commands::audio::split_clip,
+            commands::clip_clipboard::copy_clips,
+            commands::clip_clipboard::cut_clips,
+            commands::clip_clipboard::paste_clips,
             commands::audio::set_clip_muted,
             commands::audio::slip_clip,
             // Browser auditions through the engine's own output

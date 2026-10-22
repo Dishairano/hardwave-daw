@@ -369,7 +369,12 @@ interface TrackState {
   clearSelection: () => void
   selectAllClips: () => void
   copySelectedClips: () => void
-  pasteClipsAtPosition: (positionTicks: number, targetTrackId?: string) => Promise<void>
+  /** Copy the selected clips and take them out, as one undo step. */
+  cutSelectedClips: () => Promise<void>
+  /** Paste what was copied at `positionTicks`, the top clip on
+   *  `targetTrackId` (else the selected track, else the tracks the clips
+   *  came from). The pasted clips end up selected. */
+  pasteClipsAtPosition: (positionTicks: number, targetTrackId?: string) => Promise<PasteOutcome>
   setClipGain: (trackId: string, clipId: string, gainDb: number) => Promise<void>
   setClipFades: (trackId: string, clipId: string, fadeInTicks: number, fadeOutTicks: number) => Promise<void>
   setClipFadeCurves: (trackId: string, clipId: string, fadeInCurve: FadeCurveKind, fadeOutCurve: FadeCurveKind) => Promise<void>
@@ -380,6 +385,19 @@ interface TrackState {
   undo: () => Promise<boolean>
   redo: () => Promise<boolean>
   getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<WavePeak[]>
+}
+
+/** What a paste did: the new clips, and how many had no fitting track
+ *  there (audio goes on audio tracks, MIDI on MIDI tracks). */
+export interface PasteOutcome {
+  pasted: string[]
+  skipped: number
+}
+
+/** The selected clips: the multi-selection, or the one clicked clip. */
+function selectedIds(s: { selectedClipIds: Set<string>; selectedClipId: string | null }): string[] {
+  if (s.selectedClipIds.size > 0) return Array.from(s.selectedClipIds)
+  return s.selectedClipId ? [s.selectedClipId] : []
 }
 
 /// Build a fresh `tracksById` from a `tracks` array. Keep this in one
@@ -1023,41 +1041,42 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   },
 
   copySelectedClips: () => {
-    const { selectedClipIds, tracks } = get()
-    const ids = Array.from(selectedClipIds)
+    const { tracks } = get()
+    const ids = selectedIds(get())
+    if (ids.length === 0) return
     const collected: ClipInfo[] = []
     for (const t of tracks) for (const c of t.clips) if (ids.includes(c.id)) collected.push(c)
     set({ clipboard: collected })
+    // The backend keeps copies of the clips themselves: pasting used to
+    // duplicate each id on the target track, which failed on any track but
+    // its own and after a cut.
+    invoke('copy_clips', { clipIds: ids }).catch((e) => console.warn('copy failed', e))
+  },
+
+  cutSelectedClips: async () => {
+    const { tracks } = get()
+    const ids = selectedIds(get())
+    if (ids.length === 0) return
+    const collected: ClipInfo[] = []
+    for (const t of tracks) for (const c of t.clips) if (ids.includes(c.id)) collected.push(c)
+    set({ clipboard: collected })
+    await mut('cut_clips', { clipIds: ids }, ids.length === 1 ? 'Cut clip' : `Cut ${ids.length} clips`)
+    set({ selectedClipId: null, selectedClipIds: new Set() })
+    await get().fetchTracks()
   },
 
   pasteClipsAtPosition: async (positionTicks, targetTrackId) => {
-    const { clipboard, tracks, selectedTrackId } = get()
-    if (clipboard.length === 0) return
-    const trackId = targetTrackId || selectedTrackId
-    if (!trackId) return
-    const track = tracks.find(t => t.id === trackId)
-    if (!track) return
-    // Normalize: earliest clip aligns to positionTicks; others preserve relative offset.
-    const earliest = clipboard.reduce((m, c) => Math.min(m, c.position_ticks), Infinity)
-    const pasteLabel = clipboard.length === 1 ? 'Paste clip' : `Paste ${clipboard.length} clips`
-    // One paste is one undo. Each clip goes in through its own duplicate and
-    // move, so pasting eight clips used to need eight undos to take back.
-    await get().beginHistoryGroup()
-    try {
-      for (const c of clipboard) {
-        const offset = c.position_ticks - earliest
-        const newPos = positionTicks + offset
-        try {
-          const newId = await mut<string>('duplicate_clip', { trackId, clipId: c.id })
-          await mut('move_clip', { trackId, clipId: newId, newPositionTicks: newPos })
-        } catch (e) {
-          console.warn('paste failed for clip', c.id, e)
-        }
-      }
-    } finally {
-      await get().endHistoryGroup(pasteLabel)
-    }
+    const { clipboard, selectedTrackId } = get()
+    if (clipboard.length === 0) return { pasted: [], skipped: 0 }
+    const label = clipboard.length === 1 ? 'Paste clip' : `Paste ${clipboard.length} clips`
+    const outcome = await mut<PasteOutcome>(
+      'paste_clips',
+      { targetTrackId: targetTrackId ?? selectedTrackId ?? null, positionTicks },
+      label,
+    )
+    set({ selectedClipIds: new Set(outcome.pasted), selectedClipId: outcome.pasted[0] ?? null })
     await get().fetchTracks()
+    return outcome
   },
 
   setClipGain: async (trackId, clipId, gainDb) => {
