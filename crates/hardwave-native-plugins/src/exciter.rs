@@ -4,6 +4,7 @@
 
 use crate::format;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
+use hardwave_dsp::oversample::{OversampleFactor, Oversampler};
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -15,7 +16,8 @@ use std::path::PathBuf;
 const PARAM_FREQUENCY: u32 = 0;
 const PARAM_AMOUNT: u32 = 1;
 const PARAM_MIX: u32 = 2;
-const PARAM_COUNT: u32 = 3;
+const PARAM_OVERSAMPLE: u32 = 3;
+const PARAM_COUNT: u32 = 4;
 
 pub struct NativeExciter {
     descriptor: PluginDescriptor,
@@ -27,6 +29,9 @@ pub struct NativeExciter {
     frequency_hz: f32,
     mix: f32,
     needs_recoef: bool,
+    /// Runs the saturation faster so its harmonics do not fold back.
+    oversample: OversampleFactor,
+    oversampler: Oversampler,
     active: bool,
 }
 
@@ -57,6 +62,8 @@ impl NativeExciter {
             hp_r: Biquad::default(),
             drive_l: FilterDrive::new(),
             drive_r: FilterDrive::new(),
+            oversample: OversampleFactor::Two,
+            oversampler: Oversampler::new(),
             frequency_hz: 5_000.0,
             mix: 0.3,
             needs_recoef: true,
@@ -150,14 +157,20 @@ impl HostedPlugin for NativeExciter {
         }
         self.ensure_coefs();
         let mix = self.mix;
+        self.oversampler
+            .configure(self.sample_rate, self.oversample);
+        let (drive_l, drive_r) = (&self.drive_l, &self.drive_r);
         for i in 0..num_samples {
             let in_l = inputs[0].get(i).copied().unwrap_or(0.0);
             let in_r = inputs[1].get(i).copied().unwrap_or(0.0);
-            // Take high band, saturate it, add back to dry signal.
+            // Take high band, saturate it, add back to dry signal. The high
+            // band is where the saturation's harmonics fold back first, so
+            // only that step runs faster.
             let hi_l = self.hp_l.process_mono(in_l);
             let hi_r = self.hp_r.process_mono(in_r);
-            let sat_l = self.drive_l.process(hi_l);
-            let sat_r = self.drive_r.process(hi_r);
+            let (sat_l, sat_r) = self
+                .oversampler
+                .process_frame(hi_l, hi_r, |l, r| (drive_l.process(l), drive_r.process(r)));
             outputs[0][i] = in_l + sat_l * mix;
             outputs[1][i] = in_r + sat_r * mix;
         }
@@ -178,6 +191,7 @@ impl HostedPlugin for NativeExciter {
             ),
             PARAM_AMOUNT => ("Amount", 0.4, "%"),
             PARAM_MIX => ("Mix", 0.3, "%"),
+            PARAM_OVERSAMPLE => ("Oversample", 0.5, "off / 2x / 4x"),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -200,6 +214,7 @@ impl HostedPlugin for NativeExciter {
             }
             PARAM_AMOUNT => self.drive_l.amount() as f64,
             PARAM_MIX => self.mix as f64,
+            PARAM_OVERSAMPLE => self.oversample.normalised(),
             _ => 0.0,
         }
     }
@@ -216,6 +231,7 @@ impl HostedPlugin for NativeExciter {
                 self.drive_r.set_amount(real);
             }
             PARAM_MIX => self.mix = real,
+            PARAM_OVERSAMPLE => self.oversample = OversampleFactor::from_normalised(value),
             _ => {}
         }
     }
@@ -225,16 +241,27 @@ impl HostedPlugin for NativeExciter {
         Some(match id {
             PARAM_FREQUENCY => format::hz(real),
             PARAM_AMOUNT | PARAM_MIX => format::pct(real),
+            PARAM_OVERSAMPLE => OversampleFactor::from_normalised(value).label().to_string(),
             _ => return None,
+        })
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        (id == PARAM_OVERSAMPLE).then(|| {
+            OversampleFactor::ALL
+                .iter()
+                .map(|f| f.label().to_string())
+                .collect()
         })
     }
 
     fn get_state(&self) -> Vec<u8> {
         format!(
-            "{{\"freq\":{},\"amt\":{},\"mix\":{}}}",
+            "{{\"freq\":{},\"amt\":{},\"mix\":{},\"os\":{}}}",
             self.frequency_hz,
             self.drive_l.amount(),
-            self.mix
+            self.mix,
+            self.oversample.normalised()
         )
         .into_bytes()
     }
@@ -260,6 +287,11 @@ impl HostedPlugin for NativeExciter {
         if let Some(v) = read("mix") {
             self.mix = v.clamp(0.0, 1.0);
         }
+        // Songs saved before the switch existed ran without it: they keep
+        // sounding as they did.
+        self.oversample = read("os")
+            .map(|v| OversampleFactor::from_normalised(v as f64))
+            .unwrap_or(OversampleFactor::Off);
         Ok(())
     }
 

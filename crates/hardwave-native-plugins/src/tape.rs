@@ -6,6 +6,7 @@
 use crate::format;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::modulation::ModulatedDelay;
+use hardwave_dsp::oversample::{OversampleFactor, Oversampler};
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -20,7 +21,8 @@ const PARAM_WOW: u32 = 0;
 const PARAM_DRIVE: u32 = 1;
 const PARAM_HF_LOSS: u32 = 2;
 const PARAM_OUTPUT: u32 = 3;
-const PARAM_COUNT: u32 = 4;
+const PARAM_OVERSAMPLE: u32 = 4;
+const PARAM_COUNT: u32 = 5;
 
 pub struct NativeTape {
     descriptor: PluginDescriptor,
@@ -35,6 +37,9 @@ pub struct NativeTape {
     hf_loss_hz: f32,
     output_db: f32,
     needs_recoef: bool,
+    /// Runs the saturation faster so its harmonics do not fold back.
+    oversample: OversampleFactor,
+    oversampler: Oversampler,
     active: bool,
 }
 
@@ -78,6 +83,8 @@ impl NativeTape {
             drive_l: FilterDrive::new(),
             drive_r: FilterDrive::new(),
             lp_l: Biquad::default(),
+            oversample: OversampleFactor::Two,
+            oversampler: Oversampler::new(),
             lp_r: Biquad::default(),
             wow_amount: 0.3,
             hf_loss_hz: 12_000.0,
@@ -191,14 +198,19 @@ impl HostedPlugin for NativeTape {
         }
         self.ensure_coefs();
         let out_lin = 10.0_f32.powf(self.output_db / 20.0);
+        self.oversampler
+            .configure(self.sample_rate, self.oversample);
+        let (drive_l, drive_r) = (&self.drive_l, &self.drive_r);
         for i in 0..num_samples {
             let in_l = inputs[0].get(i).copied().unwrap_or(0.0);
             let in_r = inputs[1].get(i).copied().unwrap_or(0.0);
-            // Wow → saturation → low-pass → output
+            // Wow → saturation → low-pass → output. Only the saturation runs
+            // faster; the wow and the low-pass are linear.
             let wow_l = self.wow_l.process(in_l);
             let wow_r = self.wow_r.process(in_r);
-            let sat_l = self.drive_l.process(wow_l);
-            let sat_r = self.drive_r.process(wow_r);
+            let (sat_l, sat_r) = self.oversampler.process_frame(wow_l, wow_r, |l, r| {
+                (drive_l.process(l), drive_r.process(r))
+            });
             let lp_l = self.lp_l.process_mono(sat_l);
             let lp_r = self.lp_r.process_mono(sat_r);
             outputs[0][i] = lp_l * out_lin;
@@ -222,6 +234,7 @@ impl HostedPlugin for NativeTape {
                 "Hz",
             ),
             PARAM_OUTPUT => ("Output", 0.5, "dB"),
+            PARAM_OVERSAMPLE => ("Oversample", 0.5, "off / 2x / 4x"),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -245,6 +258,7 @@ impl HostedPlugin for NativeTape {
                 ((self.hf_loss_hz.log10() - lo) / (hi - lo)).clamp(0.0, 1.0) as f64
             }
             PARAM_OUTPUT => ((self.output_db + 12.0) / 24.0).clamp(0.0, 1.0) as f64,
+            PARAM_OVERSAMPLE => self.oversample.normalised(),
             _ => 0.0,
         }
     }
@@ -265,6 +279,7 @@ impl HostedPlugin for NativeTape {
                 self.needs_recoef = true;
             }
             PARAM_OUTPUT => self.output_db = real,
+            PARAM_OVERSAMPLE => self.oversample = OversampleFactor::from_normalised(value),
             _ => {}
         }
     }
@@ -275,17 +290,28 @@ impl HostedPlugin for NativeTape {
             PARAM_WOW | PARAM_DRIVE => format::pct(real),
             PARAM_HF_LOSS => format::hz(real),
             PARAM_OUTPUT => format::db(real),
+            PARAM_OVERSAMPLE => OversampleFactor::from_normalised(value).label().to_string(),
             _ => return None,
+        })
+    }
+
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        (id == PARAM_OVERSAMPLE).then(|| {
+            OversampleFactor::ALL
+                .iter()
+                .map(|f| f.label().to_string())
+                .collect()
         })
     }
 
     fn get_state(&self) -> Vec<u8> {
         format!(
-            "{{\"wow\":{},\"drv\":{},\"hf\":{},\"out\":{}}}",
+            "{{\"wow\":{},\"drv\":{},\"hf\":{},\"out\":{},\"os\":{}}}",
             self.wow_amount,
             self.drive_l.amount(),
             self.hf_loss_hz,
-            self.output_db
+            self.output_db,
+            self.oversample.normalised()
         )
         .into_bytes()
     }
@@ -315,6 +341,11 @@ impl HostedPlugin for NativeTape {
         if let Some(v) = read("out") {
             self.output_db = v.clamp(-12.0, 12.0);
         }
+        // Songs saved before the switch existed ran without it: they keep
+        // sounding as they did.
+        self.oversample = read("os")
+            .map(|v| OversampleFactor::from_normalised(v as f64))
+            .unwrap_or(OversampleFactor::Off);
         Ok(())
     }
 

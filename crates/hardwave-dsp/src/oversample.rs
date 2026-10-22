@@ -38,6 +38,43 @@ impl OversampleFactor {
             _ => OversampleFactor::Off,
         }
     }
+
+    /// The choices in the order a switch shows them.
+    pub const ALL: [OversampleFactor; 3] = [
+        OversampleFactor::Off,
+        OversampleFactor::Two,
+        OversampleFactor::Four,
+    ];
+
+    /// The choice a 0..1 parameter picks: Off, 2x and 4x sit at 0, 0.5
+    /// and 1, with the switch half way between each.
+    pub fn from_normalised(value: f64) -> Self {
+        let v = value.clamp(0.0, 1.0);
+        if v < 0.25 {
+            OversampleFactor::Off
+        } else if v < 0.75 {
+            OversampleFactor::Two
+        } else {
+            OversampleFactor::Four
+        }
+    }
+
+    /// Where this choice sits on a 0..1 parameter.
+    pub fn normalised(self) -> f64 {
+        match self {
+            OversampleFactor::Off => 0.0,
+            OversampleFactor::Two => 0.5,
+            OversampleFactor::Four => 1.0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OversampleFactor::Off => "Off",
+            OversampleFactor::Two => "2x",
+            OversampleFactor::Four => "4x",
+        }
+    }
 }
 
 /// Runs a per-sample nonlinearity at a higher rate.

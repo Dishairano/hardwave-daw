@@ -80,27 +80,6 @@ impl NativeSaturator {
             _ => v as f32,
         }
     }
-
-    /// Which oversampling a 0..1 setting picks. Off, 2x and 4x sit at
-    /// 0, 0.5 and 1, with the switch half way between each.
-    fn oversample_from_normalised(value: f64) -> OversampleFactor {
-        let v = value.clamp(0.0, 1.0);
-        if v < 0.25 {
-            OversampleFactor::Off
-        } else if v < 0.75 {
-            OversampleFactor::Two
-        } else {
-            OversampleFactor::Four
-        }
-    }
-
-    fn oversample_label(factor: OversampleFactor) -> &'static str {
-        match factor {
-            OversampleFactor::Off => "Off",
-            OversampleFactor::Two => "2x",
-            OversampleFactor::Four => "4x",
-        }
-    }
 }
 
 impl Default for NativeSaturator {
@@ -192,11 +171,7 @@ impl HostedPlugin for NativeSaturator {
             // -24..=+12 dB
             PARAM_OUTPUT => ((self.output_db + 24.0) / 36.0).clamp(0.0, 1.0) as f64,
             PARAM_MIX => self.mix as f64,
-            PARAM_OVERSAMPLE => match self.oversample {
-                OversampleFactor::Off => 0.0,
-                OversampleFactor::Two => 0.5,
-                OversampleFactor::Four => 1.0,
-            },
+            PARAM_OVERSAMPLE => self.oversample.normalised(),
             _ => 0.0,
         }
     }
@@ -210,7 +185,7 @@ impl HostedPlugin for NativeSaturator {
             }
             PARAM_OUTPUT => self.output_db = real,
             PARAM_MIX => self.mix = real,
-            PARAM_OVERSAMPLE => self.oversample = Self::oversample_from_normalised(value),
+            PARAM_OVERSAMPLE => self.oversample = OversampleFactor::from_normalised(value),
             _ => {}
         }
     }
@@ -220,9 +195,7 @@ impl HostedPlugin for NativeSaturator {
         Some(match id {
             PARAM_AMOUNT | PARAM_MIX => format::pct(real),
             PARAM_OUTPUT => format::db(real),
-            PARAM_OVERSAMPLE => {
-                Self::oversample_label(Self::oversample_from_normalised(value)).to_string()
-            }
+            PARAM_OVERSAMPLE => OversampleFactor::from_normalised(value).label().to_string(),
             _ => return None,
         })
     }
@@ -230,25 +203,24 @@ impl HostedPlugin for NativeSaturator {
     fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
         match id {
             PARAM_OVERSAMPLE => Some(
-                [
-                    OversampleFactor::Off,
-                    OversampleFactor::Two,
-                    OversampleFactor::Four,
-                ]
-                .into_iter()
-                .map(|f| Self::oversample_label(f).to_string())
-                .collect(),
+                OversampleFactor::ALL
+                    .iter()
+                    .map(|f| f.label().to_string())
+                    .collect(),
             ),
             _ => None,
         }
     }
 
     fn get_state(&self) -> Vec<u8> {
+        // The oversampling is saved too: it was not, so every song came
+        // back at the default 2x whatever had been picked.
         format!(
-            "{{\"amt\":{},\"out\":{},\"mix\":{}}}",
+            "{{\"amt\":{},\"out\":{},\"mix\":{},\"os\":{}}}",
             self.drive_l.amount(),
             self.output_db,
-            self.mix
+            self.mix,
+            self.oversample.normalised()
         )
         .into_bytes()
     }
@@ -272,6 +244,9 @@ impl HostedPlugin for NativeSaturator {
         }
         if let Some(v) = read("mix") {
             self.mix = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = read("os") {
+            self.oversample = OversampleFactor::from_normalised(v as f64);
         }
         Ok(())
     }
