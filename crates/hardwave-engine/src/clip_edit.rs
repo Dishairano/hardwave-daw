@@ -121,6 +121,58 @@ pub fn trim_clip_start(
     Ok(new_pos)
 }
 
+/// Split a clip at `at_ticks`: `clip` keeps the left part and the right
+/// part comes back as a new clip with `new_id`, each playing exactly what
+/// the whole clip played there.
+///
+/// The right part used to start its sample at a share of the window as
+/// long as its share of the clip, which is only right for a clip exactly
+/// as long as its sample, and a split MIDI clip kept every note in both
+/// halves, so everything after the split played twice.
+pub fn split_clip(
+    clip: &mut ClipPlacement,
+    at_ticks: u64,
+    new_id: &str,
+    tempo_map: &TempoMap,
+    sample_rate: f64,
+    track_pitch_factor: f64,
+) -> Result<ClipPlacement, String> {
+    let start = clip.position_ticks;
+    let end = start + clip.length_ticks;
+    if at_ticks <= start || at_ticks >= end {
+        return Err(format!(
+            "split position {at_ticks} outside clip [{start}, {end})"
+        ));
+    }
+    let mut right = clip.clone();
+    match &mut right.content {
+        ClipContent::Audio(a) => a.id = new_id.to_string(),
+        ClipContent::Midi(m) => m.id = new_id.to_string(),
+    }
+    trim_clip_start(
+        &mut right,
+        at_ticks,
+        tempo_map,
+        sample_rate,
+        track_pitch_factor,
+    )?;
+    if let ClipContent::Audio(a) = &mut clip.content {
+        if a.reversed && a.warp_markers.is_empty() {
+            // Reversed, a clip plays its window from the end back, counted
+            // from its own right edge: the left part has to start its
+            // window where the right part's sound ends.
+            let step = source_frames_per_sample(a, track_pitch_factor);
+            let span = tempo_map.tick_to_samples(end, sample_rate)
+                - tempo_map.tick_to_samples(at_ticks, sample_rate);
+            a.source_start += (span as f64 * step).round() as u64;
+        }
+    }
+    // A MIDI clip shorter than its content lets go of everything past its
+    // end, so the left part needs no notes removed.
+    clip.length_ticks = at_ticks - start;
+    Ok(right)
+}
+
 fn trim_audio(
     audio: &mut AudioClip,
     old_pos: u64,
@@ -492,6 +544,71 @@ mod tests {
             "the note still sounds at beat four"
         );
         assert_eq!((c.position_ticks, c.length_ticks), (2 * BEAT, 6 * BEAT));
+    }
+
+    #[test]
+    fn a_split_audio_clip_plays_on_where_it_was_cut_even_after_a_resize() {
+        let b = beat_samples();
+        // An eight-beat sample on a clip shrunk to four beats.
+        let mut c = placed(ClipContent::Audio(audio(0, 8 * b)), 0, 4 * BEAT);
+        let right = split_clip(&mut c, BEAT, "r", &TempoMap::default(), RATE, 1.0).expect("splits");
+        assert_eq!((c.position_ticks, c.length_ticks), (0, BEAT));
+        assert_eq!((right.position_ticks, right.length_ticks), (BEAT, 3 * BEAT));
+        // The old share-of-the-window sum put this at two beats.
+        assert_near(source_start(&right), b, "the right half starts one beat in");
+        assert_eq!(source_start(&c), 0);
+    }
+
+    #[test]
+    fn a_split_midi_clip_has_each_note_once() {
+        let mut m = MidiClip::new("m".into(), "m".into(), 4 * BEAT);
+        m.notes = (0..4)
+            .map(|i| MidiNote {
+                start_tick: i * BEAT,
+                duration_ticks: BEAT / 2,
+                ..Default::default()
+            })
+            .collect();
+        let mut c = placed(
+            ClipContent::Midi(MidiClipRef {
+                id: "m".into(),
+                clip: m,
+            }),
+            0,
+            4 * BEAT,
+        );
+        let right =
+            split_clip(&mut c, 2 * BEAT, "r", &TempoMap::default(), RATE, 1.0).expect("splits");
+        let ClipContent::Midi(r) = &right.content else {
+            unreachable!()
+        };
+        let starts: Vec<u64> = r.clip.notes.iter().map(|n| n.start_tick).collect();
+        assert_eq!(
+            starts,
+            vec![0, BEAT],
+            "the right half holds the last two notes"
+        );
+        assert_eq!(r.id, "r");
+        // The left half is shorter than what it holds now, so the engine
+        // stops it at its end.
+        let ClipContent::Midi(l) = &c.content else {
+            unreachable!()
+        };
+        assert!(c.length_ticks < l.clip.length_ticks);
+    }
+
+    #[test]
+    fn a_split_reversed_clip_plays_the_same_two_halves_backwards() {
+        let mut a = audio(0, 4 * beat_samples());
+        a.reversed = true;
+        let mut c = placed(ClipContent::Audio(a), 0, 4 * BEAT);
+        let right = split_clip(&mut c, BEAT, "r", &TempoMap::default(), RATE, 1.0).unwrap();
+        // The whole clip played the sample's last beat first; the left half
+        // still does, and the right half plays the first three backwards.
+        let map = TempoMap::default();
+        let three_beats = map.tick_to_samples(4 * BEAT, RATE) - map.tick_to_samples(BEAT, RATE);
+        assert_near(source_start(&c), three_beats, "left half: the last beat");
+        assert_eq!(source_start(&right), 0);
     }
 
     #[test]

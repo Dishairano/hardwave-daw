@@ -1501,58 +1501,36 @@ pub fn split_clip(
     clip_id: String,
     at_ticks: u64,
 ) -> Result<String, String> {
-    state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    let track = project
-        .track_mut(&track_id)
-        .ok_or_else(|| format!("Track not found: {}", track_id))?;
-
-    let idx = track
-        .clips
-        .iter()
-        .position(|c| match &c.content {
-            hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
-            hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
-        })
-        .ok_or_else(|| format!("Clip not found: {}", clip_id))?;
-
-    let original = track.clips[idx].clone();
-    let start = original.position_ticks;
-    let end = start + original.length_ticks;
-    if at_ticks <= start || at_ticks >= end {
-        return Err(format!(
-            "split position {} outside clip [{}, {})",
-            at_ticks, start, end
-        ));
-    }
-    let first_ticks = at_ticks - start;
-    let second_ticks = end - at_ticks;
-
-    // Shrink the original to the left half.
-    track.clips[idx].length_ticks = first_ticks;
-
-    // Build the right-hand clip.
+    engine.snapshot_before_mutation();
+    let sample_rate = engine.current_sample_rate() as f64;
     let new_id = uuid::Uuid::new_v4().to_string();
-    let mut right = original.clone();
-    right.position_ticks = at_ticks;
-    right.length_ticks = second_ticks;
-    match &mut right.content {
-        hardwave_project::clip::ClipContent::Audio(ac) => {
-            // Proportionally advance the source_start for the right half.
-            let total_src = ac.source_end.saturating_sub(ac.source_start) as u128;
-            let offset =
-                (total_src * first_ticks as u128 / (original.length_ticks.max(1)) as u128) as u64;
-            ac.source_start = ac.source_start.saturating_add(offset);
-            ac.id = new_id.clone();
-        }
-        hardwave_project::clip::ClipContent::Midi(mc) => {
-            mc.id = new_id.clone();
-        }
+    {
+        let mut project = engine.project.lock();
+        let tempo_map = project.tempo_map.clone();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        let track_pitch_factor = 2.0_f64
+            .powf(track.pitch_semitones as f64 / 12.0 + track.fine_tune_cents as f64 / 1200.0);
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|c| match &c.content {
+                hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+                hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
+            })
+            .ok_or_else(|| format!("Clip not found: {}", clip_id))?;
+        let right = hardwave_engine::clip_edit::split_clip(
+            clip,
+            at_ticks,
+            &new_id,
+            &tempo_map,
+            sample_rate,
+            track_pitch_factor,
+        )?;
+        track.clips.push(right);
     }
-    track.clips.push(right);
-
-    drop(project);
     engine.rebuild_graph();
     Ok(new_id)
 }

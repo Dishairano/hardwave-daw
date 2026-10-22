@@ -3217,9 +3217,24 @@ impl EngineCallback {
                             &track.midi_fx,
                         ))
                     };
+                    // Where the clip on the playlist ends, once it has been
+                    // made shorter than what it holds (shrunk from the right,
+                    // or the left half of a split): nothing after it plays
+                    // and a note held over it is let go there. A clip as long
+                    // as its content or longer plays all of it, so a song
+                    // with notes drawn past a clip's end sounds as it did.
+                    let window_end = (clip.length_ticks < midi_ref.clip.length_ticks)
+                        .then_some(clip.length_ticks);
                     for note in heard.iter() {
+                        let mut duration = note.duration_ticks.max(1);
+                        if let Some(end) = window_end {
+                            if note.start_tick >= end {
+                                continue;
+                            }
+                            duration = duration.min(end - note.start_tick);
+                        }
                         let on_tick = clip.position_ticks + note.start_tick;
-                        let off_tick = on_tick + note.duration_ticks.max(1);
+                        let off_tick = on_tick + duration;
                         let note_on = tempo_map.tick_to_samples(on_tick, sample_rate);
                         let note_off = tempo_map.tick_to_samples(off_tick, sample_rate);
                         note_regions.push(crate::midi_track_node::MidiNoteRegion {
@@ -3238,6 +3253,9 @@ impl EngineCallback {
                     // inside the clip so a clip moved on the playlist takes
                     // them with it.
                     for c in &midi_ref.clip.controls {
+                        if window_end.is_some_and(|end| c.tick >= end) {
+                            continue;
+                        }
                         let tick = clip.position_ticks + c.tick.min(midi_ref.clip.length_ticks);
                         control_regions.push(crate::midi_track_node::MidiControlRegion {
                             sample: tempo_map.tick_to_samples(tick, sample_rate),
@@ -4448,6 +4466,143 @@ mod offline_insert_tests {
         assert!(
             (0.33..0.38).contains(&peak),
             "the clip at half level through one pan law, peak {peak}"
+        );
+    }
+
+    /// Peak of a render, in windows of `window` frames, for a kick track
+    /// holding one MIDI clip at the song start.
+    fn kick_clip_peaks(notes: &[u64], clip_len: u64, frames: u64, window: usize) -> Vec<f32> {
+        clip_peaks(
+            NativeInstrumentChoice::Kick,
+            notes,
+            240,
+            (clip_len, clip_len),
+            frames,
+            window,
+        )
+    }
+
+    #[derive(Clone, Copy)]
+    enum NativeInstrumentChoice {
+        Kick,
+        Sine,
+    }
+
+    /// Peak of a render in windows of `window` frames: one MIDI track, one
+    /// clip at the song start holding `notes` of `note_len` ticks, with the
+    /// clip's own length and its length on the playlist given separately
+    /// (`lengths` = (content, playlist)).
+    fn clip_peaks(
+        instrument: NativeInstrumentChoice,
+        notes: &[u64],
+        note_len: u64,
+        lengths: (u64, u64),
+        frames: u64,
+        window: usize,
+    ) -> Vec<f32> {
+        use hardwave_midi::{MidiClip, MidiNote};
+        use hardwave_project::clip::MidiClipRef;
+        use hardwave_project::track::NativeInstrument;
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            let id = project.add_midi_track("Notes".into());
+            let mut clip = MidiClip::new("c".into(), "notes".into(), lengths.0);
+            for &start in notes {
+                clip.notes.push(MidiNote {
+                    start_tick: start,
+                    duration_ticks: note_len,
+                    pitch: 36,
+                    velocity: 1.0,
+                    ..Default::default()
+                });
+            }
+            if let Some(t) = project.track_mut(&id) {
+                t.instrument = match instrument {
+                    NativeInstrumentChoice::Kick => NativeInstrument::KickSynth,
+                    NativeInstrumentChoice::Sine => NativeInstrument::BuiltinSine,
+                };
+                t.clips.push(ClipPlacement {
+                    content: ClipContent::Midi(MidiClipRef {
+                        id: "c".into(),
+                        clip,
+                    }),
+                    track_id: id.clone(),
+                    position_ticks: 0,
+                    length_ticks: lengths.1,
+                    lane: 0,
+                });
+            }
+        }
+        let mut out: Vec<f32> = Vec::new();
+        engine
+            .render_offline_with(
+                48_000,
+                frames,
+                0,
+                None,
+                |_| {},
+                |b| {
+                    out.extend_from_slice(b);
+                    true
+                },
+            )
+            .expect("it renders");
+        out.chunks(window * 2)
+            .map(|w| w.iter().fold(0.0f32, |m, v| m.max(v.abs())))
+            .collect()
+    }
+
+    #[test]
+    fn a_note_after_the_end_of_a_shortened_midi_clip_is_not_heard() {
+        // A bar of clip shrunk on the playlist to one beat; kicks at beat
+        // one and beat three. The second kick is past the end of the clip
+        // and has to be cut, as it is for audio.
+        let beat = hardwave_project::TempoMap::default().tick_to_samples(960, 48_000.0) as usize;
+        let peaks = clip_peaks(
+            NativeInstrumentChoice::Kick,
+            &[0, 1920],
+            240,
+            (3840, 960),
+            (4 * beat) as u64,
+            beat,
+        );
+        assert!(peaks[0] > 0.1, "the first kick sounds: {peaks:?}");
+        assert!(peaks[2] < 0.01, "the kick past the end is cut: {peaks:?}");
+    }
+
+    #[test]
+    fn a_note_held_over_the_end_of_a_shortened_midi_clip_is_let_go_there() {
+        // A sine held for a whole bar in a clip shrunk to one beat.
+        let beat = hardwave_project::TempoMap::default().tick_to_samples(960, 48_000.0) as usize;
+        let window = beat / 8;
+        let peaks = clip_peaks(
+            NativeInstrumentChoice::Sine,
+            &[0],
+            3840,
+            (3840, 960),
+            (2 * beat) as u64,
+            window,
+        );
+        assert!(peaks[4] > 0.05, "it sounds inside the clip: {peaks:?}");
+        // A beat is eight windows. Held, the sine stays at its level; let go
+        // at the clip's end, it fades out with its release.
+        let held = peaks[6];
+        assert!(
+            peaks[12] < held / 3.0 && peaks[15] < held / 10.0,
+            "it is let go where the clip ends: {peaks:?}"
+        );
+    }
+
+    #[test]
+    fn a_clip_as_long_as_its_content_still_plays_notes_drawn_past_its_end() {
+        // Songs made before clips were cut at their end: a note drawn past
+        // the end of an untouched clip played, and still does.
+        let beat = hardwave_project::TempoMap::default().tick_to_samples(960, 48_000.0) as usize;
+        let peaks = kick_clip_peaks(&[0, 1920], 960, (4 * beat) as u64, beat);
+        assert!(
+            peaks[2] > 0.1,
+            "the kick past the end still sounds: {peaks:?}"
         );
     }
 
