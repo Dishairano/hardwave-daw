@@ -1,3 +1,4 @@
+import { MasterCorrelation } from './MasterCorrelation'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useSendStore, type SendInfo } from '../../../stores/sendStore'
 import { usePerfMetersStore } from '../../../stores/perfMetersStore'
@@ -407,6 +408,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
         {volumeDb <= -60 ? '-∞' : volumeDb.toFixed(1)} dB
       </div>
 
+      {kind === 'Master' && <MasterCorrelation />}
       {kind !== 'Master' && (
         <div
           className={'mx-s-out' + (outputName ? ' routed' : '')}

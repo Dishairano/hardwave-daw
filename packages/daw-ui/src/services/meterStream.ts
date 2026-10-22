@@ -32,6 +32,7 @@ interface MeterRegistration {
   minDb: number
   maxDb: number
   lastPaintedFill: number
+  lastPaintedRms: number
   /** The canvas's CSS size, kept by a ResizeObserver. Reading clientWidth
    *  in the paint loop forced a layout every frame the page had changed. */
   cssW: number
@@ -78,11 +79,17 @@ function buildGradient(ctx: CanvasRenderingContext2D, h: number): CanvasGradient
   return g
 }
 
-function paintCanvas(canvas: HTMLCanvasElement, reg: MeterRegistration, fillPct: number) {
+/**
+ * One meter: the peak as a faint bar and the RMS, the level the ear follows,
+ * as the solid part inside it, as FL Studio's mixer shows them. The strips
+ * showed the peak only, and the RMS the engine measured went nowhere.
+ */
+function paintCanvas(canvas: HTMLCanvasElement, reg: MeterRegistration, fillPct: number, rmsPct = 0) {
   // Skip paint when the value hasn't moved enough to be visible — saves
   // ~30% of canvas draw calls when a track is mostly silent.
-  if (Math.abs(fillPct - reg.lastPaintedFill) < 0.4) return
+  if (Math.abs(fillPct - reg.lastPaintedFill) < 0.4 && Math.abs(rmsPct - reg.lastPaintedRms) < 0.4) return
   reg.lastPaintedFill = fillPct
+  reg.lastPaintedRms = rmsPct
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   const dpr = window.devicePixelRatio || 1
@@ -99,9 +106,13 @@ function paintCanvas(canvas: HTMLCanvasElement, reg: MeterRegistration, fillPct:
   ctx.fillStyle = '#08080a'
   ctx.fillRect(0, 0, cssW, cssH)
   const fillH = (clamp(fillPct, 0, 100) / 100) * cssH
+  const rmsH = Math.min(fillH, (clamp(rmsPct, 0, 100) / 100) * cssH)
   if (fillH > 0.5) {
     ctx.fillStyle = buildGradient(ctx, cssH)
+    ctx.globalAlpha = 0.45
     ctx.fillRect(0, cssH - fillH, cssW, fillH)
+    ctx.globalAlpha = 1
+    if (rmsH > 0.5) ctx.fillRect(0, cssH - rmsH, cssW, rmsH)
   }
 }
 
@@ -123,8 +134,8 @@ function tick() {
     const peakDb =
       reg.channel === 'l' ? meter.peakL : reg.channel === 'r' ? meter.peakR : (meter.peakL + meter.peakR) / 2
     const range = reg.maxDb - reg.minDb
-    const fillPct = range > 0 ? ((clamp(peakDb, reg.minDb, reg.maxDb) - reg.minDb) / range) * 100 : 0
-    paintCanvas(canvas, reg, fillPct)
+    const pct = (db: number) => (range > 0 ? ((clamp(db, reg.minDb, reg.maxDb) - reg.minDb) / range) * 100 : 0)
+    paintCanvas(canvas, reg, pct(peakDb), pct(meter.rms))
   }
   rafId = requestAnimationFrame(tick)
 }
@@ -137,7 +148,7 @@ export function registerMeter(
   maxDb = 6,
 ): void {
   META.set(canvas, {
-    trackId, channel, minDb, maxDb, lastPaintedFill: -1,
+    trackId, channel, minDb, maxDb, lastPaintedFill: -1, lastPaintedRms: -1,
     cssW: canvas.clientWidth, cssH: canvas.clientHeight,
   })
   ACTIVE.add(canvas)
