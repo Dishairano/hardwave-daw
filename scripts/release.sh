@@ -129,8 +129,23 @@ cd "$(git rev-parse --show-toplevel)"
 # Typecheck + build frontend first. The explicit typecheck matters:
 # Vite emits over TS errors, so `npm run build` alone can ship broken TS
 # (CI now gates on this too — fail here, before anything is committed).
+# Where the gate runs. GitHub by default since 23 Oct 2026: the full gate on
+# web01 took 20 to 35 minutes on 2 cores and 4 GB shared with the website and
+# pushed other builds out of memory, while checks.yml runs the same fmt,
+# clippy, tests, frontend and UI suite on GitHub's machines in about ten. The
+# tree is pushed to `release-check` and the version is only bumped once that
+# run is green, so a failure costs no version number. HW_GATE_ON_GITHUB=0 runs
+# the old local gate; HW_GATE_ON_PC=1 the VM runner.
+GATE_ON_GITHUB=0
+if [ "${HW_GATE_ON_GITHUB:-1}" = "1" ] && [ "${HW_GATE_ON_PC:-0}" != "1" ] \
+  && [ "${HW_SKIP_GATE:-0}" != "1" ] && [ "${HW_PREVIEW_CHANGELOG:-0}" != "1" ]; then
+  GATE_ON_GITHUB=1
+fi
+
 if [ "${HW_PREVIEW_CHANGELOG:-0}" = "1" ]; then
   echo "preview: skipping the frontend build and the gate; reading commits only"
+elif [ "$GATE_ON_GITHUB" = "1" ]; then
+  echo "release.sh: the frontend is checked in the GitHub gate"
 else
 echo "Typechecking + unit-testing + building frontend..."
 cd packages/daw-ui && npm run typecheck && npm run test:unit && npm run build && cd ../..
@@ -143,6 +158,39 @@ fi
 # path; using it must be a deliberate, logged decision.
 if [ "${HW_PREVIEW_CHANGELOG:-0}" = "1" ]; then
   : # preview only reads history; nothing to gate
+elif [ "$GATE_ON_GITHUB" = "1" ]; then
+  # fmt here too: it takes seconds and is the check that failed most often.
+  echo "cargo fmt --check..."
+  if ! cargo fmt --all -- --check; then
+    echo "release.sh: rustfmt differences — run 'cargo fmt --all' and re-release." >&2
+    exit 1
+  fi
+  CHECK_SHA=$(git rev-parse HEAD)
+  echo "release.sh: pushing ${CHECK_SHA:0:7} to release-check and waiting for the GitHub gate (Checks)..."
+  git push --force origin "HEAD:refs/heads/release-check"
+  CHECKS_OK=0
+  for _ in $(seq 1 90); do
+    sleep 20
+    # By branch and name, not --workflow: checks.yml is not on master (the
+    # default branch), and gh resolves --workflow there.
+    STATUS=$(gh run list --branch release-check --limit 10 \
+      --json headSha,status,conclusion,workflowName \
+      --jq "[.[] | select(.headSha == \"$CHECK_SHA\" and .workflowName == \"Checks\")] | first | \"\(.status) \(.conclusion // \"pending\")\"" 2>/dev/null || echo "")
+    case "$STATUS" in
+      "completed success") CHECKS_OK=1; break ;;
+      "completed "*)
+        echo "release.sh: the GitHub gate FAILED on ${CHECK_SHA:0:7} ($STATUS)." >&2
+        echo "release.sh: nothing was bumped or tagged. Fix it and release again." >&2
+        exit 1 ;;
+      *) printf '.' ;;
+    esac
+  done
+  echo
+  if [ "$CHECKS_OK" != "1" ]; then
+    echo "release.sh: the GitHub gate did not finish in 30 minutes. Nothing was bumped or tagged." >&2
+    exit 1
+  fi
+  echo "release.sh: GitHub gate green on ${CHECK_SHA:0:7}"
 elif [ "${HW_GATE_ON_PC:-0}" = "1" ]; then
   # The gate runs on the founder's PC instead of here. Not a way around the
   # gate: gate.yml runs the same fmt, clippy, tests and frontend checks, on
