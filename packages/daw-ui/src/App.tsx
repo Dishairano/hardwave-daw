@@ -335,6 +335,31 @@ export function App() {
     }
   }, [])
 
+  // Snapshots could be saved and recalled but never removed: the backend had
+  // the command and nothing called it, so the list only grew.
+  const deleteMixerSnapshot = useCallback(async () => {
+    const push = useNotificationStore.getState().push
+    let names: string[] = []
+    try {
+      names = await invoke<string[]>('list_mixer_snapshots')
+    } catch (e) {
+      push('warning', 'Could not read the snapshots', { detail: String(e) })
+      return
+    }
+    if (names.length === 0) {
+      push('info', 'No mixer snapshots to delete')
+      return
+    }
+    const name = window.prompt(`Delete which snapshot?\n\n${names.join('\n')}`, names[names.length - 1])?.trim()
+    if (!name) return
+    try {
+      await invoke('delete_mixer_snapshot', { name })
+      push('info', `Deleted the snapshot "${name}"`)
+    } catch (e) {
+      push('warning', 'Could not delete that snapshot', { detail: String(e) })
+    }
+  }, [])
+
   /**
    * Make room for, or take out, a stretch of the song.
    *
@@ -2262,6 +2287,7 @@ export function App() {
           // Analyzers
           { label: 'Save mixer snapshot…', action: () => { void saveMixerSnapshot() } },
           { label: 'Recall mixer snapshot…', action: () => { void recallMixerSnapshot() } },
+          { label: 'Delete mixer snapshot…', action: () => { void deleteMixerSnapshot() } },
           { separator: true, label: '' },
           { label: 'Loudness meter…', action: () => setShowLoudness(true) },
           { label: 'Reference track…', action: () => setShowReference(true) },
