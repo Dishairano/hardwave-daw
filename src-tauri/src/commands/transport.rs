@@ -25,7 +25,9 @@ pub struct TransportInfo {
 #[tauri::command]
 pub fn play(state: State<AppState>) {
     use std::sync::atomic::Ordering;
-    let engine = state.engine.lock();
+    let mut engine = state.engine.lock();
+    // The device may have been let go while another program was in front.
+    crate::audio_focus::reopen_if_released(&mut engine);
     // Wait-for-input (FL Ctrl+I): park instead of starting — the audio
     // thread flips `playing` on the first MIDI event. The engine-side
     // TransportCommand handler applies the same rule, so both paths
@@ -365,7 +367,8 @@ pub fn set_bpm(state: State<AppState>, bpm: f64) {
 #[tauri::command]
 pub fn toggle_recording(state: State<AppState>) -> Result<Option<RecordedTake>, String> {
     use std::sync::atomic::Ordering;
-    let engine = state.engine.lock();
+    let mut engine = state.engine.lock();
+    crate::audio_focus::reopen_if_released(&mut engine);
     let was_recording = engine.transport.recording.load(Ordering::Relaxed);
 
     if !was_recording {
@@ -554,7 +557,8 @@ pub fn get_transport_state(state: State<AppState>) -> TransportInfo {
 #[tauri::command]
 pub fn start_count_in(state: State<AppState>, bars: u32) {
     use std::sync::atomic::Ordering;
-    let engine = state.engine.lock();
+    let mut engine = state.engine.lock();
+    crate::audio_focus::reopen_if_released(&mut engine);
     if bars == 0 {
         engine.transport.playing.store(true, Ordering::Relaxed);
         return;

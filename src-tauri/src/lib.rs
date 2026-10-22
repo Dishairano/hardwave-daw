@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
+mod audio_focus;
 mod backend_stats;
 mod collab;
 mod commands;
@@ -257,6 +258,7 @@ pub fn run() {
     // Apply persisted audio preferences before the engine starts so the first
     // stream honors the user's last device choice instead of the default.
     let prefs = AudioPrefs::load();
+    audio_focus::set_enabled(prefs.release_device_in_background);
     // The driver first: the devices below are that driver's devices. One
     // that has gone (an ASIO driver uninstalled) leaves the default.
     if let Some(host) = prefs.audio_host.as_deref() {
@@ -352,7 +354,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // Before any window loads: nothing but our own pages in them.
         .plugin(window_guard::init())
-        .manage(state)
+        .manage({
+            // Lets the audio device go while another program is in front.
+            audio_focus::spawn(Arc::clone(&state.engine));
+            state
+        })
         .invoke_handler(timed(tauri::generate_handler![
             backend_stats::get_backend_stats,
             // Transport
@@ -664,6 +670,8 @@ pub fn run() {
             commands::engine::list_audio_hosts,
             commands::engine::get_audio_host,
             commands::engine::set_audio_host,
+            commands::engine::get_release_device_in_background,
+            commands::engine::set_release_device_in_background,
             commands::engine::get_wasapi_exclusive,
             commands::engine::set_wasapi_exclusive,
             // Browser

@@ -36,6 +36,7 @@ fn persist_audio_prefs(state: &State<AppState>) {
         },
         trusted_sample_servers: engine.trusted_servers(),
         audio_host: Some(engine.audio_host_name()),
+        release_device_in_background: crate::audio_focus::enabled(),
     };
     drop(engine);
     prefs.save();
@@ -123,6 +124,19 @@ pub fn get_audio_config(state: State<AppState>) -> AudioConfig {
 #[tauri::command]
 pub fn list_audio_hosts() -> Vec<String> {
     hardwave_engine::DawEngine::list_audio_hosts()
+}
+
+/// Whether the DAW lets go of the audio device while another program is
+/// in front and the song is stopped.
+#[tauri::command]
+pub fn get_release_device_in_background() -> bool {
+    crate::audio_focus::enabled()
+}
+
+#[tauri::command]
+pub fn set_release_device_in_background(state: State<AppState>, enabled: bool) {
+    crate::audio_focus::set_enabled(enabled);
+    persist_audio_prefs(&state);
 }
 
 #[tauri::command]

@@ -306,6 +306,8 @@ permissions = [
   "allow-list-audio-hosts",
   "allow-get-audio-host",
   "allow-set-audio-host",
+  "allow-get-release-device-in-background",
+  "allow-set-release-device-in-background",
   "allow-get-wasapi-exclusive",
   "allow-set-wasapi-exclusive",
   "allow-list-directory",

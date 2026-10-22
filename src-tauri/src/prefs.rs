@@ -63,6 +63,14 @@ pub struct AudioPrefs {
     /// every launch, with the default device of that driver.
     #[serde(default)]
     pub audio_host: Option<String>,
+    /// Let go of the audio device while another program is in front and
+    /// the song is stopped (see audio_focus.rs). On unless switched off.
+    #[serde(default = "default_true")]
+    pub release_device_in_background: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_sample_rate() -> u32 {
@@ -134,6 +142,7 @@ impl AudioPrefs {
             osc_port: 0,
             trusted_sample_servers: Vec::new(),
             audio_host: None,
+            release_device_in_background: true,
         }
     }
 }
@@ -148,6 +157,7 @@ mod tests {
         let prefs: AudioPrefs = serde_json::from_str(old).expect("loads");
         assert_eq!(prefs.audio_host, None);
         assert_eq!(prefs.sample_rate, 44100);
+        assert!(prefs.release_device_in_background, "on unless switched off");
     }
 
     #[test]
