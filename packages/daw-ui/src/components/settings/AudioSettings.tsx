@@ -11,6 +11,7 @@ import { AUTOSAVE_OPTIONS, useAutosavePrefsStore } from '../../stores/autosavePr
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { RecordingLatencyRow } from './RecordingLatency'
 import { PluginLatencyRow } from './PluginLatencyRow'
+import { ReleaseInBackgroundRow } from './ReleaseInBackgroundRow'
 import { useMetronomeStore } from '../../stores/metronomeStore'
 import { usePluginStore } from '../../stores/pluginStore'
 
@@ -879,6 +880,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 }} />
               </button>
             </div>
+            <ReleaseInBackgroundRow />
           </>)}
 
           {tab === 'midi' && (<>
