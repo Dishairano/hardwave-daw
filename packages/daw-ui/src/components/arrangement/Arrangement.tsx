@@ -1,3 +1,4 @@
+import { followScroll } from './follow'
 import { usePlaylistScrollStore } from '../../stores/playlistScrollStore'
 import { useDropTarget } from '../../lib/pointerDrag'
 import { playlistRowLayout, playlistTracks } from './playlistRows'
@@ -261,6 +262,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   // Panning by hand turns it off, the same way dragging a scrollbar does in
   // every other DAW, and the FOLLOW button turns it back on.
   const followPlayhead = useGeneralPrefsStore(s => s.followPlayhead)
+  const followMode = useGeneralPrefsStore(s => s.followMode)
   const rulerUnits = useGeneralPrefsStore(s => s.rulerUnits)
   // Named stretches of the song, drawn along the ruler so the arrangement
   // can be read at a glance instead of counted in bars.
@@ -488,7 +490,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const scrollOffset = followPlayhead
-      ? Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
+      ? followScroll(playheadSecs * PIXELS_PER_SECOND, w, followMode)
       : scrollX
 
     // Background: neutral near-black, the same base as the rest of the
@@ -899,7 +901,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
    drawMainRef.current = draw
    draw()
    drawPlayheadRef.current()
-  }, [tracks, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, sections, meterSegments, peer])
+  }, [tracks, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, followMode, sections, meterSegments, peer])
 
   // The playhead: one element over the arrangement, moved with a
   // transform straight from the transport store. No React render, no
@@ -1305,8 +1307,32 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const container = containerRef.current
     const w = container ? container.getBoundingClientRect().width : 800
-    return Math.max(0, playheadSecs * PIXELS_PER_SECOND - w * 0.25)
-  }, [sampleRate, followPlayhead, scrollX])
+    return followScroll(playheadSecs * PIXELS_PER_SECOND, w, followMode)
+  }, [sampleRate, followPlayhead, followMode, scrollX])
+
+  // View > Zoom to selection: the selected clips fill the width, with a
+  // little room either side, and the view stops following the playhead so
+  // it stays on them.
+  useEffect(() => {
+    const zoomToSelection = () => {
+      const { selectedClipIds: ids } = useTrackStore.getState()
+      const picked = audioTracks.flatMap(t => t.clips.filter(c => ids.has(c.id)))
+      const container = containerRef.current
+      if (picked.length === 0 || !container || bpm <= 0) return
+      const start = Math.min(...picked.map(c => c.position_ticks))
+      const end = Math.max(...picked.map(c => c.position_ticks + c.length_ticks))
+      const w = container.getBoundingClientRect().width
+      const secs = ((end - start) / PPQ) * (60 / bpm)
+      if (secs <= 0 || w <= 0) return
+      const store = useTransportStore.getState()
+      store.setHorizontalZoom((w * 0.9) / (secs * PIXELS_PER_SECOND_BASE))
+      const pps = PIXELS_PER_SECOND_BASE * useTransportStore.getState().horizontalZoom
+      setFollowPlayhead(false)
+      setScrollX(Math.max(0, (start / PPQ) * (60 / bpm) * pps - w * 0.05))
+    }
+    window.addEventListener('daw:zoomToSelection', zoomToSelection)
+    return () => window.removeEventListener('daw:zoomToSelection', zoomToSelection)
+  }, [audioTracks, bpm, setFollowPlayhead])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     // Middle button held: slide the playlist left and right, as in FL.
