@@ -123,6 +123,8 @@ pub struct ChannelMeter {
     gated: GatedLoudness,
     tp_l: TruePeak,
     tp_r: TruePeak,
+    /// Left/right correlation, -1 (out of phase) to +1 (mono), smoothed.
+    correlation: f32,
 }
 
 const LUFS_HIST: usize = 300;
@@ -158,6 +160,7 @@ impl ChannelMeter {
             gated: GatedLoudness::new(sample_rate),
             tp_l: TruePeak::new(),
             tp_r: TruePeak::new(),
+            correlation: 0.0,
         }
     }
 
@@ -172,11 +175,15 @@ impl ChannelMeter {
         let mut block_true_peak = 0.0_f32;
         let mut sum_sq = 0.0_f64;
         let mut k_sum = 0.0_f64;
+        let (mut lr, mut ll, mut rr) = (0.0_f64, 0.0_f64, 0.0_f64);
 
         for i in 0..n {
             let l = left[i];
             let r = right[i];
             let mono = (l + r) * 0.5;
+            lr += l as f64 * r as f64;
+            ll += l as f64 * l as f64;
+            rr += r as f64 * r as f64;
 
             let abs = mono.abs();
             block_peak = block_peak.max(abs);
@@ -222,6 +229,13 @@ impl ChannelMeter {
         let rms_lin = (sum_sq / n as f64).sqrt() as f32;
         self.rms_smooth = self.rms_smooth * 0.85 + rms_lin * 0.15;
 
+        // Correlation: how alike the two sides are. Silence leaves it where
+        // it was rather than reading as 0, which would look like a problem.
+        if ll > 1e-12 && rr > 1e-12 {
+            let block = (lr / (ll * rr).sqrt()).clamp(-1.0, 1.0) as f32;
+            self.correlation = self.correlation * 0.8 + block * 0.2;
+        }
+
         // Clip detection
         if block_peak > 0.999 {
             self.clip = true;
@@ -249,6 +263,10 @@ impl ChannelMeter {
     }
     pub fn clipped(&self) -> bool {
         self.clip
+    }
+    /// -1 when the sides cancel, 0 when unrelated, +1 when they are the same.
+    pub fn correlation(&self) -> f32 {
+        self.correlation
     }
 
     /// Momentary LUFS (400ms window).
@@ -300,6 +318,7 @@ impl ChannelMeter {
         self.gated.reset();
         self.tp_l.reset();
         self.tp_r.reset();
+        self.correlation = 0.0;
         self.k_shelf_l.reset();
         self.k_hp_l.reset();
         self.k_shelf_r.reset();
@@ -530,6 +549,8 @@ pub struct MeterSnapshot {
     pub lufs_s: Option<f32>,
     pub lufs_i: Option<f32>,
     pub clipped: bool,
+    /// Left/right correlation of the master, -1 to +1.
+    pub correlation: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -604,6 +625,25 @@ mod loudness_tests {
             tp > -0.6 && tp < 0.6,
             "true peak {tp}, the samples are at -3.0"
         );
+    }
+
+    #[test]
+    fn correlation_reads_mono_wide_and_out_of_phase() {
+        let x: Vec<f32> = (0..48_000).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+        let neg: Vec<f32> = x.iter().map(|v| -v).collect();
+        let other: Vec<f32> = (0..48_000)
+            .map(|i| (i as f32 * 0.0731).sin() * 0.5)
+            .collect();
+        let read = |l: &[f32], r: &[f32]| {
+            let mut m = ChannelMeter::new(48_000.0);
+            for (a, b) in l.chunks(512).zip(r.chunks(512)) {
+                m.process_block(a, b);
+            }
+            m.correlation()
+        };
+        assert!(read(&x, &x) > 0.99);
+        assert!(read(&x, &neg) < -0.99);
+        assert!(read(&x, &other).abs() < 0.3);
     }
 
     #[test]

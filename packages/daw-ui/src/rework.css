@@ -514,3 +514,9 @@ input[type="range"].fl-range::-webkit-slider-thumb { -webkit-appearance: none; w
    text comes back when there is room for a few words of it. */
 .fl-app .fl-toolrow .hw-pgroup[data-group="hint"] { container-type: inline-size; }
 @container (max-width: 240px) { .fl-app .fl-toolrow .fl-hint { display: none; } }
+
+/* The master's correlation, under its fader. */
+.mx-v2-root .mx-corr { order: 6; display: flex; align-items: center; gap: 5px; padding: 3px 6px; font: 600 9px 'JetBrains Mono', monospace; color: var(--mx-dim, #8a8a94); }
+.mx-v2-root .mx-corr-track { position: relative; flex: 1; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #ef4444 0%, #3a3a44 50%, #3ed07a 100%); opacity: 0.55; }
+.mx-v2-root .mx-corr-dot { position: absolute; top: -2px; width: 4px; height: 8px; margin-left: -2px; border-radius: 1px; background: #f4f4f5; }
+.mx-v2-root .mx-corr.neg .mx-corr-num { color: #ef4444; }

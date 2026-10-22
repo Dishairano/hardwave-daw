@@ -11,6 +11,8 @@ interface MeterSnapshot {
   lufs_s: number | null
   lufs_i: number | null
   clipped: boolean
+  /** Left/right correlation of the master, -1 to +1. */
+  correlation?: number
 }
 
 interface TrackMeter {
@@ -32,7 +34,7 @@ interface MeterState {
 
 const DEFAULT_METER: MeterSnapshot = {
   peak_db: -100, peak_hold_db: -100, true_peak_db: -100,
-  rms_db: -100, lufs_m: null, lufs_s: null, lufs_i: null, clipped: false,
+  rms_db: -100, lufs_m: null, lufs_s: null, lufs_i: null, clipped: false, correlation: 0,
 }
 
 export const DEFAULT_TRACK_METER: TrackMeter = { peakL: -100, peakR: -100, rms: -100 }

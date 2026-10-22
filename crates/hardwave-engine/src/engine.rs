@@ -2268,6 +2268,7 @@ impl EngineCallback {
             lufs_s: None,
             lufs_i: self.meter.lufs_i(),
             clipped: self.meter.clipped(),
+            correlation: self.meter.correlation(),
         };
         self.meters_parked = self.meter_producer.push(silent).is_ok();
     }
@@ -4092,6 +4093,7 @@ impl AudioCallback for EngineCallback {
                     lufs_s: self.meter.lufs_s(num_frames),
                     lufs_i: self.meter.lufs_i(),
                     clipped: self.meter.clipped(),
+                    correlation: self.meter.correlation(),
                 };
                 // Lock-free push; if the consumer is behind, drop the sample.
                 let _ = self.meter_producer.push(snapshot);
