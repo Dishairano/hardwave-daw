@@ -79,7 +79,7 @@ unsafe impl Send for ClapPluginInstance {}
 
 impl ClapPluginInstance {
     pub fn load(descriptor: PluginDescriptor) -> Result<Self, String> {
-        Self::load_inner(descriptor, None)
+        Self::load_inner(descriptor, None, None)
     }
 
     /// Load the plug-in but reuse the supplied parameter queue instead of
@@ -88,16 +88,21 @@ impl ClapPluginInstance {
     /// editor's GUI edits (captured via `request_flush` → `params.flush`)
     /// land in the same queue the chain instance drains in `process`,
     /// so knob movements in the editor reach the live audio.
+    ///
+    /// `shared_log` is the chain instance's copy of those edits, the one
+    /// automation recording reads; see the VST3 loader.
     pub fn load_with_shared_pending(
         descriptor: PluginDescriptor,
         shared: SharedParamQueue,
+        shared_log: Option<SharedParamQueue>,
     ) -> Result<Self, String> {
-        Self::load_inner(descriptor, Some(shared))
+        Self::load_inner(descriptor, Some(shared), shared_log)
     }
 
     fn load_inner(
         descriptor: PluginDescriptor,
         shared_pending: Option<SharedParamQueue>,
+        shared_log: Option<SharedParamQueue>,
     ) -> Result<Self, String> {
         let path = descriptor.path.clone();
         if !path.exists() {
@@ -139,7 +144,8 @@ impl ClapPluginInstance {
         // valid even after the boxes move into `Self`.
         let pending_params: SharedParamQueue =
             shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
-        let gui_edit_log: SharedParamQueue = Arc::new(Mutex::new(Vec::new()));
+        let gui_edit_log: SharedParamQueue =
+            shared_log.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
         let mut host_ctx = Box::new(ClapHostContext {
             plugin: std::ptr::null(),
             pending: Arc::clone(&pending_params),

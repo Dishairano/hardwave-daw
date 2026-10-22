@@ -239,7 +239,7 @@ impl IComponentHandlerTrait for HardwaveComponentHandler {
 
 impl Vst3PluginInstance {
     pub fn load(descriptor: PluginDescriptor) -> Result<Self, String> {
-        Self::load_inner(descriptor, None)
+        Self::load_inner(descriptor, None, None)
     }
 
     /// Load the plug-in but reuse the supplied parameter queue instead
@@ -247,16 +247,23 @@ impl Vst3PluginInstance {
     /// route the editor's `IComponentHandler::performEdit` events into
     /// the same queue the chain instance drains, so GUI knob movements
     /// reach the audio chain.
+    ///
+    /// `shared_log` is the chain instance's copy of those edits, the one
+    /// automation recording reads. The window's own copy went to a log
+    /// nobody read, so knob moves in a plug-in's window were never
+    /// recorded.
     pub fn load_with_shared_pending(
         descriptor: PluginDescriptor,
         shared: crate::types::SharedParamQueue,
+        shared_log: Option<crate::types::SharedParamQueue>,
     ) -> Result<Self, String> {
-        Self::load_inner(descriptor, Some(shared))
+        Self::load_inner(descriptor, Some(shared), shared_log)
     }
 
     fn load_inner(
         descriptor: PluginDescriptor,
         shared_pending: Option<crate::types::SharedParamQueue>,
+        shared_log: Option<crate::types::SharedParamQueue>,
     ) -> Result<Self, String> {
         let binary = resolve_vst3_binary(&descriptor.path).ok_or_else(|| {
             format!(
@@ -423,7 +430,8 @@ impl Vst3PluginInstance {
         // Vst3Inner so its lifetime tracks the plugin instance.
         let pending_params: crate::types::SharedParamQueue =
             shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
-        let gui_edit_log: crate::types::SharedParamQueue = Arc::new(Mutex::new(Vec::new()));
+        let gui_edit_log: crate::types::SharedParamQueue =
+            shared_log.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
         let handler_wrapper = vst3::ComWrapper::new(HardwaveComponentHandler {
             pending: Arc::clone(&pending_params),
             log: Arc::clone(&gui_edit_log),

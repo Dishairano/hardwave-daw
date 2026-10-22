@@ -432,7 +432,7 @@ pub async fn open_plugin_editor(
         return Ok(existing.label().to_string());
     }
 
-    let (descriptor, shared_queue) = {
+    let (descriptor, shared_queue, shared_log) = {
         let state = app.state::<AppState>();
         let descriptor = {
             let engine = state.engine.lock();
@@ -452,7 +452,17 @@ pub async fn open_plugin_editor(
                 .cloned(),
             _ => None,
         };
-        (descriptor, shared_queue)
+        // And the slot's copy of those moves for automation recording, so
+        // the window writes where the recorder reads.
+        let shared_log = match (track_id.as_deref(), slot_id.as_deref()) {
+            (Some(t), Some(s)) => state
+                .slot_gui_edit_logs
+                .lock()
+                .get(&(t.to_string(), s.to_string()))
+                .cloned(),
+            _ => None,
+        };
+        (descriptor, shared_queue, shared_log)
     };
 
     // Built-in plug-ins have no window of their own: the mixer shows their
@@ -556,6 +566,7 @@ pub async fn open_plugin_editor(
                                 Some(queue) => Vst3PluginInstance::load_with_shared_pending(
                                     descriptor.clone(),
                                     queue,
+                                    shared_log,
                                 ),
                                 None => Vst3PluginInstance::load(descriptor.clone()),
                             }
@@ -566,6 +577,7 @@ pub async fn open_plugin_editor(
                                 Some(queue) => ClapPluginInstance::load_with_shared_pending(
                                     descriptor.clone(),
                                     queue,
+                                    shared_log,
                                 ),
                                 None => ClapPluginInstance::load(descriptor.clone()),
                             }
