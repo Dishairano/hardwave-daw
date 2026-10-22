@@ -59,6 +59,7 @@ import { MidiMappingsPanel, type MidiMapTarget } from './components/MidiMappings
 import { MacroPanel } from './components/MacroPanel'
 import { ManualWindow } from './components/ManualWindow'
 import { ModulationPanel } from './components/ModulationPanel'
+import { MixCheckDialog } from './components/MixCheckDialog'
 import { ReferencePanel } from './components/ReferencePanel'
 import { ScriptsPanel } from './components/ScriptsPanel'
 import { SessionView } from './components/SessionView'
@@ -258,6 +259,7 @@ export function App() {
   const [showManual, setShowManual] = useState(false)
   const [showModulation, setShowModulation] = useState(false)
   const [showReference, setShowReference] = useState(false)
+  const [showMixCheck, setShowMixCheck] = useState(false)
   const [showScripts, setShowScripts] = useState(false)
   const [showSession, setShowSession] = useState(false)
   const [showVideo, setShowVideo] = useState(false)
@@ -2290,6 +2292,7 @@ export function App() {
           { label: 'Delete mixer snapshot…', action: () => { void deleteMixerSnapshot() } },
           { separator: true, label: '' },
           { label: 'Loudness meter…', action: () => setShowLoudness(true) },
+          { label: 'Mix check…', action: () => setShowMixCheck(true) },
           { label: 'Reference track…', action: () => setShowReference(true) },
           { label: 'Scripts…', action: () => setShowScripts(true) },
           { label: 'Clip launcher…', action: () => setShowSession(true) },
@@ -2513,6 +2516,7 @@ export function App() {
       {showManual && <ManualWindow onClose={() => setShowManual(false)} />}
       {showModulation && <ModulationPanel onClose={() => setShowModulation(false)} />}
       {showReference && <ReferencePanel onClose={() => setShowReference(false)} />}
+      {showMixCheck && <MixCheckDialog onClose={() => setShowMixCheck(false)} />}
       {showScripts && <ScriptsPanel onClose={() => setShowScripts(false)} />}
       {showSession && <SessionView onClose={() => setShowSession(false)} />}
       {showVideo && <VideoWindow onClose={() => setShowVideo(false)} />}
