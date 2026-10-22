@@ -190,7 +190,11 @@ mod tests {
         assert!(piled.is_err());
         let chatty = run("for i in 0..100000 { play(); print(i); }").unwrap();
         assert!(chatty.commands.len() <= MAX_COMMANDS);
-        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        // The limits stop a runaway script instead of leaving it running
+        // forever. Sixty seconds is far above what they take, so a build
+        // machine busy with other compiles does not fail this (it took over
+        // twenty on HQ on 22 Oct 2026 while another workspace test ran).
+        assert!(started.elapsed() < std::time::Duration::from_secs(60));
     }
 
     #[test]
