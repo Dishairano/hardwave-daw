@@ -329,6 +329,9 @@ interface TrackState {
     newPositionTicks: number,
     newLengthTicks?: number,
   ) => Promise<void>
+  /// Persist a dragged left edge: the start is cut off (or a cut start comes
+  /// back) and everything after it keeps playing where it did.
+  commitClipTrimStart: (trackId: string, clipId: string, newPositionTicks: number) => Promise<void>
   moveClipToTrack: (
     fromTrackId: string,
     toTrackId: string,
@@ -910,6 +913,13 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     if (newLengthTicks !== undefined) {
       await invoke('resize_clip', { trackId, clipId, newLengthTicks })
     }
+    await get().fetchTracks()
+  },
+
+  commitClipTrimStart: async (trackId, clipId, newPositionTicks) => {
+    // A move plus a resize slid the audio along with the edge; the backend
+    // moves the start inside the sample by what played in that time.
+    await mut('trim_clip_start', { trackId, clipId, newPositionTicks }, 'Trim clip start')
     await get().fetchTracks()
   },
 

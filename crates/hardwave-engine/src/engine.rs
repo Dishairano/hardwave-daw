@@ -50,7 +50,7 @@ impl Drop for InflightRelease<'_> {
 /// Does this clip want a pitch-preserving bake? Warped clips are excluded —
 /// warp markers define their own piecewise source map and take precedence.
 /// Returns the effective (stretch, semitones) when a bake applies.
-fn bake_params(audio_clip: &hardwave_project::clip::AudioClip) -> Option<(f64, f64)> {
+pub(crate) fn bake_params(audio_clip: &hardwave_project::clip::AudioClip) -> Option<(f64, f64)> {
     // A warped clip follows its markers, and a resampled one plays like a
     // tape: neither is baked.
     if !audio_clip.warp_markers.is_empty() || audio_clip.treatment.resample {

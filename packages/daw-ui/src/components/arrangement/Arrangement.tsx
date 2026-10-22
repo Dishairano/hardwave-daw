@@ -288,7 +288,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
   const {
     tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
-    moveClipLocal, resizeClipLocal, commitClipDrag,
+    moveClipLocal, resizeClipLocal, commitClipDrag, commitClipTrimStart,
     moveClipToTrack, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
     setClipFadeCurves, toggleClipReverse, setClipGain, setClipPitch, setClipStretch,
   } = useTrackStore()
@@ -1055,7 +1055,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         const pxPerSec = pxPerTick * (bpm / 60) * PPQ
         const stretch = clip.timeFactor ?? (clip.stretchRatio > 0 ? clip.stretchRatio : 1)
         pxPerBucket = (clip.sourceFrames / clip.sourceRate / n) * stretch * pxPerSec
-        originX = x - ((clip.sourceStart ?? 0) / clip.sourceRate) * stretch * pxPerSec
+        // While its left edge is dragged the audio stays where it plays:
+        // the start is cut off, not moved, so draw from where it began.
+        const trimming = dragRef.current
+        const anchorX =
+          trimming && trimming.mode === 'resize-left' && trimming.clipId === clip.id && !clip.reversed
+            ? trimming.originalPositionTicks * pxPerTick - scrollOffset
+            : x
+        originX = anchorX - ((clip.sourceStart ?? 0) / clip.sourceRate) * stretch * pxPerSec
       }
       // Reversed, the engine reads the clip's own stretch of the file from
       // its end back to its start, so that stretch is drawn mirrored inside
@@ -1881,7 +1888,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // final position/length so save/load + audio engine see it.
       const liveTrack = useTrackStore.getState().tracks.find(t => t.id === drag.trackId)
       const liveClip = liveTrack?.clips?.find(c => c.id === drag.clipId)
-      if (liveClip) {
+      if (liveClip && drag.mode === 'resize-left') {
+        commitClipTrimStart(drag.trackId, drag.clipId, liveClip.position_ticks)
+          .catch(err => console.error('commitClipTrimStart failed', err))
+      } else if (liveClip) {
         const lengthArg = drag.mode === 'move' ? undefined : liveClip.length_ticks
         commitClipDrag(drag.trackId, drag.clipId, liveClip.position_ticks, lengthArg)
           .catch(err => console.error('commitClipDrag failed', err))
@@ -1900,7 +1910,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
     dragRef.current = null
     forceRender(n => n + 1)
-  }, [audioTracks, rows, pixelsPerTick, trackHeight, getScrollOffset, commitClipDrag])
+  }, [audioTracks, rows, pixelsPerTick, trackHeight, getScrollOffset, commitClipDrag, commitClipTrimStart])
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect()

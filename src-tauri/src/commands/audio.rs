@@ -1411,6 +1411,50 @@ pub fn resize_clip(
     Ok(())
 }
 
+/// Move a clip's left edge and keep its right edge, cutting the start off
+/// (or bringing a cut start back) without moving what plays where.
+///
+/// The playlist did this as a move plus a resize, so the content slid along
+/// with the edge. Returns where the edge ended up: earlier than asked only
+/// when the sample has nothing more before it.
+#[tauri::command]
+pub fn trim_clip_start(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    new_position_ticks: u64,
+) -> Result<u64, String> {
+    let engine = state.engine.lock();
+    engine.snapshot_before_mutation();
+    let sample_rate = engine.current_sample_rate() as f64;
+    let edge = {
+        let mut project = engine.project.lock();
+        let tempo_map = project.tempo_map.clone();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let track_pitch_factor = 2.0_f64
+            .powf(track.pitch_semitones as f64 / 12.0 + track.fine_tune_cents as f64 / 1200.0);
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|c| match &c.content {
+                hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
+                hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
+            })
+            .ok_or_else(|| format!("Clip not found: {clip_id}"))?;
+        hardwave_engine::clip_edit::trim_clip_start(
+            clip,
+            new_position_ticks,
+            &tempo_map,
+            sample_rate,
+            track_pitch_factor,
+        )?
+    };
+    engine.rebuild_graph();
+    Ok(edge)
+}
+
 /// Duplicate a clip within the same track, placing the copy immediately after it.
 #[tauri::command]
 pub fn duplicate_clip(

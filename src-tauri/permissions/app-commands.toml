@@ -324,6 +324,7 @@ permissions = [
   "allow-move-clip",
   "allow-move-clip-to-track",
   "allow-resize-clip",
+  "allow-trim-clip-start",
   "allow-delete-clip",
   "allow-duplicate-clip",
   "allow-split-clip",
