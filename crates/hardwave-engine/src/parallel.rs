@@ -213,6 +213,11 @@ fn take_work(shared: &Shared, nodes: &[usize], run: &dyn Fn(usize)) {
 }
 
 fn worker_loop(shared: Arc<Shared>) {
+    // These threads run plug-ins and effects like the audio thread does,
+    // and only the audio thread had denormals flushed: a reverb tail on a
+    // worker took the slow path and spiked the load. The workers live as
+    // long as the pool, so once is enough.
+    hardwave_audio_io::denormals::flush_denormals_to_zero();
     let mut seen_epoch = 0usize;
     loop {
         let (nodes, run) = {
@@ -259,6 +264,29 @@ pub fn default_worker_count() -> usize {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicU32;
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn the_workers_flush_denormals_like_the_audio_thread() {
+        let pool = WorkerPool::new(2);
+        let on_workers = AtomicUsize::new(0);
+        let flushed = AtomicUsize::new(0);
+        let nodes: Vec<usize> = (0..16).collect();
+        pool.run_level(&nodes, &|_| {
+            let name = std::thread::current().name().unwrap_or("").to_string();
+            if name.starts_with("hardwave-audio-worker") {
+                on_workers.fetch_add(1, Ordering::Relaxed);
+                // SAFETY: reads this thread's SSE control register.
+                if unsafe { hardwave_audio_io::denormals::read_mxcsr() } & (1 << 15) != 0 {
+                    flushed.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        });
+        let ran = on_workers.load(Ordering::Relaxed);
+        assert!(ran > 0, "the workers took part");
+        assert_eq!(flushed.load(Ordering::Relaxed), ran);
+    }
 
     #[test]
     fn a_chain_is_one_node_per_level() {
