@@ -284,6 +284,10 @@ async function commitRecording(
 
   const [{ useRecordingPrefsStore }] = await Promise.all([import('./recordingPrefsStore')])
   const blend = useRecordingPrefsStore.getState().blendRecord
+  // Quantize while recording: to the playlist's snap, when that is on.
+  const quantizeTicks = useRecordingPrefsStore.getState().quantizeRecording
+    ? snapToTicks(useTransportStore.getState().snapValue, useTransportStore.getState().snapEnabled) || null
+    : null
 
   const audioDone: string[] = []
   const midiDone: string[] = []
@@ -323,7 +327,7 @@ async function commitRecording(
           trackId: track.id,
           startSample,
           endSample,
-          quantizeTicks: null,
+          quantizeTicks,
           // Blend-record (Ctrl+B): merge into the overlapping clip instead of
           // stacking a new one.
           blend,

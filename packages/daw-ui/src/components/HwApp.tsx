@@ -184,6 +184,8 @@ export function HwTopbar({
   const toggleWaitForInput = useRecordingPrefsStore(s => s.toggleWaitForInput)
   const blendRecord = useRecordingPrefsStore(s => s.blendRecord)
   const toggleBlendRecord = useRecordingPrefsStore(s => s.toggleBlendRecord)
+  const quantizeRecording = useRecordingPrefsStore(s => s.quantizeRecording)
+  const toggleQuantizeRecording = useRecordingPrefsStore(s => s.toggleQuantizeRecording)
   const multilinkActive = useRecordingPrefsStore(s => s.multilinkActive)
   const multilinkCount = useRecordingPrefsStore(s => s.multilinkCount)
   const toggleMultilink = useRecordingPrefsStore(s => s.toggleMultilink)
@@ -575,6 +577,16 @@ export function HwTopbar({
           <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
             <circle cx="5" cy="6" r="3"/>
             <circle cx="8" cy="6" r="3"/>
+          </svg>
+        </button>
+        <button
+          onClick={() => toggleQuantizeRecording()}
+          className={`fl-mini-btn${quantizeRecording ? ' on' : ''}`}
+          title="Quantize while recording: recorded MIDI notes land on the playlist's snap grid"
+        >
+          <svg className="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
+            <path d="M2 10V6M6 10V3M10 10V5"/>
+            <path d="M1 10.5h10" strokeWidth="0.8"/>
           </svg>
         </button>
         {/* Trim: a pass rides the ride that is already there. Only worth

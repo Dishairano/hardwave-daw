@@ -42,6 +42,9 @@ export interface RecordingPrefsState {
   waitForInput: boolean
   blendRecord: boolean
   multilinkActive: boolean
+  /** Recorded MIDI notes land on the playlist's snap grid. The backend
+   *  took a grid all along and the interface always sent none. */
+  quantizeRecording: boolean
   /** Links made since multilink was armed. Reset each time it is armed. */
   multilinkCount: number
   noteMultilinkLink: () => void
@@ -49,6 +52,7 @@ export interface RecordingPrefsState {
   toggleWaitForInput: () => void
   toggleBlendRecord: () => void
   toggleMultilink: () => void
+  toggleQuantizeRecording: () => void
 }
 
 export const useRecordingPrefsStore = create<RecordingPrefsState>()(
@@ -58,6 +62,7 @@ export const useRecordingPrefsStore = create<RecordingPrefsState>()(
       waitForInput: false,
       blendRecord: false,
       multilinkActive: false,
+      quantizeRecording: false,
       multilinkCount: 0,
       toggleStepEditing:   () => set((s) => ({ stepEditing: !s.stepEditing })),
       toggleWaitForInput:  () => set((s) => {
@@ -76,6 +81,7 @@ export const useRecordingPrefsStore = create<RecordingPrefsState>()(
         return { multilinkActive: next, multilinkCount: 0 }
       }),
       noteMultilinkLink:   () => set((s) => ({ multilinkCount: s.multilinkCount + 1 })),
+      toggleQuantizeRecording: () => set((s) => ({ quantizeRecording: !s.quantizeRecording })),
     }),
     {
       name: 'hw-recording-prefs',
@@ -86,6 +92,7 @@ export const useRecordingPrefsStore = create<RecordingPrefsState>()(
         waitForInput: s.waitForInput,
         blendRecord: s.blendRecord,
         multilinkActive: s.multilinkActive,
+        quantizeRecording: s.quantizeRecording,
       }) as RecordingPrefsState,
     },
   ),
