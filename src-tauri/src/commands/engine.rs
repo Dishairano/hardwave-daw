@@ -35,6 +35,7 @@ fn persist_audio_prefs(state: &State<AppState>) {
             list
         },
         trusted_sample_servers: engine.trusted_servers(),
+        audio_host: Some(engine.audio_host_name()),
     };
     drop(engine);
     prefs.save();
@@ -131,7 +132,9 @@ pub fn get_audio_host(state: State<AppState>) -> String {
 
 #[tauri::command]
 pub fn set_audio_host(state: State<AppState>, host_name: String) -> Result<(), String> {
-    state.engine.lock().set_audio_host(&host_name)
+    state.engine.lock().set_audio_host(&host_name)?;
+    persist_audio_prefs(&state);
+    Ok(())
 }
 
 #[derive(Serialize)]

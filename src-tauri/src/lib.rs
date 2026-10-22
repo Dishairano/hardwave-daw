@@ -249,6 +249,13 @@ pub fn run() {
     // Apply persisted audio preferences before the engine starts so the first
     // stream honors the user's last device choice instead of the default.
     let prefs = AudioPrefs::load();
+    // The driver first: the devices below are that driver's devices. One
+    // that has gone (an ASIO driver uninstalled) leaves the default.
+    if let Some(host) = prefs.audio_host.as_deref() {
+        if let Err(e) = engine.set_audio_host(host) {
+            log::warn!("Failed to apply the saved audio driver {host}: {e}");
+        }
+    }
     if let Err(e) = engine.set_audio_config(
         prefs.output_device.clone(),
         prefs.sample_rate,
