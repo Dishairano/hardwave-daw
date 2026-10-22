@@ -121,6 +121,20 @@ pub trait HostedPlugin: Send {
         None
     }
 
+    /// This instance's own window, to be opened from the thread that owns
+    /// windows while the instance itself plays on the audio thread.
+    ///
+    /// The host used to open a plug-in's window on a second copy of it,
+    /// loaded only for the window. That copy never processed audio, so a
+    /// plug-in whose interface shows the audio (an analyser, a loudness
+    /// meter) waited for it forever, and anything it kept outside its
+    /// parameters never reached the copy that played. Formats built for a
+    /// separate interface thread (VST3's controller, CLAP's gui extension)
+    /// hand this out; the rest keep the second copy.
+    fn editor(&self) -> Option<std::sync::Arc<dyn PluginEditor>> {
+        None
+    }
+
     /// Returns the shared parameter queue used by the plug-in's GUI to
     /// emit knob movements.
     ///
@@ -221,3 +235,12 @@ impl TransportInfo {
 /// the audio thread drains them under `try_lock`/`lock` at the start of
 /// each `process` block and applies them to the chain instance.
 pub type SharedParamQueue = std::sync::Arc<parking_lot::Mutex<Vec<(u32, f64)>>>;
+
+/// A plug-in's own window on the instance that plays. Every call is made on
+/// the thread that owns the app's windows; the instance closes the window
+/// itself when it goes away, after which these do nothing.
+pub trait PluginEditor: Send + Sync {
+    fn open(&self, parent: raw_window_handle::RawWindowHandle) -> bool;
+    fn size(&self) -> Option<(u32, u32)>;
+    fn close(&self);
+}

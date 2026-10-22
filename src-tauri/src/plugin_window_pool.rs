@@ -160,8 +160,8 @@ mod windows_pool {
 
     /// The plug-in's GUI and its area in window `label`, on the main thread where both were made.
     fn close_gui(app: &AppHandle, label: &str) {
-        if let Some(mut hosted) = app.state::<AppState>().plugin_editors.lock().remove(label) {
-            hosted.close_editor();
+        if let Some(mut open) = app.state::<AppState>().plugin_editors.lock().remove(label) {
+            open.close();
         }
         if let Some(area) = AREAS.lock().remove(label) {
             crate::plugin_window_host::destroy_area(area);

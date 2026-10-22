@@ -63,6 +63,110 @@ pub struct ClapPluginInstance {
     /// Where the song is. Every block passed a null transport, so a
     /// tempo-synced delay, LFO or arp had no tempo to sync to.
     transport: TransportInfo,
+    /// The window side of this instance, shared with the app's main thread
+    /// (see `HostedPlugin::editor`).
+    editor: Arc<Mutex<ClapEditorSide>>,
+}
+
+/// What the main thread needs for this instance's window. CLAP has the
+/// host call the gui extension from the main thread while the plug-in
+/// processes on the audio thread, so the playing instance can show it.
+struct ClapEditorSide {
+    /// Null once the instance has gone.
+    plugin: *const ClapPlugin,
+    gui: *const ClapPluginGui,
+    name: String,
+    open: bool,
+}
+
+// SAFETY: the pointers are the plug-in's own, valid until the instance
+// clears them under the lock in its Drop; every call through them is
+// made on the main thread, as CLAP asks for the gui extension.
+unsafe impl Send for ClapEditorSide {}
+
+/// The handle the app keeps for an instance's window.
+struct ClapEditor(Arc<Mutex<ClapEditorSide>>);
+
+impl PluginEditor for ClapEditor {
+    fn open(&self, parent: raw_window_handle::RawWindowHandle) -> bool {
+        let mut side = self.0.lock();
+        if side.plugin.is_null() || side.gui.is_null() {
+            return false;
+        }
+        if side.open {
+            return true;
+        }
+        let Some(window) = clap_window(parent) else {
+            return false;
+        };
+        // SAFETY: both pointers are alive while the lock is held (see above).
+        side.open = unsafe { open_embedded_gui(&*side.gui, side.plugin, &window, &side.name) };
+        side.open
+    }
+
+    fn size(&self) -> Option<(u32, u32)> {
+        let side = self.0.lock();
+        if !side.open || side.plugin.is_null() {
+            return None;
+        }
+        let (mut w, mut h) = (0u32, 0u32);
+        let ok = unsafe { ((*side.gui).get_size)(side.plugin, &mut w, &mut h) };
+        (ok && w > 0 && h > 0).then_some((w, h))
+    }
+
+    fn close(&self) {
+        let mut side = self.0.lock();
+        if side.open && !side.plugin.is_null() {
+            unsafe {
+                ((*side.gui).hide)(side.plugin);
+                ((*side.gui).destroy)(side.plugin);
+            }
+        }
+        side.open = false;
+    }
+}
+
+/// The CLAP window description for a host window handle; None for window
+/// systems CLAP does not define (Wayland).
+fn clap_window(parent: raw_window_handle::RawWindowHandle) -> Option<ClapWindow> {
+    use raw_window_handle::RawWindowHandle as Rwh;
+    let (api, handle): (&[u8], ClapWindowHandle) = match parent {
+        #[cfg(target_os = "windows")]
+        Rwh::Win32(h) => (
+            crate::clap_ffi::CLAP_WINDOW_API_WIN32,
+            ClapWindowHandle {
+                win32: h.hwnd.get() as *mut c_void,
+            },
+        ),
+        #[cfg(target_os = "macos")]
+        Rwh::AppKit(h) => (
+            crate::clap_ffi::CLAP_WINDOW_API_COCOA,
+            ClapWindowHandle {
+                cocoa: h.ns_view.as_ptr(),
+            },
+        ),
+        #[cfg(target_os = "linux")]
+        Rwh::Xlib(h) => (
+            crate::clap_ffi::CLAP_WINDOW_API_X11,
+            ClapWindowHandle {
+                // `XlibWindowHandle.window` is an X11 `Window`
+                // (`c_ulong` = u64 on the 64-bit Linux we ship).
+                x11: h.window,
+            },
+        ),
+        #[cfg(target_os = "linux")]
+        Rwh::Xcb(h) => (
+            crate::clap_ffi::CLAP_WINDOW_API_X11,
+            ClapWindowHandle {
+                x11: u64::from(h.window.get()),
+            },
+        ),
+        _ => return None,
+    };
+    Some(ClapWindow {
+        api: api.as_ptr() as *const c_char,
+        handle,
+    })
 }
 
 /// Host-side context reachable from the C callbacks via
@@ -209,8 +313,19 @@ impl ClapPluginInstance {
             gui_edit_log,
             gui_open: false,
             transport: TransportInfo::default(),
+            editor: Arc::new(Mutex::new(ClapEditorSide {
+                plugin,
+                gui: std::ptr::null(),
+                name: String::new(),
+                open: false,
+            })),
         };
         me.refresh_params();
+        {
+            let mut side = me.editor.lock();
+            side.gui = me.gui_ext().unwrap_or(std::ptr::null());
+            side.name = me.descriptor.name.clone();
+        }
         Ok(me)
     }
 
@@ -301,6 +416,19 @@ fn clap_fixed_string_to_rust(buf: &[u8]) -> String {
 
 impl Drop for ClapPluginInstance {
     fn drop(&mut self) {
+        // A window opened on this instance from the main thread goes first,
+        // and the main thread's handle is left with nothing to call into.
+        {
+            let mut side = self.editor.lock();
+            if side.open && !side.gui.is_null() && !self.plugin.is_null() {
+                unsafe {
+                    ((*side.gui).hide)(self.plugin);
+                    ((*side.gui).destroy)(self.plugin);
+                }
+            }
+            side.open = false;
+            side.plugin = std::ptr::null();
+        }
         // Tear the editor GUI down first — its lifetime is nested inside
         // the plugin's, so it must be destroyed before `plugin.destroy`.
         if self.gui_open {
@@ -629,48 +757,8 @@ impl HostedPlugin for ClapPluginInstance {
             return false;
         };
 
-        // Map the host window handle to the matching CLAP window API +
-        // native pointer. Only the embedding APIs CLAP defines are
-        // supported; anything else (e.g. Wayland) is declined.
-        use raw_window_handle::RawWindowHandle as Rwh;
-        let (api, handle): (&[u8], ClapWindowHandle) = match parent {
-            #[cfg(target_os = "windows")]
-            Rwh::Win32(h) => (
-                crate::clap_ffi::CLAP_WINDOW_API_WIN32,
-                ClapWindowHandle {
-                    win32: h.hwnd.get() as *mut c_void,
-                },
-            ),
-            #[cfg(target_os = "macos")]
-            Rwh::AppKit(h) => (
-                crate::clap_ffi::CLAP_WINDOW_API_COCOA,
-                ClapWindowHandle {
-                    cocoa: h.ns_view.as_ptr(),
-                },
-            ),
-            #[cfg(target_os = "linux")]
-            Rwh::Xlib(h) => (
-                crate::clap_ffi::CLAP_WINDOW_API_X11,
-                ClapWindowHandle {
-                    // `XlibWindowHandle.window` is an X11 `Window`
-                    // (`c_ulong` = u64 on the 64-bit Linux we ship).
-                    x11: h.window,
-                },
-            ),
-            #[cfg(target_os = "linux")]
-            Rwh::Xcb(h) => (
-                crate::clap_ffi::CLAP_WINDOW_API_X11,
-                ClapWindowHandle {
-                    x11: u64::from(h.window.get()),
-                },
-            ),
-            _ => return false,
-        };
-        let api_ptr = api.as_ptr() as *const c_char;
-
-        let window = ClapWindow {
-            api: api_ptr,
-            handle,
+        let Some(window) = clap_window(parent) else {
+            return false;
         };
         // SAFETY: `gui` is the plug-in's own gui extension and `self.plugin`
         // the instance it belongs to, both alive for this call.
@@ -679,6 +767,11 @@ impl HostedPlugin for ClapPluginInstance {
         }
         self.gui_open = true;
         true
+    }
+
+    fn editor(&self) -> Option<Arc<dyn PluginEditor>> {
+        (!self.editor.lock().gui.is_null())
+            .then(|| Arc::new(ClapEditor(Arc::clone(&self.editor))) as Arc<dyn PluginEditor>)
     }
 
     fn editor_size(&self) -> Option<(u32, u32)> {

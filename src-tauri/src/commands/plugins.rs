@@ -297,6 +297,13 @@ pub fn rescan_and_restore_missing_plugins(
                         .lock()
                         .insert((track_id.clone(), slot_id.clone()), log);
                 }
+                // Its own window, opened later from the main thread.
+                if let Some(editor) = plugin.editor() {
+                    state
+                        .slot_editors
+                        .lock()
+                        .insert((track_id.clone(), slot_id.clone()), editor);
+                }
                 let gain_reduction_db = LiveSlot::new_gain_reduction();
                 state.slot_gain_reduction.lock().insert(
                     (track_id.clone(), slot_id.clone()),
@@ -389,6 +396,25 @@ pub fn plugin_cache_path() -> Option<String> {
     hardwave_plugin_host::PluginScanner::default_cache_path().map(|p| p.display().to_string())
 }
 
+/// A plug-in window the app has open.
+pub enum OpenEditor {
+    /// The window of the instance that plays (see `HostedPlugin::editor`).
+    Playing(std::sync::Arc<dyn hardwave_plugin_host::types::PluginEditor>),
+    /// A second copy of the plug-in loaded for the window, for a format
+    /// that cannot show the playing instance's window from here.
+    Copy(Box<dyn HostedPlugin>),
+}
+
+impl OpenEditor {
+    /// Close the plug-in's GUI. On the main thread, where it was opened.
+    pub fn close(&mut self) {
+        match self {
+            OpenEditor::Playing(editor) => editor.close(),
+            OpenEditor::Copy(hosted) => hosted.close_editor(),
+        }
+    }
+}
+
 /// Open a plugin editor in a floating native window parented to the
 /// main webview. Creates a fresh `HostedPlugin` instance from the
 /// scanner descriptor, spawns a child Tauri window, gets its native
@@ -432,7 +458,7 @@ pub async fn open_plugin_editor(
         return Ok(existing.label().to_string());
     }
 
-    let (descriptor, shared_queue, shared_log) = {
+    let (descriptor, shared_queue, shared_log, playing) = {
         let state = app.state::<AppState>();
         let descriptor = {
             let engine = state.engine.lock();
@@ -462,7 +488,17 @@ pub async fn open_plugin_editor(
                 .cloned(),
             _ => None,
         };
-        (descriptor, shared_queue, shared_log)
+        // The playing instance's own window, when its format can show it
+        // from here: then no second copy is loaded at all.
+        let playing = match (track_id.as_deref(), slot_id.as_deref()) {
+            (Some(t), Some(s)) => state
+                .slot_editors
+                .lock()
+                .get(&(t.to_string(), s.to_string()))
+                .cloned(),
+            _ => None,
+        };
+        (descriptor, shared_queue, shared_log, playing)
     };
 
     // Built-in plug-ins have no window of their own: the mixer shows their
@@ -474,15 +510,19 @@ pub async fn open_plugin_editor(
         ));
     }
 
-    // The window needs the plug-in in this process; only one the probe
+    // A second copy needs the plug-in in this process; only one the probe
     // passed and the person has not sandboxed gets there.
-    may_load_in_process(&descriptor)?;
+    if playing.is_none() {
+        may_load_in_process(&descriptor)?;
+    }
 
     // The window's plug-in is a second instance beside the one that plays.
     // It opened at the plug-in's defaults, so the window showed settings
     // the song was not using. It starts from the playing slot's state.
     let state_from_slot = std::time::Instant::now();
     let slot_state = match (track_id.clone(), slot_id.clone()) {
+        // The playing instance already has its state.
+        _ if playing.is_some() => None,
         (Some(t), Some(s)) => {
             let app = app.clone();
             tauri::async_runtime::spawn_blocking(move || {
@@ -560,41 +600,45 @@ pub async fn open_plugin_editor(
             .run_on_main_thread(move || {
                 let attach = || -> Result<(), String> {
                     let step = std::time::Instant::now();
-                    let mut hosted: Box<dyn HostedPlugin> = match descriptor.format {
-                        PluginFormat::Vst3 => Box::new(
-                            match shared_queue {
-                                Some(queue) => Vst3PluginInstance::load_with_shared_pending(
-                                    descriptor.clone(),
-                                    queue,
-                                    shared_log,
-                                ),
-                                None => Vst3PluginInstance::load(descriptor.clone()),
+                    // Without the playing instance's own window, a second
+                    // copy of the plug-in for the window, as before.
+                    let mut copy: Option<Box<dyn HostedPlugin>> = None;
+                    if playing.is_none() {
+                        let mut hosted: Box<dyn HostedPlugin> = match descriptor.format {
+                            PluginFormat::Vst3 => Box::new(
+                                match shared_queue {
+                                    Some(queue) => Vst3PluginInstance::load_with_shared_pending(
+                                        descriptor.clone(),
+                                        queue,
+                                        shared_log,
+                                    ),
+                                    None => Vst3PluginInstance::load(descriptor.clone()),
+                                }
+                                .map_err(|e| e.to_string())?,
+                            ),
+                            PluginFormat::Clap => Box::new(
+                                match shared_queue {
+                                    Some(queue) => ClapPluginInstance::load_with_shared_pending(
+                                        descriptor.clone(),
+                                        queue,
+                                        shared_log,
+                                    ),
+                                    None => ClapPluginInstance::load(descriptor.clone()),
+                                }
+                                .map_err(|e| e.to_string())?,
+                            ),
+                        };
+                        if let Some(bytes) = slot_state.as_deref() {
+                            if let Err(e) = hosted.set_state(bytes) {
+                                log::warn!(
+                                    "{}: window could not take the slot's state: {e}",
+                                    descriptor.name
+                                );
                             }
-                            .map_err(|e| e.to_string())?,
-                        ),
-                        PluginFormat::Clap => Box::new(
-                            match shared_queue {
-                                Some(queue) => ClapPluginInstance::load_with_shared_pending(
-                                    descriptor.clone(),
-                                    queue,
-                                    shared_log,
-                                ),
-                                None => ClapPluginInstance::load(descriptor.clone()),
-                            }
-                            .map_err(|e| e.to_string())?,
-                        ),
-                    };
-                    let load_ms = step.elapsed().as_millis();
-                    let step = std::time::Instant::now();
-                    if let Some(bytes) = slot_state.as_deref() {
-                        if let Err(e) = hosted.set_state(bytes) {
-                            log::warn!(
-                                "{}: window could not take the slot's state: {e}",
-                                descriptor.name
-                            );
                         }
+                        copy = Some(hosted);
                     }
-                    let state_ms = step.elapsed().as_millis();
+                    let load_ms = step.elapsed().as_millis();
                     let step = std::time::Instant::now();
                     #[cfg(windows)]
                     let (parent, area) = crate::plugin_window_host::make_area(&window)?;
@@ -605,7 +649,12 @@ pub async fn open_plugin_editor(
                         .as_raw();
                     let area_ms = step.elapsed().as_millis();
                     let step = std::time::Instant::now();
-                    if !hosted.open_editor(parent) {
+                    let opened = match (&playing, copy.as_mut()) {
+                        (Some(editor), _) => editor.open(parent),
+                        (None, Some(hosted)) => hosted.open_editor(parent),
+                        (None, None) => false,
+                    };
+                    if !opened {
                         return Err(format!(
                             "{} has no window this host can show",
                             descriptor.name
@@ -613,12 +662,17 @@ pub async fn open_plugin_editor(
                     }
                     let editor_ms = step.elapsed().as_millis();
                     log::info!(
-                        "{}: slot state in {slot_state_ms} ms (engine locked), editor window ({window_kind}) in {window_ms} ms; on the main thread: plug-in loaded in {load_ms} ms, state in {state_ms} ms, area in {area_ms} ms, plug-in editor in {editor_ms} ms",
-                        descriptor.name
+                        "{}: slot state in {slot_state_ms} ms (engine locked), editor window ({window_kind}) in {window_ms} ms; on the main thread: {} in {load_ms} ms, area in {area_ms} ms, plug-in editor in {editor_ms} ms",
+                        descriptor.name,
+                        if playing.is_some() { "on the playing instance, nothing loaded" } else { "second copy loaded" },
                     );
                     // The window takes the size the editor asks for, not
                     // a fixed 600 by 400 that cut most editors off.
-                    let size = hosted.editor_size();
+                    let size = match (&playing, copy.as_ref()) {
+                        (Some(editor), _) => editor.size(),
+                        (None, Some(hosted)) => hosted.editor_size(),
+                        (None, None) => None,
+                    };
                     #[cfg(windows)]
                     {
                         let (w, h) = size.unwrap_or((600, 400));
@@ -633,10 +687,15 @@ pub async fn open_plugin_editor(
                     if let Some((w, h)) = size {
                         let _ = window.set_size(tauri::PhysicalSize::new(w, h));
                     }
+                    let open = match (playing.clone(), copy) {
+                        (Some(editor), _) => OpenEditor::Playing(editor),
+                        (None, Some(hosted)) => OpenEditor::Copy(hosted),
+                        (None, None) => unreachable!("opened above"),
+                    };
                     app.state::<AppState>()
                         .plugin_editors
                         .lock()
-                        .insert(label.clone(), hosted);
+                        .insert(label.clone(), open);
                     Ok(())
                 };
                 let _ = tx.send(attach());
@@ -663,10 +722,9 @@ pub async fn open_plugin_editor(
         let label = window_label.clone();
         editor_window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                if let Some(mut hosted) =
-                    app.state::<AppState>().plugin_editors.lock().remove(&label)
+                if let Some(mut open) = app.state::<AppState>().plugin_editors.lock().remove(&label)
                 {
-                    hosted.close_editor();
+                    open.close();
                 }
             }
         });
@@ -680,9 +738,9 @@ pub fn close_plugin_editor(
     state: State<'_, AppState>,
     window_label: String,
 ) -> Result<(), String> {
-    let hosted = state.plugin_editors.lock().remove(&window_label);
-    if let Some(mut hosted) = hosted {
-        hosted.close_editor();
+    let open = state.plugin_editors.lock().remove(&window_label);
+    if let Some(mut open) = open {
+        open.close();
     }
     if let Some(window) = app.get_webview_window(&window_label) {
         let _ = window.close();
@@ -893,6 +951,14 @@ pub(crate) fn add_plugin_without_undo_step(
             .lock()
             .insert((track_id.clone(), slot_id.clone()), log);
     }
+    // Its own window, opened later from the main thread: the window shows
+    // the instance that plays instead of a second copy beside it.
+    if let Some(editor) = plugin.editor() {
+        state
+            .slot_editors
+            .lock()
+            .insert((track_id.clone(), slot_id.clone()), editor);
+    }
 
     // Phase 3: ship the freshly-built LiveSlot to the audio thread via
     // the lock-free InsertCommand queue. The chain takes ownership and
@@ -952,6 +1018,15 @@ fn remove_plugin_from_track_body(
             .track_mut(&track_id)
             .ok_or_else(|| format!("Track not found: {}", track_id))?;
         track.inserts.retain(|s| s.id != slot_id);
+    }
+    // A window open on this slot's instance shuts its GUI now, on this
+    // (the main) thread, before the instance leaves the chain.
+    if let Some(editor) = state
+        .slot_editors
+        .lock()
+        .remove(&(track_id.clone(), slot_id.clone()))
+    {
+        editor.close();
     }
     let cmd = InsertCommand::Remove {
         track_id: track_id.clone(),

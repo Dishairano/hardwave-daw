@@ -163,13 +163,17 @@ pub fn load_plugin_preset(
         let _ = app.run_on_main_thread(move || {
             let state = app_main.state::<AppState>();
             let mut editors = state.plugin_editors.lock();
-            for (label, hosted) in editors.iter_mut() {
+            for (label, open) in editors.iter_mut() {
                 let label_key: String = label
                     .chars()
                     .filter(|c| c.is_ascii_alphanumeric())
                     .collect();
-                if !key.is_empty() && label_key.ends_with(&key) {
-                    let _ = hosted.set_state(&for_window);
+                // A window on the playing instance shows the preset by
+                // itself; only a second copy has to be told.
+                if let crate::commands::plugins::OpenEditor::Copy(hosted) = open {
+                    if !key.is_empty() && label_key.ends_with(&key) {
+                        let _ = hosted.set_state(&for_window);
+                    }
                 }
             }
         });
