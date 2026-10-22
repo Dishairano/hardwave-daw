@@ -1075,6 +1075,9 @@ button.fl-tool-pill { cursor: pointer; font-family: inherit; }
   position: relative;
   overflow: visible;
 }
+.fl-tr.selected {
+  background: rgba(255, 255, 255, 0.045);
+}
 .fl-tr.armed {
   background: rgba(220, 38, 38, 0.06);
   box-shadow: inset 2px 0 0 0 var(--brand);

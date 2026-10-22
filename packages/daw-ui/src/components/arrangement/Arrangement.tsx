@@ -1573,6 +1573,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         }
       }
       if (!(e.ctrlKey || e.metaKey)) clearSelection()
+      // A click in a track's row picks that track, as a click on its name
+      // does: it is where a paste goes.
+      const rowTrack = trackRowAt(mouseY)
+      if (rowTrack) useTrackStore.getState().selectTrack(rowTrack.id)
       // Don't commit anything yet — defer the decision until we know if the
       // user is doing a simple click (paint/no-op) or a drag (marquee).
       // The edit cursor and the rubber band both only kick in once we cross

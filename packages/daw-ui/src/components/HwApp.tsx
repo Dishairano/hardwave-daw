@@ -1402,6 +1402,8 @@ export function HwPlaylistTracks() {
   const addAutomationLane = useTrackStore(s => s.addAutomationLane)
   const createAutomationClip = useTrackStore(s => s.createAutomationClip)
   const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
+  const selectedTrackId = useTrackStore(s => s.selectedTrackId)
+  const selectTrack = useTrackStore(s => s.selectTrack)
   const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
   // Which track currently has its KickSynth editor open, if any.
   // Editor pops up when the user double-clicks the instrument badge
@@ -1416,9 +1418,13 @@ export function HwPlaylistTracks() {
           const row = (
             <div
               key={t.id}
-              className={`fl-tr${t.armed ? ' armed' : ''}`}
+              className={`fl-tr${t.armed ? ' armed' : ''}${t.id === selectedTrackId ? ' selected' : ''}`}
               style={{ ['--track-color' as any]: t.color || '#06b6d4' }}
               title={t.name}
+              // The track list this header replaced selected a track on a
+              // click; this one did not, so paste had nowhere to go but the
+              // track of the last clip clicked.
+              onClick={() => selectTrack(t.id)}
             >
               <span className="strip" />
               <span className="nm">
