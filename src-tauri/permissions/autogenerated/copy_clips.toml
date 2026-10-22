@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-copy-clips"
+description = "Enables the copy_clips command without any pre-configured scope."
+commands.allow = ["copy_clips"]
+
+[[permission]]
+identifier = "deny-copy-clips"
+description = "Denies the copy_clips command without any pre-configured scope."
+commands.deny = ["copy_clips"]
