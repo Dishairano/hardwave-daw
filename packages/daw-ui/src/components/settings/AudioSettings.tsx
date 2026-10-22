@@ -10,6 +10,7 @@ import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
 import { AUTOSAVE_OPTIONS, useAutosavePrefsStore } from '../../stores/autosavePrefsStore'
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { RecordingLatencyRow } from './RecordingLatency'
+import { PluginLatencyRow } from './PluginLatencyRow'
 import { useMetronomeStore } from '../../stores/metronomeStore'
 import { usePluginStore } from '../../stores/pluginStore'
 
@@ -841,6 +842,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 {latencyMs} ms
               </span>
             </div>
+            <PluginLatencyRow />
             <RecordingLatencyRow />
 
             {/* WASAPI exclusive-mode toggle (Windows only) */}
