@@ -40,7 +40,7 @@ use vst3::Steinberg::Vst::{
     IParameterChanges, IParameterChangesTrait, IUnitInfo, IUnitInfoTrait, IoModes_, MediaTypes_,
     NoteOffEvent, NoteOnEvent, ParamID, ParamValue, PolyPressureEvent, ProcessContext,
     ProcessContext_::StatesAndFlags_, ProcessModes_, ProcessSetup, ProgramListInfo,
-    SymbolicSampleSizes_, ViewType,
+    SymbolicSampleSizes_, UnitInfo, ViewType,
 };
 use vst3::Steinberg::{
     kResultOk, tresult, FIDString, IBStream, IBStreamTrait, IBStream_::IStreamSeekMode_, IPlugView,
@@ -1174,9 +1174,11 @@ impl HostedPlugin for Vst3PluginInstance {
 
     /// Switch to one of them.
     ///
-    /// A program list is driven by the parameter the plug-in marks as
-    /// its program change, which is the list's own id used as a
-    /// parameter id, normalised over the number of programs.
+    /// A program list is driven by the parameter the plug-in flags as its
+    /// program change, in the unit that owns the list, with the preset's
+    /// number as its plain value. This used to set a parameter whose id
+    /// was the list's id, which is not a parameter at all, so for most
+    /// plug-ins picking a factory preset changed nothing.
     fn load_factory_preset(&mut self, index: usize) -> Result<(), String> {
         let Some(ctrl) = &self.inner.controller else {
             return Err("this plug-in has no edit controller".into());
@@ -1191,23 +1193,92 @@ impl HostedPlugin for Vst3PluginInstance {
             {
                 return Err("this plug-in publishes no presets of its own".into());
             }
-            let count = info.programCount.max(1) as f64;
-            if index as f64 >= count {
+            if index as i32 >= info.programCount.max(1) {
                 return Err("there is no preset at that place".into());
             }
-            let normalised = if count > 1.0 {
-                index as f64 / (count - 1.0)
-            } else {
-                0.0
-            };
-            ctrl.setParamNormalized(info.id as ParamID, normalised);
+            let mut owners = Vec::new();
+            for u in 0..units.getUnitCount() {
+                let mut unit: UnitInfo = std::mem::zeroed();
+                if units.getUnitInfo(u, &mut unit) == kResultOk {
+                    owners.push((unit.id, unit.programListId));
+                }
+            }
+            let mut params = Vec::new();
+            for i in 0..ctrl.getParameterCount() {
+                let mut p: vst3::Steinberg::Vst::ParameterInfo = std::mem::zeroed();
+                if ctrl.getParameterInfo(i, &mut p) == kResultOk {
+                    params.push((p.id, p.flags, p.unitId));
+                }
+            }
+            let param = program_change_param(&params, &owners, info.id)
+                .ok_or_else(|| "this plug-in switches its presets in its own window".to_string())?;
+            let normalised = ctrl
+                .plainParamToNormalized(param, index as f64)
+                .clamp(0.0, 1.0);
+            ctrl.setParamNormalized(param, normalised);
             // The audio side reads program changes through the same
             // queue a GUI edit uses, so the change is heard on the next
             // block rather than at the next reload.
             let mut q = self.inner.pending_params.lock();
-            q.push((info.id as u32, normalised));
+            q.push((param, normalised));
         }
         Ok(())
+    }
+}
+
+/// `ParameterInfo::kIsProgramChange` in the VST3 SDK.
+const IS_PROGRAM_CHANGE: i32 = 1 << 15;
+
+/// The parameter that switches program list `list` (`params` as
+/// (id, flags, unit id), `units` as (unit id, its program list id)):
+/// the program-change parameter of the unit that owns the list, or the
+/// only program-change parameter there is.
+fn program_change_param(
+    params: &[(ParamID, i32, i32)],
+    units: &[(i32, i32)],
+    list: i32,
+) -> Option<ParamID> {
+    let changers: Vec<(ParamID, i32)> = params
+        .iter()
+        .filter(|(_, flags, _)| flags & IS_PROGRAM_CHANGE != 0)
+        .map(|&(id, _, unit)| (id, unit))
+        .collect();
+    let owner = units.iter().find(|(_, l)| *l == list).map(|(u, _)| *u);
+    owner
+        .and_then(|unit| changers.iter().find(|(_, u)| *u == unit))
+        .or_else(|| (changers.len() == 1).then(|| &changers[0]))
+        .map(|(id, _)| *id)
+}
+
+#[cfg(test)]
+mod program_change_tests {
+    use super::{program_change_param, IS_PROGRAM_CHANGE};
+
+    #[test]
+    fn the_list_is_switched_by_its_unit_s_program_change_parameter() {
+        // Parameter 7 is a cutoff; 12 switches the root unit's list 3.
+        let params = [(7, 1, 0), (12, IS_PROGRAM_CHANGE | 1, 0)];
+        assert_eq!(program_change_param(&params, &[(0, 3)], 3), Some(12));
+    }
+
+    #[test]
+    fn with_several_units_the_one_that_owns_the_list_is_used() {
+        let params = [(20, IS_PROGRAM_CHANGE, 1), (21, IS_PROGRAM_CHANGE, 2)];
+        let units = [(0, -1), (1, 100), (2, 200)];
+        assert_eq!(program_change_param(&params, &units, 200), Some(21));
+    }
+
+    #[test]
+    fn a_single_program_change_parameter_is_used_even_without_unit_info() {
+        let params = [(5, IS_PROGRAM_CHANGE, 0)];
+        assert_eq!(program_change_param(&params, &[], 9), Some(5));
+    }
+
+    #[test]
+    fn the_list_id_itself_is_never_taken_for_a_parameter() {
+        // No parameter is flagged: there is nothing to switch with, and
+        // the list id (3) is not one either.
+        assert_eq!(program_change_param(&[(3, 1, 0)], &[(0, 3)], 3), None);
     }
 }
 
