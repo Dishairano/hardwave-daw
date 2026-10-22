@@ -290,6 +290,13 @@ pub struct ClapEventMidi {
 
 pub const CLAP_EXT_PARAMS: &[u8] = b"clap.params\0";
 pub const CLAP_EXT_STATE: &[u8] = b"clap.state\0";
+pub const CLAP_EXT_LATENCY: &[u8] = b"clap.latency\0";
+
+/// `clap.latency`: how many samples late the plug-in's output is.
+#[repr(C)]
+pub struct ClapPluginLatency {
+    pub get: unsafe extern "C" fn(plugin: *const ClapPlugin) -> u32,
+}
 
 pub const CLAP_NAME_SIZE: usize = 256;
 pub const CLAP_PATH_SIZE: usize = 1024;

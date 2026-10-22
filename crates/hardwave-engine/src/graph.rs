@@ -381,7 +381,11 @@ impl AudioGraph {
     /// is `acc[dest] - acc[source] - dest.latency_samples()`, which pads the
     /// source's arrival so parallel branches reach the dest sample-aligned
     /// against the slowest incoming path.
-    pub fn finalize_pdc(&mut self) {
+    ///
+    /// With `enabled` false nothing is padded: the switch in the Options
+    /// menu, for someone who wants the lowest latency while playing live
+    /// and accepts plug-ins that are late. It used to change nothing.
+    pub fn finalize_pdc(&mut self, enabled: bool) {
         self.ensure_order();
         let n = self.nodes.len();
         if n == 0 {
@@ -414,7 +418,11 @@ impl AudioGraph {
                     .map(|e| acc[e.source])
                     .max()
                     .unwrap_or(0);
-                dest_incoming_max.saturating_sub(acc[edge.source])
+                if enabled {
+                    dest_incoming_max.saturating_sub(acc[edge.source])
+                } else {
+                    0
+                }
             })
             .collect();
         self.edge_delays.clear();
@@ -990,7 +998,7 @@ mod tests {
         let sink = g.add_node(Box::new(Sum));
         g.connect(quiet, 0, sink, 0);
         g.connect(loud, 0, sink, 0);
-        g.finalize_pdc();
+        g.finalize_pdc(true);
 
         for _ in 0..4 {
             g.process(&ctx(), &[]);
@@ -1066,10 +1074,28 @@ mod tests {
         let c = g.add_node(node("C", 50));
         g.connect(a, 0, b, 0);
         g.connect(b, 0, c, 0);
-        g.finalize_pdc();
+        g.finalize_pdc(true);
         for e in &g.edges {
             assert_eq!(e.compensation_samples, 0, "single chain needs no PDC");
         }
+    }
+
+    #[test]
+    fn with_compensation_off_no_branch_is_padded() {
+        // The same slow and fast branches as the test below.
+        let mut g = AudioGraph::new(64);
+        let src = g.add_node(node("src", 0));
+        let slow = g.add_node(node("slow", 1000));
+        let fast = g.add_node(node("fast", 100));
+        let sink = g.add_node(node("sink", 0));
+        g.connect(src, 0, slow, 0);
+        g.connect(src, 0, fast, 0);
+        g.connect(slow, 0, sink, 0);
+        g.connect(fast, 0, sink, 0);
+        g.finalize_pdc(false);
+        assert!(g.edges.iter().all(|e| e.compensation_samples == 0));
+        g.finalize_pdc(true);
+        assert!(g.edges.iter().any(|e| e.compensation_samples > 0));
     }
 
     #[test]
@@ -1086,7 +1112,7 @@ mod tests {
         g.connect(src, 0, fast, 0);
         g.connect(slow, 0, sink, 0);
         g.connect(fast, 0, sink, 0);
-        g.finalize_pdc();
+        g.finalize_pdc(true);
         let mut slow_to_sink = None;
         let mut fast_to_sink = None;
         for e in &g.edges {

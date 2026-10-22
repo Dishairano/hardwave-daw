@@ -2510,8 +2510,22 @@ impl EngineCallback {
             }
             return;
         };
+        // Adding, removing or switching a plug-in changes how late its track
+        // is. The rebuild works out the compensation again so the other
+        // tracks wait for it; until now that waited for the next edit of the
+        // song, and a plug-in added while playing was heard out of time.
+        let moves_latency = matches!(
+            cmd,
+            crate::insert_chain::InsertCommand::Add { .. }
+                | crate::insert_chain::InsertCommand::Remove { .. }
+                | crate::insert_chain::InsertCommand::SetEnabled { .. }
+                | crate::insert_chain::InsertCommand::ClearAll
+        );
         if let Some(node) = self.graph.node_mut(node_id) {
             node.apply_insert_command(cmd, &mut self.insert_graveyard_tx, sample_rate, buffer_size);
+            if moves_latency {
+                self.needs_rebuild = true;
+            }
         }
     }
 
@@ -2604,7 +2618,11 @@ impl EngineCallback {
         // graph in which every node still claimed zero latency, while live
         // playback re-runs the rebuild (and therefore PDC) on every mutation.
         if hydrated_any {
-            self.graph.finalize_pdc();
+            self.graph.finalize_pdc(
+                self.transport
+                    .pdc_enabled
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            );
             self.graph_latency_samples.store(
                 self.graph.total_latency_samples(),
                 std::sync::atomic::Ordering::Relaxed,
@@ -3681,7 +3699,11 @@ impl EngineCallback {
         // Finalize PDC: compute per-edge compensation delays so parallel
         // paths arrive sample-aligned against the slowest branch before the
         // total-latency number is published.
-        self.graph.finalize_pdc();
+        self.graph.finalize_pdc(
+            self.transport
+                .pdc_enabled
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
         self.graph_latency_samples.store(
             self.graph.total_latency_samples(),
             std::sync::atomic::Ordering::Relaxed,

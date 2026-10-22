@@ -14,12 +14,13 @@ use crate::clap_ffi::{
     build_static_host, ClapAudioBuffer, ClapEventHeader, ClapEventMidi, ClapEventNote,
     ClapEventParamValue, ClapEventTransport, ClapHost, ClapHostParams, ClapInputEvents,
     ClapIstream, ClapOstream, ClapOutputEvents, ClapParamInfo, ClapPlugin, ClapPluginEntry,
-    ClapPluginFactory, ClapPluginGui, ClapPluginParams, ClapPluginState, ClapProcess, ClapWindow,
-    ClapWindowHandle, CLAP_BEATTIME_FACTOR, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI,
-    CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
-    CLAP_EXT_GUI, CLAP_EXT_HOST_PARAMS, CLAP_EXT_PARAMS, CLAP_EXT_STATE, CLAP_PROCESS_ERROR,
-    CLAP_SECTIME_FACTOR, CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
-    CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
+    ClapPluginFactory, ClapPluginGui, ClapPluginLatency, ClapPluginParams, ClapPluginState,
+    ClapProcess, ClapWindow, ClapWindowHandle, CLAP_BEATTIME_FACTOR, CLAP_CORE_EVENT_SPACE_ID,
+    CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
+    CLAP_EVENT_TRANSPORT, CLAP_EXT_GUI, CLAP_EXT_HOST_PARAMS, CLAP_EXT_LATENCY, CLAP_EXT_PARAMS,
+    CLAP_EXT_STATE, CLAP_PROCESS_ERROR, CLAP_SECTIME_FACTOR, CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
+    CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
+    CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
 };
 use crate::types::*;
 use parking_lot::Mutex;
@@ -45,6 +46,9 @@ pub struct ClapPluginInstance {
     #[allow(dead_code)]
     host_ctx: Box<ClapHostContext>,
     cached_params: Vec<ParameterInfo>,
+    /// Latency the plug-in reported when it was activated. The extension
+    /// may only be asked around activation, so it is read there and kept.
+    latency: u32,
     initialized: bool,
     /// GUI→audio parameter queue. `set_parameter_value` (host-driven:
     /// automation, generic knob UI, IPC) and the editor's GUI edits
@@ -199,6 +203,7 @@ impl ClapPluginInstance {
             host,
             host_ctx,
             cached_params: Vec::new(),
+            latency: 0,
             initialized: true,
             pending_params,
             gui_edit_log,
@@ -234,6 +239,19 @@ impl ClapPluginInstance {
             None
         } else {
             Some(ptr as *const ClapPluginParams)
+        }
+    }
+
+    fn latency_ext(&self) -> Option<*const ClapPluginLatency> {
+        if self.plugin.is_null() {
+            return None;
+        }
+        let id = CString::new(&CLAP_EXT_LATENCY[..CLAP_EXT_LATENCY.len() - 1]).ok()?;
+        let ptr = unsafe { ((*self.plugin).get_extension)(self.plugin, id.as_ptr()) };
+        if ptr.is_null() {
+            None
+        } else {
+            Some(ptr as *const ClapPluginLatency)
         }
     }
 
@@ -371,6 +389,13 @@ impl HostedPlugin for ClapPluginInstance {
             return Err("clap_plugin.activate returned false".into());
         }
         self.active = true;
+        // Asked right after activating, as the extension wants. The host
+        // reported zero for every CLAP, so a CLAP with lookahead played late
+        // against the rest of the song.
+        self.latency = self
+            .latency_ext()
+            .map(|ext| unsafe { ((*ext).get)(self.plugin) })
+            .unwrap_or(0);
         let start_ok = unsafe { ((*self.plugin).start_processing)(self.plugin) };
         if !start_ok {
             unsafe { ((*self.plugin).deactivate)(self.plugin) };
@@ -593,7 +618,7 @@ impl HostedPlugin for ClapPluginInstance {
     }
 
     fn latency_samples(&self) -> u32 {
-        0
+        self.latency
     }
 
     fn open_editor(&mut self, parent: raw_window_handle::RawWindowHandle) -> bool {
