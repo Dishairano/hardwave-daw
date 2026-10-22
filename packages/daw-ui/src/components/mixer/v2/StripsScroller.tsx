@@ -1,8 +1,6 @@
 import { memo, useCallback, useEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChannelStrip } from './ChannelStrip'
-import { VcaStrip } from './VcaStrip'
-import { useVcaStore } from '../../../stores/vcaStore'
 import { useTrackStore } from '../../../stores/trackStore'
 import { useMultiTouchGestures } from '../../../hooks/useMultiTouchGestures'
 
@@ -201,10 +199,6 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
 
   const visibleItems = virtualizer.getVirtualItems()
   const totalSize = virtualizer.getTotalSize()
-  // VCA faders after the tracks: few, so they are not virtualized.
-  const vcas = useVcaStore(s => s.vcas)
-  useEffect(() => { void useVcaStore.getState().fetch() }, [])
-  const vcaWidth = vcas.length * STRIP_W
 
   return (
     <div
@@ -219,7 +213,7 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
           // Include the trailing "+" cell in the scroll width so the scroll
           // stops right after it (no scrolling into empty space past the
           // last strip) and the button is reachable.
-          width: totalSize + vcaWidth + STRIP_W,
+          width: totalSize + STRIP_W,
           height: '100%',
           position: 'relative',
           willChange: 'transform',
@@ -254,38 +248,22 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
             </div>
           )
         })}
-        {vcas.map((vca, i) => (
-          <div
-            key={vca.id}
-            style={{ position: 'absolute', top: 0, left: totalSize + i * STRIP_W, width: STRIP_W, height: '100%' }}
-          >
-            <VcaStrip vca={vca} index={i + 1} />
-          </div>
-        ))}
-        {/* Add a channel or a VCA, pinned right after the last strip. */}
-        <div
-          className="mx-add-col"
+        {/* Add-channel button, pinned right after the last strip. */}
+        <button
+          className="mx-add-strip"
+          title="Add a mixer channel"
+          onClick={() => { void addAudioTrack() }}
           style={{
             position: 'absolute',
             top: 0,
-            left: totalSize + vcaWidth,
+            left: totalSize,
             width: STRIP_W,
             height: '100%',
           }}
         >
-          <button className="mx-add-strip" title="Add a mixer channel" onClick={() => { void addAudioTrack() }}>
-            <span>+</span>
-            <small>Add track</small>
-          </button>
-          <button
-            className="mx-add-strip mx-add-vca"
-            title="Add a VCA: one fader that moves a group of tracks together"
-            onClick={() => { void useVcaStore.getState().add() }}
-          >
-            <span>+</span>
-            <small>VCA</small>
-          </button>
-        </div>
+          <span>+</span>
+          <small>Add track</small>
+        </button>
       </div>
     </div>
   )
