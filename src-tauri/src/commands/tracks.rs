@@ -710,7 +710,9 @@ pub fn toggle_solo(state: State<AppState>, track_id: String) {
     engine.rebuild_graph();
 }
 
-/// One saved mixer state: every track's fader, pan and mute or solo.
+/// One saved mixer state: every track's fader, pan, mute and solo, its
+/// width, its sends, and whether each plug-in is on and how much of it is
+/// heard. The plug-ins' own settings are not part of it.
 ///
 /// Comparing two mixes meant writing the numbers down: there was nothing in
 /// the DAW that could hold "the mix as it was ten minutes ago" and put it
@@ -731,6 +733,93 @@ pub struct MixerSnapshotTrack {
     pub pan: f64,
     pub muted: bool,
     pub soloed: bool,
+    /// None in snapshots saved before these were kept: recalling one of
+    /// those leaves the width, sends and plug-ins as they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sends: Option<Vec<MixerSnapshotSend>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inserts: Option<Vec<MixerSnapshotInsert>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MixerSnapshotSend {
+    pub target: String,
+    pub gain_db: f64,
+    pub enabled: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MixerSnapshotInsert {
+    pub slot_id: String,
+    pub enabled: bool,
+    pub wet: f32,
+}
+
+impl MixerSnapshotTrack {
+    fn of(t: &hardwave_project::Track) -> Self {
+        Self {
+            track_id: t.id.clone(),
+            volume_db: t.volume_db,
+            pan: t.pan,
+            muted: t.muted,
+            soloed: t.soloed,
+            width: Some(t.stereo_separation),
+            sends: Some(
+                t.sends
+                    .iter()
+                    .map(|s| MixerSnapshotSend {
+                        target: s.target.clone(),
+                        gain_db: s.gain_db,
+                        enabled: s.enabled,
+                    })
+                    .collect(),
+            ),
+            inserts: Some(
+                t.inserts
+                    .iter()
+                    .map(|i| MixerSnapshotInsert {
+                        slot_id: i.id.clone(),
+                        enabled: i.enabled,
+                        wet: i.wet,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Put this onto the track. Sends to tracks and plug-ins that are gone
+    /// are skipped. Returns the plug-ins whose on/off or mix changed, for
+    /// the live chain.
+    fn apply(&self, t: &mut hardwave_project::Track) -> Vec<(String, bool, f32)> {
+        t.volume_db = self.volume_db;
+        t.pan = self.pan;
+        t.muted = self.muted;
+        t.soloed = self.soloed;
+        if let Some(width) = self.width {
+            t.stereo_separation = width;
+        }
+        for saved in self.sends.iter().flatten() {
+            if let Some(send) = t.sends.iter_mut().find(|s| s.target == saved.target) {
+                send.gain_db = saved.gain_db;
+                send.enabled = saved.enabled;
+            }
+        }
+        let mut changed = Vec::new();
+        for saved in self.inserts.iter().flatten() {
+            if let Some(slot) = t.inserts.iter_mut().find(|i| i.id == saved.slot_id) {
+                if slot.enabled != saved.enabled || slot.wet != saved.wet {
+                    slot.enabled = saved.enabled;
+                    slot.wet = saved.wet;
+                    changed.push((slot.id.clone(), slot.enabled, slot.wet));
+                }
+            }
+        }
+        changed
+    }
 }
 
 /// Snapshots live in the project's timeline blob, beside the markers, so
@@ -773,17 +862,8 @@ pub fn save_mixer_snapshot(state: State<AppState>, name: String) -> Result<(), S
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
-    let tracks: Vec<MixerSnapshotTrack> = project
-        .tracks
-        .iter()
-        .map(|t| MixerSnapshotTrack {
-            track_id: t.id.clone(),
-            volume_db: t.volume_db,
-            pan: t.pan,
-            muted: t.muted,
-            soloed: t.soloed,
-        })
-        .collect();
+    let tracks: Vec<MixerSnapshotTrack> =
+        project.tracks.iter().map(MixerSnapshotTrack::of).collect();
     let mut snapshots = read_snapshots(&project);
     snapshots.retain(|s| s.name != name);
     snapshots.push(MixerSnapshot { name, tracks });
@@ -806,7 +886,7 @@ pub fn list_mixer_snapshots(state: State<AppState>) -> Vec<String> {
 #[tauri::command]
 pub fn recall_mixer_snapshot(state: State<AppState>, name: String) -> Result<usize, String> {
     state.engine.lock().snapshot_before_mutation();
-    let restored = {
+    let (restored, plugins) = {
         let engine = state.engine.lock();
         let mut project = engine.project.lock();
         let snapshots = read_snapshots(&project);
@@ -815,18 +895,32 @@ pub fn recall_mixer_snapshot(state: State<AppState>, name: String) -> Result<usi
             .find(|s| s.name == name)
             .ok_or_else(|| format!("no snapshot called {name}"))?;
         let mut restored = 0usize;
+        let mut plugins = Vec::new();
         for saved in snapshot.tracks {
             if let Some(track) = project.track_mut(&saved.track_id) {
-                track.volume_db = saved.volume_db;
-                track.pan = saved.pan;
-                track.muted = saved.muted;
-                track.soloed = saved.soloed;
+                for (slot_id, enabled, wet) in saved.apply(track) {
+                    plugins.push((saved.track_id.clone(), slot_id, enabled, wet));
+                }
                 restored += 1;
             }
         }
-        restored
+        (restored, plugins)
     };
     let engine = state.engine.lock();
+    // The playing plug-ins are switched where they run.
+    for (track_id, slot_id, enabled, wet) in plugins {
+        use hardwave_engine::insert_chain::InsertCommand;
+        let _ = engine.try_send_insert_command(InsertCommand::SetEnabled {
+            track_id: track_id.clone(),
+            slot_id: slot_id.clone(),
+            enabled,
+        });
+        let _ = engine.try_send_insert_command(InsertCommand::SetWet {
+            track_id,
+            slot_id,
+            wet,
+        });
+    }
     engine.sync_track_meters();
     engine.rebuild_graph();
     Ok(restored)
@@ -1280,4 +1374,62 @@ pub fn duplicate_track(
     crate::commands::plugins::hydrate_track_chain(&state, &new_id)?;
     crate::commands::plugins::tell_windows_track_changed(&app, &new_id);
     Ok(new_id)
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::MixerSnapshotTrack;
+    use hardwave_project::mixer::Send;
+    use hardwave_project::track::PluginSlot;
+    use hardwave_project::Track;
+
+    fn track() -> Track {
+        let mut t = Track::new_audio("t1".into(), "Lead".into());
+        t.sends.push(Send {
+            target: "bus".into(),
+            gain_db: -6.0,
+            pre_fader: false,
+            enabled: true,
+        });
+        t.inserts.push(PluginSlot {
+            id: "s1".into(),
+            plugin_id: "hardwave.native.eq".into(),
+            enabled: true,
+            state: None,
+            sidechain_source: None,
+            wet: 1.0,
+        });
+        t
+    }
+
+    #[test]
+    fn width_sends_and_plug_in_switches_come_back() {
+        let mut t = track();
+        let saved = MixerSnapshotTrack::of(&t);
+        t.stereo_separation = 1.6;
+        t.sends[0].gain_db = 0.0;
+        t.sends[0].enabled = false;
+        t.inserts[0].enabled = false;
+        t.inserts[0].wet = 0.3;
+        let changed = saved.apply(&mut t);
+        assert_eq!(t.stereo_separation, 1.0);
+        assert_eq!((t.sends[0].gain_db, t.sends[0].enabled), (-6.0, true));
+        assert_eq!((t.inserts[0].enabled, t.inserts[0].wet), (true, 1.0));
+        assert_eq!(changed, vec![("s1".to_string(), true, 1.0)]);
+    }
+
+    #[test]
+    fn a_snapshot_from_before_leaves_width_sends_and_plug_ins_alone() {
+        let old: MixerSnapshotTrack = serde_json::from_str(
+            r#"{"trackId":"x","volumeDb":-3.0,"pan":0.0,"muted":false,"soloed":false}"#,
+        )
+        .unwrap();
+        let mut t = track();
+        t.stereo_separation = 1.6;
+        t.inserts[0].enabled = false;
+        assert!(old.apply(&mut t).is_empty());
+        assert_eq!(t.volume_db, -3.0);
+        assert_eq!(t.stereo_separation, 1.6);
+        assert!(!t.inserts[0].enabled);
+    }
 }
