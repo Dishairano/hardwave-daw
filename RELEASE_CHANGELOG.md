@@ -1,5 +1,6 @@
 ### Bug fixes
-- fix: a plug-in that keeps working while it loads on a busy computer gets up to a minute instead of ten seconds; one that does nothing for ten seconds is still stopped
+- fix: dragging a clip's left edge now trims the start of the audio or notes and leaves the rest where it plays; it used to slide the whole clip along with the edge
 
 ### Improvements
-- fix(plugins): a slow plug-in on a busy computer is no longer switched off
+- test(scripting): a busy build machine no longer fails the runaway-script test
+- fix(playlist): dragging a clip's left edge trims its start instead of sliding it
