@@ -505,6 +505,17 @@ impl GatedLoudness {
     }
 }
 
+/// Integrated loudness (BS.1770-4) of a whole stereo recording, read by the
+/// same meter as everything else, so a reference file and the mix are
+/// measured alike. `None` when too short or too quiet to measure.
+pub fn integrated_lufs(left: &[f32], right: &[f32], sample_rate: f64) -> Option<f32> {
+    let mut meter = ChannelMeter::new(sample_rate);
+    for (l, r) in left.chunks(512).zip(right.chunks(512)) {
+        meter.process_block(l, r);
+    }
+    meter.lufs_i()
+}
+
 // ---------------------------------------------------------------------------
 // Meter snapshot (sent to UI)
 // ---------------------------------------------------------------------------
