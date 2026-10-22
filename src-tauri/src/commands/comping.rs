@@ -37,37 +37,30 @@ fn end_of(placement: &ClipPlacement) -> u64 {
     placement.position_ticks + placement.length_ticks
 }
 
-/// Split one clip at an absolute tick, in place on the track.
-///
-/// The same arithmetic `split_clip` uses, without the locking, so a comp
-/// can make several cuts inside one snapshot.
-fn split_at(track: &mut Track, index: usize, at_ticks: u64) {
-    let original = track.clips[index].clone();
-    let start = original.position_ticks;
-    let end = end_of(&original);
-    if at_ticks <= start || at_ticks >= end {
-        return;
-    }
-    let first_ticks = at_ticks - start;
-    track.clips[index].length_ticks = first_ticks;
-
-    let mut right = original.clone();
-    right.position_ticks = at_ticks;
-    right.length_ticks = end - at_ticks;
+/// Split one clip at an absolute tick, in place on the track, the way the
+/// playlist's own split does, so a comp can make several cuts inside one
+/// snapshot.
+fn split_at(track: &mut Track, index: usize, at_ticks: u64, timing: &Timing) {
+    let track_pitch_factor =
+        2.0_f64.powf(track.pitch_semitones as f64 / 12.0 + track.fine_tune_cents as f64 / 1200.0);
     let new_id = uuid::Uuid::new_v4().to_string();
-    match &mut right.content {
-        ClipContent::Audio(ac) => {
-            let total_src = ac.source_end.saturating_sub(ac.source_start) as u128;
-            let offset =
-                (total_src * first_ticks as u128 / original.length_ticks.max(1) as u128) as u64;
-            ac.source_start = ac.source_start.saturating_add(offset);
-            ac.id = new_id;
-        }
-        ClipContent::Midi(mc) => {
-            mc.id = new_id;
-        }
+    if let Ok(right) = hardwave_engine::clip_edit::split_clip(
+        &mut track.clips[index],
+        at_ticks,
+        &new_id,
+        timing.tempo_map,
+        timing.sample_rate,
+        track_pitch_factor,
+    ) {
+        track.clips.push(right);
     }
-    track.clips.push(right);
+}
+
+/// What a cut needs to know to find the same place inside a sample that
+/// plays at that moment.
+struct Timing<'a> {
+    tempo_map: &'a hardwave_project::TempoMap,
+    sample_rate: f64,
 }
 
 fn set_muted(placement: &mut ClipPlacement, muted: bool) {
@@ -95,11 +88,17 @@ pub fn comp_take_range(
     state.engine.lock().snapshot_before_mutation();
     let touched = {
         let engine = state.engine.lock();
+        let sample_rate = engine.current_sample_rate() as f64;
         let mut project = engine.project.lock();
+        let tempo_map = project.tempo_map.clone();
         let track = project
             .track_mut(&track_id)
             .ok_or_else(|| format!("Track not found: {track_id}"))?;
-        apply_comp(track, &clip_id, start_ticks, end_ticks)?
+        let timing = Timing {
+            tempo_map: &tempo_map,
+            sample_rate,
+        };
+        apply_comp(track, &clip_id, start_ticks, end_ticks, &timing)?
     };
     state.engine.lock().rebuild_graph();
     Ok(touched)
@@ -112,6 +111,7 @@ fn apply_comp(
     clip_id: &str,
     start_ticks: u64,
     end_ticks: u64,
+    timing: &Timing,
 ) -> Result<usize, String> {
     if end_ticks <= start_ticks {
         return Err("choose a range with some length".into());
@@ -133,7 +133,7 @@ fn apply_comp(
                     && c.position_ticks < end_ticks
                     && end_of(c) > start_ticks
             }) {
-                split_at(track, index, edge);
+                split_at(track, index, edge, timing);
             }
         }
 
@@ -192,6 +192,14 @@ mod comp_tests {
     use super::*;
     use hardwave_project::clip::AudioClip;
 
+    fn test_timing() -> Timing<'static> {
+        static MAP: std::sync::OnceLock<hardwave_project::TempoMap> = std::sync::OnceLock::new();
+        Timing {
+            tempo_map: MAP.get_or_init(Default::default),
+            sample_rate: 48_000.0,
+        }
+    }
+
     fn take_clip(id: &str, source: &str, position: u64, length: u64) -> ClipPlacement {
         ClipPlacement {
             content: ClipContent::Audio(AudioClip {
@@ -242,7 +250,7 @@ mod comp_tests {
     #[test]
     fn choosing_a_range_from_one_take_silences_the_others_over_that_range() {
         let mut track = track_with_two_takes();
-        apply_comp(&mut track, "a", 960, 1920).expect("comp");
+        apply_comp(&mut track, "a", 960, 1920, &test_timing()).expect("comp");
         assert_eq!(muted_of(&track, "take-1.wav", 960), Some(false));
         assert_eq!(muted_of(&track, "take-2.wav", 960), Some(true));
     }
@@ -250,7 +258,7 @@ mod comp_tests {
     #[test]
     fn what_lies_outside_the_range_is_left_exactly_as_it_was() {
         let mut track = track_with_two_takes();
-        apply_comp(&mut track, "a", 960, 1920).expect("comp");
+        apply_comp(&mut track, "a", 960, 1920, &test_timing()).expect("comp");
         // The piece of take 2 before the range keeps the state it had.
         assert_eq!(muted_of(&track, "take-2.wav", 0), Some(false));
         assert_eq!(muted_of(&track, "take-2.wav", 1920), Some(false));
@@ -259,7 +267,7 @@ mod comp_tests {
     #[test]
     fn the_takes_are_cut_at_both_edges_of_the_range() {
         let mut track = track_with_two_takes();
-        apply_comp(&mut track, "a", 960, 1920).expect("comp");
+        apply_comp(&mut track, "a", 960, 1920, &test_timing()).expect("comp");
         // Two takes, each in three pieces.
         assert_eq!(track.clips.len(), 6);
         for position in [0, 960, 1920] {
@@ -273,7 +281,7 @@ mod comp_tests {
     #[test]
     fn a_second_choice_over_the_same_range_swaps_which_take_plays() {
         let mut track = track_with_two_takes();
-        apply_comp(&mut track, "a", 960, 1920).expect("first comp");
+        apply_comp(&mut track, "a", 960, 1920, &test_timing()).expect("first comp");
         let second = track
             .clips
             .iter()
@@ -286,7 +294,7 @@ mod comp_tests {
                 _ => None,
             })
             .expect("take 2 has a piece over the range");
-        apply_comp(&mut track, &second, 960, 1920).expect("second comp");
+        apply_comp(&mut track, &second, 960, 1920, &test_timing()).expect("second comp");
         assert_eq!(muted_of(&track, "take-2.wav", 960), Some(false));
         assert_eq!(muted_of(&track, "take-1.wav", 960), Some(true));
     }
@@ -294,6 +302,6 @@ mod comp_tests {
     #[test]
     fn a_range_with_no_length_is_refused() {
         let mut track = track_with_two_takes();
-        assert!(apply_comp(&mut track, "a", 960, 960).is_err());
+        assert!(apply_comp(&mut track, "a", 960, 960, &test_timing()).is_err());
     }
 }
