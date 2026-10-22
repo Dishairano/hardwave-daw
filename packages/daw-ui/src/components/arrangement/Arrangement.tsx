@@ -27,6 +27,7 @@ import { hw } from '../../theme'
 import { paintSlotOccupied, paintSlotTick } from './paint'
 import { zoomStep } from './zoom'
 import { useTempoMapStore } from '../../stores/tempoMapStore'
+import { bpmAt, flagEntry, tempoFlags } from './tempoFlags'
 import { gridLines } from '../../utils/meter'
 import { mixHex, hexLuma } from '../../lib/color'
 import { rgbColour } from '../../lib/waveformColour'
@@ -320,7 +321,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     punchInTicks: s.punchInTicks, punchOutTicks: s.punchOutTicks, setPunchIn: s.setPunchIn,
     setPunchOut: s.setPunchOut, clearPunch: s.clearPunch, setPunchRangeFromLoop: s.setPunchRangeFromLoop,
   })))
-  const { markers, addMarker, addTempoMarker, addTimeSigMarker, removeMarker, updateMarker, jumpToNext, jumpToPrev } = useMarkerStore()
+  const { markers: songMarkers, addMarker, removeMarker, updateMarker, jumpToNext, jumpToPrev } = useMarkerStore()
+  // Tempo and signature flags come from the tempo map, so they show what
+  // plays. The ones the marker list still holds from before never changed
+  // the song and are not drawn.
+  const tempoEntries = useTempoMapStore(s => s.entries)
+  const markers = useMemo(() => [
+    ...songMarkers.filter(m => m.kind !== 'tempo' && m.kind !== 'timesig'),
+    ...tempoFlags(tempoEntries),
+  ].sort((a, b) => a.tick - b.tick), [songMarkers, tempoEntries])
+  const tempoActions = useTempoMapStore.getState
   // Bar layout from the project's tempo map, so a signature change part-way
   // through the song moves the bar lines and the bar numbers with it.
   const meterSegments = useTempoMapStore(s => s.segments)
@@ -2778,17 +2788,23 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
                   setMarkerCtx(null)
                 }} />
                 <MenuItem label="Add tempo change…" onClick={() => {
-                  const raw = window.prompt('Tempo (BPM):', String(bpm))
+                  const raw = window.prompt('Tempo (BPM):', String(bpmAt(tempoEntries, markerCtx.tick)))
                   if (raw == null) { setMarkerCtx(null); return }
                   const parsed = parseFloat(raw)
-                  if (Number.isFinite(parsed) && parsed > 0) addTempoMarker(markerCtx.tick, parsed)
+                  if (Number.isFinite(parsed) && parsed > 0) {
+                    tempoActions().setTempoAt(markerCtx.tick, Math.max(20, Math.min(999, parsed)))
+                      .catch(e => useNotificationStore.getState().push('warning', 'Could not change the tempo there', { detail: String(e) }))
+                  }
                   setMarkerCtx(null)
                 }} />
                 <MenuItem label="Add time signature change…" onClick={() => {
                   const raw = window.prompt('Time signature (e.g. 4/4, 6/8, 7/8):', '4/4')
                   if (raw == null) { setMarkerCtx(null); return }
                   const m = raw.trim().match(/^(\d+)\s*\/\s*(\d+)$/)
-                  if (m) addTimeSigMarker(markerCtx.tick, parseInt(m[1], 10), parseInt(m[2], 10))
+                  if (m) {
+                    tempoActions().setSignatureAt(markerCtx.tick, parseInt(m[1], 10), parseInt(m[2], 10))
+                      .catch(e => useNotificationStore.getState().push('warning', 'Could not change the time signature there', { detail: String(e) }))
+                  }
                   setMarkerCtx(null)
                 }} />
                 <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
@@ -2823,12 +2839,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
                     const raw = window.prompt('Tempo (BPM):', String(hit.bpm ?? bpm))
                     if (raw == null) { setMarkerCtx(null); return }
                     const parsed = parseFloat(raw)
-                    if (Number.isFinite(parsed) && parsed > 0) {
-                      const clamped = Math.max(20, Math.min(999, parsed))
-                      updateMarker(hit.id, {
-                        bpm: clamped,
-                        label: `${clamped.toFixed(clamped % 1 === 0 ? 0 : 2)} BPM`,
-                      })
+                    const entry = flagEntry(hit.id)
+                    if (entry && Number.isFinite(parsed) && parsed > 0) {
+                      tempoActions().setEntryTempo(entry.index, Math.max(20, Math.min(999, parsed)))
+                        .catch(e => useNotificationStore.getState().push('warning', 'Could not change the tempo', { detail: String(e) }))
                     }
                     setMarkerCtx(null)
                   }} />
@@ -2839,11 +2853,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
                     const raw = window.prompt('Time signature (e.g. 4/4, 6/8):', current)
                     if (raw == null) { setMarkerCtx(null); return }
                     const m = raw.trim().match(/^(\d+)\s*\/\s*(\d+)$/)
-                    if (m) {
-                      const n = Math.max(1, Math.min(32, parseInt(m[1], 10)))
-                      const dRaw = parseInt(m[2], 10)
-                      const d = [1, 2, 4, 8, 16, 32].includes(dRaw) ? dRaw : 4
-                      updateMarker(hit.id, { timeSigNum: n, timeSigDen: d, label: `${n}/${d}` })
+                    const entry = flagEntry(hit.id)
+                    if (m && entry) {
+                      tempoActions().setEntrySignature(entry.index, parseInt(m[1], 10), parseInt(m[2], 10))
+                        .catch(e => useNotificationStore.getState().push('warning', 'Could not change the time signature', { detail: String(e) }))
                     }
                     setMarkerCtx(null)
                   }} />
@@ -2875,10 +2888,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
                   </>
                 )}
                 <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
-                <MenuItem label="Delete marker" danger onClick={() => {
-                  removeMarker(hit.id)
-                  setMarkerCtx(null)
-                }} />
+                <MenuItem
+                  label={hit.kind === 'tempo' ? 'Remove tempo change' : hit.kind === 'timesig' ? 'Remove time signature change' : 'Delete marker'}
+                  danger
+                  onClick={() => {
+                    const entry = flagEntry(hit.id)
+                    if (entry?.kind === 'tempo') void tempoActions().removeTempoChange(entry.index)
+                    else if (entry?.kind === 'timesig') void tempoActions().removeSignatureChange(entry.index)
+                    else removeMarker(hit.id)
+                    setMarkerCtx(null)
+                  }}
+                />
               </>
             )}
           </div>
