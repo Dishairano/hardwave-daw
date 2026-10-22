@@ -1,11 +1,9 @@
 ### Bug fixes
-- fix: turning a knob in a plug-in's own window is recorded as automation again
-- fix: picking a VST3 factory preset switches the plug-in to it; for most plug-ins it changed nothing
-- fix: the chosen audio driver (ASIO, WASAPI) is kept between launches
-- fix: the extra engine threads flush denormals too, so quiet reverb tails no longer spike the CPU there
+- fix: Add tempo change and Add time signature change in the ruler change the song itself; they only drew a flag
+- fix: delay compensation includes a plug-in added while the song plays, CLAP plug-ins report their latency, and the Plugin delay compensation switch works
+- fix: the control-surface setting and the Own process switch no longer promise HUI and a parameter sheet that are not there
 
 ### Improvements
-- fix(engine): the worker threads and offline renders flush denormals too
-- fix(audio): the chosen audio driver is kept between launches
-- fix(plugins): picking a VST3 factory preset switches the plug-in to it
-- fix(automation): knob moves in a plug-in's own window are recorded
+- fix(ui): two settings no longer promise what they cannot do
+- fix(engine): delay compensation follows plug-ins as they come and go, and its switch works
+- fix(playlist): the ruler's tempo and time signature changes change the song
