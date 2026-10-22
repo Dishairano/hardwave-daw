@@ -58,6 +58,11 @@ pub struct AudioPrefs {
     /// only make the DAW open files on these.
     #[serde(default)]
     pub trusted_sample_servers: Vec<String>,
+    /// The audio driver (ASIO, WASAPI, JACK...) picked in the settings.
+    /// It was not kept, so an ASIO user was back on the default driver at
+    /// every launch, with the default device of that driver.
+    #[serde(default)]
+    pub audio_host: Option<String>,
 }
 
 fn default_sample_rate() -> u32 {
@@ -128,6 +133,29 @@ impl AudioPrefs {
             osc_enabled: false,
             osc_port: 0,
             trusted_sample_servers: Vec::new(),
+            audio_host: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AudioPrefs;
+
+    #[test]
+    fn a_prefs_file_from_before_the_driver_was_kept_still_loads() {
+        let old = r#"{"output_device":"Speakers","sample_rate":44100,"buffer_size":256}"#;
+        let prefs: AudioPrefs = serde_json::from_str(old).expect("loads");
+        assert_eq!(prefs.audio_host, None);
+        assert_eq!(prefs.sample_rate, 44100);
+    }
+
+    #[test]
+    fn the_driver_is_kept() {
+        let mut prefs = AudioPrefs::factory();
+        prefs.audio_host = Some("ASIO".into());
+        let back: AudioPrefs =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).expect("round trip");
+        assert_eq!(back.audio_host.as_deref(), Some("ASIO"));
     }
 }
