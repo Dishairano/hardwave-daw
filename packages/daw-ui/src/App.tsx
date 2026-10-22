@@ -1618,7 +1618,13 @@ export function App() {
     const sr = transport.sampleRate || 48000
     const playheadTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
     const pasteAt = transport.editCursorTicks != null ? transport.editCursorTicks : playheadTicks
-    tracks.pasteClipsAtPosition(pasteAt)
+    tracks.pasteClipsAtPosition(pasteAt).then(({ pasted, skipped }) => {
+      if (skipped > 0) {
+        useNotificationStore.getState().push('warning', `${skipped} of ${pasted.length + skipped} clips were not pasted`, {
+          detail: 'Audio clips go on audio tracks and MIDI clips on MIDI tracks, and there were not enough tracks below the one you pasted on.',
+        })
+      }
+    }).catch((e) => console.warn('paste failed', e))
   }, [])
 
   const duplicateSelection = useCallback(() => {
@@ -1671,9 +1677,7 @@ export function App() {
   }, [loopRangeTicks])
 
   const cutSelection = useCallback(async () => {
-    const tracks = useTrackStore.getState()
-    tracks.copySelectedClips()
-    await tracks.deleteSelectedClips()
+    await useTrackStore.getState().cutSelectedClips()
   }, [])
 
   const handleOpenRecent = useCallback(async (path: string) => {
