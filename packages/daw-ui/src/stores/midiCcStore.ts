@@ -6,7 +6,7 @@ export const CC_LANE_DEFAULT_HEIGHT = 70
 
 export interface CcLaneDefinition {
   id: string
-  kind: 'pitchBend' | 'cc'
+  kind: 'pitchBend' | 'cc' | 'channelPressure'
   cc?: number
   label: string
   shortLabel: string
@@ -18,6 +18,9 @@ export const BUILT_IN_CC_LANES: CcLaneDefinition[] = [
   { id: 'cc2', kind: 'cc', cc: 2, label: 'Breath (CC2)', shortLabel: 'BRE' },
   { id: 'cc11', kind: 'cc', cc: 11, label: 'Expression (CC11)', shortLabel: 'EXP' },
   { id: 'cc64', kind: 'cc', cc: 64, label: 'Sustain (CC64)', shortLabel: 'SUS' },
+  // Channel aftertouch: pressing a key harder after it went down. The engine
+  // plays and records it, and there was no lane to draw or see it in.
+  { id: 'at', kind: 'channelPressure', label: 'Aftertouch (channel)', shortLabel: 'AT' },
 ]
 
 export function customCcLane(cc: number): CcLaneDefinition {
@@ -53,7 +56,7 @@ export function laneDefinition(laneId: string): CcLaneDefinition | null {
 }
 
 function laneArgs(def: CcLaneDefinition) {
-  return { kind: def.kind === 'pitchBend' ? 'pitchBend' : 'cc', cc: def.cc ?? null }
+  return { kind: def.kind, cc: def.kind === 'cc' ? def.cc ?? null : null }
 }
 
 export function laneDisplayValue(def: CcLaneDefinition, normalized: number): string {
