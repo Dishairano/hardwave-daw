@@ -7,6 +7,7 @@ use crate::format;
 use hardwave_dsp::dynamics::{
     compressor_gain_reduction_db, db_to_linear, linear_to_db, DetectMode, EnvelopeFollower,
 };
+use hardwave_dsp::oversample::{OversampleFactor, Oversampler};
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -17,7 +18,8 @@ use std::path::PathBuf;
 
 const PARAM_AMOUNT: u32 = 0;
 const PARAM_OUTPUT: u32 = 1;
-const PARAM_COUNT: u32 = 2;
+const PARAM_OVERSAMPLE: u32 = 2;
+const PARAM_COUNT: u32 = 3;
 
 pub struct NativeSoundgoodizer {
     descriptor: PluginDescriptor,
@@ -28,6 +30,9 @@ pub struct NativeSoundgoodizer {
     env_r: EnvelopeFollower,
     amount: f32,
     output_db: f32,
+    /// Runs the saturation faster so its harmonics do not fold back.
+    oversample: OversampleFactor,
+    oversampler: Oversampler,
     active: bool,
 }
 
@@ -63,6 +68,8 @@ impl NativeSoundgoodizer {
             sample_rate: sr,
             drive_l: FilterDrive::new(),
             drive_r: FilterDrive::new(),
+            oversample: OversampleFactor::Two,
+            oversampler: Oversampler::new(),
             env_l,
             env_r,
             amount: 0.4,
@@ -133,12 +140,17 @@ impl HostedPlugin for NativeSoundgoodizer {
         }
         let out_lin = 10.0_f32.powf(self.output_db / 20.0);
         let ceiling_db = -1.0_f32;
+        self.oversampler
+            .configure(self.sample_rate, self.oversample);
+        let (drive_l, drive_r) = (&self.drive_l, &self.drive_r);
         for i in 0..num_samples {
             let in_l = inputs[0].get(i).copied().unwrap_or(0.0);
             let in_r = inputs[1].get(i).copied().unwrap_or(0.0);
-            // Saturate
-            let sat_l = self.drive_l.process(in_l);
-            let sat_r = self.drive_r.process(in_r);
+            // Saturate, faster than the song's rate when asked, so the
+            // harmonics do not fold back as harshness.
+            let (sat_l, sat_r) = self
+                .oversampler
+                .process_frame(in_l, in_r, |l, r| (drive_l.process(l), drive_r.process(r)));
             // Track peak envelope
             let env_l = self.env_l.process(sat_l);
             let env_r = self.env_r.process(sat_r);
@@ -162,6 +174,7 @@ impl HostedPlugin for NativeSoundgoodizer {
         let (name, default, unit) = match index {
             PARAM_AMOUNT => ("Amount", 0.4, "%"),
             PARAM_OUTPUT => ("Output", 0.5, "dB"),
+            PARAM_OVERSAMPLE => ("Oversample", 0.5, "off / 2x / 4x"),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -179,6 +192,7 @@ impl HostedPlugin for NativeSoundgoodizer {
         match id {
             PARAM_AMOUNT => self.amount as f64,
             PARAM_OUTPUT => ((self.output_db + 12.0) / 24.0).clamp(0.0, 1.0) as f64,
+            PARAM_OVERSAMPLE => self.oversample.normalised(),
             _ => 0.0,
         }
     }
@@ -191,6 +205,7 @@ impl HostedPlugin for NativeSoundgoodizer {
                 self.refresh();
             }
             PARAM_OUTPUT => self.output_db = real,
+            PARAM_OVERSAMPLE => self.oversample = OversampleFactor::from_normalised(value),
             _ => {}
         }
     }
@@ -200,12 +215,28 @@ impl HostedPlugin for NativeSoundgoodizer {
         Some(match id {
             PARAM_AMOUNT => format::pct(real),
             PARAM_OUTPUT => format::db(real),
+            PARAM_OVERSAMPLE => OversampleFactor::from_normalised(value).label().to_string(),
             _ => return None,
         })
     }
 
+    fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
+        (id == PARAM_OVERSAMPLE).then(|| {
+            OversampleFactor::ALL
+                .iter()
+                .map(|f| f.label().to_string())
+                .collect()
+        })
+    }
+
     fn get_state(&self) -> Vec<u8> {
-        format!("{{\"amt\":{},\"out\":{}}}", self.amount, self.output_db).into_bytes()
+        format!(
+            "{{\"amt\":{},\"out\":{},\"os\":{}}}",
+            self.amount,
+            self.output_db,
+            self.oversample.normalised()
+        )
+        .into_bytes()
     }
 
     fn set_state(&mut self, state: &[u8]) -> Result<(), String> {
@@ -223,6 +254,11 @@ impl HostedPlugin for NativeSoundgoodizer {
         if let Some(v) = read("out") {
             self.output_db = v.clamp(-12.0, 12.0);
         }
+        // Songs saved before the switch existed ran without it: they keep
+        // sounding as they did.
+        self.oversample = read("os")
+            .map(|v| OversampleFactor::from_normalised(v as f64))
+            .unwrap_or(OversampleFactor::Off);
         self.refresh();
         Ok(())
     }
