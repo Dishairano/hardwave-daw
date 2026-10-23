@@ -563,7 +563,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
     }
     try {
       await invoke('set_preview_volume', { volume: previewVolume })
-      const plan = await invoke<{ fileBpm: number | null; speed: number }>(
+      const plan = await invoke<{ fileBpm: number | null; speed: number; keepsPitch?: boolean }>(
         'preview_audio_file_in_tempo',
         { filePath: path, matchTempo },
       )
@@ -577,7 +577,9 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         setPreviewNote(`${Math.round(plan.fileBpm)} BPM, same as the song`)
       } else {
         setPreviewNote(
-          `${Math.round(plan.fileBpm)} BPM played at ${plan.speed.toFixed(2)}x, so the pitch moves too`,
+          plan.keepsPitch
+            ? `${Math.round(plan.fileBpm)} BPM stretched to the song's tempo, pitch kept`
+            : `${Math.round(plan.fileBpm)} BPM played at ${plan.speed.toFixed(2)}x, so the pitch moves too (too long to stretch)`,
         )
       }
       // The engine stops at the end of the sample on its own. This only
@@ -762,7 +764,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         <button
           onClick={() => setMatchTempo(v => !v)}
           title={matchTempo
-            ? "Previews play at the song's tempo when the file name says the tempo. The pitch moves with it."
+            ? "Previews play at the song's tempo when the file name says the tempo, with the pitch kept. Files over 16 seconds change pitch with the speed."
             : 'Previews play at the speed the file was recorded at'}
           data-testid="preview-tempo-toggle"
           style={{

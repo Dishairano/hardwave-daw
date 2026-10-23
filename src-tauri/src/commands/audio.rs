@@ -1800,7 +1800,16 @@ pub struct PreviewPlan {
     pub file_bpm: Option<f64>,
     /// Speed the preview will run at: 1.0 is the file's own speed.
     pub speed: f64,
+    /// True when the speed was changed with the pitch kept (time stretch);
+    /// false when it plays faster or slower like a turntable, pitch and all.
+    pub keeps_pitch: bool,
 }
+
+/// Longer than this, a preview at the song's tempo plays like a turntable
+/// rather than wait for a stretch: loops are short (eight bars at 128 BPM is
+/// 15 seconds), whole songs are not. The stretch is made once per file and
+/// tempo, so a second click on the same loop starts at once.
+const PREVIEW_STRETCH_MAX_SECS: f64 = 16.0;
 
 /// Read a tempo out of a file name: "Kick 150.wav", "loop_128bpm.wav",
 /// "174 dnb break.wav".
@@ -1851,9 +1860,9 @@ fn bpm_from_name(name: &str) -> Option<f64> {
 ///
 /// Loops previewed at their own speed are hard to judge: the only way to
 /// tell whether a 128 BPM loop fits a 150 BPM song was to import it. This
-/// speeds the preview up or down to the song's tempo, which also moves the
-/// pitch, the way a turntable does. It is not time stretching and the UI
-/// says so.
+/// plays the preview at the song's tempo with its pitch kept, stretched once
+/// and cached. It used to change speed like a turntable, so the pitch moved
+/// too; a file over 16 seconds still does, and the reply says which.
 #[tauri::command]
 pub fn preview_audio_file_in_tempo(
     state: State<AppState>,
@@ -1866,6 +1875,11 @@ pub fn preview_audio_file_in_tempo(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let file_bpm = bpm_from_name(&name);
+    let (pool, source_id, seconds) = {
+        let engine = state.engine.lock();
+        let (id, seconds) = engine.preview_load(&path)?;
+        (engine.audio_pool.clone(), id, seconds)
+    };
     let engine = state.engine.lock();
     let song_bpm = {
         let project = engine.project.lock();
@@ -1880,8 +1894,24 @@ pub fn preview_audio_file_in_tempo(
         (true, Some(bpm)) if bpm > 0.0 => (song_bpm / bpm).clamp(0.25, 4.0),
         _ => 1.0,
     };
-    engine.preview_file_at_speed(&path, speed)?;
-    Ok(PreviewPlan { file_bpm, speed })
+    drop(engine);
+    // The stretch runs without the engine held, so the rest of the app is
+    // not kept waiting while it is made.
+    let stretched = if (speed - 1.0).abs() > 1e-3 && seconds <= PREVIEW_STRETCH_MAX_SECS {
+        hardwave_engine::DawEngine::bake_preview_stretch(&pool, &source_id, speed)
+    } else {
+        None
+    };
+    let engine = state.engine.lock();
+    match &stretched {
+        Some(id) => engine.preview().play_at_speed(id, 1.0),
+        None => engine.preview().play_at_speed(&source_id, speed),
+    }
+    Ok(PreviewPlan {
+        file_bpm,
+        speed,
+        keeps_pitch: stretched.is_some(),
+    })
 }
 
 #[tauri::command]
