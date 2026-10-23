@@ -584,7 +584,7 @@ const mock: TauriInternals = {
       case 'set_tempo_entry_time_signature':
         return null
       case 'preview_audio_file_in_tempo':
-        return { fileBpm: 150, speed: 0.93 }
+        return { fileBpm: 150, speed: 0.93, keepsPitch: true }
       case 'preview_audio_file':
       case 'stop_audio_preview':
       case 'set_preview_volume':

@@ -946,6 +946,32 @@ impl DawEngine {
         self.preview_file_at_speed(path, 1.0)
     }
 
+    /// Load a file for auditioning, once, and say its pool id and length in
+    /// seconds.
+    pub fn preview_load(&self, path: &std::path::Path) -> Result<(String, f64), String> {
+        let source_id = source_id_for_path(&path.to_string_lossy());
+        if !self.audio_pool.contains(&source_id) {
+            self.load_audio_file_as(path, &source_id)?;
+        }
+        let seconds = self
+            .audio_pool
+            .get(&source_id)
+            .map(|b| b.num_frames as f64 / b.sample_rate.max(1) as f64)
+            .unwrap_or(0.0);
+        Ok((source_id, seconds))
+    }
+
+    /// A pool source played `speed` times faster with its pitch kept, baked
+    /// once with the phase vocoder clips use and cached under its own id.
+    /// None when the bake gave nothing. Slow on a long file, so the caller
+    /// runs it without holding the engine.
+    pub fn bake_preview_stretch(pool: &AudioPool, source_id: &str, speed: f64) -> Option<String> {
+        let stretch = 1.0 / speed.clamp(0.25, 4.0);
+        Self::bake_stretch_variant(pool, source_id, stretch, 0.0);
+        let key = stretch_cache_key(source_id, stretch, 0.0);
+        pool.contains(&key).then_some(key)
+    }
+
     /// Audition a file, optionally sped up or slowed to the song's tempo.
     pub fn preview_file_at_speed(&self, path: &std::path::Path, speed: f64) -> Result<(), String> {
         let source_id = source_id_for_path(&path.to_string_lossy());
@@ -6177,5 +6203,35 @@ mod monitoring_tests {
             1000,
             "and the playhead moves by all of it"
         );
+    }
+
+    /// Previewing a loop at the song's tempo moved its pitch like a
+    /// turntable. The stretched preview keeps the length the song's tempo
+    /// asks for, from the clips' own phase vocoder.
+    #[test]
+    fn a_preview_stretch_takes_the_songs_length() {
+        let pool = AudioPool::new();
+        let frames = 48_000;
+        let tone: Vec<f32> = (0..frames)
+            .map(|n| (std::f32::consts::TAU * 440.0 * n as f32 / 48_000.0).sin() * 0.5)
+            .collect();
+        pool.insert(
+            "loop".into(),
+            crate::AudioBuffer {
+                channels: vec![tone.clone(), tone],
+                sample_rate: 48_000,
+                num_frames: frames,
+            },
+        );
+        // A 128 BPM loop in a 160 BPM song plays 1.25 times as fast.
+        let key = DawEngine::bake_preview_stretch(&pool, "loop", 1.25).expect("baked");
+        let baked = pool.get(&key).unwrap();
+        let expected = (frames as f64 / 1.25) as i64;
+        assert!(
+            (baked.num_frames as i64 - expected).abs() < 4_800,
+            "{} frames, expected about {expected}",
+            baked.num_frames
+        );
+        assert_ne!(key, "loop");
     }
 }
