@@ -2180,6 +2180,9 @@ struct EngineCallback {
     /// Which graph edges carry each send, filled at rebuild so a SendLevel
     /// automation lane can move a send's gain per block.
     send_edges: Vec<SendEdges>,
+    /// The edges that carry live input to a monitoring track, switched per
+    /// block for tracks whose monitoring follows the transport.
+    monitor_edges: Vec<MonitorEdges>,
     /// The threads that share the per-block work, when the setting asks
     /// for them. Picked up at rebuild, never started here: starting a
     /// thread on the audio thread is the kind of thing that makes a
@@ -2204,6 +2207,16 @@ struct EngineCallback {
 struct SendEdges {
     track_id: String,
     send_index: usize,
+    left_edge: usize,
+    right_edge: usize,
+}
+
+/// The two edges that carry live input to one monitoring track (or to the
+/// master, with direct monitoring), and whether that monitoring follows the
+/// transport: input while stopped or recording, the track's own audio while
+/// playing back.
+struct MonitorEdges {
+    auto: bool,
     left_edge: usize,
     right_edge: usize,
 }
@@ -2358,6 +2371,7 @@ impl EngineCallback {
             record_pass,
             record_last_pos,
             send_edges: Vec::with_capacity(64),
+            monitor_edges: Vec::with_capacity(8),
             worker_pool,
             reference,
             reference_on,
@@ -3051,6 +3065,7 @@ impl EngineCallback {
 
         self.graph.clear();
         self.send_edges.clear();
+        self.monitor_edges.clear();
         // Whether the work is shared across cores is a setting, and a
         // rebuild is where it is picked up. A busy lock means the next
         // rebuild gets it, which is a block or two later at worst.
@@ -3555,7 +3570,10 @@ impl EngineCallback {
         // the recording tap lives on that node, so arming a track without
         // switching monitoring on recorded silence: press record, play, get
         // an empty take and no error. Arming alone is now enough to capture.
-        let mut monitor_routes: Vec<crate::graph::NodeId> = Vec::new();
+        // Each monitoring track with whether it follows the transport
+        // (`monitor_auto`), and every track the live input passes through.
+        let mut monitor_routes: Vec<(crate::graph::NodeId, bool)> = Vec::new();
+        let mut live_tracks: Vec<&str> = Vec::new();
         let mut any_armed = false;
         for track in &project.tracks {
             if !track.kind.is_audio_bearing() {
@@ -3565,7 +3583,8 @@ impl EngineCallback {
                 any_armed = true;
                 if track.monitor_input {
                     if let Some(&node_id) = track_id_to_node.get(&track.id) {
-                        monitor_routes.push(node_id);
+                        monitor_routes.push((node_id, track.monitor_auto));
+                        live_tracks.push(&track.id);
                     }
                 }
             }
@@ -3588,13 +3607,55 @@ impl EngineCallback {
                 // switched monitoring off.
             } else if direct {
                 // Direct monitoring: bypass the track FX chain and route live
-                // input straight to master for minimum latency.
+                // input straight to master for minimum latency. One path for
+                // all tracks, so it follows the transport only when every
+                // monitoring track does.
+                let auto = monitor_routes.iter().all(|&(_, auto)| auto);
                 self.graph.connect(input_id, 0, master_id, 0);
+                let left_edge = self.graph.last_edge_index();
                 self.graph.connect(input_id, 1, master_id, 1);
+                let right_edge = self.graph.last_edge_index();
+                self.monitor_edges.push(MonitorEdges {
+                    auto,
+                    left_edge,
+                    right_edge,
+                });
             } else {
-                for track_node_id in monitor_routes {
+                for (track_node_id, auto) in monitor_routes {
                     self.graph.connect(input_id, 0, track_node_id, 0);
+                    let left_edge = self.graph.last_edge_index();
                     self.graph.connect(input_id, 1, track_node_id, 1);
+                    let right_edge = self.graph.last_edge_index();
+                    self.monitor_edges.push(MonitorEdges {
+                        auto,
+                        left_edge,
+                        right_edge,
+                    });
+                }
+                // The tracks the input passes through keep running while
+                // stopped: each monitoring track, and every bus it reaches
+                // through its output or a send.
+                let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+                while let Some(id) = live_tracks.pop() {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let Some(track) = project.tracks.iter().find(|t| t.id == id) else {
+                        continue;
+                    };
+                    if let Some(&node_id) = track_id_to_node.get(id) {
+                        if let Some(node) = self.graph.node_mut(node_id) {
+                            node.set_live_input(true);
+                        }
+                    }
+                    live_tracks.extend(track.output_bus.as_deref());
+                    live_tracks.extend(
+                        track
+                            .sends
+                            .iter()
+                            .filter(|send| send.enabled)
+                            .map(|send| send.target.as_str()),
+                    );
                 }
             }
         }
@@ -3924,6 +3985,22 @@ impl AudioCallback for EngineCallback {
                 (secs * tempo_now.max(1.0) / 60.0 * hardwave_midi::PPQ as f64).max(0.0) as u64
             }
         };
+
+        // Monitoring that follows the transport, as on a tape machine: the
+        // input while stopped or recording, the track's own audio while
+        // playing back.
+        if !self.monitor_edges.is_empty() {
+            let input_heard = !playing
+                || self
+                    .transport
+                    .recording
+                    .load(std::sync::atomic::Ordering::Relaxed);
+            for entry in &self.monitor_edges {
+                let gain = if !entry.auto || input_heard { 1.0 } else { 0.0 };
+                self.graph.set_edge_gain(entry.left_edge, gain);
+                self.graph.set_edge_gain(entry.right_edge, gain);
+            }
+        }
 
         // Send level automation. Sends are graph edges with a gain baked at
         // rebuild, so a SendLevel lane had nowhere to land: it was stored,
@@ -5781,6 +5858,151 @@ mod recording_latency_tests {
             passes[0].1.len() as u64,
             (256 - latency) * 2,
             "the frames played before recording began are not kept"
+        );
+    }
+}
+
+#[cfg(test)]
+mod monitoring_tests {
+    //! What an armed track lets you hear of the live input, stopped,
+    //! playing and recording.
+    use super::*;
+    use std::sync::atomic::Ordering::Relaxed;
+
+    struct Rig {
+        cb: EngineCallback,
+        input: rtrb::Producer<f32>,
+        commands: crossbeam_channel::Sender<EngineCommand>,
+    }
+
+    fn rig(project: Project) -> Rig {
+        let transport = TransportState::default();
+        transport.sample_rate.store(48_000, Relaxed);
+        let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);
+        let (command_tx, command_rx) = bounded::<EngineCommand>(8);
+        let track_meters: TrackMeterMap = Arc::new(Mutex::new(HashMap::new()));
+        let (input, consumer) = RingBuffer::<f32>::new(48_000 * 2);
+        let input_consumer: SharedInputConsumer = Arc::new(Mutex::new(Some(consumer)));
+        let (_cmd_tx, cmd_rx) = crate::insert_chain::command_channel(8);
+        let (grave_tx, _grave_rx) = crate::insert_chain::graveyard_channel(8);
+        let cb = EngineCallback::new(
+            transport,
+            Arc::new(Mutex::new(project)),
+            meter_producer,
+            command_rx,
+            AudioPool::new(),
+            track_meters,
+            input_consumer,
+            Arc::new(CaptureTap::default()),
+            master_tap::new_shared(),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            cmd_rx,
+            grave_tx,
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(MidiInputManager::new())),
+            Arc::new(Mutex::new(MidiCaptureRing::new(64))),
+            48_000,
+            256,
+            LoadCounters::new(),
+            crate::metronome::MetronomeSettings::silent(),
+            crate::preview_player::PreviewRequest::new(),
+            crate::audio_prefs::AudioPrefs::new(),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            Arc::new(crate::session::SessionState::new()),
+        );
+        Rig {
+            cb,
+            input,
+            commands: command_tx,
+        }
+    }
+
+    fn armed_song() -> Project {
+        let mut p = Project::default();
+        let mut t = hardwave_project::Track::new_audio("vox".into(), "Vocal".into());
+        t.armed = true;
+        t.monitor_input = true;
+        p.tracks.push(t);
+        p
+    }
+
+    /// Feed live input at 0.5 and return the loudest output sample of the
+    /// next few blocks: about 0.35 when heard, through the centre pan law.
+    fn heard(rig: &mut Rig) -> f32 {
+        let mut loudest = 0.0_f32;
+        let mut out = vec![0.0_f32; 512];
+        for _ in 0..4 {
+            for _ in 0..512 {
+                let _ = rig.input.push(0.5);
+            }
+            rig.cb.process(&mut out, 256, 2);
+            loudest = out.iter().fold(loudest, |m, s| m.max(s.abs()));
+        }
+        loudest
+    }
+
+    fn play(rig: &Rig) {
+        rig.commands
+            .send(EngineCommand::Transport(TransportCommand::Play))
+            .unwrap();
+    }
+
+    /// Monitoring through a track went silent unless the track had a
+    /// plug-in, and a stopped track returned silence before reading its
+    /// input, so the IN button let a singer hear nothing.
+    #[test]
+    fn an_armed_track_with_nothing_on_it_is_heard_stopped_and_playing() {
+        let mut r = rig(armed_song());
+        assert!(heard(&mut r) > 0.3, "stopped, the input is heard");
+        play(&r);
+        assert!(heard(&mut r) > 0.3, "playing, the input is heard");
+    }
+
+    #[test]
+    fn monitoring_off_is_silent() {
+        let mut song = armed_song();
+        song.tracks.last_mut().unwrap().monitor_input = false;
+        let mut r = rig(song);
+        assert_eq!(heard(&mut r), 0.0);
+        play(&r);
+        assert_eq!(heard(&mut r), 0.0);
+    }
+
+    #[test]
+    fn auto_monitoring_hears_the_input_stopped_and_recording_but_not_playing_back() {
+        let mut song = armed_song();
+        song.tracks.last_mut().unwrap().monitor_auto = true;
+        let mut r = rig(song);
+        assert!(heard(&mut r) > 0.3, "stopped: the input");
+        play(&r);
+        assert_eq!(heard(&mut r), 0.0, "playing back: not the input");
+        r.cb.transport.recording.store(true, Relaxed);
+        assert!(heard(&mut r) > 0.3, "recording: the input");
+    }
+
+    #[test]
+    fn a_bus_the_monitored_track_feeds_passes_the_input_while_stopped() {
+        let mut song = armed_song();
+        song.tracks.push(hardwave_project::Track::new_audio(
+            "bus".into(),
+            "Vocal bus".into(),
+        ));
+        song.tracks
+            .iter_mut()
+            .find(|t| t.id == "vox")
+            .unwrap()
+            .output_bus = Some("bus".into());
+        let mut r = rig(song);
+        // Through the pan law twice, the track's and the bus's: about 0.25.
+        let level = heard(&mut r);
+        assert!(
+            level > 0.2,
+            "the bus carries the input to master, got {level}"
         );
     }
 }

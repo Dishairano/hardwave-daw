@@ -18,6 +18,9 @@ import {
   useTrackMuted,
   useTrackSoloed,
   useTrackArmed,
+  monitorModeOf,
+  nextMonitorMode,
+  type MonitorMode,
 } from '../../../stores/trackStore'
 import { useMixerSettingsStore } from '../../../stores/mixerSettingsStore'
 import { useMeterStore } from '../../../stores/meterStore'
@@ -30,6 +33,12 @@ import {
 
 
 const NO_SENDS: SendInfo[] = []
+
+const MONITOR_TITLES: Record<MonitorMode, string> = {
+  off: 'Monitoring off: the input is recorded, not heard. Click for In',
+  in: 'Monitoring In: the input is always heard while armed. Click for Auto',
+  auto: 'Monitoring Auto: the input while stopped or recording, this track while playing back. Click to switch off',
+}
 export interface ChannelStripProps {
   trackId: string
   /** Numeric position (1-based) shown in the s-num header. Master uses 'M'. */
@@ -112,7 +121,10 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const soloed = useTrackSoloed(trackId)
   const armed = useTrackArmed(trackId)
   const soloSafe = useTrackStore((s) => s.tracksById[trackId]?.solo_safe ?? false)
-  const monitorInput = useTrackStore((s) => s.tracksById[trackId]?.monitorInput ?? true)
+  const monitorMode = useTrackStore((s) => {
+    const t = s.tracksById[trackId]
+    return t ? monitorModeOf(t) : 'in'
+  })
   const [highestPeak, resetPeak] = useHighestPeak(trackId, variant === 'master')
   // The VCAs this track is in, as amber tags on its cap.
   const vcaTagsKey = useVcaStore((s) =>
@@ -226,9 +238,9 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   const onMonitor = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
-      useTrackStore.getState().setTrackMonitorInput(trackId, !monitorInput).catch(console.error)
+      useTrackStore.getState().setTrackMonitorMode(trackId, nextMonitorMode(monitorMode)).catch(console.error)
     },
-    [trackId, monitorInput],
+    [trackId, monitorMode],
   )
   const onSoloSafe = useCallback(
     (e: React.MouseEvent) => {
@@ -305,13 +317,11 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
             )}
             {isAudioOrMidi && armed && (
               <button
-                className={'mx-pill mx-pill-in' + (monitorInput ? ' on' : '')}
+                className={'mx-pill mx-pill-in' + (monitorMode !== 'off' ? ' on' : '')}
                 onClick={onMonitor}
-                title={monitorInput
-                  ? 'Hearing the input while armed. Click to record without hearing it'
-                  : 'Not hearing the input. Click to hear it while armed'}
+                title={MONITOR_TITLES[monitorMode]}
               >
-                IN
+                {monitorMode === 'auto' ? 'AUTO' : 'IN'}
               </button>
             )}
             <button

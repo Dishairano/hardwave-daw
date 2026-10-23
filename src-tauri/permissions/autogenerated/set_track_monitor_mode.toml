@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-track-monitor-mode"
+description = "Enables the set_track_monitor_mode command without any pre-configured scope."
+commands.allow = ["set_track_monitor_mode"]
+
+[[permission]]
+identifier = "deny-set-track-monitor-mode"
+description = "Denies the set_track_monitor_mode command without any pre-configured scope."
+commands.deny = ["set_track_monitor_mode"]

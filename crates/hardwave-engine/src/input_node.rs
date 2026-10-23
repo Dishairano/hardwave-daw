@@ -607,9 +607,8 @@ impl AudioNode for InputNode {
             *r_out = cons.pop().unwrap_or(0.0);
         }
 
-        // Recording tap: the block just produced goes into the reserved
-        // capture space, interleaved L, R, L, R, so a WAV writer can dump it
-        // straight to disk on stop.
+        // Recording tap: the block just produced goes into the capture
+        // ring, interleaved L, R, L, R, and from there to the take's file.
         if let Some(cap) = &self.capture {
             if cap.recording.load(Ordering::Relaxed) {
                 cap.write_block(&left[0], &right[0], buf_size, ctx.position_samples);
