@@ -4,6 +4,9 @@ import { analyseColours, rgbColour, type WaveColours } from '../../lib/waveformC
 import { encodeWav } from '../../utils/wav'
 import { encodeSingleTrackMidi, type SmfNote } from '../../utils/midi'
 import { useTransportStore } from '../../stores/transportStore'
+import { useTrackStore } from '../../stores/trackStore'
+import { invoke } from '@tauri-apps/api/core'
+import { SAMPLER_ID } from '../browser/fileActions'
 
 const SLICE_MIDI_PPQ = 960
 const SLICE_MIDI_BASE_PITCH = 60 // C3, matches the chromatic KEYMAP convention
@@ -331,6 +334,71 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
     setBanner(`Exported ${slices.length} slices`)
   }
 
+  /** Each slice's part of the file, in seconds. */
+  const sliceRanges = () => {
+    if (!sample) return []
+    const total = sample.channels[0].length
+    return slices.map((s, i) => ({
+      start: s.start / sample.sampleRate,
+      end: sliceEnd(slices, i, total) / sample.sampleRate,
+    }))
+  }
+
+  /**
+   * The slices as clips on a new audio track, from the playhead: on the
+   * loop's beat grid when its tempo is set, so they follow the song's tempo.
+   * The slices only reached the song as downloaded files before.
+   */
+  const slicesToPlaylist = async () => {
+    if (!sample || slices.length === 0) return
+    try {
+      const position = await invoke<number>('get_playhead_tick').catch(() => 0)
+      await invoke('slices_to_playlist', {
+        filePath: path,
+        slices: sliceRanges(),
+        loopBpm: loopBpm > 0 ? loopBpm : null,
+        positionTicks: position,
+      })
+      await useTrackStore.getState().fetchTracks()
+      setBanner(`Placed ${slices.length} slice${slices.length === 1 ? '' : 's'} on a new track`)
+    } catch (e) {
+      setBanner(`Could not place the slices: ${String(e)}`)
+    }
+  }
+
+  /**
+   * One channel per slice, each a sampler playing its part of the file, as
+   * one undo step.
+   */
+  const slicesToChannels = async () => {
+    if (!sample || slices.length === 0) return
+    const store = useTrackStore.getState()
+    const stem = name.replace(/\.[^.]+$/, '')
+    await store.beginHistoryGroup()
+    try {
+      const ranges = sliceRanges()
+      const total = sample.channels[0].length / sample.sampleRate
+      for (let i = 0; i < ranges.length; i++) {
+        const trackId = await invoke<string>('add_midi_track', { name: `${stem} ${i + 1}` })
+        const slotId = await invoke<string>('add_plugin_to_track', { trackId, pluginId: SAMPLER_ID })
+        await invoke('load_sampler', { trackId, slotId, path })
+        // The sampler's start is a share of the file, and its length a
+        // share of what is left after the start.
+        const start = ranges[i].start / total
+        const rest = Math.max(1e-9, total - ranges[i].start)
+        const length = (ranges[i].end - ranges[i].start) / rest
+        await invoke('set_plugin_parameter', { trackId, slotId, paramId: 18, value: start })
+        await invoke('set_plugin_parameter', { trackId, slotId, paramId: 19, value: Math.min(1, length) })
+      }
+      setBanner(`Made ${ranges.length} channel${ranges.length === 1 ? '' : 's'}, one per slice`)
+    } catch (e) {
+      setBanner(`Could not make the channels: ${String(e)}`)
+    } finally {
+      await store.endHistoryGroup(`Slice "${stem}" into ${slices.length} channels`)
+      await store.fetchTracks()
+    }
+  }
+
   const sliceDurationSec = useMemo(() => {
     if (!sample || selectedSlice === null) return 0
     const s = slices[selectedSlice]
@@ -444,6 +512,8 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
               </label>
               <button onClick={exportSlicesAsMidi} style={btnStyle('primary')}>Export MIDI</button>
               <button onClick={exportSlices} style={btnStyle('accent')}>Export WAVs</button>
+              <button onClick={() => { void slicesToPlaylist() }} style={btnStyle('accent')} title="A new audio track with one clip per slice, from the playhead; on the loop's beat grid when its BPM is set">To playlist</button>
+              <button onClick={() => { void slicesToChannels() }} style={btnStyle('accent')} title="One sampler channel per slice">To channels</button>
             </div>
 
             <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>

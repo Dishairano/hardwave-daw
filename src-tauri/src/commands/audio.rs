@@ -148,6 +148,118 @@ pub(crate) fn import_audio_file_blocking(
 /// Map a project-side `Track` into the serialized `ClipInfo` vector
 /// the frontend expects. Shared by `get_track_clips` and the bulk
 /// `get_tracks_with_clips` endpoint.
+/// One slice of a file, in seconds of the file.
+#[derive(serde::Deserialize, Clone, Copy)]
+pub struct SliceRange {
+    pub start: f64,
+    pub end: f64,
+}
+
+/// Where each slice lands on the playlist, in ticks from the first, and how
+/// long its clip is: on the loop's own beat grid when its tempo is known, so
+/// the slices follow the song's tempo, else at the song's tempo. A clip ends
+/// where the next slice starts, as a slicer cuts it.
+fn slice_layout(slices: &[SliceRange], song_bpm: f64, loop_bpm: Option<f64>) -> Vec<(u64, u64)> {
+    let ppq = hardwave_midi::PPQ as f64;
+    let grid_bpm = loop_bpm.filter(|b| *b > 0.0).unwrap_or(song_bpm).max(1.0);
+    let first = slices.first().map(|s| s.start).unwrap_or(0.0);
+    let offsets: Vec<u64> = slices
+        .iter()
+        .map(|s| ((s.start - first).max(0.0) * grid_bpm / 60.0 * ppq).round() as u64)
+        .collect();
+    slices
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let heard =
+                ((s.end - s.start).max(0.0) * song_bpm.max(1.0) / 60.0 * ppq).round() as u64;
+            let room = offsets
+                .get(i + 1)
+                .map(|next| next - offsets[i])
+                .unwrap_or(heard);
+            (offsets[i], heard.min(room).max(1))
+        })
+        .collect()
+}
+
+/// The slicer's slices as clips on a new audio track, one per slice, from
+/// `position_ticks`. Each clip plays its part of the file, which is loaded
+/// once; nothing is written to disk. Returns the new track's id.
+#[tauri::command]
+pub fn slices_to_playlist(
+    state: State<AppState>,
+    file_path: String,
+    slices: Vec<SliceRange>,
+    loop_bpm: Option<f64>,
+    position_ticks: u64,
+) -> Result<String, String> {
+    if slices.is_empty() {
+        return Err("There are no slices to place".into());
+    }
+    state.engine.lock().snapshot_before_mutation();
+    let path = PathBuf::from(&file_path);
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Slices")
+        .to_string();
+    let engine = state.engine.lock();
+    let (source_id, info) = engine.load_audio_file(&path)?;
+    let sr = info.sample_rate as f64;
+    let song_bpm = engine
+        .transport
+        .bpm
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let layout = slice_layout(&slices, song_bpm, loop_bpm);
+    let hash = hash_source_file(&path);
+    let mut project = engine.project.lock();
+    let track_id = project.add_audio_track(format!("{name} slices"));
+    let clips: Vec<hardwave_project::clip::ClipPlacement> = slices
+        .iter()
+        .zip(layout)
+        .enumerate()
+        .map(|(i, (slice, (offset, length)))| {
+            let start = ((slice.start * sr).round() as u64).min(info.total_frames);
+            let end = ((slice.end * sr).round() as u64).clamp(start, info.total_frames);
+            hardwave_project::clip::ClipPlacement {
+                content: hardwave_project::clip::ClipContent::Audio(
+                    hardwave_project::clip::AudioClip {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        name: format!("{name} {}", i + 1),
+                        source_path: source_id.clone(),
+                        source_hash: hash.clone(),
+                        source_start: start,
+                        source_end: end,
+                        gain_db: 0.0,
+                        fade_in_ticks: 0,
+                        fade_out_ticks: 0,
+                        muted: false,
+                        reversed: false,
+                        pitch_semitones: 0.0,
+                        stretch_ratio: 1.0,
+                        warp_markers: Vec::new(),
+                        fade_in_curve: Default::default(),
+                        fade_out_curve: Default::default(),
+                        source_file: path.to_string_lossy().into_owned(),
+                        treatment: Default::default(),
+                    },
+                ),
+                track_id: track_id.clone(),
+                position_ticks: position_ticks + offset,
+                length_ticks: length,
+                lane: 0,
+                color: None,
+            }
+        })
+        .collect();
+    if let Some(track) = project.track_mut(&track_id) {
+        track.clips = clips;
+    }
+    drop(project);
+    engine.rebuild_graph();
+    Ok(track_id)
+}
+
 pub(crate) fn track_clips_to_info(
     track: &hardwave_project::Track,
     pool: &hardwave_engine::audio_pool::AudioPool,
@@ -2746,4 +2858,38 @@ fn write_derived_wav(
         .finalize()
         .map_err(|e| format!("could not finish writing: {e}"))?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod slice_layout_tests {
+    use super::{slice_layout, SliceRange};
+
+    fn quarters(n: usize, secs: f64) -> Vec<SliceRange> {
+        (0..n)
+            .map(|i| SliceRange {
+                start: i as f64 * secs,
+                end: (i + 1) as f64 * secs,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_120_bpm_loop_lands_on_the_song_beats_at_any_tempo() {
+        // Quarter-note slices of a 120 BPM loop are half a second apart.
+        let at_150 = slice_layout(&quarters(4, 0.5), 150.0, Some(120.0));
+        let starts: Vec<u64> = at_150.iter().map(|(o, _)| *o).collect();
+        assert_eq!(
+            starts,
+            vec![0, 960, 1920, 2880],
+            "one beat apart in the song"
+        );
+        // At 150 BPM half a second is 1.25 beats, so each clip is cut at the next slice.
+        assert!(at_150[..3].iter().all(|(_, len)| *len == 960));
+    }
+
+    #[test]
+    fn without_a_loop_tempo_the_slices_keep_their_time() {
+        let at_120 = slice_layout(&quarters(2, 0.5), 120.0, None);
+        assert_eq!(at_120, vec![(0, 960), (960, 960)]);
+    }
 }
