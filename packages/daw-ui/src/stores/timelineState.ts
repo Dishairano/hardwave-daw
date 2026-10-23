@@ -1,6 +1,6 @@
 /**
- * Markers and the punch range, saved with the project instead of in browser
- * storage.
+ * Markers, the punch range and track folders, saved with the project instead
+ * of in browser storage.
  *
  * Both used to live in localStorage, so they belonged to the machine rather
  * than the song: move a .hwp to another computer and every marker was gone,
@@ -14,6 +14,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { useMarkerStore, type Marker } from './markerStore'
 import { useTransportStore, pushPunchToEngine } from './transportStore'
+import { useTrackFolderStore, parseFolders, LEGACY_FOLDERS_KEY, type TrackFolder } from './trackFolderStore'
 
 const LEGACY_MARKERS_KEY = 'hardwave.daw.markers'
 const LEGACY_PUNCH_ENABLED = 'hardwave.daw.punchEnabled'
@@ -29,6 +30,8 @@ export interface PunchState {
 export interface TimelineState {
   markers: Marker[]
   punch: PunchState
+  /** Track folders. Absent in songs saved before folders were kept here. */
+  folders: TrackFolder[]
 }
 
 function ticksOrNull(value: unknown): number | null {
@@ -54,6 +57,7 @@ export function parseTimelineState(json: string | null | undefined): TimelineSta
     const punchRaw = (raw.punch ?? {}) as Partial<PunchState>
     return {
       markers,
+      folders: parseFolders((raw as { folders?: unknown }).folders),
       punch: {
         enabled: punchRaw.enabled === true,
         inTicks: ticksOrNull(punchRaw.inTicks),
@@ -69,6 +73,7 @@ export function currentTimelineState(): TimelineState {
   const t = useTransportStore.getState()
   return {
     markers: useMarkerStore.getState().markers,
+    folders: useTrackFolderStore.getState().folders,
     punch: {
       enabled: t.punchEnabled,
       inTicks: t.punchInTicks,
@@ -87,6 +92,7 @@ function applyTimelineState(state: TimelineState) {
   suppressPush = true
   try {
     useMarkerStore.getState().setMarkers(state.markers)
+    useTrackFolderStore.getState().setFolders(state.folders)
     useTransportStore.setState({
       punchEnabled: state.punch.enabled,
       punchInTicks: state.punch.inTicks,
@@ -134,7 +140,31 @@ function adoptLegacyTimelineState(): TimelineState | null {
   } catch {
     return null
   }
-  return found ? { markers, punch } : null
+  return found ? { markers, punch, folders: [] } : null
+}
+
+/**
+ * Folders from before they were kept with the song, adopted once into the
+ * first song opened afterwards: only the ones whose tracks that song has,
+ * since track ids repeat from song to song. Then the old copy is removed.
+ */
+async function adoptLegacyFolders() {
+  let raw: string | null = null
+  try { raw = localStorage.getItem(LEGACY_FOLDERS_KEY) } catch { return }
+  if (!raw) return
+  try { localStorage.removeItem(LEGACY_FOLDERS_KEY) } catch { /* still adopt */ }
+  let legacy: TrackFolder[] = []
+  try { legacy = parseFolders(JSON.parse(raw)) } catch { return }
+  if (legacy.length === 0) return
+  const ids = new Set(
+    (await invoke<{ id: string }[]>('get_tracks').catch(() => [])).map(t => t.id),
+  )
+  const fitting = legacy
+    .map(f => ({ ...f, trackIds: f.trackIds.filter(id => ids.has(id)) }))
+    .filter(f => f.trackIds.length > 0)
+  if (fitting.length === 0) return
+  const have = useTrackFolderStore.getState().folders
+  useTrackFolderStore.getState().setFolders([...have, ...fitting.filter(f => !have.some(h => h.id === f.id))])
 }
 
 /**
@@ -147,15 +177,22 @@ export function hydrateTimelineState(json: string | null) {
   const fromProject = parseTimelineState(json)
   if (fromProject) {
     applyTimelineState(fromProject)
-    return
+  } else {
+    const legacy = adoptLegacyTimelineState()
+    applyTimelineState(legacy ?? emptyTimeline())
+    if (legacy) void pushTimelineState()
   }
-  const legacy = adoptLegacyTimelineState()
-  applyTimelineState(legacy ?? { markers: [], punch: { enabled: false, inTicks: null, outTicks: null } })
-  if (legacy) void pushTimelineState()
+  // The folder store pushes on its own changes, so adopted folders reach
+  // the song.
+  void adoptLegacyFolders()
+}
+
+function emptyTimeline(): TimelineState {
+  return { markers: [], punch: { enabled: false, inTicks: null, outTicks: null }, folders: [] }
 }
 
 export function resetTimelineState() {
-  applyTimelineState({ markers: [], punch: { enabled: false, inTicks: null, outTicks: null } })
+  applyTimelineState(emptyTimeline())
   void pushTimelineState()
 }
 
@@ -195,6 +232,9 @@ export function startTimelineSync() {
   if (syncStarted) return
   syncStarted = true
   useMarkerStore.subscribe(() => {
+    if (!suppressPush) void pushTimelineState()
+  })
+  useTrackFolderStore.subscribe(() => {
     if (!suppressPush) void pushTimelineState()
   })
   useTransportStore.subscribe(s => {
