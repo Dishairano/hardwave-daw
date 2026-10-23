@@ -628,6 +628,7 @@ pub fn run() {
             commands::engine::set_metronome_enabled,
             commands::engine::set_metronome_volume,
             commands::engine::set_metronome_accent,
+            commands::engine::set_metronome_sound_files,
             commands::engine::set_metronome_record_only,
             commands::engine::get_pdc_enabled,
             commands::engine::set_pdc_enabled,
