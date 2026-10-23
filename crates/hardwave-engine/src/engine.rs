@@ -961,15 +961,43 @@ impl DawEngine {
         Ok((source_id, seconds))
     }
 
-    /// A pool source played `speed` times faster with its pitch kept, baked
-    /// once with the phase vocoder clips use and cached under its own id.
-    /// None when the bake gave nothing. Slow on a long file, so the caller
-    /// runs it without holding the engine.
+    /// A pool source played `speed` times faster with its pitch kept, for
+    /// auditioning, cached under its own id. Overlap-add, not the phase
+    /// vocoder clips get: the vocoder took about five seconds for a
+    /// ten-second loop before the first click sounded, and a preview is
+    /// for judging a loop against the song, not for the mix. None when the
+    /// stretch gave nothing.
     pub fn bake_preview_stretch(pool: &AudioPool, source_id: &str, speed: f64) -> Option<String> {
         let stretch = 1.0 / speed.clamp(0.25, 4.0);
-        Self::bake_stretch_variant(pool, source_id, stretch, 0.0);
-        let key = stretch_cache_key(source_id, stretch, 0.0);
-        pool.contains(&key).then_some(key)
+        let key = format!("{}:preview", stretch_cache_key(source_id, stretch, 0.0));
+        if pool.contains(&key) {
+            return Some(key);
+        }
+        let src = pool.get(source_id)?;
+        let req = hardwave_dsp::stretch_apply::StretchRequest {
+            algorithm: hardwave_dsp::stretch_apply::StretchAlgorithm::OverlapAdd,
+            stretch_ratio: stretch as f32,
+            pitch_semitones: 0.0,
+            sample_rate: src.sample_rate as f32,
+        };
+        let channels: Vec<Vec<f32>> = src
+            .channels
+            .iter()
+            .map(|ch| hardwave_dsp::stretch_apply::apply_stretch(ch, req))
+            .collect();
+        let num_frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
+        if num_frames == 0 {
+            return None;
+        }
+        pool.insert(
+            key.clone(),
+            AudioBuffer {
+                channels,
+                sample_rate: src.sample_rate,
+                num_frames,
+            },
+        );
+        Some(key)
     }
 
     /// Audition a file, optionally sped up or slowed to the song's tempo.
@@ -6207,7 +6235,7 @@ mod monitoring_tests {
 
     /// Previewing a loop at the song's tempo moved its pitch like a
     /// turntable. The stretched preview keeps the length the song's tempo
-    /// asks for, from the clips' own phase vocoder.
+    /// asks for.
     #[test]
     fn a_preview_stretch_takes_the_songs_length() {
         let pool = AudioPool::new();
