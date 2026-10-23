@@ -1,15 +1,14 @@
 ### New features
-- feat: clips snap to other clips' edges and to markers within a few pixels (Alt still turns snapping off)
-- feat: Edit > Delete and close the gap (Ctrl+Del) deletes the selected clips and moves what follows back
+- feat: takes go to disk while you record, with no length limit; they were held in memory and stopped at 20 minutes
+- feat: takes can be saved as 24-bit or 32-bit float, in the song's Recordings folder or one folder you pick (Audio settings, Recording)
+- feat: monitoring Auto hears the input while stopped or recording and the track itself while playing back; the mixer's IN button cycles Off, In and Auto
+- feat: a track can record the master or a bus in real time (Records, in the channel's routing), to resample the song
 
 ### Bug fixes
-- fix: a MIDI keyboard plays one track: the armed ones, or else the MIDI track picked last; it played every MIDI track at once
-- fix: Write, Latch and Touch each do what they say; Latch and Write keep going after the release and hold the last value until the song stops
-- fix: track folders are saved with the song; they lived on the machine, so every song showed the last song's folders
+- fix: monitoring an armed track is heard, stopped and playing, also on a track with no plug-ins; it was silent unless direct monitoring was on
 
 ### Improvements
-- feat(playlist): delete and close the gap (ripple delete)
-- feat(playlist): clips snap to other clips' edges and to markers
-- fix(playlist): track folders are saved with the song, not on the machine
-- fix(automation): Write, Latch and Touch each do what they say
-- fix(midi): a keyboard plays one MIDI track, not all of them
+- feat(recording): record the master or a bus in real time
+- feat(recording): monitoring that is heard, with Off, In and Auto
+- feat(recording): choose 24-bit or 32-bit float takes, and their folder
+- feat(recording): takes go straight to disk, with no length limit
