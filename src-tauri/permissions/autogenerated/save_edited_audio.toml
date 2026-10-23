@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-edited-audio"
+description = "Enables the save_edited_audio command without any pre-configured scope."
+commands.allow = ["save_edited_audio"]
+
+[[permission]]
+identifier = "deny-save-edited-audio"
+description = "Denies the save_edited_audio command without any pre-configured scope."
+commands.deny = ["save_edited_audio"]

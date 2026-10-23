@@ -695,6 +695,9 @@ pub fn run() {
             // Missing audio + relinking
             commands::sources::list_missing_sources,
             commands::sources::relink_source,
+            commands::sources::save_edited_audio,
+            commands::sources::use_edited_audio,
+            commands::sources::clips_using_file,
             commands::sources::auto_relink_sources,
             commands::sources::collect_project_samples,
             // Audio

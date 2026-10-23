@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { hw } from '../../theme'
 import { analyseColours, rgbColour, type WaveColours } from '../../lib/waveformColour'
-import { encodeWav } from '../../utils/wav'
 
 interface SampleEditorProps {
   path: string
@@ -374,20 +373,51 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
     }, 'Trimmed silence from start and end')
   }
 
-  // ── Export ─────────────────────────────────────────────────────────────────
-  const downloadWav = () => {
+  // ── Save ───────────────────────────────────────────────────────────────────
+  // How many clips in the song play this file, so the editor can offer to
+  // put the edit into them.
+  const [clipsUsing, setClipsUsing] = useState(0)
+  useEffect(() => {
+    import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke<number>('clips_using_file', { file: path }))
+      .then(setClipsUsing)
+      .catch(() => setClipsUsing(0))
+  }, [path])
+
+  /**
+   * Save the edit next to the original as "<name> (edited).wav", in 32-bit
+   * float; with `useInSong`, the clips that play the original play the edit
+   * from now on. It used to be a 16-bit download into the Downloads folder,
+   * with no way back into the song.
+   */
+  const save = async (useInSong: boolean) => {
     if (!sample) return
-    const blob = encodeWav(sample.channels, sample.sampleRate)
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    const base = name.replace(/\.[^.]+$/, '')
-    a.download = `${base}.edit.wav`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    setBanner({ kind: 'info', text: 'Saved as WAV — check your Downloads folder' })
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const nCh = sample.channels.length
+      const frames = sample.channels[0].length
+      // The head is padded to whole 4 bytes so the samples after it line up.
+      let headText = JSON.stringify({ original: path, sampleRate: sample.sampleRate, channels: nCh })
+      while ((4 + headText.length) % 4 !== 0) headText += ' '
+      const head = new TextEncoder().encode(headText)
+      const body = new Uint8Array(4 + head.length + frames * nCh * 4)
+      new DataView(body.buffer).setUint32(0, head.length, true)
+      body.set(head, 4)
+      const data = new Float32Array(body.buffer, 4 + head.length, frames * nCh)
+      for (let f = 0; f < frames; f++) {
+        for (let c = 0; c < nCh; c++) data[f * nCh + c] = sample.channels[c][f]
+      }
+      const saved = await invoke<string>('save_edited_audio', body)
+      const savedName = saved.split(/[\\/]/).pop()
+      if (useInSong) {
+        const clips = await invoke<number>('use_edited_audio', { original: path, edited: saved })
+        setBanner({ kind: 'info', text: `Saved as ${savedName}; ${clips} clip${clips === 1 ? '' : 's'} in the song now play it` })
+      } else {
+        setBanner({ kind: 'info', text: `Saved as ${savedName}, next to the original` })
+      }
+    } catch (e) {
+      setBanner({ kind: 'error', text: `Could not save: ${String(e)}` })
+    }
   }
 
   // ── Canvas interaction ─────────────────────────────────────────────────────
@@ -464,7 +494,10 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
               {playing ? '■ Stop' : '▶ Play'}
             </Btn>
             <Btn onClick={undo} disabled={undoStack.length === 0}>Undo</Btn>
-            <Btn onClick={downloadWav} disabled={!sample}>Save as WAV</Btn>
+            <Btn onClick={() => { void save(false) }} disabled={!sample}>Save</Btn>
+            {clipsUsing > 0 && (
+              <Btn onClick={() => { void save(true) }} disabled={!sample}>Save and use in the song</Btn>
+            )}
             <Btn onClick={onClose}>Close</Btn>
           </div>
         </div>
