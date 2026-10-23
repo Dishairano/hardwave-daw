@@ -67,6 +67,12 @@ pub struct AudioPrefs {
     /// the song is stopped (see audio_focus.rs). Off unless switched on.
     #[serde(default)]
     pub release_device_in_background: bool,
+    /// Takes as 24-bit WAVs instead of 32-bit float (see TakeFormat).
+    #[serde(default)]
+    pub take_bits_24: bool,
+    /// One folder for every take; none keeps them with the song.
+    #[serde(default)]
+    pub take_folder: Option<String>,
 }
 
 fn default_sample_rate() -> u32 {
@@ -139,6 +145,8 @@ impl AudioPrefs {
             trusted_sample_servers: Vec::new(),
             audio_host: None,
             release_device_in_background: false,
+            take_bits_24: false,
+            take_folder: None,
         }
     }
 }
@@ -166,5 +174,16 @@ mod tests {
         let back: AudioPrefs =
             serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).expect("round trip");
         assert_eq!(back.audio_host.as_deref(), Some("ASIO"));
+    }
+
+    #[test]
+    fn the_take_format_and_folder_are_kept() {
+        let mut prefs = AudioPrefs::factory();
+        prefs.take_bits_24 = true;
+        prefs.take_folder = Some("D:/Takes".into());
+        let back: AudioPrefs =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).expect("round trip");
+        assert!(back.take_bits_24);
+        assert_eq!(back.take_folder.as_deref(), Some("D:/Takes"));
     }
 }

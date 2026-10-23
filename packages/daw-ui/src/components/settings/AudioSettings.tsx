@@ -10,6 +10,7 @@ import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
 import { AUTOSAVE_OPTIONS, useAutosavePrefsStore } from '../../stores/autosavePrefsStore'
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { RecordingLatencyRow } from './RecordingLatency'
+import { TakeFormatRow } from './TakeFormatRow'
 import { PluginLatencyRow } from './PluginLatencyRow'
 import { ReleaseInBackgroundRow } from './ReleaseInBackgroundRow'
 import { useMetronomeStore } from '../../stores/metronomeStore'
@@ -1433,6 +1434,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               />
             </SettingRow>
             <RecordingLatencyRow />
+            <TakeFormatRow />
           </>)}
 
           {tab === 'plugins' && (<>

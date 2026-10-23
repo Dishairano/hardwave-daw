@@ -259,6 +259,10 @@ pub fn run() {
     // stream honors the user's last device choice instead of the default.
     let prefs = AudioPrefs::load();
     audio_focus::set_enabled(prefs.release_device_in_background);
+    commands::transport::set_take_format_value(commands::transport::TakeFormat {
+        bits_24: prefs.take_bits_24,
+        folder: prefs.take_folder.clone(),
+    });
     // The driver first: the devices below are that driver's devices. One
     // that has gone (an ASIO driver uninstalled) leaves the default.
     if let Some(host) = prefs.audio_host.as_deref() {
@@ -673,6 +677,8 @@ pub fn run() {
             commands::engine::set_audio_host,
             commands::mix_check::mix_check,
             commands::engine::get_release_device_in_background,
+            commands::transport::get_take_format,
+            commands::transport::set_take_format,
             commands::engine::set_release_device_in_background,
             commands::engine::get_wasapi_exclusive,
             commands::engine::set_wasapi_exclusive,

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-take-format"
+description = "Enables the set_take_format command without any pre-configured scope."
+commands.allow = ["set_take_format"]
+
+[[permission]]
+identifier = "deny-set-take-format"
+description = "Denies the set_take_format command without any pre-configured scope."
+commands.deny = ["set_take_format"]
