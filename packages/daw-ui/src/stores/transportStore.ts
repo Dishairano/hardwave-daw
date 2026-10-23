@@ -452,6 +452,15 @@ export const useTransportStore = create<TransportState>((set, get) => ({
         await commitRecording(take, get().recordStartSample ?? 0, endSample)
         set({ recordStartSample: null })
       }
+      // Latch and Write passes are written into their lanes when the song
+      // stops, not when a control is let go: show what they wrote. The two
+      // stores are loaded only when a stop needs them.
+      void import('./automationWriteStore').then(async ({ useAutomationWriteStore }) => {
+        const mode = useAutomationWriteStore.getState().mode
+        if (mode !== 'latch' && mode !== 'write') return
+        const { useTrackStore } = await import('./trackStore')
+        await useTrackStore.getState().fetchTracks()
+      }).catch(() => {})
     } catch (e) {
       if (wasRecording) set({ recording: wasRecording })
       throw e
