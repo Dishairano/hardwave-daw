@@ -73,7 +73,7 @@ use std::collections::HashMap;
 
 use crate::audio_pool::{AudioBuffer, AudioPool};
 use crate::graph::{AudioGraph, AudioNode, ProcessContext};
-use crate::input_node::{CaptureTap, InputNode, SharedInputConsumer};
+use crate::input_node::{CaptureTap, InputNode, RecordTapNode, SharedInputConsumer};
 use crate::master_node::MasterNode;
 use crate::master_tap::{self, SharedMasterTap};
 use crate::track_node::{ClipRegion, TrackMeterState, TrackNode};
@@ -537,7 +537,17 @@ impl DawEngine {
         // The ring, the take's file and the thread that writes it are made
         // here, on this thread, so the audio thread never allocates.
         let record_start = self.transport.position();
-        let latency = self.recording_latency().total_frames;
+        // The song's own output reaches the tap late only by what plug-in
+        // delay compensation holds it back; the interface's input by the
+        // whole round trip.
+        let inside = self.project.lock().record_source().ok().flatten().is_some();
+        let latency = if !inside {
+            self.recording_latency().total_frames
+        } else if self.transport.pdc_enabled.load(Ordering::Relaxed) {
+            self.graph_latency_samples.load(Ordering::Relaxed) as u64
+        } else {
+            0
+        };
         self.capture.arm_compensated(
             self.current_sample_rate(),
             CAPTURE_RING_SECS,
@@ -3581,7 +3591,13 @@ impl EngineCallback {
             }
             if track.armed {
                 any_armed = true;
-                if track.monitor_input {
+                // A track recording another track's output takes nothing
+                // from the interface, so there is no input to hear on it.
+                let records_inside = track
+                    .input_source
+                    .as_ref()
+                    .is_some_and(|s| *s != track.id && track_id_to_node.contains_key(s));
+                if track.monitor_input && !records_inside {
                     if let Some(&node_id) = track_id_to_node.get(&track.id) {
                         monitor_routes.push((node_id, track.monitor_auto));
                         live_tracks.push(&track.id);
@@ -3596,9 +3612,26 @@ impl EngineCallback {
                 .direct_monitoring
                 .load(std::sync::atomic::Ordering::Relaxed);
             let mut input_node = InputNode::new(Arc::clone(&self.input_consumer));
-            // Recording capture survives graph rebuilds because it's the same
-            // CaptureTap Arc handed to every InputNode we ever build.
-            input_node.set_capture(Some(Arc::clone(&self.capture)));
+            // Recording another track's output (resampling): a tap on that
+            // node's output feeds the recording instead of the interface.
+            // A conflict between armed tracks is refused when recording
+            // starts; until then the interface stands.
+            let inside = project
+                .record_source()
+                .ok()
+                .flatten()
+                .and_then(|id| track_id_to_node.get(&id).copied());
+            if let Some(source_node) = inside {
+                let tap = self
+                    .graph
+                    .add_node(Box::new(RecordTapNode::new(Arc::clone(&self.capture))));
+                self.graph.connect(source_node, 0, tap, 0);
+                self.graph.connect(source_node, 1, tap, 1);
+            } else {
+                // Recording capture survives graph rebuilds because it's the
+                // same CaptureTap Arc handed to every InputNode we ever build.
+                input_node.set_capture(Some(Arc::clone(&self.capture)));
+            }
             let input_id = self.graph.add_node(Box::new(input_node));
             if monitor_routes.is_empty() {
                 // Armed but not monitoring: the node exists only to feed the
@@ -5873,9 +5906,14 @@ mod monitoring_tests {
         cb: EngineCallback,
         input: rtrb::Producer<f32>,
         commands: crossbeam_channel::Sender<EngineCommand>,
+        capture: Arc<CaptureTap>,
     }
 
     fn rig(project: Project) -> Rig {
+        rig_with(project, AudioPool::new())
+    }
+
+    fn rig_with(project: Project, pool: AudioPool) -> Rig {
         let transport = TransportState::default();
         transport.sample_rate.store(48_000, Relaxed);
         let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);
@@ -5885,15 +5923,16 @@ mod monitoring_tests {
         let input_consumer: SharedInputConsumer = Arc::new(Mutex::new(Some(consumer)));
         let (_cmd_tx, cmd_rx) = crate::insert_chain::command_channel(8);
         let (grave_tx, _grave_rx) = crate::insert_chain::graveyard_channel(8);
+        let capture = Arc::new(CaptureTap::default());
         let cb = EngineCallback::new(
             transport,
             Arc::new(Mutex::new(project)),
             meter_producer,
             command_rx,
-            AudioPool::new(),
+            pool,
             track_meters,
             input_consumer,
-            Arc::new(CaptureTap::default()),
+            Arc::clone(&capture),
             master_tap::new_shared(),
             Arc::new(std::sync::atomic::AtomicU32::new(0)),
             cmd_rx,
@@ -5919,6 +5958,7 @@ mod monitoring_tests {
             cb,
             input,
             commands: command_tx,
+            capture,
         }
     }
 
@@ -6003,6 +6043,87 @@ mod monitoring_tests {
         assert!(
             level > 0.2,
             "the bus carries the input to master, got {level}"
+        );
+    }
+
+    /// A song with one track playing a steady 0.5 for a second, and an
+    /// empty track armed to record the master.
+    fn resampling_song() -> (Project, AudioPool) {
+        use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve};
+        let frames = 48_000;
+        let pool = AudioPool::new();
+        pool.insert(
+            "tone".into(),
+            crate::AudioBuffer {
+                channels: vec![vec![0.5; frames]; 2],
+                sample_rate: 48_000,
+                num_frames: frames,
+            },
+        );
+        let mut p = Project::default();
+        let mut beat = hardwave_project::Track::new_audio("beat".into(), "Beat".into());
+        beat.clips.push(ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: "clip-tone".into(),
+                name: "tone".into(),
+                source_path: "tone".into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: frames as u64,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                warp_markers: Vec::new(),
+                fade_in_curve: FadeCurve::Linear,
+                fade_out_curve: FadeCurve::Linear,
+                source_file: String::new(),
+                treatment: Default::default(),
+            }),
+            track_id: "beat".into(),
+            position_ticks: 0,
+            length_ticks: 1920,
+            lane: 0,
+            color: None,
+        });
+        p.tracks.push(beat);
+        let mut rec = hardwave_project::Track::new_audio("rec".into(), "Resample".into());
+        rec.armed = true;
+        rec.input_source = Some("master".into());
+        p.tracks.push(rec);
+        (p, pool)
+    }
+
+    /// Recording the song's own output, as resampling: the take is what
+    /// the master played, not what came in at the interface.
+    #[test]
+    fn an_armed_track_records_the_master_not_the_interface() {
+        let (song, pool) = resampling_song();
+        let mut r = rig_with(song, pool);
+        r.capture.arm(48_000, 1);
+        r.capture.recording.store(true, Relaxed);
+        play(&r);
+        let mut out = vec![0.0_f32; 512];
+        for _ in 0..8 {
+            for _ in 0..512 {
+                // A loud interface input that must not end up in the take.
+                let _ = r.input.push(0.9);
+            }
+            r.cb.process(&mut out, 256, 2);
+        }
+        r.capture.recording.store(false, Relaxed);
+        let take = r.capture.take();
+        assert!(!take.is_empty(), "the master was recorded");
+        let peak = take.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.2, "the tone through the master, got {peak}");
+        assert!(peak < 0.6, "not the interface input, got {peak}");
+        let heard = out.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(
+            heard < 0.6,
+            "the interface input is not heard on the armed track"
         );
     }
 }

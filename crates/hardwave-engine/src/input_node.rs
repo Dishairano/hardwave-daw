@@ -561,6 +561,47 @@ impl InputNode {
     }
 }
 
+/// Records another node's output: a bus or the master, for resampling. It
+/// sits after that node with nothing after it, and writes what reaches it
+/// to the recording while recording is on.
+pub struct RecordTapNode {
+    capture: Arc<CaptureTap>,
+}
+
+impl RecordTapNode {
+    pub fn new(capture: Arc<CaptureTap>) -> Self {
+        Self { capture }
+    }
+}
+
+impl AudioNode for RecordTapNode {
+    fn name(&self) -> &str {
+        "Record tap"
+    }
+
+    fn process(
+        &mut self,
+        inputs: &[&[f32]],
+        outputs: &mut [Vec<f32>],
+        _midi_in: &[hardwave_midi::MidiEvent],
+        _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+        ctx: &ProcessContext,
+    ) {
+        for ch in outputs.iter_mut() {
+            ch.fill(0.0);
+        }
+        if !self.capture.recording.load(Ordering::Relaxed) {
+            return;
+        }
+        let (Some(left), Some(right)) = (inputs.first(), inputs.get(1)) else {
+            return;
+        };
+        let n = left.len().min(right.len()).min(ctx.buffer_size as usize);
+        self.capture
+            .write_block(left, right, n, ctx.position_samples);
+    }
+}
+
 impl AudioNode for InputNode {
     fn name(&self) -> &str {
         "Input"

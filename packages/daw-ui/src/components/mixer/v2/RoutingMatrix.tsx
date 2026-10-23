@@ -19,6 +19,7 @@ const DEFAULT_NAME = /^Insert \d+$/
 /**
  * Routing for the selected channel, at the top of the FX rack:
  *
+ *   Records  [Audio input ▾]      what this channel records when armed
  *   Output   [Master ▾]           where this channel's sound goes
  *   Sends    ▶ Reverb  [----|--] -6.0 dB  post  ×
  *            [+ Send to… ▾]
@@ -63,6 +64,17 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
     [trackId],
   )
 
+  // Recording a bus or the master instead of the interface: resampling.
+  const setInput = useCallback(
+    (value: string) => {
+      useTrackStore
+        .getState()
+        .setTrackInputSource(trackId, value === '' ? null : value)
+        .catch(report('Could not change what this channel records'))
+    },
+    [trackId],
+  )
+
   const addSend = useCallback(
     (target: string) => {
       if (!target) return
@@ -101,11 +113,35 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
 
   const sentTo = new Set(sends.map((s) => s.target))
 
+  const masterId = tracks.find((t) => t.kind === 'Master')?.id
+
   return (
     <div className="mx-fx-routing">
-      <div className="mx-fx-routing-head">
-        <h4>Output</h4>
-      </div>
+      {self?.kind !== 'Midi' && (
+        <>
+          <div className="mx-fx-routing-head">
+            <h4>Records</h4>
+          </div>
+          <select
+            className="mx-fx-route-select"
+            value={self?.inputSource ?? ''}
+            onChange={(e) => setInput(e.target.value)}
+            title="What this channel records when it is armed: the audio input, or the sound of another channel or the master (resampling)"
+          >
+            <option value="">Audio input</option>
+            {masterId && <option value={masterId}>Master (the whole song)</option>}
+            {destinations(new Set())}
+          </select>
+          <div className="mx-fx-routing-head" style={{ marginTop: 10 }}>
+            <h4>Output</h4>
+          </div>
+        </>
+      )}
+      {self?.kind === 'Midi' && (
+        <div className="mx-fx-routing-head">
+          <h4>Output</h4>
+        </div>
+      )}
       <select
         className="mx-fx-route-select"
         value={self?.outputBus ?? ''}

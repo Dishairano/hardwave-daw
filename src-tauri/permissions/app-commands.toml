@@ -189,6 +189,7 @@ permissions = [
   "allow-toggle-arm",
   "allow-set-track-monitor-input",
   "allow-set-track-monitor-mode",
+  "allow-set-track-input-source",
   "allow-reorder-track",
   "allow-set-track-name",
   "allow-set-track-color",

@@ -557,6 +557,39 @@ impl Project {
         self.tracks.iter().find(|t| t.id == id)
     }
 
+    /// What a recording captures: none for the audio interface, or the
+    /// track whose output the armed tracks record. There is one recording
+    /// at a time, so armed tracks that ask for different sources are refused
+    /// rather than all given one of them.
+    pub fn record_source(&self) -> Result<Option<TrackId>, String> {
+        // A source that is the track itself, or a track since deleted,
+        // falls back to the interface.
+        let mut sources = self
+            .tracks
+            .iter()
+            .filter(|t| {
+                t.armed
+                    && t.kind.is_audio_bearing()
+                    && !matches!(t.kind, crate::track::TrackKind::Midi)
+            })
+            .map(|t| {
+                t.input_source
+                    .clone()
+                    .filter(|s| *s != t.id && self.tracks.iter().any(|o| o.id == *s))
+            });
+        let Some(first) = sources.next() else {
+            return Ok(None);
+        };
+        if sources.any(|s| s != first) {
+            return Err(
+                "The armed tracks record from different inputs. Record them one at a time, \
+                 or give them the same input."
+                    .to_string(),
+            );
+        }
+        Ok(first)
+    }
+
     pub fn track_mut(&mut self, id: &str) -> Option<&mut Track> {
         self.tracks.iter_mut().find(|t| t.id == id)
     }
@@ -1113,5 +1146,62 @@ mod tests {
         assert!(text.contains("newer version"), "unhelpful message: {text}");
         assert!(text.contains(&FORMAT_VERSION.to_string()));
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod record_source_tests {
+    use super::Project;
+    use crate::track::Track;
+
+    fn song(sources: &[(&str, Option<&str>, bool)]) -> Project {
+        let mut p = Project::default();
+        for (id, source, armed) in sources {
+            let mut t = Track::new_audio((*id).into(), (*id).into());
+            t.armed = *armed;
+            t.input_source = source.map(Into::into);
+            p.tracks.push(t);
+        }
+        p
+    }
+
+    #[test]
+    fn nothing_armed_or_the_interface_records_the_interface() {
+        assert_eq!(song(&[]).record_source(), Ok(None));
+        assert_eq!(song(&[("a", None, true)]).record_source(), Ok(None));
+        assert_eq!(
+            song(&[("a", Some("master"), false)]).record_source(),
+            Ok(None),
+            "an unarmed track's input does not count"
+        );
+    }
+
+    #[test]
+    fn an_armed_track_can_record_the_master_or_a_bus() {
+        assert_eq!(
+            song(&[("a", Some("master"), true)]).record_source(),
+            Ok(Some("master".into()))
+        );
+        assert_eq!(
+            song(&[("bus", None, false), ("a", Some("bus"), true)]).record_source(),
+            Ok(Some("bus".into()))
+        );
+    }
+
+    #[test]
+    fn itself_or_a_deleted_track_falls_back_to_the_interface() {
+        assert_eq!(song(&[("a", Some("a"), true)]).record_source(), Ok(None));
+        assert_eq!(song(&[("a", Some("gone"), true)]).record_source(), Ok(None));
+    }
+
+    #[test]
+    fn armed_tracks_asking_for_different_inputs_are_refused() {
+        assert!(song(&[("a", Some("master"), true), ("b", None, true)])
+            .record_source()
+            .is_err());
+        assert_eq!(
+            song(&[("a", Some("master"), true), ("b", Some("master"), true)]).record_source(),
+            Ok(Some("master".into()))
+        );
     }
 }

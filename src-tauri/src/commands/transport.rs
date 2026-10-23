@@ -489,6 +489,9 @@ pub fn toggle_recording(state: State<AppState>) -> Result<Option<RecordedTake>, 
     let was_recording = engine.transport.recording.load(Ordering::Relaxed);
 
     if !was_recording {
+        // Armed tracks that ask for different inputs cannot share the one
+        // recording; say so rather than give them all one of the inputs.
+        engine.project.lock().record_source()?;
         // Begin: arm the InputNode tap and remember where we started so
         // the resulting clip gets placed at the right timeline position.
         engine.transport.recording.store(true, Ordering::Relaxed);

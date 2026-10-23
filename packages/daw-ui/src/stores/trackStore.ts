@@ -157,6 +157,8 @@ export interface TrackInfo {
   filterCutoffHz: number
   filterResonance: number
   outputBus: string | null
+  /** What this track records when armed: null for the audio interface, or a bus or the master. */
+  inputSource?: string | null
   insert_count: number
   inserts: InsertInfo[]
   automationLanes: AutomationLaneInfo[]
@@ -315,6 +317,7 @@ interface TrackState {
   setTrackFilterCutoffHz: (id: string, cutoffHz: number) => Promise<void>
   setTrackFilterResonance: (id: string, resonance: number) => Promise<void>
   setTrackOutputBus: (id: string, outputBus: string | null) => Promise<void>
+  setTrackInputSource: (id: string, source: string | null) => Promise<void>
   trackHeights: Record<string, number>
   setTrackHeight: (id: string, height: number) => void
 
@@ -829,6 +832,14 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const name = tracks.find(t => t.id === id)?.name ?? 'track'
     const targetName = outputBus ? (tracks.find(t => t.id === outputBus)?.name ?? 'Master') : 'Master'
     await mut('set_track_output_bus', { trackId: id, outputBus }, `Route "${name}" to ${targetName}`)
+    await get().refreshTrack(id)
+  },
+
+  setTrackInputSource: async (id, source) => {
+    const tracks = get().tracks
+    const name = tracks.find(t => t.id === id)?.name ?? 'track'
+    const sourceName = source ? (tracks.find(t => t.id === source)?.name ?? 'Master') : 'the audio input'
+    await mut('set_track_input_source', { trackId: id, source }, `"${name}" records ${sourceName}`)
     await get().refreshTrack(id)
   },
 
