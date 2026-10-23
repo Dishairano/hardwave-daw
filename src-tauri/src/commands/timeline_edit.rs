@@ -132,6 +132,47 @@ pub fn delete_time(state: State<AppState>, at_ticks: u64, length_ticks: u64) -> 
     shift_everything(state, end, -(length_ticks as i64))
 }
 
+/// Move every clip, automation point and clip, tempo change, marker and
+/// section at or after `from` by `delta` ticks.
+fn shift_project(project: &mut hardwave_project::Project, from: u64, delta: i64) {
+    for track in project.tracks.iter_mut() {
+        for placement in track.clips.iter_mut() {
+            if placement.position_ticks >= from {
+                shift_clip(placement, delta);
+            }
+            // A MIDI clip carries its id twice; nothing inside it moves,
+            // because notes and controls are relative to the clip.
+            if let ClipContent::Midi(_) = placement.content {
+                continue;
+            }
+        }
+        for lane in track.automation_lanes.iter_mut() {
+            for point in lane.points.iter_mut() {
+                if point.tick >= from {
+                    point.tick = apply(point.tick, delta);
+                }
+            }
+        }
+        for clip in track.automation_clips.iter_mut() {
+            if clip.start_tick >= from {
+                clip.start_tick = apply(clip.start_tick, delta);
+            }
+        }
+    }
+
+    // Tempo and time-signature changes are part of the arrangement: a
+    // key change two bars later has to stay two bars later. The entry at
+    // tick 0 is the song's starting tempo and never moves.
+    for entry in project.tempo_map.entries.iter_mut() {
+        if entry.tick >= from && entry.tick > 0 {
+            entry.tick = apply(entry.tick, delta);
+        }
+    }
+
+    shift_markers(project, from, delta);
+    shift_sections(project, from, delta);
+}
+
 /// Move everything at or after `from` by `delta` ticks.
 fn shift_everything(state: State<AppState>, from: u64, delta: i64) -> Result<(), String> {
     if delta > 0 {
@@ -141,43 +182,7 @@ fn shift_everything(state: State<AppState>, from: u64, delta: i64) -> Result<(),
     {
         let engine = state.engine.lock();
         let mut project = engine.project.lock();
-
-        for track in project.tracks.iter_mut() {
-            for placement in track.clips.iter_mut() {
-                if placement.position_ticks >= from {
-                    shift_clip(placement, delta);
-                }
-                // A MIDI clip carries its id twice; nothing inside it moves,
-                // because notes and controls are relative to the clip.
-                if let ClipContent::Midi(_) = placement.content {
-                    continue;
-                }
-            }
-            for lane in track.automation_lanes.iter_mut() {
-                for point in lane.points.iter_mut() {
-                    if point.tick >= from {
-                        point.tick = apply(point.tick, delta);
-                    }
-                }
-            }
-            for clip in track.automation_clips.iter_mut() {
-                if clip.start_tick >= from {
-                    clip.start_tick = apply(clip.start_tick, delta);
-                }
-            }
-        }
-
-        // Tempo and time-signature changes are part of the arrangement: a
-        // key change two bars later has to stay two bars later. The entry at
-        // tick 0 is the song's starting tempo and never moves.
-        for entry in project.tempo_map.entries.iter_mut() {
-            if entry.tick >= from && entry.tick > 0 {
-                entry.tick = apply(entry.tick, delta);
-            }
-        }
-
-        shift_markers(&mut project, from, delta);
-        shift_sections(&mut project, from, delta);
+        shift_project(&mut project, from, delta);
     }
 
     // The graph rebuild is what re-reads the tempo map and the clips, which
@@ -354,6 +359,347 @@ pub fn duplicate_section(state: State<AppState>, id: String) -> Result<usize, St
 
     state.engine.lock().rebuild_graph();
     Ok(copied)
+}
+
+/// Give a section another name.
+#[tauri::command]
+pub fn rename_section(state: State<AppState>, id: String, name: String) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("give the section a name".into());
+    }
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    let mut sections = read_sections(&project);
+    let section = sections
+        .iter_mut()
+        .find(|s| s.id == id)
+        .ok_or_else(|| "no section with that id".to_string())?;
+    section.name = name;
+    write_sections(&mut project, &sections);
+    Ok(())
+}
+
+/// What starts inside a section, taken out of the song to be put back
+/// elsewhere, each at its offset from the section's start.
+#[derive(Default)]
+struct Lifted {
+    clips: Vec<(usize, hardwave_project::clip::ClipPlacement)>,
+    points: Vec<(usize, usize, hardwave_project::automation::AutomationPoint)>,
+    automation_clips: Vec<(usize, hardwave_project::automation_clip::AutomationClip)>,
+    tempos: Vec<hardwave_project::tempo::TempoEntry>,
+    markers: Vec<serde_json::Value>,
+}
+
+fn lift(project: &mut hardwave_project::Project, start: u64, end: u64) -> Lifted {
+    let inside = |t: u64| t >= start && t < end;
+    let mut lifted = Lifted::default();
+    for (ti, track) in project.tracks.iter_mut().enumerate() {
+        let (take, keep): (Vec<_>, Vec<_>) = track
+            .clips
+            .drain(..)
+            .partition(|c| inside(c.position_ticks));
+        track.clips = keep;
+        lifted.clips.extend(take.into_iter().map(|mut c| {
+            c.position_ticks -= start;
+            (ti, c)
+        }));
+        for (li, lane) in track.automation_lanes.iter_mut().enumerate() {
+            let (take, keep): (Vec<_>, Vec<_>) =
+                lane.points.drain(..).partition(|p| inside(p.tick));
+            lane.points = keep;
+            lifted.points.extend(take.into_iter().map(|mut p| {
+                p.tick -= start;
+                (ti, li, p)
+            }));
+        }
+        let (take, keep): (Vec<_>, Vec<_>) = track
+            .automation_clips
+            .drain(..)
+            .partition(|c| inside(c.start_tick));
+        track.automation_clips = keep;
+        lifted
+            .automation_clips
+            .extend(take.into_iter().map(|mut c| {
+                c.start_tick -= start;
+                (ti, c)
+            }));
+    }
+    let (take, keep): (Vec<_>, Vec<_>) = project
+        .tempo_map
+        .entries
+        .drain(..)
+        .partition(|e| e.tick > 0 && inside(e.tick));
+    project.tempo_map.entries = keep;
+    lifted.tempos = take
+        .into_iter()
+        .map(|mut e| {
+            e.tick -= start;
+            e
+        })
+        .collect();
+    if let Some(mut value) = project
+        .timeline_state
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+    {
+        if let Some(markers) = value.get_mut("markers").and_then(|m| m.as_array_mut()) {
+            let (take, keep): (Vec<_>, Vec<_>) = markers
+                .drain(..)
+                .partition(|m| m.get("tick").and_then(|t| t.as_u64()).is_some_and(inside));
+            *markers = keep;
+            lifted.markers = take
+                .into_iter()
+                .map(|mut m| {
+                    let tick = m["tick"].as_u64().unwrap_or(start);
+                    m["tick"] = serde_json::json!(tick - start);
+                    m
+                })
+                .collect();
+        }
+        project.timeline_state = Some(value.to_string());
+    }
+    lifted
+}
+
+fn put_back(project: &mut hardwave_project::Project, lifted: Lifted, at: u64) {
+    for (ti, mut c) in lifted.clips {
+        c.position_ticks += at;
+        if let Some(track) = project.tracks.get_mut(ti) {
+            track.clips.push(c);
+        }
+    }
+    for (ti, li, mut p) in lifted.points {
+        p.tick += at;
+        if let Some(lane) = project
+            .tracks
+            .get_mut(ti)
+            .and_then(|t| t.automation_lanes.get_mut(li))
+        {
+            lane.points.push(p);
+        }
+    }
+    for track in project.tracks.iter_mut() {
+        for lane in track.automation_lanes.iter_mut() {
+            lane.points.sort_by_key(|p| p.tick);
+        }
+    }
+    for (ti, mut c) in lifted.automation_clips {
+        c.start_tick += at;
+        if let Some(track) = project.tracks.get_mut(ti) {
+            track.automation_clips.push(c);
+        }
+    }
+    for mut e in lifted.tempos {
+        e.tick += at;
+        project.tempo_map.entries.push(e);
+    }
+    project.tempo_map.entries.sort_by_key(|e| e.tick);
+    if lifted.markers.is_empty() {
+        return;
+    }
+    let mut value: serde_json::Value = project
+        .timeline_state
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !value["markers"].is_array() {
+        value["markers"] = serde_json::json!([]);
+    }
+    if let Some(markers) = value["markers"].as_array_mut() {
+        for mut m in lifted.markers {
+            let tick = m["tick"].as_u64().unwrap_or(0);
+            m["tick"] = serde_json::json!(tick + at);
+            markers.push(m);
+        }
+    }
+    project.timeline_state = Some(value.to_string());
+}
+
+/// Move a section, and everything that starts inside it, to just before
+/// another section, or after the last one when `before` is none. The
+/// song closes up where it was and opens up where it goes, so reordering
+/// verse, chorus and drop is one step instead of dragging every track.
+fn move_section_in(
+    project: &mut hardwave_project::Project,
+    id: &str,
+    before: Option<&str>,
+) -> Result<(), String> {
+    let mut sections = read_sections(project);
+    let moving = sections
+        .iter()
+        .find(|s| s.id == id)
+        .cloned()
+        .ok_or_else(|| "no section with that id".to_string())?;
+    let length = moving.end_ticks.saturating_sub(moving.start_ticks);
+    if length == 0 {
+        return Err("that section has no length".into());
+    }
+    if before == Some(id) {
+        return Ok(());
+    }
+    // Where it goes, in the song as it is now.
+    let target = match before {
+        Some(other) => {
+            sections
+                .iter()
+                .find(|s| s.id == other)
+                .ok_or_else(|| "no section to put it before".to_string())?
+                .start_ticks
+        }
+        None => sections
+            .iter()
+            .filter(|s| s.id != id)
+            .map(|s| s.end_ticks)
+            .max()
+            .unwrap_or(moving.end_ticks)
+            .max(moving.end_ticks),
+    };
+    // Take the section out of the list so the shifts below leave it alone.
+    sections.retain(|s| s.id != id);
+    write_sections(project, &sections);
+    let lifted = lift(project, moving.start_ticks, moving.end_ticks);
+    shift_project(project, moving.end_ticks, -(length as i64));
+    let at = if target > moving.start_ticks {
+        target - length
+    } else {
+        target
+    };
+    shift_project(project, at, length as i64);
+    put_back(project, lifted, at);
+    let mut sections = read_sections(project);
+    sections.push(Section {
+        start_ticks: at,
+        end_ticks: at + length,
+        ..moving
+    });
+    write_sections(project, &sections);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn move_section(
+    state: State<AppState>,
+    id: String,
+    before: Option<String>,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        move_section_in(&mut project, &id, before.as_deref())?;
+    }
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+#[cfg(test)]
+mod section_move_tests {
+    use super::*;
+    use hardwave_project::clip::{ClipPlacement, MidiClipRef};
+
+    fn clip_at(track: &str, at: u64) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Midi(MidiClipRef {
+                id: format!("c{at}"),
+                clip: hardwave_midi::MidiClip::new(format!("c{at}"), "c".into(), 960),
+            }),
+            track_id: track.into(),
+            position_ticks: at,
+            length_ticks: 960,
+            lane: 0,
+            color: None,
+        }
+    }
+
+    /// Verse 0-1920, chorus 1920-3840, drop 3840-5760, a clip in each and a
+    /// marker in the drop.
+    fn song() -> hardwave_project::Project {
+        let mut p = hardwave_project::Project::default();
+        let id = p.tracks[1].id.clone();
+        for at in [0, 1920, 3840] {
+            p.tracks[1].clips.push(clip_at(&id, at));
+        }
+        p.timeline_state = Some(
+            r#"{"markers":[{"id":"m","tick":4000}],"sections":[
+                {"id":"v","name":"Verse","startTicks":0,"endTicks":1920},
+                {"id":"c","name":"Chorus","startTicks":1920,"endTicks":3840},
+                {"id":"d","name":"Drop","startTicks":3840,"endTicks":5760}]}"#
+                .into(),
+        );
+        p
+    }
+
+    fn order(p: &hardwave_project::Project) -> Vec<(String, u64)> {
+        let mut s: Vec<(String, u64)> = read_sections(p)
+            .into_iter()
+            .map(|s| (s.name, s.start_ticks))
+            .collect();
+        s.sort_by_key(|(_, at)| *at);
+        s
+    }
+
+    fn clips(p: &hardwave_project::Project) -> Vec<(String, u64)> {
+        let mut c: Vec<(String, u64)> = p.tracks[1]
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Midi(m) => (m.id.clone(), c.position_ticks),
+                _ => (String::new(), c.position_ticks),
+            })
+            .collect();
+        c.sort_by_key(|(_, at)| *at);
+        c
+    }
+
+    #[test]
+    fn the_drop_moves_before_the_chorus_with_what_is_in_it() {
+        let mut p = song();
+        move_section_in(&mut p, "d", Some("c")).unwrap();
+        assert_eq!(
+            order(&p),
+            vec![
+                ("Verse".into(), 0),
+                ("Drop".into(), 1920),
+                ("Chorus".into(), 3840)
+            ]
+        );
+        assert_eq!(
+            clips(&p),
+            vec![
+                ("c0".into(), 0),
+                ("c3840".into(), 1920),
+                ("c1920".into(), 3840)
+            ]
+        );
+        assert!(
+            p.timeline_state.unwrap().contains(r#""tick":2080"#),
+            "the marker came along"
+        );
+    }
+
+    #[test]
+    fn the_verse_moves_to_the_end() {
+        let mut p = song();
+        move_section_in(&mut p, "v", None).unwrap();
+        assert_eq!(
+            order(&p),
+            vec![
+                ("Chorus".into(), 0),
+                ("Drop".into(), 1920),
+                ("Verse".into(), 3840)
+            ]
+        );
+        assert_eq!(
+            clips(&p),
+            vec![
+                ("c1920".into(), 0),
+                ("c3840".into(), 1920),
+                ("c0".into(), 3840)
+            ]
+        );
+    }
 }
 
 #[cfg(test)]
