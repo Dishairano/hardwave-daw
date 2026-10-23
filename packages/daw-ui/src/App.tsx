@@ -459,6 +459,66 @@ export function App() {
     }
   }, [])
 
+  /** Sections by name, or a note that there are none. */
+  const sectionsOrNote = async (): Promise<{ id: string; name: string }[]> => {
+    let sections: { id: string; name: string }[] = []
+    try {
+      sections = await invoke<{ id: string; name: string }[]>('list_sections')
+    } catch { sections = [] }
+    if (sections.length === 0) {
+      useNotificationStore.getState().push('info', 'No sections yet', {
+        detail: 'Set the loop range over a part and use "Mark the loop range as a section".',
+      })
+    }
+    return sections
+  }
+
+  const renameSection = useCallback(async () => {
+    const sections = await sectionsOrNote()
+    if (sections.length === 0) return
+    const names = sections.map(s => s.name)
+    const name = window.prompt(`Rename which section?\n\n${names.join('\n')}`, names[0])?.trim()
+    const chosen = sections.find(s => s.name === name)
+    if (!chosen) return
+    const next = window.prompt(`New name for "${chosen.name}"`, chosen.name)?.trim()
+    if (!next || next === chosen.name) return
+    try {
+      await invoke('rename_section', { id: chosen.id, name: next })
+      window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
+    } catch (e) {
+      useNotificationStore.getState().push('warning', 'Could not rename that section', { detail: String(e) })
+    }
+  }, [])
+
+  /** Move a section, with everything that starts in it, before another one
+   *  or to the end: reordering the arrangement in one step. */
+  const moveSection = useCallback(async () => {
+    const sections = await sectionsOrNote()
+    if (sections.length === 0) return
+    const names = sections.map(s => s.name)
+    const name = window.prompt(`Move which section?\n\n${names.join('\n')}`, names[0])?.trim()
+    const chosen = sections.find(s => s.name === name)
+    if (!chosen) return
+    const others = sections.filter(s => s.id !== chosen.id).map(s => s.name)
+    const answer = window.prompt(
+      `Put "${chosen.name}" before which section? Leave it empty for the end.\n\n${others.join('\n')}`,
+      '',
+    )
+    if (answer === null || answer === undefined) return
+    const before = answer.trim() === '' ? null : sections.find(s => s.name === answer.trim() && s.id !== chosen.id)
+    if (answer.trim() !== '' && !before) return
+    try {
+      await invoke('move_section', { id: chosen.id, before: before ? before.id : null })
+      await useTrackStore.getState().fetchTracks()
+      window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
+      useNotificationStore.getState().push('info', `Moved "${chosen.name}"`, {
+        detail: before ? `It now comes before "${before.name}".` : 'It is now at the end.',
+      })
+    } catch (e) {
+      useNotificationStore.getState().push('warning', 'Could not move that section', { detail: String(e) })
+    }
+  }, [])
+
   const insertTimeAtLoop = useCallback(async () => {
     const range = loopRangeTicks()
     if (!range) {
@@ -2193,6 +2253,8 @@ export function App() {
           { label: 'Mark the loop range as a section…', action: () => { void markSection() } },
           { label: 'Repeat a section', action: () => { void repeatSection() } },
           { label: 'Remove a section', action: () => { void removeSection() } },
+          { label: 'Rename a section', action: () => { void renameSection() } },
+          { label: 'Move a section', action: () => { void moveSection() } },
           { separator: true, label: '' },
           { label: 'Insert time at the loop range', action: () => { void insertTimeAtLoop() } },
           { label: 'Delete the loop range', action: () => { void deleteTimeAtLoop() } },

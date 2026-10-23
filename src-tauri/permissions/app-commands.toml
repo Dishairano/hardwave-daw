@@ -79,6 +79,8 @@ permissions = [
   "allow-add-section",
   "allow-delete-section",
   "allow-duplicate-section",
+  "allow-rename-section",
+  "allow-move-section",
   "allow-list-macros",
   "allow-add-macro",
   "allow-rename-macro",

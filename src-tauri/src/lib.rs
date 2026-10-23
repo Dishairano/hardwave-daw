@@ -441,6 +441,8 @@ pub fn run() {
             commands::timeline_edit::add_section,
             commands::timeline_edit::delete_section,
             commands::timeline_edit::duplicate_section,
+            commands::timeline_edit::rename_section,
+            commands::timeline_edit::move_section,
             commands::macros::list_macros,
             commands::macros::add_macro,
             commands::macros::rename_macro,
