@@ -155,14 +155,15 @@ pub type PluginStateSnapshotSender =
 /// services exactly one snapshot request per audio block.
 pub type PluginStateSnapshotSlot = Arc<Mutex<Option<PluginStateSnapshotSender>>>;
 
-/// Main DAW engine.
-/// How much recording room is reserved when a take starts.
-///
-/// Reserved up front because the audio thread must not allocate. Twenty
-/// minutes of stereo f32 at 48 kHz is about 460 MB, which is the trade: a
-/// long take costs memory, and going past it is reported rather than
-/// silently reallocated.
-const CAPTURE_HEADROOM_SECS: u32 = 20 * 60;
+/// The passes of a recorded take: where each starts on the timeline, and the
+/// range of the take's samples it is.
+pub type TakePasses = Vec<(u64, std::ops::Range<usize>)>;
+
+/// Seconds of audio the ring between the audio thread and the disk holds
+/// while recording. The take itself goes to a file, so this only has to
+/// ride out a slow disk; it used to be the whole take, reserved in memory for
+/// twenty minutes (about 460 MB at 48 kHz) and cut off after that.
+const CAPTURE_RING_SECS: u32 = 10;
 
 /// The parts of the recording latency, for the settings read-out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -533,15 +534,13 @@ impl DawEngine {
         if self.capture.recording.load(Ordering::Relaxed) {
             return;
         }
-        // Reserve the room here, on this thread, so the audio thread never
-        // grows a buffer mid-take. Half an hour of stereo at the device rate
-        // is about 700 MB of f32 at 48 kHz, so this is deliberately a cap:
-        // beyond it the tap reports an overflow rather than reallocating.
+        // The ring, the take's file and the thread that writes it are made
+        // here, on this thread, so the audio thread never allocates.
         let record_start = self.transport.position();
         let latency = self.recording_latency().total_frames;
         self.capture.arm_compensated(
             self.current_sample_rate(),
-            CAPTURE_HEADROOM_SECS,
+            CAPTURE_RING_SECS,
             latency,
             record_start,
         );
@@ -627,15 +626,15 @@ impl DawEngine {
         self.capture.take()
     }
 
-    /// Finish the capture and return it split into loop passes, each with
-    /// the timeline position it starts at.
+    /// Finish the capture: the take's file, and each loop pass in it as a
+    /// range of samples with the timeline position it starts at.
     ///
     /// Each pass except the last is trimmed to where the loop (or the punch
     /// window) ends: the transport wraps at block granularity, so without
     /// the trim every pass would carry a few milliseconds of audio from past
     /// the loop end. The last pass is left as played, since recording may
     /// have stopped part-way through it.
-    pub fn stop_capture_passes(&self) -> Vec<(u64, Vec<f32>)> {
+    pub fn stop_capture_takes(&self) -> Option<(crate::input_node::TakeFile, TakePasses)> {
         use std::sync::atomic::Ordering::Relaxed;
         self.capture.recording.store(false, Relaxed);
         let record_start = self.record_start.load(Relaxed);
@@ -643,17 +642,17 @@ impl DawEngine {
         // that is not always the record start: a punch-in or a pass that
         // began late moves it.
         let first = self.capture.first_position().unwrap_or(record_start);
-        let passes = self.capture.take_passes();
+        let (file, ranges) = self.capture.take_pass_ranges()?;
         let looping = self.transport.looping.load(Relaxed);
         let loop_start = self.transport.loop_start.load(Relaxed);
         let loop_end = self.transport.loop_end.load(Relaxed);
         let (punched, punch_in, punch_out) = self.capture.punch();
 
-        let last = passes.len().saturating_sub(1);
-        passes
+        let last = ranges.len().saturating_sub(1);
+        let passes = ranges
             .into_iter()
             .enumerate()
-            .map(|(i, mut samples)| {
+            .map(|(i, mut range)| {
                 let mut start = if i == 0 { first } else { loop_start };
                 let mut end = if looping && loop_end > loop_start {
                     loop_end
@@ -666,11 +665,29 @@ impl DawEngine {
                 }
                 if i < last && end > start && end != u64::MAX {
                     let frames = (end - start) as usize;
-                    samples.truncate(frames * 2);
+                    range.end = range.end.min(range.start + frames * 2);
                 }
-                (start, samples)
+                (start, range)
             })
+            .collect();
+        Some((file, passes))
+    }
+
+    /// `stop_capture_takes`, read back into memory: for short takes and
+    /// tests.
+    pub fn stop_capture_passes(&self) -> Vec<(u64, Vec<f32>)> {
+        let Some((file, passes)) = self.stop_capture_takes() else {
+            return Vec::new();
+        };
+        passes
+            .into_iter()
+            .map(|(start, range)| (start, file.read(range).unwrap_or_default()))
             .collect()
+    }
+
+    /// Where takes are written while recording.
+    pub fn set_capture_dir(&self, dir: std::path::PathBuf) {
+        self.capture.set_dir(dir);
     }
 
     /// Sample rate of the running audio device, or the offline default
