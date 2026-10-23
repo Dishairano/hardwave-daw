@@ -4,7 +4,8 @@
 //! count: 8, monotimbral.
 
 use crate::format;
-use hardwave_dsp::synth::AdsrEnvelope;
+use crate::voices::{self, Glide, HeldNotes, MonoStep, VoiceMode, VoiceSettings};
+use hardwave_dsp::synth::{AdsrEnvelope, AdsrStage};
 use hardwave_dsp::wavetable::{Wavetable, WavetableOscillator};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -12,8 +13,6 @@ use hardwave_plugin_host::types::{
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
-
-const POLYPHONY: usize = 8;
 
 const PARAM_BANK: u32 = 0;
 const PARAM_POSITION: u32 = 1;
@@ -23,7 +22,10 @@ const PARAM_DECAY: u32 = 4;
 const PARAM_SUSTAIN: u32 = 5;
 const PARAM_RELEASE: u32 = 6;
 const PARAM_MASTER: u32 = 7;
-const PARAM_COUNT: u32 = 8;
+const PARAM_VOICE_MODE: u32 = 8;
+const PARAM_VOICES: u32 = 9;
+const PARAM_GLIDE: u32 = 10;
+const PARAM_COUNT: u32 = 11;
 
 #[derive(Clone, Copy)]
 enum Bank {
@@ -90,6 +92,22 @@ struct VoiceSlot {
     note: u8,
     velocity: f32,
     active: bool,
+    /// The voice's pitch, which slides in Mono and Legato.
+    glide: Glide,
+    /// The detune taken when the note started, in semitones.
+    detune: f32,
+}
+
+/// A voice further into its sound is the one to steal: an idle one, then one
+/// letting go, before one still sounding.
+fn steal_rank(stage: AdsrStage) -> u8 {
+    match stage {
+        AdsrStage::Idle => 0,
+        AdsrStage::Release => 1,
+        AdsrStage::Sustain => 2,
+        AdsrStage::Decay => 3,
+        AdsrStage::Attack => 4,
+    }
 }
 
 impl VoiceSlot {
@@ -100,6 +118,8 @@ impl VoiceSlot {
             note: 0,
             velocity: 0.0,
             active: false,
+            glide: Glide::default(),
+            detune: 0.0,
         }
     }
 }
@@ -118,6 +138,8 @@ pub struct NativeWavetable {
     release: f32,
     master_gain: f32,
     active: bool,
+    voice_settings: VoiceSettings,
+    held: HeldNotes,
 }
 
 impl NativeWavetable {
@@ -141,7 +163,9 @@ impl NativeWavetable {
 
     pub fn new() -> Self {
         let sr = 48_000.0_f32;
-        let voices = (0..POLYPHONY).map(|_| VoiceSlot::new(sr)).collect();
+        let voices = (0..voices::MAX_VOICES)
+            .map(|_| VoiceSlot::new(sr))
+            .collect();
         Self {
             descriptor: Self::descriptor(),
             sample_rate: sr,
@@ -156,19 +180,63 @@ impl NativeWavetable {
             release: 0.4,
             master_gain: 0.6,
             active: false,
+            voice_settings: VoiceSettings::default(),
+            held: HeldNotes::default(),
         }
     }
 
-    fn note_to_freq(midi_note: u8, fine_semis: f32) -> f32 {
-        let semis = midi_note as f32 - 69.0 + fine_semis;
-        440.0 * (2.0_f32).powf(semis / 12.0)
-    }
-
+    /// A full synth stole voice 0 every time, however loud it still was.
     fn alloc_voice(&mut self) -> usize {
-        if let Some(idx) = self.voices.iter().position(|v| !v.active) {
-            return idx;
+        voices::pick_voice(
+            &self.voices,
+            self.voice_settings.voices,
+            |v| !v.active,
+            |v| steal_rank(v.env.stage()),
+        )
+    }
+
+    /// Start a note on slot `idx` with the current sound, the envelope from
+    /// the top. `slide` glides the pitch there from where the slot is.
+    fn start_note(&mut self, idx: usize, note: u8, velocity: f32, slide: bool) {
+        let (attack, decay, sustain, release) =
+            (self.attack, self.decay, self.sustain, self.release);
+        let (position, detune) = (self.position, self.unison_detune);
+        let glide_s = self.voice_settings.glide_s;
+        let sr = self.sample_rate;
+        let slot = &mut self.voices[idx];
+        if slide && slot.active {
+            slot.glide.slide(note as f32, glide_s, sr);
+        } else {
+            slot.glide.jump(note as f32);
+            slot.osc.reset_phase();
         }
-        0
+        slot.note = note;
+        slot.velocity = velocity;
+        slot.detune = detune;
+        slot.osc
+            .set_frequency(voices::note_hz(slot.glide.pitch() + detune));
+        slot.osc.set_level(1.0);
+        slot.osc.set_position(position);
+        slot.env.set_times(attack, decay, release);
+        slot.env.set_sustain(sustain);
+        slot.env.note_on();
+        slot.active = true;
+    }
+
+    /// Mono and Legato play on slot 0.
+    fn mono(&mut self, step: MonoStep, velocity: f32) {
+        let glide_s = self.voice_settings.glide_s;
+        let sr = self.sample_rate;
+        match step {
+            MonoStep::Start(note) => self.start_note(0, note, velocity, true),
+            MonoStep::Glide(note) => {
+                let slot = &mut self.voices[0];
+                slot.note = note;
+                slot.glide.slide(note as f32, glide_s, sr);
+            }
+            MonoStep::Release => self.voices[0].env.note_off(),
+            MonoStep::Nothing => {}
+        }
     }
 }
 
@@ -185,9 +253,10 @@ impl HostedPlugin for NativeWavetable {
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
-        self.voices = (0..POLYPHONY)
+        self.voices = (0..voices::MAX_VOICES)
             .map(|_| VoiceSlot::new(self.sample_rate))
             .collect();
+        self.held.clear();
         for v in self.voices.iter_mut() {
             v.env.set_times(self.attack, self.decay, self.release);
             v.env.set_sustain(self.sustain);
@@ -218,27 +287,26 @@ impl HostedPlugin for NativeWavetable {
         for ev in midi_in {
             match ev {
                 MidiEvent::NoteOn { note, velocity, .. } if *velocity > 0.0 => {
-                    let attack = self.attack;
-                    let decay = self.decay;
-                    let sustain = self.sustain;
-                    let release = self.release;
-                    let position = self.position;
-                    let detune = self.unison_detune;
-                    let idx = self.alloc_voice();
-                    let slot = &mut self.voices[idx];
-                    slot.note = *note;
-                    slot.velocity = *velocity;
-                    slot.osc.set_frequency(Self::note_to_freq(*note, detune));
-                    slot.osc.set_level(1.0);
-                    slot.osc.set_position(position);
-                    slot.osc.reset_phase();
-                    slot.env.set_times(attack, decay, release);
-                    slot.env.set_sustain(sustain);
-                    slot.env.note_on();
-                    slot.active = true;
+                    let mode = self.voice_settings.mode;
+                    if mode == VoiceMode::Poly {
+                        let idx = self.alloc_voice();
+                        self.start_note(idx, *note, *velocity, false);
+                    } else {
+                        let step = self.held.press(mode, *note);
+                        self.mono(step, *velocity);
+                    }
                 }
                 MidiEvent::NoteOn { note, .. } | MidiEvent::NoteOff { note, .. } => {
-                    for slot in self.voices.iter_mut() {
+                    let mode = self.voice_settings.mode;
+                    let first = if mode == VoiceMode::Poly {
+                        0
+                    } else {
+                        let step = self.held.lift(mode, *note);
+                        let velocity = self.voices[0].velocity;
+                        self.mono(step, velocity);
+                        1
+                    };
+                    for slot in self.voices.iter_mut().skip(first) {
                         if slot.active && slot.note == *note {
                             slot.env.note_off();
                         }
@@ -257,6 +325,10 @@ impl HostedPlugin for NativeWavetable {
                 if !slot.env.is_active() {
                     slot.active = false;
                     break;
+                }
+                if slot.glide.gliding() {
+                    let pitch = slot.glide.advance();
+                    slot.osc.set_frequency(voices::note_hz(pitch + slot.detune));
                 }
                 let s = slot.osc.tick(&self.table) * env_v * slot.velocity * self.master_gain;
                 outputs[0][i] += s;
@@ -279,6 +351,9 @@ impl HostedPlugin for NativeWavetable {
             PARAM_SUSTAIN => ("Sustain", 0.7, ""),
             PARAM_RELEASE => ("Release", 0.4 / 5.0, "s"),
             PARAM_MASTER => ("Master", 0.6, "%"),
+            PARAM_VOICE_MODE => ("Voice mode", 0.0, ""),
+            PARAM_VOICES => ("Voices", VoiceSettings::voices_to_norm(8), ""),
+            PARAM_GLIDE => ("Glide", VoiceSettings::glide_to_norm(0.05), "s"),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -302,6 +377,9 @@ impl HostedPlugin for NativeWavetable {
             PARAM_SUSTAIN => self.sustain as f64,
             PARAM_RELEASE => (self.release / 5.0).clamp(0.0, 1.0) as f64,
             PARAM_MASTER => self.master_gain as f64,
+            PARAM_VOICE_MODE => VoiceSettings::mode_to_norm(self.voice_settings.mode),
+            PARAM_VOICES => VoiceSettings::voices_to_norm(self.voice_settings.voices),
+            PARAM_GLIDE => VoiceSettings::glide_to_norm(self.voice_settings.glide_s),
             _ => 0.0,
         }
     }
@@ -320,6 +398,15 @@ impl HostedPlugin for NativeWavetable {
             PARAM_SUSTAIN => self.sustain = v as f32,
             PARAM_RELEASE => self.release = env_secs_from_norm(v),
             PARAM_MASTER => self.master_gain = v as f32,
+            PARAM_VOICE_MODE => {
+                let mode = VoiceSettings::mode_from_norm(v);
+                if mode != self.voice_settings.mode {
+                    self.held.clear();
+                    self.voice_settings.mode = mode;
+                }
+            }
+            PARAM_VOICES => self.voice_settings.voices = VoiceSettings::voices_from_norm(v),
+            PARAM_GLIDE => self.voice_settings.glide_s = VoiceSettings::glide_from_norm(v),
             _ => {}
         }
     }
@@ -336,6 +423,9 @@ impl HostedPlugin for NativeWavetable {
             PARAM_ATTACK | PARAM_DECAY | PARAM_RELEASE => {
                 format::secs(env_secs_from_norm(v) as f64)
             }
+            PARAM_VOICE_MODE => return VoiceSettings::text(0, v),
+            PARAM_VOICES => return VoiceSettings::text(1, v),
+            PARAM_GLIDE => return VoiceSettings::text(2, v),
             _ => return None,
         };
         Some(text)
@@ -344,13 +434,14 @@ impl HostedPlugin for NativeWavetable {
     fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
         match id {
             PARAM_BANK => Some(BANK_NAMES.iter().map(|s| s.to_string()).collect()),
+            PARAM_VOICE_MODE => Some(voices::MODE_NAMES.iter().map(|s| s.to_string()).collect()),
             _ => None,
         }
     }
 
     fn get_state(&self) -> Vec<u8> {
         format!(
-            "{{\"bank\":{},\"pos\":{},\"det\":{},\"a\":{},\"d\":{},\"s\":{},\"r\":{},\"m\":{}}}",
+            "{{\"bank\":{},\"pos\":{},\"det\":{},\"a\":{},\"d\":{},\"s\":{},\"r\":{},\"m\":{},{}}}",
             bank_to_norm(self.bank),
             self.position,
             self.unison_detune,
@@ -358,7 +449,8 @@ impl HostedPlugin for NativeWavetable {
             self.decay,
             self.sustain,
             self.release,
-            self.master_gain
+            self.master_gain,
+            self.voice_settings.state_fields()
         )
         .into_bytes()
     }
@@ -397,6 +489,7 @@ impl HostedPlugin for NativeWavetable {
         if let Some(v) = read("m") {
             self.master_gain = v.clamp(0.0, 1.0);
         }
+        self.voice_settings.read_state(read);
         Ok(())
     }
 
@@ -438,6 +531,42 @@ mod tests {
                 p.parameter_text(id, 0.5).is_some(),
                 "parameter {id} has no text"
             );
+        }
+    }
+
+    #[test]
+    fn voice_settings_play_and_come_back() {
+        let on = |note| MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note,
+            velocity: 0.8,
+        };
+        let mut p = NativeWavetable::new();
+        p.activate(48_000.0, 512).unwrap();
+        p.set_parameter_value(PARAM_VOICES, VoiceSettings::voices_to_norm(2));
+        let mut out = vec![Vec::new(), Vec::new()];
+        p.process(
+            &[],
+            &mut out,
+            &[on(60), on(64), on(67)],
+            &mut Vec::new(),
+            64,
+        );
+        assert_eq!(p.voices.iter().filter(|v| v.active).count(), 2);
+
+        p.set_parameter_value(
+            PARAM_VOICE_MODE,
+            VoiceSettings::mode_to_norm(VoiceMode::Legato),
+        );
+        p.process(&[], &mut out, &[on(48), on(55)], &mut Vec::new(), 64);
+        assert!(p.voices[0].glide.gliding(), "Legato slides to the new note");
+
+        let state = p.get_state();
+        let mut back = NativeWavetable::new();
+        back.set_state(&state).unwrap();
+        for id in [PARAM_VOICE_MODE, PARAM_VOICES, PARAM_GLIDE] {
+            assert!((back.get_parameter_value(id) - p.get_parameter_value(id)).abs() < 1e-4);
         }
     }
 }

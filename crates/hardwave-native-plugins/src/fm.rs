@@ -4,6 +4,7 @@
 //! ADSR. Hardstyle producers use this for screech leads + bell stabs.
 
 use crate::format;
+use crate::voices::{self, Glide, HeldNotes, MonoStep, VoiceMode, VoiceSettings};
 use hardwave_dsp::fm_synth::{Algorithm, FmVoice};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -11,8 +12,6 @@ use hardwave_plugin_host::types::{
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
-
-const POLYPHONY: usize = 8;
 
 const PARAM_ALGORITHM: u32 = 0;
 const PARAM_OP1_RATIO: u32 = 1;
@@ -28,7 +27,10 @@ const PARAM_DECAY: u32 = 10;
 const PARAM_SUSTAIN: u32 = 11;
 const PARAM_RELEASE: u32 = 12;
 const PARAM_MASTER: u32 = 13;
-const PARAM_COUNT: u32 = 14;
+const PARAM_VOICE_MODE: u32 = 14;
+const PARAM_VOICES: u32 = 15;
+const PARAM_GLIDE: u32 = 16;
+const PARAM_COUNT: u32 = 17;
 
 fn algo_from_norm(v: f32) -> Algorithm {
     let i = ((v.clamp(0.0, 1.0) * 8.0).floor() as i32).clamp(0, 7);
@@ -89,6 +91,9 @@ struct VoiceSlot {
     voice: FmVoice,
     note: u8,
     active: bool,
+    velocity: f32,
+    /// The voice's pitch, which slides in Mono and Legato.
+    glide: Glide,
 }
 
 impl VoiceSlot {
@@ -97,6 +102,8 @@ impl VoiceSlot {
             voice: FmVoice::new(sr),
             note: 0,
             active: false,
+            velocity: 0.0,
+            glide: Glide::default(),
         }
     }
 }
@@ -114,6 +121,8 @@ pub struct NativeFmSynth {
     release: f32,
     master_gain: f32,
     active: bool,
+    voice_settings: VoiceSettings,
+    held: HeldNotes,
 }
 
 impl NativeFmSynth {
@@ -137,7 +146,9 @@ impl NativeFmSynth {
 
     pub fn new() -> Self {
         let sr = 48_000.0_f32;
-        let voices = (0..POLYPHONY).map(|_| VoiceSlot::new(sr)).collect();
+        let voices = (0..voices::MAX_VOICES)
+            .map(|_| VoiceSlot::new(sr))
+            .collect();
         let mut s = Self {
             descriptor: Self::descriptor(),
             sample_rate: sr,
@@ -151,6 +162,8 @@ impl NativeFmSynth {
             release: 0.3,
             master_gain: 0.6,
             active: false,
+            voice_settings: VoiceSettings::default(),
+            held: HeldNotes::default(),
         };
         s.refresh_static();
         s
@@ -172,26 +185,61 @@ impl NativeFmSynth {
         }
     }
 
-    fn note_to_freq(midi_note: u8) -> f32 {
-        let semis = midi_note as f32 - 69.0;
-        440.0 * (2.0_f32).powf(semis / 12.0)
+    fn alloc_voice(&mut self) -> usize {
+        // No idle slot: steal one whose sound has ended, else the first.
+        voices::pick_voice(
+            &self.voices,
+            self.voice_settings.voices,
+            |v| !v.active,
+            |v| u8::from(v.voice.is_active()),
+        )
     }
 
-    fn alloc_voice(&mut self) -> usize {
-        if let Some(idx) = self.voices.iter().position(|v| !v.active) {
-            return idx;
+    /// Start a note on slot `idx` with the current sound, envelopes from
+    /// the top. `slide` glides the pitch there from where the slot is.
+    fn start_note(&mut self, idx: usize, note: u8, velocity: f32, slide: bool) {
+        let glide_s = self.voice_settings.glide_s;
+        let sr = self.sample_rate;
+        let (algorithm, ratios, levels) = (self.algorithm, self.op_ratios, self.op_levels);
+        let (attack, decay, sustain, release) =
+            (self.attack, self.decay, self.sustain, self.release);
+        let slot = &mut self.voices[idx];
+        if slide && slot.active {
+            slot.glide.slide(note as f32, glide_s, sr);
+        } else {
+            slot.glide.jump(note as f32);
         }
-        // No idle slot — steal the longest-running voice.
-        self.voices
-            .iter()
-            .enumerate()
-            .min_by(|a, b| {
-                let an = if a.1.voice.is_active() { 1 } else { 0 };
-                let bn = if b.1.voice.is_active() { 1 } else { 0 };
-                an.cmp(&bn)
-            })
-            .map(|(i, _)| i)
-            .unwrap_or(0)
+        slot.note = note;
+        slot.active = true;
+        slot.velocity = velocity;
+        slot.voice.set_base_hz(voices::note_hz(slot.glide.pitch()));
+        slot.voice.set_velocity(velocity);
+        slot.voice.set_algorithm(algorithm);
+        for i in 0..4 {
+            if let Some(op) = slot.voice.op_mut(i) {
+                op.set_ratio(ratios[i], 0.0);
+                op.set_level(levels[i]);
+                op.set_envelope_times(attack, decay, release);
+                op.set_sustain(sustain);
+            }
+        }
+        slot.voice.note_on();
+    }
+
+    /// Mono and Legato play on slot 0.
+    fn mono(&mut self, step: MonoStep, velocity: f32) {
+        let glide_s = self.voice_settings.glide_s;
+        let sr = self.sample_rate;
+        match step {
+            MonoStep::Start(note) => self.start_note(0, note, velocity, true),
+            MonoStep::Glide(note) => {
+                let slot = &mut self.voices[0];
+                slot.note = note;
+                slot.glide.slide(note as f32, glide_s, sr);
+            }
+            MonoStep::Release => self.voices[0].voice.note_off(),
+            MonoStep::Nothing => {}
+        }
     }
 }
 
@@ -208,9 +256,10 @@ impl HostedPlugin for NativeFmSynth {
 
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
-        self.voices = (0..POLYPHONY)
+        self.voices = (0..voices::MAX_VOICES)
             .map(|_| VoiceSlot::new(self.sample_rate))
             .collect();
+        self.held.clear();
         self.refresh_static();
         self.active = true;
         Ok(())
@@ -238,26 +287,26 @@ impl HostedPlugin for NativeFmSynth {
         for ev in midi_in {
             match ev {
                 MidiEvent::NoteOn { note, velocity, .. } if *velocity > 0.0 => {
-                    let idx = self.alloc_voice();
-                    let f = Self::note_to_freq(*note);
-                    let slot = &mut self.voices[idx];
-                    slot.note = *note;
-                    slot.active = true;
-                    slot.voice.set_base_hz(f);
-                    slot.voice.set_velocity(*velocity);
-                    slot.voice.set_algorithm(self.algorithm);
-                    for i in 0..4 {
-                        if let Some(op) = slot.voice.op_mut(i) {
-                            op.set_ratio(self.op_ratios[i], 0.0);
-                            op.set_level(self.op_levels[i]);
-                            op.set_envelope_times(self.attack, self.decay, self.release);
-                            op.set_sustain(self.sustain);
-                        }
+                    let mode = self.voice_settings.mode;
+                    if mode == VoiceMode::Poly {
+                        let idx = self.alloc_voice();
+                        self.start_note(idx, *note, *velocity, false);
+                    } else {
+                        let step = self.held.press(mode, *note);
+                        self.mono(step, *velocity);
                     }
-                    slot.voice.note_on();
                 }
                 MidiEvent::NoteOn { note, .. } | MidiEvent::NoteOff { note, .. } => {
-                    for slot in self.voices.iter_mut() {
+                    let mode = self.voice_settings.mode;
+                    let first = if mode == VoiceMode::Poly {
+                        0
+                    } else {
+                        let step = self.held.lift(mode, *note);
+                        let velocity = self.voices[0].velocity;
+                        self.mono(step, velocity);
+                        1
+                    };
+                    for slot in self.voices.iter_mut().skip(first) {
                         if slot.active && slot.note == *note {
                             slot.voice.note_off();
                         }
@@ -272,6 +321,10 @@ impl HostedPlugin for NativeFmSynth {
                 continue;
             }
             for i in 0..num_samples {
+                if slot.glide.gliding() {
+                    let pitch = slot.glide.advance();
+                    slot.voice.set_base_hz(voices::note_hz(pitch));
+                }
                 let s = slot.voice.tick() * self.master_gain;
                 outputs[0][i] += s;
                 outputs[1][i] += s;
@@ -302,6 +355,9 @@ impl HostedPlugin for NativeFmSynth {
             PARAM_SUSTAIN => ("Sustain", 0.7, ""),
             PARAM_RELEASE => ("Release", 0.3 / 5.0, "s"),
             PARAM_MASTER => ("Master", 0.6, "%"),
+            PARAM_VOICE_MODE => ("Voice mode", 0.0, ""),
+            PARAM_VOICES => ("Voices", VoiceSettings::voices_to_norm(8), ""),
+            PARAM_GLIDE => ("Glide", VoiceSettings::glide_to_norm(0.05), "s"),
             _ => return None,
         };
         Some(ParameterInfo {
@@ -331,6 +387,9 @@ impl HostedPlugin for NativeFmSynth {
             PARAM_SUSTAIN => self.sustain as f64,
             PARAM_RELEASE => (self.release / 5.0).clamp(0.0, 1.0) as f64,
             PARAM_MASTER => self.master_gain as f64,
+            PARAM_VOICE_MODE => VoiceSettings::mode_to_norm(self.voice_settings.mode),
+            PARAM_VOICES => VoiceSettings::voices_to_norm(self.voice_settings.voices),
+            PARAM_GLIDE => VoiceSettings::glide_to_norm(self.voice_settings.glide_s),
             _ => 0.0,
         }
     }
@@ -352,6 +411,15 @@ impl HostedPlugin for NativeFmSynth {
             PARAM_SUSTAIN => self.sustain = v as f32,
             PARAM_RELEASE => self.release = env_secs_from_norm(v),
             PARAM_MASTER => self.master_gain = v as f32,
+            PARAM_VOICE_MODE => {
+                let mode = VoiceSettings::mode_from_norm(v);
+                if mode != self.voice_settings.mode {
+                    self.held.clear();
+                    self.voice_settings.mode = mode;
+                }
+            }
+            PARAM_VOICES => self.voice_settings.voices = VoiceSettings::voices_from_norm(v),
+            PARAM_GLIDE => self.voice_settings.glide_s = VoiceSettings::glide_from_norm(v),
             _ => {}
         }
         self.refresh_static();
@@ -370,6 +438,9 @@ impl HostedPlugin for NativeFmSynth {
             PARAM_ATTACK | PARAM_DECAY | PARAM_RELEASE => {
                 format::secs(env_secs_from_norm(v) as f64)
             }
+            PARAM_VOICE_MODE => return VoiceSettings::text(0, v),
+            PARAM_VOICES => return VoiceSettings::text(1, v),
+            PARAM_GLIDE => return VoiceSettings::text(2, v),
             _ => return None,
         };
         Some(text)
@@ -378,19 +449,21 @@ impl HostedPlugin for NativeFmSynth {
     fn parameter_options(&self, id: u32) -> Option<Vec<String>> {
         match id {
             PARAM_ALGORITHM => Some(ALGO_NAMES.iter().map(|s| s.to_string()).collect()),
+            PARAM_VOICE_MODE => Some(voices::MODE_NAMES.iter().map(|s| s.to_string()).collect()),
             _ => None,
         }
     }
 
     fn get_state(&self) -> Vec<u8> {
         format!(
-            "{{\"alg\":{},\"r1\":{},\"l1\":{},\"r2\":{},\"l2\":{},\"r3\":{},\"l3\":{},\"r4\":{},\"l4\":{},\"a\":{},\"d\":{},\"s\":{},\"r\":{},\"m\":{}}}",
+            "{{\"alg\":{},\"r1\":{},\"l1\":{},\"r2\":{},\"l2\":{},\"r3\":{},\"l3\":{},\"r4\":{},\"l4\":{},\"a\":{},\"d\":{},\"s\":{},\"r\":{},\"m\":{},{}}}",
             algo_to_norm(self.algorithm),
             self.op_ratios[0], self.op_levels[0],
             self.op_ratios[1], self.op_levels[1],
             self.op_ratios[2], self.op_levels[2],
             self.op_ratios[3], self.op_levels[3],
-            self.attack, self.decay, self.sustain, self.release, self.master_gain
+            self.attack, self.decay, self.sustain, self.release, self.master_gain,
+            self.voice_settings.state_fields()
         ).into_bytes()
     }
 
@@ -432,6 +505,7 @@ impl HostedPlugin for NativeFmSynth {
         if let Some(v) = read("m") {
             self.master_gain = v.clamp(0.0, 1.0);
         }
+        self.voice_settings.read_state(read);
         self.refresh_static();
         Ok(())
     }
@@ -474,6 +548,42 @@ mod tests {
                 p.parameter_text(id, 0.5).is_some(),
                 "parameter {id} has no text"
             );
+        }
+    }
+
+    #[test]
+    fn voice_settings_play_and_come_back() {
+        let on = |note| MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note,
+            velocity: 0.8,
+        };
+        let mut p = NativeFmSynth::new();
+        p.activate(48_000.0, 512).unwrap();
+        p.set_parameter_value(PARAM_VOICES, VoiceSettings::voices_to_norm(2));
+        let mut out = vec![Vec::new(), Vec::new()];
+        p.process(
+            &[],
+            &mut out,
+            &[on(60), on(64), on(67)],
+            &mut Vec::new(),
+            64,
+        );
+        assert_eq!(p.voices.iter().filter(|v| v.active).count(), 2);
+
+        p.set_parameter_value(
+            PARAM_VOICE_MODE,
+            VoiceSettings::mode_to_norm(VoiceMode::Legato),
+        );
+        p.process(&[], &mut out, &[on(48), on(55)], &mut Vec::new(), 64);
+        assert!(p.voices[0].glide.gliding(), "Legato slides to the new note");
+
+        let state = p.get_state();
+        let mut back = NativeFmSynth::new();
+        back.set_state(&state).unwrap();
+        for id in [PARAM_VOICE_MODE, PARAM_VOICES, PARAM_GLIDE] {
+            assert!((back.get_parameter_value(id) - p.get_parameter_value(id)).abs() < 1e-4);
         }
     }
 }

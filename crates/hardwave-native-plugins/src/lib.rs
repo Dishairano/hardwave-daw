@@ -53,6 +53,7 @@ pub mod wavetable;
 pub mod sampler;
 pub mod stutter;
 pub mod vocoder;
+pub mod voices;
 
 pub use auto_filter::NativeAutoFilter;
 pub use auto_pan::NativeAutoPan;
