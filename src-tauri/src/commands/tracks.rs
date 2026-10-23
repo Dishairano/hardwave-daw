@@ -710,6 +710,22 @@ pub fn toggle_solo(state: State<AppState>, track_id: String) {
     engine.rebuild_graph();
 }
 
+/// The MIDI track a keyboard plays when no track is armed: the one picked
+/// last. Picking is not an undo step, so this is not either.
+#[tauri::command]
+pub fn set_keyboard_track(state: State<AppState>, track_id: Option<String>) {
+    let engine = state.engine.lock();
+    let changed = {
+        let mut project = engine.project.lock();
+        let changed = project.keyboard_track != track_id;
+        project.keyboard_track = track_id;
+        changed
+    };
+    if changed {
+        engine.rebuild_graph();
+    }
+}
+
 /// One saved mixer state: every track's fader, pan, mute and solo, its
 /// width, its sends, and whether each plug-in is on and how much of it is
 /// heard. The plug-ins' own settings are not part of it.
