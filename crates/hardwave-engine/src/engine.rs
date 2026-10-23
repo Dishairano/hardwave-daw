@@ -3868,7 +3868,28 @@ impl EngineCallback {
 }
 
 impl AudioCallback for EngineCallback {
+    /// Some drivers hand over a bigger block than the one asked for. The
+    /// graph is built for the size asked for, so everything past it came out
+    /// as silence, a gap in every block. Such a block is now played as
+    /// pieces of the size the graph was built for.
     fn process(&mut self, output: &mut [f32], num_frames: usize, _num_channels: u16) {
+        let most = (self.graph.buffer_size_hint() as usize).max(1);
+        let num_frames = num_frames.min(output.len() / 2);
+        if num_frames <= most {
+            self.process_block(output, num_frames);
+            return;
+        }
+        let mut done = 0;
+        while done < num_frames {
+            let n = (num_frames - done).min(most);
+            self.process_block(&mut output[done * 2..(done + n) * 2], n);
+            done += n;
+        }
+    }
+}
+
+impl EngineCallback {
+    fn process_block(&mut self, output: &mut [f32], num_frames: usize) {
         // Real audio load starts here and is published at the end of the
         // block. Instant::now does not allocate or lock, so it is safe on
         // this thread.
@@ -6124,6 +6145,37 @@ mod monitoring_tests {
         assert!(
             heard < 0.6,
             "the interface input is not heard on the armed track"
+        );
+    }
+
+    /// Some drivers hand over a bigger block than the one asked for. The
+    /// graph is built for the size asked for, so everything past it came
+    /// out as silence: a gap in every block.
+    #[test]
+    fn a_block_bigger_than_asked_is_played_whole() {
+        let (mut song, pool) = resampling_song();
+        song.tracks.retain(|t| t.id != "rec");
+        let mut r = rig_with(song, pool);
+        play(&r);
+        // The rig asks for 256; the driver gives 1000.
+        let mut out = vec![0.0_f32; 2000];
+        r.cb.process(&mut out, 1000, 2);
+        let quiet = out
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .enumerate()
+            .skip(64)
+            .find(|(_, f)| f[0].abs() < 0.1)
+            .map(|(i, _)| i);
+        assert_eq!(
+            quiet, None,
+            "the whole block plays, not the first 256 frames"
+        );
+        assert_eq!(
+            r.cb.transport.position(),
+            1000,
+            "and the playhead moves by all of it"
         );
     }
 }
