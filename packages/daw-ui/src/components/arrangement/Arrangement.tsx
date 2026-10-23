@@ -13,6 +13,7 @@ import { listen } from '@tauri-apps/api/event'
 import { useTrackStore, ClipInfo, FadeCurveKind, WavePeak } from '../../stores/trackStore'
 import { useSampleWindowStore } from '../../stores/sampleWindowStore'
 import { invoke } from '@tauri-apps/api/core'
+import { sectionAt, sectionMoves } from './sectionMoves'
 import { useTransportStore, snapToTicks } from '../../stores/transportStore'
 import { useShallow } from 'zustand/react/shallow'
 import { useMarkerStore } from '../../stores/markerStore'
@@ -308,7 +309,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   // its own so it cannot be mistaken for the playhead.
   const peer = useCollabStore(s => s.peer)
   const [spectralTarget, setSpectralTarget] = useState<{ trackId: string; clipId: string } | null>(null)
-  const [markerCtx, setMarkerCtx] = useState<{ x: number; y: number; markerId: string | null; tick: number } | null>(null)
+  const [markerCtx, setMarkerCtx] = useState<{ x: number; y: number; markerId: string | null; sectionId: string | null; tick: number } | null>(null)
   const [renamingMarker, setRenamingMarker] = useState<{ id: string; draft: string } | null>(null)
   // Only what the arrangement draws from. The playhead moves 30 times a
   // second while playing; it is drawn on a canvas of its own (below), so
@@ -2009,8 +2010,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         const mx = m.tick * pixelsPerTick - scrollOffset
         return mouseX >= mx - 1 && mouseX <= mx + 11
       })
+      // A section band under the pointer gets its own actions, so a
+      // section is moved or renamed where it is drawn, not by typing its
+      // name into a prompt.
+      const sectionHit = markerHit ? null : sectionAt(sections, tick)
       setContextMenu(null)
-      setMarkerCtx({ x: e.clientX, y: e.clientY, markerId: markerHit ? markerHit.id : null, tick: applySnap(tick) })
+      setMarkerCtx({
+        x: e.clientX, y: e.clientY, markerId: markerHit ? markerHit.id : null,
+        sectionId: sectionHit ? sectionHit.id : null, tick: applySnap(tick),
+      })
       return
     }
     const hit = hitTest(mouseX, mouseY, scrollOffset)
@@ -2024,7 +2032,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       setContextMenu(null)
       setMarkerCtx(null)
     }
-  }, [hitTest, getScrollOffset, selectClip, selectedClipIds, markers, pixelsPerTick, applySnap])
+  }, [hitTest, getScrollOffset, selectClip, selectedClipIds, markers, sections, pixelsPerTick, applySnap])
 
   // A sample dragged from the browser. The drag is a pointer drag (see
   // lib/pointerDrag): HTML5 drag events never reach the page on Windows.
@@ -2156,6 +2164,21 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     else if (e.deltaMode === 2) dy *= viewportH
     setVerticalScroll((v) => Math.max(0, Math.min(maxScroll, v + dy)))
   }, [trackHeight, setTrackHeight, horizontalZoom, setHorizontalZoom, audioTracks.length, followPlayhead, getScrollOffset, PIXELS_PER_SECOND, setFollowPlayhead])
+
+  /** Run one section command from the ruler menu and refresh what it
+   *  changed: the bands always, the clips when the music moved. */
+  const sectionAction = useCallback(async (
+    what: string, command: string, args: Record<string, unknown>, movesMusic: boolean,
+  ) => {
+    setMarkerCtx(null)
+    try {
+      await invoke(command, args)
+      if (movesMusic) await useTrackStore.getState().fetchTracks()
+      window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
+    } catch (e) {
+      useNotificationStore.getState().push('warning', `Could not ${what}`, { detail: String(e) })
+    }
+  }, [])
 
   // Close marker context menu on outside mousedown
   useEffect(() => {
@@ -2840,6 +2863,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       })()}
       {markerCtx && (() => {
         const hit = markerCtx.markerId ? markers.find(m => m.id === markerCtx.markerId) : null
+        const section = !hit && markerCtx.sectionId ? sections.find(s => s.id === markerCtx.sectionId) ?? null : null
+        const moves = section ? sectionMoves(sections, section.id) : null
         return (
           <div
             data-marker-ctx-menu
@@ -2855,8 +2880,34 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             }}
           >
             <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-              {hit ? hit.label : `Tick ${markerCtx.tick}`}
+              {hit ? hit.label : section ? section.name : `Tick ${markerCtx.tick}`}
             </div>
+            {section && moves && (
+              <>
+                <MenuItem label="Rename section…" onClick={() => {
+                  const next = window.prompt(`New name for "${section.name}"`, section.name)?.trim()
+                  if (!next || next === section.name) { setMarkerCtx(null); return }
+                  void sectionAction('rename that section', 'rename_section', { id: section.id, name: next }, false)
+                }} />
+                {moves.earlier !== undefined && (
+                  <MenuItem label="Move section earlier" onClick={() => {
+                    void sectionAction('move that section', 'move_section', { id: section.id, before: moves.earlier }, true)
+                  }} />
+                )}
+                {moves.later !== undefined && (
+                  <MenuItem label="Move section later" onClick={() => {
+                    void sectionAction('move that section', 'move_section', { id: section.id, before: moves.later }, true)
+                  }} />
+                )}
+                <MenuItem label="Repeat section" onClick={() => {
+                  void sectionAction('repeat that section', 'duplicate_section', { id: section.id }, true)
+                }} />
+                <MenuItem label="Remove section (keeps the music)" onClick={() => {
+                  void sectionAction('remove that section', 'delete_section', { id: section.id }, false)
+                }} />
+                <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
+              </>
+            )}
             {!hit && (
               <>
                 <MenuItem label="Add marker here" onClick={() => {
