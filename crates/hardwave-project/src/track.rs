@@ -184,6 +184,12 @@ pub struct Track {
     /// to arm a track without monitoring (e.g. when monitoring via hardware).
     #[serde(default = "default_monitor_input")]
     pub monitor_input: bool,
+    /// Monitoring that follows the transport, as on a tape machine: the
+    /// input is heard while stopped and while recording, and the track's
+    /// own audio while playing back, so a take can be checked without
+    /// switching monitoring off. Only matters with `monitor_input` on.
+    #[serde(default)]
+    pub monitor_auto: bool,
 
     /// Flip sample polarity on this track. Applied before the fader.
     #[serde(default)]
@@ -329,6 +335,7 @@ impl Track {
             armed: false,
             output_bus: None,
             monitor_input: true,
+            monitor_auto: false,
             phase_invert: false,
             swap_lr: false,
             stereo_separation: 1.0,

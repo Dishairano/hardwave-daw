@@ -29,6 +29,8 @@ pub struct TrackInfo {
     armed: bool,
     #[serde(rename = "monitorInput")]
     monitor_input: bool,
+    #[serde(rename = "monitorAuto")]
+    monitor_auto: bool,
     #[serde(rename = "phaseInvert")]
     phase_invert: bool,
     #[serde(rename = "swapLr")]
@@ -181,6 +183,7 @@ pub(crate) fn track_to_info(
         solo_safe: t.solo_safe,
         armed: t.armed,
         monitor_input: t.monitor_input,
+        monitor_auto: t.monitor_auto,
         phase_invert: t.phase_invert,
         swap_lr: t.swap_lr,
         stereo_separation: t.stereo_separation,
@@ -1141,6 +1144,34 @@ pub fn set_track_monitor_input(state: State<AppState>, track_id: String, enabled
         }
     }
     engine.rebuild_graph();
+}
+
+/// What an armed track lets you hear, as one undo step: "off", "in"
+/// (always the input) or "auto" (the input while stopped and recording, the
+/// track's own audio while playing back).
+#[tauri::command]
+pub fn set_track_monitor_mode(
+    state: State<AppState>,
+    track_id: String,
+    mode: String,
+) -> Result<(), String> {
+    let (input, auto) = match mode.as_str() {
+        "off" => (false, false),
+        "in" => (true, false),
+        "auto" => (true, true),
+        other => return Err(format!("Unknown monitoring mode \"{other}\"")),
+    };
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.monitor_input = input;
+            track.monitor_auto = auto;
+        }
+    }
+    engine.rebuild_graph();
+    Ok(())
 }
 
 #[tauri::command]

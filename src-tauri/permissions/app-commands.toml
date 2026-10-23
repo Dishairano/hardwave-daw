@@ -188,6 +188,7 @@ permissions = [
   "allow-toggle-solo-safe",
   "allow-toggle-arm",
   "allow-set-track-monitor-input",
+  "allow-set-track-monitor-mode",
   "allow-reorder-track",
   "allow-set-track-name",
   "allow-set-track-color",

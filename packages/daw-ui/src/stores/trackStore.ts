@@ -119,6 +119,20 @@ export interface InsertInfo {
   sidechainSource: string | null
 }
 
+/** What an armed track lets you hear: nothing, always the input, or the
+ * input while stopped or recording and its own audio while playing back. */
+export type MonitorMode = 'off' | 'in' | 'auto'
+
+export function monitorModeOf(t: Pick<TrackInfo, 'monitorInput' | 'monitorAuto'>): MonitorMode {
+  if (!t.monitorInput) return 'off'
+  return t.monitorAuto ? 'auto' : 'in'
+}
+
+/** The button cycles Off, In, Auto. */
+export function nextMonitorMode(mode: MonitorMode): MonitorMode {
+  return mode === 'off' ? 'in' : mode === 'in' ? 'auto' : 'off'
+}
+
 export interface TrackInfo {
   id: string
   name: string
@@ -131,6 +145,8 @@ export interface TrackInfo {
   armed: boolean
   solo_safe: boolean
   monitorInput: boolean
+  /** With monitorInput: the input while stopped or recording, the track's own audio while playing back. */
+  monitorAuto?: boolean
   phaseInvert: boolean
   swapLr: boolean
   stereoSeparation: number
@@ -283,6 +299,8 @@ interface TrackState {
   soloExclusively: (id: string) => Promise<void>
   toggleArm: (id: string) => Promise<void>
   setTrackMonitorInput: (id: string, enabled: boolean) => Promise<void>
+  /** Off, always (In), or following the transport (Auto). */
+  setTrackMonitorMode: (id: string, mode: MonitorMode) => Promise<void>
   toggleSoloSafe: (id: string) => Promise<void>
   reorderTrack: (id: string, newIndex: number) => Promise<void>
   renameTrack: (id: string, name: string) => Promise<void>
@@ -706,6 +724,13 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   setTrackMonitorInput: async (id, enabled) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
     await mut('set_track_monitor_input', { trackId: id, enabled }, `${enabled ? 'Enable' : 'Disable'} input monitoring on "${name}"`)
+    await get().refreshTrack(id)
+  },
+
+  setTrackMonitorMode: async (id, mode) => {
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    const label = mode === 'off' ? 'off' : mode === 'auto' ? 'Auto' : 'In'
+    await mut('set_track_monitor_mode', { trackId: id, mode }, `Monitoring ${label} on "${name}"`)
     await get().refreshTrack(id)
   },
 

@@ -603,6 +603,10 @@ pub struct TrackNode {
     /// True when another track routes into this one, which makes it a bus
     /// that has work to do even with nothing of its own on it.
     receives_input: bool,
+    /// True when live input passes through this track: an armed track that
+    /// monitors, or a bus one routes into. It runs while the song is
+    /// stopped, so a singer hears themselves before pressing play.
+    live_input: bool,
     /// Cached static fader value so we can restore it when an
     /// automation lane is removed mid-session. We store the linear
     /// gain so the runtime path stays branch-light.
@@ -657,6 +661,7 @@ impl TrackNode {
             automation_lanes: Vec::new(),
             automation_clips: Vec::new(),
             receives_input: false,
+            live_input: false,
             static_volume: 1.0,
             static_pan: 0.0,
         }
@@ -716,6 +721,7 @@ impl TrackNode {
             && self.chain.slots.is_empty()
             && self.automation_lanes.is_empty()
             && !self.receives_input
+            && !self.live_input
             // A track whose only content is in the launcher grid still
             // has work to do: the gate is about idle tracks, and one
             // with a clip queued or playing is not idle.
@@ -892,6 +898,15 @@ impl TrackNode {
         self.receives_input = receives;
     }
 
+    /// Monitoring went through the track only while playing, and only when
+    /// the track had a plug-in: a track with nothing on it counted as idle
+    /// and a stopped one returned silence, so an armed vocal track let the
+    /// singer hear nothing. A track live input passes through now runs
+    /// while stopped (its clips stay still) and is never idle.
+    pub fn set_live_input(&mut self, live: bool) {
+        self.live_input = live;
+    }
+
     pub fn set_muted(&mut self, muted: bool) {
         self.muted = muted;
     }
@@ -913,6 +928,10 @@ impl AudioNode for TrackNode {
     /// never reached through `Box<dyn AudioNode>`, which is why a bus with
     /// nothing of its own on it stayed on the idle path and every send into
     /// it was silent.
+    fn set_live_input(&mut self, live: bool) {
+        TrackNode::set_live_input(self, live);
+    }
+
     fn set_receives_input(&mut self, receives: bool) {
         TrackNode::set_receives_input(self, receives);
     }
@@ -1036,7 +1055,7 @@ impl AudioNode for TrackNode {
     /// Muted, stopped, or a placeholder: each of those leaves the track
     /// silent before it reads its input or runs anything (see `process`).
     fn idle(&self, ctx: &ProcessContext) -> bool {
-        self.muted || !ctx.playing || self.has_nothing_to_play()
+        self.muted || (!ctx.playing && !self.live_input) || self.has_nothing_to_play()
     }
 
     fn process(
@@ -1078,7 +1097,7 @@ impl AudioNode for TrackNode {
             ch.fill(0.0);
         }
 
-        if self.muted || !ctx.playing {
+        if self.muted || (!ctx.playing && !self.live_input) {
             return;
         }
 
@@ -1180,11 +1199,13 @@ impl AudioNode for TrackNode {
         // The launcher. A launched slot loops on top of the song and
         // replaces this track's timeline clips, because a track doing
         // both at once is nobody's idea of either.
-        let session_playing = self.run_session(outputs, buf_size, pos, ctx);
+        let session_playing = ctx.playing && self.run_session(outputs, buf_size, pos, ctx);
 
-        // Sum all clips that overlap the current buffer window
+        // Sum all clips that overlap the current buffer window. Stopped, a
+        // track runs only for its live input, and its clips stay silent: the
+        // playhead is not moving, so they would repeat one block.
         for (clip_idx, clip) in self.clips.iter().enumerate() {
-            if session_playing {
+            if session_playing || !ctx.playing {
                 break;
             }
             if clip.muted {

@@ -52,6 +52,10 @@ pub trait AudioNode: Send {
     /// of its own on it still mixes what reaches it. Only track nodes care.
     fn set_receives_input(&mut self, _receives: bool) {}
 
+    /// Tell a node that live input passes through it, so it keeps running
+    /// while the song is stopped. Only track nodes care.
+    fn set_live_input(&mut self, _live: bool) {}
+
     /// Move one knob of one plug-in in this node's chain.
     ///
     /// Borrowed rather than a command: modulation sets a knob every
