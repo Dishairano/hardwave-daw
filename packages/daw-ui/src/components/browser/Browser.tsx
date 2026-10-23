@@ -764,7 +764,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         <button
           onClick={() => setMatchTempo(v => !v)}
           title={matchTempo
-            ? "Previews play at the song's tempo when the file name says the tempo, with the pitch kept. Files over 16 seconds change pitch with the speed."
+            ? "Previews play at the song's tempo when the file name says the tempo, with the pitch kept. Files over 32 seconds change pitch with the speed."
             : 'Previews play at the speed the file was recorded at'}
           data-testid="preview-tempo-toggle"
           style={{

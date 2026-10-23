@@ -1806,10 +1806,10 @@ pub struct PreviewPlan {
 }
 
 /// Longer than this, a preview at the song's tempo plays like a turntable
-/// rather than wait for a stretch: loops are short (eight bars at 128 BPM is
-/// 15 seconds), whole songs are not. The stretch is made once per file and
-/// tempo, so a second click on the same loop starts at once.
-const PREVIEW_STRETCH_MAX_SECS: f64 = 16.0;
+/// rather than wait for a stretch: loops are short (sixteen bars at 120 BPM
+/// is 32 seconds), whole songs are not. The stretch is made once per file
+/// and tempo, so a second click on the same loop starts at once.
+const PREVIEW_STRETCH_MAX_SECS: f64 = 32.0;
 
 /// Read a tempo out of a file name: "Kick 150.wav", "loop_128bpm.wav",
 /// "174 dnb break.wav".
@@ -1862,7 +1862,7 @@ fn bpm_from_name(name: &str) -> Option<f64> {
 /// tell whether a 128 BPM loop fits a 150 BPM song was to import it. This
 /// plays the preview at the song's tempo with its pitch kept, stretched once
 /// and cached. It used to change speed like a turntable, so the pitch moved
-/// too; a file over 16 seconds still does, and the reply says which.
+/// too; a file over 32 seconds still does, and the reply says which.
 #[tauri::command]
 pub fn preview_audio_file_in_tempo(
     state: State<AppState>,
