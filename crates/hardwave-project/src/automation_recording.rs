@@ -113,6 +113,12 @@ impl AutomationRecorder {
         }
     }
 
+    /// The value captured last, which a Latch or Write pass holds after
+    /// the control is let go.
+    pub fn last_value(&self) -> Option<f64> {
+        self.samples.last().map(|&(_, v)| v)
+    }
+
     pub fn sample_count(&self) -> usize {
         self.samples.len()
     }

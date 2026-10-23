@@ -39,6 +39,7 @@ pub fn play(state: State<AppState>) {
     } else {
         engine.transport.playing.store(true, Ordering::Relaxed);
     }
+    crate::commands::automation_write::note_play_start(&state, &engine);
     engine.send_command(TransportCommand::Play);
     state
         .collab
@@ -68,6 +69,9 @@ pub fn set_wait_for_input(state: State<AppState>, enabled: bool) {
 pub fn stop(state: State<AppState>) -> Result<Option<RecordedTake>, String> {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
+    // Latch and Write passes end where the song stopped, before the
+    // playhead goes back.
+    crate::commands::automation_write::finish_passes(&state, &engine);
     engine
         .transport
         .wait_pending
