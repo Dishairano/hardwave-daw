@@ -349,6 +349,7 @@ permissions = [
   "allow-slip-clip",
   "allow-preview-audio-file",
   "allow-preview-audio-file-in-tempo",
+  "allow-slices-to-playlist",
   "allow-stop-audio-preview",
   "allow-set-preview-volume",
   "allow-set-clip-gain",
