@@ -30,6 +30,14 @@ async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: strin
   return r
 }
 
+/** A MIDI keyboard plays the MIDI track picked last (when no track is armed
+ *  for input). Picking an audio track leaves it where it was; the engine
+ *  only rebuilds when the track actually changes. */
+function keyboardFollows(track: { id: string; kind: string } | undefined) {
+  if (!track || track.kind !== 'Midi') return
+  invoke('set_keyboard_track', { trackId: track.id }).catch(() => {})
+}
+
 const TRACK_LIMIT = 500
 
 /**
@@ -427,7 +435,10 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   activeMidiTrackId: null,
   activeMidiClipId: null,
 
-  setActiveMidiClip: (trackId, clipId) => set({ activeMidiTrackId: trackId, activeMidiClipId: clipId }),
+  setActiveMidiClip: (trackId, clipId) => {
+    set({ activeMidiTrackId: trackId, activeMidiClipId: clipId })
+    keyboardFollows(get().tracks.find(t => t.id === trackId))
+  },
 
   ensureMidiClipOnTrack: async (trackId) => {
     const state = get()
@@ -508,7 +519,10 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     if (label) useHistoryStore.getState().push(label)
   },
 
-  selectTrack: (id) => set({ selectedTrackId: id }),
+  selectTrack: (id) => {
+    set({ selectedTrackId: id })
+    keyboardFollows(get().tracks.find(t => t.id === id))
+  },
 
   selectClip: (clipId, trackId) => set({
     selectedClipId: clipId,

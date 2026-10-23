@@ -3084,6 +3084,15 @@ impl EngineCallback {
             }
         }
 
+        // Who hears a MIDI keyboard: the armed tracks when any are armed,
+        // otherwise the one MIDI track picked last (the first one in a new
+        // song). Every MIDI track used to take it, so a keyboard played all
+        // of them at once.
+        let armed_for_input = project.tracks.iter().any(|t| {
+            t.armed && t.monitor_input && !matches!(t.kind, hardwave_project::TrackKind::Master)
+        });
+        let keyboard_track = keyboard_track_of(&project);
+
         for track in &project.tracks {
             if !track.kind.is_audio_bearing() {
                 continue;
@@ -3310,15 +3319,11 @@ impl EngineCallback {
                 midi_node.set_controls(control_regions);
 
                 let node_id = self.graph.add_node(Box::new(midi_node));
-                // Every MIDI track accepts live input by default. This
-                // makes a freshly-created MIDI track immediately respond
-                // to a controller without needing the user to find the
-                // "arm" toggle. `armed && monitor_input` still narrows
-                // routing when the user explicitly sets it (the OR keeps
-                // the default-on behaviour while honouring the flags
-                // once set).
-                let accepts = matches!(track.kind, hardwave_project::TrackKind::Midi)
-                    || (track.armed && track.monitor_input);
+                // A track armed for input hears the keyboard; with none
+                // armed, the keyboard plays the track picked last, so a new
+                // MIDI track still answers a controller without arming.
+                let accepts = (track.armed && track.monitor_input)
+                    || (!armed_for_input && keyboard_track.as_deref() == Some(track.id.as_str()));
                 self.graph.set_accepts_live_midi(node_id, accepts);
                 track_id_to_node.insert(track.id.clone(), node_id);
                 continue;
@@ -4183,6 +4188,67 @@ pub fn guard_output(block: &mut [f32]) -> bool {
         }
     }
     changed
+}
+
+/// The MIDI track a keyboard plays when nothing is armed: the one picked
+/// last, if it is still a MIDI track, else the first MIDI track.
+fn keyboard_track_of(project: &hardwave_project::Project) -> Option<String> {
+    let is_midi = |id: &str| {
+        project
+            .tracks
+            .iter()
+            .any(|t| t.id == id && matches!(t.kind, hardwave_project::TrackKind::Midi))
+    };
+    project
+        .keyboard_track
+        .clone()
+        .filter(|id| is_midi(id))
+        .or_else(|| {
+            project
+                .tracks
+                .iter()
+                .find(|t| matches!(t.kind, hardwave_project::TrackKind::Midi))
+                .map(|t| t.id.clone())
+        })
+}
+
+#[cfg(test)]
+mod keyboard_track_tests {
+    use super::keyboard_track_of;
+    use hardwave_project::{Project, Track, TrackKind};
+
+    fn song() -> Project {
+        let mut p = Project::default();
+        let mut a = Track::new_audio("synth-a".into(), "Lead".into());
+        a.kind = TrackKind::Midi;
+        let mut b = Track::new_audio("synth-b".into(), "Bass".into());
+        b.kind = TrackKind::Midi;
+        p.tracks.push(a);
+        p.tracks.push(b);
+        p
+    }
+
+    #[test]
+    fn the_keyboard_plays_the_track_picked_last() {
+        let mut p = song();
+        p.keyboard_track = Some("synth-b".into());
+        assert_eq!(keyboard_track_of(&p).as_deref(), Some("synth-b"));
+    }
+
+    #[test]
+    fn with_nothing_picked_it_plays_the_first_midi_track_only() {
+        let p = song();
+        assert_eq!(keyboard_track_of(&p).as_deref(), Some("synth-a"));
+    }
+
+    #[test]
+    fn a_pick_that_is_gone_or_not_midi_falls_back() {
+        let mut p = song();
+        p.keyboard_track = Some("insert-001".into());
+        assert_eq!(keyboard_track_of(&p).as_deref(), Some("synth-a"));
+        p.keyboard_track = Some("deleted".into());
+        assert_eq!(keyboard_track_of(&p).as_deref(), Some("synth-a"));
+    }
 }
 
 #[cfg(test)]

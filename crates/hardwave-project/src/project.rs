@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::tempo::TempoMap;
-use crate::track::Track;
+use crate::track::{Track, TrackId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMetadata {
@@ -133,6 +133,11 @@ pub struct Project {
     /// by position.
     #[serde(default)]
     pub video: Option<VideoTrack>,
+    /// The MIDI track a keyboard plays when no track is armed: the one last
+    /// picked in the playlist, channel rack or piano roll. A keyboard used
+    /// to play every MIDI track at once.
+    #[serde(default)]
+    pub keyboard_track: Option<TrackId>,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a
@@ -193,6 +198,7 @@ impl Default for Project {
             vcas: Vec::new(),
             modulations: Vec::new(),
             video: None,
+            keyboard_track: None,
             scenes: vec![
                 "Scene 1".to_string(),
                 "Scene 2".to_string(),
