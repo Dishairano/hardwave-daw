@@ -1,3 +1,4 @@
+import { magnetEdge, magnetSnap } from './magnetSnap'
 import { labelGap, rulerLabel } from './rulerLabel'
 import { followScroll } from './follow'
 import { usePlaylistScrollStore } from '../../stores/playlistScrollStore'
@@ -85,6 +86,9 @@ interface DragState {
   originalFadeInTicks: number
   originalFadeOutTicks: number
   groupMoveOriginals?: { clipId: string; trackId: string; origPos: number }[]
+  /** The other clips' edges and the markers, for magnetic snap. Gathered on
+   *  the first move of a drag and kept for the rest of it. */
+  snapTargets?: number[]
   // Scroll offset frozen at scrub start. The auto-follow scroll offset is
   // derived from the live playhead, so recomputing it mid-scrub while
   // playing makes a stationary cursor map to an ever-advancing tick (the
@@ -1682,9 +1686,25 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     drag.currentMouseY = mouseY
     const dx = mouseX - drag.startMouseX
     const dTicks = Math.round(dx / pixelsPerTick)
-    // Alt held while moving or resizing a clip leaves the grid out, as in
-    // FL Studio, for placing a clip by ear.
-    const snapDrag = (ticks: number) => (e.altKey ? ticks : applySnap(ticks))
+    // Magnetic snap: within 8 px of another clip's edge or a marker, a
+    // moved or resized edge sticks to it; further away the grid decides.
+    // Alt held leaves both out, as in FL Studio, for placing a clip by ear.
+    const reach = 8 / pixelsPerTick
+    const edgeTargets = (): number[] => {
+      if (!drag.snapTargets) {
+        const moving = new Set([drag.clipId, ...(drag.groupMoveOriginals ?? []).map(m => m.clipId)])
+        const targets: number[] = []
+        for (const t of audioTracks) {
+          for (const c of t.clips) {
+            if (moving.has(c.id)) continue
+            targets.push(c.position_ticks, c.position_ticks + c.length_ticks)
+          }
+        }
+        for (const m of markers) targets.push(m.tick)
+        drag.snapTargets = targets
+      }
+      return drag.snapTargets
+    }
 
     const minLen = snapTicks > 0 ? snapTicks : PPQ
 
@@ -1782,7 +1802,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       return
     }
     if (drag.mode === 'move') {
-      const snapped = snapDrag(Math.max(0, drag.originalPositionTicks + dTicks))
+      const raw = Math.max(0, drag.originalPositionTicks + dTicks)
+      const snapped = e.altKey
+        ? raw
+        : magnetSnap(raw, drag.originalLengthTicks, applySnap(raw), edgeTargets(), reach)
       const effectiveDelta = snapped - drag.originalPositionTicks
 
       // Cross-track move — hit-test the cursor's vertical position
@@ -1827,18 +1850,22 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     } else if (drag.mode === 'resize-right') {
       const newLen = Math.max(minLen, drag.originalLengthTicks + dTicks)
-      resizeClipLocal(drag.trackId, drag.clipId, snapDrag(newLen))
+      const start = drag.originalPositionTicks
+      const end = e.altKey
+        ? start + newLen
+        : magnetEdge(start + newLen, start + applySnap(newLen), edgeTargets(), reach)
+      resizeClipLocal(drag.trackId, drag.clipId, Math.max(minLen, end - start))
     } else if (drag.mode === 'resize-left') {
       // Keep the right edge anchored; shift position and shrink length.
       const rightEdge = drag.originalPositionTicks + drag.originalLengthTicks
       let newPos = Math.max(0, drag.originalPositionTicks + dTicks)
-      newPos = snapDrag(newPos)
+      newPos = e.altKey ? newPos : magnetEdge(newPos, applySnap(newPos), edgeTargets(), reach)
       if (newPos > rightEdge - minLen) newPos = rightEdge - minLen
       const newLen = rightEdge - newPos
       moveClipLocal(drag.trackId, drag.clipId, newPos)
       resizeClipLocal(drag.trackId, drag.clipId, newLen)
     }
-  }, [hitTest, getScrollOffset, pixelsPerTick, moveClipLocal, moveClipToTrack, resizeClipLocal, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint, trackHeight, audioTracks, trackRowAt, paintClipAt])
+  }, [hitTest, getScrollOffset, pixelsPerTick, moveClipLocal, moveClipToTrack, resizeClipLocal, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint, trackHeight, audioTracks, trackRowAt, paintClipAt, markers])
 
   const handleMouseUp = useCallback(() => {
     // Right-mouse-button pan release. If we panned (moved past 4 px)
