@@ -527,6 +527,45 @@ pub fn set_metronome_volume(state: State<AppState>, volume: f32) {
     state.engine.lock().metronome().set_volume_linear(volume);
 }
 
+/// A click sound from a file: mixed to mono at the file's own rate, and cut
+/// at four seconds, far longer than any click.
+fn read_click_sound(path: &str) -> Result<hardwave_engine::metronome::ClickSound, String> {
+    let (info, channels) =
+        hardwave_dsp::AudioFileReader::read_resampled(std::path::Path::new(path), None)
+            .map_err(|e| format!("{path}: {e}"))?;
+    let frames = channels
+        .first()
+        .map(|c| c.len())
+        .unwrap_or(0)
+        .min(info.sample_rate as usize * 4);
+    if frames == 0 {
+        return Err(format!("{path}: the file holds no audio"));
+    }
+    let n = channels.len() as f32;
+    let samples = (0..frames)
+        .map(|i| channels.iter().map(|c| c[i]).sum::<f32>() / n)
+        .collect();
+    Ok(hardwave_engine::metronome::ClickSound {
+        samples,
+        sample_rate: info.sample_rate,
+    })
+}
+
+/// The user's own click sounds, from files, played by the engine on the
+/// beat's sample: one for every beat, and one for the bar's first beat. None
+/// keeps the built-in click. Nothing changes when a file will not open.
+#[tauri::command]
+pub fn set_metronome_sound_files(
+    state: State<AppState>,
+    beat: Option<String>,
+    downbeat: Option<String>,
+) -> Result<(), String> {
+    let beat = beat.as_deref().map(read_click_sound).transpose()?;
+    let downbeat = downbeat.as_deref().map(read_click_sound).transpose()?;
+    state.engine.lock().metronome().set_sounds(beat, downbeat);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn set_metronome_accent(state: State<AppState>, accent: bool) {
     state

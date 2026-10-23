@@ -1421,6 +1421,13 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 {Math.round(metronome.volume * 100)}%
               </span>
             </SettingRow>
+            {/* The user's own click sounds, played by the engine on the beat. */}
+            <SettingRow label="Click sound">
+              <ClickFile path={metronome.beatSound} empty="Built-in" onChange={metronome.setBeatSound} />
+            </SettingRow>
+            <SettingRow label="Downbeat sound">
+              <ClickFile path={metronome.downbeatSound} empty="Same as the click" onChange={metronome.setDownbeatSound} />
+            </SettingRow>
             <SettingRow label="Count-in">
               <Select
                 value={String(metronome.precountBars)}
@@ -1642,6 +1649,38 @@ function channelPairOptions(maxChannels: number): { value: string; label: string
     value: String(i * 2),
     label: `${i * 2 + 1} / ${i * 2 + 2}`,
   }))
+}
+
+/** A click sound file: its name, a way to pick another, and a way back to the default. */
+function ClickFile({ path, empty, onChange }: {
+  path: string | null
+  empty: string
+  onChange: (path: string | null) => void
+}) {
+  const name = path ? path.split(/[\\/]/).pop() : empty
+  const choose = async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const picked = await open({
+        multiple: false,
+        title: 'Click sound',
+        filters: [{ name: 'Audio', extensions: ['wav', 'aif', 'aiff', 'flac', 'mp3', 'ogg'] }],
+      })
+      if (typeof picked === 'string') onChange(picked)
+    } catch { /* no dialog outside the app */ }
+  }
+  return (
+    <>
+      <span
+        title={path ?? undefined}
+        style={{ fontSize: 11, color: path ? hw.textPrimary : hw.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+      >
+        {name}
+      </span>
+      <Btn label="Choose…" onClick={() => { void choose() }} />
+      {path && <Btn label="Reset" onClick={() => onChange(null)} />}
+    </>
+  )
 }
 
 function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {

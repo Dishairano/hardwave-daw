@@ -5,10 +5,10 @@ const LS_VOLUME = 'hardwave.daw.metronomeVolume'
 const LS_ACCENT = 'hardwave.daw.metronomeAccent'
 const LS_REC_ONLY = 'hardwave.daw.metronomeRecordOnly'
 const LS_PRECOUNT = 'hardwave.daw.metronomePrecountBars'
-const LS_CUSTOM_DOWN = 'hardwave.daw.metronomeCustomDownbeat'
-const LS_CUSTOM_ACCENT = 'hardwave.daw.metronomeCustomAccent'
-const LS_CUSTOM_DOWN_NAME = 'hardwave.daw.metronomeCustomDownbeatName'
-const LS_CUSTOM_ACCENT_NAME = 'hardwave.daw.metronomeCustomAccentName'
+// Paths to the user's own click sounds. These replace data-URL keys that no
+// screen ever wrote.
+const LS_BEAT_SOUND = 'hardwave.daw.metronomeBeatSound'
+const LS_DOWNBEAT_SOUND = 'hardwave.daw.metronomeDownbeatSound'
 
 function readString(key: string): string | null {
   try {
@@ -45,10 +45,10 @@ interface MetronomeState {
   accent: boolean
   recordOnly: boolean
   precountBars: number
-  customDownbeat: string | null
-  customAccent: string | null
-  customDownbeatName: string | null
-  customAccentName: string | null
+  /** A file of the user's own for every beat; null for the built-in click. */
+  beatSound: string | null
+  /** A file for the bar's first beat; null to use the beat sound. */
+  downbeatSound: string | null
 
   setEnabled: (v: boolean) => void
   toggleEnabled: () => void
@@ -56,8 +56,8 @@ interface MetronomeState {
   setAccent: (v: boolean) => void
   setRecordOnly: (v: boolean) => void
   setPrecountBars: (v: number) => void
-  setCustomDownbeat: (dataUrl: string | null, name: string | null) => void
-  setCustomAccent: (dataUrl: string | null, name: string | null) => void
+  setBeatSound: (path: string | null) => void
+  setDownbeatSound: (path: string | null) => void
 }
 
 export const useMetronomeStore = create<MetronomeState>((set) => ({
@@ -66,10 +66,8 @@ export const useMetronomeStore = create<MetronomeState>((set) => ({
   accent: readBool(LS_ACCENT, true),
   recordOnly: readBool(LS_REC_ONLY, false),
   precountBars: Math.max(0, Math.min(4, Math.round(readNumber(LS_PRECOUNT, 0)))),
-  customDownbeat: readString(LS_CUSTOM_DOWN),
-  customAccent: readString(LS_CUSTOM_ACCENT),
-  customDownbeatName: readString(LS_CUSTOM_DOWN_NAME),
-  customAccentName: readString(LS_CUSTOM_ACCENT_NAME),
+  beatSound: readString(LS_BEAT_SOUND),
+  downbeatSound: readString(LS_DOWNBEAT_SOUND),
 
   setEnabled: (v) => { writeBool(LS_ENABLED, v); set({ enabled: v }) },
   toggleEnabled: () => set(s => { writeBool(LS_ENABLED, !s.enabled); return { enabled: !s.enabled } }),
@@ -80,14 +78,6 @@ export const useMetronomeStore = create<MetronomeState>((set) => ({
     const c = Math.max(0, Math.min(4, Math.round(v)))
     writeNumber(LS_PRECOUNT, c); set({ precountBars: c })
   },
-  setCustomDownbeat: (dataUrl, name) => {
-    writeString(LS_CUSTOM_DOWN, dataUrl)
-    writeString(LS_CUSTOM_DOWN_NAME, name)
-    set({ customDownbeat: dataUrl, customDownbeatName: name })
-  },
-  setCustomAccent: (dataUrl, name) => {
-    writeString(LS_CUSTOM_ACCENT, dataUrl)
-    writeString(LS_CUSTOM_ACCENT_NAME, name)
-    set({ customAccent: dataUrl, customAccentName: name })
-  },
+  setBeatSound: (path) => { writeString(LS_BEAT_SOUND, path); set({ beatSound: path }) },
+  setDownbeatSound: (path) => { writeString(LS_DOWNBEAT_SOUND, path); set({ downbeatSound: path }) },
 }))

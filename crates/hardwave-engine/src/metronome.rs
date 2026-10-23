@@ -11,6 +11,7 @@
 //! a beat lands exactly on its sample.
 
 use hardwave_project::tempo::TempoMap;
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -32,6 +33,26 @@ pub struct MetronomeSettings {
     pub accent: Arc<AtomicBool>,
     /// Only click while recording.
     pub record_only: Arc<AtomicBool>,
+    /// The user's own click sounds, when chosen.
+    pub sounds: Arc<Mutex<ClickSounds>>,
+}
+
+/// A click sound of the user's own: mono samples at their own rate.
+pub struct ClickSound {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+}
+
+/// The user's click sounds: one for every beat, one for the bar's first.
+/// Either can be missing, and then the built-in blip plays instead.
+#[derive(Default)]
+pub struct ClickSounds {
+    beat: Option<Arc<ClickSound>>,
+    downbeat: Option<Arc<ClickSound>>,
+    /// Sounds replaced while the engine may still be playing them. Kept, so
+    /// the audio thread never holds the last reference and frees memory.
+    /// Only grows when the user picks another file.
+    retired: Vec<Arc<ClickSound>>,
 }
 
 impl MetronomeSettings {
@@ -41,6 +62,33 @@ impl MetronomeSettings {
             volume: Arc::new(AtomicU32::new(0.7f32.to_bits())),
             accent: Arc::new(AtomicBool::new(true)),
             record_only: Arc::new(AtomicBool::new(false)),
+            sounds: Arc::new(Mutex::new(ClickSounds::default())),
+        }
+    }
+
+    /// Use the user's own click sounds; None for the built-in blip. Called
+    /// from the UI thread.
+    pub fn set_sounds(&self, beat: Option<ClickSound>, downbeat: Option<ClickSound>) {
+        let mut sounds = self.sounds.lock();
+        let old: Vec<Arc<ClickSound>> = sounds
+            .beat
+            .take()
+            .into_iter()
+            .chain(sounds.downbeat.take())
+            .collect();
+        sounds.retired.extend(old);
+        sounds.beat = beat.filter(|s| !s.samples.is_empty()).map(Arc::new);
+        sounds.downbeat = downbeat.filter(|s| !s.samples.is_empty()).map(Arc::new);
+    }
+
+    /// The sound for one click, if the user chose one. On the audio thread,
+    /// so it never waits: a busy lock plays the built-in blip this once.
+    fn sound_for(&self, downbeat: bool) -> Option<Arc<ClickSound>> {
+        let sounds = self.sounds.try_lock()?;
+        if downbeat {
+            sounds.downbeat.clone().or_else(|| sounds.beat.clone())
+        } else {
+            sounds.beat.clone()
         }
     }
 
@@ -86,10 +134,15 @@ pub struct ClickVoice {
     remaining: u32,
     total: u32,
     gain: f32,
+    /// The user's sound being played, and where in it, in its own samples.
+    sound: Option<Arc<ClickSound>>,
+    sound_pos: f64,
+    sound_step: f64,
 }
 
 impl ClickVoice {
     fn start(&mut self, freq: f32, gain: f32, sample_rate: f32) {
+        self.sound = None;
         self.phase = 0.0;
         self.phase_step = std::f32::consts::TAU * freq / sample_rate;
         self.total = (DECAY_SECS * sample_rate) as u32;
@@ -97,7 +150,50 @@ impl ClickVoice {
         self.gain = gain;
     }
 
+    /// Play a user's sound from its start, stepped through at the ratio of
+    /// its rate to the engine's, so it keeps its pitch at any device rate.
+    fn start_sound(&mut self, sound: Arc<ClickSound>, gain: f32, sample_rate: f32) {
+        self.sound_step = sound.sample_rate as f64 / sample_rate.max(1.0) as f64;
+        self.sound_pos = 0.0;
+        self.sound = Some(sound);
+        self.gain = gain;
+        self.remaining = 0;
+    }
+
+    /// A click on a beat: the user's sound if there is one, else the blip.
+    fn trigger(
+        &mut self,
+        settings: &MetronomeSettings,
+        downbeat: bool,
+        volume: f32,
+        sample_rate: f32,
+    ) {
+        match settings.sound_for(downbeat) {
+            Some(sound) => self.start_sound(sound, volume, sample_rate),
+            None => {
+                let freq = if downbeat { DOWNBEAT_HZ } else { BEAT_HZ };
+                self.start(freq, volume * 0.6, sample_rate);
+            }
+        }
+    }
+
+    fn sounding(&self) -> bool {
+        self.remaining > 0 || self.sound.is_some()
+    }
+
     fn next_sample(&mut self) -> f32 {
+        if let Some(sound) = &self.sound {
+            let i = self.sound_pos as usize;
+            if i + 1 >= sound.samples.len() {
+                let last = sound.samples.get(i).copied().unwrap_or(0.0) * self.gain;
+                self.sound = None;
+                return last;
+            }
+            let frac = (self.sound_pos - i as f64) as f32;
+            let s = sound.samples[i] + (sound.samples[i + 1] - sound.samples[i]) * frac;
+            self.sound_pos += self.sound_step;
+            return s * self.gain;
+        }
         if self.remaining == 0 || self.total == 0 {
             return 0.0;
         }
@@ -229,7 +325,7 @@ impl Metronome {
         sample_rate: f64,
     ) {
         let audible = self.settings.is_audible(recording);
-        if !audible && self.voice.remaining == 0 {
+        if !audible && !self.voice.sounding() {
             return;
         }
         if sample_rate <= 0.0 {
@@ -242,12 +338,9 @@ impl Metronome {
         for frame in 0..num_frames {
             if audible {
                 while next < events.len() && events[next].frame_offset == frame {
-                    let freq = if accent && events[next].downbeat {
-                        DOWNBEAT_HZ
-                    } else {
-                        BEAT_HZ
-                    };
-                    self.voice.start(freq, volume * 0.6, sample_rate as f32);
+                    let downbeat = accent && events[next].downbeat;
+                    self.voice
+                        .trigger(&self.settings, downbeat, volume, sample_rate as f32);
                     next += 1;
                 }
             }
@@ -302,8 +395,8 @@ impl Metronome {
             };
             if beat_now != beat_prev && beat_now >= 0 {
                 let downbeat = accent && (beat_now as u64).is_multiple_of(bar);
-                let freq = if downbeat { DOWNBEAT_HZ } else { BEAT_HZ };
-                self.voice.start(freq, volume * 0.6, sample_rate as f32);
+                self.voice
+                    .trigger(&self.settings, downbeat, volume, sample_rate as f32);
             }
             let s = self.voice.next_sample();
             if s != 0.0 {
@@ -595,5 +688,77 @@ mod tests {
         // Even if something switches it on, the export path holds its own
         // instance, so a bounce cannot inherit the playback setting.
         assert!(!silent.is_audible(true));
+    }
+
+    /// A user's own click sound played from the UI on a second clock, so
+    /// it drifted against the song. It now plays from the engine, on the
+    /// beat's own sample.
+    #[test]
+    fn a_users_sound_plays_on_the_beat_sample() {
+        let settings = MetronomeSettings::new();
+        settings.enabled.store(true, Ordering::Relaxed);
+        settings.set_volume_linear(1.0);
+        settings.set_sounds(
+            Some(ClickSound {
+                samples: vec![0.25; 100],
+                sample_rate: 48_000,
+            }),
+            Some(ClickSound {
+                samples: vec![0.75; 100],
+                sample_rate: 48_000,
+            }),
+        );
+        let mut m = Metronome::new(settings);
+        let out = render_block(&mut m, 256, &[beat_at(10, true), beat_at(200, false)]);
+        assert_eq!(out[9 * 2], 0.0, "nothing before the beat");
+        assert!(
+            (out[10 * 2] - 0.75).abs() < 1e-6,
+            "the downbeat sound on its sample"
+        );
+        assert!(
+            (out[200 * 2] - 0.25).abs() < 1e-6,
+            "the beat sound on its sample"
+        );
+    }
+
+    #[test]
+    fn a_sound_at_another_rate_keeps_its_length_in_time() {
+        let settings = MetronomeSettings::new();
+        settings.enabled.store(true, Ordering::Relaxed);
+        settings.set_volume_linear(1.0);
+        // 100 samples at 24 kHz is 200 samples at 48 kHz.
+        settings.set_sounds(
+            Some(ClickSound {
+                samples: vec![0.5; 100],
+                sample_rate: 24_000,
+            }),
+            None,
+        );
+        let mut m = Metronome::new(settings);
+        let out = render_block(&mut m, 512, &[beat_at(0, false)]);
+        let heard = out
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter(|f| f[0] != 0.0)
+            .count();
+        assert!((198..=200).contains(&heard), "heard for {heard} frames");
+    }
+
+    #[test]
+    fn without_a_sound_of_its_own_the_downbeat_uses_the_beat_sound() {
+        let settings = MetronomeSettings::new();
+        settings.enabled.store(true, Ordering::Relaxed);
+        settings.set_volume_linear(1.0);
+        settings.set_sounds(
+            Some(ClickSound {
+                samples: vec![0.25; 100],
+                sample_rate: 48_000,
+            }),
+            None,
+        );
+        let mut m = Metronome::new(settings);
+        let out = render_block(&mut m, 64, &[beat_at(0, true)]);
+        assert!((out[0] - 0.25).abs() < 1e-6);
     }
 }

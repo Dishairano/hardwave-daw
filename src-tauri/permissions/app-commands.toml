@@ -263,6 +263,7 @@ permissions = [
   "allow-set-metronome-enabled",
   "allow-set-metronome-volume",
   "allow-set-metronome-accent",
+  "allow-set-metronome-sound-files",
   "allow-set-metronome-record-only",
   "allow-get-pdc-enabled",
   "allow-set-pdc-enabled",
