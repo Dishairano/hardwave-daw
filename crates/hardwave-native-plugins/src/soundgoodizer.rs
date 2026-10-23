@@ -297,7 +297,12 @@ mod tests {
             Some("-12.0 dB")
         );
         for id in 0..PARAM_COUNT {
-            assert!(sg.parameter_options(id).is_none());
+            // Only the oversampling is a switch; the rest are knobs.
+            if id == PARAM_OVERSAMPLE {
+                assert_eq!(sg.parameter_options(id).map(|o| o.len()), Some(3));
+            } else {
+                assert!(sg.parameter_options(id).is_none());
+            }
             for step in 0..=10 {
                 assert!(sg.parameter_text(id, step as f64 / 10.0).is_some());
             }

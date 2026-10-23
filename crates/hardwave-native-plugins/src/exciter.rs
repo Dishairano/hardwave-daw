@@ -331,7 +331,12 @@ mod tests {
             Some("40 %")
         );
         for id in 0..PARAM_COUNT {
-            assert!(ex.parameter_options(id).is_none());
+            // Only the oversampling is a switch; the rest are knobs.
+            if id == PARAM_OVERSAMPLE {
+                assert_eq!(ex.parameter_options(id).map(|o| o.len()), Some(3));
+            } else {
+                assert!(ex.parameter_options(id).is_none());
+            }
             for step in 0..=10 {
                 assert!(ex.parameter_text(id, step as f64 / 10.0).is_some());
             }
