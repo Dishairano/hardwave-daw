@@ -32,9 +32,132 @@ fn velocity_to_midi(v: f32) -> u8 {
     ((v.clamp(0.0, 1.0) * 127.0).round() as u8).max(1)
 }
 
+/// One tempo or signature change for a song's conductor track.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SmfTempo {
+    pub tick: u64,
+    pub bpm: f64,
+    pub time_sig: (u32, u32),
+}
+
+/// One track of a song export: its name and every note and controller
+/// move it plays, at song ticks.
+pub struct SmfTrack<'a> {
+    pub name: &'a str,
+    pub clip: &'a MidiClip,
+}
+
 /// Render `clip` to format-0 Standard MIDI File bytes at `bpm`. The SMF
 /// division is the project PPQ, so note ticks transfer 1:1.
 pub fn write_smf(clip: &MidiClip, bpm: f64) -> Vec<u8> {
+    let mut track = Vec::new();
+    write_tempo(&mut track, 0, bpm);
+    let events = clip_events(clip);
+    write_events(&mut track, events, 0);
+    end_track(&mut track);
+    let mut out = header(0, 1);
+    push_chunk(&mut out, &track);
+    out
+}
+
+/// A whole song as a format-1 Standard MIDI File: a conductor track with
+/// every tempo and signature change, then one track per MIDI track, named.
+/// A tempo ramp is written as the step at its start: SMF has no ramps.
+pub fn write_song_smf(tempos: &[SmfTempo], tracks: &[SmfTrack<'_>]) -> Vec<u8> {
+    let mut conductor = Vec::new();
+    let mut prev = 0u64;
+    let mut sorted = tempos.to_vec();
+    sorted.sort_by_key(|t| t.tick);
+    if sorted.first().is_none_or(|t| t.tick > 0) {
+        sorted.insert(
+            0,
+            SmfTempo {
+                tick: 0,
+                bpm: 120.0,
+                time_sig: (4, 4),
+            },
+        );
+    }
+    let mut last_sig = None;
+    for t in &sorted {
+        let delta = (t.tick - prev) as u32;
+        prev = t.tick;
+        write_tempo(&mut conductor, delta, t.bpm);
+        if last_sig != Some(t.time_sig) {
+            last_sig = Some(t.time_sig);
+            write_time_sig(&mut conductor, 0, t.time_sig);
+        }
+    }
+    end_track(&mut conductor);
+
+    let mut out = header(1, 1 + tracks.len() as u16);
+    push_chunk(&mut out, &conductor);
+    for t in tracks {
+        let mut chunk = Vec::new();
+        // Track name meta: FF 03 len text.
+        let name = t.name.as_bytes();
+        write_vlq(&mut chunk, 0);
+        chunk.extend_from_slice(&[0xFF, 0x03]);
+        write_vlq(&mut chunk, name.len() as u32);
+        chunk.extend_from_slice(name);
+        write_events(&mut chunk, clip_events(t.clip), 0);
+        end_track(&mut chunk);
+        push_chunk(&mut out, &chunk);
+    }
+    out
+}
+
+fn header(format: u16, tracks: u16) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"MThd");
+    out.extend_from_slice(&6u32.to_be_bytes());
+    out.extend_from_slice(&format.to_be_bytes());
+    out.extend_from_slice(&tracks.to_be_bytes());
+    out.extend_from_slice(&(PPQ as u16).to_be_bytes());
+    out
+}
+
+fn push_chunk(out: &mut Vec<u8>, track: &[u8]) {
+    out.extend_from_slice(b"MTrk");
+    out.extend_from_slice(&(track.len() as u32).to_be_bytes());
+    out.extend_from_slice(track);
+}
+
+/// Tempo meta: FF 51 03 + microseconds per quarter.
+fn write_tempo(track: &mut Vec<u8>, delta: u32, bpm: f64) {
+    let usec_per_quarter = (60_000_000.0 / bpm.max(1.0)).round() as u32;
+    write_vlq(track, delta);
+    track.extend_from_slice(&[0xFF, 0x51, 0x03]);
+    track.push(((usec_per_quarter >> 16) & 0xFF) as u8);
+    track.push(((usec_per_quarter >> 8) & 0xFF) as u8);
+    track.push((usec_per_quarter & 0xFF) as u8);
+}
+
+/// Time signature meta: FF 58 04 nn dd cc bb, the denominator as a power
+/// of two, 24 clocks per click and 8 thirty-seconds per quarter.
+fn write_time_sig(track: &mut Vec<u8>, delta: u32, (num, den): (u32, u32)) {
+    write_vlq(track, delta);
+    let power = den.max(1).trailing_zeros().min(7) as u8;
+    track.extend_from_slice(&[0xFF, 0x58, 0x04, num.clamp(1, 255) as u8, power, 24, 8]);
+}
+
+fn end_track(track: &mut Vec<u8>) {
+    write_vlq(track, 0);
+    track.extend_from_slice(&[0xFF, 0x2F, 0x00]);
+}
+
+fn write_events(track: &mut Vec<u8>, events: Vec<(u64, u8, Vec<u8>)>, start: u64) {
+    let mut prev_tick = start;
+    for (tick, _order, message) in events {
+        let delta = (tick - prev_tick) as u32;
+        prev_tick = tick;
+        write_vlq(track, delta);
+        track.extend_from_slice(&message);
+    }
+}
+
+/// A clip's notes and controller moves as (tick, order, message), sorted.
+fn clip_events(clip: &MidiClip) -> Vec<(u64, u8, Vec<u8>)> {
     // (absolute_tick, order at that tick, raw MIDI message). Order keeps a
     // note-off before a controller move, and both before a note-on, so a
     // repeated pitch retriggers cleanly and a bend applies to the note it
@@ -81,39 +204,7 @@ pub fn write_smf(clip: &MidiClip, bpm: f64) -> Vec<u8> {
         events.push((c.tick, CONTROL, message));
     }
     events.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-
-    let mut track = Vec::new();
-    // Tempo meta at delta 0: FF 51 03 + microseconds-per-quarter.
-    let usec_per_quarter = (60_000_000.0 / bpm.max(1.0)).round() as u32;
-    write_vlq(&mut track, 0);
-    track.extend_from_slice(&[0xFF, 0x51, 0x03]);
-    track.push(((usec_per_quarter >> 16) & 0xFF) as u8);
-    track.push(((usec_per_quarter >> 8) & 0xFF) as u8);
-    track.push((usec_per_quarter & 0xFF) as u8);
-
-    let mut prev_tick = 0u64;
-    for (tick, _order, message) in events {
-        let delta = (tick - prev_tick) as u32;
-        prev_tick = tick;
-        write_vlq(&mut track, delta);
-        track.extend_from_slice(&message);
-    }
-    // End of track.
-    write_vlq(&mut track, 0);
-    track.extend_from_slice(&[0xFF, 0x2F, 0x00]);
-
-    let mut out = Vec::with_capacity(22 + track.len());
-    // MThd: format 0, 1 track, division = PPQ.
-    out.extend_from_slice(b"MThd");
-    out.extend_from_slice(&6u32.to_be_bytes());
-    out.extend_from_slice(&0u16.to_be_bytes()); // format 0
-    out.extend_from_slice(&1u16.to_be_bytes()); // 1 track
-    out.extend_from_slice(&(PPQ as u16).to_be_bytes());
-    // MTrk.
-    out.extend_from_slice(b"MTrk");
-    out.extend_from_slice(&(track.len() as u32).to_be_bytes());
-    out.extend_from_slice(&track);
-    out
+    events
 }
 
 #[cfg(test)]
@@ -260,5 +351,76 @@ mod tests {
             .position(|w| w == [0x90, 60])
             .expect("note written");
         assert!(cc_at < note_at, "expression is set before the note sounds");
+    }
+
+    /// The chunks of an SMF: (kind, body).
+    fn chunks(bytes: &[u8]) -> Vec<(&[u8], &[u8])> {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at + 8 <= bytes.len() {
+            let len = u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+            out.push((&bytes[at..at + 4], &bytes[at + 8..at + 8 + len]));
+            at += 8 + len;
+        }
+        out
+    }
+
+    #[test]
+    fn a_song_is_a_conductor_track_and_one_named_track_each() {
+        let lead = clip_with(vec![note(0, 480, 60, 0.8)]);
+        let bass = clip_with(vec![note(960, 480, 36, 0.8)]);
+        let bytes = write_song_smf(
+            &[
+                SmfTempo {
+                    tick: 0,
+                    bpm: 150.0,
+                    time_sig: (4, 4),
+                },
+                SmfTempo {
+                    tick: 7680,
+                    bpm: 160.0,
+                    time_sig: (7, 8),
+                },
+            ],
+            &[
+                SmfTrack {
+                    name: "Lead",
+                    clip: &lead,
+                },
+                SmfTrack {
+                    name: "Bass",
+                    clip: &bass,
+                },
+            ],
+        );
+        let c = chunks(&bytes);
+        assert_eq!(c.len(), 4, "header, conductor and two tracks");
+        assert_eq!(c[0].1[0..2], [0, 1], "format 1");
+        assert_eq!(c[0].1[2..4], [0, 3], "three tracks");
+        let conductor = c[1].1;
+        let tempos = conductor
+            .windows(3)
+            .filter(|w| w == &[0xFF, 0x51, 0x03])
+            .count();
+        assert_eq!(tempos, 2, "both tempos");
+        assert!(
+            conductor.windows(5).any(|w| w == [0xFF, 0x58, 0x04, 7, 3]),
+            "7/8 as 7 over two to the third"
+        );
+        assert!(c[2].1.windows(4).any(|w| w == b"Lead"));
+        assert!(c[3].1.windows(4).any(|w| w == b"Bass"));
+        assert!(
+            c[3].1.windows(3).any(|w| w == [0x90, 36, 102]),
+            "the bass note"
+        );
+    }
+
+    #[test]
+    fn the_single_clip_file_is_unchanged() {
+        let clip = clip_with(vec![note(0, 480, 60, 1.0)]);
+        let bytes = write_smf(&clip, 120.0);
+        let c = chunks(&bytes);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].1[0..4], [0, 0, 0, 1], "format 0, one track");
     }
 }

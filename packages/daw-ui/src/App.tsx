@@ -2060,6 +2060,28 @@ export function App() {
           { label: 'Project info…', shortcut: 'F11', action: () => setShowProjectInfo(true) },
           { separator: true, label: '' },
           { label: 'Export audio…', action: handleExportAudio },
+          {
+            // The whole song's notes as one .mid, a track per MIDI track,
+            // for another DAW or a notation program.
+            label: 'Export song as MIDI…',
+            action: async () => {
+              const push = useNotificationStore.getState().push
+              try {
+                const { save } = await import('@tauri-apps/plugin-dialog')
+                const path = await save({
+                  defaultPath: `${useProjectStore.getState().projectName || 'Song'}.mid`,
+                  filters: [{ name: 'MIDI', extensions: ['mid'] }],
+                })
+                if (!path) return
+                const tracks = await invoke<number>('export_song_midi', { path })
+                push('info', 'Song exported as MIDI', {
+                  detail: `${tracks} track${tracks === 1 ? '' : 's'}, with the tempo and time signature changes`,
+                })
+              } catch (e) {
+                push('error', 'MIDI export failed', { detail: String(e) })
+              }
+            },
+          },
           { separator: true, label: '' },
           {
             label: 'Import FL Studio project…',
