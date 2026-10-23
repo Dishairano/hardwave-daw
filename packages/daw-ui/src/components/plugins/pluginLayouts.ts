@@ -216,14 +216,14 @@ export const LAYOUTS: Record<string, PluginLayout> = {
   tripleosc: { sub: 'Synth · 3 oscillators', fam: 'synth', w: 1080, cols: '1fr 1fr 1fr', outOnly: true, panels: [
     [{ t: 'Oscillator 1', s: [[['d', 'wave:Osc1 Wave', 70]], [['p', 'Osc1 Wave']], [['k', 'Osc1 Detune', 'Osc1 Level']]] }],
     [{ t: 'Oscillator 2', s: [[['d', 'wave:Osc2 Wave', 70]], [['p', 'Osc2 Wave']], [['k', 'Osc2 Detune', 'Osc2 Level']]] }],
-    [{ t: 'Oscillator 3', s: [[['d', 'wave:Osc3 Wave', 70]], [['p', 'Osc3 Wave']], [['k', 'Osc3 Detune', 'Osc3 Level']]] }],
+    [{ t: 'Oscillator 3', s: [[['d', 'wave:Osc3 Wave', 70]], [['p', 'Osc3 Wave']], [['k', 'Osc3 Detune', 'Osc3 Level']]] }, { t: 'Voices', s: [[['p', 'Voice mode']], [['k', 'Voices', 'Glide']]] }],
   ], bottom: { t: 'Amp envelope', x: 'ADSR', s: [[['d', 'adsr', 150], ['k', 'Attack', 'Decay', 'Sustain', 'Release']]] } },
   fm: { sub: 'Synth · 4-operator FM', fam: 'synth', w: 1080, cols: '1fr 1.6fr', outOnly: true, panels: [
-    [{ t: 'Algorithm', grow: true, s: [[['d', 'algo', 170]], [['p', 'Algorithm']]] }],
+    [{ t: 'Algorithm', grow: true, s: [[['d', 'algo', 170]], [['p', 'Algorithm']]] }, { t: 'Voices', s: [[['p', 'Voice mode']], [['k', 'Voices', 'Glide']]] }],
     [{ t: 'Operators', grow: true, s: [[['k', 'Op1 Ratio', 'Op2 Ratio', 'Op3 Ratio', 'Op4 Ratio']], [['k', 'Op1 Level', 'Op2 Level', 'Op3 Level', 'Op4 Level']]] }],
   ], bottom: { t: 'Amp envelope', x: 'ADSR', s: [[['d', 'adsr', 130], ['k', 'Attack', 'Decay', 'Sustain', 'Release', 'Master']]] } },
   wavetable: { sub: 'Synth · Wavetable', fam: 'synth', w: 1040, cols: '1.4fr 1fr', outOnly: true, panels: [
-    [{ t: 'Wavetable', grow: true, s: [[['d', 'table', 220]], [['p', 'Bank']]] }],
+    [{ t: 'Wavetable', grow: true, s: [[['d', 'table', 220]], [['p', 'Bank']]] }, { t: 'Voices', s: [[['p', 'Voice mode']], [['k', 'Voices', 'Glide']]] }],
     [{ t: 'Oscillator', s: [[['K', 'Position']], [['k', 'Detune', 'Master']]] }, { t: 'Amp envelope', grow: true, s: [[['d', 'adsr', 80]], [['k', 'Attack', 'Decay', 'Sustain', 'Release']]] }],
   ] },
   noise: { sub: 'Synth · Noise', fam: 'synth', w: 920, cols: '1fr 1.2fr', outOnly: true, panels: [
