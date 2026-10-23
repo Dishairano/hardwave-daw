@@ -8,6 +8,7 @@
 - fix: monitoring an armed track is heard, stopped and playing, also on a track with no plug-ins; it was silent unless direct monitoring was on
 
 ### Improvements
+- fix(project): the new track fields go last, so older songs keep opening
 - feat(recording): record the master or a bus in real time
 - feat(recording): monitoring that is heard, with Off, In and Auto
 - feat(recording): choose 24-bit or 32-bit float takes, and their folder
