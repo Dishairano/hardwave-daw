@@ -551,6 +551,7 @@ pub fn run() {
             commands::tracks::toggle_arm,
             commands::tracks::set_track_monitor_input,
             commands::tracks::set_track_monitor_mode,
+            commands::tracks::set_track_input_source,
             commands::tracks::reorder_track,
             commands::tracks::set_track_name,
             commands::tracks::set_track_color,

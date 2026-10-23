@@ -51,6 +51,8 @@ pub struct TrackInfo {
     filter_resonance: f32,
     #[serde(rename = "outputBus")]
     output_bus: Option<String>,
+    #[serde(rename = "inputSource")]
+    input_source: Option<String>,
     insert_count: usize,
     inserts: Vec<InsertInfo>,
     /// Automation lanes attached to this track. Surfaced to the UI so
@@ -194,6 +196,7 @@ pub(crate) fn track_to_info(
         filter_cutoff_hz: t.filter_cutoff_hz,
         filter_resonance: t.filter_resonance,
         output_bus: t.output_bus.clone(),
+        input_source: t.input_source.clone(),
         insert_count: t.inserts.len(),
         inserts,
         automation_lanes: t
@@ -1272,6 +1275,43 @@ pub fn set_track_filter_resonance(state: State<AppState>, track_id: String, reso
         }
     }
     engine.rebuild_graph();
+}
+
+/// What a track records when armed: none for the audio interface, or another
+/// track's output (a bus, or the master), to record the song's own sound.
+#[tauri::command]
+pub fn set_track_input_source(
+    state: State<AppState>,
+    track_id: String,
+    source: Option<String>,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    let source = source.filter(|s| !s.is_empty());
+    {
+        let engine = state.engine.lock();
+        if engine.transport.recording.load(Ordering::Relaxed) {
+            return Err("Stop recording before changing what a track records".into());
+        }
+        let project = engine.project.lock();
+        if let Some(ref id) = source {
+            if *id == track_id {
+                return Err("A track cannot record its own output".into());
+            }
+            if !project.tracks.iter().any(|t| t.id == *id) {
+                return Err("That track no longer exists".into());
+            }
+        }
+    }
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.input_source = source;
+        }
+    }
+    engine.rebuild_graph();
+    Ok(())
 }
 
 #[tauri::command]

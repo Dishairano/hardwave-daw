@@ -495,6 +495,14 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     } catch (e) {
       // Roll back the optimistic toggle if the engine rejected the call.
       set({ recording: wasRecording, recordStartSample: null })
+      // The engine says why it would not start (armed tracks asking for
+      // different inputs, say); the button alone gave no sign.
+      if (!wasRecording) {
+        useNotificationStore.getState().push('warning', 'Recording did not start', {
+          detail: String(e),
+          sticky: true,
+        })
+      }
       throw e
     }
   },

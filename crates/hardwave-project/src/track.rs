@@ -190,6 +190,11 @@ pub struct Track {
     /// switching monitoring off. Only matters with `monitor_input` on.
     #[serde(default)]
     pub monitor_auto: bool,
+    /// What this track records when armed: none for the audio interface's
+    /// input, or another track's output (a bus, or the master) to record
+    /// the song's own sound in real time, as resampling.
+    #[serde(default)]
+    pub input_source: Option<TrackId>,
 
     /// Flip sample polarity on this track. Applied before the fader.
     #[serde(default)]
@@ -336,6 +341,7 @@ impl Track {
             output_bus: None,
             monitor_input: true,
             monitor_auto: false,
+            input_source: None,
             phase_invert: false,
             swap_lr: false,
             stereo_separation: 1.0,
