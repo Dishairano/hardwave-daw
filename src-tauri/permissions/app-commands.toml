@@ -363,6 +363,7 @@ permissions = [
   "allow-detect-clip-transients",
   "allow-create-midi-clip",
   "allow-export-clip-midi",
+  "allow-export-song-midi",
   "allow-get-midi-notes",
   "allow-get-clip-controls",
   "allow-extract-groove",

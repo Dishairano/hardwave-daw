@@ -190,6 +190,84 @@ pub fn export_clip_midi(
     Ok(())
 }
 
+/// The whole song as one MIDI file: a track per MIDI track, named, with
+/// its clips where they sit in the song, and the tempo and signature
+/// changes. Notes go out as the instrument hears them: after the track's
+/// MIDI effects, cut where a shortened clip ends, muted ones left out.
+/// Returns how many tracks were written.
+#[tauri::command]
+pub fn export_song_midi(state: State<AppState>, path: String) -> Result<usize, String> {
+    let bytes_and_count = {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        let tempos: Vec<hardwave_midi::SmfTempo> = project
+            .tempo_map
+            .entries
+            .iter()
+            .map(|e| hardwave_midi::SmfTempo {
+                tick: e.tick,
+                bpm: e.bpm,
+                time_sig: (e.time_sig_num, e.time_sig_den),
+            })
+            .collect();
+        let mut songs: Vec<(String, hardwave_midi::MidiClip)> = Vec::new();
+        for track in &project.tracks {
+            if !matches!(track.kind, hardwave_project::track::TrackKind::Midi) {
+                continue;
+            }
+            let mut all = hardwave_midi::MidiClip::new(track.id.clone(), track.name.clone(), 0);
+            for clip in &track.clips {
+                let hardwave_project::clip::ClipContent::Midi(mc) = &clip.content else {
+                    continue;
+                };
+                if mc.clip.muted {
+                    continue;
+                }
+                let heard = if track.midi_fx.is_empty() {
+                    mc.clip.notes.clone()
+                } else {
+                    hardwave_midi::midi_fx::apply_chain(&mc.clip.notes, &track.midi_fx)
+                };
+                // The same window the engine plays: a clip shortened from
+                // the right stops there.
+                let end = (clip.length_ticks < mc.clip.length_ticks).then_some(clip.length_ticks);
+                for mut note in heard {
+                    if note.muted || end.is_some_and(|e| note.start_tick >= e) {
+                        continue;
+                    }
+                    if let Some(e) = end {
+                        note.duration_ticks = note.duration_ticks.min(e - note.start_tick);
+                    }
+                    note.start_tick += clip.position_ticks;
+                    all.notes.push(note);
+                }
+                for c in &mc.clip.controls {
+                    if end.is_some_and(|e| c.tick >= e) {
+                        continue;
+                    }
+                    let mut c = *c;
+                    c.tick += clip.position_ticks;
+                    all.controls.push(c);
+                }
+            }
+            if !all.notes.is_empty() || !all.controls.is_empty() {
+                songs.push((track.name.clone(), all));
+            }
+        }
+        if songs.is_empty() {
+            return Err("The song has no MIDI notes to export".into());
+        }
+        let tracks: Vec<hardwave_midi::SmfTrack<'_>> = songs
+            .iter()
+            .map(|(name, clip)| hardwave_midi::SmfTrack { name, clip })
+            .collect();
+        (hardwave_midi::write_song_smf(&tempos, &tracks), songs.len())
+    };
+    let (bytes, count) = bytes_and_count;
+    std::fs::write(&path, bytes).map_err(|e| format!("write {path}: {e}"))?;
+    Ok(count)
+}
+
 /// One controller lane's points, as the piano roll draws them.
 #[derive(Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

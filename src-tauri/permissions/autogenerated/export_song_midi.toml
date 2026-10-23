@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-song-midi"
+description = "Enables the export_song_midi command without any pre-configured scope."
+commands.allow = ["export_song_midi"]
+
+[[permission]]
+identifier = "deny-export-song-midi"
+description = "Denies the export_song_midi command without any pre-configured scope."
+commands.deny = ["export_song_midi"]

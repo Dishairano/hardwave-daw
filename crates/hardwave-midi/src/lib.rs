@@ -22,7 +22,7 @@ pub use output::{MidiOutputManager, MIDI_CLOCK_TICK, MIDI_CONTINUE, MIDI_START, 
 pub use recording::{
     CapturedMidi, CcEvent, MidiCaptureRing, MidiCcRecorder, MidiRecordMode, MidiRecorder,
 };
-pub use smf::write_smf;
+pub use smf::{write_smf, write_song_smf, SmfTempo, SmfTrack};
 pub use theory::{generate_melody, major_scale, suggest_next_chord, Chord, ChordQuality};
 
 use serde::{Deserialize, Serialize};
