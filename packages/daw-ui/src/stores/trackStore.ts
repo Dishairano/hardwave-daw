@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { invokeOrNull, invokeOrToast } from '../api/invoke'
 import { useProjectStore } from './projectStore'
+import { rippleShifts } from './ripple'
 import { useHistoryStore } from './historyStore'
 
 /**
@@ -325,6 +326,9 @@ interface TrackState {
   /** Move clips by the same number of ticks, as one undo step. None goes
    *  before the song start: the whole group stops there together. */
   nudgeClips: (clipIds: Iterable<string>, deltaTicks: number) => Promise<void>
+  /** Delete the selected clips and close the gaps they leave on their
+   *  tracks (ripple delete), as one undo step. */
+  rippleDeleteSelected: () => Promise<void>
   /// Optimistic local-only update — mutates the clip's position in the
   /// store without an IPC round-trip or fetchTracks. Used during a
   /// drag's mousemove path so 60fps drag isn't bottlenecked by 500-track
@@ -1014,6 +1018,32 @@ export const useTrackStore = create<TrackState>((set, get) => ({
         return
       }
     }
+  },
+
+  rippleDeleteSelected: async () => {
+    const ids = new Set(get().selectedClipIds)
+    if (ids.size === 0 && get().selectedClipId) ids.add(get().selectedClipId!)
+    if (ids.size === 0) return
+    const work = get().tracks
+      .map(t => ({ track: t, gone: (t.clips ?? []).filter(c => ids.has(c.id)) }))
+      .filter(w => w.gone.length > 0)
+    if (work.length === 0) return
+    await get().beginHistoryGroup()
+    try {
+      for (const { track, gone } of work) {
+        const moves = rippleShifts(track.clips ?? [], ids)
+        for (const c of gone) await mut('delete_clip', { trackId: track.id, clipId: c.id })
+        // Earliest first, so a clip never lands on one that has yet to move.
+        const ordered = [...moves.entries()].sort((a, b) => a[1] - b[1])
+        for (const [clipId, newPositionTicks] of ordered) {
+          await mut('move_clip', { trackId: track.id, clipId, newPositionTicks })
+        }
+      }
+    } finally {
+      await get().endHistoryGroup(ids.size === 1 ? 'Delete clip and close the gap' : `Delete ${ids.size} clips and close the gaps`)
+    }
+    set({ selectedClipId: null, selectedClipIds: new Set() })
+    await get().fetchTracks()
   },
 
   deleteSelectedClips: async () => {

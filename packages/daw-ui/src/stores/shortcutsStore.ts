@@ -13,7 +13,7 @@ export type ActionId =
   | 'newProject' | 'openProject' | 'save' | 'saveAs'
   | 'selectAll' | 'duplicate' | 'copy' | 'cut' | 'paste'
   | 'undo' | 'redo'
-  | 'togglePlay' | 'playSelection' | 'deleteSelection' | 'splitClip'
+  | 'togglePlay' | 'playSelection' | 'deleteSelection' | 'rippleDelete' | 'splitClip'
   | 'gotoStart' | 'gotoEnd' | 'toggleLoop' | 'toggleRecord'
   | 'panicStop' | 'toggleMetronome'
   | 'togglePlaylist' | 'toggleChannelRack' | 'togglePianoRoll'
@@ -54,6 +54,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'cut',              label: 'Cut',                        category: 'Editing' },
   { id: 'paste',            label: 'Paste at playhead',          category: 'Editing' },
   { id: 'deleteSelection',  label: 'Delete selection',           category: 'Editing' },
+  { id: 'rippleDelete',     label: 'Delete and close the gap',   category: 'Editing' },
   { id: 'splitClip',        label: 'Split clip at edit cursor',  category: 'Editing' },
 
   { id: 'togglePlay',       label: 'Play / pause',               category: 'Transport' },
@@ -122,6 +123,7 @@ export const DEFAULTS: Record<ActionId, Binding> = {
   togglePlay:  { code: 'Space' },
   playSelection: { code: 'Space', shift: true },
   deleteSelection: { code: 'Delete' },
+  rippleDelete:    { code: 'Delete', ctrl: true },
   splitClip:   { code: 'KeyS' },
   gotoStart:   { code: 'Home' },
   gotoEnd:     { code: 'End' },

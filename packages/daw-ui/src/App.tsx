@@ -1852,6 +1852,7 @@ export function App() {
         case 'togglePlay':  transport.togglePlayback(); return
         case 'playSelection': playSelection(); return
         case 'deleteSelection': tracks.deleteSelectedClips(); return
+        case 'rippleDelete': void tracks.rippleDeleteSelected(); return
         case 'splitClip': {
           const sel = tracks.selectedClipId
           if (!sel) return
@@ -2173,6 +2174,7 @@ export function App() {
           { separator: true, label: '' },
           { label: 'Insert time at the loop range', action: () => { void insertTimeAtLoop() } },
           { label: 'Delete the loop range', action: () => { void deleteTimeAtLoop() } },
+          { label: 'Delete and close the gap', shortcut: 'Ctrl+Del', action: () => { void useTrackStore.getState().rippleDeleteSelected() } },
         ],
       },
       {
