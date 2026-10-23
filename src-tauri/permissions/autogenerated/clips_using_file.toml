@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clips-using-file"
+description = "Enables the clips_using_file command without any pre-configured scope."
+commands.allow = ["clips_using_file"]
+
+[[permission]]
+identifier = "deny-clips-using-file"
+description = "Denies the clips_using_file command without any pre-configured scope."
+commands.deny = ["clips_using_file"]

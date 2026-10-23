@@ -615,3 +615,197 @@ mod untrusted_projects {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+/// Whether two paths name the same file: by the file system when both
+/// exist, else by their text, ignoring case and slash direction as Windows
+/// does.
+fn same_file(a: &str, b: &str) -> bool {
+    if let (Ok(x), Ok(y)) = (Path::new(a).canonicalize(), Path::new(b).canonicalize()) {
+        return x == y;
+    }
+    let norm = |p: &str| p.replace('\\', "/").to_lowercase();
+    norm(a) == norm(b)
+}
+
+/// How many clips in the song play `file`.
+#[tauri::command]
+pub fn clips_using_file(state: State<AppState>, file: String) -> usize {
+    project_sources(&state)
+        .values()
+        .filter(|(f, _, _)| same_file(f, &file))
+        .map(|(_, _, count)| *count)
+        .sum()
+}
+
+/// What the audio editor sends: the file it edited, and the result.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EditedAudioHead {
+    original: String,
+    sample_rate: u32,
+    channels: u16,
+}
+
+/// The audio editor's result, saved next to the file it came from as
+/// "<name> (edited).wav", in 32-bit float so the edit loses nothing. It could
+/// only be downloaded before, as 16-bit, into the Downloads folder.
+///
+/// The body is raw bytes, not JSON numbers, so a long sample is not turned
+/// into megabytes of text: a little-endian u32 with the length of a JSON
+/// head, the head, then the samples as interleaved little-endian f32. The
+/// file name is made here, never taken from the page, and nothing is ever
+/// overwritten: the page can only add a WAV next to an audio file that
+/// exists.
+#[tauri::command]
+pub fn save_edited_audio(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
+        return Err("The edit did not arrive as audio".into());
+    };
+    let (head, samples) = split_edited_audio(body)?;
+    let original = PathBuf::from(&head.original);
+    let is_audio = original
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_lowercase().as_str()));
+    if !original.is_file() || !is_audio {
+        return Err(format!("{} is not an audio file", head.original));
+    }
+    let dir = original.parent().ok_or("The file has no folder")?;
+    let stem = original
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "audio".into());
+    let mut target = dir.join(format!("{stem} (edited).wav"));
+    let mut n = 2;
+    while target.exists() {
+        target = dir.join(format!("{stem} (edited {n}).wav"));
+        n += 1;
+    }
+    let spec = hound::WavSpec {
+        channels: head.channels,
+        sample_rate: head.sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut writer = hound::WavWriter::create(&target, spec).map_err(|e| e.to_string())?;
+    for s in samples {
+        writer.write_sample(s).map_err(|e| e.to_string())?;
+    }
+    writer.finalize().map_err(|e| e.to_string())?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+/// The head and the samples of an edit, checked: a sane rate and channel
+/// count, and whole frames.
+fn split_edited_audio(body: &[u8]) -> Result<(EditedAudioHead, Vec<f32>), String> {
+    let bad = || "The edit arrived damaged".to_string();
+    let len_bytes: [u8; 4] = body
+        .get(..4)
+        .ok_or_else(bad)?
+        .try_into()
+        .map_err(|_| bad())?;
+    let head_len = u32::from_le_bytes(len_bytes) as usize;
+    let head_end = 4usize.checked_add(head_len).ok_or_else(bad)?;
+    let head: EditedAudioHead =
+        serde_json::from_slice(body.get(4..head_end).ok_or_else(bad)?).map_err(|_| bad())?;
+    if !(8_000..=384_000).contains(&head.sample_rate) || !(1..=8).contains(&head.channels) {
+        return Err(bad());
+    }
+    let data = &body[head_end..];
+    if !data.len().is_multiple_of(4 * head.channels as usize) {
+        return Err(bad());
+    }
+    let samples = data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| {
+            let s = f32::from_le_bytes(*b);
+            if s.is_finite() {
+                s
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    Ok((head, samples))
+}
+
+/// Put an edit into the song: every clip playing `original` plays `edited`
+/// from now on, as one undo step. Returns how many clips follow.
+#[tauri::command]
+pub fn use_edited_audio(
+    state: State<AppState>,
+    original: String,
+    edited: String,
+) -> Result<usize, String> {
+    let ids: Vec<String> = project_sources(&state)
+        .into_iter()
+        .filter(|(_, (file, _, _))| same_file(file, &original))
+        .map(|(id, _)| id)
+        .collect();
+    let mut clips = 0;
+    for id in ids {
+        clips += relink_source(state.clone(), id, edited.clone())?;
+    }
+    Ok(clips)
+}
+
+#[cfg(test)]
+mod edited_audio_tests {
+    use super::*;
+
+    fn body(head: &str, samples: &[f32]) -> Vec<u8> {
+        let mut b = (head.len() as u32).to_le_bytes().to_vec();
+        b.extend_from_slice(head.as_bytes());
+        for s in samples {
+            b.extend_from_slice(&s.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn an_edit_arrives_as_its_head_and_samples() {
+        let b = body(
+            r#"{"original":"C:/a.wav","sampleRate":48000,"channels":2}"#,
+            &[0.1, -0.1, f32::NAN, 0.5],
+        );
+        let (head, samples) = split_edited_audio(&b).unwrap();
+        assert_eq!(head.channels, 2);
+        assert_eq!(
+            samples,
+            vec![0.1, -0.1, 0.0, 0.5],
+            "not a number becomes silence"
+        );
+    }
+
+    #[test]
+    fn a_damaged_edit_is_refused() {
+        assert!(split_edited_audio(&[1, 0]).is_err());
+        assert!(split_edited_audio(&body(
+            r#"{"original":"a","sampleRate":5,"channels":2}"#,
+            &[]
+        ))
+        .is_err());
+        assert!(
+            split_edited_audio(&body(
+                r#"{"original":"a","sampleRate":48000,"channels":2}"#,
+                &[0.1]
+            ))
+            .is_err(),
+            "half a frame"
+        );
+        let mut b = body(r#"{"original":"a","sampleRate":48000,"channels":1}"#, &[]);
+        b[0] = 0xff;
+        assert!(
+            split_edited_audio(&b).is_err(),
+            "a head longer than the body"
+        );
+    }
+
+    #[test]
+    fn paths_match_across_case_and_slashes() {
+        assert!(same_file("C:\\Samples\\Kick.wav", "c:/samples/kick.wav"));
+        assert!(!same_file("C:/Samples/Kick.wav", "C:/Samples/Snare.wav"));
+    }
+}
