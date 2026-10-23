@@ -7,6 +7,9 @@
 //! tracks hear themselves through their FX chain.
 
 use parking_lot::Mutex;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -14,29 +17,31 @@ use crate::graph::{AudioNode, ProcessContext};
 
 pub type SharedInputConsumer = Arc<Mutex<Option<rtrb::Consumer<f32>>>>;
 
-/// Where a recording is written while it happens.
+/// Where a recording is written while it happens: straight to disk.
 ///
-/// The take used to be pushed into a `Vec` behind a mutex, with `reserve`
-/// and `push` running on the audio thread: growing a buffer while recording
-/// is an allocation in the audio callback, which is the classic cause of a
-/// click in the take. Worse, the audio thread took the lock with `try_lock`
-/// and dropped a whole block when the UI held it, so a take could lose 10 ms
-/// of audio silently.
+/// The audio thread writes into a small lock-free ring and never allocates
+/// or waits; a writer thread empties the ring into a file as the take goes.
+/// A take was held in memory before, in a buffer reserved for twenty
+/// minutes (about 460 MB at 48 kHz) that a longer take simply ran out of.
+/// Now it is as long as the disk allows, and the loop passes are cut from the
+/// file by position when recording stops (`take_pass_ranges`), so even a long
+/// take is never loaded back into memory.
 ///
-/// Now the space is reserved up front, on the UI thread, before recording
-/// starts. The audio thread only writes into it and bumps a counter, so it
-/// never allocates and never waits. A take that outgrows the reservation
-/// stops growing rather than reallocating; `overflowed` says so, and the
-/// caller can tell the user instead of handing them a truncated file that
-/// looks complete.
+/// `overflowed` reports a take that lost audio: the ring filled because the
+/// disk could not keep up, or no file could be made. The caller tells the
+/// user instead of handing them a file that looks complete.
 pub struct CaptureTap {
     pub recording: AtomicBool,
-    /// Frames of headroom, as interleaved stereo samples. Written only by
-    /// the UI thread while recording is off.
-    slots: Mutex<Vec<f32>>,
+    /// The audio thread's end of the ring. `try_lock` here only meets `arm`
+    /// and `finish`, which run with recording off.
+    producer: Mutex<Option<rtrb::Producer<f32>>>,
+    /// The thread that writes the ring to disk, and where it writes.
+    writer: Mutex<Option<TakeWriter>>,
+    /// Folder the take's file is written in while recording.
+    dir: Mutex<PathBuf>,
     /// Samples written so far by the audio thread.
     written: AtomicUsize,
-    /// Set when the reservation ran out.
+    /// Set when audio was lost: the ring filled, or there was no file.
     overflowed: AtomicBool,
     /// Punch window in samples. The playlist has let people set a punch
     /// range, drawn it, and saved it with the project since it was written,
@@ -90,7 +95,9 @@ impl Default for CaptureTap {
     fn default() -> Self {
         Self {
             recording: AtomicBool::new(false),
-            slots: Mutex::new(Vec::new()),
+            producer: Mutex::new(None),
+            writer: Mutex::new(None),
+            dir: Mutex::new(std::env::temp_dir().join("hardwave-takes")),
             written: AtomicUsize::new(0),
             overflowed: AtomicBool::new(false),
             punch_enabled: AtomicBool::new(false),
@@ -110,12 +117,59 @@ impl Default for CaptureTap {
 }
 
 impl CaptureTap {
-    /// Reserve room for `seconds` of stereo audio and start from zero.
+    /// Start a take that streams to disk, with a ring of `seconds` between
+    /// the audio thread and the disk.
     ///
-    /// Called from the UI thread with recording off, so the allocation
-    /// happens here rather than in the audio callback.
+    /// Called from the UI thread with recording off, so the ring, the file
+    /// and the writer thread are made here rather than in the audio callback.
     pub fn arm(&self, sample_rate: u32, seconds: u32) {
         self.arm_compensated(sample_rate, seconds, 0, 0);
+    }
+
+    /// The folder takes are written in while recording: the song's own
+    /// recordings folder, so a long take fills the disk the user chose for
+    /// them rather than the system's temporary folder.
+    pub fn set_dir(&self, dir: PathBuf) {
+        *self.dir.lock() = dir;
+    }
+
+    /// Make the ring, the file and the writer thread for a new take.
+    fn start_stream(&self, sample_rate: u32, seconds: u32) {
+        // Whatever an earlier take left behind is finished first.
+        drop(self.finish());
+        let capacity = (sample_rate.max(1) as usize)
+            .saturating_mul(seconds.max(1) as usize)
+            .saturating_mul(2);
+        let (producer, consumer) = rtrb::RingBuffer::new(capacity);
+        let dir = self.dir.lock().clone();
+        match TakeWriter::start(&dir, consumer) {
+            Ok(writer) => {
+                *self.writer.lock() = Some(writer);
+                *self.producer.lock() = Some(producer);
+            }
+            Err(e) => {
+                log::error!("recording: could not open a file in {}: {e}", dir.display());
+                *self.producer.lock() = None;
+            }
+        }
+    }
+
+    /// Stop writing and hand over the take on disk: everything the audio
+    /// thread wrote, once the writer has emptied the ring. None when no take
+    /// was started. Call with recording off.
+    pub fn finish(&self) -> Option<TakeFile> {
+        let producer = self.producer.lock().take();
+        let writer = self.writer.lock().take()?;
+        drop(producer);
+        let samples = self.written.swap(0, Ordering::Relaxed);
+        match writer.finish() {
+            Ok(path) => Some(TakeFile { path, samples }),
+            Err(e) => {
+                log::error!("recording: the take could not be written: {e}");
+                self.overflowed.store(true, Ordering::Relaxed);
+                None
+            }
+        }
     }
 
     /// Arm for a take whose samples reach the tap `latency` frames after
@@ -125,46 +179,59 @@ impl CaptureTap {
         self.floor.store(floor, Ordering::Relaxed);
         self.pending.store(0, Ordering::Relaxed);
         self.first_position.store(u64::MAX, Ordering::Relaxed);
-        let needed = (sample_rate as usize).saturating_mul(seconds as usize) * 2;
-        let mut slots = self.slots.lock();
-        if slots.len() < needed {
-            slots.resize(needed, 0.0);
-        }
+        self.start_stream(sample_rate, seconds);
         self.written.store(0, Ordering::Relaxed);
         self.overflowed.store(false, Ordering::Relaxed);
         self.pass_count.store(0, Ordering::Relaxed);
         self.last_block_start.store(u64::MAX, Ordering::Relaxed);
     }
 
-    /// The captured samples split at every loop jump, one entry per pass, in
-    /// the order they were played. One entry when the loop never wrapped.
-    pub fn take_passes(&self) -> Vec<Vec<f32>> {
-        let all = self.take();
+    /// Finish the take and say where each loop pass lies in its file, in
+    /// samples, in the order they were played. One range when the loop never
+    /// wrapped. Nothing is read back into memory.
+    pub fn take_pass_ranges(&self) -> Option<(TakeFile, Vec<Range<usize>>)> {
         let count = self
             .pass_count
             .swap(0, Ordering::Relaxed)
             .min(MAX_LOOP_PASSES);
-        let mut bounds: Vec<usize> = (0..count)
-            .map(|i| self.pass_starts[i].load(Ordering::Relaxed).min(all.len()))
+        let starts: Vec<usize> = (0..count)
+            .map(|i| self.pass_starts[i].load(Ordering::Relaxed))
             .collect();
-        bounds.retain(|&b| b > 0 && b < all.len());
+        let file = self.finish()?;
+        let total = file.samples;
+        let mut bounds: Vec<usize> = starts.into_iter().map(|b| b.min(total)).collect();
+        bounds.retain(|&b| b > 0 && b < total);
         bounds.dedup();
-        let mut passes = Vec::with_capacity(bounds.len() + 1);
+        let mut ranges = Vec::with_capacity(bounds.len() + 1);
         let mut from = 0;
         for b in bounds {
-            passes.push(all[from..b].to_vec());
+            ranges.push(from..b);
             from = b;
         }
-        passes.push(all[from..].to_vec());
-        passes.retain(|p| !p.is_empty());
-        passes
+        ranges.push(from..total);
+        ranges.retain(|r| !r.is_empty());
+        Some((file, ranges))
     }
 
-    /// Take the captured samples and reset for the next session.
+    /// The captured samples split at every loop jump, read back into memory.
+    /// For short takes and tests; recording itself uses `take_pass_ranges`.
+    pub fn take_passes(&self) -> Vec<Vec<f32>> {
+        let Some((file, ranges)) = self.take_pass_ranges() else {
+            return Vec::new();
+        };
+        ranges
+            .into_iter()
+            .map(|r| file.read(r).unwrap_or_default())
+            .collect()
+    }
+
+    /// Take the captured samples, read back into memory, and reset for the
+    /// next session.
     pub fn take(&self) -> Vec<f32> {
-        let slots = self.slots.lock();
-        let n = self.written.swap(0, Ordering::Relaxed).min(slots.len());
-        slots[..n].to_vec()
+        self.pass_count.store(0, Ordering::Relaxed);
+        self.finish()
+            .map(|file| file.read(0..file.samples).unwrap_or_default())
+            .unwrap_or_default()
     }
 
     /// Set the punch window, in samples on the project's timeline.
@@ -353,7 +420,11 @@ impl CaptureTap {
             return;
         }
         let from = offset + skip + punch_offset;
-        let Some(mut slots) = self.slots.try_lock() else {
+        let Some(mut guard) = self.producer.try_lock() else {
+            self.overflowed.store(true, Ordering::Relaxed);
+            return;
+        };
+        let Some(producer) = guard.as_mut() else {
             self.overflowed.store(true, Ordering::Relaxed);
             return;
         };
@@ -362,16 +433,109 @@ impl CaptureTap {
             self.first_position
                 .store(pos + punch_offset as u64, Ordering::Relaxed);
         }
-        let room = slots.len().saturating_sub(start) / 2;
-        let n = take.min(room);
+        // The ring is only full when the disk fell behind.
+        let n = take.min(producer.slots() / 2);
         if n < take {
             self.overflowed.store(true, Ordering::Relaxed);
         }
-        for i in 0..n {
-            slots[start + i * 2] = left[from + i];
-            slots[start + i * 2 + 1] = right[from + i];
+        if n == 0 {
+            return;
         }
+        let Ok(mut chunk) = producer.write_chunk(n * 2) else {
+            self.overflowed.store(true, Ordering::Relaxed);
+            return;
+        };
+        let (a, b) = chunk.as_mut_slices();
+        for (k, slot) in a.iter_mut().chain(b.iter_mut()).enumerate() {
+            let i = from + k / 2;
+            *slot = if k % 2 == 0 { left[i] } else { right[i] };
+        }
+        chunk.commit_all();
         self.written.store(start + n * 2, Ordering::Relaxed);
+    }
+}
+
+/// The thread that empties a take's ring into its file.
+struct TakeWriter {
+    path: PathBuf,
+    stop: Arc<AtomicBool>,
+    handle: std::thread::JoinHandle<std::io::Result<()>>,
+}
+
+/// How many takes this run has started, for unique file names.
+static TAKE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+impl TakeWriter {
+    fn start(dir: &Path, mut consumer: rtrb::Consumer<f32>) -> std::io::Result<Self> {
+        std::fs::create_dir_all(dir)?;
+        let n = TAKE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!(".recording-{}-{n}.f32", std::process::id()));
+        let file = std::fs::File::create(&path)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stop);
+        let handle = std::thread::Builder::new()
+            .name("take-writer".into())
+            .spawn(move || {
+                let mut out = std::io::BufWriter::with_capacity(1 << 18, file);
+                loop {
+                    let ready = consumer.slots();
+                    if ready > 0 {
+                        let chunk = consumer
+                            .read_chunk(ready)
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                        let (a, b) = chunk.as_slices();
+                        for s in a.iter().chain(b.iter()) {
+                            out.write_all(&s.to_le_bytes())?;
+                        }
+                        chunk.commit_all();
+                    } else if stopping.load(Ordering::Acquire) {
+                        break;
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                }
+                out.flush()
+            })?;
+        Ok(Self { path, stop, handle })
+    }
+
+    /// Write out what is left in the ring and close the file.
+    fn finish(self) -> std::io::Result<PathBuf> {
+        self.stop.store(true, Ordering::Release);
+        match self.handle.join() {
+            Ok(result) => result.map(|()| self.path),
+            Err(_) => Err(std::io::Error::other("the take writer stopped")),
+        }
+    }
+}
+
+/// A finished take on disk: interleaved stereo f32 samples, `samples` long.
+/// The file is removed when this is dropped, once its passes are written out.
+pub struct TakeFile {
+    pub path: PathBuf,
+    pub samples: usize,
+}
+
+impl TakeFile {
+    /// Samples `range` of the take.
+    pub fn read(&self, range: Range<usize>) -> std::io::Result<Vec<f32>> {
+        let range = range.start.min(self.samples)..range.end.min(self.samples);
+        let mut file = std::fs::File::open(&self.path)?;
+        file.seek(SeekFrom::Start(range.start as u64 * 4))?;
+        let mut bytes = vec![0u8; range.len() * 4];
+        file.read_exact(&mut bytes)?;
+        Ok(bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect())
+    }
+}
+
+impl Drop for TakeFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -486,29 +650,43 @@ mod capture_tests {
         assert_eq!(out[4], 0.3);
     }
 
-    /// The tap used to push into a Vec, so a long take grew a buffer on the
-    /// audio thread. The room is reserved before recording starts, and the
-    /// writing path must not change the allocation.
+    /// A take used to be cut off at the memory reserved for it. It now goes
+    /// to disk while it is played, so a take far longer than the ring
+    /// between the audio thread and the disk arrives whole.
     #[test]
-    fn writing_does_not_grow_the_reservation() {
+    fn a_take_longer_than_the_ring_goes_to_disk_whole() {
         let t = tap(1);
-        let capacity_before = t.slots.lock().capacity();
-        for _ in 0..200 {
-            t.write_test_block(&[0.5; 64], &[0.5; 64], 64);
+        // Three seconds through a one-second ring, at about the pace audio
+        // arrives, so the writer keeps up as it does on a real disk.
+        for _ in 0..(48_000 / 480 * 3) {
+            t.write_test_block(&[0.4; 480], &[0.4; 480], 480);
+            std::thread::sleep(std::time::Duration::from_micros(500));
         }
-        assert_eq!(t.slots.lock().capacity(), capacity_before);
+        assert!(!t.overflowed(), "nothing may be lost");
+        let out = t.take();
+        assert_eq!(out.len(), 48_000 * 3 * 2);
+        assert!(out.iter().all(|&s| s == 0.4));
+    }
+
+    /// A folder that cannot be made, for a take with nowhere to go.
+    fn unwritable_dir() -> PathBuf {
+        let file = std::env::temp_dir().join(format!("hw-not-a-folder-{}", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+        file.join("takes")
     }
 
     #[test]
-    fn a_take_past_the_reservation_is_reported_not_grown() {
-        // One second of room, two seconds of audio.
-        let t = tap(1);
-        for _ in 0..(48_000 / 480 * 2) {
-            t.write_test_block(&[0.4; 480], &[0.4; 480], 480);
-        }
-        assert!(t.overflowed(), "running out of room must be reported");
-        let out = t.take();
-        assert_eq!(out.len(), 48_000 * 2, "kept exactly what fit");
+    fn a_take_with_nowhere_to_go_is_reported_not_lost_quietly() {
+        let t = CaptureTap::default();
+        t.set_dir(unwritable_dir());
+        t.arm(48_000, 1);
+        t.recording.store(true, Ordering::Relaxed);
+        t.write_test_block(&[0.4; 480], &[0.4; 480], 480);
+        assert!(
+            t.overflowed(),
+            "a take that was not written must be reported"
+        );
+        assert!(t.take().is_empty());
     }
 
     #[test]
@@ -518,6 +696,8 @@ mod capture_tests {
         assert_eq!(t.take().len(), 4);
         assert!(t.take().is_empty(), "a second take must be empty");
 
+        // The next take arms again, as the engine does for every take.
+        t.arm(48_000, 1);
         t.write_test_block(&[0.9], &[0.9], 1);
         assert_eq!(t.take(), vec![0.9, 0.9], "and the tap still works after");
     }
@@ -669,11 +849,12 @@ mod capture_tests {
 
     #[test]
     fn arming_clears_the_previous_overflow() {
-        let t = tap(1);
-        for _ in 0..300 {
-            t.write_test_block(&[0.4; 480], &[0.4; 480], 480);
-        }
+        let t = CaptureTap::default();
+        t.set_dir(unwritable_dir());
+        t.arm(48_000, 1);
+        t.write_test_block(&[0.4; 480], &[0.4; 480], 480);
         assert!(t.overflowed());
+        t.set_dir(std::env::temp_dir().join("hardwave-takes"));
         t.arm(48_000, 1);
         assert!(!t.overflowed(), "a new take starts clean");
     }

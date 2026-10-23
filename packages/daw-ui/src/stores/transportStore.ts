@@ -16,9 +16,6 @@ export const SNAP_VALUES: SnapValue[] = [
 
 const PPQ_TICKS = 960
 
-/** Matches CAPTURE_HEADROOM_SECS in crates/hardwave-engine/src/engine.rs. */
-const RECORD_LIMIT_MINUTES = 20
-
 // ── Count-in ─────────────────────────────────────────────────────────────
 //
 // The engine counts off and starts playback itself. This used to schedule a
@@ -387,8 +384,10 @@ async function commitRecording(
         sticky: true,
       })
     } else if (take!.truncated) {
-      push('warning', 'The take hit the recording limit', {
-        detail: `Recording stops at ${RECORD_LIMIT_MINUTES} minutes in one take. What was captured up to that point has been kept.`,
+      // Takes go to disk as they are played and have no length limit; this
+      // only happens when the disk fell behind or could not be written.
+      push('warning', 'Part of the take was lost', {
+        detail: 'The disk could not keep up, or the recordings folder could not be written, so some audio is missing from this take. Check the free space where the song is saved.',
         sticky: true,
       })
     }

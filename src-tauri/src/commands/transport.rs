@@ -162,8 +162,8 @@ fn next_take_name(dir: &Path) -> String {
 /// The command used to answer with a path or null, so the three ways a take
 /// can disappoint were indistinguishable in the UI and all three ended in
 /// silence with no message: nothing captured at all, a captured take that is
-/// pure silence because the wrong input was selected, and a take that hit the
-/// reserved recording length.
+/// pure silence because the wrong input was selected, and a take that lost
+/// audio on its way to disk.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordedTake {
@@ -171,7 +171,8 @@ pub struct RecordedTake {
     pub seconds: f64,
     /// Highest sample in the take, so the UI can warn about a silent one.
     pub peak: f32,
-    /// True when the take ran past the reserved recording length.
+    /// True when audio was lost on the way to disk: the disk fell behind, or
+    /// the recordings folder could not be written.
     pub truncated: bool,
     /// One entry per loop pass, in the order played, each with the position
     /// it starts at. A single entry when the loop never wrapped.
@@ -194,9 +195,10 @@ pub struct TakePass {
 
 fn finalize_recording_session(engine: &hardwave_engine::DawEngine) -> Result<RecordedTake, String> {
     let truncated = engine.capture_overflowed();
-    let passes = engine.stop_capture_passes();
-    let total: usize = passes.iter().map(|(_, s)| s.len()).sum();
-    if total == 0 {
+    let (take, passes) = engine.stop_capture_takes().unzip();
+    let passes = passes.unwrap_or_default();
+    let total: usize = passes.iter().map(|(_, r)| r.len()).sum();
+    let Some(take) = take.filter(|_| total > 0) else {
         return Ok(RecordedTake {
             path: None,
             seconds: 0.0,
@@ -204,19 +206,19 @@ fn finalize_recording_session(engine: &hardwave_engine::DawEngine) -> Result<Rec
             truncated,
             passes: Vec::new(),
         });
-    }
+    };
 
     let sample_rate = engine.current_sample_rate();
     let dir = recordings_dir(engine)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let base = next_take_name(&dir);
     let stem = base.trim_end_matches(".wav").to_string();
-    let several = passes.iter().filter(|(_, s)| !s.is_empty()).count() > 1;
+    let several = passes.iter().filter(|(_, r)| !r.is_empty()).count() > 1;
 
     let mut files = Vec::new();
     let mut peak = 0.0_f32;
-    for (i, (start, samples)) in passes.iter().enumerate() {
-        if samples.is_empty() {
+    for (i, (start, range)) in passes.iter().enumerate() {
+        if range.is_empty() {
             continue;
         }
         let name = if several {
@@ -225,8 +227,7 @@ fn finalize_recording_session(engine: &hardwave_engine::DawEngine) -> Result<Rec
             base.clone()
         };
         let path = dir.join(name);
-        write_take_wav(&path, samples, sample_rate)?;
-        let pass_peak = samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        let pass_peak = write_take_wav(&take, range.clone(), &path, sample_rate)?;
         peak = peak.max(pass_peak);
         let start_ticks = {
             let project = engine.project.lock();
@@ -238,7 +239,7 @@ fn finalize_recording_session(engine: &hardwave_engine::DawEngine) -> Result<Rec
             path: path.to_string_lossy().to_string(),
             start_samples: *start,
             start_ticks,
-            seconds: samples.len() as f64 / 2.0 / sample_rate.max(1) as f64,
+            seconds: range.len() as f64 / 2.0 / sample_rate.max(1) as f64,
             peak: pass_peak,
         });
     }
@@ -253,9 +254,16 @@ fn finalize_recording_session(engine: &hardwave_engine::DawEngine) -> Result<Rec
     })
 }
 
-/// 32-bit float stereo WAV, which is the engine's own sample format, so a
-/// take is stored exactly as it was captured.
-fn write_take_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
+/// One pass of a take, `range` of its samples, as a 32-bit float stereo WAV,
+/// which is the engine's own sample format, so a take is stored exactly as
+/// it was captured. Read from the take's file a block at a time, so a long
+/// take never sits in memory. Returns the pass's peak.
+fn write_take_wav(
+    take: &hardwave_engine::input_node::TakeFile,
+    range: std::ops::Range<usize>,
+    path: &Path,
+    sample_rate: u32,
+) -> Result<f32, String> {
     let spec = hound::WavSpec {
         channels: 2,
         sample_rate,
@@ -263,10 +271,19 @@ fn write_take_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), 
         sample_format: hound::SampleFormat::Float,
     };
     let mut writer = hound::WavWriter::create(path, spec).map_err(|e| e.to_string())?;
-    for s in samples {
-        writer.write_sample(*s).map_err(|e| e.to_string())?;
+    let mut peak = 0.0_f32;
+    let mut at = range.start;
+    const BLOCK: usize = 1 << 16;
+    while at < range.end {
+        let end = (at + BLOCK).min(range.end);
+        for s in take.read(at..end).map_err(|e| e.to_string())? {
+            peak = peak.max(s.abs());
+            writer.write_sample(s).map_err(|e| e.to_string())?;
+        }
+        at = end;
     }
-    writer.finalize().map_err(|e| e.to_string())
+    writer.finalize().map_err(|e| e.to_string())?;
+    Ok(peak)
 }
 
 #[cfg(test)]
@@ -379,6 +396,11 @@ pub fn toggle_recording(state: State<AppState>) -> Result<Option<RecordedTake>, 
         // Begin: arm the InputNode tap and remember where we started so
         // the resulting clip gets placed at the right timeline position.
         engine.transport.recording.store(true, Ordering::Relaxed);
+        // The take streams to disk as it is played, next to where it will
+        // end up, so a long take fills the disk the recordings live on.
+        if let Ok(dir) = recordings_dir(&engine) {
+            engine.set_capture_dir(dir);
+        }
         engine.start_capture();
         return Ok(None);
     }
