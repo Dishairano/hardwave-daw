@@ -71,7 +71,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await invoke('new_project')
     usePatternStore.getState().hydrate(null)
     await invoke('set_channel_rack_state', { payload: null })
-    // A new song starts with no markers and no punch range.
+    // A new song starts with no markers, no punch range and no folders.
     resetTimelineState()
     await useTempoMapStore.getState().refresh()
     set({ filePath: null, projectName: 'Untitled', dirty: false })

@@ -49,7 +49,25 @@ describe('parseTimelineState', () => {
     expect(parseTimelineState('[]')).toEqual({
       markers: [],
       punch: { enabled: false, inTicks: null, outTicks: null },
+      folders: [],
     })
+  })
+
+  it('keeps track folders with the song and drops broken ones', () => {
+    const parsed = parseTimelineState(JSON.stringify({
+      markers: [],
+      folders: [
+        { id: 'f1', name: 'Drums', color: '#3B82F6', collapsed: true, trackIds: ['t1', 't2'] },
+        { id: 'f2', name: 'Broken', color: '#fff', collapsed: 'yes', trackIds: [] },
+      ],
+    }))
+    expect(parsed?.folders).toEqual([
+      { id: 'f1', name: 'Drums', color: '#3B82F6', collapsed: true, trackIds: ['t1', 't2'] },
+    ])
+  })
+
+  it('reads a song saved before folders were kept with it as having none', () => {
+    expect(parseTimelineState(JSON.stringify({ markers: [] }))?.folders).toEqual([])
   })
 
   it('rejects negative punch positions', () => {
