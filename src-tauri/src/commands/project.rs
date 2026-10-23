@@ -291,9 +291,19 @@ pub fn set_channel_rack_state(
     state: State<AppState>,
     payload: Option<String>,
     from: Option<String>,
-) {
-    {
+    undoable: Option<bool>,
+) -> bool {
+    let recorded = {
         let engine = state.engine.lock();
+        // A step edit is an undo step like any other edit. The rack also
+        // sends its state when a song is opened or another window changed
+        // it; those are not edits, and neither is a payload that changes
+        // nothing.
+        let changed = engine.project.lock().channel_rack_state != payload;
+        let recorded = changed && undoable.unwrap_or(false);
+        if recorded {
+            engine.snapshot_before_mutation();
+        }
         // Read into the step sequencer's notes and played: the rack sends
         // this whenever a step changes, so pattern mode hears it at once.
         engine
@@ -301,12 +311,14 @@ pub fn set_channel_rack_state(
             .lock()
             .set_channel_rack_state(payload.clone());
         engine.rebuild_graph();
-    }
+        recorded
+    };
     // Every other window takes the same steps, so none saves old ones.
     let _ = app.emit(
         "daw:rackChanged",
         serde_json::json!({ "payload": payload, "from": from.unwrap_or_default() }),
     );
+    recorded
 }
 
 /// Markers and the punch range, as the UI serialises them. Opaque here on

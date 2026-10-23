@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
-import { usePatternStore } from './patternStore'
+import { isHydrating, usePatternStore } from './patternStore'
 import { useChannelRackPrefsStore } from './channelRackPrefsStore'
+import { useHistoryStore } from './historyStore'
+import { useProjectStore } from './projectStore'
 
 /**
  * Keep the engine, and every other window, in step with the channel rack.
@@ -10,6 +12,10 @@ import { useChannelRackPrefsStore } from './channelRackPrefsStore'
  * Now each change goes to the engine shortly after it is made (pattern mode
  * plays it), and the engine tells the other windows so a detached rack and
  * the main window never save each other's old steps.
+ *
+ * An edit is an undo step: step edits had none, so Ctrl+Z skipped them and
+ * undid the edit before. A burst of edits (painting a row of steps) is one
+ * step; a rack loaded from a song or another window is none.
  */
 let started = false
 let applyingRemote = false
@@ -25,15 +31,26 @@ export function startRackSync(): void {
   if (started) return
   started = true
   let timer: ReturnType<typeof setTimeout> | null = null
+  let edited = false
   const push = () => {
     if (applyingRemote) return
+    if (!isHydrating()) edited = true
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => {
       timer = null
-      invoke('set_channel_rack_state', {
+      const undoable = edited
+      edited = false
+      invoke<boolean>('set_channel_rack_state', {
         payload: usePatternStore.getState().serialize(),
         from: thisWindow(),
-      }).catch(() => { /* outside the app */ })
+        undoable,
+      })
+        .then((recorded) => {
+          if (!recorded) return
+          useProjectStore.getState().markDirty()
+          useHistoryStore.getState().push('Edit the channel rack')
+        })
+        .catch(() => { /* outside the app */ })
     }, 120)
   }
   usePatternStore.subscribe((s, prev) => {

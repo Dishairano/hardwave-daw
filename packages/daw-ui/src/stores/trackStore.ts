@@ -4,6 +4,7 @@ import { invokeOrNull, invokeOrToast } from '../api/invoke'
 import { useProjectStore } from './projectStore'
 import { rippleShifts } from './ripple'
 import { useHistoryStore } from './historyStore'
+import { usePatternStore } from './patternStore'
 
 /**
  * True while a gesture is being grouped into one undo step.
@@ -40,6 +41,13 @@ function keyboardFollows(track: { id: string; kind: string } | undefined) {
 }
 
 const TRACK_LIMIT = 500
+
+/** Undo and redo can change the channel rack's steps, which the engine keeps
+ *  with the song; the rack on screen has to show them. */
+async function rehydrateRack() {
+  const rack = await invoke<string | null>('get_channel_rack_state').catch(() => undefined)
+  if (rack !== undefined) usePatternStore.getState().hydrate(rack)
+}
 
 /**
  * Compute the next default track name. Counts every non-Master track
@@ -1271,6 +1279,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
       useProjectStore.getState().markDirty()
       useHistoryStore.getState().undoOne()
       await get().fetchTracks()
+      await rehydrateRack()
     }
     return ok
   },
@@ -1281,6 +1290,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
       useProjectStore.getState().markDirty()
       useHistoryStore.getState().redoOne()
       await get().fetchTracks()
+      await rehydrateRack()
     }
     return ok
   },

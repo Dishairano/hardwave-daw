@@ -3,6 +3,13 @@ import { useChannelRackPrefsStore } from './channelRackPrefsStore'
 
 export const STEPS_PER_PATTERN = 16
 
+/** Set while `hydrate` replaces the rack with a saved state, so the sync can
+ *  tell a loaded rack from an edit (see rackSync.ts). */
+let hydrating = 0
+export function isHydrating(): boolean {
+  return hydrating > 0
+}
+
 export const PATTERN_COLORS = [
   '#DC2626', '#EA580C', '#CA8A04', '#65A30D',
   '#059669', '#0891B2', '#2563EB', '#7C3AED',
@@ -363,6 +370,18 @@ export const usePatternStore = create<PatternState>((set, get) => ({
   },
 
   hydrate: (json) => {
+    hydrating++
+    try {
+      hydrateRack(json)
+    } finally {
+      hydrating--
+    }
+  },
+}))
+
+function hydrateRack(json: string | null) {
+  const set = usePatternStore.setState
+  {
     if (!json) {
       const fresh = emptyPattern(1)
       set({ patterns: [fresh], activeId: fresh.id })
@@ -388,5 +407,5 @@ export const usePatternStore = create<PatternState>((set, get) => ({
     } catch {}
     const fresh = emptyPattern(1)
     set({ patterns: [fresh], activeId: fresh.id })
-  },
-}))
+  }
+}
