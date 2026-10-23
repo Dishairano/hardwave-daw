@@ -184,17 +184,6 @@ pub struct Track {
     /// to arm a track without monitoring (e.g. when monitoring via hardware).
     #[serde(default = "default_monitor_input")]
     pub monitor_input: bool,
-    /// Monitoring that follows the transport, as on a tape machine: the
-    /// input is heard while stopped and while recording, and the track's
-    /// own audio while playing back, so a take can be checked without
-    /// switching monitoring off. Only matters with `monitor_input` on.
-    #[serde(default)]
-    pub monitor_auto: bool,
-    /// What this track records when armed: none for the audio interface's
-    /// input, or another track's output (a bus, or the master) to record
-    /// the song's own sound in real time, as resampling.
-    #[serde(default)]
-    pub input_source: Option<TrackId>,
 
     /// Flip sample polarity on this track. Applied before the fader.
     #[serde(default)]
@@ -321,6 +310,21 @@ pub struct Track {
     /// writing one down.
     #[serde(default)]
     pub session_slots: Vec<Option<SessionSlot>>,
+    // New fields go AFTER this line, at the end. Songs saved before format
+    // 2 (27 Sep 2026) are positional arrays, read in this order: a field
+    // added anywhere else shifts every field after it, and those songs no
+    // longer open.
+    /// Monitoring that follows the transport, as on a tape machine: the
+    /// input is heard while stopped and while recording, and the track's
+    /// own audio while playing back, so a take can be checked without
+    /// switching monitoring off. Only matters with `monitor_input` on.
+    #[serde(default)]
+    pub monitor_auto: bool,
+    /// What this track records when armed: none for the audio interface's
+    /// input, or another track's output (a bus, or the master) to record
+    /// the song's own sound in real time, as resampling.
+    #[serde(default)]
+    pub input_source: Option<TrackId>,
 }
 
 impl Track {
@@ -407,5 +411,46 @@ mod serde_bytes_opt {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
         Option::<Vec<u8>>::deserialize(d)
+    }
+}
+
+#[cfg(test)]
+mod field_order_tests {
+    use super::Track;
+
+    /// Songs saved before format 2 are positional arrays. The monitoring and
+    /// input fields were first put in the middle of the struct, which
+    /// shifted every field after them, and such a song did not open.
+    #[test]
+    fn a_track_saved_before_the_newest_fields_still_opens() {
+        let mut t = Track::new_audio("a".into(), "A".into());
+        t.phase_invert = true;
+        t.swap_lr = true;
+        t.monitor_auto = true;
+        t.input_source = Some("master".into());
+        let packed = rmp_serde::to_vec(&t).unwrap();
+        let mut fields: Vec<serde_json::Value> = rmp_serde::from_slice(&packed).unwrap();
+        // The newest fields are the last two in the file...
+        let n = fields.len();
+        assert_eq!(
+            fields[n - 2],
+            serde_json::json!(true),
+            "monitor_auto is second to last"
+        );
+        assert_eq!(
+            fields[n - 1],
+            serde_json::json!("master"),
+            "input_source is last"
+        );
+        // ...so a file from before them is the same array without them.
+        fields.truncate(n - 2);
+        let old = rmp_serde::to_vec(&fields).unwrap();
+        let back: Track = rmp_serde::from_slice(&old).expect("an older track opens");
+        assert!(
+            back.phase_invert && back.swap_lr,
+            "every field lands where it was"
+        );
+        assert!(!back.monitor_auto);
+        assert_eq!(back.input_source, None);
     }
 }
