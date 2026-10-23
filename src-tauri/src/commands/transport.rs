@@ -131,7 +131,53 @@ pub fn stop(state: State<AppState>) -> Result<Option<RecordedTake>, String> {
 /// on its own schedule, and Disk Cleanup and Storage Sense both target it, so
 /// a saved project could lose the vocal that was recorded into it with no
 /// warning and nothing to recover.
+/// How takes are written: as 24-bit or 32-bit float WAVs, and in which
+/// folder. Set in Audio settings and kept with them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TakeFormat {
+    /// 24-bit integer: smaller, and what most other programs expect. Off
+    /// keeps a take exactly as captured, in 32-bit float.
+    pub bits_24: bool,
+    /// One folder for every take, whatever the song; none keeps takes in
+    /// the song's own Recordings folder.
+    pub folder: Option<String>,
+}
+
+static TAKE_FORMAT: std::sync::Mutex<TakeFormat> = std::sync::Mutex::new(TakeFormat {
+    bits_24: false,
+    folder: None,
+});
+
+pub fn take_format() -> TakeFormat {
+    TAKE_FORMAT.lock().map(|f| f.clone()).unwrap_or_default()
+}
+
+pub fn set_take_format_value(format: TakeFormat) {
+    if let Ok(mut f) = TAKE_FORMAT.lock() {
+        *f = format;
+    }
+}
+
+#[tauri::command]
+pub fn get_take_format() -> TakeFormat {
+    take_format()
+}
+
+#[tauri::command]
+pub fn set_take_format(state: State<AppState>, format: TakeFormat) {
+    let format = TakeFormat {
+        folder: format.folder.filter(|f| !f.trim().is_empty()),
+        ..format
+    };
+    set_take_format_value(format);
+    crate::commands::engine::persist_audio_prefs_public(&state);
+}
+
 fn recordings_dir(engine: &hardwave_engine::DawEngine) -> Result<PathBuf, String> {
+    if let Some(folder) = take_format().folder {
+        return Ok(PathBuf::from(folder));
+    }
     if let Some(project_dir) = engine.project_dir() {
         return Ok(project_dir.join("Recordings"));
     }
@@ -254,21 +300,27 @@ fn finalize_recording_session(engine: &hardwave_engine::DawEngine) -> Result<Rec
     })
 }
 
-/// One pass of a take, `range` of its samples, as a 32-bit float stereo WAV,
-/// which is the engine's own sample format, so a take is stored exactly as
-/// it was captured. Read from the take's file a block at a time, so a long
-/// take never sits in memory. Returns the pass's peak.
+/// One pass of a take, `range` of its samples, as a stereo WAV: 32-bit float
+/// by default, the engine's own format, so a take is stored exactly as it
+/// was captured, or 24-bit when chosen in Audio settings. Read from the
+/// take's file a block at a time, so a long take never sits in memory.
+/// Returns the pass's peak.
 fn write_take_wav(
     take: &hardwave_engine::input_node::TakeFile,
     range: std::ops::Range<usize>,
     path: &Path,
     sample_rate: u32,
 ) -> Result<f32, String> {
+    let bits_24 = take_format().bits_24;
     let spec = hound::WavSpec {
         channels: 2,
         sample_rate,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
+        bits_per_sample: if bits_24 { 24 } else { 32 },
+        sample_format: if bits_24 {
+            hound::SampleFormat::Int
+        } else {
+            hound::SampleFormat::Float
+        },
     };
     let mut writer = hound::WavWriter::create(path, spec).map_err(|e| e.to_string())?;
     let mut peak = 0.0_f32;
@@ -278,7 +330,12 @@ fn write_take_wav(
         let end = (at + BLOCK).min(range.end);
         for s in take.read(at..end).map_err(|e| e.to_string())? {
             peak = peak.max(s.abs());
-            writer.write_sample(s).map_err(|e| e.to_string())?;
+            if bits_24 {
+                let v = (s.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32;
+                writer.write_sample(v).map_err(|e| e.to_string())?;
+            } else {
+                writer.write_sample(s).map_err(|e| e.to_string())?;
+            }
         }
         at = end;
     }
@@ -289,6 +346,45 @@ fn write_take_wav(
 #[cfg(test)]
 mod take_name_tests {
     use super::*;
+
+    /// A take's raw file, as the engine leaves it when recording stops.
+    fn raw_take(dir: &Path, samples: &[f32]) -> hardwave_engine::input_node::TakeFile {
+        let path = dir.join("raw.f32");
+        let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        std::fs::write(&path, bytes).unwrap();
+        hardwave_engine::input_node::TakeFile {
+            path,
+            samples: samples.len(),
+        }
+    }
+
+    #[test]
+    fn a_pass_is_written_from_its_range_of_the_take_in_the_chosen_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let take = raw_take(dir.path(), &[0.1, 0.1, 0.5, -0.5, -1.0, 1.0, 0.2, 0.2]);
+
+        set_take_format_value(TakeFormat::default());
+        let float = dir.path().join("float.wav");
+        let peak = write_take_wav(&take, 2..6, &float, 48_000).unwrap();
+        assert_eq!(peak, 1.0, "the peak is the pass's, not the take's");
+        let mut r = hound::WavReader::open(&float).unwrap();
+        assert_eq!(r.spec().bits_per_sample, 32);
+        let got: Vec<f32> = r.samples::<f32>().map(|s| s.unwrap()).collect();
+        assert_eq!(got, vec![0.5, -0.5, -1.0, 1.0]);
+
+        set_take_format_value(TakeFormat {
+            bits_24: true,
+            folder: None,
+        });
+        let int = dir.path().join("int.wav");
+        write_take_wav(&take, 2..6, &int, 48_000).unwrap();
+        set_take_format_value(TakeFormat::default());
+        let mut r = hound::WavReader::open(&int).unwrap();
+        assert_eq!(r.spec().bits_per_sample, 24);
+        assert_eq!(r.spec().sample_format, hound::SampleFormat::Int);
+        let got: Vec<i32> = r.samples::<i32>().map(|s| s.unwrap()).collect();
+        assert_eq!(got, vec![4_194_304, -4_194_304, -8_388_607, 8_388_607]);
+    }
 
     #[test]
     fn a_take_is_named_readably_and_never_overwrites() {

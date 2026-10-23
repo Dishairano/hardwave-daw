@@ -37,6 +37,8 @@ fn persist_audio_prefs(state: &State<AppState>) {
         trusted_sample_servers: engine.trusted_servers(),
         audio_host: Some(engine.audio_host_name()),
         release_device_in_background: crate::audio_focus::enabled(),
+        take_bits_24: crate::commands::transport::take_format().bits_24,
+        take_folder: crate::commands::transport::take_format().folder,
     };
     drop(engine);
     prefs.save();

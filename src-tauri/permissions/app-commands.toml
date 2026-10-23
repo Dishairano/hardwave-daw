@@ -309,6 +309,8 @@ permissions = [
   "allow-set-audio-host",
   "allow-mix-check",
   "allow-get-release-device-in-background",
+  "allow-get-take-format",
+  "allow-set-take-format",
   "allow-set-release-device-in-background",
   "allow-get-wasapi-exclusive",
   "allow-set-wasapi-exclusive",
