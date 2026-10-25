@@ -32,12 +32,104 @@ pub struct ScriptRun {
     pub output: Vec<String>,
 }
 
+/// What a script can read of the song, made before it runs: `song.bpm`,
+/// and `song.tracks`, each with its id, name, kind, volume (dB), pan,
+/// mute, solo and arm, and its clips (id, name, kind, start and length in
+/// ticks, muted), and for a MIDI clip its notes (tick, length, pitch,
+/// velocity 0 to 127). A copy, so a script reads the song as it was when
+/// it started, and what it asks for is applied after it ends.
+///
+/// Scripts could change a song but not look at it, so even "make every
+/// note on the bass track quieter" could not be written.
+pub fn song_view(project: &hardwave_project::Project) -> rhai::Map {
+    use hardwave_project::clip::ClipContent;
+    use rhai::{Array, Dynamic, Map};
+    let mut song = Map::new();
+    song.insert(
+        "bpm".into(),
+        Dynamic::from_float(
+            project
+                .tempo_map
+                .entries
+                .first()
+                .map(|e| e.bpm)
+                .unwrap_or(120.0),
+        ),
+    );
+    let tracks: Array = project
+        .tracks
+        .iter()
+        .map(|t| {
+            let mut m = Map::new();
+            m.insert("id".into(), t.id.clone().into());
+            m.insert("name".into(), t.name.clone().into());
+            m.insert("kind".into(), format!("{:?}", t.kind).into());
+            m.insert("volume".into(), Dynamic::from_float(t.volume_db));
+            m.insert("pan".into(), Dynamic::from_float(t.pan));
+            m.insert("muted".into(), t.muted.into());
+            m.insert("soloed".into(), t.soloed.into());
+            m.insert("armed".into(), t.armed.into());
+            let clips: Array = t
+                .clips
+                .iter()
+                .map(|c| {
+                    let mut cm = Map::new();
+                    cm.insert("start".into(), (c.position_ticks as i64).into());
+                    cm.insert("length".into(), (c.length_ticks as i64).into());
+                    match &c.content {
+                        ClipContent::Audio(a) => {
+                            cm.insert("id".into(), a.id.clone().into());
+                            cm.insert("name".into(), a.name.clone().into());
+                            cm.insert("kind".into(), "audio".into());
+                            cm.insert("muted".into(), a.muted.into());
+                        }
+                        ClipContent::Midi(m) => {
+                            cm.insert("id".into(), m.id.clone().into());
+                            cm.insert("name".into(), m.clip.name.clone().into());
+                            cm.insert("kind".into(), "midi".into());
+                            cm.insert("muted".into(), m.clip.muted.into());
+                            let notes: Array = m
+                                .clip
+                                .notes
+                                .iter()
+                                .map(|n| {
+                                    let mut nm = Map::new();
+                                    nm.insert("tick".into(), (n.start_tick as i64).into());
+                                    nm.insert("length".into(), (n.duration_ticks as i64).into());
+                                    nm.insert("pitch".into(), (n.pitch as i64).into());
+                                    nm.insert(
+                                        "velocity".into(),
+                                        ((n.velocity * 127.0).round().clamp(0.0, 127.0) as i64)
+                                            .into(),
+                                    );
+                                    nm.into()
+                                })
+                                .collect();
+                            cm.insert("notes".into(), notes.into());
+                        }
+                    }
+                    cm.into()
+                })
+                .collect();
+            m.insert("clips".into(), clips.into());
+            m.into()
+        })
+        .collect();
+    song.insert("tracks".into(), tracks.into());
+    song
+}
+
 /// Run a script and collect what it asks for.
 ///
 /// Nothing is applied here. The caller gets a list of commands and
 /// decides when to run them, which is what makes a script one undo
 /// step rather than fifty.
 pub fn run(source: &str) -> Result<ScriptRun, String> {
+    run_with_song(source, rhai::Map::new())
+}
+
+/// `run`, with the song for the script to read as `song`.
+pub fn run_with_song(source: &str, song: rhai::Map) -> Result<ScriptRun, String> {
     let collected: Arc<Mutex<Vec<ScriptCommand>>> = Arc::new(Mutex::new(Vec::new()));
     let printed: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -168,8 +260,10 @@ pub fn run(source: &str) -> Result<ScriptRun, String> {
     });
     engine.register_fn("bars", |bars: i64| bars * 4 * hardwave_midi::PPQ as i64);
 
+    let mut scope = rhai::Scope::new();
+    scope.push_constant("song", song);
     engine
-        .run(source)
+        .run_with_scope(&mut scope, source)
         .map_err(|e| format!("{e}"))
         .map(|()| ScriptRun {
             commands: collected.lock().map(|l| l.clone()).unwrap_or_default(),
@@ -295,5 +389,56 @@ mod tests {
         // are off, so an import is the only door and it is shut.
         let error = run(r#"import "std" as s;"#).expect_err("imports should be refused");
         assert!(!error.is_empty());
+    }
+
+    /// A script reads the song and acts on what it finds: here, every
+    /// note louder than 100 on the bass is replaced by a quieter one.
+    #[test]
+    fn a_script_reads_the_song() {
+        use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+        let mut p = hardwave_project::Project::default();
+        let id = p.add_midi_track("Bass".into());
+        let mut clip = hardwave_midi::MidiClip::new("bass-1".into(), "Bass line".into(), 3840);
+        for (tick, vel) in [(0u64, 0.9f32), (960, 0.5)] {
+            clip.notes.push(hardwave_midi::MidiNote {
+                start_tick: tick,
+                duration_ticks: 480,
+                pitch: 36,
+                velocity: vel,
+                ..Default::default()
+            });
+        }
+        p.track_mut(&id).unwrap().clips.push(ClipPlacement {
+            content: ClipContent::Midi(MidiClipRef {
+                id: "bass-1".into(),
+                clip,
+            }),
+            track_id: id.clone(),
+            position_ticks: 0,
+            length_ticks: 3840,
+            lane: 0,
+            color: None,
+        });
+        let script = r#"
+            for t in song.tracks {
+                if t.name != "Bass" { continue; }
+                for c in t.clips {
+                    for n in c.notes {
+                        if n.velocity > 100 {
+                            delete_note(c.id, n.tick, n.pitch);
+                            add_note(c.id, n.tick, n.pitch, 80, n.length);
+                        }
+                    }
+                }
+            }
+            print(song.tracks.len());
+        "#;
+        let ran = run_with_song(script, song_view(&p)).unwrap();
+        assert_eq!(
+            ran.commands.len(),
+            2,
+            "the loud note, deleted and added back quieter"
+        );
+        assert_eq!(ran.output, vec![p.tracks.len().to_string()]);
     }
 }

@@ -96,8 +96,8 @@ pub fn delete_script(name: String) -> Result<(), String> {
 /// The same run, with the commands thrown away: it is how the editor
 /// can say "this does not parse" before the project is touched.
 #[tauri::command]
-pub fn check_script(body: String) -> Result<ScriptResult, String> {
-    let run = crate::scripting::run(&body)?;
+pub fn check_script(state: State<AppState>, body: String) -> Result<ScriptResult, String> {
+    let run = crate::scripting::run_with_song(&body, song_for(&state))?;
     Ok(ScriptResult {
         output: run.output,
         asked: run.commands.len(),
@@ -105,10 +105,17 @@ pub fn check_script(body: String) -> Result<ScriptResult, String> {
     })
 }
 
+/// The song as a script reads it, copied before it runs.
+fn song_for(state: &State<AppState>) -> rhai::Map {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    crate::scripting::song_view(&project)
+}
+
 /// Run a script and apply what it asked for.
 #[tauri::command]
 pub fn run_script(state: State<AppState>, body: String) -> Result<ScriptResult, String> {
-    let run = crate::scripting::run(&body)?;
+    let run = crate::scripting::run_with_song(&body, song_for(&state))?;
     if run.commands.is_empty() {
         return Ok(ScriptResult {
             output: run.output,
