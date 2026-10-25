@@ -25,11 +25,18 @@ interface ScriptResult {
   applied: number
 }
 
-const EXAMPLE = `// Four kicks on the beat.
-for i in 0..4 {
-    add_note("clip-id-here", beats(i), 36, 100, beats(0.25));
+const EXAMPLE = `// Four kicks on the beat, in the first MIDI clip of the track called Kick.
+for t in song.tracks {
+    if t.name != "Kick" { continue; }
+    for c in t.clips {
+        if c.kind != "midi" { continue; }
+        for i in 0..4 {
+            add_note(c.id, beats(i), 36, 100, beats(0.25));
+        }
+        print("four kicks written in " + c.name);
+        break;
+    }
 }
-print("four kicks written");
 `
 
 export function ScriptsPanel({ onClose }: { onClose: () => void }) {
@@ -192,7 +199,13 @@ add_note(clip_id, tick, pitch, velocity, length)
 delete_note(clip_id, tick, pitch)
 move_clip(clip_id, tick)   delete_clip(clip_id)
 beats(n)  bars(n)   ticks, so you can write beats(2)
-print(text)`
+print(text)
+
+Reading the song (as it was when the script started):
+song.bpm
+song.tracks: id, name, kind, volume, pan, muted, soloed, armed, clips
+  clip: id, name, kind ("audio" or "midi"), start, length, muted, notes
+  note: tick, length, pitch, velocity (0 to 127)`
             }</pre>
           </details>
         </div>
