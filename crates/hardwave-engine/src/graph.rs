@@ -56,6 +56,10 @@ pub trait AudioNode: Send {
     /// while the song is stopped. Only track nodes care.
     fn set_live_input(&mut self, _live: bool) {}
 
+    /// The keyboard moved to another track: let go of every note it is
+    /// holding here, since the releases will not arrive any more.
+    fn release_live_notes(&mut self) {}
+
     /// Move one knob of one plug-in in this node's chain.
     ///
     /// Borrowed rather than a command: modulation sets a knob every
@@ -303,7 +307,14 @@ impl AudioGraph {
     /// guaranteed safe.
     pub fn set_accepts_live_midi(&mut self, node_id: NodeId, accepts: bool) {
         if let Some(slot) = self.accepts_live_midi.get_mut(node_id) {
-            *slot = accepts;
+            let was = std::mem::replace(slot, accepts);
+            // A node that stops hearing the keyboard would never get the
+            // releases of the notes held on it.
+            if was && !accepts {
+                if let Some(node) = self.nodes.get_mut(node_id) {
+                    node.release_live_notes();
+                }
+            }
         }
     }
 
