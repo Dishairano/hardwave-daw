@@ -223,8 +223,16 @@ pub fn spawn_dispatcher(
     midi_out: Arc<Mutex<hardwave_midi::output::MidiOutputManager>>,
     midi_input: Arc<Mutex<hardwave_midi::MidiInputManager>>,
 ) {
+    let mut last_frame_at = std::time::Instant::now();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(8));
+        // The desk shows the song as it is now, about thirty times a second,
+        // sending only what changed: a fader moved with the mouse, by
+        // automation or by undo moves the motor too.
+        if surface.is_enabled() && last_frame_at.elapsed() >= std::time::Duration::from_millis(33) {
+            last_frame_at = std::time::Instant::now();
+            send_desk_frame(&engine, &surface, &midi_out);
+        }
         // The input manager's own lock only: holding the engine's while waiting for it kept
         // everything else off the engine during a MIDI port scan.
         let events = midi_input.lock().drain_events();
@@ -381,6 +389,41 @@ fn apply_surface(
     };
 
     match action {
+        cs::SurfaceAction::Touch { strip, on } => {
+            surface.set_touched(strip, on);
+            // One undo step per move of the hand, not one per message the
+            // fader sends while it moves.
+            if on {
+                engine.lock().snapshot_before_mutation();
+            }
+        }
+        cs::SurfaceAction::VPot { strip, clicks } => {
+            let Some(track_id) = track_of(strip) else {
+                return;
+            };
+            let eng = engine.lock();
+            {
+                let mut project = eng.project.lock();
+                if let Some(track) = project.track_mut(&track_id) {
+                    track.pan = (track.pan + clicks as f64 * 0.02).clamp(-1.0, 1.0);
+                }
+            }
+            eng.apply_track_mix(&track_id);
+        }
+        cs::SurfaceAction::VPotPush { strip } => {
+            let Some(track_id) = track_of(strip) else {
+                return;
+            };
+            let eng = engine.lock();
+            eng.snapshot_before_mutation();
+            {
+                let mut project = eng.project.lock();
+                if let Some(track) = project.track_mut(&track_id) {
+                    track.pan = 0.0;
+                }
+            }
+            eng.apply_track_mix(&track_id);
+        }
         cs::SurfaceAction::Fader { strip, value } => {
             let Some(track_id) = track_of(strip) else {
                 return;
@@ -392,7 +435,10 @@ fn apply_surface(
                     track.volume_db = cs::fader_to_db(value);
                 }
             }
-            eng.rebuild_graph();
+            // Straight to the node, as the mixer's own fader does: a desk
+            // fader sends dozens of messages a second, and each rebuilt
+            // the whole graph.
+            eng.apply_track_mix(&track_id);
         }
         cs::SurfaceAction::MasterFader { value } => {
             let eng = engine.lock();
@@ -503,7 +549,7 @@ fn apply_surface(
                     track.pan = value.clamp(-1.0, 1.0) as f64;
                 }
             }
-            engine.lock().rebuild_graph();
+            engine.lock().apply_track_mix(&track_id);
         }
         cs::SurfaceAction::Goto { beats } => {
             let eng = engine.lock();
@@ -515,12 +561,19 @@ fn apply_surface(
     }
 }
 
-/// Send the strips' faders and mute lights for the bank the desk is on.
-///
-/// Without this a motorised fader stays where the hand left it when the
-/// bank changes, which means the desk and the mix disagree about what
-/// is under your fingers.
+/// A new bank: the whole desk is sent again on the next frame, names and
+/// all, so the strips and the mix agree about what is under the fingers.
 pub fn send_bank_state(
+    _engine: &Arc<Mutex<DawEngine>>,
+    surface: &crate::control_surface::SharedSurface,
+    _midi_out: &Arc<Mutex<hardwave_midi::output::MidiOutputManager>>,
+) {
+    surface.redraw();
+}
+
+/// Bring the desk up to date with the song: what changed since the last
+/// frame, or everything after a redraw.
+pub fn send_desk_frame(
     engine: &Arc<Mutex<DawEngine>>,
     surface: &crate::control_surface::SharedSurface,
     midi_out: &Arc<Mutex<hardwave_midi::output::MidiOutputManager>>,
@@ -529,23 +582,33 @@ pub fn send_bank_state(
     use std::sync::atomic::Ordering;
 
     let bank = surface.bank.load(Ordering::Relaxed);
-    let strips: Vec<(f32, bool)> = {
-        let eng = engine.lock();
-        let project = eng.project.lock();
-        cs::bank_tracks(&project, bank)
-            .into_iter()
-            .filter_map(|id| {
-                project
-                    .track(&id)
-                    .map(|t| (cs::db_to_fader(t.volume_db), t.muted))
-            })
-            .collect()
+    let frame = {
+        // try_lock: a frame skipped while something holds the song is put
+        // right by the next one, a thirtieth of a second later.
+        let Some(eng) = engine.try_lock() else {
+            return;
+        };
+        let master_db = eng.transport.master_volume_db.load(Ordering::Relaxed);
+        let Some(project) = eng.project.try_lock() else {
+            return;
+        };
+        cs::desk_frame(&project, bank, master_db)
     };
-    let out = midi_out.lock();
-    for (strip, (level, muted)) in strips.iter().enumerate() {
-        out.broadcast(&cs::fader_feedback(strip, *level));
-        out.broadcast(&cs::button_feedback(cs::mute_note(strip), *muted));
+    let Ok(mut shown) = surface.shown.lock() else {
+        return;
+    };
+    let messages = cs::frame_messages(
+        shown.as_ref(),
+        &frame,
+        surface.touched.load(Ordering::Relaxed),
+    );
+    if !messages.is_empty() {
+        let out = midi_out.lock();
+        for m in &messages {
+            out.broadcast(m);
+        }
     }
+    *shown = Some(frame);
 }
 
 #[cfg(test)]

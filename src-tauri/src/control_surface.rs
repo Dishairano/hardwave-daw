@@ -7,11 +7,13 @@
 //! it could never give you eight faders, their mutes and their solos
 //! at once, and it could not move a motorised fader back.
 //!
-//! What is here is the common ground between the two protocols, which
-//! is what every desk implements: eight faders, mute, solo and arm per
-//! strip, the transport keys, and bank left and right. The scribble
-//! strips and the LED rings are not: they need the sysex display
-//! protocol, which differs between the two.
+//! Eight faders, mute, solo and arm per strip, the V-pots (pan), the
+//! transport keys, and bank left and right come in. Back to the desk, a
+//! few times a second and only what changed ([`frame_messages`]): the
+//! motorised faders, the mute, solo and arm lights, the V-pot rings, and
+//! each track's name and level on the scribble strips. A fader with a
+//! hand on it (the desk says so with its touch notes) is left alone, so
+//! the motor never fights the hand.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -33,6 +35,10 @@ const NOTE_FORWARD: u8 = 92;
 const NOTE_STOP: u8 = 93;
 const NOTE_PLAY: u8 = 94;
 const NOTE_RECORD: u8 = 95;
+const NOTE_VPOT_PUSH_FIRST: u8 = 32; // 32..39 V-pot pressed
+const NOTE_TOUCH_FIRST: u8 = 104; // 104..111 a hand on the fader
+const CC_VPOT_FIRST: u8 = 16; // 16..23 V-pot turned, relative
+const CC_RING_FIRST: u8 = 48; // 48..55 V-pot LED ring
 
 /// What the desk is doing: whether it is listened to at all, and which
 /// eight tracks its strips are on.
@@ -41,6 +47,10 @@ pub struct ControlSurface {
     pub enabled: AtomicBool,
     /// Index of the first track under the strips.
     pub bank: AtomicUsize,
+    /// Faders with a hand on them, one bit per strip.
+    pub touched: std::sync::atomic::AtomicU8,
+    /// What the desk was last sent; none sends everything next time.
+    pub shown: std::sync::Mutex<Option<DeskFrame>>,
 }
 
 impl ControlSurface {
@@ -50,6 +60,23 @@ impl ControlSurface {
 
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Send the whole desk next time: a new bank, the desk just switched
+    /// on, or plugged in again.
+    pub fn redraw(&self) {
+        if let Ok(mut shown) = self.shown.lock() {
+            *shown = None;
+        }
+    }
+
+    pub fn set_touched(&self, strip: usize, on: bool) {
+        let bit = 1u8 << (strip & 7);
+        if on {
+            self.touched.fetch_or(bit, Ordering::Relaxed);
+        } else {
+            self.touched.fetch_and(!bit, Ordering::Relaxed);
+        }
     }
 }
 
@@ -87,6 +114,20 @@ pub enum SurfaceAction {
     Tempo {
         bpm: f64,
     },
+    /// A V-pot turned: clicks, positive clockwise.
+    VPot {
+        strip: usize,
+        clicks: i32,
+    },
+    /// A V-pot pressed: pan back to the centre.
+    VPotPush {
+        strip: usize,
+    },
+    /// A hand on (or off) a touch-sensitive fader.
+    Touch {
+        strip: usize,
+        on: bool,
+    },
     Pan {
         strip: usize,
         value: f32,
@@ -116,7 +157,34 @@ pub fn interpret(event: &MidiEvent) -> Option<SurfaceAction> {
                 None
             }
         }
+        // A hand leaving a fader: the touch note's release.
+        MidiEvent::NoteOff { note, .. }
+            if (NOTE_TOUCH_FIRST..NOTE_TOUCH_FIRST + STRIPS as u8).contains(&note) =>
+        {
+            Some(SurfaceAction::Touch {
+                strip: (note - NOTE_TOUCH_FIRST) as usize,
+                on: false,
+            })
+        }
+        MidiEvent::ControlChange { cc, value, .. }
+            if (CC_VPOT_FIRST..CC_VPOT_FIRST + STRIPS as u8).contains(&cc) =>
+        {
+            // Relative: bit 6 is the direction (set is anticlockwise), the
+            // rest how many clicks.
+            let raw = (value.clamp(0.0, 1.0) * 127.0).round() as u8;
+            let clicks = (raw & 0x3F) as i32;
+            Some(SurfaceAction::VPot {
+                strip: (cc - CC_VPOT_FIRST) as usize,
+                clicks: if raw & 0x40 != 0 { -clicks } else { clicks },
+            })
+        }
         MidiEvent::NoteOn { note, velocity, .. } => {
+            if (NOTE_TOUCH_FIRST..NOTE_TOUCH_FIRST + STRIPS as u8).contains(&note) {
+                return Some(SurfaceAction::Touch {
+                    strip: (note - NOTE_TOUCH_FIRST) as usize,
+                    on: velocity > 0.0,
+                });
+            }
             if velocity <= 0.0 {
                 return None;
             }
@@ -129,6 +197,9 @@ pub fn interpret(event: &MidiEvent) -> Option<SurfaceAction> {
                 }),
                 NOTE_MUTE_FIRST..=23 => Some(SurfaceAction::Mute {
                     strip: (note - NOTE_MUTE_FIRST) as usize,
+                }),
+                NOTE_VPOT_PUSH_FIRST..=39 => Some(SurfaceAction::VPotPush {
+                    strip: (note - NOTE_VPOT_PUSH_FIRST) as usize,
                 }),
                 NOTE_BANK_LEFT => Some(SurfaceAction::BankLeft),
                 NOTE_BANK_RIGHT => Some(SurfaceAction::BankRight),
@@ -209,6 +280,142 @@ pub fn fader_to_db(value: f32) -> f64 {
 /// The reverse, for sending a fader back to the desk.
 pub fn db_to_fader(db: f64) -> f32 {
     (((db + 60.0) / 60.0) as f32).clamp(0.0, 1.0)
+}
+
+/// One strip as the desk shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StripView {
+    pub fader: f32,
+    pub volume_db: f64,
+    pub pan: f64,
+    pub muted: bool,
+    pub soloed: bool,
+    pub armed: bool,
+    pub name: String,
+}
+
+/// What the desk should show for the bank it is on.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DeskFrame {
+    pub strips: Vec<StripView>,
+    pub master: f32,
+}
+
+/// The desk as the song is now, for `bank`.
+pub fn desk_frame(project: &Project, bank: usize, master_db: f64) -> DeskFrame {
+    let strips = bank_tracks(project, bank)
+        .iter()
+        .filter_map(|id| project.track(id))
+        .map(|t| StripView {
+            fader: db_to_fader(t.volume_db),
+            volume_db: t.volume_db,
+            pan: t.pan,
+            muted: t.muted,
+            soloed: t.soloed,
+            armed: t.armed,
+            name: t.name.clone(),
+        })
+        .collect();
+    DeskFrame {
+        strips,
+        master: db_to_fader(master_db),
+    }
+}
+
+/// The messages that take the desk from what it showed (`old`, none for
+/// a blank desk) to `new`: only what changed, and nothing for a fader with
+/// a hand on it (`touched`, one bit per strip).
+pub fn frame_messages(old: Option<&DeskFrame>, new: &DeskFrame, touched: u8) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for strip in 0..STRIPS {
+        let now = new.strips.get(strip);
+        let was = old.and_then(|o| o.strips.get(strip));
+        if old.is_some() && now == was {
+            continue;
+        }
+        let blank = StripView {
+            fader: 0.0,
+            volume_db: f64::NEG_INFINITY,
+            pan: 0.0,
+            muted: false,
+            soloed: false,
+            armed: false,
+            name: String::new(),
+        };
+        let v = now.unwrap_or(&blank);
+        let changed = |f: &dyn Fn(&StripView) -> bool| was.is_none_or(|w| f(w) != f(v));
+        if touched & (1 << strip) == 0 && was.is_none_or(|w| w.fader != v.fader) {
+            out.push(fader_feedback(strip, v.fader).to_vec());
+        }
+        if changed(&|s| s.armed) {
+            out.push(button_feedback(NOTE_REC_FIRST + strip as u8, v.armed).to_vec());
+        }
+        if changed(&|s| s.soloed) {
+            out.push(button_feedback(NOTE_SOLO_FIRST + strip as u8, v.soloed).to_vec());
+        }
+        if changed(&|s| s.muted) {
+            out.push(button_feedback(mute_note(strip), v.muted).to_vec());
+        }
+        if was.is_none_or(|w| w.pan != v.pan) {
+            out.push(vec![
+                0xB0,
+                CC_RING_FIRST + strip as u8,
+                pan_ring(v.pan, now.is_some()),
+            ]);
+        }
+        if was.is_none_or(|w| w.name != v.name) {
+            out.push(scribble(strip, 0, &v.name));
+        }
+        if was.is_none_or(|w| w.volume_db != v.volume_db) {
+            let level = if now.is_none() {
+                String::new()
+            } else if v.volume_db <= -60.0 {
+                "-inf".to_string()
+            } else {
+                format!("{:.1}", v.volume_db)
+            };
+            out.push(scribble(strip, 1, &level));
+        }
+    }
+    if old.is_none_or(|o| o.master != new.master) {
+        out.push(fader_feedback(STRIPS, new.master).to_vec());
+    }
+    out
+}
+
+/// A V-pot ring showing a pan: one LED of eleven, the middle one centre,
+/// and dark for a strip with no track under it.
+fn pan_ring(pan: f64, lit: bool) -> u8 {
+    if !lit {
+        return 0;
+    }
+    let position = (6.0 + pan.clamp(-1.0, 1.0) * 5.0).round() as u8;
+    position.clamp(1, 11)
+}
+
+/// Six characters of text on a strip's scribble strip, top row (0) or
+/// bottom (1), as the Mackie display message. Each strip has seven
+/// cells; the seventh stays blank so neighbours do not run together.
+pub fn scribble(strip: usize, row: usize, text: &str) -> Vec<u8> {
+    let offset = (row.min(1) * 56 + strip.min(STRIPS - 1) * 7) as u8;
+    let mut msg = vec![0xF0, 0x00, 0x00, 0x66, 0x14, 0x12, offset];
+    let cells: Vec<u8> = text
+        .chars()
+        .map(|c| {
+            if c.is_ascii() && !c.is_ascii_control() {
+                c as u8
+            } else {
+                b'?'
+            }
+        })
+        .chain(std::iter::repeat(b' '))
+        .take(7)
+        .enumerate()
+        .map(|(i, c)| if i == 6 { b' ' } else { c })
+        .collect();
+    msg.extend(cells);
+    msg.push(0xF7);
+    msg
 }
 
 /// Shared handle for the app and the dispatcher.
@@ -315,5 +522,112 @@ mod tests {
             let db = fader_to_db(value);
             assert!((db_to_fader(db) - value).abs() < 1e-6);
         }
+    }
+
+    fn strip(name: &str, db: f64) -> StripView {
+        StripView {
+            fader: db_to_fader(db),
+            volume_db: db,
+            pan: 0.0,
+            muted: false,
+            soloed: false,
+            armed: false,
+            name: name.into(),
+        }
+    }
+
+    #[test]
+    fn a_v_pot_is_relative_and_a_touch_is_a_note() {
+        let cc = |cc: u8, raw: u8| MidiEvent::ControlChange {
+            timing: 0,
+            channel: 0,
+            cc,
+            value: raw as f32 / 127.0,
+        };
+        assert_eq!(
+            interpret(&cc(17, 0x03)),
+            Some(SurfaceAction::VPot {
+                strip: 1,
+                clicks: 3
+            })
+        );
+        assert_eq!(
+            interpret(&cc(17, 0x41)),
+            Some(SurfaceAction::VPot {
+                strip: 1,
+                clicks: -1
+            })
+        );
+        assert_eq!(
+            interpret(&note_on(106)),
+            Some(SurfaceAction::Touch { strip: 2, on: true })
+        );
+        assert_eq!(
+            interpret(&MidiEvent::NoteOff {
+                timing: 0,
+                channel: 0,
+                note: 106,
+                velocity: 0.0
+            }),
+            Some(SurfaceAction::Touch {
+                strip: 2,
+                on: false
+            })
+        );
+        assert_eq!(
+            interpret(&note_on(33)),
+            Some(SurfaceAction::VPotPush { strip: 1 })
+        );
+    }
+
+    #[test]
+    fn a_blank_desk_gets_everything_and_after_that_only_what_changed() {
+        let first = DeskFrame {
+            strips: vec![strip("Kick", -6.0), strip("Bass", 0.0)],
+            master: 1.0,
+        };
+        let all = frame_messages(None, &first, 0);
+        assert!(all.contains(&scribble(0, 0, "Kick")), "names on the strips");
+        assert!(
+            all.contains(&fader_feedback(1, 1.0).to_vec()),
+            "faders moved"
+        );
+        assert!(
+            all.contains(&scribble(2, 0, "")),
+            "an empty strip is cleared"
+        );
+
+        let mut next = first.clone();
+        next.strips[1].muted = true;
+        let changes = frame_messages(Some(&first), &next, 0);
+        assert_eq!(changes, vec![button_feedback(mute_note(1), true).to_vec()]);
+    }
+
+    #[test]
+    fn a_fader_with_a_hand_on_it_is_not_moved() {
+        let first = DeskFrame {
+            strips: vec![strip("Kick", -6.0)],
+            master: 1.0,
+        };
+        let mut next = first.clone();
+        next.strips[0] = strip("Kick", -3.0);
+        let changes = frame_messages(Some(&first), &next, 0b0000_0001);
+        assert!(
+            !changes.iter().any(|m| m[0] == 0xE0),
+            "no fader message while touched"
+        );
+        assert!(
+            changes.contains(&scribble(0, 1, "-3.0")),
+            "the level still shows"
+        );
+    }
+
+    #[test]
+    fn the_scribble_strip_is_six_characters_and_a_gap() {
+        let m = scribble(1, 1, "Lead synth");
+        assert_eq!(&m[..7], &[0xF0, 0x00, 0x00, 0x66, 0x14, 0x12, 63]);
+        assert_eq!(&m[7..14], b"Lead s ");
+        assert_eq!(*m.last().unwrap(), 0xF7);
+        assert_eq!(&scribble(0, 0, "Bassé")[7..14], b"Bass?  ");
     }
 }
