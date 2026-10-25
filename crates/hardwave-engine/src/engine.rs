@@ -197,6 +197,8 @@ pub struct SourceTake {
     pub source: RecordSource,
     pub file: crate::input_node::TakeFile,
     pub passes: TakePasses,
+    /// Audio was lost: the ring filled, or the disk failed part-way.
+    pub truncated: bool,
 }
 
 /// Seconds of audio the ring between the audio thread and the disk holds
@@ -783,6 +785,7 @@ impl DawEngine {
                     source,
                     file,
                     passes,
+                    truncated: tap.overflowed(),
                 });
             }
         }

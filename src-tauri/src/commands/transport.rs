@@ -275,8 +275,10 @@ fn free_name(dir: &Path, stem: &str) -> PathBuf {
 }
 
 fn finalize_recording_session(engine: &hardwave_engine::DawEngine) -> Result<RecordedTake, String> {
-    let truncated = engine.capture_overflowed();
     let takes = engine.stop_capture_sources();
+    // Read after stopping, per take: a write that failed while finishing
+    // counts too.
+    let truncated = takes.iter().any(|t| t.truncated);
     let total: usize = takes
         .iter()
         .flat_map(|t| t.passes.iter())

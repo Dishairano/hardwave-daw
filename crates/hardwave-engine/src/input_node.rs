@@ -235,14 +235,20 @@ impl CaptureTap {
         let writer = self.writer.lock().take()?;
         drop(producer);
         let samples = self.written.swap(0, Ordering::Relaxed);
-        match writer.finish() {
-            Ok(path) => Some(TakeFile { path, samples }),
-            Err(e) => {
-                log::error!("recording: the take could not be written: {e}");
-                self.overflowed.store(true, Ordering::Relaxed);
-                None
-            }
+        let (path, error) = writer.finish();
+        if let Some(e) = error {
+            // Keep what reached the disk, and say the take is not whole.
+            log::error!("recording: part of the take could not be written: {e}");
+            self.overflowed.store(true, Ordering::Relaxed);
+            let on_disk = std::fs::metadata(&path)
+                .map(|m| (m.len() / 4) as usize)
+                .unwrap_or(0);
+            return Some(TakeFile {
+                path,
+                samples: samples.min(on_disk),
+            });
         }
+        Some(TakeFile { path, samples })
     }
 
     /// Arm for a take whose samples reach the tap `latency` frames after
@@ -562,6 +568,7 @@ static TAKE_COUNTER: AtomicU64 = AtomicU64::new(0);
 impl TakeWriter {
     fn start(dir: &Path, mut consumer: rtrb::Consumer<f32>) -> std::io::Result<Self> {
         std::fs::create_dir_all(dir)?;
+        remove_stale_takes(dir);
         let n = TAKE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = dir.join(format!(".recording-{}-{n}.f32", std::process::id()));
         let file = std::fs::File::create(&path)?;
@@ -571,15 +578,25 @@ impl TakeWriter {
             .name("take-writer".into())
             .spawn(move || {
                 let mut out = std::io::BufWriter::with_capacity(1 << 18, file);
+                // A write that fails (a full disk, a drive pulled) stops the
+                // writing, not the draining: the ring keeps being emptied so
+                // the audio thread is never blocked, and what reached the
+                // disk before is kept.
+                let mut failed: Option<std::io::Error> = None;
                 loop {
                     let ready = consumer.slots();
                     if ready > 0 {
-                        let chunk = consumer
-                            .read_chunk(ready)
-                            .map_err(|e| std::io::Error::other(e.to_string()))?;
-                        let (a, b) = chunk.as_slices();
-                        for s in a.iter().chain(b.iter()) {
-                            out.write_all(&s.to_le_bytes())?;
+                        let Ok(chunk) = consumer.read_chunk(ready) else {
+                            continue;
+                        };
+                        if failed.is_none() {
+                            let (a, b) = chunk.as_slices();
+                            for s in a.iter().chain(b.iter()) {
+                                if let Err(e) = out.write_all(&s.to_le_bytes()) {
+                                    failed = Some(e);
+                                    break;
+                                }
+                            }
                         }
                         chunk.commit_all();
                     } else if stopping.load(Ordering::Acquire) {
@@ -588,17 +605,51 @@ impl TakeWriter {
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
                 }
-                out.flush()
+                match failed {
+                    Some(e) => {
+                        let _ = out.flush();
+                        Err(e)
+                    }
+                    None => out.flush(),
+                }
             })?;
         Ok(Self { path, stop, handle })
     }
 
-    /// Write out what is left in the ring and close the file.
-    fn finish(self) -> std::io::Result<PathBuf> {
+    /// Write out what is left in the ring and close the file. The path
+    /// comes back even when writing failed part-way, with the error, so
+    /// what did reach the disk is kept.
+    fn finish(self) -> (PathBuf, Option<std::io::Error>) {
         self.stop.store(true, Ordering::Release);
-        match self.handle.join() {
-            Ok(result) => result.map(|()| self.path),
-            Err(_) => Err(std::io::Error::other("the take writer stopped")),
+        let error = match self.handle.join() {
+            Ok(result) => result.err(),
+            Err(_) => Some(std::io::Error::other("the take writer stopped")),
+        };
+        (self.path, error)
+    }
+}
+
+/// Take files left by a session that ended mid-take (a crash, a power cut)
+/// are removed when the next take starts in the same folder; one a few
+/// hours old cannot belong to a take still being recorded.
+fn remove_stale_takes(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mine = format!(".recording-{}-", std::process::id());
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with(".recording-") || !name.ends_with(".f32") || name.starts_with(&mine) {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > std::time::Duration::from_secs(6 * 3600));
+        if old {
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }
