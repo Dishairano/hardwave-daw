@@ -743,8 +743,12 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   toggleArm: async (id) => {
     const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
-    await mut('toggle_arm', { trackId: id }, `Toggle arm on "${name}"`)
+    const warning = await mut<string | null>('toggle_arm', { trackId: id }, `Toggle arm on "${name}"`)
     await get().refreshTrack(id)
+    if (warning) {
+      const { useNotificationStore } = await import('./notificationStore')
+      useNotificationStore.getState().push('warning', 'The audio input did not open', { detail: warning, sticky: true })
+    }
   },
 
   setTrackMonitorInput: async (id, enabled) => {

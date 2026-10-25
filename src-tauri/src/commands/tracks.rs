@@ -992,8 +992,11 @@ pub fn set_exclusive_solo(state: State<AppState>, track_id: String) {
     engine.rebuild_graph();
 }
 
+/// Arm or disarm a track. Arming one that records the interface opens the
+/// input; when that fails the arm stands and the answer says why, so the
+/// interface can tell the person before they record a silent take.
 #[tauri::command]
-pub fn toggle_arm(state: State<AppState>, track_id: String) {
+pub fn toggle_arm(state: State<AppState>, track_id: String) -> Option<String> {
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
@@ -1004,7 +1007,7 @@ pub fn toggle_arm(state: State<AppState>, track_id: String) {
     }
     engine.rebuild_graph();
     drop(engine);
-    state.engine.lock().follow_armed_inputs();
+    state.engine.lock().follow_armed_inputs().err()
 }
 
 #[tauri::command]
@@ -1319,7 +1322,7 @@ pub fn set_track_input_source(
     }
     engine.rebuild_graph();
     drop(engine);
-    state.engine.lock().follow_armed_inputs();
+    let _ = state.engine.lock().follow_armed_inputs();
     Ok(())
 }
 
@@ -1360,7 +1363,7 @@ pub fn set_track_input_channel(
     }
     engine.rebuild_graph();
     drop(engine);
-    state.engine.lock().follow_armed_inputs();
+    let _ = state.engine.lock().follow_armed_inputs();
     Ok(())
 }
 
