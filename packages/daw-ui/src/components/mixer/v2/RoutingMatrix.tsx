@@ -1,7 +1,9 @@
-import { memo, useCallback, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { useSendStore, type SendInfo } from '../../../stores/sendStore'
-import { useTrackStore, type TrackInfo } from '../../../stores/trackStore'
+import { inputLabel, useTrackStore, type TrackInfo } from '../../../stores/trackStore'
 import { useNotificationStore } from '../../../stores/notificationStore'
+import { interfaceInputs, inputValue, parseInputValue } from './recordInputs'
 
 export interface RoutingMatrixProps {
   trackId: string
@@ -19,7 +21,8 @@ const DEFAULT_NAME = /^Insert \d+$/
 /**
  * Routing for the selected channel, at the top of the FX rack:
  *
- *   Records  [Audio input ▾]      what this channel records when armed
+ *   Records  [Audio input ▾]      what this channel records when armed:
+ *                                 an input of the interface, or a channel
  *   Output   [Master ▾]           where this channel's sound goes
  *   Sends    ▶ Reverb  [----|--] -6.0 dB  post  ×
  *            [+ Send to… ▾]
@@ -35,6 +38,15 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
   // Send levels while a slider is held, so the number follows the hand
   // and the store is written once on release.
   const [dragging, setDragging] = useState<Record<number, number>>({})
+  // How many inputs the interface has, for the Records menu.
+  const [inputCount, setInputCount] = useState(0)
+  useEffect(() => {
+    let alive = true
+    invoke<number>('get_input_channel_count')
+      .then(n => { if (alive) setInputCount(n) })
+      .catch(() => { /* no interface: only the channels are offered */ })
+    return () => { alive = false }
+  }, [])
 
   const { used, empty } = useMemo(() => {
     const used: TrackInfo[] = []
@@ -64,16 +76,33 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
     [trackId],
   )
 
-  // Recording a bus or the master instead of the interface: resampling.
+  // An input of the interface (so two tracks can record two inputs at
+  // once), the one chosen in Audio settings, or a bus or the master
+  // instead of the interface: resampling.
   const setInput = useCallback(
     (value: string) => {
-      useTrackStore
-        .getState()
-        .setTrackInputSource(trackId, value === '' ? null : value)
-        .catch(report('Could not change what this channel records'))
+      const store = useTrackStore.getState()
+      const channel = parseInputValue(value)
+      const done = value === '' || channel
+        ? store.setTrackInputChannel(trackId, channel)
+        : store.setTrackInputSource(trackId, value)
+      done.catch(report('Could not change what this channel records'))
     },
     [trackId],
   )
+  const recordsValue = self?.inputSource
+    ?? (self?.inputChannel ? inputValue(self.inputChannel) : '')
+  const inputs = interfaceInputs(inputCount)
+  // A pick the interface no longer has stays listed, so the menu still
+  // says what the track asks for.
+  if (self?.inputChannel && !inputs.some(o => o.value === recordsValue)) {
+    const ch = self.inputChannel
+    inputs.push({
+      value: recordsValue,
+      label: `${inputLabel(ch)} (not on this interface)`,
+      channel: ch,
+    })
+  }
 
   const addSend = useCallback(
     (target: string) => {
@@ -124,11 +153,18 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
           </div>
           <select
             className="mx-fx-route-select"
-            value={self?.inputSource ?? ''}
+            value={recordsValue}
             onChange={(e) => setInput(e.target.value)}
-            title="What this channel records when it is armed: the audio input, or the sound of another channel or the master (resampling)"
+            title="What this channel records when it is armed: an input of the audio interface, or the sound of another channel or the master (resampling)"
           >
-            <option value="">Audio input</option>
+            <option value="">Audio input (from Audio settings)</option>
+            {inputs.length > 0 && (
+              <optgroup label="Audio interface">
+                {inputs.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </optgroup>
+            )}
             {masterId && <option value={masterId}>Master (the whole song)</option>}
             {destinations(new Set())}
           </select>

@@ -1,5 +1,6 @@
 use crate::AppState;
 use hardwave_engine::TransportCommand;
+use hardwave_project::RecordSource;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::State;
@@ -221,8 +222,13 @@ pub struct RecordedTake {
     /// the recordings folder could not be written.
     pub truncated: bool,
     /// One entry per loop pass, in the order played, each with the position
-    /// it starts at. A single entry when the loop never wrapped.
+    /// it starts at. A single entry when the loop never wrapped. With armed
+    /// tracks on different inputs, the first input's.
     pub passes: Vec<TakePass>,
+    /// Each armed audio track's own passes, by track id: the take of the
+    /// input that track records, so two tracks on two inputs each get their
+    /// own audio instead of one shared take.
+    pub by_track: std::collections::HashMap<String, Vec<TakePass>>,
 }
 
 /// One loop pass of a take, written as its own file.
@@ -239,64 +245,134 @@ pub struct TakePass {
     pub peak: f32,
 }
 
+/// How a take's file says which input it came from, when a recording had
+/// more than one: `In 1`, `In 3-4`, or the name of the channel recorded.
+fn source_label(project: &hardwave_project::Project, source: &RecordSource) -> String {
+    let label = match source {
+        RecordSource::Interface(pick) if pick.mono => format!("In {}", pick.first + 1),
+        RecordSource::Interface(pick) => format!("In {}-{}", pick.first + 1, pick.first + 2),
+        RecordSource::Track(id) => project
+            .track(id)
+            .map(|t| t.name.clone())
+            .unwrap_or_else(|| id.clone()),
+    };
+    label
+        .chars()
+        .map(|c| if "/\\:*?\"<>|".contains(c) { '_' } else { c })
+        .collect()
+}
+
+/// `name` in `dir`, or `name (2)`, `name (3)`... when it is taken, so a
+/// take never overwrites another.
+fn free_name(dir: &Path, stem: &str) -> PathBuf {
+    let mut candidate = dir.join(format!("{stem}.wav"));
+    let mut n = 2;
+    while candidate.exists() {
+        candidate = dir.join(format!("{stem} ({n}).wav"));
+        n += 1;
+    }
+    candidate
+}
+
 fn finalize_recording_session(engine: &hardwave_engine::DawEngine) -> Result<RecordedTake, String> {
     let truncated = engine.capture_overflowed();
-    let (take, passes) = engine.stop_capture_takes().unzip();
-    let passes = passes.unwrap_or_default();
-    let total: usize = passes.iter().map(|(_, r)| r.len()).sum();
-    let Some(take) = take.filter(|_| total > 0) else {
+    let takes = engine.stop_capture_sources();
+    let total: usize = takes
+        .iter()
+        .flat_map(|t| t.passes.iter())
+        .map(|(_, r)| r.len())
+        .sum();
+    if total == 0 {
         return Ok(RecordedTake {
             path: None,
             seconds: 0.0,
             peak: 0.0,
             truncated,
             passes: Vec::new(),
+            by_track: Default::default(),
         });
-    };
+    }
 
     let sample_rate = engine.current_sample_rate();
     let dir = recordings_dir(engine)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let base = next_take_name(&dir);
     let stem = base.trim_end_matches(".wav").to_string();
-    let several = passes.iter().filter(|(_, r)| !r.is_empty()).count() > 1;
+    // What each armed track records, and each input's name, read once:
+    // the files below are written without holding the song.
+    let default = engine.default_input();
+    let (labels, track_sources) = {
+        let project = engine.project.lock();
+        let labels: Vec<String> = takes
+            .iter()
+            .map(|t| source_label(&project, &t.source))
+            .collect();
+        let track_sources: Vec<(String, RecordSource)> = project
+            .record_armed()
+            .map(|t| (t.id.clone(), project.record_source_of(t, default)))
+            .collect();
+        (labels, track_sources)
+    };
+    let named = takes
+        .iter()
+        .filter(|t| t.passes.iter().any(|(_, r)| !r.is_empty()))
+        .count()
+        > 1;
 
-    let mut files = Vec::new();
     let mut peak = 0.0_f32;
-    for (i, (start, range)) in passes.iter().enumerate() {
-        if range.is_empty() {
-            continue;
-        }
-        let name = if several {
-            format!("{stem} pass {}.wav", i + 1)
+    let mut per_source: Vec<Vec<TakePass>> = Vec::with_capacity(takes.len());
+    for (take, label) in takes.iter().zip(&labels) {
+        let source_stem = if named {
+            format!("{stem} {label}")
         } else {
-            base.clone()
+            stem.clone()
         };
-        let path = dir.join(name);
-        let pass_peak = write_take_wav(&take, range.clone(), &path, sample_rate)?;
-        peak = peak.max(pass_peak);
-        let start_ticks = {
-            let project = engine.project.lock();
-            project
-                .tempo_map
-                .samples_to_tick(*start, sample_rate as f64)
-        };
-        files.push(TakePass {
-            path: path.to_string_lossy().to_string(),
-            start_samples: *start,
-            start_ticks,
-            seconds: range.len() as f64 / 2.0 / sample_rate.max(1) as f64,
-            peak: pass_peak,
-        });
+        let several = take.passes.iter().filter(|(_, r)| !r.is_empty()).count() > 1;
+        let mut files = Vec::new();
+        for (i, (start, range)) in take.passes.iter().enumerate() {
+            if range.is_empty() {
+                continue;
+            }
+            let path = if several {
+                free_name(&dir, &format!("{source_stem} pass {}", i + 1))
+            } else {
+                free_name(&dir, &source_stem)
+            };
+            let pass_peak = write_take_wav(&take.file, range.clone(), &path, sample_rate)?;
+            peak = peak.max(pass_peak);
+            let start_ticks = {
+                let project = engine.project.lock();
+                project
+                    .tempo_map
+                    .samples_to_tick(*start, sample_rate as f64)
+            };
+            files.push(TakePass {
+                path: path.to_string_lossy().to_string(),
+                start_samples: *start,
+                start_ticks,
+                seconds: range.len() as f64 / 2.0 / sample_rate.max(1) as f64,
+                peak: pass_peak,
+            });
+        }
+        per_source.push(files);
     }
 
-    let last = files.last().cloned();
+    let by_track = track_sources
+        .into_iter()
+        .filter_map(|(id, source)| {
+            let k = takes.iter().position(|t| t.source == source)?;
+            Some((id, per_source[k].clone()))
+        })
+        .collect();
+    let first = per_source.into_iter().next().unwrap_or_default();
+    let last = first.last().cloned();
     Ok(RecordedTake {
         path: last.as_ref().map(|p| p.path.clone()),
-        seconds: files.iter().map(|p| p.seconds).sum(),
+        seconds: first.iter().map(|p| p.seconds).sum(),
         peak,
         truncated,
-        passes: files,
+        passes: first,
+        by_track,
     })
 }
 
@@ -384,6 +460,31 @@ mod take_name_tests {
         assert_eq!(r.spec().sample_format, hound::SampleFormat::Int);
         let got: Vec<i32> = r.samples::<i32>().map(|s| s.unwrap()).collect();
         assert_eq!(got, vec![4_194_304, -4_194_304, -8_388_607, 8_388_607]);
+    }
+
+    /// With two inputs recorded at once, each file says which input it is,
+    /// and a name already taken gets a number instead of being overwritten.
+    #[test]
+    fn each_input_s_take_is_named_after_it() {
+        let mut p = hardwave_project::Project::default();
+        let mut t = hardwave_project::Track::new_audio("bus".into(), "Drum: bus".into());
+        t.armed = false;
+        p.tracks.push(t);
+        let ch =
+            |first, mono| RecordSource::Interface(hardwave_project::InputChannel { first, mono });
+        assert_eq!(source_label(&p, &ch(0, true)), "In 1");
+        assert_eq!(source_label(&p, &ch(2, false)), "In 3-4");
+        assert_eq!(
+            source_label(&p, &RecordSource::Track("bus".into())),
+            "Drum_ bus",
+            "no characters a file name cannot hold"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let first = free_name(dir.path(), "Take In 1");
+        assert!(first.ends_with("Take In 1.wav"));
+        std::fs::write(&first, b"x").unwrap();
+        assert!(free_name(dir.path(), "Take In 1").ends_with("Take In 1 (2).wav"));
     }
 
     #[test]
@@ -489,9 +590,21 @@ pub fn toggle_recording(state: State<AppState>) -> Result<Option<RecordedTake>, 
     let was_recording = engine.transport.recording.load(Ordering::Relaxed);
 
     if !was_recording {
-        // Armed tracks that ask for different inputs cannot share the one
-        // recording; say so rather than give them all one of the inputs.
-        engine.project.lock().record_source()?;
+        // Every input the armed tracks ask for records at once, each to a
+        // take of its own, up to a limit; past it, say so rather than leave
+        // some of them out.
+        let wanted = engine
+            .project
+            .lock()
+            .record_sources(engine.default_input())
+            .len();
+        let most = hardwave_engine::input_node::MAX_RECORD_SOURCES;
+        if wanted > most {
+            return Err(format!(
+                "The armed tracks ask for {wanted} different inputs; up to {most} record at once. \
+                 Disarm some, or give them the same input."
+            ));
+        }
         // Begin: arm the InputNode tap and remember where we started so
         // the resulting clip gets placed at the right timeline position.
         engine.transport.recording.store(true, Ordering::Relaxed);

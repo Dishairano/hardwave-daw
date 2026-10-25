@@ -2,7 +2,16 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::tempo::TempoMap;
-use crate::track::{Track, TrackId};
+use crate::track::{InputChannel, Track, TrackId};
+
+/// Where an armed track's recording comes from.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RecordSource {
+    /// An input of the audio interface.
+    Interface(InputChannel),
+    /// Another track's output, a bus or the master: resampling.
+    Track(TrackId),
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMetadata {
@@ -557,37 +566,40 @@ impl Project {
         self.tracks.iter().find(|t| t.id == id)
     }
 
-    /// What a recording captures: none for the audio interface, or the
-    /// track whose output the armed tracks record. There is one recording
-    /// at a time, so armed tracks that ask for different sources are refused
-    /// rather than all given one of them.
-    pub fn record_source(&self) -> Result<Option<TrackId>, String> {
-        // A source that is the track itself, or a track since deleted,
-        // falls back to the interface.
-        let mut sources = self
-            .tracks
-            .iter()
-            .filter(|t| {
-                t.armed
-                    && t.kind.is_audio_bearing()
-                    && !matches!(t.kind, crate::track::TrackKind::Midi)
-            })
-            .map(|t| {
-                t.input_source
-                    .clone()
-                    .filter(|s| *s != t.id && self.tracks.iter().any(|o| o.id == *s))
-            });
-        let Some(first) = sources.next() else {
-            return Ok(None);
-        };
-        if sources.any(|s| s != first) {
-            return Err(
-                "The armed tracks record from different inputs. Record them one at a time, \
-                 or give them the same input."
-                    .to_string(),
-            );
+    /// What an armed track records: an input of the audio interface, or
+    /// another track's output. `default` is the input chosen in Audio
+    /// settings, for a track that has not picked one of its own. A source
+    /// that is the track itself, or a track since deleted, falls back to
+    /// the interface.
+    pub fn record_source_of(&self, track: &Track, default: InputChannel) -> RecordSource {
+        match track
+            .input_source
+            .as_ref()
+            .filter(|s| **s != track.id && self.tracks.iter().any(|o| o.id == **s))
+        {
+            Some(id) => RecordSource::Track(id.clone()),
+            None => RecordSource::Interface(track.input_channel.unwrap_or(default)),
         }
-        Ok(first)
+    }
+
+    /// The armed audio tracks, which record when recording starts.
+    pub fn record_armed(&self) -> impl Iterator<Item = &Track> {
+        self.tracks.iter().filter(|t| {
+            t.armed && t.kind.is_audio_bearing() && !matches!(t.kind, crate::track::TrackKind::Midi)
+        })
+    }
+
+    /// Everything a recording captures at once, each source once, in the
+    /// order of the tracks: two tracks on the same input share one take.
+    pub fn record_sources(&self, default: InputChannel) -> Vec<RecordSource> {
+        let mut sources: Vec<RecordSource> = Vec::new();
+        for t in self.record_armed() {
+            let source = self.record_source_of(t, default);
+            if !sources.contains(&source) {
+                sources.push(source);
+            }
+        }
+        sources
     }
 
     pub fn track_mut(&mut self, id: &str) -> Option<&mut Track> {
@@ -1151,8 +1163,17 @@ mod tests {
 
 #[cfg(test)]
 mod record_source_tests {
-    use super::Project;
-    use crate::track::Track;
+    use super::{Project, RecordSource};
+    use crate::track::{InputChannel, Track};
+
+    const DEFAULT: InputChannel = InputChannel {
+        first: 0,
+        mono: false,
+    };
+
+    fn ch(first: u16, mono: bool) -> InputChannel {
+        InputChannel { first, mono }
+    }
 
     fn song(sources: &[(&str, Option<&str>, bool)]) -> Project {
         let mut p = Project::default();
@@ -1166,12 +1187,16 @@ mod record_source_tests {
     }
 
     #[test]
-    fn nothing_armed_or_the_interface_records_the_interface() {
-        assert_eq!(song(&[]).record_source(), Ok(None));
-        assert_eq!(song(&[("a", None, true)]).record_source(), Ok(None));
+    fn nothing_armed_records_nothing_and_an_armed_track_the_interface() {
+        assert!(song(&[]).record_sources(DEFAULT).is_empty());
         assert_eq!(
-            song(&[("a", Some("master"), false)]).record_source(),
-            Ok(None),
+            song(&[("a", None, true)]).record_sources(DEFAULT),
+            vec![RecordSource::Interface(DEFAULT)]
+        );
+        assert!(
+            song(&[("a", Some("master"), false)])
+                .record_sources(DEFAULT)
+                .is_empty(),
             "an unarmed track's input does not count"
         );
     }
@@ -1179,29 +1204,56 @@ mod record_source_tests {
     #[test]
     fn an_armed_track_can_record_the_master_or_a_bus() {
         assert_eq!(
-            song(&[("a", Some("master"), true)]).record_source(),
-            Ok(Some("master".into()))
+            song(&[("a", Some("master"), true)]).record_sources(DEFAULT),
+            vec![RecordSource::Track("master".into())]
         );
         assert_eq!(
-            song(&[("bus", None, false), ("a", Some("bus"), true)]).record_source(),
-            Ok(Some("bus".into()))
+            song(&[("bus", None, false), ("a", Some("bus"), true)]).record_sources(DEFAULT),
+            vec![RecordSource::Track("bus".into())]
         );
     }
 
     #[test]
     fn itself_or_a_deleted_track_falls_back_to_the_interface() {
-        assert_eq!(song(&[("a", Some("a"), true)]).record_source(), Ok(None));
-        assert_eq!(song(&[("a", Some("gone"), true)]).record_source(), Ok(None));
+        assert_eq!(
+            song(&[("a", Some("a"), true)]).record_sources(DEFAULT),
+            vec![RecordSource::Interface(DEFAULT)]
+        );
+        assert_eq!(
+            song(&[("a", Some("gone"), true)]).record_sources(DEFAULT),
+            vec![RecordSource::Interface(DEFAULT)]
+        );
+    }
+
+    /// One stereo input for every armed track was the limit: a singer and a
+    /// guitar could not be recorded at once onto two tracks.
+    #[test]
+    fn armed_tracks_on_different_inputs_each_record_their_own() {
+        let mut p = song(&[
+            ("vox", None, true),
+            ("gtr", None, true),
+            ("re", Some("master"), true),
+        ]);
+        p.track_mut("vox").unwrap().input_channel = Some(ch(0, true));
+        p.track_mut("gtr").unwrap().input_channel = Some(ch(1, true));
+        assert_eq!(
+            p.record_sources(DEFAULT),
+            vec![
+                RecordSource::Interface(ch(0, true)),
+                RecordSource::Interface(ch(1, true)),
+                RecordSource::Track("master".into()),
+            ]
+        );
     }
 
     #[test]
-    fn armed_tracks_asking_for_different_inputs_are_refused() {
-        assert!(song(&[("a", Some("master"), true), ("b", None, true)])
-            .record_source()
-            .is_err());
+    fn tracks_on_the_same_input_share_one_source() {
+        let mut p = song(&[("a", None, true), ("b", None, true)]);
+        p.track_mut("b").unwrap().input_channel = Some(DEFAULT);
         assert_eq!(
-            song(&[("a", Some("master"), true), ("b", Some("master"), true)]).record_source(),
-            Ok(Some("master".into()))
+            p.record_sources(DEFAULT),
+            vec![RecordSource::Interface(DEFAULT)],
+            "the Audio settings input picked explicitly is the same input"
         );
     }
 }

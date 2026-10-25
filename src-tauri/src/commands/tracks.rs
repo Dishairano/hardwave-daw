@@ -53,6 +53,10 @@ pub struct TrackInfo {
     output_bus: Option<String>,
     #[serde(rename = "inputSource")]
     input_source: Option<String>,
+    /// Which interface input the track records; none for the one chosen in
+    /// Audio settings.
+    #[serde(rename = "inputChannel")]
+    input_channel: Option<hardwave_project::InputChannel>,
     insert_count: usize,
     inserts: Vec<InsertInfo>,
     /// Automation lanes attached to this track. Surfaced to the UI so
@@ -197,6 +201,7 @@ pub(crate) fn track_to_info(
         filter_resonance: t.filter_resonance,
         output_bus: t.output_bus.clone(),
         input_source: t.input_source.clone(),
+        input_channel: t.input_channel,
         insert_count: t.inserts.len(),
         inserts,
         automation_lanes: t
@@ -1312,6 +1317,51 @@ pub fn set_track_input_source(
     }
     engine.rebuild_graph();
     Ok(())
+}
+
+/// Which of the interface's inputs a track records: one channel or a pair,
+/// or none for the input chosen in Audio settings. Picking an input of the
+/// interface also stops the track recording another channel's output, in
+/// the same undo step.
+#[tauri::command]
+pub fn set_track_input_channel(
+    state: State<AppState>,
+    track_id: String,
+    channel: Option<hardwave_project::InputChannel>,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    {
+        let engine = state.engine.lock();
+        if engine.transport.recording.load(Ordering::Relaxed) {
+            return Err("Stop recording before changing what a track records".into());
+        }
+        if let Some(pick) = channel {
+            let available = engine.input_channel_count();
+            if pick.end() > available {
+                return Err(format!(
+                    "The audio interface has {available} inputs, so input {} is not there",
+                    pick.first + 1
+                ));
+            }
+        }
+    }
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    {
+        let mut project = engine.project.lock();
+        if let Some(track) = project.track_mut(&track_id) {
+            track.input_channel = channel;
+            track.input_source = None;
+        }
+    }
+    engine.rebuild_graph();
+    Ok(())
+}
+
+/// How many inputs the audio interface has, for the Records menu.
+#[tauri::command]
+pub fn get_input_channel_count(state: State<AppState>) -> u16 {
+    state.engine.lock().input_channel_count()
 }
 
 #[tauri::command]

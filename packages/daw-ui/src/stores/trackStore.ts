@@ -63,6 +63,18 @@ function nextTrackName(tracks: { kind: string }[]): string | null {
 
 export type FadeCurveKind = 'linear' | 'equal_power' | 's_curve' | 'logarithmic'
 
+/** One input of the audio interface: a channel, or a pair starting there (counting from 0). */
+export interface InputChannel {
+  first: number
+  mono: boolean
+}
+
+/** `In 3`, `In 1-2`, or the Audio settings input when none is picked. */
+export function inputLabel(channel: InputChannel | null | undefined): string {
+  if (!channel) return 'the audio input'
+  return channel.mono ? `In ${channel.first + 1}` : `In ${channel.first + 1}-${channel.first + 2}`
+}
+
 export interface ClipInfo {
   id: string
   name: string
@@ -167,6 +179,8 @@ export interface TrackInfo {
   outputBus: string | null
   /** What this track records when armed: null for the audio interface, or a bus or the master. */
   inputSource?: string | null
+  /** Which interface input it records: a channel or a pair counting from 0, or null for the one chosen in Audio settings. */
+  inputChannel?: InputChannel | null
   insert_count: number
   inserts: InsertInfo[]
   automationLanes: AutomationLaneInfo[]
@@ -326,6 +340,7 @@ interface TrackState {
   setTrackFilterResonance: (id: string, resonance: number) => Promise<void>
   setTrackOutputBus: (id: string, outputBus: string | null) => Promise<void>
   setTrackInputSource: (id: string, source: string | null) => Promise<void>
+  setTrackInputChannel: (id: string, channel: InputChannel | null) => Promise<void>
   trackHeights: Record<string, number>
   setTrackHeight: (id: string, height: number) => void
 
@@ -848,6 +863,12 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const name = tracks.find(t => t.id === id)?.name ?? 'track'
     const sourceName = source ? (tracks.find(t => t.id === source)?.name ?? 'Master') : 'the audio input'
     await mut('set_track_input_source', { trackId: id, source }, `"${name}" records ${sourceName}`)
+    await get().refreshTrack(id)
+  },
+
+  setTrackInputChannel: async (id, channel) => {
+    const name = get().tracks.find(t => t.id === id)?.name ?? 'track'
+    await mut('set_track_input_channel', { trackId: id, channel }, `"${name}" records ${inputLabel(channel)}`)
     await get().refreshTrack(id)
   },
 

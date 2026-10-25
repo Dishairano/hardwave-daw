@@ -1,10 +1,11 @@
-//! InputNode — streams live audio from the input device into the graph.
+//! Live audio from the input device into the graph.
 //!
-//! Holds the consumer side of a lock-free ring buffer that `hardwave-audio-io`'s
-//! input callback pushes interleaved stereo samples into. On each process()
-//! call the node drains one block worth of frames (or silence, when the ring
-//! is empty or detached) and writes them to its stereo outputs, so armed
-//! tracks hear themselves through their FX chain.
+//! `hardwave-audio-io`'s input callback pushes every channel of the
+//! interface, frame by frame, into a lock-free ring. Each block the
+//! [`InputHub`] drains one block of frames from it into a shared buffer,
+//! and an [`InputNode`] per input in use (a channel, or a pair) reads its
+//! channels from there to its stereo outputs, so armed tracks hear
+//! themselves through their FX chain and each records its own input.
 
 use parking_lot::Mutex;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -15,7 +16,72 @@ use std::sync::Arc;
 
 use crate::graph::{AudioNode, ProcessContext};
 
-pub type SharedInputConsumer = Arc<Mutex<Option<rtrb::Consumer<f32>>>>;
+use hardwave_project::InputChannel;
+
+/// The engine's end of the input ring: frames of `width` channels, and the
+/// input chosen in Audio settings when the stream started.
+pub struct InputRing {
+    pub consumer: rtrb::Consumer<f32>,
+    pub width: u16,
+    pub default: InputChannel,
+}
+
+impl InputRing {
+    /// Stereo from the first two channels: what a ring was before the
+    /// interface's other inputs were passed through.
+    pub fn stereo(consumer: rtrb::Consumer<f32>) -> Self {
+        Self {
+            consumer,
+            width: 2,
+            default: InputChannel {
+                first: 0,
+                mono: false,
+            },
+        }
+    }
+}
+
+pub type SharedInputConsumer = Arc<Mutex<Option<InputRing>>>;
+
+/// The most inputs that record at once, each with its own take.
+pub const MAX_RECORD_SOURCES: usize = 8;
+
+/// One capture per input that can record at once. The first is the one
+/// recording has always used; the others are for more armed tracks on
+/// other inputs.
+pub fn capture_set() -> Arc<[Arc<CaptureTap>]> {
+    (0..MAX_RECORD_SOURCES)
+        .map(|_| Arc::new(CaptureTap::default()))
+        .collect::<Vec<_>>()
+        .into()
+}
+
+/// One block of the interface's input, every channel, interleaved: what
+/// the hub drained this block and every input node reads.
+pub struct InputBlock {
+    width: usize,
+    frames: usize,
+    data: Vec<f32>,
+    /// Frames still waiting in the ring before this block was drained.
+    queue_frames: u32,
+}
+
+pub type SharedInputBlock = Arc<parking_lot::RwLock<InputBlock>>;
+
+impl InputBlock {
+    /// Room for `max_frames` frames of the widest input stream, made here so
+    /// the audio thread never grows it.
+    pub fn shared(max_frames: usize) -> SharedInputBlock {
+        let cap =
+            max_frames.max(1) * hardwave_audio_io::AudioDeviceManager::MAX_INPUT_CHANNELS as usize;
+        Arc::new(parking_lot::RwLock::new(Self {
+            width: 2,
+            frames: 0,
+            data: Vec::with_capacity(cap),
+            queue_frames: 0,
+        }))
+    }
+}
 
 /// Where a recording is written while it happens: straight to disk.
 ///
@@ -539,22 +605,91 @@ impl Drop for TakeFile {
     }
 }
 
-pub struct InputNode {
+/// Drains the input ring once per block into the shared [`InputBlock`].
+/// It makes no sound itself; the input nodes read what it drained, and an
+/// edge from it to each of them makes sure it runs first.
+pub struct InputHub {
     consumer: SharedInputConsumer,
+    block: SharedInputBlock,
+}
+
+impl InputHub {
+    pub fn new(consumer: SharedInputConsumer, block: SharedInputBlock) -> Self {
+        Self { consumer, block }
+    }
+}
+
+impl AudioNode for InputHub {
+    fn name(&self) -> &str {
+        "Input hub"
+    }
+
+    fn process(
+        &mut self,
+        _inputs: &[&[f32]],
+        outputs: &mut [Vec<f32>],
+        _midi_in: &[hardwave_midi::MidiEvent],
+        _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+        _ctx: &ProcessContext,
+    ) {
+        let buf_size = outputs.first().map(|o| o.len()).unwrap_or(0);
+        for ch in outputs.iter_mut() {
+            ch.fill(0.0);
+        }
+        // try_lock and try_write so a UI-thread swap of the ring can never
+        // stall the audio callback; a missed block reads as silence.
+        let Some(mut block) = self.block.try_write() else {
+            return;
+        };
+        block.frames = 0;
+        let Some(mut guard) = self.consumer.try_lock() else {
+            return;
+        };
+        let Some(ring) = guard.as_mut() else {
+            return;
+        };
+        let width = ring.width.max(1) as usize;
+        let frames = buf_size.min(block.data.capacity() / width);
+        block.width = width;
+        block.frames = frames;
+        // Frames waiting, as frames: how long the oldest one has been
+        // queued before this block reads it.
+        block.queue_frames = (ring.consumer.slots() / width) as u32;
+        // Within the capacity made up front, so this never allocates.
+        block.data.clear();
+        block.data.resize(frames * width, 0.0);
+        // Whole frames only, so the channels never slip against each other;
+        // what the ring does not have yet stays silent.
+        let ready = (ring.consumer.slots() / width).min(frames) * width;
+        if let Ok(chunk) = ring.consumer.read_chunk(ready) {
+            let (a, b) = chunk.as_slices();
+            block.data[..a.len()].copy_from_slice(a);
+            block.data[a.len()..a.len() + b.len()].copy_from_slice(b);
+            chunk.commit_all();
+        }
+    }
+}
+
+/// One input of the interface (a channel, or a pair) as a stereo signal,
+/// read from what the hub drained this block. Armed tracks on this input
+/// hear it through their chain, and its capture records it.
+pub struct InputNode {
+    block: SharedInputBlock,
+    pick: InputChannel,
     capture: Option<Arc<CaptureTap>>,
 }
 
 impl InputNode {
-    pub fn new(consumer: SharedInputConsumer) -> Self {
+    pub fn new(block: SharedInputBlock, pick: InputChannel) -> Self {
         Self {
-            consumer,
+            block,
+            pick,
             capture: None,
         }
     }
 
-    /// Attach a capture tap. When the tap's `recording` flag is true and
-    /// the input ring is producing samples, every block the node drains
-    /// is also pushed to the tap's buffer. Detach by calling
+    /// Attach a capture tap. When the tap's `recording` flag is true, every
+    /// block the node reads is also written to the tap. Detach by calling
     /// `set_capture(None)`.
     pub fn set_capture(&mut self, capture: Option<Arc<CaptureTap>>) {
         self.capture = capture;
@@ -622,31 +757,30 @@ impl AudioNode for InputNode {
         if buf_size == 0 || outputs.len() < 2 {
             return;
         }
-
-        // try_lock so a UI-thread rebuild that's swapping the consumer can
-        // never stall the audio callback. If we can't lock (or no consumer
-        // is attached), the outputs stay at silence for this block.
-        let mut guard = match self.consumer.try_lock() {
-            Some(g) => g,
-            None => return,
+        let Some(block) = self.block.try_read() else {
+            return;
         };
-        let cons = match guard.as_mut() {
-            Some(c) => c,
-            None => return,
-        };
-
         if let Some(cap) = &self.capture {
-            // Stereo samples waiting, as frames: how long the oldest one has
-            // been queued before this block reads it.
-            cap.note_queue_frames((cons.slots() / 2) as u32);
+            cap.note_queue_frames(block.queue_frames);
         }
 
+        // The chosen channel and the one after it, or that one channel on
+        // both sides when the input is mono. An input past the interface's
+        // last channel is silent.
+        let width = block.width.max(1);
+        let first = self.pick.first as usize;
+        let second = if self.pick.mono { first } else { first + 1 };
         let (left, rest) = outputs.split_at_mut(1);
         let (right, _) = rest.split_at_mut(1);
-        for (l_out, r_out) in left[0].iter_mut().zip(right[0].iter_mut()).take(buf_size) {
-            *l_out = cons.pop().unwrap_or(0.0);
-            *r_out = cons.pop().unwrap_or(0.0);
+        if first < width {
+            let second = if second < width { second } else { first };
+            let frames = block.frames.min(buf_size);
+            for (f, frame) in block.data.chunks_exact(width).take(frames).enumerate() {
+                left[0][f] = frame[first];
+                right[0][f] = frame[second];
+            }
         }
+        drop(block);
 
         // Recording tap: the block just produced goes into the capture
         // ring, interleaved L, R, L, R, and from there to the take's file.
@@ -655,6 +789,126 @@ impl AudioNode for InputNode {
                 cap.write_block(&left[0], &right[0], buf_size, ctx.position_samples);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    fn ctx(frames: u32) -> ProcessContext {
+        ProcessContext {
+            sample_rate: 48_000.0,
+            buffer_size: frames,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: 0,
+            position_ticks: 0,
+            playing: false,
+        }
+    }
+
+    fn run(node: &mut dyn AudioNode, frames: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut outputs = vec![vec![0.0; frames]; 4];
+        let mut midi = Vec::new();
+        node.process(&[], &mut outputs, &[], &mut midi, &ctx(frames as u32));
+        (outputs[0].clone(), outputs[1].clone())
+    }
+
+    /// Four channels from the interface: 0.1, 0.2, 0.3 and 0.4 on inputs
+    /// 1 to 4, for two frames.
+    fn four_channel_block() -> SharedInputBlock {
+        let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+        for _ in 0..2 {
+            for v in [0.1, 0.2, 0.3, 0.4] {
+                producer.push(v).unwrap();
+            }
+        }
+        let ring: SharedInputConsumer = Arc::new(Mutex::new(Some(InputRing {
+            consumer,
+            width: 4,
+            default: InputChannel {
+                first: 0,
+                mono: false,
+            },
+        })));
+        let block = InputBlock::shared(16);
+        let mut hub = InputHub::new(ring, Arc::clone(&block));
+        run(&mut hub, 2);
+        block
+    }
+
+    #[test]
+    fn each_input_reads_its_own_channels() {
+        let block = four_channel_block();
+        let pair = |first, mono| InputChannel { first, mono };
+        let mut a = InputNode::new(Arc::clone(&block), pair(0, false));
+        let mut b = InputNode::new(Arc::clone(&block), pair(2, false));
+        let mut c = InputNode::new(Arc::clone(&block), pair(1, true));
+        assert_eq!(run(&mut a, 2), (vec![0.1, 0.1], vec![0.2, 0.2]));
+        assert_eq!(run(&mut b, 2), (vec![0.3, 0.3], vec![0.4, 0.4]));
+        assert_eq!(
+            run(&mut c, 2),
+            (vec![0.2, 0.2], vec![0.2, 0.2]),
+            "a mono input on both sides"
+        );
+    }
+
+    #[test]
+    fn an_input_the_interface_does_not_have_is_silent() {
+        let block = four_channel_block();
+        let mut gone = InputNode::new(
+            block,
+            InputChannel {
+                first: 6,
+                mono: false,
+            },
+        );
+        assert_eq!(run(&mut gone, 2), (vec![0.0, 0.0], vec![0.0, 0.0]));
+    }
+
+    #[test]
+    fn frames_the_hub_did_not_drain_are_silent() {
+        let block = four_channel_block();
+        let mut a = InputNode::new(
+            block,
+            InputChannel {
+                first: 3,
+                mono: true,
+            },
+        );
+        let (l, _) = run(&mut a, 4);
+        assert_eq!(
+            l,
+            vec![0.4, 0.4, 0.0, 0.0],
+            "two frames came in, four were asked for"
+        );
+    }
+
+    /// The hub asks for more than the ring holds: what is there is read in
+    /// whole frames and the rest of the block is silence.
+    #[test]
+    fn a_short_ring_fills_what_it_has() {
+        let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+        for v in [0.5, 0.6, 0.5] {
+            producer.push(v).unwrap();
+        }
+        let ring: SharedInputConsumer = Arc::new(Mutex::new(Some(InputRing::stereo(consumer))));
+        let block = InputBlock::shared(16);
+        let mut hub = InputHub::new(ring, Arc::clone(&block));
+        run(&mut hub, 3);
+        let mut a = InputNode::new(
+            block,
+            InputChannel {
+                first: 0,
+                mono: false,
+            },
+        );
+        assert_eq!(
+            run(&mut a, 3),
+            (vec![0.5, 0.0, 0.0], vec![0.6, 0.0, 0.0]),
+            "the half frame waits for its other half"
+        );
     }
 }
 

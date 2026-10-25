@@ -229,6 +229,9 @@ pub struct AudioDeviceManager {
     input_active_sample_rate: u32,
     /// Buffer size the input stream is running at.
     input_active_buffer_size: u32,
+    /// Channels in every frame the input stream pushes to the engine: all
+    /// of the interface's inputs, so each track can record its own.
+    input_active_channels: u16,
     /// Latency the running streams report.
     latency: Arc<StreamLatency>,
     /// The device's rate over the engine's (1, 2 or 4): when Windows has an
@@ -295,6 +298,7 @@ impl AudioDeviceManager {
             input_monitor_producer: Arc::new(PlMutex::new(None)),
             input_active_sample_rate: 0,
             input_active_buffer_size: 0,
+            input_active_channels: 0,
             latency: Arc::new(StreamLatency::default()),
             output_factor: 1,
             negotiated_rate: 0,
@@ -807,18 +811,7 @@ impl AudioDeviceManager {
         let device = self.resolve_input_device()?;
         let wanted = self.input_channels.clamp(1, 2);
         let in_offset = self.input_channel_offset;
-        // Recording from input 3 means opening the interface wide enough
-        // to reach it. Without an offset nothing changes: two channels,
-        // the way it always was.
-        let device_in_channels = device
-            .default_input_config()
-            .map(|c| c.channels())
-            .unwrap_or(wanted);
-        let channels = if in_offset == 0 {
-            wanted
-        } else {
-            device_in_channels.max(in_offset + wanted)
-        };
+        let channels = Self::input_width(&device, in_offset + wanted);
         let sample_rate = self.negotiate_input_rate(&device);
 
         // Prefer the output buffer size so the monitor latency tracks the
@@ -875,12 +868,29 @@ impl AudioDeviceManager {
                     // dropped when the ring is full (consumer has gone away
                     // or isn't draining fast enough).
                     let mut producer_guard = monitor_producer.try_lock();
-                    let mut producer = producer_guard.as_mut().and_then(|g| g.as_mut());
+                    let producer = producer_guard.as_mut().and_then(|g| g.as_mut());
 
-                    // Interleaved, however wide the interface is: the take
-                    // is the chosen channel and the one after it, or that
-                    // one channel twice when the take is mono.
+                    // Every channel of every frame goes to the engine, so
+                    // each armed track can take its own input from it.
+                    // Whole frames only: a frame cut in half would shift
+                    // every channel after it.
                     let step = chans.max(1) as usize;
+                    if let Some(p) = producer {
+                        let n = (data.len() / step).min(p.slots() / step) * step;
+                        if n > 0 {
+                            if let Ok(mut chunk) = p.write_chunk(n) {
+                                let (a, b) = chunk.as_mut_slices();
+                                let split = a.len();
+                                a.copy_from_slice(&data[..split]);
+                                b.copy_from_slice(&data[split..n]);
+                                chunk.commit_all();
+                            }
+                        }
+                    }
+
+                    // The level meter reads the input chosen in Audio
+                    // settings: that channel and the one after it, or that
+                    // one channel twice when it is mono.
                     let mut i = 0;
                     while i + first < data.len() {
                         let l = data[i + first];
@@ -896,10 +906,6 @@ impl AudioDeviceManager {
                         }
                         if ar > max_r {
                             max_r = ar;
-                        }
-                        if let Some(ref mut p) = producer {
-                            let _ = p.push(l);
-                            let _ = p.push(r);
                         }
                         i += step;
                     }
@@ -919,7 +925,39 @@ impl AudioDeviceManager {
         self.input_stream = Some(stream);
         self.input_active_sample_rate = sample_rate;
         self.input_active_buffer_size = buffer_size;
+        self.input_active_channels = channels;
         Ok(())
+    }
+
+    /// The most channels an input stream opens, whatever the interface
+    /// offers: past this the ring between the input and the engine grows
+    /// for inputs nobody records.
+    pub const MAX_INPUT_CHANNELS: u16 = 64;
+
+    /// How wide the input stream opens: every input the interface has by
+    /// default, and at least far enough to reach `reach` (the end of the
+    /// input chosen in Audio settings).
+    fn input_width(device: &cpal::Device, reach: u16) -> u16 {
+        let offered = device
+            .default_input_config()
+            .map(|c| c.channels())
+            .unwrap_or(reach);
+        offered.max(reach).clamp(1, Self::MAX_INPUT_CHANNELS)
+    }
+
+    /// How wide the next input stream will be, so the ring it fills can be
+    /// sized before it starts.
+    pub fn planned_input_channels(&self) -> u16 {
+        let reach = self.input_channel_offset + self.input_channels.clamp(1, 2);
+        self.resolve_input_device()
+            .map(|d| Self::input_width(&d, reach))
+            .unwrap_or(reach)
+    }
+
+    /// Channels in each frame the running input stream pushes (0 when
+    /// stopped).
+    pub fn input_active_channels(&self) -> u16 {
+        self.input_active_channels
     }
 
     /// Stop the input stream if running. Resets the peak tracker so the next
@@ -932,6 +970,7 @@ impl AudioDeviceManager {
         self.latency.set_input(0);
         self.input_active_sample_rate = 0;
         self.input_active_buffer_size = 0;
+        self.input_active_channels = 0;
     }
 
     pub fn is_input_running(&self) -> bool {
