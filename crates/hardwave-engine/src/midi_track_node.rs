@@ -212,6 +212,11 @@ pub struct MidiTrackNode {
     /// Notes still held when the playhead went back, let go at the top of
     /// the next block (reused, so the audio thread does not allocate).
     jump_offs: Vec<u8>,
+    /// Keys held down on the keyboard right now, as it sent them, so they
+    /// can be let go when the keyboard moves to another track.
+    live_held: [bool; 128],
+    /// Let go of every held keyboard note at the top of the next block.
+    release_live: bool,
     /// Active built-in-synth voices (polyphonic — a chord plays as many
     /// voices). Live notes carry `off_sample = None` (released by an
     /// explicit NoteOff); clip notes carry their scheduled release sample.
@@ -329,6 +334,8 @@ impl MidiTrackNode {
             last_block_end: 0,
             jumped: false,
             jump_offs: Vec::with_capacity(64),
+            live_held: [false; 128],
+            release_live: false,
             // The whole pool up front: it grew on the audio thread the
             // first time a chord played.
             voices: Vec::with_capacity(MAX_VOICES),
@@ -739,6 +746,10 @@ impl MidiTrackNode {
 }
 
 impl AudioNode for MidiTrackNode {
+    fn release_live_notes(&mut self) {
+        self.release_live = true;
+    }
+
     fn set_chain_parameter(&mut self, slot_id: &str, param_id: u32, value: f64) {
         // Modulation moves a parameter 0..1, as automation does.
         self.chain
@@ -821,6 +832,27 @@ impl AudioNode for MidiTrackNode {
         // FL Studio / Logic / Ableton all let you audition a soft synth
         // from a controller without engaging Play; this branch is what
         // makes that work.
+        // The keyboard moved to another track: its held voices here are let
+        // go, as the releases will not arrive.
+        if self.release_live {
+            for v in self.voices.iter_mut() {
+                if v.off_sample.is_none() && v.stage != EnvStage::Idle {
+                    v.stage = EnvStage::Release;
+                }
+            }
+        }
+        for ev in midi_in {
+            match *ev {
+                hardwave_midi::MidiEvent::NoteOn { note, velocity, .. } if velocity > 0.0 => {
+                    self.live_held[(note & 0x7F) as usize] = true;
+                }
+                hardwave_midi::MidiEvent::NoteOn { note, .. }
+                | hardwave_midi::MidiEvent::NoteOff { note, .. } => {
+                    self.live_held[(note & 0x7F) as usize] = false;
+                }
+                _ => {}
+            }
+        }
         for ev in midi_in {
             match *ev {
                 hardwave_midi::MidiEvent::NoteOn {
@@ -1230,6 +1262,26 @@ impl AudioNode for MidiTrackNode {
         // or sampler) can generate audio from them. Timing is block-local.
         let mut block_midi = std::mem::take(&mut self.block_midi_scratch);
         block_midi.clear();
+        // A hosted instrument is told the same: every held key released,
+        // and the sustain pedal up, before anything else this block.
+        if std::mem::take(&mut self.release_live) {
+            for note in 0..128u8 {
+                if std::mem::take(&mut self.live_held[note as usize]) {
+                    block_midi.push(hardwave_midi::MidiEvent::NoteOff {
+                        timing: 0,
+                        channel: 0,
+                        note,
+                        velocity: 0.0,
+                    });
+                }
+            }
+            block_midi.push(hardwave_midi::MidiEvent::ControlChange {
+                timing: 0,
+                channel: 0,
+                cc: 64,
+                value: 0.0,
+            });
+        }
         block_midi.extend_from_slice(midi_in);
         // Held notes the playhead jumped away from end here, first.
         for &note in &self.jump_offs {
@@ -1598,6 +1650,46 @@ mod tests {
         assert!(
             peak > 0.0,
             "live NoteOn should produce audible output, got peak={peak}"
+        );
+    }
+
+    /// A chord held on the keyboard when another track is picked: the
+    /// release goes to the new track, so this one has to let go itself.
+    /// It used to sound until the song was reloaded.
+    #[test]
+    fn a_held_note_is_let_go_when_the_keyboard_moves_away() {
+        let mut node = make_node();
+        let ctx = ctx_at(48_000.0, 256, 0, false);
+        let inputs: [&[f32]; 0] = [];
+        let mut midi_out = Vec::new();
+        let press = vec![MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.9,
+        }];
+        node.process(
+            &inputs,
+            &mut block_outputs(256),
+            &press,
+            &mut midi_out,
+            &ctx,
+        );
+        assert!(node
+            .voices
+            .iter()
+            .any(|v| v.stage != EnvStage::Release && v.stage != EnvStage::Idle));
+        node.release_live_notes();
+        node.process(&inputs, &mut block_outputs(256), &[], &mut midi_out, &ctx);
+        assert!(
+            node.voices
+                .iter()
+                .all(|v| v.stage == EnvStage::Release || v.stage == EnvStage::Idle),
+            "every held voice is released"
+        );
+        assert!(
+            !node.live_held[60],
+            "and the key is no longer counted as held"
         );
     }
 
