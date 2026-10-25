@@ -100,6 +100,14 @@ impl Default for TrackMeterState {
 }
 
 impl TrackMeterState {
+    /// Show silence: for a track with no node, which no block will update.
+    pub fn park(&self) {
+        self.peak_db_l.store(-120.0, Ordering::Relaxed);
+        self.peak_db_r.store(-120.0, Ordering::Relaxed);
+        self.pre_fader_peak_db.store(-120.0, Ordering::Relaxed);
+        self.rms_db.store(-120.0, Ordering::Relaxed);
+    }
+
     /// Set the mix the node plays at: linear volume, pan -1..1, width 0..2.
     pub fn set_mix(&self, volume_linear: f32, pan: f32, width: f32) {
         use std::sync::atomic::Ordering::{Relaxed, Release};
@@ -559,7 +567,9 @@ pub struct TrackNode {
     gain_ramp: GainRamp,
     /// Positive = delay, negative = advance. Bounded against delay_capacity.
     delay_samples: i32,
-    /// Delay line for the left/right channels (ring buffer, zero-initialized).
+    /// Delay line for the left/right channels (ring buffer, zero-initialized),
+    /// made only for a track that has a delay: every track used to carry
+    /// 100 ms of it, made and zeroed for all 500 tracks at every rebuild.
     delay_buf_l: Vec<f32>,
     delay_buf_r: Vec<f32>,
     delay_write_pos: usize,
@@ -648,8 +658,8 @@ impl TrackNode {
             width_applied: 1.0,
             gain_ramp: GainRamp::default(),
             delay_samples: 0,
-            delay_buf_l: vec![0.0; TRACK_DELAY_CAPACITY],
-            delay_buf_r: vec![0.0; TRACK_DELAY_CAPACITY],
+            delay_buf_l: Vec::new(),
+            delay_buf_r: Vec::new(),
             delay_write_pos: 0,
             cached_buffers: Vec::new(),
             meter,
@@ -703,6 +713,10 @@ impl TrackNode {
         // in a streaming graph without lookahead, and is normally achieved by delaying
         // the other tracks instead.
         self.delay_samples = samples.clamp(0, max) as i32;
+        if self.delay_samples > 0 && self.delay_buf_l.is_empty() {
+            self.delay_buf_l = vec![0.0; TRACK_DELAY_CAPACITY];
+            self.delay_buf_r = vec![0.0; TRACK_DELAY_CAPACITY];
+        }
     }
 
     /// Update the clip list. Called from the engine thread (not the audio thread)
@@ -1325,7 +1339,7 @@ impl AudioNode for TrackNode {
         // Order is deliberate: delay first so the shifted signal feeds the rest of
         // the chain, then L/R swap, then polarity flip, then M/S separation.
 
-        if self.delay_samples > 0 {
+        if self.delay_samples > 0 && !self.delay_buf_l.is_empty() {
             let cap = self.delay_buf_l.len();
             let delay = self.delay_samples as usize;
             let (out_left, out_rest) = outputs.split_at_mut(1);
