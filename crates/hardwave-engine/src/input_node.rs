@@ -630,9 +630,18 @@ impl AudioNode for InputHub {
         outputs: &mut [Vec<f32>],
         _midi_in: &[hardwave_midi::MidiEvent],
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
-        _ctx: &ProcessContext,
+        ctx: &ProcessContext,
     ) {
-        let buf_size = outputs.first().map(|o| o.len()).unwrap_or(0);
+        // The block's real length: the graph's buffers are always the
+        // largest block, and a driver often hands over less (480 frames of
+        // a 512 hint, or the rest of a split block). Reading the whole
+        // buffer drained input the next block needed and wrote silence
+        // into every take.
+        let buf_size = outputs
+            .first()
+            .map(|o| o.len())
+            .unwrap_or(0)
+            .min(ctx.buffer_size as usize);
         for ch in outputs.iter_mut() {
             ch.fill(0.0);
         }
@@ -750,7 +759,16 @@ impl AudioNode for InputNode {
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
         ctx: &ProcessContext,
     ) {
-        let buf_size = outputs.first().map(|o| o.len()).unwrap_or(0);
+        // The block's real length: the graph's buffers are always the
+        // largest block, and a driver often hands over less (480 frames of
+        // a 512 hint, or the rest of a split block). Reading the whole
+        // buffer drained input the next block needed and wrote silence
+        // into every take.
+        let buf_size = outputs
+            .first()
+            .map(|o| o.len())
+            .unwrap_or(0)
+            .min(ctx.buffer_size as usize);
         for ch in outputs.iter_mut() {
             ch.fill(0.0);
         }
@@ -813,6 +831,44 @@ mod input_tests {
         let mut midi = Vec::new();
         node.process(&[], &mut outputs, &[], &mut midi, &ctx(frames as u32));
         (outputs[0].clone(), outputs[1].clone())
+    }
+
+    /// The graph's buffers are the largest block; a driver handing over 3
+    /// frames into buffers of 8 must have 3 frames read from the ring and
+    /// written to the take, not 8.
+    #[test]
+    fn a_short_block_reads_and_records_only_its_own_frames() {
+        let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+        for v in [0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5] {
+            producer.push(v).unwrap();
+        }
+        let ring: SharedInputConsumer = Arc::new(Mutex::new(Some(InputRing::stereo(consumer))));
+        let block = InputBlock::shared(8);
+        let mut hub = InputHub::new(Arc::clone(&ring), Arc::clone(&block));
+        let mut node = InputNode::new(
+            Arc::clone(&block),
+            InputChannel {
+                first: 0,
+                mono: false,
+            },
+        );
+        let tap = Arc::new(CaptureTap::default());
+        tap.arm(48_000, 1);
+        tap.recording.store(true, Ordering::Relaxed);
+        node.set_capture(Some(Arc::clone(&tap)));
+        let mut midi = Vec::new();
+        let mut buffers = vec![vec![0.0; 8]; 4];
+        hub.process(&[], &mut buffers, &[], &mut midi, &ctx(3));
+        let mut outputs = vec![vec![0.0; 8]; 4];
+        node.process(&[], &mut outputs, &[], &mut midi, &ctx(3));
+        assert_eq!(&outputs[0][..3], &[0.1, 0.2, 0.3]);
+        assert_eq!(
+            ring.lock().as_ref().unwrap().consumer.slots(),
+            4,
+            "two frames are left for the next block"
+        );
+        tap.recording.store(false, Ordering::Relaxed);
+        assert_eq!(tap.take().len(), 6, "the take got three frames, not eight");
     }
 
     /// Four channels from the interface: 0.1, 0.2, 0.3 and 0.4 on inputs
