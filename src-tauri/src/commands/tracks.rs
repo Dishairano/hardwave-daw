@@ -1003,6 +1003,8 @@ pub fn toggle_arm(state: State<AppState>, track_id: String) {
         }
     }
     engine.rebuild_graph();
+    drop(engine);
+    state.engine.lock().follow_armed_inputs();
 }
 
 #[tauri::command]
@@ -1316,6 +1318,8 @@ pub fn set_track_input_source(
         }
     }
     engine.rebuild_graph();
+    drop(engine);
+    state.engine.lock().follow_armed_inputs();
     Ok(())
 }
 
@@ -1355,6 +1359,8 @@ pub fn set_track_input_channel(
         }
     }
     engine.rebuild_graph();
+    drop(engine);
+    state.engine.lock().follow_armed_inputs();
     Ok(())
 }
 

@@ -235,12 +235,12 @@ pub struct InputMeterSnapshot {
 
 #[tauri::command]
 pub fn start_input_monitoring(state: State<AppState>) -> Result<(), String> {
-    state.engine.lock().start_input_monitoring()
+    state.engine.lock().start_input_monitoring_by_hand()
 }
 
 #[tauri::command]
 pub fn stop_input_monitoring(state: State<AppState>) {
-    state.engine.lock().stop_input_monitoring();
+    state.engine.lock().stop_input_monitoring_by_hand();
 }
 
 #[tauri::command]
