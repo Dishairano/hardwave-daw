@@ -640,8 +640,8 @@ pub fn cancel_recording(state: State<AppState>) {
     if !was_recording {
         return;
     }
-    // Drain and drop — same path as the regular stop, just no WAV write.
-    let _ = engine.stop_capture();
+    // Stop and remove the take's files, without reading them back.
+    engine.discard_capture();
 }
 
 #[tauri::command]
