@@ -758,6 +758,18 @@ impl DawEngine {
         self.capture.take()
     }
 
+    /// Throw the take away: every capture stops and its file is removed,
+    /// without reading a sample of it back. Cancelling used to read the
+    /// whole take into memory first, gigabytes for a long one, only to drop
+    /// it.
+    pub fn discard_capture(&self) {
+        self.stop_captures();
+        self.record_sources.lock().clear();
+        for tap in self.captures.iter() {
+            drop(tap.finish());
+        }
+    }
+
     /// Finish every capture of the take: for each input recorded, the
     /// take's file and each loop pass in it as a range of samples with the
     /// timeline position it starts at.
@@ -6465,6 +6477,26 @@ mod recording_latency_tests {
             engine.recording_latency().total_frames,
             0,
             "a large negative offset clamps at zero rather than moving takes later than played"
+        );
+    }
+
+    /// Cancelling a take removes its file and leaves nothing to finish.
+    #[test]
+    fn a_discarded_take_leaves_no_file() {
+        let engine = DawEngine::new();
+        let dir = std::env::temp_dir().join(format!("hw-discard-{}", std::process::id()));
+        engine.set_capture_dir(dir.clone());
+        engine.start_capture();
+        let block = vec![0.5_f32; 256];
+        engine.capture.write_test_block_at(&block, &block, 256, 0);
+        engine.discard_capture();
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .map(|d| d.filter_map(|e| e.ok()).collect())
+            .unwrap_or_default();
+        assert!(left.is_empty(), "no take file left behind: {left:?}");
+        assert!(
+            engine.stop_capture_passes().is_empty(),
+            "nothing to finish after"
         );
     }
 
