@@ -814,8 +814,17 @@ impl DawEngine {
         let passes = ranges
             .into_iter()
             .enumerate()
-            .map(|(i, mut range)| {
-                let mut start = if i == 0 { first } else { loop_start };
+            .map(|(i, (mut range, played_at))| {
+                // Each pass starts where it was played: the loop start for a
+                // loop, but also wherever a jump took the playhead (a
+                // timecode master, a Link session, a clock master's song
+                // position). Every pass after the first used to be put at
+                // the loop start, loop or not.
+                let mut start = if i == 0 {
+                    first
+                } else {
+                    played_at.unwrap_or(loop_start)
+                };
                 let mut end = if looping && loop_end > loop_start {
                     loop_end
                 } else {
@@ -4628,7 +4637,10 @@ impl EngineCallback {
             // repeat, so without this a second pass reads as more notes in
             // the first one.
             let abs = self.transport.position();
-            if self.transport.recording.load(Relaxed) {
+            // Only blocks that play count: while Link holds the start, the
+            // playhead sits still and then moves back a little to land on
+            // the beat, which is not a loop pass.
+            if self.transport.recording.load(Relaxed) && playing {
                 let previous = self.record_last_pos.swap(abs, Relaxed);
                 if previous != u64::MAX && abs < previous {
                     self.record_pass.fetch_add(1, Relaxed);
@@ -6451,6 +6463,38 @@ mod recording_latency_tests {
             0,
             "a large negative offset clamps at zero rather than moving takes later than played"
         );
+    }
+
+    /// A jump back with no loop (a timecode master locating, a Link session
+    /// jumping) starts a new pass where the playhead went. Every pass after
+    /// the first was put at the loop start, loop or not, so the second half
+    /// of such a take landed at bar 1.
+    #[test]
+    fn a_pass_after_a_jump_lands_where_it_was_played() {
+        let engine = DawEngine::new();
+        engine.audio_prefs().set_record_offset_ms(-1000);
+        assert_eq!(engine.recording_latency().total_frames, 0);
+        engine
+            .transport
+            .loop_start
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        engine.transport.set_position(96_000);
+        engine.start_capture();
+        let block = vec![0.5_f32; 256];
+        engine
+            .capture
+            .write_test_block_at(&block, &block, 256, 96_000);
+        engine
+            .capture
+            .write_test_block_at(&block, &block, 256, 96_256);
+        // The master located back to 48 000.
+        engine
+            .capture
+            .write_test_block_at(&block, &block, 256, 48_000);
+        let passes = engine.stop_capture_passes();
+        assert_eq!(passes.len(), 2);
+        assert_eq!(passes[0].0, 96_000);
+        assert_eq!(passes[1].0, 48_000, "not the loop start (0)");
     }
 
     #[test]
