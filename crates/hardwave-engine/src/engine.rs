@@ -1680,7 +1680,11 @@ impl DawEngine {
                     .transport
                     .bpm
                     .load(std::sync::atomic::Ordering::Relaxed);
-                *slot = Some(crate::link::LinkSession::start(self.transport.clone(), bpm));
+                *slot = Some(crate::link::LinkSession::start(
+                    self.transport.clone(),
+                    bpm,
+                    self.audio_device.latency(),
+                ));
             }
         } else {
             *slot = None;
@@ -2401,6 +2405,8 @@ struct EngineCallback {
     /// Shared with `DawEngine.captures`. Forwarded into the input nodes and
     /// record taps each rebuild so a recording survives graph rebuilds.
     captures: Arc<[Arc<CaptureTap>]>,
+    /// Keeps the playhead on a Link session's beat.
+    link_follow: crate::link::PhaseFollower,
     /// One block of every interface input, drained by the input hub and
     /// read by each input node. Made here, at the largest block size, so
     /// the audio thread never grows it.
@@ -2688,6 +2694,7 @@ impl EngineCallback {
             meters_parked: false,
             captures,
             input_block: InputBlock::shared(buffer_size as usize),
+            link_follow: crate::link::PhaseFollower::default(),
             graph_latency_samples,
             insert_command_rx,
             insert_graveyard_tx,
@@ -4311,7 +4318,46 @@ impl EngineCallback {
             }
         }
 
-        let playing = self.transport.is_playing();
+        let mut playing = self.transport.is_playing();
+        // Link: with others in the session, play waits for the session to
+        // reach the playhead's place in the bar, and the playhead is kept on
+        // the session's beat after that. Not during a count-in, which is
+        // ours alone.
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let counting_in = self.transport.count_in_remaining.load(Relaxed) > 0;
+            let (num, den) =
+                crate::transport::unpack_time_sig(self.transport.time_sig.load(Relaxed));
+            let quantum = num.max(1) as f64 * 4.0 / den.max(1) as f64;
+            let sr = self.sample_rate as f64;
+            let position = self.transport.position();
+            let project = &self.project;
+            let action = self.link_follow.block(
+                &self.transport.link,
+                playing && !counting_in,
+                || {
+                    project.try_lock().map(|p| {
+                        p.tempo_map.samples_to_tick(position, sr) as f64 / hardwave_midi::PPQ as f64
+                    })
+                },
+                quantum,
+                self.transport.bpm.load(Relaxed),
+                sr,
+                num_frames,
+            );
+            match action {
+                crate::link::LinkAction::Keep => {}
+                crate::link::LinkAction::Hold => playing = false,
+                crate::link::LinkAction::Shift(samples) => {
+                    let moved = if samples >= 0 {
+                        position.saturating_add(samples as u64)
+                    } else {
+                        position.saturating_sub(samples.unsigned_abs())
+                    };
+                    self.transport.set_position(moved);
+                }
+            }
+        }
         // When transport is stopped AND nothing is monitoring live input,
         // the graph can only produce silence — skip processing to save CPU.
         if !playing && !self.has_monitored_input {
