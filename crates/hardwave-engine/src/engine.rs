@@ -163,6 +163,34 @@ pub type PluginStateSnapshotSlot = Arc<Mutex<Option<PluginStateSnapshotSender>>>
 /// range of the take's samples it is.
 pub type TakePasses = Vec<(u64, std::ops::Range<usize>)>;
 
+/// Why the audio input did not open, as something a person can act on.
+/// Windows answers "Access is denied" when its privacy settings keep
+/// desktop programs off the microphone, which covers every audio input.
+fn input_open_error(e: &str) -> String {
+    if e.contains("0x80070005") || e.contains("Access is denied") {
+        "Windows does not let the DAW use the audio input. Turn on Settings > Privacy & \
+         security > Microphone > Let desktop apps access your microphone, then arm the \
+         track again."
+            .to_string()
+    } else {
+        format!("The audio input could not be opened: {e}")
+    }
+}
+
+#[cfg(test)]
+mod input_open_error_tests {
+    #[test]
+    fn a_privacy_refusal_says_where_to_allow_it() {
+        let m = super::input_open_error(
+            "Stream error: A backend-specific error has occurred: Access is denied. (0x80070005)",
+        );
+        assert!(m.contains("Let desktop apps access your microphone"), "{m}");
+        assert!(
+            super::input_open_error("no device").starts_with("The audio input could not be opened")
+        );
+    }
+}
+
 /// One input's take when recording stops: what it recorded, its file, and
 /// its loop passes.
 pub struct SourceTake {
@@ -1778,8 +1806,9 @@ impl DawEngine {
     /// The input only ran while the monitor switch in Audio settings was
     /// on, so arming a track and recording gave a silent take unless that
     /// switch had been found first. An input the person opened themselves
-    /// is left open.
-    pub fn follow_armed_inputs(&mut self) {
+    /// is left open. An input that will not open says why, in words that
+    /// say what to do: it was only logged, and the take came out silent.
+    pub fn follow_armed_inputs(&mut self) -> Result<(), String> {
         let needed = self
             .project
             .lock()
@@ -1790,11 +1819,17 @@ impl DawEngine {
         if needed && !running {
             match self.start_input_monitoring() {
                 Ok(()) => self.input_opened_for_arm = true,
-                Err(e) => log::warn!("could not open the input for an armed track: {e}"),
+                Err(e) => {
+                    log::warn!("could not open the input for an armed track: {e}");
+                    // A stream that failed to start leaves nothing to read.
+                    self.stop_input_monitoring();
+                    return Err(input_open_error(&e));
+                }
             }
         } else if !needed && running && self.input_opened_for_arm {
             self.stop_input_monitoring();
         }
+        Ok(())
     }
 
     /// The monitor switch in Audio settings: the input stays open until
@@ -1811,7 +1846,7 @@ impl DawEngine {
     /// records the interface keeps it open, or its take would be silent.
     pub fn stop_input_monitoring_by_hand(&mut self) {
         self.stop_input_monitoring();
-        self.follow_armed_inputs();
+        let _ = self.follow_armed_inputs();
     }
 
     /// Stop the input monitor stream and detach the ring buffer.

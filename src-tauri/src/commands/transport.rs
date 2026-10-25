@@ -605,12 +605,12 @@ pub fn toggle_recording(state: State<AppState>) -> Result<Option<RecordedTake>, 
                  Disarm some, or give them the same input."
             ));
         }
+        // An armed track that records the interface needs its input open,
+        // or the take is silent: refuse, and say why, rather than record it.
+        engine.follow_armed_inputs()?;
         // Begin: arm the InputNode tap and remember where we started so
         // the resulting clip gets placed at the right timeline position.
         engine.transport.recording.store(true, Ordering::Relaxed);
-        // An armed track that records the interface needs its input open,
-        // or the take is silent.
-        engine.follow_armed_inputs();
         // The take streams to disk as it is played, next to where it will
         // end up, so a long take fills the disk the recordings live on.
         if let Ok(dir) = recordings_dir(&engine) {

@@ -8,7 +8,7 @@ pub fn undo(state: State<AppState>) -> bool {
     if ok {
         engine.rebuild_graph();
         // An arm can come back or go away with the step.
-        engine.follow_armed_inputs();
+        let _ = engine.follow_armed_inputs();
     }
     ok
 }
@@ -20,7 +20,7 @@ pub fn redo(state: State<AppState>) -> bool {
     if ok {
         engine.rebuild_graph();
         // An arm can come back or go away with the step.
-        engine.follow_armed_inputs();
+        let _ = engine.follow_armed_inputs();
     }
     ok
 }
