@@ -18,6 +18,10 @@ use crate::graph::{AudioNode, ProcessContext};
 
 use hardwave_project::InputChannel;
 
+/// One loop pass of a take: its samples in the take's file, and where on
+/// the timeline it starts (none for the first pass).
+pub type PassRange = (Range<usize>, Option<u64>);
+
 /// The engine's end of the input ring: frames of `width` channels, and the
 /// input chosen in Audio settings when the stream started.
 pub struct InputRing {
@@ -124,6 +128,8 @@ pub struct CaptureTap {
     /// take can be split into one clip per pass. Fixed size so the audio
     /// thread never allocates; passes past the limit stay in the last one.
     pass_starts: [AtomicUsize; MAX_LOOP_PASSES],
+    /// Where on the timeline each pass after the first starts, in samples.
+    pass_positions: [AtomicI64; MAX_LOOP_PASSES],
     pass_count: AtomicUsize,
     /// Playhead at the previous block, to notice the jump back at a loop.
     last_block_start: AtomicU64,
@@ -170,6 +176,7 @@ impl Default for CaptureTap {
             punch_in: AtomicU64::new(0),
             punch_out: AtomicU64::new(u64::MAX),
             pass_starts: std::array::from_fn(|_| AtomicUsize::new(0)),
+            pass_positions: std::array::from_fn(|_| AtomicI64::new(0)),
             pass_count: AtomicUsize::new(0),
             last_block_start: AtomicU64::new(0),
             latency: AtomicU64::new(0),
@@ -253,29 +260,48 @@ impl CaptureTap {
     }
 
     /// Finish the take and say where each loop pass lies in its file, in
-    /// samples, in the order they were played. One range when the loop never
-    /// wrapped. Nothing is read back into memory.
-    pub fn take_pass_ranges(&self) -> Option<(TakeFile, Vec<Range<usize>>)> {
+    /// samples, in the order they were played, with where on the timeline
+    /// each pass after the first starts (none for the first, which starts
+    /// at `first_position`). One range when the loop never wrapped. Nothing
+    /// is read back into memory.
+    pub fn take_pass_ranges(&self) -> Option<(TakeFile, Vec<PassRange>)> {
         let count = self
             .pass_count
             .swap(0, Ordering::Relaxed)
             .min(MAX_LOOP_PASSES);
-        let starts: Vec<usize> = (0..count)
-            .map(|i| self.pass_starts[i].load(Ordering::Relaxed))
+        let starts: Vec<(usize, u64)> = (0..count)
+            .map(|i| {
+                (
+                    self.pass_starts[i].load(Ordering::Relaxed),
+                    self.pass_positions[i].load(Ordering::Relaxed).max(0) as u64,
+                )
+            })
             .collect();
         let file = self.finish()?;
         let total = file.samples;
-        let mut bounds: Vec<usize> = starts.into_iter().map(|b| b.min(total)).collect();
-        bounds.retain(|&b| b > 0 && b < total);
-        bounds.dedup();
+        // A pass with nothing in it gives way to the one after it, which
+        // keeps its own position.
+        let mut bounds: Vec<(usize, u64)> = Vec::with_capacity(starts.len());
+        for (b, at) in starts {
+            let b = b.min(total);
+            if b == 0 || b >= total {
+                continue;
+            }
+            match bounds.last_mut() {
+                Some(last) if last.0 == b => *last = (b, at),
+                _ => bounds.push((b, at)),
+            }
+        }
         let mut ranges = Vec::with_capacity(bounds.len() + 1);
         let mut from = 0;
-        for b in bounds {
-            ranges.push(from..b);
+        let mut from_at = None;
+        for (b, at) in bounds {
+            ranges.push((from..b, from_at));
             from = b;
+            from_at = Some(at);
         }
-        ranges.push(from..total);
-        ranges.retain(|r| !r.is_empty());
+        ranges.push((from..total, from_at));
+        ranges.retain(|(r, _)| !r.is_empty());
         Some((file, ranges))
     }
 
@@ -287,7 +313,7 @@ impl CaptureTap {
         };
         ranges
             .into_iter()
-            .map(|r| file.read(r).unwrap_or_default())
+            .map(|(r, _)| file.read(r).unwrap_or_default())
             .collect()
     }
 
@@ -418,10 +444,10 @@ impl CaptureTap {
             // loop still splits per pass.
             if self.pending.load(Ordering::Relaxed) > 0 {
                 // A loop shorter than the latency: close the pass now.
-                self.mark_pass();
+                self.mark_pass(block_start as i64 - latency as i64);
             }
             if latency == 0 {
-                self.mark_pass();
+                self.mark_pass(block_start as i64);
             } else {
                 self.pending.store(latency, Ordering::Relaxed);
             }
@@ -438,7 +464,7 @@ impl CaptureTap {
                 let left_over = pending - span as u64;
                 self.pending.store(left_over, Ordering::Relaxed);
                 if left_over == 0 {
-                    self.mark_pass();
+                    self.mark_pass(block_start as i64 + i as i64 - latency as i64);
                     self.eff_next.store(
                         block_start as i64 + i as i64 - latency as i64,
                         Ordering::Relaxed,
@@ -456,11 +482,13 @@ impl CaptureTap {
         }
     }
 
-    /// Note that the samples written from here on belong to a new pass.
-    fn mark_pass(&self) {
+    /// Note that the samples written from here on belong to a new pass,
+    /// which starts at timeline position `at`.
+    fn mark_pass(&self, at: i64) {
         let n = self.pass_count.load(Ordering::Relaxed);
         if n < MAX_LOOP_PASSES {
             self.pass_starts[n].store(self.written.load(Ordering::Relaxed), Ordering::Relaxed);
+            self.pass_positions[n].store(at.max(0), Ordering::Relaxed);
             self.pass_count.store(n + 1, Ordering::Relaxed);
         }
     }
@@ -734,7 +762,7 @@ impl AudioNode for RecordTapNode {
         for ch in outputs.iter_mut() {
             ch.fill(0.0);
         }
-        if !self.capture.recording.load(Ordering::Relaxed) {
+        if !self.capture.recording.load(Ordering::Relaxed) || !ctx.playing {
             return;
         }
         let (Some(left), Some(right)) = (inputs.first(), inputs.get(1)) else {
@@ -803,7 +831,9 @@ impl AudioNode for InputNode {
         // Recording tap: the block just produced goes into the capture
         // ring, interleaved L, R, L, R, and from there to the take's file.
         if let Some(cap) = &self.capture {
-            if cap.recording.load(Ordering::Relaxed) {
+            // Only while the song plays: while Link holds the start the
+            // playhead stands still, and what came in then has no place.
+            if cap.recording.load(Ordering::Relaxed) && ctx.playing {
                 cap.write_block(&left[0], &right[0], buf_size, ctx.position_samples);
             }
         }
@@ -822,7 +852,7 @@ mod input_tests {
             time_sig: (4, 4),
             position_samples: 0,
             position_ticks: 0,
-            playing: false,
+            playing: true,
         }
     }
 
