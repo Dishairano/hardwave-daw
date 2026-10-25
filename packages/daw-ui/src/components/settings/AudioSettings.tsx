@@ -11,6 +11,7 @@ import { AUTOSAVE_OPTIONS, useAutosavePrefsStore } from '../../stores/autosavePr
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { RecordingLatencyRow } from './RecordingLatency'
 import { TakeFormatRow } from './TakeFormatRow'
+import { MtcFollowRow } from './MtcFollowRow'
 import { PluginLatencyRow } from './PluginLatencyRow'
 import { ReleaseInBackgroundRow } from './ReleaseInBackgroundRow'
 import { useMetronomeStore } from '../../stores/metronomeStore'
@@ -1095,6 +1096,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   {midiSyncEnabled ? 'On' : 'Off'}
                 </button>
               </div>
+              <MtcFollowRow disabled={midiOpen.length === 0} />
             </div>
 
             {/* MIDI Outputs — clock send to external hardware */}

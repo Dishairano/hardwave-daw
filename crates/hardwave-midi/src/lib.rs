@@ -4,6 +4,7 @@ pub mod generators;
 pub mod groove;
 pub mod input;
 pub mod midi_fx;
+pub mod mtc;
 pub mod osc;
 pub mod output;
 pub mod recording;

@@ -402,6 +402,8 @@ permissions = [
   "allow-get-midi-desired-ports",
   "allow-set-midi-clock-sync-enabled",
   "allow-get-midi-clock-sync-status",
+  "allow-set-mtc-follow",
+  "allow-get-mtc-status",
   "allow-inject-midi-event",
   "allow-dump-midi-capture",
   "allow-capture-recent-midi",
