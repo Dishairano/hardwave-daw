@@ -39,6 +39,10 @@ pub struct ClockSyncSnapshot {
     /// The song position a clock master sent (Song Position Pointer), in
     /// sixteenths: where its Continue carries on from.
     pub song_position: Option<u16>,
+    /// The last of Start (0xFA), Continue (0xFB) and Stop (0xFC) since the
+    /// last snapshot: a master sends Stop, the position and Continue in one
+    /// burst when it jumps, and what counts is the one it ended on.
+    pub last_transport: Option<u8>,
     /// Where a timecode master is, in seconds, and when that was read: the
     /// latest complete set of quarter frames.
     pub mtc_running_at: Option<(f64, Instant)>,
@@ -68,6 +72,7 @@ struct SharedState {
     pending_continue: bool,
     pending_stop: bool,
     song_position: Option<u16>,
+    last_transport: Option<u8>,
     quarter_frames: crate::mtc::QuarterFrames,
     mtc_running_at: Option<(f64, Instant)>,
     mtc_locate: Option<f64>,
@@ -383,6 +388,7 @@ impl MidiInputManager {
             pending_continue: state.pending_continue,
             pending_stop: state.pending_stop,
             song_position: state.song_position.take(),
+            last_transport: state.last_transport.take(),
             mtc_running_at: state.mtc_running_at.take(),
             mtc_locate: state.mtc_locate.take(),
             mtc_last_frame: state.mtc_last_frame,
@@ -445,6 +451,7 @@ fn handle_input_bytes(bytes: &[u8], context: &PortContext) {
         Some(0xFA) => {
             let mut state = shared.lock();
             state.pending_start = true;
+            state.last_transport = Some(0xFA);
             state.tick_intervals.clear();
             state.last_tick_at = None;
             state.last_event_at = Some(now);
@@ -452,11 +459,13 @@ fn handle_input_bytes(bytes: &[u8], context: &PortContext) {
         Some(0xFB) => {
             let mut state = shared.lock();
             state.pending_continue = true;
+            state.last_transport = Some(0xFB);
             state.last_event_at = Some(now);
         }
         Some(0xFC) => {
             let mut state = shared.lock();
             state.pending_stop = true;
+            state.last_transport = Some(0xFC);
             state.last_event_at = Some(now);
         }
         // Song Position Pointer: where a clock master's Continue starts.
@@ -700,6 +709,13 @@ mod tests {
             manager.take_clock_sync_snapshot().song_position.is_none(),
             "taken once"
         );
+        // A master jumping: Stop, the position, Continue, in one burst.
+        handle_input_bytes(&[0xFC], &context);
+        handle_input_bytes(&[0xF2, 0x10, 0x00], &context);
+        handle_input_bytes(&[0xFB], &context);
+        let snap = manager.take_clock_sync_snapshot();
+        assert_eq!(snap.last_transport, Some(0xFB), "it ended playing");
+        assert_eq!(snap.song_position, Some(16));
     }
 
     #[test]
