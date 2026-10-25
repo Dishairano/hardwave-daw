@@ -4,6 +4,15 @@ use tauri::State;
 #[tauri::command]
 pub fn undo(state: State<AppState>) -> bool {
     let mut engine = state.engine.lock();
+    // Not while recording: a step that arms or disarms a track would send
+    // inputs into the wrong takes.
+    if engine
+        .transport
+        .recording
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return false;
+    }
     let ok = engine.undo();
     if ok {
         engine.rebuild_graph();
@@ -16,6 +25,15 @@ pub fn undo(state: State<AppState>) -> bool {
 #[tauri::command]
 pub fn redo(state: State<AppState>) -> bool {
     let mut engine = state.engine.lock();
+    // Not while recording: a step that arms or disarms a track would send
+    // inputs into the wrong takes.
+    if engine
+        .transport
+        .recording
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return false;
+    }
     let ok = engine.redo();
     if ok {
         engine.rebuild_graph();

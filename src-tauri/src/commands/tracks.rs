@@ -998,7 +998,18 @@ pub fn set_exclusive_solo(state: State<AppState>, track_id: String) {
 /// input; when that fails the arm stands and the answer says why, so the
 /// interface can tell the person before they record a silent take.
 #[tauri::command]
-pub fn toggle_arm(state: State<AppState>, track_id: String) -> Option<String> {
+pub fn toggle_arm(state: State<AppState>, track_id: String) -> Result<Option<String>, String> {
+    // Which input goes into which take is fixed when recording starts;
+    // arming in the middle sent inputs into the wrong takes.
+    if state
+        .engine
+        .lock()
+        .transport
+        .recording
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return Err("Stop recording before arming or disarming a track".into());
+    }
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
@@ -1009,7 +1020,7 @@ pub fn toggle_arm(state: State<AppState>, track_id: String) -> Option<String> {
     }
     engine.rebuild_graph();
     drop(engine);
-    state.engine.lock().follow_armed_inputs().err()
+    Ok(state.engine.lock().follow_armed_inputs().err())
 }
 
 #[tauri::command]
