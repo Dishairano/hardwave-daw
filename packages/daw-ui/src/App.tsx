@@ -1036,10 +1036,21 @@ export function App() {
     // opened so play() just flips a flag and no audio comes out, no time
     // advances. Bug regressed silently because only test code was
     // invoking start_engine. Wire it on every launch here.
-    invoke('start_engine').catch((err) => {
+    // A sound card that will not open is why a song plays silently, so this
+    // stays on screen with a way out; it used to be a toast that went while
+    // the splash screen was still up.
+    const reportAudioStart = (err: unknown) => {
       console.error('start_engine failed at boot:', err)
-      useNotificationStore.getState().push('error', 'Audio engine failed to start', { detail: String(err) })
-    })
+      useNotificationStore.getState().push('error', 'No sound: the sound card did not open', {
+        detail: String(err),
+        sticky: true,
+        actions: [
+          { label: 'Retry audio', onClick: () => { void invoke('start_engine').catch(reportAudioStart) } },
+          { label: 'Audio settings', onClick: () => setShowAudioSettings(true) },
+        ],
+      })
+    }
+    invoke('start_engine').catch(reportAudioStart)
     // Persisted recording prefs the engine observes (wait-for-input).
     syncWaitForInput()
     fetchTracks().finally(() => setTracksReady(true))

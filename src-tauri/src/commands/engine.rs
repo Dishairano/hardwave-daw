@@ -61,7 +61,55 @@ pub struct AudioConfig {
 
 #[tauri::command]
 pub fn start_engine(state: State<AppState>) -> Result<(), String> {
-    state.engine.lock().start()
+    state
+        .engine
+        .lock()
+        .start()
+        .map_err(|e| audio_start_hint(&e))
+}
+
+/// Why the sound card would not open, in words that say what to do. The
+/// raw message is a Windows error code ("0x8889000A"), which tells nobody
+/// that another program has the card to itself.
+fn audio_start_hint(e: &str) -> String {
+    let lower = e.to_lowercase();
+    let hint = if lower.contains("0x8889000a") || lower.contains("in use") {
+        "Another program is using the sound card on its own (exclusive mode): close it, or turn off \
+         \"Allow applications to take exclusive control\" for this device in the Windows sound settings."
+    } else if lower.contains("0x80070005") || lower.contains("access is denied") {
+        "Windows does not let the DAW use this sound card: check Settings > Privacy & security."
+    } else if lower.contains("0x88890004")
+        || lower.contains("invalidated")
+        || lower.contains("not found")
+        || lower.contains("no such device")
+        || lower.contains("disconnected")
+    {
+        "The sound card is not there any more: plug it back in, or pick another one in Audio settings."
+    } else if lower.contains("0x88890008")
+        || lower.contains("unsupported")
+        || lower.contains("format")
+    {
+        "The sound card does not accept this sample rate or buffer size: pick another in Audio settings."
+    } else {
+        "Pick the sound card again in Audio settings, or try another one."
+    };
+    format!("{hint} ({e})")
+}
+
+#[cfg(test)]
+mod audio_start_hint_tests {
+    #[test]
+    fn a_windows_code_becomes_something_to_do() {
+        let m = super::audio_start_hint(
+            "Stream error: A backend-specific error has occurred: 0x8889000A",
+        );
+        assert!(
+            m.starts_with("Another program is using the sound card"),
+            "{m}"
+        );
+        assert!(m.contains("0x8889000A"), "the code stays, for us");
+        assert!(super::audio_start_hint("whatever").starts_with("Pick the sound card again"));
+    }
 }
 
 #[tauri::command]
