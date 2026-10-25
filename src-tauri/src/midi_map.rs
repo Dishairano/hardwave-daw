@@ -445,6 +445,7 @@ fn apply_surface(
                 }
             }
             engine.lock().rebuild_graph();
+            engine.lock().follow_armed_inputs();
         }
         cs::SurfaceAction::BankLeft | cs::SurfaceAction::BankRight => {
             let count = {

@@ -3,20 +3,24 @@ use tauri::State;
 
 #[tauri::command]
 pub fn undo(state: State<AppState>) -> bool {
-    let engine = state.engine.lock();
+    let mut engine = state.engine.lock();
     let ok = engine.undo();
     if ok {
         engine.rebuild_graph();
+        // An arm can come back or go away with the step.
+        engine.follow_armed_inputs();
     }
     ok
 }
 
 #[tauri::command]
 pub fn redo(state: State<AppState>) -> bool {
-    let engine = state.engine.lock();
+    let mut engine = state.engine.lock();
     let ok = engine.redo();
     if ok {
         engine.rebuild_graph();
+        // An arm can come back or go away with the step.
+        engine.follow_armed_inputs();
     }
     ok
 }

@@ -287,6 +287,10 @@ pub struct DawEngine {
     captures: Arc<[Arc<CaptureTap>]>,
     /// What each capture records in the current or last take, in order.
     record_sources: Mutex<Vec<RecordSource>>,
+    /// The interface's input was opened because a track that records it
+    /// was armed, not by the monitor switch in Audio settings, so it is let
+    /// go again when the last such track is disarmed.
+    input_opened_for_arm: bool,
 
     /// Undo/redo history. Take a snapshot BEFORE mutating the project.
     pub history: Arc<Mutex<History>>,
@@ -368,6 +372,7 @@ impl DawEngine {
             capture: Arc::clone(&captures[0]),
             captures,
             record_sources: Mutex::new(Vec::new()),
+            input_opened_for_arm: false,
             history: Arc::new(Mutex::new(History::new())),
             record_start: std::sync::atomic::AtomicU64::new(0),
             record_pass: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -1767,8 +1772,51 @@ impl DawEngine {
         started
     }
 
+    /// Open the interface's input while an armed track records it, and let
+    /// it go when none does.
+    ///
+    /// The input only ran while the monitor switch in Audio settings was
+    /// on, so arming a track and recording gave a silent take unless that
+    /// switch had been found first. An input the person opened themselves
+    /// is left open.
+    pub fn follow_armed_inputs(&mut self) {
+        let needed = self
+            .project
+            .lock()
+            .record_sources(self.default_input())
+            .iter()
+            .any(|s| matches!(s, RecordSource::Interface(_)));
+        let running = self.audio_device.is_input_running();
+        if needed && !running {
+            match self.start_input_monitoring() {
+                Ok(()) => self.input_opened_for_arm = true,
+                Err(e) => log::warn!("could not open the input for an armed track: {e}"),
+            }
+        } else if !needed && running && self.input_opened_for_arm {
+            self.stop_input_monitoring();
+        }
+    }
+
+    /// The monitor switch in Audio settings: the input stays open until
+    /// switched off, whatever is armed.
+    pub fn start_input_monitoring_by_hand(&mut self) -> Result<(), String> {
+        self.input_opened_for_arm = false;
+        if self.audio_device.is_input_running() {
+            return Ok(());
+        }
+        self.start_input_monitoring()
+    }
+
+    /// Switching the monitor off in Audio settings. An armed track that
+    /// records the interface keeps it open, or its take would be silent.
+    pub fn stop_input_monitoring_by_hand(&mut self) {
+        self.stop_input_monitoring();
+        self.follow_armed_inputs();
+    }
+
     /// Stop the input monitor stream and detach the ring buffer.
     pub fn stop_input_monitoring(&mut self) {
+        self.input_opened_for_arm = false;
         self.audio_device.stop_input_stream();
         self.audio_device.set_input_monitor_producer(None);
         *self.input_consumer.lock() = None;
