@@ -374,6 +374,9 @@ pub enum EngineCommand {
     Transport(TransportCommand),
     /// Rebuild the audio graph from the current project state.
     RebuildGraph,
+    /// Which MIDI tracks hear the keyboard changed (a track was picked):
+    /// set that on the nodes, without rebuilding the graph.
+    RefreshLiveMidi,
 }
 
 impl DawEngine {
@@ -966,6 +969,12 @@ impl DawEngine {
     }
 
     /// Tell the audio thread to rebuild its graph from the current project state.
+    /// Which MIDI tracks hear the keyboard changed: set it on the audio
+    /// thread without rebuilding the graph.
+    pub fn refresh_live_midi(&self) {
+        let _ = self.command_tx.try_send(EngineCommand::RefreshLiveMidi);
+    }
+
     pub fn rebuild_graph(&self) {
         // Kick the bake off in the background and signal the rebuild now.
         // Baking a long stem takes seconds (~16 s for 30 s of stereo), so
@@ -2407,6 +2416,9 @@ struct EngineCallback {
     captures: Arc<[Arc<CaptureTap>]>,
     /// Keeps the playhead on a Link session's beat.
     link_follow: crate::link::PhaseFollower,
+    /// The MIDI tracks' nodes in the current graph, so picking another track
+    /// for the keyboard is set on them without a rebuild.
+    midi_track_nodes: Vec<(String, crate::graph::NodeId)>,
     /// One block of every interface input, drained by the input hub and
     /// read by each input node. Made here, at the largest block size, so
     /// the audio thread never grows it.
@@ -2695,6 +2707,7 @@ impl EngineCallback {
             captures,
             input_block: InputBlock::shared(buffer_size as usize),
             link_follow: crate::link::PhaseFollower::default(),
+            midi_track_nodes: Vec::new(),
             graph_latency_samples,
             insert_command_rx,
             insert_graveyard_tx,
@@ -2777,7 +2790,7 @@ impl EngineCallback {
         if !self.needs_rebuild && !self.deferred_insert_commands.is_empty() {
             let mut parked = std::mem::take(&mut self.deferred_insert_commands);
             for cmd in parked.drain(..) {
-                self.dispatch_one_insert_command(cmd);
+                self.dispatch_one_insert_command(cmd, true);
             }
             // Put the (now empty) original allocation back if nothing
             // re-parked in the meantime; otherwise keep the new pushes.
@@ -2786,11 +2799,16 @@ impl EngineCallback {
             }
         }
         while let Some(cmd) = self.insert_command_rx.try_recv() {
-            self.dispatch_one_insert_command(cmd);
+            self.dispatch_one_insert_command(cmd, false);
         }
     }
 
-    fn dispatch_one_insert_command(&mut self, cmd: crate::insert_chain::InsertCommand) {
+    /// `replay` is a command parked by an earlier block coming round again.
+    fn dispatch_one_insert_command(
+        &mut self,
+        cmd: crate::insert_chain::InsertCommand,
+        replay: bool,
+    ) {
         let sample_rate = self.sample_rate as f64;
         let buffer_size = self.graph.buffer_size_hint();
         // A new song: every node's plug-ins go, and so does whatever was
@@ -2819,15 +2837,27 @@ impl EngineCallback {
         // ends, freeing it to move into apply_insert_command below.
         let node_id = self.track_id_to_node.get(target).copied();
         let Some(node_id) = node_id else {
-            // No node for this track yet. If a rebuild is still pending
-            // (deferred by try_lock contention) the node will appear in
-            // a few blocks — park the command instead of dropping it.
-            // Past capacity we fall back to the old drop-with-warning
-            // behaviour rather than allocating on the audio thread.
+            // No node for this track yet: a rebuild still pending (deferred
+            // by try_lock contention), or an empty insert, which has no node
+            // until something is put on it. A plug-in added to one asks for
+            // the rebuild that gives it a node, and waits for it, parked.
+            // Once round is enough: a command still without a node after the
+            // rebuild has no track to go to.
+            let adds = matches!(cmd, crate::insert_chain::InsertCommand::Add { .. });
+            if adds && !replay {
+                self.needs_rebuild = true;
+            }
             if self.needs_rebuild
+                && !replay
                 && self.deferred_insert_commands.len() < self.deferred_insert_commands.capacity()
             {
                 self.deferred_insert_commands.push(cmd);
+            } else if let crate::insert_chain::InsertCommand::Add { mut slot, .. } = cmd {
+                // Never dropped here: a plug-in is let go off this thread.
+                slot.plugin.deactivate();
+                if let Err(slot) = self.insert_graveyard_tx.try_bury(slot) {
+                    std::mem::forget(slot);
+                }
             } else {
                 log::warn!(
                     "insert chain: no TrackNode for track_id {}; dropping command",
@@ -2963,6 +2993,7 @@ impl EngineCallback {
                 EngineCommand::RebuildGraph => {
                     self.needs_rebuild = true;
                 }
+                EngineCommand::RefreshLiveMidi => self.refresh_live_midi(),
             }
         }
     }
@@ -3321,6 +3352,29 @@ impl EngineCallback {
         regions
     }
 
+    /// Set which MIDI tracks hear the keyboard, on the nodes already built.
+    ///
+    /// Picking a track moves the keyboard to it, and that used to rebuild
+    /// the whole graph on this thread: about 14 ms for a new song's 500
+    /// tracks, longer than a 512-frame block, so every click on a track was
+    /// a click in the sound. This changes one flag per MIDI track.
+    fn refresh_live_midi(&mut self) {
+        let Some(project) = self.project.try_lock() else {
+            self.needs_rebuild = true;
+            return;
+        };
+        let armed_for_input = project.tracks.iter().any(|t| {
+            t.armed && t.monitor_input && !matches!(t.kind, hardwave_project::TrackKind::Master)
+        });
+        let keyboard_track = keyboard_track_ref(&project);
+        for (id, node) in &self.midi_track_nodes {
+            if let Some(track) = project.tracks.iter().find(|t| &t.id == id) {
+                let accepts = hears_keyboard(track, armed_for_input, keyboard_track);
+                self.graph.set_accepts_live_midi(*node, accepts);
+            }
+        }
+    }
+
     fn rebuild_graph(&mut self) {
         // RT-safety: this runs on the audio thread. If the UI currently
         // holds the project or meter-map lock we must NOT block — leave
@@ -3359,6 +3413,7 @@ impl EngineCallback {
         self.graph.clear();
         self.send_edges.clear();
         self.monitor_edges.clear();
+        self.midi_track_nodes.clear();
         // Whether the work is shared across cores is a setting, and a
         // rebuild is where it is picked up. A busy lock means the next
         // rebuild gets it, which is a block or two later at worst.
@@ -3417,6 +3472,21 @@ impl EngineCallback {
             t.armed && t.monitor_input && !matches!(t.kind, hardwave_project::TrackKind::Master)
         });
         let keyboard_track = keyboard_track_of(&project);
+        // Tracks something reaches: another track's output, a send, a MIDI
+        // route. A track nothing reaches and that has nothing of its own is
+        // an empty insert, and gets no node (see `is_placeholder`).
+        let mut reached: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for t in &project.tracks {
+            if let Some(bus) = t.output_bus.as_deref() {
+                reached.insert(bus);
+            }
+            for send in t.sends.iter().filter(|s| s.enabled) {
+                reached.insert(send.target.as_str());
+            }
+            for target in &t.midi_route_to {
+                reached.insert(target.as_str());
+            }
+        }
 
         for track in &project.tracks {
             if !track.kind.is_audio_bearing() {
@@ -3427,6 +3497,15 @@ impl EngineCallback {
                 .entry(track.id.clone())
                 .or_insert_with(|| Arc::new(TrackMeterState::default()))
                 .clone();
+
+            // An empty insert makes no sound, and building its node was most
+            // of a rebuild: a new song has 500 of them, and building them all
+            // took about 14 ms on the audio thread, longer than a block, so
+            // every rebuild was a click. Its meter shows silence.
+            if is_placeholder(track, &reached) && !stashed_chains.contains_key(&track.id) {
+                meter.park();
+                continue;
+            }
 
             // MIDI tracks get an entirely separate node type — a built-in
             // monosynth that converts pre-resolved note schedules into
@@ -3647,9 +3726,9 @@ impl EngineCallback {
                 // A track armed for input hears the keyboard; with none
                 // armed, the keyboard plays the track picked last, so a new
                 // MIDI track still answers a controller without arming.
-                let accepts = (track.armed && track.monitor_input)
-                    || (!armed_for_input && keyboard_track.as_deref() == Some(track.id.as_str()));
+                let accepts = hears_keyboard(track, armed_for_input, keyboard_track.as_deref());
                 self.graph.set_accepts_live_midi(node_id, accepts);
+                self.midi_track_nodes.push((track.id.clone(), node_id));
                 track_id_to_node.insert(track.id.clone(), node_id);
                 continue;
             }
@@ -4717,6 +4796,28 @@ pub fn guard_output(block: &mut [f32]) -> bool {
 /// The MIDI track a keyboard plays when nothing is armed: the one picked
 /// last, if it is still a MIDI track, else the first MIDI track.
 fn keyboard_track_of(project: &hardwave_project::Project) -> Option<String> {
+    keyboard_track_ref(project).map(str::to_string)
+}
+
+/// A track with nothing in it and nothing reaching it: an empty insert of
+/// a new song. It makes no sound, so the graph leaves it out.
+fn is_placeholder(
+    track: &hardwave_project::Track,
+    reached: &std::collections::HashSet<&str>,
+) -> bool {
+    matches!(track.kind, hardwave_project::TrackKind::Audio)
+        && track.clips.is_empty()
+        && track.inserts.is_empty()
+        && track.automation_lanes.is_empty()
+        && track.automation_clips.is_empty()
+        && track.session_slots.iter().all(Option::is_none)
+        && !track.armed
+        && !track.frozen
+        && !reached.contains(track.id.as_str())
+}
+
+/// `keyboard_track_of` without making a String, for the audio thread.
+fn keyboard_track_ref(project: &hardwave_project::Project) -> Option<&str> {
     let is_midi = |id: &str| {
         project
             .tracks
@@ -4725,15 +4826,26 @@ fn keyboard_track_of(project: &hardwave_project::Project) -> Option<String> {
     };
     project
         .keyboard_track
-        .clone()
+        .as_deref()
         .filter(|id| is_midi(id))
         .or_else(|| {
             project
                 .tracks
                 .iter()
                 .find(|t| matches!(t.kind, hardwave_project::TrackKind::Midi))
-                .map(|t| t.id.clone())
+                .map(|t| t.id.as_str())
         })
+}
+
+/// Whether a MIDI track's node hears the keyboard: armed with its input on,
+/// or, with no track armed, the track picked last.
+fn hears_keyboard(
+    track: &hardwave_project::Track,
+    armed_for_input: bool,
+    keyboard_track: Option<&str>,
+) -> bool {
+    (track.armed && track.monitor_input)
+        || (!armed_for_input && keyboard_track == Some(track.id.as_str()))
 }
 
 #[cfg(test)]
@@ -5990,8 +6102,24 @@ mod rt_safety_tests {
     #[test]
     fn a_new_song_takes_the_old_songs_plug_ins_off_shared_track_ids() {
         use crate::insert_chain::{tests::make_gain_slot, InsertCommand};
-        // Two songs both have the mixer insert "insert-001" (a fixed id).
-        let project_arc = Arc::new(Mutex::new(Project::default()));
+        // Two songs both have the mixer insert "insert-001" (a fixed id),
+        // with a plug-in on it, as the song lists every plug-in it has.
+        let with_plugin = |name: &str| {
+            let mut p = Project::default();
+            p.track_mut("insert-001")
+                .unwrap()
+                .inserts
+                .push(hardwave_project::track::PluginSlot {
+                    id: name.into(),
+                    plugin_id: "test.gain".into(),
+                    enabled: true,
+                    state: None,
+                    sidechain_source: None,
+                    wet: 1.0,
+                });
+            p
+        };
+        let project_arc = Arc::new(Mutex::new(with_plugin("old-sampler")));
         let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
         let shared = "insert-001".to_string();
         assert!(cb.track_id_to_node.contains_key(&shared));
@@ -6025,7 +6153,7 @@ mod rt_safety_tests {
         // Opening the new song: clear, swap the song, rebuild, then the new
         // song's own plug-in for the same track id.
         cmd_tx.try_send(InsertCommand::ClearAll).ok().unwrap();
-        *project_arc.lock() = Project::default();
+        *project_arc.lock() = with_plugin("new-synth");
         cb.needs_rebuild = true;
         let (new, _) = make_gain_slot("new-synth", 1.0, true);
         cmd_tx
@@ -6044,10 +6172,69 @@ mod rt_safety_tests {
         );
     }
 
+    /// A new song's empty inserts have no node; a plug-in put on one asks
+    /// for the rebuild that gives it a node, waits for it, and plays.
+    #[test]
+    fn a_plug_in_put_on_an_empty_insert_gets_a_node_and_plays() {
+        use crate::insert_chain::{tests::make_gain_slot, InsertCommand};
+        let project_arc = Arc::new(Mutex::new(Project::default()));
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
+        let id = "insert-007".to_string();
+        assert!(
+            !cb.track_id_to_node.contains_key(&id),
+            "an empty insert has no node"
+        );
+        // The app lists the plug-in in the song, then hands it to the
+        // audio thread.
+        project_arc
+            .lock()
+            .track_mut(&id)
+            .unwrap()
+            .inserts
+            .push(hardwave_project::track::PluginSlot {
+                id: "eq".into(),
+                plugin_id: "test.gain".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 1.0,
+            });
+        let (slot, _) = make_gain_slot("eq", 1.0, true);
+        cmd_tx
+            .try_send(InsertCommand::Add {
+                track_id: id.clone(),
+                slot,
+            })
+            .ok()
+            .unwrap();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        cb.process(&mut out, 256, 2);
+        let node_id = *cb.track_id_to_node.get(&id).expect("the insert got a node");
+        let node = cb.graph.node_mut(node_id).unwrap();
+        let chain = node.take_chain().expect("a chain");
+        assert_eq!(chain.slots.len(), 1, "the plug-in is on it");
+        assert!(cb.deferred_insert_commands.is_empty());
+    }
+
     #[test]
     fn insert_command_for_pending_track_is_parked_not_dropped() {
         let mut project = Project::default();
         let track_id = project.add_audio_track("new track".into());
+        // A track with a plug-in on it, as one getting insert commands has;
+        // an empty one has no node at all.
+        project
+            .track_mut(&track_id)
+            .unwrap()
+            .inserts
+            .push(hardwave_project::track::PluginSlot {
+                id: "slot-x".into(),
+                plugin_id: "test.gain".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 1.0,
+            });
         let project_arc = Arc::new(Mutex::new(project));
         let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
 
@@ -6652,6 +6839,51 @@ mod monitoring_tests {
         assert!(
             heard > 0.4,
             "both inputs are heard through their tracks, got {heard}"
+        );
+    }
+
+    /// How long one rebuild of a new song's graph takes on the audio thread:
+    /// a figure to read, not a pass/fail. Run with --ignored --nocapture.
+    #[test]
+    #[ignore = "a measurement, run by hand"]
+    fn measure_a_new_song_rebuild() {
+        let mut r = rig(Project::default());
+        let mut times = Vec::new();
+        for _ in 0..20 {
+            let t = std::time::Instant::now();
+            r.cb.rebuild_graph();
+            times.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        eprintln!(
+            "REBUILD ms: median {:.2}, max {:.2} (a 512-frame block at 48 kHz is 10.7 ms)",
+            times[10], times[19]
+        );
+
+        // The same song with 60 of its tracks in use, a clip on each.
+        let (mut song, pool) = resampling_song();
+        let clip = song.tracks.iter().find(|t| t.id == "beat").unwrap().clips[0].clone();
+        for t in song
+            .tracks
+            .iter_mut()
+            .filter(|t| t.name.starts_with("Insert "))
+            .take(60)
+        {
+            let mut c = clip.clone();
+            c.track_id = t.id.clone();
+            t.clips.push(c);
+        }
+        let mut r = rig_with(song, pool);
+        let mut times = Vec::new();
+        for _ in 0..20 {
+            let t = std::time::Instant::now();
+            r.cb.rebuild_graph();
+            times.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        eprintln!(
+            "REBUILD 60 used ms: median {:.2}, max {:.2}",
+            times[10], times[19]
         );
     }
 }

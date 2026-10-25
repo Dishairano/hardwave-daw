@@ -732,8 +732,10 @@ pub fn set_keyboard_track(state: State<AppState>, track_id: Option<String>) {
         project.keyboard_track = track_id;
         changed
     };
+    // A flag on the MIDI tracks' nodes, not a rebuild of the graph: a
+    // rebuild on every click of a track was heard as a click.
     if changed {
-        engine.rebuild_graph();
+        engine.refresh_live_midi();
     }
 }
 
