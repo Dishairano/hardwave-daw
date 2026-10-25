@@ -483,6 +483,11 @@ fn apply_surface(
             let Some(track_id) = track_of(strip) else {
                 return;
             };
+            // Not while recording: which input goes into which take is
+            // fixed when recording starts.
+            if engine.lock().transport.recording.load(Ordering::Relaxed) {
+                return;
+            }
             {
                 let eng = engine.lock();
                 let mut project = eng.project.lock();
