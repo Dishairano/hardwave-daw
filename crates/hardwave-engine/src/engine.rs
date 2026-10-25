@@ -6186,19 +6186,16 @@ mod rt_safety_tests {
         );
         // The app lists the plug-in in the song, then hands it to the
         // audio thread.
-        project_arc
-            .lock()
-            .track_mut(&id)
-            .unwrap()
-            .inserts
-            .push(hardwave_project::track::PluginSlot {
+        project_arc.lock().track_mut(&id).unwrap().inserts.push(
+            hardwave_project::track::PluginSlot {
                 id: "eq".into(),
                 plugin_id: "test.gain".into(),
                 enabled: true,
                 state: None,
                 sidechain_source: None,
                 wet: 1.0,
-            });
+            },
+        );
         let (slot, _) = make_gain_slot("eq", 1.0, true);
         cmd_tx
             .try_send(InsertCommand::Add {
