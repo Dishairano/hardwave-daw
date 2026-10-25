@@ -530,6 +530,9 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     }
   },
 
+  // An edit to one track reloads that track, not the song: the clip,
+  // automation and instrument edits each reloaded all 500 tracks and their
+  // clips, which is what made editing a big song feel slow.
   refreshTrack: async (id) => {
     try {
       const payload = await invoke<(TrackInfo & { clips?: ClipInfo[] }) | null>(
@@ -882,7 +885,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   setTrackInstrument: async (trackId, kind) => {
     await invoke('set_track_instrument', { trackId, kind })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   // ─── Automation ─────────────────────────────────────────────────
@@ -895,7 +898,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const id = await invoke<string>('add_automation_lane', { trackId, target })
     useProjectStore.getState().markDirty()
     useHistoryStore.getState().push('Add automation lane')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
     return id
   },
   /// The lane for a target: the existing one if there is one, a new one
@@ -920,55 +923,55 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   deleteAutomationLane: async (trackId, laneId) => {
     await invoke('delete_automation_lane', { trackId, laneId })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
   addAutomationPoint: async (trackId, laneId, tick, value) => {
     const idx = await invoke<number>('add_automation_point', { trackId, laneId, tick, value })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
     return idx
   },
   moveAutomationPoint: async (trackId, laneId, pointIndex, tick, value) => {
     const idx = await invoke<number>('move_automation_point', { trackId, laneId, pointIndex, tick, value })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
     return idx
   },
   deleteAutomationPoint: async (trackId, laneId, pointIndex) => {
     await invoke('delete_automation_point', { trackId, laneId, pointIndex })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
   setAutomationLaneVisible: async (trackId, laneId, visible) => {
     await invoke('set_automation_lane_visible', { trackId, laneId, visible })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   createAutomationClip: async (trackId, target, startTick, lengthTicks) => {
     const id = await invoke<string>('create_automation_clip', { trackId, target, startTick, lengthTicks })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
     return id
   },
   deleteAutomationClip: async (trackId, clipId) => {
     await invoke('delete_automation_clip', { trackId, clipId })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
   moveAutomationClip: async (trackId, clipId, startTick) => {
     await invoke('move_automation_clip', { trackId, clipId, startTick })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
   resizeAutomationClip: async (trackId, clipId, lengthTicks) => {
     await invoke('resize_automation_clip', { trackId, clipId, lengthTicks })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
   addAutomationClipPoint: async (trackId, clipId, tick, value) => {
     await invoke('add_automation_clip_point', { trackId, clipId, tick, value })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
   moveAutomationClipPoint: async (trackId, clipId, pointIndex, tick, value) => {
     await invoke('move_automation_clip_point', { trackId, clipId, pointIndex, tick, value })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
   removeAutomationClipPoint: async (trackId, clipId, pointIndex) => {
     await invoke('remove_automation_clip_point', { trackId, clipId, pointIndex })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   importAudioFile: async (trackId, filePath, positionTicks) => {
@@ -985,7 +988,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   moveClip: async (trackId, clipId, newPositionTicks) => {
     await mut('move_clip', { trackId, clipId, newPositionTicks }, 'Move clip')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   nudgeClips: async (clipIds, deltaTicks) => {
@@ -1054,7 +1057,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     // A move plus a resize slid the audio along with the edge; the backend
     // moves the start inside the sample by what played in that time.
     await mut('trim_clip_start', { trackId, clipId, newPositionTicks }, 'Trim clip start')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   moveClipToTrack: async (fromTrackId, toTrackId, clipId, newPositionTicks) => {
@@ -1063,18 +1066,18 @@ export const useTrackStore = create<TrackState>((set, get) => ({
       { fromTrackId, toTrackId, clipId, newPositionTicks },
       'Move clip to track',
     )
-    await get().fetchTracks()
+    await Promise.all([get().refreshTrack(fromTrackId), get().refreshTrack(toTrackId)])
   },
 
   resizeClip: async (trackId, clipId, newLengthTicks) => {
     await mut('resize_clip', { trackId, clipId, newLengthTicks }, 'Resize clip')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   deleteClip: async (trackId, clipId) => {
     await mut('delete_clip', { trackId, clipId }, 'Delete clip')
     set({ selectedClipId: null })
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   deleteSelectedClip: async () => {
@@ -1136,7 +1139,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   duplicateClip: async (trackId, clipId) => {
     const newId = await mut<string>('duplicate_clip', { trackId, clipId }, 'Duplicate clip')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
     return newId
   },
 
@@ -1168,18 +1171,18 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   splitClip: async (trackId, clipId, atTicks) => {
     const newId = await mut<string>('split_clip', { trackId, clipId, atTicks }, 'Split clip')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
     return newId
   },
 
   setClipMuted: async (trackId, clipId, muted) => {
     await mut('set_clip_muted', { trackId, clipId, muted }, muted ? 'Mute clip' : 'Unmute clip')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   slipClip: async (trackId, clipId, deltaSamples) => {
     await mut('slip_clip', { trackId, clipId, deltaSamples }, 'Slip clip')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   copySelectedClips: () => {
@@ -1223,32 +1226,32 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   setClipGain: async (trackId, clipId, gainDb) => {
     await mut('set_clip_gain', { trackId, clipId, gainDb }, `Set clip gain to ${gainDb.toFixed(1)} dB`)
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   setClipFades: async (trackId, clipId, fadeInTicks, fadeOutTicks) => {
     await mut('set_clip_fades', { trackId, clipId, fadeInTicks, fadeOutTicks }, 'Edit clip fades')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   setClipFadeCurves: async (trackId, clipId, fadeInCurve, fadeOutCurve) => {
     await mut('set_clip_fade_curves', { trackId, clipId, fadeInCurve, fadeOutCurve }, 'Edit clip fade curves')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   toggleClipReverse: async (trackId, clipId) => {
     await mut('toggle_clip_reverse', { trackId, clipId }, 'Reverse clip')
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   setClipPitch: async (trackId, clipId, pitchSemitones) => {
     await mut('set_clip_pitch', { trackId, clipId, pitchSemitones }, `Pitch clip ${pitchSemitones >= 0 ? '+' : ''}${pitchSemitones} st`)
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   setClipStretch: async (trackId, clipId, stretchRatio) => {
     await mut('set_clip_stretch', { trackId, clipId, stretchRatio }, `Set clip stretch ${stretchRatio.toFixed(2)}×`)
-    await get().fetchTracks()
+    await get().refreshTrack(trackId)
   },
 
   setClipColor: async (trackId, clipIds, color) => {
