@@ -123,7 +123,8 @@ pub fn song_view(project: &hardwave_project::Project) -> rhai::Map {
 ///
 /// Nothing is applied here. The caller gets a list of commands and
 /// decides when to run them, which is what makes a script one undo
-/// step rather than fifty.
+/// step rather than fifty. Without a song to read: for tests.
+#[cfg(test)]
 pub fn run(source: &str) -> Result<ScriptRun, String> {
     run_with_song(source, rhai::Map::new())
 }
