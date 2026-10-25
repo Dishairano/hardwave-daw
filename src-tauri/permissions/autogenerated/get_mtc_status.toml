@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-mtc-status"
+description = "Enables the get_mtc_status command without any pre-configured scope."
+commands.allow = ["get_mtc_status"]
+
+[[permission]]
+identifier = "deny-get-mtc-status"
+description = "Denies the get_mtc_status command without any pre-configured scope."
+commands.deny = ["get_mtc_status"]

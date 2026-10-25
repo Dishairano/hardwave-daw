@@ -145,6 +145,38 @@ pub fn get_midi_clock_sync_status(state: State<AppState>) -> MidiClockSyncStatus
     }
 }
 
+/// Following MIDI timecode: on or off, the master's timecode at the top of
+/// the song, and what the master last sent.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MtcStatus {
+    pub enabled: bool,
+    pub offset_seconds: f64,
+    /// The master's last position in seconds, and its frame rate.
+    pub seen_seconds: Option<f64>,
+    pub fps: Option<f64>,
+}
+
+#[tauri::command]
+pub fn set_mtc_follow(state: State<AppState>, enabled: bool, offset_seconds: f64) {
+    state
+        .midi_sync
+        .mtc_enabled
+        .store(enabled, Ordering::Relaxed);
+    *state.midi_sync.mtc_offset.lock() = offset_seconds.clamp(0.0, 24.0 * 3600.0);
+}
+
+#[tauri::command]
+pub fn get_mtc_status(state: State<AppState>) -> MtcStatus {
+    let seen = *state.midi_sync.mtc_seen.lock();
+    MtcStatus {
+        enabled: state.midi_sync.mtc_enabled.load(Ordering::Relaxed),
+        offset_seconds: *state.midi_sync.mtc_offset.lock(),
+        seen_seconds: seen.map(|(s, _)| s),
+        fps: seen.map(|(_, f)| f),
+    }
+}
+
 /// Wire-format DTO for `inject_midi_event`. Mirrors the variant set of
 /// `hardwave_midi::MidiEvent` 1:1 so the frontend can build a typed
 /// payload without needing access to the Rust enum. Timing is in

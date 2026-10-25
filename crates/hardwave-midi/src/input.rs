@@ -36,6 +36,19 @@ pub struct ClockSyncSnapshot {
     pub pending_start: bool,
     pub pending_continue: bool,
     pub pending_stop: bool,
+    /// The song position a clock master sent (Song Position Pointer), in
+    /// sixteenths: where its Continue carries on from.
+    pub song_position: Option<u16>,
+    /// Where a timecode master is, in seconds, and when that was read: the
+    /// latest complete set of quarter frames.
+    pub mtc_running_at: Option<(f64, Instant)>,
+    /// A timecode master's full-frame message: it located there, in seconds.
+    pub mtc_locate: Option<f64>,
+    /// When the last quarter frame came in; a master that stops sending
+    /// them has stopped.
+    pub mtc_last_frame: Option<Instant>,
+    /// The frame rate the timecode master sends.
+    pub mtc_fps: Option<f64>,
 }
 
 #[derive(Default)]
@@ -54,6 +67,12 @@ struct SharedState {
     pending_start: bool,
     pending_continue: bool,
     pending_stop: bool,
+    song_position: Option<u16>,
+    quarter_frames: crate::mtc::QuarterFrames,
+    mtc_running_at: Option<(f64, Instant)>,
+    mtc_locate: Option<f64>,
+    mtc_last_frame: Option<Instant>,
+    mtc_fps: Option<f64>,
 }
 
 /// Result of a single reconcile pass — useful for logging/telemetry.
@@ -363,6 +382,11 @@ impl MidiInputManager {
             pending_start: state.pending_start,
             pending_continue: state.pending_continue,
             pending_stop: state.pending_stop,
+            song_position: state.song_position.take(),
+            mtc_running_at: state.mtc_running_at.take(),
+            mtc_locate: state.mtc_locate.take(),
+            mtc_last_frame: state.mtc_last_frame,
+            mtc_fps: state.mtc_fps,
         };
         state.pending_start = false;
         state.pending_continue = false;
@@ -434,6 +458,31 @@ fn handle_input_bytes(bytes: &[u8], context: &PortContext) {
             let mut state = shared.lock();
             state.pending_stop = true;
             state.last_event_at = Some(now);
+        }
+        // Song Position Pointer: where a clock master's Continue starts.
+        Some(0xF2) if bytes.len() >= 3 => {
+            let mut state = shared.lock();
+            state.song_position = Some((bytes[1] & 0x7F) as u16 | ((bytes[2] & 0x7F) as u16) << 7);
+            state.last_event_at = Some(now);
+        }
+        // MTC quarter frame: a timecode master playing.
+        Some(0xF1) if bytes.len() >= 2 => {
+            let mut state = shared.lock();
+            state.mtc_last_frame = Some(now);
+            if let Some((at, fps)) = state.quarter_frames.push(bytes[1]) {
+                state.mtc_fps = Some(fps);
+                state.mtc_running_at = Some((at, now));
+            }
+            state.last_event_at = Some(now);
+        }
+        // MTC full frame: a timecode master located.
+        Some(0xF0) => {
+            if let Some(tc) = crate::mtc::Timecode::from_full_frame(bytes) {
+                let mut state = shared.lock();
+                state.mtc_locate = Some(tc.seconds());
+                state.mtc_fps = Some(tc.fps);
+                state.last_event_at = Some(now);
+            }
         }
         _ => {
             if let Some(event) = parse_midi_bytes(0, bytes) {
@@ -616,6 +665,41 @@ mod tests {
             }
             _ => panic!("expected note ons"),
         }
+    }
+
+    /// A clock master's Continue carries on from the song position it sent,
+    /// and a timecode master's quarter frames and full frame are read.
+    #[test]
+    fn song_position_and_timecode_reach_the_sync_snapshot() {
+        let shared = Arc::new(Mutex::new(SharedState::default()));
+        let context = PortContext {
+            shared: Arc::clone(&shared),
+            velocity_curve: Arc::new(AtomicU8::new(VelocityCurve::Linear.to_index())),
+            enabled: Arc::new(AtomicBool::new(true)),
+        };
+        handle_input_bytes(&[0xF2, 0x00, 0x02], &context);
+        // 00:00:10:00 at 30 fps, as eight quarter frames.
+        for d in [0x00, 0x10, 0x2A, 0x30, 0x40, 0x50, 0x60, 0x76] {
+            handle_input_bytes(&[0xF1, d], &context);
+        }
+        handle_input_bytes(
+            &[0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x60, 0x00, 0x05, 0x00, 0xF7],
+            &context,
+        );
+        let manager = MidiInputManager {
+            shared,
+            ..MidiInputManager::new()
+        };
+        let snap = manager.take_clock_sync_snapshot();
+        assert_eq!(snap.song_position, Some(256));
+        let (at, _) = snap.mtc_running_at.expect("timecode running");
+        assert!((at - (10.0 + 2.0 / 30.0)).abs() < 1e-9, "got {at}");
+        assert_eq!(snap.mtc_locate, Some(5.0));
+        assert_eq!(snap.mtc_fps, Some(30.0));
+        assert!(
+            manager.take_clock_sync_snapshot().song_position.is_none(),
+            "taken once"
+        );
     }
 
     #[test]

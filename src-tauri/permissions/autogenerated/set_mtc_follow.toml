@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-mtc-follow"
+description = "Enables the set_mtc_follow command without any pre-configured scope."
+commands.allow = ["set_mtc_follow"]
+
+[[permission]]
+identifier = "deny-set-mtc-follow"
+description = "Denies the set_mtc_follow command without any pre-configured scope."
+commands.deny = ["set_mtc_follow"]
