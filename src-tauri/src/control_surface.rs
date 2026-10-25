@@ -287,6 +287,9 @@ pub fn db_to_fader(db: f64) -> f32 {
 pub struct StripView {
     pub fader: f32,
     pub volume_db: f64,
+    /// The level as the scribble strip shows it, so a level that moves
+    /// within the shown decimal sends nothing.
+    pub level: String,
     pub pan: f64,
     pub muted: bool,
     pub soloed: bool,
@@ -309,6 +312,7 @@ pub fn desk_frame(project: &Project, bank: usize, master_db: f64) -> DeskFrame {
         .map(|t| StripView {
             fader: db_to_fader(t.volume_db),
             volume_db: t.volume_db,
+            level: level_text(t.volume_db),
             pan: t.pan,
             muted: t.muted,
             soloed: t.soloed,
@@ -336,6 +340,7 @@ pub fn frame_messages(old: Option<&DeskFrame>, new: &DeskFrame, touched: u8) -> 
         let blank = StripView {
             fader: 0.0,
             volume_db: f64::NEG_INFINITY,
+            level: String::new(),
             pan: 0.0,
             muted: false,
             soloed: false,
@@ -344,7 +349,11 @@ pub fn frame_messages(old: Option<&DeskFrame>, new: &DeskFrame, touched: u8) -> 
         };
         let v = now.unwrap_or(&blank);
         let changed = |f: &dyn Fn(&StripView) -> bool| was.is_none_or(|w| f(w) != f(v));
-        if touched & (1 << strip) == 0 && was.is_none_or(|w| w.fader != v.fader) {
+        // Compared as the desk sees it (14 bits), so automation moving a
+        // fader by less than one step sends nothing.
+        if touched & (1 << strip) == 0
+            && was.is_none_or(|w| fader_feedback(strip, w.fader) != fader_feedback(strip, v.fader))
+        {
             out.push(fader_feedback(strip, v.fader).to_vec());
         }
         if changed(&|s| s.armed) {
@@ -366,21 +375,57 @@ pub fn frame_messages(old: Option<&DeskFrame>, new: &DeskFrame, touched: u8) -> 
         if was.is_none_or(|w| w.name != v.name) {
             out.push(scribble(strip, 0, &v.name));
         }
-        if was.is_none_or(|w| w.volume_db != v.volume_db) {
-            let level = if now.is_none() {
-                String::new()
-            } else if v.volume_db <= -60.0 {
-                "-inf".to_string()
-            } else {
-                format!("{:.1}", v.volume_db)
-            };
-            out.push(scribble(strip, 1, &level));
+        if was.is_none_or(|w| w.level != v.level) {
+            out.push(scribble(strip, 1, &v.level));
         }
     }
     if old.is_none_or(|o| o.master != new.master) {
         out.push(fader_feedback(STRIPS, new.master).to_vec());
     }
     out
+}
+
+/// A level as the scribble strip shows it: one decimal, or -inf at the
+/// bottom of the fader.
+fn level_text(db: f64) -> String {
+    if db <= -60.0 {
+        "-inf".to_string()
+    } else {
+        format!("{db:.1}")
+    }
+}
+
+/// Which open MIDI outputs are the desk: those named like an open input
+/// (a desk shows up as an input and an output of the same name, give or
+/// take "MIDIIN2 (X-Touch)" against "MIDIOUT2 (X-Touch)"), or the only
+/// output open. Feedback used to go to every output, so a synth on the
+/// clock port got pitch bends and notes thirty times a second.
+pub fn desk_outputs(outputs: &[String], inputs: &[String]) -> Vec<String> {
+    fn key(name: &str) -> String {
+        name.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| {
+                !w.is_empty()
+                    && !matches!(*w, "in" | "out" | "input" | "output" | "port")
+                    && !w.starts_with("midiin")
+                    && !w.starts_with("midiout")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    let input_keys: Vec<String> = inputs.iter().map(|n| key(n)).collect();
+    let matched: Vec<String> = outputs
+        .iter()
+        .filter(|o| input_keys.contains(&key(o)))
+        .cloned()
+        .collect();
+    if !matched.is_empty() {
+        return matched;
+    }
+    if outputs.len() == 1 {
+        return outputs.to_vec();
+    }
+    Vec::new()
 }
 
 /// A V-pot ring showing a pan: one LED of eleven, the middle one centre,
@@ -528,6 +573,7 @@ mod tests {
         StripView {
             fader: db_to_fader(db),
             volume_db: db,
+            level: level_text(db),
             pan: 0.0,
             muted: false,
             soloed: false,
@@ -629,5 +675,38 @@ mod tests {
         assert_eq!(&m[7..14], b"Lead s ");
         assert_eq!(*m.last().unwrap(), 0xF7);
         assert_eq!(&scribble(0, 0, "Bassé")[7..14], b"Bass?  ");
+    }
+
+    #[test]
+    fn feedback_goes_to_the_desk_not_every_output() {
+        let outs = vec!["MIDIOUT2 (X-Touch)".to_string(), "Synth".to_string()];
+        let ins = vec!["MIDIIN2 (X-Touch)".to_string()];
+        assert_eq!(
+            desk_outputs(&outs, &ins),
+            vec!["MIDIOUT2 (X-Touch)".to_string()]
+        );
+        assert_eq!(
+            desk_outputs(&["Only one".to_string()], &[]),
+            vec!["Only one".to_string()]
+        );
+        assert!(
+            desk_outputs(&outs, &["Keystation".to_string()]).is_empty(),
+            "no guessing"
+        );
+    }
+
+    #[test]
+    fn a_level_that_moves_within_its_decimal_sends_nothing() {
+        let first = DeskFrame {
+            strips: vec![strip("Kick", -6.01)],
+            master: 1.0,
+        };
+        let next = DeskFrame {
+            strips: vec![strip("Kick", -6.02)],
+            master: 1.0,
+        };
+        // The fader itself (touched here) is a real step on a 14-bit desk;
+        // the level text reads -6.0 both times and is not sent again.
+        assert!(frame_messages(Some(&first), &next, 0b1).is_empty());
     }
 }

@@ -231,7 +231,8 @@ pub fn spawn_dispatcher(
         // automation or by undo moves the motor too.
         if surface.is_enabled() && last_frame_at.elapsed() >= std::time::Duration::from_millis(33) {
             last_frame_at = std::time::Instant::now();
-            send_desk_frame(&engine, &surface, &midi_out);
+            let inputs = midi_input.lock().open_port_names();
+            send_desk_frame(&engine, &surface, &midi_out, &inputs);
         }
         // The input manager's own lock only: holding the engine's while waiting for it kept
         // everything else off the engine during a MIDI port scan.
@@ -460,11 +461,8 @@ fn apply_surface(
                 track.muted
             };
             engine.lock().rebuild_graph();
-            // The button's own light, so the desk shows what the mix is
-            // doing rather than what was last pressed.
-            midi_out
-                .lock()
-                .broadcast(&cs::button_feedback(cs::mute_note(strip), muted));
+            // The button's light follows in the next desk frame.
+            let _ = muted;
         }
         cs::SurfaceAction::Solo { strip } => {
             let Some(track_id) = track_of(strip) else {
@@ -582,6 +580,7 @@ pub fn send_desk_frame(
     engine: &Arc<Mutex<DawEngine>>,
     surface: &crate::control_surface::SharedSurface,
     midi_out: &Arc<Mutex<hardwave_midi::output::MidiOutputManager>>,
+    open_inputs: &[String],
 ) {
     use crate::control_surface as cs;
     use std::sync::atomic::Ordering;
@@ -609,8 +608,10 @@ pub fn send_desk_frame(
     );
     if !messages.is_empty() {
         let out = midi_out.lock();
-        for m in &messages {
-            out.broadcast(m);
+        for port in cs::desk_outputs(&out.open_port_names(), open_inputs) {
+            for m in &messages {
+                let _ = out.send(&port, m);
+            }
         }
     }
     *shown = Some(frame);
