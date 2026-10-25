@@ -171,6 +171,10 @@ pub struct MidiTrackNode {
     /// This block's controller events, kept between blocks so collecting
     /// them does not allocate on the audio thread.
     control_scratch: Vec<hardwave_midi::MidiEvent>,
+    /// This block's notes and controllers for the plug-in chain, kept
+    /// between blocks for the same reason: it was a fresh Vec every block,
+    /// an allocation and a free on the audio thread whenever a note played.
+    block_midi_scratch: Vec<hardwave_midi::MidiEvent>,
     /// What each MIDI note sounds at, when the track is not in twelve
     /// equal. `None` is twelve equal, which is the plain formula.
     tuning_table: Option<Box<[f32; 128]>>,
@@ -312,6 +316,7 @@ impl MidiTrackNode {
             controls: Vec::new(),
             next_control_idx: 0,
             control_scratch: Vec::with_capacity(64),
+            block_midi_scratch: Vec::with_capacity(256),
             tuning_table: None,
             mpe: false,
             live_channel: 0,
@@ -324,7 +329,9 @@ impl MidiTrackNode {
             last_block_end: 0,
             jumped: false,
             jump_offs: Vec::with_capacity(64),
-            voices: Vec::new(),
+            // The whole pool up front: it grew on the audio thread the
+            // first time a chord played.
+            voices: Vec::with_capacity(MAX_VOICES),
             volume: 1.0,
             pan: 0.0,
             fader_volume: 1.0,
@@ -1221,7 +1228,9 @@ impl AudioNode for MidiTrackNode {
         // Route this block's notes (clip schedule + live input) to the
         // insert chain so a hosted instrument plug-in (VST3 / CLAP synth
         // or sampler) can generate audio from them. Timing is block-local.
-        let mut block_midi: Vec<hardwave_midi::MidiEvent> = midi_in.to_vec();
+        let mut block_midi = std::mem::take(&mut self.block_midi_scratch);
+        block_midi.clear();
+        block_midi.extend_from_slice(midi_in);
         // Held notes the playhead jumped away from end here, first.
         for &note in &self.jump_offs {
             block_midi.push(hardwave_midi::MidiEvent::NoteOff {
@@ -1366,6 +1375,7 @@ impl AudioNode for MidiTrackNode {
                 );
             }
         }
+        self.block_midi_scratch = block_midi;
 
         // Width, fader and pan, ramped from the last block, then meters on
         // the post-FX signal.
