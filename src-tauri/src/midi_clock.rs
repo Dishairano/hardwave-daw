@@ -186,7 +186,11 @@ pub fn spawn_dispatcher(engine: Arc<Mutex<DawEngine>>, state: Arc<MidiClockState
         loop {
             std::thread::sleep(Duration::from_micros(500));
             let enabled = state.enabled.load(Ordering::Relaxed);
-            let playing = enabled && transport.is_playing();
+            // Held for a Link session to reach the bar is not playing yet:
+            // the clock would start a drum machine before the song.
+            let playing = enabled
+                && transport.is_playing()
+                && !transport.link_holding.load(Ordering::Relaxed);
             if !playing {
                 playhead = None;
                 for event in follower.step(0.0, false, false) {

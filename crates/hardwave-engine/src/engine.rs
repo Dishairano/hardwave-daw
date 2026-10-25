@@ -4433,6 +4433,9 @@ impl EngineCallback {
                 sr,
                 num_frames,
             );
+            self.transport
+                .link_holding
+                .store(matches!(action, crate::link::LinkAction::Hold), Relaxed);
             match action {
                 crate::link::LinkAction::Keep => {}
                 crate::link::LinkAction::Hold => playing = false,

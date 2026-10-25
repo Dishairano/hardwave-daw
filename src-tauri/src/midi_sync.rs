@@ -78,13 +78,16 @@ pub fn spawn_dispatcher(
                 if let Some(bpm) = snapshot.bpm_estimate {
                     transport.bpm.store(bpm, Ordering::Relaxed);
                 }
-                if snapshot.pending_start {
-                    transport.set_position(0);
-                    transport.playing.store(true, Ordering::Relaxed);
-                }
+                // A jump arrives as Stop, the position and Continue in one
+                // burst; applied as separate flags in a fixed order it ended
+                // stopped. The position goes first, then whichever of Start,
+                // Continue and Stop came last.
                 // Continue carries on from the song position the master
                 // sent; it used to carry on from wherever the playhead was.
-                if let Some(sixteenths) = snapshot.song_position {
+                // Start is the top of the song, whatever position came first.
+                if snapshot.last_transport == Some(0xFA) {
+                    transport.set_position(0);
+                } else if let Some(sixteenths) = snapshot.song_position {
                     let ticks = sixteenths as u64 * hardwave_midi::PPQ / 4;
                     let sr = transport.sample_rate.load(Ordering::Relaxed) as f64;
                     let samples = {
@@ -94,11 +97,10 @@ pub fn spawn_dispatcher(
                     };
                     transport.set_position(samples);
                 }
-                if snapshot.pending_continue {
-                    transport.playing.store(true, Ordering::Relaxed);
-                }
-                if snapshot.pending_stop {
-                    transport.playing.store(false, Ordering::Relaxed);
+                match snapshot.last_transport {
+                    Some(0xFA) | Some(0xFB) => transport.playing.store(true, Ordering::Relaxed),
+                    Some(0xFC) => transport.playing.store(false, Ordering::Relaxed),
+                    _ => {}
                 }
             }
 
@@ -165,6 +167,20 @@ impl MtcChase {
         }
         if let Some((at, read_at)) = snapshot.mtc_running_at {
             let target = at + now.saturating_duration_since(read_at).as_secs_f64() - offset;
+            if target < 0.0 {
+                // The master is rolling up to the song (a pre-roll): wait at
+                // the top. Playing from 0 straight away and being pulled
+                // back every frame looped the first moment of the song for
+                // the whole pre-roll.
+                if playing && self.following {
+                    action.play = Some(false);
+                    self.following = false;
+                }
+                if position_secs > 0.0 {
+                    action.locate = Some(0.0);
+                }
+                return action;
+            }
             if !playing {
                 action.locate = Some(target);
                 action.play = Some(true);
@@ -235,6 +251,19 @@ mod chase_tests {
         // Playback someone started by hand is not the master's to stop.
         let mut c = MtcChase::default();
         assert_eq!(c.step(&quiet, true, 20.0, 0.0, now).play, None);
+    }
+
+    /// A master rolling from 00:59:50 to a song starting at 01:00:00: the
+    /// song waits at the top until the master gets there, then plays.
+    #[test]
+    fn a_pre_roll_waits_at_the_top_then_plays() {
+        let now = Instant::now();
+        let mut c = MtcChase::default();
+        let a = c.step(&running(3590.0, now), false, 0.0, 3600.0, now);
+        assert_eq!(a, ChaseAction::default(), "nothing yet, already at the top");
+        let a = c.step(&running(3600.04, now), false, 0.0, 3600.0, now);
+        assert_eq!(a.play, Some(true));
+        assert!((a.locate.unwrap() - 0.04).abs() < 1e-9);
     }
 
     #[test]
