@@ -4312,19 +4312,42 @@ impl AudioCallback for EngineCallback {
     /// graph is built for the size asked for, so everything past it came out
     /// as silence, a gap in every block. Such a block is now played as
     /// pieces of the size the graph was built for.
+    ///
+    /// A block that crosses the loop end is split there too, so the jump
+    /// back lands on the exact sample. The whole block used to play on past
+    /// the loop end and the next one started at the loop start, so every
+    /// pass ran up to a block long, the audio after the loop end was heard,
+    /// and a loop drifted against a clock or a Link session.
     fn process(&mut self, output: &mut [f32], num_frames: usize, _num_channels: u16) {
         let most = (self.graph.buffer_size_hint() as usize).max(1);
         let num_frames = num_frames.min(output.len() / 2);
-        if num_frames <= most {
-            self.process_block(output, num_frames);
-            return;
-        }
         let mut done = 0;
         while done < num_frames {
-            let n = (num_frames - done).min(most);
+            let mut n = (num_frames - done).min(most);
+            if let Some(to_end) = self.frames_to_loop_end(n) {
+                n = to_end;
+            }
             self.process_block(&mut output[done * 2..(done + n) * 2], n);
             done += n;
         }
+    }
+}
+
+impl EngineCallback {
+    /// Frames left before the loop end, when it falls inside the next `n`.
+    fn frames_to_loop_end(&self, n: usize) -> Option<usize> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let t = &self.transport;
+        if !t.playing.load(Relaxed) || !t.looping.load(Relaxed) || t.pattern_mode.load(Relaxed) {
+            return None;
+        }
+        let (start, end) = (t.loop_start.load(Relaxed), t.loop_end.load(Relaxed));
+        let pos = t.position();
+        if end <= start || pos >= end {
+            return None;
+        }
+        let left = (end - pos) as usize;
+        (left > 0 && left < n).then_some(left)
     }
 }
 
@@ -6963,6 +6986,28 @@ mod monitoring_tests {
         eprintln!(
             "REBUILD 60 used ms: median {:.2}, max {:.2}",
             times[10], times[19]
+        );
+    }
+
+    /// A block crossing the loop end is split there: the playhead goes back
+    /// to the loop start and carries on from there, nothing past the end
+    /// is played, and each pass is exactly the loop long.
+    #[test]
+    fn the_loop_jumps_back_on_the_exact_sample() {
+        let mut r = rig(Project::default());
+        r.cb.transport.looping.store(true, Relaxed);
+        r.cb.transport.loop_start.store(1_000, Relaxed);
+        r.cb.transport.loop_end.store(2_000, Relaxed);
+        play(&r);
+        let mut out = vec![0.0_f32; 512];
+        // Playing already, as it is by the time a loop comes round.
+        r.cb.process(&mut out, 256, 2);
+        r.cb.transport.set_position(1_900);
+        r.cb.process(&mut out, 256, 2);
+        assert_eq!(
+            r.cb.transport.position(),
+            1_000 + 156,
+            "100 frames to the end, then 156 from the loop start"
         );
     }
 }
