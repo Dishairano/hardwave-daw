@@ -56,6 +56,9 @@ pub struct TransportState {
     /// `wait_for_input` on, no MIDI seen yet). The audio thread flips it
     /// off and starts playback on the first drained MIDI event.
     pub wait_pending: Arc<AtomicBool>,
+    /// The Link session's clock while one is joined, so the audio thread
+    /// can keep the playhead on the session's beat.
+    pub link: Arc<crate::link::LinkClock>,
 
     /// Samples left in a count-in before playback starts, and how long the
     /// count-in is in total (the UI shows progress from the pair).
@@ -101,6 +104,7 @@ impl Default for TransportState {
             pdc_enabled: Arc::new(AtomicBool::new(true)),
             wait_for_input: Arc::new(AtomicBool::new(false)),
             wait_pending: Arc::new(AtomicBool::new(false)),
+            link: Arc::new(crate::link::LinkClock::default()),
             count_in_remaining: Arc::new(AtomicU64::new(0)),
             count_in_total: Arc::new(AtomicU64::new(0)),
             count_in_then_play: Arc::new(AtomicBool::new(false)),
