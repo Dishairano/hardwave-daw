@@ -56,3 +56,42 @@ export function playlistRowLayout(tracks: PlaylistTrackLike[]): RowLayout {
   })
   return { rowOf, ownerOf, isTrackRow, total: ownerOf.length }
 }
+
+/** One row of the playlist's name column. */
+export type ColumnRow<T extends PlaylistTrackLike> =
+  | { kind: 'track'; track: T }
+  | { kind: 'lane'; track: T; lane: T['automationLanes'][number] }
+  | { kind: 'clip'; track: T; clip: NonNullable<T['automationClips']>[number] }
+  | { kind: 'empty'; slot: number }
+
+/** The name column's rows in order, the same rows `playlistRowLayout`
+ *  counts: each track, its automation lanes and clips, then the numbered
+ *  empty slots that fill the grid out. */
+export function playlistColumnRows<T extends PlaylistTrackLike>(
+  tracks: T[],
+  emptySlots: number,
+): ColumnRow<T>[] {
+  const rows: ColumnRow<T>[] = []
+  for (const track of tracks) {
+    rows.push({ kind: 'track', track })
+    for (const lane of track.automationLanes) rows.push({ kind: 'lane', track, lane })
+    for (const clip of track.automationClips ?? []) rows.push({ kind: 'clip', track, clip })
+  }
+  for (let i = 0; i < emptySlots; i++) rows.push({ kind: 'empty', slot: tracks.length + i + 1 })
+  return rows
+}
+
+/** Rows to draw for a view `viewHeight` tall scrolled `scrollY` down, with a
+ *  few to spare either side so a fast scroll does not show a gap. */
+export function visibleRows(
+  count: number,
+  rowHeight: number,
+  scrollY: number,
+  viewHeight: number,
+  spare = 4,
+): { first: number; last: number } {
+  const h = Math.max(1, rowHeight)
+  const first = Math.max(0, Math.floor(scrollY / h) - spare)
+  const last = Math.min(count, Math.ceil((scrollY + viewHeight) / h) + spare)
+  return { first: Math.min(first, last), last }
+}

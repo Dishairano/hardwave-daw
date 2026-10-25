@@ -14,8 +14,8 @@
 
 import { useTrackFolderStore } from '../stores/trackFolderStore'
 import { usePlaylistScrollStore } from '../stores/playlistScrollStore'
-import { playlistTracks } from './arrangement/playlistRows'
-import React, { useState, useCallback, useEffect, useMemo } from 'react'
+import { playlistColumnRows, playlistTracks, visibleRows } from './arrangement/playlistRows'
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { TrackContextMenu } from './arrangement/TrackContextMenu'
 import { t, useLanguage } from '../i18n'
 import { Browser } from './browser/Browser'
@@ -1419,17 +1419,52 @@ export function HwPlaylistTracks() {
   const selectTrack = useTrackStore(s => s.selectTrack)
   const [trackMenu, setTrackMenu] = useState<{ trackId: string; x: number; y: number } | null>(null)
   const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
+  // Only the rows in view are drawn. All 500 were, each with its buttons,
+  // and every change to any track drew them all again, which is what made a
+  // big song slow to work in. Every row is one track height, the same as
+  // the grid beside it, so the rows above and below are plain space.
+  const rowHeight = useTransportStore(s => s.trackHeight)
+  const columnRef = useRef<HTMLDivElement>(null)
+  const [viewHeight, setViewHeight] = useState(800)
+  useEffect(() => {
+    const el = columnRef.current
+    if (!el) return
+    const measure = () => setViewHeight(el.clientHeight || 800)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const rows = useMemo(() => playlistColumnRows(tracks, placeholderCount), [tracks, placeholderCount])
+  const { first, last } = visibleRows(rows.length, rowHeight, scrollY, viewHeight)
   // Which track currently has its KickSynth editor open, if any.
   // Editor pops up when the user double-clicks the instrument badge
   // on a kick_synth-voiced track.
   const [kickEditorTrack, setKickEditorTrack] = useState<string | null>(null)
   return (
-    <div className="fl-pl-tracks" onWheel={onWheel}>
+    <div className="fl-pl-tracks" onWheel={onWheel} ref={columnRef}>
       <div className="fl-pl-tracks-head">TRACKS</div>
       <div className="fl-pl-tracks-list" style={{ transform: `translateY(${-scrollY}px)` }}>
-        {tracks.flatMap((t) => {
+        <div style={{ height: first * rowHeight, flexShrink: 0 }} aria-hidden="true" />
+        {rows.slice(first, last).map((r) => {
+          if (r.kind === 'lane') return <AutomationLane key={r.lane.id} trackId={r.track.id} lane={r.lane} />
+          if (r.kind === 'clip') return <AutomationClipLane key={r.clip.id} trackId={r.track.id} clip={r.clip} />
+          if (r.kind === 'empty') {
+            return (
+              <div
+                key={`pl-slot-${r.slot}`}
+                className="fl-tr fl-tr-empty"
+                style={{ ['--track-color' as any]: 'transparent' }}
+                aria-hidden="true"
+              >
+                <span className="strip" />
+                <span className="nm" />
+              </div>
+            )
+          }
+          const t = r.track
           const isMidi = (t.kind || '').toLowerCase() === 'midi'
-          const row = (
+          return (
             <div
               key={t.id}
               className={`fl-tr${t.armed ? ' armed' : ''}${t.id === selectedTrackId ? ' selected' : ''}`}
@@ -1495,34 +1530,8 @@ export function HwPlaylistTracks() {
               </span>
             </div>
           )
-          // Render the track's automation lanes directly under it. The
-          // add-lane affordance used to sit on its own 18 px row after
-          // the lanes, but that broke canvas-grid alignment because the
-          // grid assumes every row is `trackHeight`. The "+L" button on
-          // the track header above opens the same lane-target picker
-          // without taking any vertical space.
-          const laneRows = t.automationLanes.map(lane => (
-            <AutomationLane key={lane.id} trackId={t.id} lane={lane} />
-          ))
-          const clipRows = (t.automationClips ?? []).map(clip => (
-            <AutomationClipLane key={clip.id} trackId={t.id} clip={clip} />
-          ))
-          return [row, ...laneRows, ...clipRows]
         })}
-        {Array.from({ length: placeholderCount }, (_, i) => {
-          const slotNum = tracks.length + i + 1
-          return (
-            <div
-              key={`pl-slot-${slotNum}`}
-              className="fl-tr fl-tr-empty"
-              style={{ ['--track-color' as any]: 'transparent' }}
-              aria-hidden="true"
-            >
-              <span className="strip" />
-              <span className="nm" />
-            </div>
-          )
-        })}
+        <div style={{ height: (rows.length - last) * rowHeight, flexShrink: 0 }} aria-hidden="true" />
       </div>
       {kickEditorTrack && (() => {
         const t = tracks.find(x => x.id === kickEditorTrack)

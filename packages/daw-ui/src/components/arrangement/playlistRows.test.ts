@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { playlistRowLayout, playlistTracks } from './playlistRows'
+import { playlistColumnRows, playlistRowLayout, playlistTracks, visibleRows } from './playlistRows'
 
 const track = (id: string, lanes = 0, clips = 0, kind = 'Audio') => ({
   id,
@@ -21,5 +21,22 @@ describe('playlist rows', () => {
     const tracks = [track('m', 0, 0, 'Master'), track('insert-001'), track('channel'), track('hidden')]
     const shown = playlistTracks(tracks, [{ collapsed: true, trackIds: ['hidden'] }])
     expect(shown.map((t) => t.id)).toEqual(['insert-001', 'channel'])
+  })
+})
+
+describe('the name column draws what is in view', () => {
+  const t = (id: string, lanes = 0) => ({ id, kind: 'Audio', automationLanes: Array.from({ length: lanes }, (_, i) => ({ id: `${id}-l${i}` })) })
+
+  it('lists tracks, their lanes, then the empty slots', () => {
+    const rows = playlistColumnRows([t('a', 1), t('b')], 2)
+    expect(rows.map(r => r.kind)).toEqual(['track', 'lane', 'track', 'empty', 'empty'])
+    expect(rows[4]).toEqual({ kind: 'empty', slot: 4 })
+  })
+
+  it('windows the rows around the scroll position', () => {
+    expect(visibleRows(500, 56, 0, 560)).toEqual({ first: 0, last: 14 })
+    expect(visibleRows(500, 56, 5600, 560)).toEqual({ first: 96, last: 114 })
+    expect(visibleRows(500, 56, 56 * 499, 560)).toEqual({ first: 495, last: 500 })
+    expect(visibleRows(3, 56, 0, 560)).toEqual({ first: 0, last: 3 })
   })
 })
