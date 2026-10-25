@@ -5,6 +5,21 @@ use crate::clip::ClipPlacement;
 
 pub type TrackId = String;
 
+/// Which of the audio interface's inputs a track records: one channel, or
+/// a pair starting at `first` (counting from zero).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct InputChannel {
+    pub first: u16,
+    pub mono: bool,
+}
+
+impl InputChannel {
+    /// How many of the interface's channels it takes to reach this input.
+    pub fn end(&self) -> u16 {
+        self.first + if self.mono { 1 } else { 2 }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TrackKind {
     Audio,
@@ -325,6 +340,11 @@ pub struct Track {
     /// the song's own sound in real time, as resampling.
     #[serde(default)]
     pub input_source: Option<TrackId>,
+    /// Which of the interface's inputs this track records, so two armed
+    /// tracks can record two sources at once: a microphone on input 1, a
+    /// guitar on input 2. None is the input chosen in Audio settings.
+    #[serde(default)]
+    pub input_channel: Option<InputChannel>,
 }
 
 impl Track {
@@ -346,6 +366,7 @@ impl Track {
             monitor_input: true,
             monitor_auto: false,
             input_source: None,
+            input_channel: None,
             phase_invert: false,
             swap_lr: false,
             stereo_separation: 1.0,
@@ -428,28 +449,42 @@ mod field_order_tests {
         t.swap_lr = true;
         t.monitor_auto = true;
         t.input_source = Some("master".into());
+        t.input_channel = Some(super::InputChannel {
+            first: 2,
+            mono: true,
+        });
         let packed = rmp_serde::to_vec(&t).unwrap();
         let mut fields: Vec<serde_json::Value> = rmp_serde::from_slice(&packed).unwrap();
-        // The newest fields are the last two in the file...
+        // The newest fields are the last three in the file...
         let n = fields.len();
         assert_eq!(
-            fields[n - 2],
+            fields[n - 3],
             serde_json::json!(true),
-            "monitor_auto is second to last"
+            "monitor_auto is third to last"
+        );
+        assert_eq!(
+            fields[n - 2],
+            serde_json::json!("master"),
+            "input_source is second to last"
         );
         assert_eq!(
             fields[n - 1],
-            serde_json::json!("master"),
-            "input_source is last"
+            serde_json::json!([2, true]),
+            "input_channel is last"
         );
         // ...so a file from before them is the same array without them.
-        fields.truncate(n - 2);
+        for newest in 1..=3 {
+            let old = rmp_serde::to_vec(&fields[..n - newest]).unwrap();
+            let back: Track = rmp_serde::from_slice(&old).expect("an older track opens");
+            assert!(
+                back.phase_invert && back.swap_lr,
+                "every field lands where it was"
+            );
+            assert_eq!(back.input_channel, None);
+        }
+        fields.truncate(n - 3);
         let old = rmp_serde::to_vec(&fields).unwrap();
         let back: Track = rmp_serde::from_slice(&old).expect("an older track opens");
-        assert!(
-            back.phase_invert && back.swap_lr,
-            "every field lands where it was"
-        );
         assert!(!back.monitor_auto);
         assert_eq!(back.input_source, None);
     }

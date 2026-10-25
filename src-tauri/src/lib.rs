@@ -554,6 +554,8 @@ pub fn run() {
             commands::tracks::set_track_monitor_input,
             commands::tracks::set_track_monitor_mode,
             commands::tracks::set_track_input_source,
+            commands::tracks::set_track_input_channel,
+            commands::tracks::get_input_channel_count,
             commands::tracks::reorder_track,
             commands::tracks::set_track_name,
             commands::tracks::set_track_color,

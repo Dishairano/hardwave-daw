@@ -192,6 +192,8 @@ permissions = [
   "allow-set-track-monitor-input",
   "allow-set-track-monitor-mode",
   "allow-set-track-input-source",
+  "allow-set-track-input-channel",
+  "allow-get-input-channel-count",
   "allow-reorder-track",
   "allow-set-track-name",
   "allow-set-track-color",

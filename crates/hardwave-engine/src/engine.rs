@@ -73,11 +73,15 @@ use std::collections::HashMap;
 
 use crate::audio_pool::{AudioBuffer, AudioPool};
 use crate::graph::{AudioGraph, AudioNode, ProcessContext};
-use crate::input_node::{CaptureTap, InputNode, RecordTapNode, SharedInputConsumer};
+use crate::input_node::{
+    CaptureTap, InputBlock, InputHub, InputNode, InputRing, RecordTapNode, SharedInputBlock,
+    SharedInputConsumer, MAX_RECORD_SOURCES,
+};
 use crate::master_node::MasterNode;
 use crate::master_tap::{self, SharedMasterTap};
 use crate::track_node::{ClipRegion, TrackMeterState, TrackNode};
 use crate::transport::{TransportCommand, TransportState};
+use hardwave_project::{InputChannel, RecordSource};
 
 /// Shared per-track meter map. Rebuilt when the audio graph is rebuilt.
 pub type TrackMeterMap = Arc<Mutex<HashMap<String, Arc<TrackMeterState>>>>;
@@ -158,6 +162,14 @@ pub type PluginStateSnapshotSlot = Arc<Mutex<Option<PluginStateSnapshotSender>>>
 /// The passes of a recorded take: where each starts on the timeline, and the
 /// range of the take's samples it is.
 pub type TakePasses = Vec<(u64, std::ops::Range<usize>)>;
+
+/// One input's take when recording stops: what it recorded, its file, and
+/// its loop passes.
+pub struct SourceTake {
+    pub source: RecordSource,
+    pub file: crate::input_node::TakeFile,
+    pub passes: TakePasses,
+}
 
 /// Seconds of audio the ring between the audio thread and the disk holds
 /// while recording. The take itself goes to a file, so this only has to
@@ -267,8 +279,14 @@ pub struct DawEngine {
     /// Recording capture target. The audio thread's InputNode appends
     /// interleaved L/R samples here when [`CaptureTap::recording`] is
     /// true. The UI thread can drain this on stop to write a WAV file
-    /// and place a clip on the armed track.
+    /// and place a clip on the armed track. The first of `captures`.
     pub capture: Arc<CaptureTap>,
+    /// One capture per input recording at once: armed tracks on different
+    /// inputs (or recording different channels' output) each get a take of
+    /// their own.
+    captures: Arc<[Arc<CaptureTap>]>,
+    /// What each capture records in the current or last take, in order.
+    record_sources: Mutex<Vec<RecordSource>>,
 
     /// Undo/redo history. Take a snapshot BEFORE mutating the project.
     pub history: Arc<Mutex<History>>,
@@ -329,6 +347,7 @@ pub enum EngineCommand {
 impl DawEngine {
     pub fn new() -> Self {
         let (tx, rx) = bounded(256);
+        let captures = crate::input_node::capture_set();
 
         Self {
             last_audio_restart: None,
@@ -346,7 +365,9 @@ impl DawEngine {
             meter_cache: MeterSnapshot::default(),
             track_meters: Arc::new(Mutex::new(HashMap::new())),
             input_consumer: Arc::new(Mutex::new(None)),
-            capture: Arc::new(CaptureTap::default()),
+            capture: Arc::clone(&captures[0]),
+            captures,
+            record_sources: Mutex::new(Vec::new()),
             history: Arc::new(Mutex::new(History::new())),
             record_start: std::sync::atomic::AtomicU64::new(0),
             record_pass: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -525,39 +546,85 @@ impl DawEngine {
         self.history.lock().sizes()
     }
 
+    /// How many inputs the audio interface offers: the width of the
+    /// running input stream, or the one the next stream would open.
+    pub fn input_channel_count(&self) -> u16 {
+        match self.audio_device.input_active_channels() {
+            0 => self.audio_device.planned_input_channels(),
+            w => w,
+        }
+    }
+
+    /// The input chosen in Audio settings, which a track records unless it
+    /// has picked one of its own.
+    pub fn default_input(&self) -> InputChannel {
+        InputChannel {
+            first: self.audio_device.input_channel_offset,
+            mono: self.audio_device.input_channels == 1,
+        }
+    }
+
     /// Begin a recording capture. Clears any previously buffered samples
     /// and flips the `recording` flag so the audio thread starts pushing
     /// input blocks into the capture buffer immediately. Idempotent — a
     /// second call while already recording is a no-op.
+    ///
+    /// Every input the armed tracks record from gets a capture of its own,
+    /// up to [`MAX_RECORD_SOURCES`]; with nothing armed the first capture
+    /// records the input chosen in Audio settings, as it always did.
     pub fn start_capture(&self) {
         use std::sync::atomic::Ordering;
         if self.capture.recording.load(Ordering::Relaxed) {
             return;
         }
-        // The ring, the take's file and the thread that writes it are made
-        // here, on this thread, so the audio thread never allocates.
+        // The rings, the takes' files and the threads that write them are
+        // made here, on this thread, so the audio thread never allocates.
         let record_start = self.transport.position();
+        let default = self.default_input();
+        let mut sources = self.project.lock().record_sources(default);
+        sources.truncate(MAX_RECORD_SOURCES);
+        if sources.is_empty() {
+            sources.push(RecordSource::Interface(default));
+        }
         // The song's own output reaches the tap late only by what plug-in
         // delay compensation holds it back; the interface's input by the
         // whole round trip.
-        let inside = self.project.lock().record_source().ok().flatten().is_some();
-        let latency = if !inside {
-            self.recording_latency().total_frames
-        } else if self.transport.pdc_enabled.load(Ordering::Relaxed) {
+        let interface_latency = self.recording_latency().total_frames;
+        let inside_latency = if self.transport.pdc_enabled.load(Ordering::Relaxed) {
             self.graph_latency_samples.load(Ordering::Relaxed) as u64
         } else {
             0
         };
-        self.capture.arm_compensated(
-            self.current_sample_rate(),
-            CAPTURE_RING_SECS,
-            latency,
-            record_start,
-        );
+        for (tap, source) in self.captures.iter().zip(&sources) {
+            let latency = match source {
+                RecordSource::Interface(_) => interface_latency,
+                RecordSource::Track(_) => inside_latency,
+            };
+            tap.arm_compensated(
+                self.current_sample_rate(),
+                CAPTURE_RING_SECS,
+                latency,
+                record_start,
+            );
+        }
+        let active = sources.len();
+        *self.record_sources.lock() = sources;
         self.record_start.store(record_start, Ordering::Relaxed);
         self.record_pass.store(0, Ordering::Relaxed);
         self.record_last_pos.store(u64::MAX, Ordering::Relaxed);
-        self.capture.recording.store(true, Ordering::Relaxed);
+        for tap in &self.captures[..active] {
+            tap.recording.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// The captures of the current or last take.
+    fn active_captures(&self) -> &[Arc<CaptureTap>] {
+        let n = self
+            .record_sources
+            .lock()
+            .len()
+            .clamp(1, MAX_RECORD_SOURCES);
+        &self.captures[..n]
     }
 
     /// How late a played sample reaches the recording, and so how far each
@@ -570,7 +637,14 @@ impl DawEngine {
         let to_frames = |nanos: u64| nanos.saturating_mul(sr) / 1_000_000_000;
         let output_frames = to_frames(stream.output_nanos());
         let input_frames = to_frames(stream.input_nanos());
-        let queue_frames = self.capture.queue_frames() as u64;
+        // Every input node reads the same ring, so they all see the same
+        // queue; one that has not run yet reads zero.
+        let queue_frames = self
+            .captures
+            .iter()
+            .map(|c| c.queue_frames())
+            .max()
+            .unwrap_or(0) as u64;
         let offset_ms = self.audio_prefs.record_offset_ms();
         let measured = (output_frames + input_frames + queue_frames) as i64;
         let offset_frames = offset_ms as i64 * sr as i64 / 1000;
@@ -601,7 +675,9 @@ impl DawEngine {
                 project.tempo_map.tick_to_samples(out_ticks, sr),
             )
         };
-        self.capture.set_punch(enabled, in_samples, out_samples);
+        for tap in self.captures.iter() {
+            tap.set_punch(enabled, in_samples, out_samples);
+        }
     }
 
     /// How many loop passes the current or last recording ran for.
@@ -619,7 +695,7 @@ impl DawEngine {
     /// Whether the last take ran out of reserved room, so the caller can say
     /// so instead of presenting a truncated file as complete.
     pub fn capture_overflowed(&self) -> bool {
-        self.capture.overflowed()
+        self.active_captures().iter().any(|c| c.overflowed())
     }
 
     /// Seconds captured so far in the active take.
@@ -627,36 +703,76 @@ impl DawEngine {
         self.capture.seconds_captured(self.current_sample_rate())
     }
 
+    /// Stop every capture writing. The audio thread stops at its next block.
+    fn stop_captures(&self) {
+        for tap in self.captures.iter() {
+            tap.recording
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     /// Finish the active capture and return the interleaved L/R samples
     /// captured since `start_capture()`. The buffer is left empty so a
     /// follow-up start_capture begins from scratch.
     pub fn stop_capture(&self) -> Vec<f32> {
-        use std::sync::atomic::Ordering;
-        self.capture.recording.store(false, Ordering::Relaxed);
+        self.stop_captures();
+        for tap in &self.captures[1..] {
+            drop(tap.finish());
+        }
         self.capture.take()
     }
 
-    /// Finish the capture: the take's file, and each loop pass in it as a
-    /// range of samples with the timeline position it starts at.
+    /// Finish every capture of the take: for each input recorded, the
+    /// take's file and each loop pass in it as a range of samples with the
+    /// timeline position it starts at.
+    pub fn stop_capture_sources(&self) -> Vec<SourceTake> {
+        self.stop_captures();
+        let sources = std::mem::take(&mut *self.record_sources.lock());
+        let mut takes = Vec::with_capacity(sources.len());
+        for (tap, source) in self.captures.iter().zip(sources) {
+            if let Some((file, passes)) = self.finish_tap(tap) {
+                takes.push(SourceTake {
+                    source,
+                    file,
+                    passes,
+                });
+            }
+        }
+        // A capture past the sources holds nothing; finishing it removes
+        // any file an earlier take left behind.
+        for tap in self.captures.iter().skip(takes.len()) {
+            drop(tap.finish());
+        }
+        takes
+    }
+
+    /// The first capture's take, for one input: see `stop_capture_sources`.
+    pub fn stop_capture_takes(&self) -> Option<(crate::input_node::TakeFile, TakePasses)> {
+        self.stop_capture_sources()
+            .into_iter()
+            .next()
+            .map(|t| (t.file, t.passes))
+    }
+
+    /// One capture's file and its loop passes.
     ///
     /// Each pass except the last is trimmed to where the loop (or the punch
     /// window) ends: the transport wraps at block granularity, so without
     /// the trim every pass would carry a few milliseconds of audio from past
     /// the loop end. The last pass is left as played, since recording may
     /// have stopped part-way through it.
-    pub fn stop_capture_takes(&self) -> Option<(crate::input_node::TakeFile, TakePasses)> {
+    fn finish_tap(&self, tap: &CaptureTap) -> Option<(crate::input_node::TakeFile, TakePasses)> {
         use std::sync::atomic::Ordering::Relaxed;
-        self.capture.recording.store(false, Relaxed);
         let record_start = self.record_start.load(Relaxed);
         // Where the first kept sample was played. With latency compensation
         // that is not always the record start: a punch-in or a pass that
         // began late moves it.
-        let first = self.capture.first_position().unwrap_or(record_start);
-        let (file, ranges) = self.capture.take_pass_ranges()?;
+        let first = tap.first_position().unwrap_or(record_start);
+        let (file, ranges) = tap.take_pass_ranges()?;
         let looping = self.transport.looping.load(Relaxed);
         let loop_start = self.transport.loop_start.load(Relaxed);
         let loop_end = self.transport.loop_end.load(Relaxed);
-        let (punched, punch_in, punch_out) = self.capture.punch();
+        let (punched, punch_in, punch_out) = tap.punch();
 
         let last = ranges.len().saturating_sub(1);
         let passes = ranges
@@ -697,7 +813,9 @@ impl DawEngine {
 
     /// Where takes are written while recording.
     pub fn set_capture_dir(&self, dir: std::path::PathBuf) {
-        self.capture.set_dir(dir);
+        for tap in self.captures.iter() {
+            tap.set_dir(dir.clone());
+        }
     }
 
     /// Sample rate of the running audio device, or the offline default
@@ -775,7 +893,7 @@ impl DawEngine {
             audio_pool,
             Arc::clone(&self.track_meters),
             Arc::clone(&self.input_consumer),
-            Arc::clone(&self.capture),
+            Arc::clone(&self.captures),
             Arc::clone(&self.master_tap),
             Arc::clone(&self.graph_latency_samples),
             cmd_rx,
@@ -1593,7 +1711,7 @@ impl DawEngine {
         self.audio_device.input_channel_offset = input;
         self.audio_device.output_channel_offset = output;
         if input_changed && self.audio_device.is_input_running() {
-            let _ = self.audio_device.start_input_stream();
+            let _ = self.start_input_monitoring();
         }
         if output_changed && self.audio_device.is_running() {
             // The output pair is fixed when the stream opens, so the
@@ -1612,7 +1730,7 @@ impl DawEngine {
         // If monitoring is running, restart it so the new device/channel
         // count takes effect immediately without the caller re-toggling.
         if self.audio_device.is_input_running() {
-            let _ = self.audio_device.start_input_stream();
+            let _ = self.start_input_monitoring();
         }
     }
 
@@ -1622,15 +1740,31 @@ impl DawEngine {
     pub fn start_input_monitoring(&mut self) -> Result<(), String> {
         // Create a fresh ring buffer pair every time we (re)start — this
         // guarantees no stale samples from a previous session survive into
-        // the new stream. Capacity is a few output blocks worth of stereo
-        // samples so small drift between input/output buffer sizes absorbs
-        // without audible glitching.
-        let (producer, consumer) = rtrb::RingBuffer::<f32>::new(16384);
+        // the new stream, and that every frame in it has the new stream's
+        // width. Capacity is a few output blocks of every channel, so small
+        // drift between input and output buffer sizes absorbs without
+        // audible glitching.
+        let width = self.audio_device.planned_input_channels().max(1);
+        let (producer, consumer) = rtrb::RingBuffer::<f32>::new(8192 * width as usize);
+        *self.input_consumer.lock() = None;
         self.audio_device.set_input_monitor_producer(Some(producer));
-        *self.input_consumer.lock() = Some(consumer);
-        self.audio_device
+        let started = self
+            .audio_device
             .start_input_stream()
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        let width = match self.audio_device.input_active_channels() {
+            0 => width,
+            w => w,
+        };
+        *self.input_consumer.lock() = Some(InputRing {
+            consumer,
+            width,
+            default: self.default_input(),
+        });
+        // Which input each armed track reads from depends on the stream's
+        // width and the input chosen in Audio settings.
+        self.rebuild_graph();
+        started
     }
 
     /// Stop the input monitor stream and detach the ring buffer.
@@ -1928,7 +2062,7 @@ impl DawEngine {
             // Offline render doesn't capture anything — the recording tap
             // only matters for live audio. Pass a fresh detached tap so the
             // signature stays uniform without polluting the live capture.
-            Arc::new(CaptureTap::default()),
+            crate::input_node::capture_set(),
             offline_tap,
             offline_latency,
             offline_cmd_rx,
@@ -2181,9 +2315,13 @@ struct EngineCallback {
     /// graph does not run while stopped, so without this every meter kept
     /// showing the last block it played.
     meters_parked: bool,
-    /// Shared with `DawEngine.capture`. Forwarded into the InputNode each
-    /// rebuild so the recording tap survives graph rebuilds.
-    capture: Arc<CaptureTap>,
+    /// Shared with `DawEngine.captures`. Forwarded into the input nodes and
+    /// record taps each rebuild so a recording survives graph rebuilds.
+    captures: Arc<[Arc<CaptureTap>]>,
+    /// One block of every interface input, drained by the input hub and
+    /// read by each input node. Made here, at the largest block size, so
+    /// the audio thread never grows it.
+    input_block: SharedInputBlock,
     graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
     /// Per-track plug-in command receiver. Drained at the start of every
     /// audio block; commands route to TrackNodes by track_id.
@@ -2407,7 +2545,7 @@ impl EngineCallback {
         audio_pool: AudioPool,
         track_meters: TrackMeterMap,
         input_consumer: SharedInputConsumer,
-        capture: Arc<CaptureTap>,
+        captures: Arc<[Arc<CaptureTap>]>,
         master_tap: SharedMasterTap,
         graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
         insert_command_rx: crate::insert_chain::InsertCommandReceiver,
@@ -2465,7 +2603,8 @@ impl EngineCallback {
             master_id: None,
             has_monitored_input: false,
             meters_parked: false,
-            capture,
+            captures,
+            input_block: InputBlock::shared(buffer_size as usize),
             graph_latency_samples,
             insert_command_rx,
             insert_graveyard_tx,
@@ -3634,28 +3773,44 @@ impl EngineCallback {
         // the recording tap lives on that node, so arming a track without
         // switching monitoring on recorded silence: press record, play, get
         // an empty take and no error. Arming alone is now enough to capture.
-        // Each monitoring track with whether it follows the transport
-        // (`monitor_auto`), and every track the live input passes through.
-        let mut monitor_routes: Vec<(crate::graph::NodeId, bool)> = Vec::new();
+        //
+        // Each armed track records its own input: a channel or a pair of the
+        // interface, or another track's output. Every source gets a capture
+        // of its own, in the order `record_sources` gives, which is the order
+        // `start_capture` armed them in.
+        let default_input = self
+            .input_consumer
+            .try_lock()
+            .and_then(|g| g.as_ref().map(|r| r.default))
+            .unwrap_or(InputChannel {
+                first: 0,
+                mono: false,
+            });
+        let mut sources = project.record_sources(default_input);
+        sources.truncate(MAX_RECORD_SOURCES);
+        // Each monitoring track with its input and whether it follows the
+        // transport (`monitor_auto`), and every track the live input passes
+        // through.
+        let mut monitor_routes: Vec<(crate::graph::NodeId, InputChannel, bool)> = Vec::new();
         let mut live_tracks: Vec<&str> = Vec::new();
-        let mut any_armed = false;
-        for track in &project.tracks {
-            if !track.kind.is_audio_bearing() {
+        // An armed instrument track plays the keyboard live, so any armed
+        // track keeps the graph running while stopped; only audio tracks
+        // record and monitor the interface.
+        let any_armed = project
+            .tracks
+            .iter()
+            .any(|t| t.armed && t.kind.is_audio_bearing());
+        for track in project.record_armed() {
+            // A track recording another track's output takes nothing from
+            // the interface, so there is no input to hear on it.
+            let RecordSource::Interface(pick) = project.record_source_of(track, default_input)
+            else {
                 continue;
-            }
-            if track.armed {
-                any_armed = true;
-                // A track recording another track's output takes nothing
-                // from the interface, so there is no input to hear on it.
-                let records_inside = track
-                    .input_source
-                    .as_ref()
-                    .is_some_and(|s| *s != track.id && track_id_to_node.contains_key(s));
-                if track.monitor_input && !records_inside {
-                    if let Some(&node_id) = track_id_to_node.get(&track.id) {
-                        monitor_routes.push((node_id, track.monitor_auto));
-                        live_tracks.push(&track.id);
-                    }
+            };
+            if track.monitor_input {
+                if let Some(&node_id) = track_id_to_node.get(&track.id) {
+                    monitor_routes.push((node_id, pick, track.monitor_auto));
+                    live_tracks.push(&track.id);
                 }
             }
         }
@@ -3665,50 +3820,88 @@ impl EngineCallback {
                 .transport
                 .direct_monitoring
                 .load(std::sync::atomic::Ordering::Relaxed);
-            let mut input_node = InputNode::new(Arc::clone(&self.input_consumer));
-            // Recording another track's output (resampling): a tap on that
-            // node's output feeds the recording instead of the interface.
-            // A conflict between armed tracks is refused when recording
-            // starts; until then the interface stands.
-            let inside = project
-                .record_source()
-                .ok()
-                .flatten()
-                .and_then(|id| track_id_to_node.get(&id).copied());
-            if let Some(source_node) = inside {
-                let tap = self
-                    .graph
-                    .add_node(Box::new(RecordTapNode::new(Arc::clone(&self.capture))));
-                self.graph.connect(source_node, 0, tap, 0);
-                self.graph.connect(source_node, 1, tap, 1);
-            } else {
-                // Recording capture survives graph rebuilds because it's the
-                // same CaptureTap Arc handed to every InputNode we ever build.
-                input_node.set_capture(Some(Arc::clone(&self.capture)));
+            // The hub drains the interface's input once per block; each input
+            // node reads its channels from what the hub drained, and the
+            // edge from the hub makes sure it has run first.
+            let hub = self.graph.add_node(Box::new(InputHub::new(
+                Arc::clone(&self.input_consumer),
+                Arc::clone(&self.input_block),
+            )));
+            let mut input_nodes: Vec<(InputChannel, crate::graph::NodeId)> = Vec::new();
+            for (slot, source) in sources.iter().enumerate() {
+                let capture = Arc::clone(&self.captures[slot]);
+                match source {
+                    RecordSource::Interface(pick) => {
+                        let mut node = InputNode::new(Arc::clone(&self.input_block), *pick);
+                        node.set_capture(Some(capture));
+                        let id = self.graph.add_node(Box::new(node));
+                        self.graph.connect(hub, 0, id, 0);
+                        input_nodes.push((*pick, id));
+                    }
+                    // Recording another track's output (resampling): a tap on
+                    // that node's output feeds this capture.
+                    RecordSource::Track(source_id) => {
+                        if let Some(&source_node) = track_id_to_node.get(source_id) {
+                            let tap = self.graph.add_node(Box::new(RecordTapNode::new(capture)));
+                            self.graph.connect(source_node, 0, tap, 0);
+                            self.graph.connect(source_node, 1, tap, 1);
+                        }
+                    }
+                }
             }
-            let input_id = self.graph.add_node(Box::new(input_node));
+            // Past the most inputs that record at once, a track still hears
+            // its input; it just has no capture.
+            for &(_, pick, _) in &monitor_routes {
+                if !input_nodes.iter().any(|(p, _)| *p == pick) {
+                    let id = self.graph.add_node(Box::new(InputNode::new(
+                        Arc::clone(&self.input_block),
+                        pick,
+                    )));
+                    self.graph.connect(hub, 0, id, 0);
+                    input_nodes.push((pick, id));
+                }
+            }
+            let node_of = |pick: InputChannel| {
+                input_nodes
+                    .iter()
+                    .find(|(p, _)| *p == pick)
+                    .map(|&(_, id)| id)
+            };
             if monitor_routes.is_empty() {
-                // Armed but not monitoring: the node exists only to feed the
-                // recording tap, so it connects to nothing. Wiring it to
-                // master here would make the input audible when the user
+                // Armed but not monitoring: the input nodes exist only to
+                // feed the recording, so they connect to nothing. Wiring them
+                // to master here would make the input audible when the user
                 // switched monitoring off.
             } else if direct {
                 // Direct monitoring: bypass the track FX chain and route live
-                // input straight to master for minimum latency. One path for
-                // all tracks, so it follows the transport only when every
-                // monitoring track does.
-                let auto = monitor_routes.iter().all(|&(_, auto)| auto);
-                self.graph.connect(input_id, 0, master_id, 0);
-                let left_edge = self.graph.last_edge_index();
-                self.graph.connect(input_id, 1, master_id, 1);
-                let right_edge = self.graph.last_edge_index();
-                self.monitor_edges.push(MonitorEdges {
-                    auto,
-                    left_edge,
-                    right_edge,
-                });
+                // input straight to master for minimum latency. One path per
+                // input, so it follows the transport only when every track
+                // monitoring that input does.
+                for &(pick, input_id) in &input_nodes {
+                    let on_it: Vec<bool> = monitor_routes
+                        .iter()
+                        .filter(|r| r.1 == pick)
+                        .map(|r| r.2)
+                        .collect();
+                    if on_it.is_empty() {
+                        continue;
+                    }
+                    let auto = on_it.iter().all(|&auto| auto);
+                    self.graph.connect(input_id, 0, master_id, 0);
+                    let left_edge = self.graph.last_edge_index();
+                    self.graph.connect(input_id, 1, master_id, 1);
+                    let right_edge = self.graph.last_edge_index();
+                    self.monitor_edges.push(MonitorEdges {
+                        auto,
+                        left_edge,
+                        right_edge,
+                    });
+                }
             } else {
-                for (track_node_id, auto) in monitor_routes {
+                for (track_node_id, pick, auto) in monitor_routes {
+                    let Some(input_id) = node_of(pick) else {
+                        continue;
+                    };
                     self.graph.connect(input_id, 0, track_node_id, 0);
                     let left_edge = self.graph.last_edge_index();
                     self.graph.connect(input_id, 1, track_node_id, 1);
@@ -5561,7 +5754,7 @@ mod rt_safety_tests {
             AudioPool::new(),
             track_meters,
             input_consumer,
-            Arc::new(CaptureTap::default()),
+            crate::input_node::capture_set(),
             master_tap::new_shared(),
             Arc::new(std::sync::atomic::AtomicU32::new(0)),
             cmd_rx,
@@ -5798,7 +5991,7 @@ mod wait_for_input_tests {
             AudioPool::new(),
             track_meters,
             input_consumer,
-            Arc::new(CaptureTap::default()),
+            crate::input_node::capture_set(),
             master_tap::new_shared(),
             Arc::new(std::sync::atomic::AtomicU32::new(0)),
             cmd_rx,
@@ -5982,6 +6175,7 @@ mod monitoring_tests {
         input: rtrb::Producer<f32>,
         commands: crossbeam_channel::Sender<EngineCommand>,
         capture: Arc<CaptureTap>,
+        captures: Arc<[Arc<CaptureTap>]>,
     }
 
     fn rig(project: Project) -> Rig {
@@ -5989,16 +6183,29 @@ mod monitoring_tests {
     }
 
     fn rig_with(project: Project, pool: AudioPool) -> Rig {
+        rig_wide(project, pool, 2)
+    }
+
+    /// A rig whose interface has `width` inputs.
+    fn rig_wide(project: Project, pool: AudioPool, width: u16) -> Rig {
         let transport = TransportState::default();
         transport.sample_rate.store(48_000, Relaxed);
         let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);
         let (command_tx, command_rx) = bounded::<EngineCommand>(8);
         let track_meters: TrackMeterMap = Arc::new(Mutex::new(HashMap::new()));
         let (input, consumer) = RingBuffer::<f32>::new(48_000 * 2);
-        let input_consumer: SharedInputConsumer = Arc::new(Mutex::new(Some(consumer)));
+        let input_consumer: SharedInputConsumer = Arc::new(Mutex::new(Some(InputRing {
+            consumer,
+            width,
+            default: InputChannel {
+                first: 0,
+                mono: false,
+            },
+        })));
         let (_cmd_tx, cmd_rx) = crate::insert_chain::command_channel(8);
         let (grave_tx, _grave_rx) = crate::insert_chain::graveyard_channel(8);
-        let capture = Arc::new(CaptureTap::default());
+        let captures = crate::input_node::capture_set();
+        let capture = Arc::clone(&captures[0]);
         let cb = EngineCallback::new(
             transport,
             Arc::new(Mutex::new(project)),
@@ -6007,7 +6214,7 @@ mod monitoring_tests {
             pool,
             track_meters,
             input_consumer,
-            Arc::clone(&capture),
+            Arc::clone(&captures),
             master_tap::new_shared(),
             Arc::new(std::sync::atomic::AtomicU32::new(0)),
             cmd_rx,
@@ -6034,6 +6241,7 @@ mod monitoring_tests {
             input,
             commands: command_tx,
             capture,
+            captures,
         }
     }
 
@@ -6261,5 +6469,60 @@ mod monitoring_tests {
             baked.num_frames
         );
         assert_ne!(key, "loop");
+    }
+
+    /// A singer on input 1 and a guitar on input 2, on two armed tracks:
+    /// each track records and hears its own input. Every armed track got the
+    /// same stereo input before, so the two could not be recorded at once.
+    #[test]
+    fn two_armed_tracks_record_two_inputs_at_once() {
+        let mut song = Project::default();
+        for (id, first) in [("vox", 0), ("gtr", 1)] {
+            let mut t = hardwave_project::Track::new_audio(id.into(), id.into());
+            t.armed = true;
+            t.monitor_input = true;
+            t.input_channel = Some(InputChannel { first, mono: true });
+            song.tracks.push(t);
+        }
+        let mut r = rig_wide(song, AudioPool::new(), 4);
+        // Armed as start_capture arms them: one capture per input, in the
+        // order of the tracks.
+        for tap in &r.captures[..2] {
+            tap.arm(48_000, 1);
+            tap.recording.store(true, Relaxed);
+        }
+        play(&r);
+        let mut out = vec![0.0_f32; 512];
+        for _ in 0..8 {
+            for _ in 0..256 {
+                for v in [0.3, 0.6, 0.9, 0.9] {
+                    let _ = r.input.push(v);
+                }
+            }
+            r.cb.process(&mut out, 256, 2);
+        }
+        for tap in r.captures.iter() {
+            tap.recording.store(false, Relaxed);
+        }
+        let vox = r.captures[0].take();
+        let gtr = r.captures[1].take();
+        assert!(
+            !vox.is_empty() && !gtr.is_empty(),
+            "both inputs were recorded"
+        );
+        assert!(
+            vox.iter().all(|&s| s == 0.3),
+            "the singer's take is input 1 only"
+        );
+        assert!(
+            gtr.iter().all(|&s| s == 0.6),
+            "the guitar's take is input 2 only"
+        );
+        assert!(r.captures[2].take().is_empty(), "nothing else recorded");
+        let heard = out.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(
+            heard > 0.4,
+            "both inputs are heard through their tracks, got {heard}"
+        );
     }
 }

@@ -206,7 +206,7 @@ export function pushPunchToEngine(): void {
 }
 
 /** One loop pass of a take, written as its own file. */
-interface TakePass {
+export interface TakePass {
   path: string
   startSamples: number
   startTicks: number
@@ -215,13 +215,22 @@ interface TakePass {
 }
 
 /** What the backend says a finished take turned out to be. */
-interface RecordedTake {
+export interface RecordedTake {
   path: string | null
   seconds: number
   peak: number
   truncated: boolean
   /** One per loop pass, in the order played. One when the loop never wrapped. */
   passes: TakePass[]
+  /** Each armed audio track's own passes, by track id: the take of the input
+   *  it records. Missing for a backend that recorded one input for all. */
+  byTrack?: Record<string, TakePass[]>
+}
+
+/** The passes a track gets from a take: its own input's, or the one take
+ *  every armed track shared before tracks had inputs of their own. */
+export function passesFor(take: RecordedTake | null, trackId: string): TakePass[] {
+  return take?.byTrack?.[trackId] ?? take?.passes ?? []
 }
 
 /**
@@ -298,7 +307,7 @@ async function commitRecording(
     for (const track of audioArmed) {
       if (!haveAudio) continue
       const placed: string[] = []
-      for (const pass of passes) {
+      for (const pass of passesFor(take, track.id)) {
         const ticks = Number.isFinite(pass.startTicks) ? pass.startTicks : fallbackTicks
         try {
           const clip = await useTrackStore.getState().importAudioFile(track.id, pass.path, ticks)
@@ -367,9 +376,7 @@ async function commitRecording(
   }
   if (audioDone.length + midiDone.length > 1) {
     push('info', `Recorded ${audioDone.length + midiDone.length} tracks`, {
-      detail: audioDone.length > 1
-        ? 'Your interface has one stereo input, so every armed audio track got the same take.'
-        : [...audioDone, ...midiDone].join(', '),
+      detail: [...audioDone, ...midiDone].join(', '),
     })
   }
   if (passCount > 1) {
