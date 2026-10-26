@@ -1,5 +1,7 @@
 import { nlBrowser } from './nl-browser'
+import { nlEditors } from './nl-editors'
 import { nlMixer } from './nl-mixer'
+import { nlPanels } from './nl-panels'
 import { nlPlaylist } from './nl-playlist'
 
 /**
@@ -11,6 +13,8 @@ export const nl: Record<string, string> = {
   ...nlPlaylist,
   ...nlMixer,
   ...nlBrowser,
+  ...nlEditors,
+  ...nlPanels,
   // Menus
   'File': 'Bestand',
   'Edit': 'Bewerken',
