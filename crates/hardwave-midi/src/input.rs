@@ -62,6 +62,12 @@ struct SharedState {
     /// stamped with the block's start position, so a recorded part was
     /// quantised to the buffer size, about 10 ms at 512 frames.
     events: VecDeque<(Instant, MidiEvent)>,
+    /// The same events for the thread that applies MIDI mappings and reads
+    /// a control surface. It used to drain `events` too, every 8 ms, so
+    /// each event went to whichever of the two got there first: a note
+    /// taken by the mapping thread was never played, and a knob moved
+    /// for a mapping sometimes reached a plug-in instead.
+    control: VecDeque<MidiEvent>,
     last_event_at: Option<Instant>,
     dropped: u64,
     // Clock sync — updated in the midir callback on system realtime bytes.
@@ -105,6 +111,29 @@ pub struct MidiInputManager {
     /// is off and their messages are dropped as they arrive, so turning it
     /// back on needs no reconnection.
     enabled: Arc<AtomicBool>,
+    /// Which events belong to the control surface, not to the music.
+    claim: Arc<parking_lot::RwLock<Option<Claim>>>,
+}
+
+/// Says whether an event is the control surface's: its buttons send notes
+/// and its faders pitch bends, which must not play an armed instrument.
+pub type Claim = Arc<dyn Fn(&MidiEvent) -> bool + Send + Sync>;
+
+/// Queue an event that arrived: for the audio thread unless the control
+/// surface claims it, and for the thread that applies mappings either way.
+fn push_event(state: &mut SharedState, now: Instant, event: MidiEvent, claimed: bool) {
+    if !claimed {
+        if state.events.len() >= QUEUE_CAPACITY {
+            state.events.pop_front();
+            state.dropped = state.dropped.saturating_add(1);
+        }
+        state.events.push_back((now, event));
+    }
+    if state.control.len() >= QUEUE_CAPACITY {
+        state.control.pop_front();
+    }
+    state.control.push_back(event);
+    state.last_event_at = Some(now);
 }
 
 /// What the midir callback for one port needs: the queue every port shares,
@@ -113,6 +142,7 @@ struct PortContext {
     shared: Arc<Mutex<SharedState>>,
     velocity_curve: Arc<AtomicU8>,
     enabled: Arc<AtomicBool>,
+    claim: Arc<parking_lot::RwLock<Option<Claim>>>,
 }
 
 impl MidiInputManager {
@@ -123,7 +153,15 @@ impl MidiInputManager {
             desired: Vec::new(),
             velocity_curves: HashMap::new(),
             enabled: Arc::new(AtomicBool::new(true)),
+            claim: Arc::new(parking_lot::RwLock::new(None)),
         }
+    }
+
+    /// Say which events are the control surface's, so they reach the thread
+    /// that reads the surface and not the audio thread. Applies to ports
+    /// already open.
+    pub fn set_claim(&self, claim: Option<Claim>) {
+        *self.claim.write() = claim;
     }
 
     /// List available MIDI input port names. Returns an empty vec if the
@@ -177,6 +215,7 @@ impl MidiInputManager {
             shared: Arc::clone(&self.shared),
             velocity_curve: Arc::clone(self.velocity_curve_slot(port_name)),
             enabled: Arc::clone(&self.enabled),
+            claim: Arc::clone(&self.claim),
         };
         let conn = input
             .connect(
@@ -318,11 +357,12 @@ impl MidiInputManager {
         self.active.iter().map(|(n, _)| n.clone()).collect()
     }
 
-    /// Drain and return every buffered event. Called by the engine once per
-    /// audio block so events stay fresh even with many ports open.
+    /// Every event since the last call, for the thread that applies MIDI
+    /// mappings and reads a control surface. Its own copy: the audio thread
+    /// drains the same events from its queue (`try_drain_events_into`).
     pub fn drain_events(&self) -> Vec<MidiEvent> {
         let mut state = self.shared.lock();
-        state.events.drain(..).map(|(_, ev)| ev).collect()
+        state.control.drain(..).collect()
     }
 
     /// Non-blocking drain into a caller-owned buffer. Returns true when the
@@ -368,12 +408,7 @@ impl MidiInputManager {
     /// exact same drain pipeline as a physical controller.
     pub fn inject(&self, ev: MidiEvent) {
         let mut state = self.shared.lock();
-        if state.events.len() >= QUEUE_CAPACITY {
-            state.events.pop_front();
-            state.dropped = state.dropped.saturating_add(1);
-        }
-        state.events.push_back((Instant::now(), ev));
-        state.last_event_at = Some(Instant::now());
+        push_event(&mut state, Instant::now(), ev, false);
     }
 
     /// Return the current clock-sync observation and clear the pending
@@ -501,13 +536,13 @@ fn handle_input_bytes(bytes: &[u8], context: &PortContext) {
                     event,
                     VelocityCurve::from_index(context.velocity_curve.load(Ordering::Relaxed)),
                 );
+                let claimed = context
+                    .claim
+                    .read()
+                    .as_ref()
+                    .is_some_and(|claim| claim(&event));
                 let mut state = shared.lock();
-                if state.events.len() >= QUEUE_CAPACITY {
-                    state.events.pop_front();
-                    state.dropped = state.dropped.saturating_add(1);
-                }
-                state.events.push_back((now, event));
-                state.last_event_at = Some(now);
+                push_event(&mut state, now, event, claimed);
             }
         }
     }
@@ -685,6 +720,7 @@ mod tests {
             shared: Arc::clone(&shared),
             velocity_curve: Arc::new(AtomicU8::new(VelocityCurve::Linear.to_index())),
             enabled: Arc::new(AtomicBool::new(true)),
+            claim: Arc::new(parking_lot::RwLock::new(None)),
         };
         handle_input_bytes(&[0xF2, 0x00, 0x02], &context);
         // 00:00:10:00 at 30 fps, as eight quarter frames.
@@ -726,6 +762,7 @@ mod tests {
             shared: Arc::clone(&shared),
             velocity_curve: Arc::new(AtomicU8::new(VelocityCurve::Linear.to_index())),
             enabled: Arc::clone(&enabled),
+            claim: Arc::new(parking_lot::RwLock::new(None)),
         };
 
         handle_input_bytes(&[0x90, 60, 100], &context);
@@ -793,6 +830,62 @@ mod tests {
         let mut second = Vec::new();
         manager.try_drain_events_with_age_into(&mut second, 48_000.0);
         assert!(second.is_empty(), "events were drained twice");
+    }
+
+    /// The audio thread and the thread that applies mappings each get every
+    /// event. They used to share one queue, and each event went to whichever
+    /// drained it first.
+    #[test]
+    fn the_audio_thread_and_the_mapping_thread_each_get_every_event() {
+        let manager = MidiInputManager::new();
+        for n in 0..10u8 {
+            manager.inject(MidiEvent::ControlChange {
+                timing: 0,
+                channel: 0,
+                cc: n,
+                value: 0.5,
+            });
+        }
+        let mapping = manager.drain_events();
+        let mut audio = Vec::new();
+        assert!(manager.try_drain_events_into(&mut audio));
+        assert_eq!((mapping.len(), audio.len()), (10, 10));
+        assert!(manager.drain_events().is_empty(), "each copy drains once");
+    }
+
+    /// A control surface's message goes to the thread that reads the surface
+    /// only: its buttons are notes, and must not play an armed instrument.
+    #[test]
+    fn a_message_the_control_surface_claims_never_reaches_the_audio_thread() {
+        let shared = Arc::new(Mutex::new(SharedState::default()));
+        let claim: Claim = Arc::new(|ev| matches!(ev, MidiEvent::NoteOn { note: 94, .. }));
+        let context = PortContext {
+            shared: Arc::clone(&shared),
+            velocity_curve: Arc::new(AtomicU8::new(VelocityCurve::Linear.to_index())),
+            enabled: Arc::new(AtomicBool::new(true)),
+            claim: Arc::new(parking_lot::RwLock::new(Some(claim))),
+        };
+        handle_input_bytes(&[0x90, 94, 127], &context); // the desk's Play button
+        handle_input_bytes(&[0x90, 60, 100], &context); // a key
+        let manager = MidiInputManager {
+            shared,
+            ..MidiInputManager::new()
+        };
+        let mut audio = Vec::new();
+        manager.try_drain_events_into(&mut audio);
+        let notes: Vec<u8> = audio
+            .iter()
+            .filter_map(|e| match e {
+                MidiEvent::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notes, vec![60], "the key plays, the button does not");
+        assert_eq!(
+            manager.drain_events().len(),
+            2,
+            "the surface thread sees both"
+        );
     }
 
     #[test]
