@@ -53,6 +53,16 @@ export function t(english: string): string {
   return DICTIONARIES[language]?.[english] ?? english
 }
 
+/**
+ * A sentence with blanks: `tf('{n} tracks on {name}', { n: 3, name })`. The
+ * translation keeps the same {names}, wherever its language puts them, so
+ * "3 sporen op Bass" reads right rather than being stitched from pieces.
+ */
+export function tf(english: string, values: Record<string, string | number>): string {
+  return t(english).replace(/\{(\w+)\}/g, (blank, key: string) =>
+    key in values ? String(values[key]) : blank)
+}
+
 /** Subscribe to the chosen language, for components that show text. */
 export function useLanguage(): LanguageId {
   return useLanguageStore(s => s.language)
