@@ -146,6 +146,37 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
     }
   }, [targetSlot, targetTrackId, targetTrack])
 
+  // .vstpreset files, the preset format every VST3 host reads: a plug-in
+  // maker's library or a preset from Cubase loads here, and one saved here
+  // opens there.
+  const isVst3 = !!targetSlot && targetSlot.pluginId.startsWith('vst3:')
+  const importVstPreset = useCallback(async () => {
+    if (!targetSlot || !targetTrackId) return
+    const { push } = useNotificationStore.getState()
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const path = await open({ multiple: false, filters: [{ name: 'VST3 preset', extensions: ['vstpreset'] }] })
+      if (typeof path !== 'string') return
+      await invoke('import_vstpreset', { trackId: targetTrackId, slotId: targetSlot.id, pluginId: targetSlot.pluginId, path })
+      push('info', `Loaded "${path.split(/[\\/]/).pop()}"`, { detail: `Into ${targetSlot.pluginName}.` })
+    } catch (e) {
+      push('warning', 'That preset did not load', { detail: String(e) })
+    }
+  }, [targetSlot, targetTrackId])
+  const exportVstPreset = useCallback(async () => {
+    if (!targetSlot || !targetTrackId) return
+    const { push } = useNotificationStore.getState()
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog')
+      const path = await save({ defaultPath: `${targetSlot.pluginName}.vstpreset`, filters: [{ name: 'VST3 preset', extensions: ['vstpreset'] }] })
+      if (!path) return
+      await invoke('export_vstpreset', { trackId: targetTrackId, slotId: targetSlot.id, pluginId: targetSlot.pluginId, path })
+      push('info', 'Saved the preset file', { detail: path })
+    } catch (e) {
+      push('warning', 'The preset file was not saved', { detail: String(e) })
+    }
+  }, [targetSlot, targetTrackId])
+
   const rename = useCallback(async (row: Row) => {
     const newName = window.prompt('Rename this preset', row.preset.name)?.trim()
     if (!newName || newName === row.preset.name) return
@@ -194,6 +225,10 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
           {slots.length === 0 && <option value="">(no plug-ins on that track)</option>}
           {slots.map(s => <option key={s.id} value={s.id}>{s.pluginName}</option>)}
         </select>
+        {isVst3 && (<>
+          <button type="button" className="hw-dbtn" onClick={() => { void importVstPreset() }} title="Load a .vstpreset file into this plug-in">Import .vstpreset…</button>
+          <button type="button" className="hw-dbtn" onClick={() => { void exportVstPreset() }} title="Save this plug-in's settings as a .vstpreset file other hosts open">Export…</button>
+        </>)}
       </div>
 
       <div style={{ overflowY: 'auto', flex: 1 }}>

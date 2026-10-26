@@ -150,6 +150,18 @@ pub fn load_plugin_preset(
 ) -> Result<(), String> {
     let dir = preset_dir(&app, &plugin_id)?;
     let bytes = fs::read(blob_path(&dir, &preset_id)).map_err(|e| format!("read blob: {e}"))?;
+    apply_state(&app, &state, track_id, slot_id, bytes)
+}
+
+/// Give a live slot a plug-in state: the playing instance and any second
+/// copy its window runs.
+fn apply_state(
+    app: &AppHandle,
+    state: &State<AppState>,
+    track_id: String,
+    slot_id: String,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
     // The plug-in's open window is an instance of its own: give it the
     // preset too, on the main thread where its interface lives, or the
     // window keeps showing the old settings while the new ones play.
@@ -189,6 +201,91 @@ pub fn load_plugin_preset(
         .try_send_insert_command(cmd)
         .map_err(|_| "insert command queue full or engine not started".to_string())?;
     Ok(())
+}
+
+/// The class id of a VST3 plug-in, read from a throwaway instance the way
+/// the parameter sheet reads names. An error for any other kind.
+fn vst3_class_of(state: &State<AppState>, plugin_id: &str) -> Result<[u8; 16], String> {
+    let descriptor = {
+        let engine = state.engine.lock();
+        let scanner = engine.plugin_scanner.lock();
+        scanner
+            .find(plugin_id)
+            .cloned()
+            .ok_or_else(|| format!("Plug-in not found: {plugin_id}"))?
+    };
+    let plugin = crate::commands::plugins::load_hosted(&descriptor)?;
+    plugin
+        .vst3_class_id()
+        .ok_or_else(|| ".vstpreset files are for VST3 plug-ins".to_string())
+}
+
+/// The biggest preset file read: a sampler's preset can carry its samples,
+/// but a file far past this is not a preset.
+const VSTPRESET_MAX: u64 = 256 * 1024 * 1024;
+
+/// Load a `.vstpreset` file into a VST3 slot: a preset from the plug-in
+/// maker's library, Cubase or another host. One made for another plug-in
+/// is refused rather than fed to this one.
+#[tauri::command]
+pub fn import_vstpreset(
+    app: AppHandle,
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    plugin_id: String,
+    path: String,
+) -> Result<(), String> {
+    let size = fs::metadata(&path)
+        .map_err(|_| "The preset file could not be read".to_string())?
+        .len();
+    if size > VSTPRESET_MAX {
+        return Err("That file is too big to be a preset".into());
+    }
+    let bytes = fs::read(&path).map_err(|_| "The preset file could not be read".to_string())?;
+    let preset = hardwave_plugin_host::vstpreset::parse(&bytes)?;
+    let class = vst3_class_of(&state, &plugin_id)?;
+    if !hardwave_plugin_host::vstpreset::is_for(&preset.class_id, &class) {
+        return Err("This preset is for another plug-in".into());
+    }
+    apply_state(&app, &state, track_id, slot_id, preset.component)
+}
+
+/// Save a VST3 slot's settings, as it plays now, as a `.vstpreset` file
+/// that other hosts and the plug-in's own browser can open.
+#[tauri::command]
+pub fn export_vstpreset(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    plugin_id: String,
+    path: String,
+) -> Result<(), String> {
+    let class = vst3_class_of(&state, &plugin_id)?;
+    let bytes = state
+        .engine
+        .lock()
+        .snapshot_plugin_states(std::time::Duration::from_millis(500))
+        .and_then(|mut m| m.remove(&(track_id.clone(), slot_id.clone())))
+        .or_else(|| {
+            let engine = state.engine.lock();
+            let project = engine.project.lock();
+            project
+                .track(&track_id)
+                .and_then(|t| t.inserts.iter().find(|i| i.id == slot_id))
+                .and_then(|i| i.state.clone())
+        })
+        .ok_or_else(|| "The plug-in gave no settings to save".to_string())?;
+    let mut target = PathBuf::from(path);
+    if target.extension().and_then(|e| e.to_str()) != Some("vstpreset") {
+        target.set_extension("vstpreset");
+    }
+    let class_id = hardwave_plugin_host::vstpreset::class_id_string(&class, cfg!(windows));
+    fs::write(
+        &target,
+        hardwave_plugin_host::vstpreset::write(&class_id, &bytes, None),
+    )
+    .map_err(|e| format!("Could not write the preset: {e}"))
 }
 
 #[tauri::command]

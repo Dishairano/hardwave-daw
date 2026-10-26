@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-vstpreset"
+description = "Enables the import_vstpreset command without any pre-configured scope."
+commands.allow = ["import_vstpreset"]
+
+[[permission]]
+identifier = "deny-import-vstpreset"
+description = "Denies the import_vstpreset command without any pre-configured scope."
+commands.deny = ["import_vstpreset"]
