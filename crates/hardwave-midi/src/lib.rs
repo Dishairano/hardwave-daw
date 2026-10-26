@@ -69,6 +69,26 @@ pub enum MidiEvent {
         channel: u8,
         pressure: f32,
     },
+    /// One sounding note's own setting, for a plug-in that takes note
+    /// expression (CLAP, VST3): sent after its note-on. A note with a pan
+    /// or fine tuning of its own was heard that way from the built-in
+    /// synth only; a plug-in got the plain note.
+    NoteExpression {
+        timing: u32,
+        channel: u8,
+        note: u8,
+        kind: NoteExpressionKind,
+        value: f32,
+    },
+}
+
+/// What a note expression sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoteExpressionKind {
+    /// Detune, in semitones.
+    Tuning,
+    /// Place in the stereo field, -1 left to 1 right.
+    Pan,
 }
 
 impl MidiEvent {
@@ -80,6 +100,7 @@ impl MidiEvent {
             Self::PitchBend { timing, .. } => *timing,
             Self::Aftertouch { timing, .. } => *timing,
             Self::ChannelPressure { timing, .. } => *timing,
+            Self::NoteExpression { timing, .. } => *timing,
         }
     }
 }

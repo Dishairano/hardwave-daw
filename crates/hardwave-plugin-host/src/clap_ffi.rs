@@ -215,6 +215,10 @@ pub const CLAP_PROCESS_SLEEP: i32 = 4;
 pub const CLAP_EVENT_NOTE_ON: u16 = 0;
 pub const CLAP_EVENT_NOTE_OFF: u16 = 1;
 pub const CLAP_EVENT_NOTE_CHOKE: u16 = 2;
+pub const CLAP_EVENT_NOTE_EXPRESSION: u16 = 4;
+/// Note expression ids: pan is 0 (left) to 1 (right), tuning is semitones.
+pub const CLAP_NOTE_EXPRESSION_PAN: i32 = 1;
+pub const CLAP_NOTE_EXPRESSION_TUNING: i32 = 2;
 pub const CLAP_EVENT_PARAM_VALUE: u16 = 5;
 pub const CLAP_EVENT_MIDI: u16 = 6;
 pub const CLAP_EVENT_TRANSPORT: u16 = 9;
@@ -275,6 +279,18 @@ pub struct ClapEventNote {
     pub channel: i16,
     pub key: i16,
     pub velocity: f64,
+}
+
+/// clap_event_note_expression_t: one sounding note's own setting.
+#[repr(C)]
+pub struct ClapEventNoteExpression {
+    pub header: ClapEventHeader,
+    pub expression_id: i32,
+    pub note_id: i32,
+    pub port_index: i16,
+    pub channel: i16,
+    pub key: i16,
+    pub value: f64,
 }
 
 #[repr(C)]

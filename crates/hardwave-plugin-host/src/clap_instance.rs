@@ -12,15 +12,16 @@
 
 use crate::clap_ffi::{
     build_static_host, ClapAudioBuffer, ClapEventHeader, ClapEventMidi, ClapEventNote,
-    ClapEventParamValue, ClapEventTransport, ClapHost, ClapHostParams, ClapInputEvents,
-    ClapIstream, ClapOstream, ClapOutputEvents, ClapParamInfo, ClapPlugin, ClapPluginEntry,
-    ClapPluginFactory, ClapPluginGui, ClapPluginLatency, ClapPluginParams, ClapPluginState,
-    ClapProcess, ClapWindow, ClapWindowHandle, CLAP_BEATTIME_FACTOR, CLAP_CORE_EVENT_SPACE_ID,
-    CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
-    CLAP_EVENT_TRANSPORT, CLAP_EXT_GUI, CLAP_EXT_HOST_PARAMS, CLAP_EXT_LATENCY, CLAP_EXT_PARAMS,
-    CLAP_EXT_STATE, CLAP_PROCESS_ERROR, CLAP_SECTIME_FACTOR, CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
-    CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
-    CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
+    ClapEventNoteExpression, ClapEventParamValue, ClapEventTransport, ClapHost, ClapHostParams,
+    ClapInputEvents, ClapIstream, ClapOstream, ClapOutputEvents, ClapParamInfo, ClapPlugin,
+    ClapPluginEntry, ClapPluginFactory, ClapPluginGui, ClapPluginLatency, ClapPluginParams,
+    ClapPluginState, ClapProcess, ClapWindow, ClapWindowHandle, CLAP_BEATTIME_FACTOR,
+    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_NOTE_OFF,
+    CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT, CLAP_EXT_GUI,
+    CLAP_EXT_HOST_PARAMS, CLAP_EXT_LATENCY, CLAP_EXT_PARAMS, CLAP_EXT_STATE,
+    CLAP_NOTE_EXPRESSION_PAN, CLAP_NOTE_EXPRESSION_TUNING, CLAP_PROCESS_ERROR, CLAP_SECTIME_FACTOR,
+    CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
+    CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
 };
 use crate::types::*;
 use parking_lot::Mutex;
@@ -69,6 +70,14 @@ pub struct ClapPluginInstance {
     /// The plug-in's own presets, found through its preset-discovery
     /// factory the first time they are asked for.
     presets: std::sync::OnceLock<Vec<crate::clap_presets::ClapPreset>>,
+    /// Kept from block to block, so processing allocates nothing: copies
+    /// of the inputs (a plug-in may write to them), the channel pointers,
+    /// and the block's events. All of it used to be made and freed again
+    /// every block, on the audio thread.
+    input_scratch: Vec<Vec<f32>>,
+    input_ptrs: Vec<*mut f32>,
+    output_ptrs: Vec<*mut f32>,
+    event_queue: Box<EncodedEventQueue>,
 }
 
 /// What the main thread needs for this instance's window. CLAP has the
@@ -372,6 +381,12 @@ impl ClapPluginInstance {
                 resize_request,
             })),
             presets: std::sync::OnceLock::new(),
+            input_scratch: Vec::new(),
+            input_ptrs: Vec::with_capacity(8),
+            output_ptrs: Vec::with_capacity(8),
+            event_queue: Box::new(EncodedEventQueue {
+                events: Vec::with_capacity(MAX_BLOCK_EVENTS),
+            }),
         };
         me.refresh_params();
         {
@@ -598,6 +613,10 @@ impl HostedPlugin for ClapPluginInstance {
     fn activate(&mut self, sample_rate: f64, max_block_size: u32) -> Result<(), String> {
         self.sample_rate = sample_rate.max(1.0);
         self.max_block = max_block_size.max(1);
+        // The input copies, made here at their full size rather than per block.
+        self.input_scratch = (0..2)
+            .map(|_| Vec::with_capacity(self.max_block as usize))
+            .collect();
         let ok =
             unsafe { ((*self.plugin).activate)(self.plugin, self.sample_rate, 1, self.max_block) };
         if !ok {
@@ -652,63 +671,75 @@ impl HostedPlugin for ClapPluginInstance {
         }
         // Build input channel pointers. CLAP wants `*mut *mut f32`.
         let channel_count = inputs.len().min(outputs.len()).max(1) as u32;
-        let mut input_scratch: Vec<Vec<f32>> = inputs
-            .iter()
-            .map(|c| c[..num_samples.min(c.len())].to_vec())
-            .collect();
+        if self.input_scratch.len() < inputs.len() {
+            self.input_scratch.resize_with(inputs.len(), Vec::new);
+        }
+        for (copy, input) in self.input_scratch.iter_mut().zip(inputs) {
+            copy.clear();
+            copy.extend_from_slice(&input[..num_samples.min(input.len())]);
+        }
         // Ensure outputs have enough capacity.
         for out in outputs.iter_mut() {
             out.clear();
             out.resize(num_samples, 0.0);
         }
-        let mut input_ptrs: Vec<*mut f32> =
-            input_scratch.iter_mut().map(|v| v.as_mut_ptr()).collect();
-        let mut output_ptrs: Vec<*mut f32> = outputs.iter_mut().map(|v| v.as_mut_ptr()).collect();
+        self.input_ptrs.clear();
+        self.input_ptrs.extend(
+            self.input_scratch
+                .iter_mut()
+                .take(inputs.len())
+                .map(|v| v.as_mut_ptr()),
+        );
+        self.output_ptrs.clear();
+        self.output_ptrs
+            .extend(outputs.iter_mut().map(|v| v.as_mut_ptr()));
         let audio_in = ClapAudioBuffer {
-            data32: input_ptrs.as_mut_ptr(),
+            data32: self.input_ptrs.as_mut_ptr(),
             data64: std::ptr::null_mut(),
             channel_count,
             latency: 0,
             constant_mask: 0,
         };
         let mut audio_out = ClapAudioBuffer {
-            data32: output_ptrs.as_mut_ptr(),
+            data32: self.output_ptrs.as_mut_ptr(),
             data64: std::ptr::null_mut(),
             channel_count,
             latency: 0,
             constant_mask: 0,
         };
 
-        let mut events = encode_midi_events(midi_in);
+        let events = &mut self.event_queue.events;
+        events.clear();
         // Inject host-side parameter changes (automation, generic knob
         // UI, the set_plugin_parameter IPC, and editor GUI edits captured
         // via request_flush) as CLAP_EVENT_PARAM_VALUE events at the head
-        // of the block. Draining empties the shared queue for next time.
-        let drained: Vec<(u32, f64)> = {
-            let mut q = self.pending_params.lock();
-            std::mem::take(&mut *q)
-        };
-        for (param_id, value) in drained {
-            events
-                .events
-                .push(EncodedEvent::ParamValue(ClapEventParamValue {
-                    header: ClapEventHeader {
-                        size: std::mem::size_of::<ClapEventParamValue>() as u32,
-                        time: 0,
-                        space_id: CLAP_CORE_EVENT_SPACE_ID,
-                        event_type: CLAP_EVENT_PARAM_VALUE,
-                        flags: 0,
-                    },
-                    param_id,
-                    cookie: std::ptr::null_mut(),
-                    note_id: -1,
-                    port_index: -1,
-                    channel: -1,
-                    key: -1,
-                    value,
-                }));
+        // of the block. Draining empties the shared queue for next time
+        // and keeps its room.
+        let mut pending = self.pending_params.lock();
+        for (param_id, value) in pending.drain(..) {
+            if events.len() >= MAX_BLOCK_EVENTS {
+                break;
+            }
+            events.push(EncodedEvent::ParamValue(ClapEventParamValue {
+                header: ClapEventHeader {
+                    size: std::mem::size_of::<ClapEventParamValue>() as u32,
+                    time: 0,
+                    space_id: CLAP_CORE_EVENT_SPACE_ID,
+                    event_type: CLAP_EVENT_PARAM_VALUE,
+                    flags: 0,
+                },
+                param_id,
+                cookie: std::ptr::null_mut(),
+                note_id: -1,
+                port_index: -1,
+                channel: -1,
+                key: -1,
+                value,
+            }));
         }
-        let events_ctx = Box::into_raw(Box::new(events));
+        drop(pending);
+        encode_midi_events(midi_in, events);
+        let events_ctx: *mut EncodedEventQueue = &mut *self.event_queue;
 
         let input_events = ClapInputEvents {
             ctx: events_ctx as *mut c_void,
@@ -734,11 +765,6 @@ impl HostedPlugin for ClapPluginInstance {
         };
 
         let status = unsafe { ((*self.plugin).process)(self.plugin, &process) };
-
-        // Release the event queue box.
-        unsafe {
-            let _: Box<EncodedEventQueue> = Box::from_raw(events_ctx);
-        }
 
         if status == CLAP_PROCESS_ERROR {
             log::warn!(
@@ -964,86 +990,171 @@ unsafe fn open_embedded_gui(
 // Event queue bridging: host-side MidiEvent list → CLAP event queue
 // ---------------------------------------------------------------------------
 
+/// The most events one block hands a CLAP plug-in; the rest wait.
+const MAX_BLOCK_EVENTS: usize = 1024;
+
+/// A note's id for note expression: its channel and key, the same for its
+/// on, its expressions and its off.
+fn clap_note_id(channel: u8, note: u8) -> i32 {
+    (channel as i32 & 0x0F) * 128 + (note as i32 & 0x7F)
+}
+
 enum EncodedEvent {
     NoteOn(ClapEventNote),
     NoteOff(ClapEventNote),
     Midi(ClapEventMidi),
     ParamValue(ClapEventParamValue),
+    NoteExpression(ClapEventNoteExpression),
 }
 
 struct EncodedEventQueue {
     events: Vec<EncodedEvent>,
 }
 
-fn encode_midi_events(midi: &[hardwave_midi::MidiEvent]) -> EncodedEventQueue {
-    let mut events = Vec::with_capacity(midi.len());
+/// The block's notes and controllers as CLAP events, after whatever is
+/// already in `events`. Pitch bend, pressure and poly aftertouch go as raw
+/// MIDI; they used to be dropped, so a bend never reached a CLAP synth.
+fn encode_midi_events(midi: &[hardwave_midi::MidiEvent], events: &mut Vec<EncodedEvent>) {
+    let header = |size: usize, time: u32, event_type: u16| ClapEventHeader {
+        size: size as u32,
+        time,
+        space_id: CLAP_CORE_EVENT_SPACE_ID,
+        event_type,
+        flags: 0,
+    };
+    let raw = |time: u32, data: [u8; 3]| {
+        EncodedEvent::Midi(ClapEventMidi {
+            header: header(std::mem::size_of::<ClapEventMidi>(), time, CLAP_EVENT_MIDI),
+            port_index: 0,
+            data,
+        })
+    };
     for ev in midi {
-        match *ev {
+        if events.len() >= MAX_BLOCK_EVENTS {
+            break;
+        }
+        let event = match *ev {
             hardwave_midi::MidiEvent::NoteOn {
                 timing,
                 channel,
                 note,
                 velocity,
-            } => {
-                events.push(EncodedEvent::NoteOn(ClapEventNote {
-                    header: ClapEventHeader {
-                        size: std::mem::size_of::<ClapEventNote>() as u32,
-                        time: timing,
-                        space_id: CLAP_CORE_EVENT_SPACE_ID,
-                        event_type: CLAP_EVENT_NOTE_ON,
-                        flags: 0,
-                    },
-                    note_id: -1,
-                    port_index: 0,
-                    channel: channel as i16,
-                    key: note as i16,
-                    velocity: velocity as f64,
-                }));
-            }
+            } => EncodedEvent::NoteOn(ClapEventNote {
+                header: header(
+                    std::mem::size_of::<ClapEventNote>(),
+                    timing,
+                    CLAP_EVENT_NOTE_ON,
+                ),
+                note_id: clap_note_id(channel, note),
+                port_index: 0,
+                channel: channel as i16,
+                key: note as i16,
+                velocity: velocity as f64,
+            }),
             hardwave_midi::MidiEvent::NoteOff {
                 timing,
                 channel,
                 note,
                 velocity,
-            } => {
-                events.push(EncodedEvent::NoteOff(ClapEventNote {
-                    header: ClapEventHeader {
-                        size: std::mem::size_of::<ClapEventNote>() as u32,
-                        time: timing,
-                        space_id: CLAP_CORE_EVENT_SPACE_ID,
-                        event_type: CLAP_EVENT_NOTE_OFF,
-                        flags: 0,
-                    },
-                    note_id: -1,
-                    port_index: 0,
-                    channel: channel as i16,
-                    key: note as i16,
-                    velocity: velocity as f64,
-                }));
-            }
+            } => EncodedEvent::NoteOff(ClapEventNote {
+                header: header(
+                    std::mem::size_of::<ClapEventNote>(),
+                    timing,
+                    CLAP_EVENT_NOTE_OFF,
+                ),
+                note_id: clap_note_id(channel, note),
+                port_index: 0,
+                channel: channel as i16,
+                key: note as i16,
+                velocity: velocity as f64,
+            }),
             hardwave_midi::MidiEvent::ControlChange {
                 timing,
                 channel,
                 cc,
                 value,
+            } => raw(
+                timing,
+                [
+                    0xB0 | (channel & 0x0F),
+                    cc & 0x7F,
+                    (value.clamp(0.0, 1.0) * 127.0) as u8,
+                ],
+            ),
+            hardwave_midi::MidiEvent::PitchBend {
+                timing,
+                channel,
+                value,
             } => {
-                let cc_value = (value.clamp(0.0, 1.0) * 127.0) as u8;
-                events.push(EncodedEvent::Midi(ClapEventMidi {
-                    header: ClapEventHeader {
-                        size: std::mem::size_of::<ClapEventMidi>() as u32,
-                        time: timing,
-                        space_id: CLAP_CORE_EVENT_SPACE_ID,
-                        event_type: CLAP_EVENT_MIDI,
-                        flags: 0,
-                    },
-                    port_index: 0,
-                    data: [0xB0 | (channel & 0x0F), cc, cc_value],
-                }));
+                let bend = (((value.clamp(-1.0, 1.0) + 1.0) * 0.5) * 16383.0).round() as u16;
+                raw(
+                    timing,
+                    [
+                        0xE0 | (channel & 0x0F),
+                        (bend & 0x7F) as u8,
+                        (bend >> 7) as u8,
+                    ],
+                )
             }
-            _ => {}
-        }
+            hardwave_midi::MidiEvent::ChannelPressure {
+                timing,
+                channel,
+                pressure,
+            } => raw(
+                timing,
+                [
+                    0xD0 | (channel & 0x0F),
+                    (pressure.clamp(0.0, 1.0) * 127.0) as u8,
+                    0,
+                ],
+            ),
+            hardwave_midi::MidiEvent::Aftertouch {
+                timing,
+                channel,
+                note,
+                pressure,
+            } => raw(
+                timing,
+                [
+                    0xA0 | (channel & 0x0F),
+                    note & 0x7F,
+                    (pressure.clamp(0.0, 1.0) * 127.0) as u8,
+                ],
+            ),
+            hardwave_midi::MidiEvent::NoteExpression {
+                timing,
+                channel,
+                note,
+                kind,
+                value,
+            } => {
+                let (expression_id, value) = match kind {
+                    hardwave_midi::NoteExpressionKind::Pan => (
+                        CLAP_NOTE_EXPRESSION_PAN,
+                        ((value.clamp(-1.0, 1.0) + 1.0) * 0.5) as f64,
+                    ),
+                    hardwave_midi::NoteExpressionKind::Tuning => (
+                        CLAP_NOTE_EXPRESSION_TUNING,
+                        value.clamp(-120.0, 120.0) as f64,
+                    ),
+                };
+                EncodedEvent::NoteExpression(ClapEventNoteExpression {
+                    header: header(
+                        std::mem::size_of::<ClapEventNoteExpression>(),
+                        timing,
+                        CLAP_EVENT_NOTE_EXPRESSION,
+                    ),
+                    expression_id,
+                    note_id: clap_note_id(channel, note),
+                    port_index: 0,
+                    channel: channel as i16,
+                    key: note as i16,
+                    value,
+                })
+            }
+        };
+        events.push(event);
     }
-    EncodedEventQueue { events }
 }
 
 unsafe extern "C" fn event_queue_size(list: *const ClapInputEvents) -> u32 {
@@ -1062,6 +1173,7 @@ unsafe extern "C" fn event_queue_get(
         }
         Some(EncodedEvent::Midi(ev)) => &ev.header as *const ClapEventHeader,
         Some(EncodedEvent::ParamValue(ev)) => &ev.header as *const ClapEventHeader,
+        Some(EncodedEvent::NoteExpression(ev)) => &ev.header as *const ClapEventHeader,
         None => std::ptr::null(),
     }
 }
@@ -1466,5 +1578,109 @@ mod factory_id_tests {
         assert_eq!(factory_plugin_id("com.u-he.diva"), "com.u-he.diva");
         // Only the leading prefix goes.
         assert_eq!(factory_plugin_id("clap:clap:x"), "clap:x");
+    }
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+    use hardwave_midi::{MidiEvent, NoteExpressionKind};
+
+    /// A bend, pressure and poly aftertouch reach a CLAP as raw MIDI (they
+    /// were dropped), and a note's own pan and tuning as note expression on
+    /// the note's id.
+    #[test]
+    fn bends_pressure_and_note_expression_reach_a_clap() {
+        let mut events = Vec::with_capacity(16);
+        encode_midi_events(
+            &[
+                MidiEvent::NoteOn {
+                    timing: 2,
+                    channel: 1,
+                    note: 64,
+                    velocity: 1.0,
+                },
+                MidiEvent::NoteExpression {
+                    timing: 2,
+                    channel: 1,
+                    note: 64,
+                    kind: NoteExpressionKind::Pan,
+                    value: 1.0,
+                },
+                MidiEvent::NoteExpression {
+                    timing: 2,
+                    channel: 1,
+                    note: 64,
+                    kind: NoteExpressionKind::Tuning,
+                    value: -0.5,
+                },
+                MidiEvent::PitchBend {
+                    timing: 8,
+                    channel: 1,
+                    value: 1.0,
+                },
+                MidiEvent::ChannelPressure {
+                    timing: 9,
+                    channel: 1,
+                    pressure: 1.0,
+                },
+                MidiEvent::Aftertouch {
+                    timing: 10,
+                    channel: 1,
+                    note: 64,
+                    pressure: 0.0,
+                },
+            ],
+            &mut events,
+        );
+        assert_eq!(events.len(), 6);
+        match (&events[0], &events[1], &events[2]) {
+            (
+                EncodedEvent::NoteOn(on),
+                EncodedEvent::NoteExpression(pan),
+                EncodedEvent::NoteExpression(tune),
+            ) => {
+                assert_eq!(on.note_id, 128 + 64);
+                assert_eq!(
+                    (pan.expression_id, pan.note_id, pan.value),
+                    (CLAP_NOTE_EXPRESSION_PAN, 128 + 64, 1.0)
+                );
+                assert_eq!(
+                    (tune.expression_id, tune.value),
+                    (CLAP_NOTE_EXPRESSION_TUNING, -0.5)
+                );
+                assert_eq!(pan.header.event_type, CLAP_EVENT_NOTE_EXPRESSION);
+            }
+            _ => panic!("a note, then its pan and tuning"),
+        }
+        let raw: Vec<[u8; 3]> = events[3..]
+            .iter()
+            .map(|e| match e {
+                EncodedEvent::Midi(m) => m.data,
+                _ => panic!("raw MIDI"),
+            })
+            .collect();
+        assert_eq!(raw, vec![[0xE1, 0x7F, 0x7F], [0xD1, 127, 0], [0xA1, 64, 0]]);
+    }
+
+    /// A full block stops at the limit rather than growing the list.
+    #[test]
+    fn a_flood_of_events_stops_at_the_limit() {
+        let mut events = Vec::with_capacity(MAX_BLOCK_EVENTS);
+        let flood: Vec<MidiEvent> = (0..MAX_BLOCK_EVENTS + 50)
+            .map(|i| MidiEvent::ControlChange {
+                timing: 0,
+                channel: 0,
+                cc: (i % 128) as u8,
+                value: 0.5,
+            })
+            .collect();
+        encode_midi_events(&flood, &mut events);
+        assert_eq!(events.len(), MAX_BLOCK_EVENTS);
+        assert_eq!(
+            events.capacity(),
+            MAX_BLOCK_EVENTS,
+            "no growing on the audio thread"
+        );
     }
 }

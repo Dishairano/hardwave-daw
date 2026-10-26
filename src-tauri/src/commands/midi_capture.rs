@@ -103,6 +103,20 @@ impl CapturedMidiEntry {
                 cc: None,
                 value: None,
             },
+            MidiEvent::NoteExpression {
+                channel,
+                note,
+                value,
+                ..
+            } => Self {
+                sample_pos,
+                kind: "note_expression",
+                channel,
+                note: Some(note),
+                velocity: None,
+                cc: None,
+                value: Some(value),
+            },
         }
     }
 }
@@ -415,8 +429,9 @@ pub fn commit_recording_to_midi_clip(
                     kind: MidiControlKind::ChannelPressure,
                     value: pressure.clamp(0.0, 1.0),
                 }),
-                // Per-note aftertouch has nowhere to live in a clip yet.
-                MidiEvent::Aftertouch { .. } => {}
+                // Per-note aftertouch has nowhere to live in a clip yet,
+                // and note expression is made by the host, not played in.
+                MidiEvent::Aftertouch { .. } | MidiEvent::NoteExpression { .. } => {}
             }
         }
         recorder.stop();
