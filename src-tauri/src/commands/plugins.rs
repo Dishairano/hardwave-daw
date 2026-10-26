@@ -2399,7 +2399,12 @@ pub fn restart_sandboxed_plugin(
     };
     let mut restarted = 0;
     for (track_id, slot_id, index, count, enabled, wet, sidechain_active, saved) in plan {
-        let mut plugin = instantiate_for_slot(&state.sandboxed_plugins, &descriptor)?;
+        let mut plugin =
+            instantiate_for_slot(&state.sandboxed_plugins, &descriptor).map_err(|e| {
+                log::warn!("restarting {plugin_id}: {e}");
+                e
+            })?;
+        log::info!("restarted {plugin_id} on {track_id}");
         if let Some(bytes) = saved {
             let _ = plugin.set_state(&bytes);
         }

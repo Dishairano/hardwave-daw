@@ -31,6 +31,10 @@ use raw_window_handle::RawWindowHandle;
 /// child that is merely slow should recover rather than be declared
 /// dead.
 const BLOCK_DEADLINE: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long one write to the child may take before it counts as gone. A
+/// pipe that nobody reads fills and then blocks the writer for ever, which
+/// the read deadlines above never see.
+const WRITE_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1500);
 /// How long a plug-in may take to activate before it counts as hung.
 const ACTIVATE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 /// Messages waiting for the child at most; past this, blocks are dropped.
@@ -211,12 +215,33 @@ impl SandboxedPlugin {
         if let Some(flag) = first_arg {
             command.arg(flag);
         }
+        // What the child says on its way (it cannot load the plug-in, its
+        // window would not open) goes to a log of its own, for support.
+        let stderr = crate::diagnostics::logs_dir()
+            .and_then(|dir| {
+                std::fs::create_dir_all(&dir).ok()?;
+                let name: String = descriptor
+                    .id
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .take(80)
+                    .collect();
+                std::fs::File::create(dir.join(format!("plugin-{name}.log"))).ok()
+            })
+            .map(Stdio::from)
+            .unwrap_or_else(Stdio::null);
         let child = command
             .arg(&descriptor.path)
             .arg(&descriptor.id)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(stderr)
             .spawn()
             .map_err(|e| format!("could not start the plug-in process: {e}"))?;
         let child_pid = child.id();
@@ -628,6 +653,51 @@ fn bridge_loop(
     };
     let mut writer = BufWriter::new(stdin);
     let (frames_tx, frames) = mpsc::sync_channel::<std::io::Result<Option<Frame>>>(4);
+    // A write that does not come back means the child stopped reading (or
+    // something it started holds the pipe): the watchdog says it is gone
+    // and kills it, so the app can start it again. When a write began, in
+    // milliseconds since `started`, or 0 between writes.
+    let started = std::time::Instant::now();
+    let writing_since = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let bridge_done = Arc::new(AtomicBool::new(false));
+    // Shared with the watchdog, which kills it when a write hangs.
+    let child = Arc::new(Mutex::new(child));
+    {
+        let child = Arc::clone(&child);
+        let writing_since = Arc::clone(&writing_since);
+        let bridge_done = Arc::clone(&bridge_done);
+        let crashed = Arc::clone(&crashed);
+        let crash_message = Arc::clone(&crash_message);
+        let from_tx = from_tx.clone();
+        let shared = Arc::clone(&shared);
+        let _ = std::thread::Builder::new()
+            .name("hardwave-plugin-bridge-watch".into())
+            .spawn(move || {
+                while !bridge_done.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    let since = writing_since.load(Ordering::Relaxed);
+                    if since == 0 || crashed.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    let now = started.elapsed().as_millis() as u64;
+                    if now.saturating_sub(since) < WRITE_DEADLINE.as_millis() as u64 {
+                        continue;
+                    }
+                    let message = "the plug-in's process stopped taking audio".to_string();
+                    log::warn!("plug-in process: {message}");
+                    crashed.store(true, Ordering::Relaxed);
+                    if let Ok(mut slot) = crash_message.lock() {
+                        *slot = Some(message.clone());
+                    }
+                    shared.params_ready.notify_all();
+                    let _ = from_tx.try_send(FromChild::Crashed(message));
+                    if let Ok(mut child) = child.lock() {
+                        let _ = child.kill();
+                    }
+                    break;
+                }
+            });
+    }
     {
         let shared = Arc::clone(&shared);
         let _ = std::thread::Builder::new()
@@ -652,9 +722,13 @@ fn bridge_loop(
     }
 
     let fail = |message: String| {
-        crashed.store(true, Ordering::Relaxed);
-        if let Ok(mut slot) = crash_message.lock() {
-            *slot = Some(message.clone());
+        log::warn!("plug-in process: {message}");
+        // The first reason stands: a write failing because the watchdog
+        // already killed the child says less than the watchdog did.
+        if !crashed.swap(true, Ordering::Relaxed) {
+            if let Ok(mut slot) = crash_message.lock() {
+                *slot = Some(message.clone());
+            }
         }
         shared.params_ready.notify_all();
         let _ = from_tx.send(FromChild::Crashed(message));
@@ -703,10 +777,13 @@ fn bridge_loop(
         if stale && last_state.elapsed() >= STATE_EVERY {
             shared.state_stale.store(false, Ordering::Relaxed);
             last_state = std::time::Instant::now();
-            if Frame::new(REQ_GET_STATE, Vec::new())
-                .write(&mut writer)
-                .is_err()
-            {
+            writing_since.store(
+                started.elapsed().as_millis().max(1) as u64,
+                Ordering::Relaxed,
+            );
+            let asked = Frame::new(REQ_GET_STATE, Vec::new()).write(&mut writer);
+            writing_since.store(0, Ordering::Relaxed);
+            if asked.is_err() {
                 fail("the plug-in's process stopped answering".into());
                 break;
             }
@@ -714,6 +791,10 @@ fn bridge_loop(
         let Some(job) = job else {
             continue;
         };
+        writing_since.store(
+            started.elapsed().as_millis().max(1) as u64,
+            Ordering::Relaxed,
+        );
         let written = match &job {
             ToChild::Shutdown => {
                 let _ = Frame::new(REQ_SHUTDOWN, Vec::new()).write(&mut writer);
@@ -739,6 +820,7 @@ fn bridge_loop(
                 written
             }
         };
+        writing_since.store(0, Ordering::Relaxed);
         if written.is_err() {
             fail("the plug-in's process stopped answering".into());
             break;
@@ -772,8 +854,11 @@ fn bridge_loop(
         }
     }
 
-    let _ = child.kill();
-    let _ = child.wait();
+    bridge_done.store(true, Ordering::Relaxed);
+    if let Ok(mut child) = child.lock() {
+        let _ = child.kill();
+        let _ = child.wait();
+    };
 }
 
 /// Keep what the child says outside the block-by-block exchange, and say
@@ -820,15 +905,18 @@ fn take_aside(frame: &Frame, shared: &Shared) -> bool {
 /// Nothing else lives in this process. When the plug-in takes it down,
 /// what dies is a process holding one plug-in, and the DAW carries on.
 pub fn run_host_child(plugin_path: &str, plugin_id: &str) -> i32 {
-    // Frames get a private copy of stdout before any plug-in code runs;
-    // what the plug-in prints goes nowhere instead of into a frame.
-    let frames_out = match hardwave_plugin_host::bridge_child::private_stdout() {
-        Ok(out) => out,
+    // Frames get private copies of stdin and stdout before any plug-in
+    // code runs; what the plug-in prints goes nowhere instead of into a
+    // frame, and nothing it starts holds the pipes to the DAW.
+    let (frames_in, frames_out) = match hardwave_plugin_host::bridge_child::private_stdio() {
+        Ok(streams) => streams,
         Err(e) => {
-            eprintln!("--host-plugin: no stream for frames: {e}");
+            eprintln!("--host-plugin: no streams for frames: {e}");
             return 4;
         }
     };
+    // This thread keeps the plug-in's window.
+    hardwave_plugin_host::bridge_child::prepare_window_thread();
     let descriptor = match crate::commands::plugins::descriptor_for_child(plugin_path, plugin_id) {
         Some(d) => d,
         None => {
@@ -844,7 +932,7 @@ pub fn run_host_child(plugin_path: &str, plugin_id: &str) -> i32 {
         }
     };
     let title = descriptor.name.clone();
-    hardwave_plugin_host::bridge_child::serve(plugin, std::io::stdin(), frames_out, &title)
+    hardwave_plugin_host::bridge_child::serve(plugin, frames_in, frames_out, &title)
 }
 
 #[cfg(test)]
@@ -1101,6 +1189,37 @@ while True:
         assert_eq!(plugin.get_state(), b"state".to_vec());
         assert!(plugin.shared.editor_open.load(Ordering::Relaxed));
         assert!(!plugin.has_crashed());
+        drop(plugin);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A child that stops reading fills the pipe, and a write to a full pipe
+    /// never comes back: the watchdog says it is gone instead of the crash
+    /// going unnoticed (a WebView2 editor's processes kept the pipe open
+    /// after its process was killed).
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_stops_reading_is_declared_gone() {
+        let dir = std::env::temp_dir().join(format!("hw-sandbox-deaf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = fake_child(&dir, "exec sleep 30");
+        let mut plugin = SandboxedPlugin::start(descriptor(), &exe).expect("start");
+        // A song's worth of plug-in state is far more than a pipe holds.
+        plugin.set_state(&vec![7u8; 4 << 20]).expect("handed over");
+        let started = std::time::Instant::now();
+        while !plugin.has_crashed() && started.elapsed() < std::time::Duration::from_secs(8) {
+            let _ = block(&mut plugin, 128);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(4),
+            "noticed within the deadline"
+        );
+        assert!(plugin.has_crashed(), "the hung write was noticed");
+        assert_eq!(
+            plugin.crash_message().as_deref(),
+            Some("the plug-in's process stopped taking audio")
+        );
         drop(plugin);
         let _ = std::fs::remove_dir_all(&dir);
     }
