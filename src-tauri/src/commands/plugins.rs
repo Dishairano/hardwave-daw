@@ -2063,6 +2063,13 @@ pub struct SandboxCrash {
 /// A crash used to close the DAW. Now the slot goes quiet and the song
 /// keeps playing, which is only useful if the app says which plug-in
 /// it was, so this is polled and reported once.
+/// What each plug-in in its own process has done with its audio blocks:
+/// for support and tests, when one plays nothing.
+#[tauri::command]
+pub fn get_sandbox_stats() -> Vec<crate::plugin_sandbox::SandboxStats> {
+    crate::plugin_sandbox::sandbox_stats()
+}
+
 #[tauri::command]
 pub fn take_sandbox_crashes(_state: State<AppState>) -> Vec<SandboxCrash> {
     let crashes: Vec<SandboxCrash> = crate::plugin_sandbox::crashed_sandboxes()
