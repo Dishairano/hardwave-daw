@@ -865,6 +865,14 @@ fn wchar_string_to_rust(chars: &[vst3::Steinberg::char16]) -> String {
 }
 
 impl HostedPlugin for Vst3PluginInstance {
+    fn vst3_class_id(&self) -> Option<[u8; 16]> {
+        let mut id = [0u8; 16];
+        for (d, s) in id.iter_mut().zip(self.class_cid().iter()) {
+            *d = *s as u8;
+        }
+        Some(id)
+    }
+
     fn descriptor(&self) -> &PluginDescriptor {
         &self.inner.descriptor
     }

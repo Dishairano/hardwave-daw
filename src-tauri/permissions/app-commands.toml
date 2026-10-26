@@ -248,6 +248,8 @@ permissions = [
   "allow-list-plugin-presets",
   "allow-save-plugin-preset",
   "allow-load-plugin-preset",
+  "allow-import-vstpreset",
+  "allow-export-vstpreset",
   "allow-delete-plugin-preset",
   "allow-rename-plugin-preset",
   "allow-open-plugin-editor",

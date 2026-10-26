@@ -81,6 +81,12 @@ pub trait HostedPlugin: Send {
 
     /// Get opaque plugin state for save.
     fn get_state(&self) -> Vec<u8>;
+
+    /// A VST3 plug-in's class id, which names it in a `.vstpreset`. None
+    /// for every other kind.
+    fn vst3_class_id(&self) -> Option<[u8; 16]> {
+        None
+    }
     /// Restore plugin state from save.
     fn set_state(&mut self, state: &[u8]) -> Result<(), String>;
 

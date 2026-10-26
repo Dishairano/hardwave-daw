@@ -10,6 +10,7 @@ pub mod plugin_ops;
 pub mod scanner;
 pub mod types;
 pub mod vst3;
+pub mod vstpreset;
 
 pub use scanner::PluginScanner;
 pub use types::*;

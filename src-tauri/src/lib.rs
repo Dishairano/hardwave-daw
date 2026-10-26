@@ -614,6 +614,8 @@ pub fn run() {
             commands::plugin_presets::list_plugin_presets,
             commands::plugin_presets::save_plugin_preset,
             commands::plugin_presets::load_plugin_preset,
+            commands::plugin_presets::import_vstpreset,
+            commands::plugin_presets::export_vstpreset,
             commands::plugin_presets::delete_plugin_preset,
             commands::plugin_presets::rename_plugin_preset,
             commands::plugins::open_plugin_editor,
