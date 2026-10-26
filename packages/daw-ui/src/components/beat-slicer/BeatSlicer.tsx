@@ -41,35 +41,13 @@ function defaultSlice(start: number): Slice {
   return { start, adsr: { a: 0.005, d: 0.05, s: 1, r: 0.02 }, vol: 1, pan: 0, reverse: false }
 }
 
-function detectTransients(ch: Float32Array, sampleRate: number, threshold: number): number[] {
-  const win = Math.max(256, Math.floor(sampleRate * 0.010))
-  const hop = Math.floor(win / 2)
-  const energies: number[] = []
-  for (let i = 0; i + win < ch.length; i += hop) {
-    let sum = 0
-    for (let j = 0; j < win; j++) {
-      const v = ch[i + j]
-      sum += v * v
-    }
-    energies.push(Math.sqrt(sum / win))
-  }
-  const flux: number[] = [0]
-  for (let i = 1; i < energies.length; i++) {
-    flux.push(Math.max(0, energies[i] - energies[i - 1]))
-  }
-  let maxFlux = 0
-  for (const v of flux) if (v > maxFlux) maxFlux = v
-  if (maxFlux < 1e-6) return []
-  const minGap = Math.floor(sampleRate * 0.040 / hop)
-  const out: number[] = []
-  let lastPick = -minGap
-  for (let i = 0; i < flux.length; i++) {
-    if (flux[i] / maxFlux >= threshold && i - lastPick >= minGap) {
-      out.push(i * hop)
-      lastPick = i
-    }
-  }
-  return out
+/** Where the hits are, from the engine's detection (the warp editor's),
+ *  in the sample's own frames here: the engine counts at the file's rate,
+ *  the page decodes at its own. The slicer had a cruder copy of its own. */
+async function detectTransients(path: string, sampleRate: number, threshold: number): Promise<number[]> {
+  const found = await invoke<{ sample_rate: number; onsets: number[] }>('detect_file_transients', { path, threshold })
+  const scale = found.sample_rate > 0 ? sampleRate / found.sample_rate : 1
+  return found.onsets.map((o) => Math.round(o * scale))
 }
 
 function sliceEnd(slices: Slice[], i: number, total: number) {
@@ -131,18 +109,27 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
     }
   }, [])
 
-  const runAutoDetect = useCallback(() => {
+  const runAutoDetect = useCallback(async () => {
     if (!sample) return
-    const idx = detectTransients(sample.channels[0], sample.sampleRate, threshold)
+    let idx: number[]
+    try {
+      idx = await detectTransients(path, sample.sampleRate, threshold)
+    } catch (e) {
+      // One slice, so an empty list does not ask again and again.
+      setSlices([defaultSlice(0)])
+      setSelectedSlice(0)
+      setBanner(String(e))
+      return
+    }
     const newSlices: Slice[] = idx.length === 0 ? [defaultSlice(0)] : idx.map(defaultSlice)
     if (newSlices[0].start !== 0) newSlices.unshift(defaultSlice(0))
     setSlices(newSlices)
     setSelectedSlice(0)
     setBanner(newSlices.length === 1 ? t('Detected 1 slice') : tf('Detected {n} slices', { n: newSlices.length }))
-  }, [sample, threshold])
+  }, [sample, threshold, path])
 
   useEffect(() => {
-    if (sample && slices.length === 0) runAutoDetect()
+    if (sample && slices.length === 0) void runAutoDetect()
   }, [sample, slices.length, runAutoDetect])
 
   // The sample's colours (FL Studio's Multiband colouring), worked out once.
@@ -469,7 +456,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
                 />
                 <span style={{ width: 28, textAlign: 'right' }}>{threshold.toFixed(2)}</span>
               </label>
-              <button onClick={runAutoDetect} style={btnStyle('primary')}>{t('Auto-detect')}</button>
+              <button onClick={() => { void runAutoDetect() }} style={btnStyle('primary')}>{t('Auto-detect')}</button>
               <button onClick={clearAll} style={btnStyle('ghost')}>{t('Clear')}</button>
               <div style={{ display: 'flex', gap: 0, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, overflow: 'hidden' }}>
                 <button

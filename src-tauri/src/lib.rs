@@ -760,6 +760,7 @@ pub fn run() {
             commands::audio::set_clip_warp_markers,
             commands::audio::warp_clip_to_grid,
             commands::audio::detect_clip_transients,
+            commands::audio::detect_file_transients,
             // MIDI
             commands::midi::create_midi_clip,
             commands::midi::export_clip_midi,
