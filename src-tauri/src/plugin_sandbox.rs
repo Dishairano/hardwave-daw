@@ -118,6 +118,32 @@ impl Block {
     }
 }
 
+/// A plug-in process's life as the bridge sees it, in a log of its own
+/// (logs/plugin-<id>-host.log): started, activated, first audio back, and
+/// how it ended. Lifecycle only, a handful of lines, for support and for
+/// telling a crash that was noticed from one that was not.
+#[derive(Clone, Default)]
+struct Trace(Option<Arc<Mutex<std::fs::File>>>);
+
+impl Trace {
+    fn open(name: &str) -> Self {
+        let file = crate::diagnostics::logs_dir().and_then(|dir| {
+            std::fs::create_dir_all(&dir).ok()?;
+            std::fs::File::create(dir.join(format!("plugin-{name}-host.log"))).ok()
+        });
+        Trace(file.map(|f| Arc::new(Mutex::new(f))))
+    }
+
+    fn line(&self, what: &str) {
+        use std::io::Write;
+        if let Some(file) = &self.0 {
+            if let Ok(mut f) = file.lock() {
+                let _ = writeln!(f, "{} {what}", chrono::Local::now().format("%H:%M:%S%.3f"));
+            }
+        }
+    }
+}
+
 /// What the bridge sends to the worker thread.
 enum ToChild {
     Block(Block),
@@ -217,22 +243,23 @@ impl SandboxedPlugin {
         }
         // What the child says on its way (it cannot load the plug-in, its
         // window would not open) goes to a log of its own, for support.
+        let log_name: String = descriptor
+            .id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .take(80)
+            .collect();
+        let trace = Trace::open(&log_name);
         let stderr = crate::diagnostics::logs_dir()
             .and_then(|dir| {
                 std::fs::create_dir_all(&dir).ok()?;
-                let name: String = descriptor
-                    .id
-                    .chars()
-                    .map(|c| {
-                        if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
-                            c
-                        } else {
-                            '_'
-                        }
-                    })
-                    .take(80)
-                    .collect();
-                std::fs::File::create(dir.join(format!("plugin-{name}.log"))).ok()
+                std::fs::File::create(dir.join(format!("plugin-{log_name}.log"))).ok()
             })
             .map(Stdio::from)
             .unwrap_or_else(Stdio::null);
@@ -245,6 +272,10 @@ impl SandboxedPlugin {
             .spawn()
             .map_err(|e| format!("could not start the plug-in process: {e}"))?;
         let child_pid = child.id();
+        trace.line(&format!(
+            "started process {child_pid} for {}",
+            descriptor.id
+        ));
 
         let (to_tx, to_rx) = mpsc::sync_channel::<ToChild>(TO_CHILD_DEPTH);
         // Bounded too, so neither end of the audio thread's exchange
@@ -264,7 +295,9 @@ impl SandboxedPlugin {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
                 .name("hardwave-plugin-bridge".into())
-                .spawn(move || bridge_loop(child, to_rx, from_tx, crashed, crash_message, shared))
+                .spawn(move || {
+                    bridge_loop(child, to_rx, from_tx, crashed, crash_message, shared, trace)
+                })
                 .map_err(|e| format!("could not start the bridge thread: {e}"))?
         };
         // The list is asked for at once: the child answers when the
@@ -642,6 +675,7 @@ fn bridge_loop(
     crashed: Arc<AtomicBool>,
     crash_message: Arc<Mutex<Option<String>>>,
     shared: Arc<Shared>,
+    trace: Trace,
 ) {
     let Some(stdin) = child.stdin.take() else {
         crashed.store(true, Ordering::Relaxed);
@@ -670,6 +704,7 @@ fn bridge_loop(
         let crash_message = Arc::clone(&crash_message);
         let from_tx = from_tx.clone();
         let shared = Arc::clone(&shared);
+        let trace = trace.clone();
         let _ = std::thread::Builder::new()
             .name("hardwave-plugin-bridge-watch".into())
             .spawn(move || {
@@ -685,6 +720,7 @@ fn bridge_loop(
                     }
                     let message = "the plug-in's process stopped taking audio".to_string();
                     log::warn!("plug-in process: {message}");
+                    trace.line(&format!("watchdog: {message}"));
                     crashed.store(true, Ordering::Relaxed);
                     if let Ok(mut slot) = crash_message.lock() {
                         *slot = Some(message.clone());
@@ -700,12 +736,18 @@ fn bridge_loop(
     }
     {
         let shared = Arc::clone(&shared);
+        let trace = trace.clone();
         let _ = std::thread::Builder::new()
             .name("hardwave-plugin-bridge-read".into())
             .spawn(move || {
                 let mut reader = BufReader::new(stdout);
                 loop {
                     let frame = Frame::read(&mut reader);
+                    match &frame {
+                        Ok(None) => trace.line("its output ended"),
+                        Err(e) => trace.line(&format!("its output went wrong: {e}")),
+                        _ => {}
+                    }
                     if let Ok(Some(f)) = &frame {
                         if take_aside(f, &shared) {
                             continue;
@@ -723,6 +765,7 @@ fn bridge_loop(
 
     let fail = |message: String| {
         log::warn!("plug-in process: {message}");
+        trace.line(&format!("gone: {message}"));
         // The first reason stands: a write failing because the watchdog
         // already killed the child says less than the watchdog did.
         if !crashed.swap(true, Ordering::Relaxed) {
@@ -762,6 +805,7 @@ fn bridge_loop(
     };
 
     let mut payload = Vec::with_capacity(POOL_FRAMES * 8 + 4096);
+    let mut audio_back = false;
     let mut last_state = std::time::Instant::now();
     loop {
         // While its window is open, or after its knobs moved, the state is
@@ -833,12 +877,17 @@ fn bridge_loop(
                     fail(why);
                     break;
                 }
+                trace.line("activated");
             }
             ToChild::Block(mut block) => match wait_for(RES_AUDIO, BLOCK_DEADLINE) {
                 Ok(frame) => {
                     // The block's own buffers take the answer: same length
                     // as what went out.
                     let n = frame.read_audio(&mut block.left, &mut block.right);
+                    if !audio_back {
+                        audio_back = true;
+                        trace.line("first audio back");
+                    }
                     block.left[n..].fill(0.0);
                     block.right[n..].fill(0.0);
                     if from_tx.send(FromChild::Block(block)).is_err() {
@@ -855,6 +904,7 @@ fn bridge_loop(
     }
 
     bridge_done.store(true, Ordering::Relaxed);
+    trace.line("bridge ends");
     if let Ok(mut child) = child.lock() {
         let _ = child.kill();
         let _ = child.wait();
@@ -1221,6 +1271,42 @@ while True:
             Some("the plug-in's process stopped taking audio")
         );
         drop(plugin);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A child killed while it plays is noticed: the song goes on, and the
+    /// app is told so it can start it again.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_killed_while_playing_is_noticed() {
+        let dir = std::env::temp_dir().join(format!("hw-sandbox-killed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("child.py");
+        std::fs::write(&script, SPEAKING_CHILD).unwrap();
+        let exe = fake_child(&dir, &format!("exec python3 {}", script.display()));
+        let mut plugin = SandboxedPlugin::start(descriptor(), &exe).expect("start");
+        assert!(plugin.wait_for_params(std::time::Duration::from_secs(5)));
+        plugin.activate(48_000.0, 128).expect("activate");
+        // Playing.
+        for _ in 0..50 {
+            let _ = block(&mut plugin, 128);
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        assert!(!plugin.has_crashed());
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(plugin.child_pid.to_string())
+            .status();
+        let killed = std::time::Instant::now();
+        while !plugin.has_crashed() && killed.elapsed() < std::time::Duration::from_secs(5) {
+            let _ = block(&mut plugin, 128);
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        assert!(plugin.has_crashed(), "the kill was noticed");
+        assert!(
+            killed.elapsed() < std::time::Duration::from_secs(2),
+            "within a moment"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

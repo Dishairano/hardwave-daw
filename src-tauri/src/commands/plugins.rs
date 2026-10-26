@@ -56,7 +56,9 @@ pub(crate) fn descriptor_for_child(path: &str, id: &str) -> Option<PluginDescrip
         num_inputs: 2,
         num_outputs: 2,
         has_midi_input: false,
-        has_editor: false,
+        // Whether it has a window is the app's to know (it asks only for
+        // one that has); the child would otherwise refuse every request.
+        has_editor: true,
     })
 }
 
