@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-note-expression-to-automation"
+description = "Enables the note_expression_to_automation command without any pre-configured scope."
+commands.allow = ["note_expression_to_automation"]
+
+[[permission]]
+identifier = "deny-note-expression-to-automation"
+description = "Denies the note_expression_to_automation command without any pre-configured scope."
+commands.deny = ["note_expression_to_automation"]
