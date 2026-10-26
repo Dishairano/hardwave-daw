@@ -266,6 +266,14 @@ fn serve_frames<R: Read, W: Write>(
                 }
             }
             REQ_OPEN_EDITOR | REQ_CLOSE_EDITOR => {
+                eprintln!(
+                    "[hardwave bridge] the DAW asks to {} the window",
+                    if frame.kind == REQ_OPEN_EDITOR {
+                        "open"
+                    } else {
+                        "close"
+                    }
+                );
                 let command = if frame.kind == REQ_OPEN_EDITOR {
                     UiCommand::Open
                 } else {
@@ -575,6 +583,7 @@ mod window {
                                 continue;
                             }
                             let Some(ed) = editor.as_ref() else {
+                                eprintln!("[hardwave bridge] the plug-in has no window");
                                 send(out, Frame::new(RES_EDITOR, vec![0]));
                                 continue;
                             };
@@ -604,7 +613,9 @@ mod window {
                             let handle = raw_window_handle::RawWindowHandle::Win32(
                                 raw_window_handle::Win32WindowHandle::new(id),
                             );
-                            if ed.open(handle) {
+                            let opened = ed.open(handle);
+                            eprintln!("[hardwave bridge] the plug-in's window opened: {opened}");
+                            if opened {
                                 if let Some((w, h)) = ed.size() {
                                     fit(hwnd, w, h);
                                 }
