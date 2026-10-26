@@ -1,7 +1,10 @@
 import { hw } from '../../theme'
 import { useTrackStore, type InsertInfo } from '../../stores/trackStore'
 import { usePluginStore } from '../../stores/pluginStore'
-import { useMeterStore, DEFAULT_TRACK_METER } from '../../stores/meterStore'
+import { useMeterStore, useTrackMeter } from '../../stores/meterStore'
+import { useSendStore } from '../../stores/sendStore'
+import { useShallow } from 'zustand/react/shallow'
+import type { TrackInfo } from '../../stores/trackStore'
 import { PATTERN_COLORS } from '../../stores/patternStore'
 import { useSlotPresetStore } from '../../stores/slotPresetStore'
 import { useMixerSettingsStore } from '../../stores/mixerSettingsStore'
@@ -10,7 +13,7 @@ import { ParameterContextMenu } from '../ParameterContextMenu'
 import { SendsEditor } from './SendsEditor'
 import { MixerPanelV2 } from './v2/MixerPanel'
 import { PluginParamSheet } from './PluginParamSheet'
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { memo, useEffect, useState, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 
 export function MixerPanel() {
@@ -24,13 +27,18 @@ export function MixerPanel() {
   return <MixerPanelLegacy />
 }
 
+/** The old mixer, still one click away under Options. It read the whole
+ *  track and meter stores, so every meter tick redrew every strip, and a
+ *  big song dropped the screen to a few frames a second. Now each strip
+ *  row reads its own meter and redraws only when its own track changes. */
 function MixerPanelLegacy() {
-  const {
-    tracks, setVolume, setPan, toggleMute, toggleSolo, toggleSoloSafe, toggleArm, renameTrack, setTrackColor,
-    setTrackPhaseInvert, setTrackSwapLr, setTrackStereoSeparation, setTrackDelaySamples, setTrackMonitorInput,
-  } = useTrackStore()
-  const { master, tracks: trackMeters, startListening } = useMeterStore()
+  const tracks = useTrackStore((s) => s.tracks)
+  const { setVolume, toggleMute } = useTrackStore(useShallow((s) => ({ setVolume: s.setVolume, toggleMute: s.toggleMute })))
+  const master = useMeterStore((s) => s.master)
+  const startListening = useMeterStore((s) => s.startListening)
   useEffect(() => { startListening() }, [])
+  // The sends of every channel, loaded once for all the strips.
+  useEffect(() => { useSendStore.getState().fetchAll().catch(() => { /* not in Tauri */ }) }, [])
   const [clipResetNonce, setClipResetNonce] = useState(0)
 
   const allTracks = tracks.filter(t => t.kind !== 'Master')
@@ -64,40 +72,9 @@ function MixerPanelLegacy() {
         {/* dB scale ruler (once per mixer, to the left of the first strip) */}
         {allTracks.length > 0 && <DbScale />}
 
-        {allTracks.map((track, idx) => {
-          const meter = trackMeters[track.id] ?? DEFAULT_TRACK_METER
-          return (
-            <Strip key={track.id}
-              trackId={track.id}
-              inserts={track.inserts ?? []}
-              name={track.name} color={track.color} number={idx}
-              volumeDb={track.volume_db} pan={track.pan}
-              muted={track.muted} soloed={track.soloed}
-              soloSafe={track.solo_safe}
-              armed={track.armed}
-              monitorInput={track.monitorInput}
-              phaseInvert={track.phaseInvert}
-              swapLr={track.swapLr}
-              stereoSeparation={track.stereoSeparation}
-              delaySamples={track.delaySamples}
-              peakL={meter.peakL} peakR={meter.peakR} rmsDb={meter.rms}
-              clipResetNonce={clipResetNonce}
-              onRename={name => renameTrack(track.id, name)}
-              onColorChange={color => setTrackColor(track.id, color)}
-              onVolume={db => setVolume(track.id, db)}
-              onPan={p => setPan(track.id, p)}
-              onMute={() => toggleMute(track.id)}
-              onSolo={() => toggleSolo(track.id)}
-              onArm={() => toggleArm(track.id)}
-              onToggleMonitorInput={() => setTrackMonitorInput(track.id, !track.monitorInput)}
-              onToggleSoloSafe={() => toggleSoloSafe(track.id)}
-              onTogglePhaseInvert={() => setTrackPhaseInvert(track.id, !track.phaseInvert)}
-              onToggleSwapLr={() => setTrackSwapLr(track.id, !track.swapLr)}
-              onStereoSeparation={v => setTrackStereoSeparation(track.id, v)}
-              onDelaySamples={s => setTrackDelaySamples(track.id, s)}
-            />
-          )
-        })}
+        {allTracks.map((track, idx) => (
+          <TrackStrip key={track.id} track={track} number={idx} clipResetNonce={clipResetNonce} />
+        ))}
 
         {allTracks.length > 0 && <div style={{ width: 1, background: hw.border, margin: '0 1px', flexShrink: 0 }} />}
 
@@ -124,6 +101,48 @@ function MixerPanelLegacy() {
     </div>
   )
 }
+
+/** One channel's strip in the old mixer: its own meter, and redrawn only
+ *  when its track, place or the clip reset changes. */
+const TrackStrip = memo(function TrackStrip({ track, number, clipResetNonce }: {
+  track: TrackInfo
+  number: number
+  clipResetNonce: number
+}) {
+  const meter = useTrackMeter(track.id)
+  const t = useTrackStore.getState
+  return (
+    <Strip
+      trackId={track.id}
+      inserts={track.inserts ?? []}
+      name={track.name} color={track.color} number={number}
+      volumeDb={track.volume_db} pan={track.pan}
+      muted={track.muted} soloed={track.soloed}
+      soloSafe={track.solo_safe}
+      armed={track.armed}
+      monitorInput={track.monitorInput}
+      phaseInvert={track.phaseInvert}
+      swapLr={track.swapLr}
+      stereoSeparation={track.stereoSeparation}
+      delaySamples={track.delaySamples}
+      peakL={meter.peakL} peakR={meter.peakR} rmsDb={meter.rms}
+      clipResetNonce={clipResetNonce}
+      onRename={name => t().renameTrack(track.id, name)}
+      onColorChange={color => t().setTrackColor(track.id, color)}
+      onVolume={db => t().setVolume(track.id, db)}
+      onPan={p => t().setPan(track.id, p)}
+      onMute={() => t().toggleMute(track.id)}
+      onSolo={() => t().toggleSolo(track.id)}
+      onArm={() => t().toggleArm(track.id)}
+      onToggleMonitorInput={() => t().setTrackMonitorInput(track.id, !track.monitorInput)}
+      onToggleSoloSafe={() => t().toggleSoloSafe(track.id)}
+      onTogglePhaseInvert={() => t().setTrackPhaseInvert(track.id, !track.phaseInvert)}
+      onToggleSwapLr={() => t().setTrackSwapLr(track.id, !track.swapLr)}
+      onStereoSeparation={v => t().setTrackStereoSeparation(track.id, v)}
+      onDelaySamples={s => t().setTrackDelaySamples(track.id, s)}
+    />
+  )
+})
 
 // Meter dB range used by every strip.
 const METER_MIN_DB = -60
@@ -641,12 +660,16 @@ const sB: React.CSSProperties = {
 }
 
 const MAX_VISIBLE_SLOTS = 10
+const NO_TRACKS: TrackInfo[] = []
 
 function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[] }) {
-  const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed, addToTrack, setInsertWet, setPluginSidechainSource } = usePluginStore()
+  const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed, addToTrack, setInsertWet, setPluginSidechainSource } = usePluginStore(useShallow((s) => ({
+    setInsertEnabled: s.setInsertEnabled, removeFromTrack: s.removeFromTrack, reorderInsert: s.reorderInsert,
+    setFxChainBypassed: s.setFxChainBypassed, addToTrack: s.addToTrack, setInsertWet: s.setInsertWet,
+    setPluginSidechainSource: s.setPluginSidechainSource,
+  })))
   const plugins = usePluginStore(s => s.plugins)
-  const tracks = useTrackStore(s => s.tracks)
-  const { fetchTracks } = useTrackStore()
+  const fetchTracks = useTrackStore(s => s.fetchTracks)
   const slotPresets = useSlotPresetStore(s => s.presets)
   const loadSlotPresets = useSlotPresetStore(s => s.load)
   const addSlotPreset = useSlotPresetStore(s => s.add)
@@ -656,6 +679,11 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
   const [dragOverSlotId, setDragOverSlotId] = useState<string | null>(null)
   const [dragOverEmptyIdx, setDragOverEmptyIdx] = useState<number | null>(null)
   const [openPluginWindows, setOpenPluginWindows] = useState<string[]>([])
+  // The track list only while something here shows track names (a plug-in
+  // window's sidechain picker, a sidechain badge), so a 500-track song does
+  // not redraw every strip's slots on every track change.
+  const needsTracks = openPluginWindows.length > 0 || inserts.some(i => i.sidechainSource)
+  const tracks = useTrackStore(s => (needsTracks ? s.tracks : NO_TRACKS))
   const [windowPositions, setWindowPositions] = useState<Record<string, { x: number; y: number }>>(() => {
     try {
       const raw = localStorage.getItem('hardwave.daw.pluginWindowPositions')
