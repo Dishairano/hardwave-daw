@@ -22,6 +22,7 @@ pub mod sanitize;
 pub mod scripting_api;
 pub mod sidechain_routing;
 pub mod step_rack;
+pub mod templates;
 pub mod tempo;
 pub mod track;
 pub mod vca;

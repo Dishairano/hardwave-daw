@@ -42,6 +42,10 @@ interface ProjectState {
   loadProject: (path: string) => Promise<void>
   /** Open an FL Studio project as a new, unsaved song. */
   importFlProject: (path: string) => Promise<FlImportReport>
+  /** Keep the open song as a template: the whole song, plug-ins and all. */
+  saveSongTemplate: (name: string) => Promise<void>
+  /** Start a new, untitled song from a song template. */
+  newFromSongTemplate: (name: string) => Promise<void>
   getInfo: () => Promise<ProjectInfo>
   markDirty: () => void
   pushRecent: (path: string) => void
@@ -155,6 +159,38 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await useTempoMapStore.getState().refresh()
     set({ filePath: null, projectName: name, dirty: true })
     return report
+  },
+
+  saveSongTemplate: async (name: string) => {
+    // What only the window holds goes into the song first, as for a save.
+    await invoke('set_channel_rack_state', { payload: usePatternStore.getState().serialize() })
+    await invoke('set_timeline_state', { payload: serializeTimelineState() })
+    await invoke('save_song_template', { name })
+  },
+
+  newFromSongTemplate: async (name: string) => {
+    set({ opening: { name, stage: 'file', done: 0, total: 0 } })
+    let stopListening: (() => void) | undefined
+    try {
+      const { listen } = await import('@tauri-apps/api/event')
+      stopListening = await listen<{ stage: string; done: number; total: number }>(
+        'project-load-progress',
+        (ev) => set({ opening: { name, ...ev.payload } }),
+      )
+    } catch { /* outside Tauri */ }
+    try {
+      await invoke('new_song_from_template', { name })
+    } finally {
+      stopListening?.()
+      set({ opening: null })
+    }
+    usePatternStore.getState().hydrate(await invoke<string | null>('get_channel_rack_state'))
+    hydrateTimelineState(await invoke<string | null>('get_timeline_state'))
+    await useTempoMapStore.getState().refresh()
+    // A new song: saving asks for a name and a folder, so the template
+    // itself is never written over.
+    set({ filePath: null, projectName: 'Untitled', dirty: false })
+    reportMissingAudioSources().catch(() => {})
   },
 
   getInfo: async () => {

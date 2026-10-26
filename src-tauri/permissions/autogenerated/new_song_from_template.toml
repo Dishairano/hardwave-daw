@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-new-song-from-template"
+description = "Enables the new_song_from_template command without any pre-configured scope."
+commands.allow = ["new_song_from_template"]
+
+[[permission]]
+identifier = "deny-new-song-from-template"
+description = "Denies the new_song_from_template command without any pre-configured scope."
+commands.deny = ["new_song_from_template"]

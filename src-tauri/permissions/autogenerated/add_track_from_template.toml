@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-track-from-template"
+description = "Enables the add_track_from_template command without any pre-configured scope."
+commands.allow = ["add_track_from_template"]
+
+[[permission]]
+identifier = "deny-add-track-from-template"
+description = "Denies the add_track_from_template command without any pre-configured scope."
+commands.deny = ["add_track_from_template"]

@@ -1201,6 +1201,18 @@ export function App() {
           if (latest) setCrashInfo(latest)
         }
         await invoke('autosave_mark_alive')
+        // The song template the DAW starts with, when one is picked and no
+        // crash is waiting to be recovered.
+        const startWith = useGeneralPrefsStore.getState().startupTemplate
+        if (!crashed && startWith && !useProjectStore.getState().filePath) {
+          try {
+            await useProjectStore.getState().newFromSongTemplate(startWith)
+            await useTrackStore.getState().fetchTracks()
+          } catch {
+            // The template is gone: start empty and stop asking for it.
+            useGeneralPrefsStore.getState().setStartupTemplate(null)
+          }
+        }
       } catch {}
     })()
 
@@ -1547,26 +1559,21 @@ export function App() {
     } catch { /* invokeOrToast already told the user */ }
   }, [])
 
+  // The whole song as a template: tracks, plug-ins with their settings,
+  // routing, tempo. It used to keep each track's name, colour, fader and pan
+  // only, so a mixing template came back without a single plug-in.
   const handleSaveAsTemplate = useCallback(async () => {
     const name = window.prompt('Template name:')
     if (name === null) return
     const trimmed = name.trim()
     if (!trimmed) return
-    const tracks = useTrackStore.getState().tracks
-      .filter(t => t.kind !== 'Master')
-      .map(t => ({
-        name: t.name,
-        kind: t.kind,
-        color: t.color,
-        volume_db: t.volume_db,
-        pan: t.pan,
-      }))
-    if (tracks.length === 0) {
-      window.alert('No tracks to save. Add some tracks first.')
-      return
+    const { push } = useNotificationStore.getState()
+    try {
+      await useProjectStore.getState().saveSongTemplate(trimmed)
+      push('info', `Saved the template "${trimmed}"`, { detail: 'File > New lists it under Your song templates.' })
+    } catch (err) {
+      push('warning', 'The template was not saved', { detail: String(err) })
     }
-    const bpm = useTransportStore.getState().bpm
-    useUserTemplateStore.getState().add(trimmed, tracks, bpm)
   }, [])
 
   const handleNewProject = useCallback(async () => {
@@ -1576,6 +1583,15 @@ export function App() {
 
   const handlePickTemplate = useCallback(async (id: TemplateId) => {
     setShowTemplateDialog(false)
+    if (id.startsWith('song:')) {
+      try {
+        await useProjectStore.getState().newFromSongTemplate(id.slice(5))
+      } catch (err) {
+        useNotificationStore.getState().push('warning', 'The template did not open', { detail: String(err) })
+      }
+      await fetchTracks()
+      return
+    }
     await newProject()
     await fetchTracks()
     await applyTemplate(id)
@@ -2280,6 +2296,7 @@ export function App() {
           { label: 'Audio track', action: () => useTrackStore.getState().addAudioTrack() },
           { label: 'Instrument track', action: () => useTrackStore.getState().addMidiTrack() },
           { label: 'Automation track', action: handleAddAutomationTrack },
+          { label: 'Track from a template…', action: () => setShowTrackTemplateManager(true) },
           { separator: true, label: '' },
           {
             label: 'Rescan plug-ins',

@@ -371,6 +371,17 @@ const mock: TauriInternals = {
         return { input: 0, output: 0 }
       case 'set_channel_offsets':
         return null
+      case 'list_song_templates':
+      case 'list_track_templates':
+        return []
+      case 'save_song_template':
+      case 'save_track_template':
+      case 'delete_song_template':
+      case 'delete_track_template':
+      case 'new_song_from_template':
+        return null
+      case 'add_track_from_template':
+        return 't-template'
       case 'get_click_output':
       case 'set_click_output':
         return { requested: null, active: null }

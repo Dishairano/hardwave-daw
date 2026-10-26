@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-song-template"
+description = "Enables the save_song_template command without any pre-configured scope."
+commands.allow = ["save_song_template"]
+
+[[permission]]
+identifier = "deny-save-song-template"
+description = "Denies the save_song_template command without any pre-configured scope."
+commands.deny = ["save_song_template"]

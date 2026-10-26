@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-track-templates"
+description = "Enables the list_track_templates command without any pre-configured scope."
+commands.allow = ["list_track_templates"]
+
+[[permission]]
+identifier = "deny-list-track-templates"
+description = "Denies the list_track_templates command without any pre-configured scope."
+commands.deny = ["list_track_templates"]
