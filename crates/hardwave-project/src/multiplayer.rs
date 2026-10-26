@@ -242,6 +242,10 @@ pub enum SyncKind {
     },
     /// A track was deleted.
     TrackRemoved { track_id: String },
+    /// What belongs to the song rather than one track: the tempo map, the
+    /// channel rack, markers and sections, the arrangements, macros, VCAs
+    /// and modulation. MessagePack, as `Project::song_level_blob` writes it.
+    SongState { blob: Vec<u8> },
     /// A plug-in knob moved (live, so not yet in the track's saved state).
     PluginParam {
         track_id: String,
