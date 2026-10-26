@@ -553,6 +553,64 @@ impl Project {
         rmp_serde::to_vec_named(track).unwrap_or_default()
     }
 
+    /// What belongs to the song rather than one track, as bytes for a room:
+    /// a tempo change, a pattern drawn in the channel rack, a marker or a
+    /// new arrangement reached the other side only when the whole song was
+    /// sent again. MessagePack with field names.
+    pub fn song_level_blob(&self) -> Vec<u8> {
+        #[derive(Serialize)]
+        struct SongLevel<'a> {
+            tempo_map: &'a TempoMap,
+            channel_rack_state: &'a Option<String>,
+            timeline_state: &'a Option<String>,
+            arrangements: &'a Vec<crate::arrangement::Arrangement>,
+            active_arrangement: &'a String,
+            macros: &'a Vec<crate::macros::Macro>,
+            vcas: &'a Vec<crate::vca::Vca>,
+            modulations: &'a Vec<crate::modulation::ModRoute>,
+        }
+        rmp_serde::to_vec_named(&SongLevel {
+            tempo_map: &self.tempo_map,
+            channel_rack_state: &self.channel_rack_state,
+            timeline_state: &self.timeline_state,
+            arrangements: &self.arrangements,
+            active_arrangement: &self.active_arrangement,
+            macros: &self.macros,
+            vcas: &self.vcas,
+            modulations: &self.modulations,
+        })
+        .unwrap_or_default()
+    }
+
+    /// Take what a room sent from `song_level_blob`. The tracks are not in
+    /// it and are left as they are.
+    pub fn put_song_level_blob(&mut self, blob: &[u8]) -> Result<(), String> {
+        #[derive(Deserialize)]
+        struct SongLevel {
+            tempo_map: TempoMap,
+            channel_rack_state: Option<String>,
+            timeline_state: Option<String>,
+            arrangements: Vec<crate::arrangement::Arrangement>,
+            active_arrangement: String,
+            macros: Vec<crate::macros::Macro>,
+            vcas: Vec<crate::vca::Vca>,
+            modulations: Vec<crate::modulation::ModRoute>,
+        }
+        let s: SongLevel = rmp_serde::from_slice(blob).map_err(|e| e.to_string())?;
+        if s.tempo_map.entries.is_empty() {
+            return Err("a song needs a tempo".into());
+        }
+        self.tempo_map = s.tempo_map;
+        self.set_channel_rack_state(s.channel_rack_state);
+        self.timeline_state = s.timeline_state;
+        self.arrangements = s.arrangements;
+        self.active_arrangement = s.active_arrangement;
+        self.macros = s.macros;
+        self.vcas = s.vcas;
+        self.modulations = s.modulations;
+        Ok(())
+    }
+
     /// A track a room sent, put in place of the one with its id (or at
     /// `index` when it is new). Returns the track it replaced.
     pub fn put_track_blob(
@@ -764,6 +822,27 @@ mod decompress_tests {
 
 #[cfg(test)]
 mod tests {
+    /// A tempo change, the channel rack and the markers go to the other side
+    /// without the tracks, and come back the same.
+    #[test]
+    fn the_song_level_goes_to_a_room_without_the_tracks() {
+        let mut ours = Project::default();
+        ours.tempo_map.entries[0].bpm = 150.0;
+        ours.channel_rack_state = Some("{\"patterns\":[]}".into());
+        ours.timeline_state = Some("{\"markers\":[1]}".into());
+        let blob = ours.song_level_blob();
+
+        let mut theirs = Project::default();
+        let t = theirs.add_midi_track("Theirs".into());
+        theirs.put_song_level_blob(&blob).unwrap();
+        assert_eq!(theirs.tempo_map.entries[0].bpm, 150.0);
+        assert_eq!(theirs.channel_rack_state, ours.channel_rack_state);
+        assert_eq!(theirs.timeline_state, ours.timeline_state);
+        assert!(theirs.track(&t).is_some(), "their tracks stay");
+        assert_eq!(theirs.song_level_blob(), blob);
+        assert!(theirs.put_song_level_blob(b"nonsense").is_err());
+    }
+
     /// A track a room sends replaces ours by id, or lands at its place
     /// when it is new; the bytes round-trip.
     #[test]

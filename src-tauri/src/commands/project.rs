@@ -487,7 +487,7 @@ fn ramp_from_str(s: &str) -> TempoRamp {
 /// The transport's signature is a pair of atomics the audio thread reads, and
 /// loading a project only ever refreshed the tempo, so the signature stayed
 /// at whatever the last project used.
-fn apply_project_time_signature(engine: &hardwave_engine::DawEngine) {
+pub(crate) fn apply_project_time_signature(engine: &hardwave_engine::DawEngine) {
     use std::sync::atomic::Ordering;
     let (num, den) = {
         let project = engine.project.lock();

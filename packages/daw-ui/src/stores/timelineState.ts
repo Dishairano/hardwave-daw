@@ -244,3 +244,25 @@ export function startTimelineSync() {
     if (!suppressPush) void pushTimelineState()
   })
 }
+
+/**
+ * A room partner's markers, sections, punch range and folders, and their
+ * tempo changes, arrive through the engine: the stores take them like a
+ * song being opened, and the tempo lane reads the tempo map again.
+ */
+let roomSyncStarted = false
+export function startTimelineRoomSync(): void {
+  if (roomSyncStarted) return
+  roomSyncStarted = true
+  import('@tauri-apps/api/event')
+    .then(({ listen }) => {
+      void listen<string | null>('daw:timelineChanged', (ev) => {
+        const state = parseTimelineState(ev.payload)
+        if (state) applyTimelineState(state)
+      })
+      void listen('daw:tempoChanged', () => {
+        void import('./tempoMapStore').then(({ useTempoMapStore }) => useTempoMapStore.getState().refresh())
+      })
+    })
+    .catch(() => { /* outside the app */ })
+}
