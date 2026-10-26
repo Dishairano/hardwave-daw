@@ -23,6 +23,7 @@ import { segmentAt } from '../../utils/meter'
 import { decodeMidi, rescaleNotes } from '../../utils/midi'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { mixHex, hexLuma } from '../../lib/color'
+import { t, tf, useLanguage } from '../../i18n'
 
 const PPQ = 960
 const MINIMAP_HEIGHT = 36
@@ -162,6 +163,7 @@ function toNote(n: MidiNoteInfo): Note {
 }
 
 export function PianoRoll() {
+  useLanguage()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Which per-note property the strip under the notes edits.
   const [noteProperty, setNoteProperty] = useState<NoteProperty>('velocity')
@@ -970,7 +972,7 @@ export function PianoRoll() {
 
   const exportMidi = useCallback(async () => {
     if (!activeTrackId || !activeClipId) {
-      useNotificationStore.getState().push('warning', 'No active clip to export')
+      useNotificationStore.getState().push('warning', t('No active clip to export'))
       return
     }
     try {
@@ -987,15 +989,15 @@ export function PianoRoll() {
         clipId: activeClipId,
         path,
       })
-      useNotificationStore.getState().push('info', 'MIDI exported')
+      useNotificationStore.getState().push('info', t('MIDI exported'))
     } catch (e) {
-      useNotificationStore.getState().push('error', 'MIDI export failed', { detail: String(e) })
+      useNotificationStore.getState().push('error', t('MIDI export failed'), { detail: String(e) })
     }
   }, [activeTrackId, activeClipId])
 
   const importMidi = useCallback(async (file: File) => {
     if (!activeTrackId || !activeClipId) {
-      useNotificationStore.getState().push('warning', 'Select a MIDI clip first')
+      useNotificationStore.getState().push('warning', t('Select a MIDI clip first'))
       return
     }
     try {
@@ -1003,7 +1005,7 @@ export function PianoRoll() {
       const parsed = decodeMidi(buf)
       const flat = parsed.tracks.flat()
       if (flat.length === 0) {
-        useNotificationStore.getState().push('info', 'No notes found in file')
+        useNotificationStore.getState().push('info', t('No notes found in file'))
         return
       }
       const rescaled = rescaleNotes(flat, parsed.ppq, PPQ)
@@ -1019,9 +1021,9 @@ export function PianoRoll() {
       }
       useProjectStore.getState().markDirty()
       await refreshNotes()
-      useNotificationStore.getState().push('info', `Imported ${rescaled.length} notes`)
+      useNotificationStore.getState().push('info', tf('Imported {n} notes', { n: rescaled.length }))
     } catch (e) {
-      useNotificationStore.getState().push('error', 'MIDI import failed', { detail: String(e) })
+      useNotificationStore.getState().push('error', t('MIDI import failed'), { detail: String(e) })
     }
   }, [activeTrackId, activeClipId, refreshNotes])
 
@@ -1282,7 +1284,7 @@ export function PianoRoll() {
   const runExtractGroove = useCallback(async () => {
     if (!activeTrackId || !activeClipId) return
     setGenOpen(false)
-    const name = window.prompt('Name this groove', 'Groove 1')?.trim()
+    const name = window.prompt(t('Name this groove'), 'Groove 1')?.trim()
     if (!name) return
     try {
       const steps = await invoke<number>('extract_groove', {
@@ -1290,11 +1292,11 @@ export function PianoRoll() {
         gridTicks: snap > 0 ? snap : 240,
         name,
       })
-      useNotificationStore.getState().push('info', `Saved "${name}"`, {
-        detail: `${steps} steps of timing and accent, kept with the song.`,
+      useNotificationStore.getState().push('info', tf('Saved "{name}"', { name }), {
+        detail: tf('{n} steps of timing and accent, kept with the song.', { n: steps }),
       })
     } catch (err) {
-      useNotificationStore.getState().push('warning', 'Could not take that groove', { detail: String(err) })
+      useNotificationStore.getState().push('warning', t('Could not take that groove'), { detail: String(err) })
     }
   }, [activeTrackId, activeClipId, snap])
 
@@ -1306,14 +1308,14 @@ export function PianoRoll() {
       names = await invoke<string[]>('list_grooves')
     } catch { names = [] }
     if (names.length === 0) {
-      useNotificationStore.getState().push('info', 'No grooves saved yet', {
-        detail: 'Open a part that was played in, and use "Take groove" first.',
+      useNotificationStore.getState().push('info', t('No grooves saved yet'), {
+        detail: t('Open a part that was played in, and use "Take groove" first.'),
       })
       return
     }
-    const name = window.prompt(`Apply which groove?\n\n${names.join('\n')}`, names[names.length - 1])?.trim()
+    const name = window.prompt(tf('Apply which groove?\n\n{names}', { names: names.join('\n') }), names[names.length - 1])?.trim()
     if (!name) return
-    const amount = window.prompt('How much of it? 0 to 100', '100')?.trim()
+    const amount = window.prompt(t('How much of it? 0 to 100'), '100')?.trim()
     const strength = Math.max(0, Math.min(1, (Number(amount) || 0) / 100))
     try {
       const moved = await invoke<number>('apply_groove', {
@@ -1321,9 +1323,9 @@ export function PianoRoll() {
       })
       useProjectStore.getState().markDirty()
       await refreshNotes()
-      useNotificationStore.getState().push('info', `Put "${name}" on ${moved} notes`)
+      useNotificationStore.getState().push('info', tf('Put "{name}" on {n} notes', { name, n: moved }))
     } catch (err) {
-      useNotificationStore.getState().push('warning', 'Could not apply that groove', { detail: String(err) })
+      useNotificationStore.getState().push('warning', t('Could not apply that groove'), { detail: String(err) })
     }
   }, [activeTrackId, activeClipId, refreshNotes])
 
@@ -1505,11 +1507,14 @@ export function PianoRoll() {
       const bar = Math.floor(note.startTick / (PPQ * 4)) + 1
       const beat = Math.floor((note.startTick % (PPQ * 4)) / PPQ) + 1
       setSpokenNote(
-        `${NOTE_NAMES_SHARP[note.pitch % 12]}${Math.floor(note.pitch / 12) - 1}, `
-        + `bar ${bar} beat ${beat}, `
-        + `${Math.round((note.durationTicks / PPQ) * 100) / 100} beats, `
-        + `velocity ${Math.round(note.velocity * 127)}`
-        + `${note.muted ? ', muted' : ''}`,
+        tf('{note}, bar {bar} beat {beat}, {beats} beats, velocity {velocity}', {
+          note: `${NOTE_NAMES_SHARP[note.pitch % 12]}${Math.floor(note.pitch / 12) - 1}`,
+          bar,
+          beat,
+          beats: Math.round((note.durationTicks / PPQ) * 100) / 100,
+          velocity: Math.round(note.velocity * 127),
+        })
+        + `${note.muted ? t(', muted') : ''}`,
       )
       return
     }
@@ -1843,7 +1848,7 @@ export function PianoRoll() {
   }, [followPlayhead, pixelsPerTick, scrollX])
 
   const emptyHint = !activeTrackId || !activeClipId
-    ? 'Select a MIDI track or double-click a MIDI clip to edit notes.'
+    ? t('Select a MIDI track or double-click a MIDI clip to edit notes.')
     : null
 
   return (
@@ -1871,7 +1876,7 @@ export function PianoRoll() {
           <span style={{ width: 9, height: 9, borderRadius: 3, background: trackColor, flexShrink: 0 }} />
         )}
         <span style={{ fontSize: 12.5, fontWeight: 600, color: hw.textPrimary }}>
-          {activeTrackId && activeClipId ? (activeClipName || 'Untitled clip') : 'No clip selected'}
+          {activeTrackId && activeClipId ? (activeClipName || t('Untitled clip')) : t('No clip selected')}
         </span>
         {activeTrack && <span style={{ fontSize: 11.5, color: hw.textMuted }}>{activeTrack.name}</span>}
         {selectedNotes.size > 0 && (
@@ -1880,22 +1885,22 @@ export function PianoRoll() {
             background: hw.accentDim, padding: '1px 6px',
             borderRadius: hw.radius.sm,
           }}>
-            {selectedNotes.size} selected
+            {tf('{n} selected', { n: selectedNotes.size })}
           </span>
         )}
         <div style={{ flex: 1 }} />
 
         <div style={{ display: 'flex', gap: 1 }}>
-          {(['draw', 'select', 'erase', 'chord'] as const).map(t => (
-            <button key={t} onClick={() => setTool(t)} style={{
+          {(['draw', 'select', 'erase', 'chord'] as const).map(id => (
+            <button key={id} onClick={() => setTool(id)} style={{
               padding: '1px 6px', fontSize: 9, fontWeight: 600,
-              color: tool === t ? hw.accent : hw.textFaint,
-              background: tool === t ? hw.accentDim : 'transparent',
-              border: `1px solid ${tool === t ? hw.accentGlow : 'transparent'}`,
+              color: tool === id ? hw.accent : hw.textFaint,
+              background: tool === id ? hw.accentDim : 'transparent',
+              border: `1px solid ${tool === id ? hw.accentGlow : 'transparent'}`,
               borderRadius: hw.radius.sm, textTransform: 'uppercase',
               transition: 'all 0.1s',
             }}>
-              {t}
+              {t({ draw: 'Draw', select: 'Select', erase: 'Erase', chord: 'Chord' }[id])}
             </button>
           ))}
         </div>
@@ -1905,32 +1910,32 @@ export function PianoRoll() {
             <select
               value={chordType}
               onChange={e => setChordType(e.target.value as keyof typeof CHORD_TYPES)}
-              title="Chord type"
+              title={t('Chord type')}
               style={{
                 fontSize: 9, background: 'rgba(255,255,255,0.04)', color: hw.accent,
                 border: `1px solid ${hw.accentGlow}`, borderRadius: hw.radius.sm, padding: '1px 4px',
               }}
             >
               {Object.entries(CHORD_TYPES).map(([k, v]) => (
-                <option key={k} value={k}>{v.name}</option>
+                <option key={k} value={k}>{t(v.name)}</option>
               ))}
             </select>
             <select
               value={chordInversion}
               onChange={e => setChordInversion(Number(e.target.value))}
-              title="Chord inversion"
+              title={t('Chord inversion')}
               style={{
                 fontSize: 9, background: 'rgba(255,255,255,0.04)', color: hw.textMuted,
                 border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '1px 4px',
               }}
             >
-              <option value={0}>Root</option>
-              <option value={1}>1st inv</option>
-              <option value={2}>2nd inv</option>
-              <option value={3}>3rd inv</option>
+              <option value={0}>{t('Root')}</option>
+              <option value={1}>{t('1st inv')}</option>
+              <option value={2}>{t('2nd inv')}</option>
+              <option value={3}>{t('3rd inv')}</option>
             </select>
             {chordType === 'custom' && (
-              <div style={{ display: 'flex', gap: 1, padding: '0 2px' }} title="Select intervals (semitones) to stamp">
+              <div style={{ display: 'flex', gap: 1, padding: '0 2px' }} title={t('Select intervals (semitones) to stamp')}>
                 {INTERVAL_LABELS.map((label, iv) => {
                   const on = customChordSet.has(iv)
                   return (
@@ -1963,7 +1968,7 @@ export function PianoRoll() {
         <select
           value={scaleRoot}
           onChange={e => setScaleRoot(Number(e.target.value))}
-          title="Scale root note"
+          title={t('Scale root note')}
           style={{
             fontSize: 9, background: 'rgba(255,255,255,0.04)', color: hw.textMuted,
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '1px 4px',
@@ -1976,7 +1981,7 @@ export function PianoRoll() {
         <select
           value={scaleType}
           onChange={e => setScaleType(e.target.value as keyof typeof SCALE_TYPES)}
-          title="Scale type"
+          title={t('Scale type')}
           style={{
             fontSize: 9, background: 'rgba(255,255,255,0.04)',
             color: scaleType === 'chromatic' ? hw.textFaint : hw.accent,
@@ -1984,12 +1989,12 @@ export function PianoRoll() {
           }}
         >
           {Object.entries(SCALE_TYPES).map(([k, v]) => (
-            <option key={k} value={k}>{v.name}</option>
+            <option key={k} value={k}>{t(v.name)}</option>
           ))}
         </select>
         <button
           onClick={() => setSnapToScale(v => !v)}
-          title="Snap new notes to scale"
+          title={t('Snap new notes to scale')}
           disabled={scaleType === 'chromatic'}
           style={{
             padding: '1px 5px', fontSize: 9, fontWeight: 600,
@@ -2011,7 +2016,7 @@ export function PianoRoll() {
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '1px 4px',
           }}
         >
-          <option value={PPQ * 4}>Bar</option>
+          <option value={PPQ * 4}>{t('Bar')}</option>
           <option value={PPQ * 2}>1/2</option>
           <option value={PPQ}>1/4</option>
           <option value={PPQ / 2}>1/8</option>
@@ -2023,7 +2028,7 @@ export function PianoRoll() {
 
         <button
           onClick={zoomToFit}
-          title={selectedNotes.size > 0 ? 'Zoom to selection' : 'Zoom to fit all notes'}
+          title={selectedNotes.size > 0 ? t('Zoom to selection') : t('Zoom to fit all notes')}
           style={{
             padding: '1px 6px', fontSize: 9, fontWeight: 600,
             color: hw.textMuted,
@@ -2036,7 +2041,7 @@ export function PianoRoll() {
         </button>
         <button
           onClick={() => setFollowPlayhead(!followPlayhead)}
-          title="Follow playhead"
+          title={t('Follow playhead')}
           style={{
             padding: '1px 6px', fontSize: 9, fontWeight: 600,
             color: followPlayhead ? hw.accent : hw.textFaint,
@@ -2049,7 +2054,7 @@ export function PianoRoll() {
         </button>
         <button
           onClick={() => setShowMinimap(v => !v)}
-          title="Toggle minimap overview"
+          title={t('Toggle minimap overview')}
           style={{
             padding: '1px 6px', fontSize: 9, fontWeight: 600,
             color: showMinimap ? hw.accent : hw.textFaint,
@@ -2063,9 +2068,9 @@ export function PianoRoll() {
         <button
           onClick={() => setGhostMode(m => m === 'off' ? 'track' : m === 'track' ? 'all' : 'off')}
           title={
-            ghostMode === 'off' ? 'Ghost notes: OFF (click to show same-track)' :
-            ghostMode === 'track' ? 'Ghost notes: same track (click to show all)' :
-            'Ghost notes: all tracks (click to hide)'
+            ghostMode === 'off' ? t('Ghost notes: OFF (click to show same-track)') :
+            ghostMode === 'track' ? t('Ghost notes: same track (click to show all)') :
+            t('Ghost notes: all tracks (click to hide)')
           }
           style={{
             padding: '1px 6px', fontSize: 9, fontWeight: 600,
@@ -2079,7 +2084,7 @@ export function PianoRoll() {
         </button>
         <button
           onClick={() => setVelFromY(v => !v)}
-          title="Velocity from vertical click position inside the note row"
+          title={t('Velocity from vertical click position inside the note row')}
           style={{
             padding: '1px 6px', fontSize: 9, fontWeight: 600,
             color: velFromY ? hw.accent : hw.textFaint,
@@ -2099,8 +2104,9 @@ export function PianoRoll() {
             }}
             onContextMenu={(e) => { e.preventDefault(); setQwertyMenuOpen(v => !v) }}
             title={qwertyEnabled
-              ? `QWERTY typing ON — octave ${qwertyOctave}, velocity ${qwertyVelocity}. Click to disable, shift-click for options, [ / ] to shift octave.`
-              : 'Click to enable QWERTY typing (Z=C, S=C#, X=D…; Q row an octave up)'}
+              ? tf('QWERTY typing ON — octave {octave}, velocity {velocity}. Click to disable, shift-click for options, [ / ] to shift octave.',
+                { octave: qwertyOctave, velocity: qwertyVelocity })
+              : t('Click to enable QWERTY typing (Z=C, S=C#, X=D…; Q row an octave up)')}
             style={{
               padding: '1px 6px', fontSize: 9, fontWeight: 600,
               color: qwertyEnabled ? hw.accent : hw.textFaint,
@@ -2127,7 +2133,7 @@ export function PianoRoll() {
               }}
             >
               <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                QWERTY typing
+                {t('QWERTY typing')}
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: hw.textMuted }}>
                 <input
@@ -2135,11 +2141,11 @@ export function PianoRoll() {
                   checked={qwertyEnabled}
                   onChange={(e) => setQwertyEnabled(e.target.checked)}
                 />
-                Enable
+                {t('Enable')}
               </label>
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
-                  <span>Octave</span>
+                  <span>{t('Octave')}</span>
                   <span style={{ color: hw.textPrimary, fontWeight: 600 }}>{qwertyOctave}</span>
                 </div>
                 <input type="range" min={0} max={9} step={1} value={qwertyOctave}
@@ -2148,7 +2154,7 @@ export function PianoRoll() {
               </div>
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
-                  <span>Velocity</span>
+                  <span>{t('Velocity')}</span>
                   <span style={{ color: hw.textPrimary, fontWeight: 600 }}>{qwertyVelocity}</span>
                 </div>
                 <input type="range" min={1} max={127} step={1} value={qwertyVelocity}
@@ -2158,7 +2164,7 @@ export function PianoRoll() {
               <button
                 onClick={qwertyRest}
                 disabled={!qwertyEnabled}
-                title="Advance the edit cursor by one snap without inserting a note (Backquote key while typing)"
+                title={t('Advance the edit cursor by one snap without inserting a note (Backquote key while typing)')}
                 style={{
                   padding: '5px 10px', fontSize: 10, fontWeight: 700,
                   color: qwertyEnabled ? hw.textPrimary : hw.textFaint,
@@ -2168,12 +2174,12 @@ export function PianoRoll() {
                   cursor: qwertyEnabled ? 'pointer' : 'not-allowed',
                 }}
               >
-                Rest (skip step)
+                {t('Rest (skip step)')}
               </button>
               <div style={{ fontSize: 8, color: hw.textFaint, lineHeight: 1.4 }}>
-                Z row = octave {qwertyOctave} · Q row = octave {qwertyOctave + 1}
+                {tf('Z row = octave {low} · Q row = octave {high}', { low: qwertyOctave, high: qwertyOctave + 1 })}
                 <br />
-                <kbd style={{ fontSize: 8 }}>[</kbd> / <kbd style={{ fontSize: 8 }}>]</kbd> shift octave · <kbd style={{ fontSize: 8 }}>`</kbd> rest · notes added at edit cursor
+                <kbd style={{ fontSize: 8 }}>[</kbd> / <kbd style={{ fontSize: 8 }}>]</kbd> {t('shift octave')} · <kbd style={{ fontSize: 8 }}>`</kbd> {t('rest')} · {t('notes added at edit cursor')}
               </div>
             </div>
           )}
@@ -2182,7 +2188,7 @@ export function PianoRoll() {
         <div style={{ position: 'relative' }}>
           <button
             onClick={(e) => { e.stopPropagation(); setQOpen(v => !v) }}
-            title="Quantize options (Ctrl+Q applies)"
+            title={t('Quantize options (Ctrl+Q applies)')}
             style={{
               padding: '1px 8px', fontSize: 9, fontWeight: 600,
               color: qOpen ? hw.accent : hw.textMuted,
@@ -2209,10 +2215,10 @@ export function PianoRoll() {
                 display: 'flex', flexDirection: 'column', gap: 8,
               }}
             >
-              <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Quantize</div>
+              <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>{t('Quantize')}</div>
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
-                  <span>Strength</span>
+                  <span>{t('Strength')}</span>
                   <span style={{ color: hw.textPrimary, fontWeight: 600 }}>{qStrength}%</span>
                 </div>
                 <input type="range" min={0} max={100} step={1} value={qStrength}
@@ -2220,7 +2226,7 @@ export function PianoRoll() {
                   style={{ width: '100%', accentColor: hw.accent }} />
               </div>
               <div>
-                <div style={{ fontSize: 9, color: hw.textMuted, marginBottom: 2 }}>Apply to</div>
+                <div style={{ fontSize: 9, color: hw.textMuted, marginBottom: 2 }}>{t('Apply to')}</div>
                 <div style={{ display: 'flex', gap: 2 }}>
                   {(['start','end','both'] as const).map(m => (
                     <button key={m} onClick={() => setQMode(m)} style={{
@@ -2230,7 +2236,7 @@ export function PianoRoll() {
                       border: `1px solid ${qMode === m ? hw.accentGlow : hw.border}`,
                       borderRadius: hw.radius.sm, textTransform: 'uppercase',
                     }}>
-                      {m}
+                      {t({ start: 'Start', end: 'End', both: 'Both' }[m])}
                     </button>
                   ))}
                 </div>
@@ -2252,7 +2258,7 @@ export function PianoRoll() {
                   border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
                 }}
               >
-                Apply quantize
+                {t('Apply quantize')}
               </button>
             </div>
           )}
@@ -2261,7 +2267,7 @@ export function PianoRoll() {
         <div style={{ position: 'relative' }}>
           <button
             onClick={(e) => { e.stopPropagation(); setGenOpen(v => !v) }}
-            title="Generators — arpeggiate, strum, snap to scale"
+            title={t('Generators — arpeggiate, strum, snap to scale')}
             style={{
               padding: '1px 8px', fontSize: 9, fontWeight: 600,
               color: genOpen ? hw.accent : hw.textMuted,
@@ -2326,14 +2332,14 @@ export function PianoRoll() {
                     onChange={e => setArpGate(Number(e.target.value))} style={{ width: '100%', accentColor: hw.accent }} />
                 </div>
                 <button onClick={runArpeggiate} disabled={selectedNotes.size === 0}
-                  title={selectedNotes.size === 0 ? 'Select a chord first' : 'Arpeggiate selection'}
+                  title={selectedNotes.size === 0 ? t('Select a chord first') : t('Arpeggiate selection')}
                   style={{
                     padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
                     background: selectedNotes.size === 0 ? hw.border : hw.accent,
                     border: 'none', borderRadius: hw.radius.sm,
                     cursor: selectedNotes.size === 0 ? 'not-allowed' : 'pointer',
                   }}>
-                  Arpeggiate selection
+                  {t('Arpeggiate selection')}
                 </button>
               </div>
 
@@ -2351,7 +2357,7 @@ export function PianoRoll() {
                         background: strumDir === v ? hw.accentDim : 'transparent',
                         border: `1px solid ${strumDir === v ? hw.accentGlow : hw.border}`,
                         borderRadius: hw.radius.sm, textTransform: 'uppercase',
-                      }}>{v}</button>
+                      }}>{t({ up: 'Up', down: 'Down' }[v])}</button>
                     ))}
                   </div>
                   <label style={{ fontSize: 9, color: hw.textMuted, display: 'flex', alignItems: 'center', gap: 3 }}>
@@ -2365,7 +2371,7 @@ export function PianoRoll() {
                   padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
                   background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
                 }}>
-                  Strum {selectedNotes.size > 0 ? 'selection' : 'all'}
+                  {selectedNotes.size > 0 ? t('Strum selection') : t('Strum all')}
                 </button>
               </div>
 
@@ -2373,16 +2379,16 @@ export function PianoRoll() {
 
               {/* Scale snap (uses the toolbar's root + scale) */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Snap to scale</div>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>{t('Snap to scale')}</div>
                 <button onClick={runScaleSnap} disabled={scaleType === 'chromatic'}
-                  title={scaleType === 'chromatic' ? 'Pick a non-chromatic scale in the toolbar' : 'Snap pitches to scale'}
+                  title={scaleType === 'chromatic' ? t('Pick a non-chromatic scale in the toolbar') : t('Snap pitches to scale')}
                   style={{
                     padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
                     background: scaleType === 'chromatic' ? hw.border : hw.accent,
                     border: 'none', borderRadius: hw.radius.sm,
                     cursor: scaleType === 'chromatic' ? 'not-allowed' : 'pointer',
                   }}>
-                  Snap {selectedNotes.size > 0 ? 'selection' : 'all'} → {SCALE_TYPES[scaleType].name}
+                  {tf(selectedNotes.size > 0 ? 'Snap selection → {scale}' : 'Snap all → {scale}', { scale: t(SCALE_TYPES[scaleType].name) })}
                 </button>
               </div>
 
@@ -2390,14 +2396,14 @@ export function PianoRoll() {
 
               {/* Humanize */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Humanize</div>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>{t('Humanize')}</div>
                 <button onClick={runHumanize}
-                  title="Add subtle random timing + velocity variation"
+                  title={t('Add subtle random timing + velocity variation')}
                   style={{
                     padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
                     background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
                   }}>
-                  Humanize {selectedNotes.size > 0 ? 'selection' : 'all'}
+                  {selectedNotes.size > 0 ? t('Humanize selection') : t('Humanize all')}
                 </button>
               </div>
 
@@ -2407,20 +2413,20 @@ export function PianoRoll() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Groove</div>
                 <button onClick={runExtractGroove}
-                  title="Take the timing and accents of this part and keep them under a name"
+                  title={t('Take the timing and accents of this part and keep them under a name')}
                   style={{
                     padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
                     background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
                   }}>
-                  Take groove
+                  {t('Take groove')}
                 </button>
                 <button onClick={runApplyGroove}
-                  title="Put a saved groove on this part"
+                  title={t('Put a saved groove on this part')}
                   style={{
                     padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
                     background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
                   }}>
-                  Apply groove
+                  {t('Apply groove')}
                 </button>
               </div>
 
@@ -2430,12 +2436,12 @@ export function PianoRoll() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Legato</div>
                 <button onClick={runLegato}
-                  title="Stretch each note to meet the next (close all gaps)"
+                  title={t('Stretch each note to meet the next (close all gaps)')}
                   style={{
                     padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff',
                     background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
                   }}>
-                  Legato {selectedNotes.size > 0 ? 'selection' : 'all'}
+                  {selectedNotes.size > 0 ? t('Legato selection') : t('Legato all')}
                 </button>
               </div>
 
@@ -2446,58 +2452,58 @@ export function PianoRoll() {
                 <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Chop / roll</div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <label style={{ fontSize: 9, color: hw.textMuted, flex: 1 }}>
-                    Repeats
+                    {t('Repeats')}
                     <select value={chopRepeats} onChange={e => setChopRepeats(Number(e.target.value))}
                       style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
                       {[2, 3, 4, 6, 8, 16].map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </label>
                   <button onClick={runNoteRepeat}
-                    title="Split each note into an even roll"
+                    title={t('Split each note into an even roll')}
                     style={{ flex: 1, padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff', background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer', alignSelf: 'flex-end' }}>
-                    Chop {selectedNotes.size > 0 ? 'selection' : 'all'}
+                    {selectedNotes.size > 0 ? t('Chop selection') : t('Chop all')}
                   </button>
                 </div>
               </div>
 
               {/* Chordify */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Chord</div>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>{t('Chord')}</div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <label style={{ fontSize: 9, color: hw.textMuted, flex: 1 }}>
-                    Type
+                    {t('Type')}
                     <select value={chordQuality} onChange={e => setChordQuality(e.target.value)}
                       style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
-                      <option value="major">Major</option>
-                      <option value="minor">Minor</option>
-                      <option value="dim">Diminished</option>
-                      <option value="aug">Augmented</option>
-                      <option value="dom7">Dominant 7</option>
-                      <option value="maj7">Major 7</option>
-                      <option value="min7">Minor 7</option>
+                      <option value="major">{t('Major')}</option>
+                      <option value="minor">{t('Minor')}</option>
+                      <option value="dim">{t('Diminished')}</option>
+                      <option value="aug">{t('Augmented')}</option>
+                      <option value="dom7">{t('Dominant 7')}</option>
+                      <option value="maj7">{t('Major 7')}</option>
+                      <option value="min7">{t('Minor 7')}</option>
                     </select>
                   </label>
                   <button onClick={runChordify}
-                    title="Stack a chord under each note (the note is the root)"
+                    title={t('Stack a chord under each note (the note is the root)')}
                     style={{ flex: 1, padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff', background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer', alignSelf: 'flex-end' }}>
-                    Chord {selectedNotes.size > 0 ? 'selection' : 'all'}
+                    {selectedNotes.size > 0 ? t('Chord selection') : t('Chord all')}
                   </button>
                 </div>
               </div>
 
               {/* Chord progression */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Progression</div>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>{t('Progression')}</div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <label style={{ fontSize: 9, color: hw.textMuted, flex: 1 }}>
-                    Key
+                    {t('Key')}
                     <select value={progKey} onChange={e => setProgKey(Number(e.target.value))}
                       style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
                       {['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].map((n, i) => <option key={n} value={i}>{n}</option>)}
                     </select>
                   </label>
                   <label style={{ fontSize: 9, color: hw.textMuted, flex: 1 }}>
-                    Bars
+                    {t('Bars')}
                     <select value={progBars} onChange={e => setProgBars(Number(e.target.value))}
                       style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
                       {[2, 4, 8, 16].map(b => <option key={b} value={b}>{b}</option>)}
@@ -2505,27 +2511,27 @@ export function PianoRoll() {
                   </label>
                 </div>
                 <button onClick={runProgression}
-                  title="Generate a diatonic chord progression (uses the Chord type above as the starting chord)"
+                  title={t('Generate a diatonic chord progression (uses the Chord type above as the starting chord)')}
                   style={{ padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff', background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer' }}>
-                  Generate progression
+                  {t('Generate progression')}
                 </button>
               </div>
 
               {/* Melody line — a diatonic lead over an auto-built progression.
                   Reuses the Key / Chord-type / Bars controls above. */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>Melody</div>
+                <div style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>{t('Melody')}</div>
                 <label style={{ fontSize: 9, color: hw.textMuted }}>
-                  Notes / bar
+                  {t('Notes / bar')}
                   <select value={melodyNotesPerBar} onChange={e => setMelodyNotesPerBar(Number(e.target.value))}
                     style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: hw.textPrimary, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, padding: '2px 4px' }}>
                     {[1, 2, 4, 8].map(b => <option key={b} value={b}>{b}</option>)}
                   </select>
                 </label>
                 <button onClick={runMelody}
-                  title="Generate a diatonic melody line over an auto-built progression (uses the Key, Chord type and Bars above)"
+                  title={t('Generate a diatonic melody line over an auto-built progression (uses the Key, Chord type and Bars above)')}
                   style={{ padding: '5px 10px', fontSize: 10, fontWeight: 700, color: '#fff', background: hw.accent, border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer' }}>
-                  Generate melody
+                  {t('Generate melody')}
                 </button>
               </div>
             </div>
@@ -2545,7 +2551,7 @@ export function PianoRoll() {
         />
         <button
           onClick={() => midiImportRef.current?.click()}
-          title="Import notes from a .mid file into the active clip"
+          title={t('Import notes from a .mid file into the active clip')}
           style={{
             padding: '1px 8px', fontSize: 9, fontWeight: 600,
             color: hw.textMuted, background: 'rgba(255,255,255,0.04)',
@@ -2553,11 +2559,11 @@ export function PianoRoll() {
             textTransform: 'uppercase',
           }}
         >
-          Import MIDI
+          {t('Import MIDI')}
         </button>
         <button
           onClick={exportMidi}
-          title="Export active clip as a .mid file"
+          title={t('Export active clip as a .mid file')}
           style={{
             padding: '1px 8px', fontSize: 9, fontWeight: 600,
             color: hw.textMuted, background: 'rgba(255,255,255,0.04)',
@@ -2565,13 +2571,13 @@ export function PianoRoll() {
             textTransform: 'uppercase',
           }}
         >
-          Export MIDI
+          {t('Export MIDI')}
         </button>
 
         <div style={{ position: 'relative' }}>
           <button
             onClick={() => setToolsOpen(v => !v)}
-            title="Note tools: legato, humanize, flip, reverse…"
+            title={t('Note tools: legato, humanize, flip, reverse…')}
             style={{
               padding: '1px 8px', fontSize: 9, fontWeight: 600,
               color: toolsOpen ? hw.accent : hw.textMuted,
@@ -2580,7 +2586,7 @@ export function PianoRoll() {
               borderRadius: hw.radius.sm, textTransform: 'uppercase',
             }}
           >
-            Tools ▾
+            {t('Tools')} ▾
           </button>
           {toolsOpen && (
             <div
@@ -2625,8 +2631,8 @@ export function PianoRoll() {
                 return (
                   <ToolMenuItem
                     key={key as string}
-                    label={label as string}
-                    hint={hint as string}
+                    label={t(label as string)}
+                    hint={t(hint as string)}
                     onClick={() => runTransform(key as Parameters<typeof runTransform>[0])}
                   />
                 )
@@ -2663,7 +2669,7 @@ export function PianoRoll() {
             ref={canvasRef}
             tabIndex={0}
             role="application"
-            aria-label="Piano roll. Tab moves to the next note, Shift and Tab to the previous, arrows move the selected note, Delete removes it."
+            aria-label={t('Piano roll. Tab moves to the next note, Shift and Tab to the previous, arrows move the selected note, Delete removes it.')}
 
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
@@ -2739,12 +2745,12 @@ export function PianoRoll() {
             <button
               key={p}
               onClick={() => setNoteProperty(p)}
-              title={{
+              title={t({
                 velocity: 'How hard the note was played',
                 pan: 'Where this one note sits, left to right',
                 fine: 'Detune this one note, in cents',
                 release: 'How hard the key was let go: harder is a shorter tail',
-              }[p]}
+              }[p])}
               style={{
                 fontSize: 8, padding: '1px 5px', cursor: 'pointer',
                 background: 'transparent',
@@ -2775,7 +2781,7 @@ export function PianoRoll() {
           <div>
             <div
               onMouseDown={onCcLaneResizeStart}
-              title="Drag to resize CC lanes"
+              title={t('Drag to resize CC lanes')}
               style={{
                 height: 4,
                 cursor: 'ns-resize',
@@ -2792,20 +2798,20 @@ export function PianoRoll() {
             }}>
               <span style={{ color: hw.textSecondary, fontWeight: 600 }}>CC</span>
               <div style={{ display: 'flex', gap: 2 }}>
-                {(['pencil', 'line', 'curve'] as CcTool[]).map(t => (
+                {(['pencil', 'line', 'curve'] as CcTool[]).map(id => (
                   <button
-                    key={t}
-                    onClick={() => setCcTool(t)}
+                    key={id}
+                    onClick={() => setCcTool(id)}
                     style={{
                       padding: '2px 7px', fontSize: 9,
-                      background: ccTool === t ? hw.accent : 'transparent',
-                      color: ccTool === t ? '#fff' : hw.textSecondary,
-                      border: `1px solid ${ccTool === t ? hw.accent : hw.border}`,
+                      background: ccTool === id ? hw.accent : 'transparent',
+                      color: ccTool === id ? '#fff' : hw.textSecondary,
+                      border: `1px solid ${ccTool === id ? hw.accent : hw.border}`,
                       borderRadius: 3, cursor: 'pointer',
                       textTransform: 'uppercase', letterSpacing: 0.4,
                     }}
                   >
-                    {t}
+                    {t({ pencil: 'Pencil', line: 'Line', curve: 'Curve' }[id])}
                   </button>
                 ))}
               </div>
@@ -2814,7 +2820,7 @@ export function PianoRoll() {
                 type="number"
                 min={0}
                 max={127}
-                placeholder="Custom CC#"
+                placeholder={t('Custom CC#')}
                 value={customCcNumber}
                 onChange={e => setCustomCcNumber(e.target.value)}
                 style={{
@@ -2832,7 +2838,7 @@ export function PianoRoll() {
                 }}
                 style={laneAddBtn}
               >
-                Add CC
+                {t('Add CC')}
               </button>
               <select
                 value=""
@@ -2847,9 +2853,9 @@ export function PianoRoll() {
                   border: `1px solid ${hw.border}`, borderRadius: 3,
                 }}
               >
-                <option value="">+ Preset lane…</option>
+                <option value="">{t('+ Preset lane…')}</option>
                 {BUILT_IN_CC_LANES.filter(d => !visibleCcLaneIds.includes(d.id)).map(d => (
-                  <option key={d.id} value={d.id}>{d.label}</option>
+                  <option key={d.id} value={d.id}>{t(d.label)}</option>
                 ))}
               </select>
             </div>
@@ -2909,12 +2915,12 @@ export function PianoRoll() {
               border: `1px solid ${hw.border}`, borderRadius: 3,
             }}
           >
-            <option value="">+ Add CC lane…</option>
+            <option value="">{t('+ Add CC lane…')}</option>
             {BUILT_IN_CC_LANES.map(d => (
-              <option key={d.id} value={d.id}>{d.label}</option>
+              <option key={d.id} value={d.id}>{t(d.label)}</option>
             ))}
           </select>
-          <span>Pitch bend, mod wheel, expression and more</span>
+          <span>{t('Pitch bend, mod wheel, expression and more')}</span>
         </div>
       )}
 
@@ -2996,7 +3002,7 @@ export function PianoRoll() {
             await refreshNotes()
           } catch (err) { console.warn('delete note failed', err) }
         }
-        const label = targetIndices.length > 1 ? `${targetIndices.length} notes` : noteName(note.pitch)
+        const label = targetIndices.length > 1 ? tf('{n} notes', { n: targetIndices.length }) : noteName(note.pitch)
         return (
           <>
             <div
@@ -3019,12 +3025,12 @@ export function PianoRoll() {
               <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
                 {label}
               </div>
-              <NoteMenuItem label={note.muted ? 'Unmute' : 'Mute'} onClick={toggleMute} />
-              <NoteMenuItem label="Duplicate" shortcut="Ctrl+D" onClick={duplicate} />
-              <NoteMenuItem label="Quantize" shortcut="Ctrl+Q" onClick={quantize} />
+              <NoteMenuItem label={note.muted ? t('Unmute') : t('Mute')} onClick={toggleMute} />
+              <NoteMenuItem label={t('Duplicate')} shortcut="Ctrl+D" onClick={duplicate} />
+              <NoteMenuItem label={t('Quantize')} shortcut="Ctrl+Q" onClick={quantize} />
               <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
               <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                Velocity
+                {t('Velocity')}
               </div>
               <div style={{ display: 'flex', gap: 2, padding: '0 4px 2px' }}>
                 {[0.25, 0.5, 0.75, 1.0].map(v => (
@@ -3038,7 +3044,7 @@ export function PianoRoll() {
                 ))}
               </div>
               <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
-              <NoteMenuItem label="Delete" shortcut="Del" danger onClick={del} />
+              <NoteMenuItem label={t('Delete')} shortcut="Del" danger onClick={del} />
             </div>
           </>
         )

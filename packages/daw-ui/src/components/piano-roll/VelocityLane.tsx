@@ -1,4 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react'
+import { t, useLanguage } from '../../i18n'
 
 interface Note {
   index: number
@@ -68,6 +69,7 @@ interface VelocityLaneProps {
 export function VelocityLane({
   notes, selectedNotes, height, keyboardWidth, scrollX, pixelsPerTick, property, onVelocityChange,
 }: VelocityLaneProps) {
+  useLanguage()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -240,7 +242,7 @@ export function VelocityLane({
       <canvas
         ref={canvasRef}
         onMouseDown={handleMouseDown}
-        title="Click/drag to set velocity, Shift+drag across notes to draw a curve"
+        title={t('Click/drag to set velocity, Shift+drag across notes to draw a curve')}
         style={{ display: 'block', cursor: 'ns-resize' }}
       />
     </div>

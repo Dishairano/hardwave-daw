@@ -5,6 +5,7 @@ import { useTrackStore } from '../../stores/trackStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { DialogFrame } from '../ui/DialogFrame'
 import { btn } from '../ui/dialogStyles'
+import { t, tf, useLanguage } from '../../i18n'
 
 /**
  * Painting something out of a recording.
@@ -35,6 +36,7 @@ const CEILING_DB = -6
 export function SpectralEditor({
   trackId, clipId, onClose,
 }: { trackId: string; clipId: string; onClose: () => void }) {
+  useLanguage()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [data, setData] = useState<SpectrogramData | null>(null)
   const [boxes, setBoxes] = useState<Box[]>([])
@@ -129,8 +131,10 @@ export function SpectralEditor({
       await invoke('erase_from_clip', { trackId, clipId, patches })
       await useTrackStore.getState().fetchTracks()
       useNotificationStore.getState().push('info',
-        `${patches.length} ${patches.length === 1 ? 'patch' : 'patches'} painted out`, {
-          detail: 'The take as it was recorded is kept: this is a new file.',
+        patches.length === 1
+          ? t('1 patch painted out')
+          : tf('{n} patches painted out', { n: patches.length }), {
+          detail: t('The take as it was recorded is kept: this is a new file.'),
         })
       onClose()
     } catch (e) {
@@ -141,8 +145,8 @@ export function SpectralEditor({
 
   return (
     <DialogFrame
-      title="Paint it out"
-      subtitle="Drag a box around the cough, the creak or the click"
+      title={t('Paint it out')}
+      subtitle={t('Drag a box around the cough, the creak or the click')}
       onClose={onClose}
       width={900}
     >
@@ -153,7 +157,7 @@ export function SpectralEditor({
           height={320}
           role="application"
           tabIndex={0}
-          aria-label="Spectrogram. Drag a box around what should be rubbed out. Press Backspace to clear what is painted."
+          aria-label={t('Spectrogram. Drag a box around what should be rubbed out. Press Backspace to clear what is painted.')}
           onKeyDown={e => {
             // A keyboard user cannot drag a box, but can at least
             // undo one and leave without reaching for the mouse.
@@ -181,28 +185,28 @@ export function SpectralEditor({
         />
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 12.5, color: hw.textSecondary }}>Strength</span>
+          <span style={{ fontSize: 12.5, color: hw.textSecondary }}>{t('Strength')}</span>
           <input
             type="range" min={0.1} max={1} step={0.05} value={strength}
             onChange={e => setStrength(Number(e.target.value))}
             style={{ width: 180 }}
           />
           <span style={{ fontSize: 12, color: hw.textFaint }}>
-            {Math.round(strength * 100)}% — part way is often better than a hole
+            {tf('{n}% — part way is often better than a hole', { n: Math.round(strength * 100) })}
           </span>
           <div style={{ flex: 1 }} />
           <span
             aria-live="polite"
             style={{ fontSize: 12, color: error ? hw.red : hw.textFaint }}
           >
-            {error ?? `${boxes.length} painted`}
+            {error ?? tf('{n} painted', { n: boxes.length })}
           </span>
-          <button onClick={() => setBoxes([])} style={btn()}>Clear</button>
+          <button onClick={() => setBoxes([])} style={btn()}>{t('Clear')}</button>
           <button
             onClick={() => void apply()}
             disabled={busy || boxes.length === 0}
             style={{ ...btn(), background: hw.accent, color: '#fff' }}
-          >{busy ? 'Working…' : 'Paint it out'}</button>
+          >{busy ? t('Working…') : t('Paint it out')}</button>
         </div>
       </div>
     </DialogFrame>

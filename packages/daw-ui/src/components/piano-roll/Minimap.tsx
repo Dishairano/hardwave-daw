@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback } from 'react'
 import { hw } from '../../theme'
+import { t, useLanguage } from '../../i18n'
 
 interface Note {
   index: number
@@ -24,6 +25,7 @@ interface MinimapProps {
 export function Minimap({
   notes, height, keyboardWidth, scrollX, viewWidth, totalTicks, pixelsPerTick, onScroll,
 }: MinimapProps) {
+  useLanguage()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
@@ -122,7 +124,7 @@ export function Minimap({
       <canvas
         ref={canvasRef}
         onMouseDown={handleMouseDown}
-        title="Drag to jump to region"
+        title={t('Drag to jump to region')}
         style={{ display: 'block', cursor: 'ew-resize' }}
       />
     </div>

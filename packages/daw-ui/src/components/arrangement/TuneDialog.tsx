@@ -5,6 +5,7 @@ import { useTrackStore } from '../../stores/trackStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { DialogFrame } from '../ui/DialogFrame'
 import { btn } from '../ui/dialogStyles'
+import { t, tf, useLanguage } from '../../i18n'
 
 /**
  * Tuning a sung take, note by note.
@@ -21,6 +22,7 @@ const ROOTS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 export function TuneDialog({
   trackId, clipId, onClose,
 }: { trackId: string; clipId: string; onClose: () => void }) {
+  useLanguage()
   const [strength, setStrength] = useState(1)
   const [root, setRoot] = useState(0)
   const [scale, setScale] = useState<'chromatic' | 'major' | 'minor'>('chromatic')
@@ -36,33 +38,35 @@ export function TuneDialog({
       )
       await useTrackStore.getState().fetchTracks()
       useNotificationStore.getState().push('info',
-        `${result.moved} of ${result.notes} ${result.notes === 1 ? 'note' : 'notes'} tuned`, {
-          detail: `The take was up to ${Math.round(result.worstCents)} cents out. `
-            + 'The original is untouched: the tuned audio is a new file.',
+        result.notes === 1
+          ? tf('{moved} of 1 note tuned', { moved: result.moved })
+          : tf('{moved} of {notes} notes tuned', { moved: result.moved, notes: result.notes }), {
+          detail: tf('The take was up to {cents} cents out. The original is untouched: the tuned audio is a new file.',
+            { cents: Math.round(result.worstCents) }),
         })
       onClose()
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not tune that', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not tune that'), { detail: String(e) })
       setBusy(false)
     }
   }
 
   return (
     <DialogFrame
-      title="Tune this take"
-      subtitle="Note by note, in place"
+      title={t('Tune this take')}
+      subtitle={t('Note by note, in place')}
       onClose={onClose}
       width={420}
     >
       <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <Row label="Strength" value={`${Math.round(strength * 100)}%`}>
+        <Row label={t('Strength')} value={`${Math.round(strength * 100)}%`}>
           <input
             type="range" min={0} max={1} step={0.05} value={strength}
             onChange={e => setStrength(Number(e.target.value))}
             style={{ width: '100%' }}
           />
         </Row>
-        <Row label="Key">
+        <Row label={t('Key')}>
           <div style={{ display: 'flex', gap: 6 }}>
             <select
               value={root}
@@ -76,13 +80,13 @@ export function TuneDialog({
               onChange={e => setScale(e.target.value as 'chromatic' | 'major' | 'minor')}
               style={select()}
             >
-              <option value="chromatic">any note</option>
-              <option value="major">major</option>
-              <option value="minor">minor</option>
+              <option value="chromatic">{t('any note')}</option>
+              <option value="major">{t('major')}</option>
+              <option value="minor">{t('minor')}</option>
             </select>
           </div>
         </Row>
-        <Row label="Leave alone within" value={`${tolerance} cents`}>
+        <Row label={t('Leave alone within')} value={tf('{n} cents', { n: tolerance })}>
           <input
             type="range" min={0} max={50} step={5} value={tolerance}
             onChange={e => setTolerance(Number(e.target.value))}
@@ -90,16 +94,15 @@ export function TuneDialog({
           />
         </Row>
         <div style={{ fontSize: 12, color: hw.textFaint, lineHeight: 1.5 }}>
-          One voice at a time. The take keeps its length and its place, and the
-          original file is left where it is.
+          {t('One voice at a time. The take keeps its length and its place, and the original file is left where it is.')}
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button onClick={onClose} style={btn()}>Cancel</button>
+          <button onClick={onClose} style={btn()}>{t('Cancel')}</button>
           <button
             onClick={() => void apply()}
             disabled={busy}
             style={{ ...btn(), background: hw.accent, color: '#fff' }}
-          >{busy ? 'Tuning…' : 'Tune'}</button>
+          >{busy ? t('Tuning…') : t('Tune')}</button>
         </div>
       </div>
     </DialogFrame>
