@@ -178,6 +178,57 @@ fn merge_notes_into_overlapping_clip(
     Some(midi_ref.id.clone())
 }
 
+/// Replace-record: remove the notes of the track's MIDI clips that start
+/// under the take, and the controller moves of the kinds the take recorded,
+/// so the take plays instead of on top of them. A take used to be laid
+/// over the old part as a second clip and both played. Muted clips, and
+/// clips this same take made (`skip`, earlier loop passes), are left alone.
+/// Only a clip's own length is looked at: the repeats of a looped clip are
+/// the same notes, and taking them out of one repeat would take them out
+/// of all. Returns how many notes went.
+fn clear_notes_under_take(
+    track: &mut hardwave_project::track::Track,
+    position_ticks: u64,
+    length_ticks: u64,
+    controls: &[hardwave_midi::MidiControlPoint],
+    skip: &[String],
+) -> usize {
+    use hardwave_project::clip::ClipContent;
+
+    let take_end = position_ticks + length_ticks;
+    let mut removed = 0;
+    for placement in track.clips.iter_mut() {
+        let start = placement.position_ticks;
+        let end = start + placement.length_ticks;
+        if end <= position_ticks || start >= take_end {
+            continue;
+        }
+        let ClipContent::Midi(ref mut midi_ref) = placement.content else {
+            continue;
+        };
+        if midi_ref.clip.muted || skip.contains(&midi_ref.id) {
+            continue;
+        }
+        // The take's window in the clip's own ticks.
+        let from = position_ticks.saturating_sub(start);
+        let to = take_end - start;
+        let before = midi_ref.clip.notes.len();
+        midi_ref
+            .clip
+            .notes
+            .retain(|n| n.start_tick < from || n.start_tick >= to);
+        removed += before - midi_ref.clip.notes.len();
+        midi_ref.clip.controls.retain(|c| {
+            !(c.tick >= from
+                && c.tick < to
+                && controls
+                    .iter()
+                    .any(|t| t.kind == c.kind && t.channel == c.channel))
+        });
+    }
+    removed
+}
+
 /// Turn what was just played into a clip, without having pressed record.
 ///
 /// The DAW keeps recent MIDI input in a rolling buffer whether or not it is
@@ -216,7 +267,7 @@ pub fn capture_recent_midi(
                 .into(),
         );
     }
-    commit_recording_to_midi_clip(state, track_id, from, to, None, Some(false))
+    commit_recording_to_midi_clip(state, track_id, from, to, None, Some(false), None)
 }
 
 /// Commit a slice of the rolling capture into a MIDI clip placed on the/// Commit a slice of the rolling capture into a MIDI clip placed on the
@@ -244,6 +295,7 @@ pub fn commit_recording_to_midi_clip(
     end_sample: u64,
     quantize_ticks: Option<u64>,
     blend: Option<bool>,
+    replace: Option<bool>,
 ) -> Result<Vec<String>, String> {
     use hardwave_midi::{MidiClip, MidiControlKind, MidiControlPoint, MidiEvent, MidiRecorder};
     use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
@@ -373,8 +425,17 @@ pub fn commit_recording_to_midi_clip(
             continue;
         }
 
+        // Replace-record: what the take covers is played by the take alone.
+        if replace.unwrap_or(false) {
+            let mut project = engine.project.lock();
+            let Some(track) = project.track_mut(&track_id) else {
+                return Err(format!("track {track_id} not found"));
+            };
+            clear_notes_under_take(track, position_ticks, length_ticks, &controls, &created);
+        }
+
         // Blend-record merges into an overlapping clip when one exists.
-        if blend.unwrap_or(false) {
+        if blend.unwrap_or(false) && !replace.unwrap_or(false) {
             let merged = {
                 let mut project = engine.project.lock();
                 let Some(track) = project.track_mut(&track_id) else {
@@ -550,6 +611,35 @@ mod blend_tests {
         assert_eq!(
             m.clip.controls[0].tick, 1100,
             "the move shifts by where the take sits inside the clip"
+        );
+    }
+
+    /// Replace-record: the old notes under the take go, the ones before
+    /// and after it stay, and the take's own clip is not touched.
+    #[test]
+    fn replace_takes_out_only_the_notes_under_the_take() {
+        let mut t = track_with_midi_clip(0, 4000);
+        let ClipContent::Midi(ref mut m) = t.clips[0].content else {
+            unreachable!()
+        };
+        m.clip.notes = vec![note(0), note(960), note(1920), note(3000)];
+        // The take covers ticks 900 to 2400 of the song; the clip starts at 0.
+        let gone = super::clear_notes_under_take(&mut t, 900, 1500, &[], &[]);
+        assert_eq!(gone, 2);
+        let ClipContent::Midi(ref m) = t.clips[0].content else {
+            unreachable!()
+        };
+        let left: Vec<u64> = m.clip.notes.iter().map(|n| n.start_tick).collect();
+        assert_eq!(left, vec![0, 3000]);
+        // A clip the take made itself is skipped.
+        let id = m.id.clone();
+        let ClipContent::Midi(ref mut m) = t.clips[0].content else {
+            unreachable!()
+        };
+        m.clip.notes.push(note(1000));
+        assert_eq!(
+            super::clear_notes_under_take(&mut t, 900, 1500, &[], &[id]),
+            0
         );
     }
 }

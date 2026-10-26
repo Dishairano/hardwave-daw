@@ -11,6 +11,7 @@ import { AUTOSAVE_OPTIONS, useAutosavePrefsStore } from '../../stores/autosavePr
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { RecordingLatencyRow } from './RecordingLatency'
 import { TakeFormatRow } from './TakeFormatRow'
+import { MidiTakeModeRow } from './MidiTakeModeRow'
 import { MtcFollowRow } from './MtcFollowRow'
 import { PluginLatencyRow } from './PluginLatencyRow'
 import { ReleaseInBackgroundRow } from './ReleaseInBackgroundRow'
@@ -1444,6 +1445,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
             </SettingRow>
             <RecordingLatencyRow />
             <TakeFormatRow />
+            <MidiTakeModeRow />
           </>)}
 
           {tab === 'plugins' && (<>

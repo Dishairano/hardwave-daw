@@ -41,6 +41,10 @@ export interface RecordingPrefsState {
   stepEditing: boolean
   waitForInput: boolean
   blendRecord: boolean
+  /** Recorded MIDI replaces the notes it is played over, instead of
+   *  landing on top of them in a second clip that plays as well. Blend
+   *  and replace exclude each other; with neither, a take is a new clip. */
+  replaceRecord: boolean
   multilinkActive: boolean
   /** Recorded MIDI notes land on the playlist's snap grid. The backend
    *  took a grid all along and the interface always sent none. */
@@ -51,6 +55,7 @@ export interface RecordingPrefsState {
   toggleStepEditing: () => void
   toggleWaitForInput: () => void
   toggleBlendRecord: () => void
+  setMidiTakeMode: (mode: 'stack' | 'blend' | 'replace') => void
   toggleMultilink: () => void
   toggleQuantizeRecording: () => void
 }
@@ -61,6 +66,7 @@ export const useRecordingPrefsStore = create<RecordingPrefsState>()(
       stepEditing: false,
       waitForInput: false,
       blendRecord: false,
+      replaceRecord: false,
       multilinkActive: false,
       quantizeRecording: false,
       multilinkCount: 0,
@@ -72,7 +78,8 @@ export const useRecordingPrefsStore = create<RecordingPrefsState>()(
         invoke('set_wait_for_input', { enabled: next }).catch(() => {})
         return { waitForInput: next }
       }),
-      toggleBlendRecord:   () => set((s) => ({ blendRecord: !s.blendRecord })),
+      toggleBlendRecord:   () => set((s) => ({ blendRecord: !s.blendRecord, replaceRecord: false })),
+      setMidiTakeMode:     (mode) => set({ blendRecord: mode === 'blend', replaceRecord: mode === 'replace' }),
       toggleMultilink:     () => set((s) => {
         const next = !s.multilinkActive
         // Switching it off cancels a learn still waiting for a knob that
@@ -91,6 +98,7 @@ export const useRecordingPrefsStore = create<RecordingPrefsState>()(
         stepEditing: s.stepEditing,
         waitForInput: s.waitForInput,
         blendRecord: s.blendRecord,
+        replaceRecord: s.replaceRecord,
         multilinkActive: s.multilinkActive,
         quantizeRecording: s.quantizeRecording,
       }) as RecordingPrefsState,

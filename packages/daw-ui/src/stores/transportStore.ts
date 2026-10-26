@@ -290,6 +290,7 @@ async function commitRecording(
 
   const [{ useRecordingPrefsStore }] = await Promise.all([import('./recordingPrefsStore')])
   const blend = useRecordingPrefsStore.getState().blendRecord
+  const replace = useRecordingPrefsStore.getState().replaceRecord
   // Quantize while recording: to the playlist's snap, when that is on.
   const quantizeTicks = useRecordingPrefsStore.getState().quantizeRecording
     ? snapToTicks(useTransportStore.getState().snapValue, useTransportStore.getState().snapEnabled) || null
@@ -335,8 +336,9 @@ async function commitRecording(
           endSample,
           quantizeTicks,
           // Blend-record (Ctrl+B): merge into the overlapping clip instead of
-          // stacking a new one.
+          // stacking a new one. Replace: the notes under the take go.
           blend,
+          replace,
         })) as string[]
         for (const clipId of clipIds.slice(0, -1)) {
           await useTrackStore.getState().setClipMuted(track.id, clipId, true)
