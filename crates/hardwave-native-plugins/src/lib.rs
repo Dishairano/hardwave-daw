@@ -139,6 +139,51 @@ pub fn native_plugin_descriptors() -> Vec<PluginDescriptor> {
     ]
 }
 
+/// A built-in plug-in by its id, or None for an id that is not one.
+pub fn create_native(id: &str) -> Option<Box<dyn hardwave_plugin_host::types::HostedPlugin>> {
+    Some(match id {
+        NativeEq::ID => Box::new(NativeEq::new()),
+        NativeCompressor::ID => Box::new(NativeCompressor::new()),
+        NativeLimiter::ID => Box::new(NativeLimiter::new()),
+        NativeDistortion::ID => Box::new(NativeDistortion::new()),
+        NativeFilter::ID => Box::new(NativeFilter::new()),
+        NativeDelay::ID => Box::new(NativeDelay::new()),
+        NativeReverb::ID => Box::new(NativeReverb::new()),
+        NativeStereo::ID => Box::new(NativeStereo::new()),
+        NativeMultiband::ID => Box::new(NativeMultiband::new()),
+        NativeTripleOsc::ID => Box::new(NativeTripleOsc::new()),
+        NativeFmSynth::ID => Box::new(NativeFmSynth::new()),
+        NativeWavetable::ID => Box::new(NativeWavetable::new()),
+        NativeChorus::ID => Box::new(NativeChorus::new()),
+        NativePhaser::ID => Box::new(NativePhaser::new()),
+        NativeConvReverb::ID => Box::new(NativeConvReverb::new()),
+        NativeTremolo::ID => Box::new(NativeTremolo::new()),
+        NativeFlanger::ID => Box::new(NativeFlanger::new()),
+        NativeAutoPan::ID => Box::new(NativeAutoPan::new()),
+        NativeBitcrush::ID => Box::new(NativeBitcrush::new()),
+        NativeGain::ID => Box::new(NativeGain::new()),
+        NativeSaturator::ID => Box::new(NativeSaturator::new()),
+        NativeNoise::ID => Box::new(NativeNoise::new()),
+        NativeSubBass::ID => Box::new(NativeSubBass::new()),
+        NativeVibrato::ID => Box::new(NativeVibrato::new()),
+        NativeMidSide::ID => Box::new(NativeMidSide::new()),
+        NativeGate::ID => Box::new(NativeGate::new()),
+        NativeTransient::ID => Box::new(NativeTransient::new()),
+        NativeClipper::ID => Box::new(NativeClipper::new()),
+        NativeExciter::ID => Box::new(NativeExciter::new()),
+        NativeTape::ID => Box::new(NativeTape::new()),
+        NativeSoundgoodizer::ID => Box::new(NativeSoundgoodizer::new()),
+        NativeMonoFold::ID => Box::new(NativeMonoFold::new()),
+        NativeRingMod::ID => Box::new(NativeRingMod::new()),
+        NativeAutoFilter::ID => Box::new(NativeAutoFilter::new()),
+        NativeStereoDouble::ID => Box::new(NativeStereoDouble::new()),
+        NativeVocoder::ID => Box::new(NativeVocoder::new()),
+        NativeStutter::ID => Box::new(NativeStutter::new()),
+        NativeSampler::ID => Box::new(NativeSampler::new()),
+        _ => return None,
+    })
+}
+
 pub fn native_plugin_ids() -> Vec<&'static str> {
     vec![
         NativeEq::ID,

@@ -310,3 +310,140 @@ fn playing_a_song_allocates_nothing_on_the_audio_thread() {
         LARGEST.load(Ordering::Relaxed)
     );
 }
+
+/// Every built-in plug-in on its own: an effect on a track playing a tone,
+/// an instrument playing a chord a beat, each watched like the song above.
+/// The song covers four of them; a click from any of the other thirty-odd,
+/// when it is used, was found only by ear.
+#[test]
+fn no_built_in_plug_in_allocates_on_the_audio_thread() {
+    let mut failures = Vec::new();
+    for descriptor in hardwave_native_plugins::native_plugin_descriptors() {
+        let started = std::time::Instant::now();
+        let id = descriptor.id.clone();
+        let instrument = descriptor.has_midi_input;
+        let engine = DawEngine::new();
+        {
+            let frames = SR as usize * 2;
+            let tone: Vec<f32> = (0..frames)
+                .map(|n| (std::f32::consts::TAU * 220.0 * n as f32 / SR as f32).sin() * 0.4)
+                .collect();
+            engine.audio_pool.insert(
+                "rt-one".into(),
+                AudioBuffer {
+                    channels: vec![tone.clone(), tone],
+                    sample_rate: SR,
+                    num_frames: frames,
+                },
+            );
+            let mut project = engine.project.lock();
+            if instrument {
+                let t = project.add_midi_track("One".into());
+                let track = project.track_mut(&t).unwrap();
+                track.inserts.push(slot("slot-one", &id));
+                let mut clip = hardwave_midi::MidiClip::new("rt-one".into(), "One".into(), 2 * BAR);
+                for beat in 0..8u64 {
+                    for pitch in [48u8, 55, 60] {
+                        clip.notes.push(hardwave_midi::MidiNote {
+                            start_tick: beat * 960,
+                            duration_ticks: 480,
+                            pitch,
+                            velocity: 0.8,
+                            ..Default::default()
+                        });
+                    }
+                }
+                track.clips.push(ClipPlacement {
+                    content: ClipContent::Midi(MidiClipRef {
+                        id: "rt-one".into(),
+                        clip,
+                    }),
+                    track_id: t.clone(),
+                    position_ticks: 0,
+                    length_ticks: 2 * BAR,
+                    lane: 0,
+                    color: None,
+                });
+            } else {
+                let t = project.add_audio_track("One".into());
+                let track = project.track_mut(&t).unwrap();
+                track.inserts.push(slot("slot-one", &id));
+                track.clips.push(ClipPlacement {
+                    content: ClipContent::Audio(AudioClip {
+                        id: "clip-one".into(),
+                        name: "rt-one".into(),
+                        source_path: "rt-one".into(),
+                        source_hash: String::new(),
+                        source_start: 0,
+                        source_end: frames as u64,
+                        gain_db: 0.0,
+                        fade_in_ticks: 0,
+                        fade_out_ticks: 0,
+                        muted: false,
+                        reversed: false,
+                        pitch_semitones: 0.0,
+                        stretch_ratio: 1.0,
+                        warp_markers: Vec::new(),
+                        fade_in_curve: FadeCurve::Linear,
+                        fade_out_curve: FadeCurve::Linear,
+                        source_file: String::new(),
+                        treatment: Default::default(),
+                    }),
+                    track_id: t.clone(),
+                    position_ticks: 0,
+                    length_ticks: 2 * BAR,
+                    lane: 0,
+                    color: None,
+                });
+            }
+        }
+        let factory = |id: &str| hardwave_native_plugins::create_native(id);
+        let factory: OfflineInsertFactory<'_> = &factory;
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        LARGEST.store(0, Ordering::Relaxed);
+        // Short, because this runs for every plug-in in a debug build on
+        // every check: past the first blocks the graph is built and the
+        // buffers are full, and 0.6 s of playing covers note starts, a
+        // loop of the tone and every parameter smoother settling.
+        const WARM_UP_BLOCKS: usize = 16;
+        let total = SR as usize * 4 / 5;
+        let (mut blocks, mut frames_done) = (0usize, 0usize);
+        engine
+            .render_offline_with(
+                SR,
+                total as u64,
+                0,
+                Some(factory),
+                |_| {},
+                |block| {
+                    blocks += 1;
+                    frames_done += block.len() / 2;
+                    if blocks == WARM_UP_BLOCKS {
+                        WATCHING.with(|w| w.set(true));
+                    }
+                    if frames_done >= total {
+                        WATCHING.with(|w| w.set(false));
+                    }
+                    true
+                },
+            )
+            .unwrap();
+        WATCHING.with(|w| w.set(false));
+        let n = ALLOCATIONS.load(Ordering::Relaxed);
+        eprintln!(
+            "{id}: {n} allocations in {:.1} s",
+            started.elapsed().as_secs_f32()
+        );
+        if n > 0 {
+            failures.push(format!(
+                "{id}: {n} allocations, the largest {} bytes",
+                LARGEST.load(Ordering::Relaxed)
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "built-in plug-ins that allocate on the audio thread while playing:\n{}",
+        failures.join("\n")
+    );
+}

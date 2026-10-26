@@ -2,15 +2,7 @@ use crate::AppState;
 use hardwave_dsp::waveform_colour::WaveformColours;
 use hardwave_engine::insert_chain::{InsertCommand, LiveSlot};
 use hardwave_native_plugins::sampler;
-use hardwave_native_plugins::{
-    NativeAutoFilter, NativeAutoPan, NativeBitcrush, NativeChorus, NativeClipper, NativeCompressor,
-    NativeConvReverb, NativeDelay, NativeDistortion, NativeEq, NativeExciter, NativeFilter,
-    NativeFlanger, NativeFmSynth, NativeGain, NativeGate, NativeLimiter, NativeMidSide,
-    NativeMonoFold, NativeMultiband, NativeNoise, NativePhaser, NativeReverb, NativeRingMod,
-    NativeSampler, NativeSaturator, NativeSoundgoodizer, NativeStereo, NativeStereoDouble,
-    NativeStutter, NativeSubBass, NativeTape, NativeTransient, NativeTremolo, NativeTripleOsc,
-    NativeVibrato, NativeVocoder, NativeWavetable,
-};
+use hardwave_native_plugins::NativeSampler;
 use hardwave_plugin_host::scanner::ScanDiff;
 use hardwave_plugin_host::types::HostedPlugin;
 use hardwave_plugin_host::{
@@ -73,47 +65,8 @@ pub(crate) fn instantiate_plugin(
 ) -> Result<Box<dyn HostedPlugin>, String> {
     let native_path = PathBuf::from("<native>");
     if descriptor.path == native_path {
-        return match descriptor.id.as_str() {
-            id if id == NativeEq::ID => Ok(Box::new(NativeEq::new())),
-            id if id == NativeCompressor::ID => Ok(Box::new(NativeCompressor::new())),
-            id if id == NativeLimiter::ID => Ok(Box::new(NativeLimiter::new())),
-            id if id == NativeDistortion::ID => Ok(Box::new(NativeDistortion::new())),
-            id if id == NativeFilter::ID => Ok(Box::new(NativeFilter::new())),
-            id if id == NativeDelay::ID => Ok(Box::new(NativeDelay::new())),
-            id if id == NativeReverb::ID => Ok(Box::new(NativeReverb::new())),
-            id if id == NativeStereo::ID => Ok(Box::new(NativeStereo::new())),
-            id if id == NativeMultiband::ID => Ok(Box::new(NativeMultiband::new())),
-            id if id == NativeTripleOsc::ID => Ok(Box::new(NativeTripleOsc::new())),
-            id if id == NativeFmSynth::ID => Ok(Box::new(NativeFmSynth::new())),
-            id if id == NativeWavetable::ID => Ok(Box::new(NativeWavetable::new())),
-            id if id == NativeChorus::ID => Ok(Box::new(NativeChorus::new())),
-            id if id == NativePhaser::ID => Ok(Box::new(NativePhaser::new())),
-            id if id == NativeConvReverb::ID => Ok(Box::new(NativeConvReverb::new())),
-            id if id == NativeTremolo::ID => Ok(Box::new(NativeTremolo::new())),
-            id if id == NativeFlanger::ID => Ok(Box::new(NativeFlanger::new())),
-            id if id == NativeAutoPan::ID => Ok(Box::new(NativeAutoPan::new())),
-            id if id == NativeBitcrush::ID => Ok(Box::new(NativeBitcrush::new())),
-            id if id == NativeGain::ID => Ok(Box::new(NativeGain::new())),
-            id if id == NativeSaturator::ID => Ok(Box::new(NativeSaturator::new())),
-            id if id == NativeNoise::ID => Ok(Box::new(NativeNoise::new())),
-            id if id == NativeSubBass::ID => Ok(Box::new(NativeSubBass::new())),
-            id if id == NativeVibrato::ID => Ok(Box::new(NativeVibrato::new())),
-            id if id == NativeMidSide::ID => Ok(Box::new(NativeMidSide::new())),
-            id if id == NativeGate::ID => Ok(Box::new(NativeGate::new())),
-            id if id == NativeTransient::ID => Ok(Box::new(NativeTransient::new())),
-            id if id == NativeClipper::ID => Ok(Box::new(NativeClipper::new())),
-            id if id == NativeExciter::ID => Ok(Box::new(NativeExciter::new())),
-            id if id == NativeTape::ID => Ok(Box::new(NativeTape::new())),
-            id if id == NativeSoundgoodizer::ID => Ok(Box::new(NativeSoundgoodizer::new())),
-            id if id == NativeMonoFold::ID => Ok(Box::new(NativeMonoFold::new())),
-            id if id == NativeRingMod::ID => Ok(Box::new(NativeRingMod::new())),
-            id if id == NativeAutoFilter::ID => Ok(Box::new(NativeAutoFilter::new())),
-            id if id == NativeStereoDouble::ID => Ok(Box::new(NativeStereoDouble::new())),
-            id if id == NativeVocoder::ID => Ok(Box::new(NativeVocoder::new())),
-            id if id == NativeStutter::ID => Ok(Box::new(NativeStutter::new())),
-            id if id == NativeSampler::ID => Ok(Box::new(NativeSampler::new())),
-            other => Err(format!("Unknown native plug-in id: {other}")),
-        };
+        return hardwave_native_plugins::create_native(&descriptor.id)
+            .ok_or_else(|| format!("Unknown native plug-in id: {}", descriptor.id));
     }
     // Everything past here is someone else's C++ about to be loaded into this
     // process. A plug-in that crashes on load takes the DAW with it, usually
