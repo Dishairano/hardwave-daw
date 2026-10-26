@@ -355,11 +355,16 @@ pub fn build_project(
     // A soloed playlist track is soloed here too, which silences the rest
     // as FL does and gives it all back with one click. FL soloes by
     // switching every other track off, so the switches then mean nothing.
+    // These are the open arrangement's; a clip in another one is checked
+    // against its own with `switched_off`.
     let soloed = |fl_track: u32| fl.playlist_tracks_solo.contains(&fl_track);
     let track_off = |fl_track: u32| {
         fl.playlist_tracks_solo.is_empty() && fl.playlist_tracks_off.contains(&fl_track)
     };
     let mut row = 0usize;
+    // The arrangement each clip made is in, by the clip's id; those not in
+    // the one open in FL are moved into arrangements of their own at the end.
+    let mut arrangement_of: BTreeMap<String, usize> = BTreeMap::new();
     // Each track made, with the FL insert it plays into.
     let mut sources: Vec<(String, u32)> = Vec::new();
 
@@ -386,6 +391,9 @@ pub fn build_project(
             sources.push((id.clone(), channel_insert(channel)));
             let settings = &channel.settings;
             if let Some(track) = project.track_mut(&id) {
+                if let Some(color) = &channel.color {
+                    track.color = color.clone();
+                }
                 track.volume_db = fl_volume_db(settings.volume);
                 track.pan = fl_pan(settings.pan);
                 track.muted = !settings.enabled;
@@ -458,12 +466,17 @@ pub fn build_project(
             .unwrap_or_else(|| format!("Pattern {pattern}"))
     };
     for clip in &fl.playlist_clips {
-        let FlClipContent::Pattern { pattern_index, .. } = &clip.content else {
+        let FlClipContent::Pattern {
+            pattern_index,
+            offset_ticks,
+        } = &clip.content
+        else {
             continue;
         };
         // A muted placement, or one on a track switched off, stays silent
         // here too, its notes kept.
-        let silent = clip.muted || track_off(clip.track_index);
+        let silent = clip.muted || switched_off(fl, clip.arrangement, clip.track_index);
+        let open = clip.arrangement == fl.current_arrangement;
         for (pattern, channel, notes) in &fl.pattern_notes {
             if pattern != pattern_index || notes.is_empty() {
                 continue;
@@ -471,7 +484,7 @@ pub fn build_project(
             let Some(track_id) = instrument_track.get(channel) else {
                 continue;
             };
-            if soloed(clip.track_index) {
+            if open && soloed(clip.track_index) {
                 if let Some(track) = project.track_mut(track_id) {
                     track.soloed = true;
                 }
@@ -481,12 +494,13 @@ pub fn build_project(
                 pattern_name(*pattern),
                 clip.length_ticks.max(1),
             );
-            // Notes past the end of the placement are cut off in FL too.
+            // Notes past the end of the placement are cut off in FL too, and
+            // so are those before where a clip trimmed at its start begins.
             midi.notes = notes
                 .iter()
-                .filter(|n| n.tick < clip.length_ticks)
+                .filter(|n| n.tick >= *offset_ticks && n.tick - offset_ticks < clip.length_ticks)
                 .map(|n| hardwave_midi::MidiNote {
-                    start_tick: n.tick,
+                    start_tick: n.tick - offset_ticks,
                     duration_ticks: n.length_ticks,
                     pitch: n.pitch,
                     velocity: n.velocity as f32 / 127.0,
@@ -496,17 +510,21 @@ pub fn build_project(
                 })
                 .collect();
             report.notes += midi.notes.len();
+            let id = uuid::Uuid::new_v4().to_string();
+            arrangement_of.insert(id.clone(), clip.arrangement);
             if let Some(track) = project.track_mut(track_id) {
                 track.clips.push(ClipPlacement {
-                    content: ClipContent::Midi(MidiClipRef {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        clip: midi,
-                    }),
+                    content: ClipContent::Midi(MidiClipRef { id, clip: midi }),
                     track_id: track_id.clone(),
                     position_ticks: clip.start_tick,
                     length_ticks: clip.length_ticks.max(1),
                     lane: 0,
-                    color: None,
+                    // FL draws a pattern clip in the pattern's colour.
+                    color: fl
+                        .pattern_colors
+                        .iter()
+                        .find(|(p, _)| p == pattern_index)
+                        .map(|(_, c)| c.clone()),
                 });
                 report.pattern_clips += 1;
             }
@@ -546,6 +564,22 @@ pub fn build_project(
             .unwrap_or_else(|| format!("Track {fl_track}"));
         row += 1;
         let track_id = project.claim_row(row, &lane_name, false);
+        // The row's colour in FL, or its one channel's.
+        let lane_color = fl
+            .playlist_track_colors
+            .iter()
+            .find(|(n, _)| *n == fl_track)
+            .map(|(_, c)| c.clone())
+            .or_else(|| match &channels.iter().collect::<Vec<_>>()[..] {
+                [only] => fl
+                    .channels
+                    .get(**only as usize)
+                    .and_then(|c| c.color.clone()),
+                _ => None,
+            });
+        if let (Some(color), Some(track)) = (lane_color, project.track_mut(&track_id)) {
+            track.color = color;
+        }
         report.audio_tracks += 1;
         // A lane of one channel is where that channel's volume and pan
         // automation goes.
@@ -643,6 +677,7 @@ pub fn build_project(
             // can be found later.
             let file = find(sample_path).unwrap_or_else(|| sample_path.clone());
             let clip_id = uuid::Uuid::new_v4().to_string();
+            arrangement_of.insert(clip_id.clone(), clip.arrangement);
             // The clip's own fades, in milliseconds, and its own volume on
             // top of its channel's.
             let length = clip.length_ticks.max(1);
@@ -665,7 +700,12 @@ pub fn build_project(
                 gain_db: (fl_audio_clip_gain_db(settings.volume) + own_gain_db).max(-100.0),
                 fade_in_ticks,
                 fade_out_ticks,
-                muted: clip.muted || !settings.enabled,
+                // The row's own switch is on the track, from the open
+                // arrangement; another arrangement's is on the clip.
+                muted: clip.muted
+                    || !settings.enabled
+                    || (clip.arrangement != fl.current_arrangement
+                        && switched_off(fl, clip.arrangement, clip.track_index)),
                 reversed: settings.reversed,
                 pitch_semitones: 0.0,
                 stretch_ratio: 1.0,
@@ -715,7 +755,8 @@ pub fn build_project(
                     position_ticks: clip.start_tick,
                     length_ticks: clip.length_ticks.max(1),
                     lane: 0,
-                    color: None,
+                    // FL draws an audio clip in its channel's colour.
+                    color: channel.and_then(|c| c.color.clone()),
                 });
                 report.audio_clips += 1;
             }
@@ -735,7 +776,15 @@ pub fn build_project(
         lanes: &lanes_of_channel,
         external: &external_plugins,
     };
-    build_automation(fl, &mut project, &places, &mut mixer, &mut report);
+    build_automation(
+        fl,
+        &mut project,
+        &places,
+        &mut mixer,
+        &mut report,
+        &mut arrangement_of,
+    );
+    split_arrangements(&mut project, fl, &arrangement_of);
 
     report.missing_samples = missing.into_iter().collect();
     FlBuild {
@@ -746,6 +795,81 @@ pub fn build_project(
         external_plugins,
         report,
     }
+}
+
+/// Whether FL's playlist track `track` is switched off in `arrangement`.
+/// While one is soloed the switches say nothing: the solo comes across as
+/// a solo, which gives everything back with one click.
+fn switched_off(fl: &FlProject, arrangement: usize, track: u32) -> bool {
+    let (off, solo) = match fl.arrangements.get(arrangement) {
+        Some(a) => (&a.tracks_off, &a.tracks_solo),
+        None => (&fl.playlist_tracks_off, &fl.playlist_tracks_solo),
+    };
+    solo.is_empty() && off.contains(&track)
+}
+
+/// FL's arrangements as ours: the open one stays on the tracks, each other
+/// one is stored with its clips, by name and in FL's order. Every FL
+/// arrangement's clips used to land on the one playlist at once.
+fn split_arrangements(
+    project: &mut Project,
+    fl: &FlProject,
+    arrangement_of: &BTreeMap<String, usize>,
+) {
+    if fl.arrangements.len() < 2 {
+        return;
+    }
+    let open = fl.current_arrangement;
+    let id_of = |content: &ClipContent| -> String {
+        match content {
+            ClipContent::Midi(m) => m.id.clone(),
+            ClipContent::Audio(a) => a.id.clone(),
+        }
+    };
+    let elsewhere =
+        |id: String| -> Option<usize> { arrangement_of.get(&id).copied().filter(|a| *a != open) };
+    let mut stored: Vec<std::collections::HashMap<String, crate::arrangement::TrackTimeline>> =
+        vec![Default::default(); fl.arrangements.len()];
+    for track in &mut project.tracks {
+        let mut kept = Vec::new();
+        for placement in std::mem::take(&mut track.clips) {
+            match elsewhere(id_of(&placement.content)) {
+                Some(a) => stored[a]
+                    .entry(track.id.clone())
+                    .or_default()
+                    .clips
+                    .push(placement),
+                None => kept.push(placement),
+            }
+        }
+        track.clips = kept;
+        let mut kept = Vec::new();
+        for automation in std::mem::take(&mut track.automation_clips) {
+            match elsewhere(automation.id.clone()) {
+                Some(a) => stored[a]
+                    .entry(track.id.clone())
+                    .or_default()
+                    .automation_clips
+                    .push(automation),
+                None => kept.push(automation),
+            }
+        }
+        track.automation_clips = kept;
+    }
+    let mut arrangements = Vec::new();
+    for (index, (fl_arrangement, timelines)) in fl.arrangements.iter().zip(stored).enumerate() {
+        arrangements.push(crate::arrangement::Arrangement {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: fl_arrangement.name.clone(),
+            timelines,
+        });
+        if index == open {
+            project.active_arrangement = arrangements[index].id.clone();
+        }
+    }
+    project.arrangements = arrangements;
+    // The open one's snapshot is what is on the tracks now.
+    project.capture_active_arrangement();
 }
 
 /// Where the channels went, for their automation to find them.
@@ -803,6 +927,7 @@ fn build_automation(
     places: &AutomationPlaces,
     mixer: &mut MixerMap,
     report: &mut FlBuildReport,
+    arrangement_of: &mut BTreeMap<String, usize>,
 ) {
     use crate::automation::{AutomationTarget, CurveMode};
     use crate::fl_import::FlAutomationTarget as T;
@@ -943,9 +1068,7 @@ fn build_automation(
             continue;
         };
         // Muted, or on a track switched off: it moves nothing in FL either.
-        let switched_off = fl.playlist_tracks_solo.is_empty()
-            && fl.playlist_tracks_off.contains(&clip.track_index);
-        if clip.muted || switched_off {
+        if clip.muted || switched_off(fl, clip.arrangement, clip.track_index) {
             continue;
         }
         let targets = resolved.get(channel_index).filter(|t| !t.is_empty());
@@ -973,6 +1096,7 @@ fn build_automation(
             for (tick, value) in &window {
                 automation.insert_point(*tick, scale.apply(*value), CurveMode::Linear);
             }
+            arrangement_of.insert(automation.id.clone(), clip.arrangement);
             if let Some(track) = project.track_mut(track_id) {
                 track.automation_clips.push(automation);
                 report.automation_clips += 1;
@@ -1062,6 +1186,9 @@ fn build_mixer(
     for insert in &reached {
         *row += 1;
         let id = project.claim_row(*row, &name_of(inserts[insert]), false);
+        if let (Some(color), Some(track)) = (&inserts[insert].color, project.track_mut(&id)) {
+            track.color = color.clone();
+        }
         insert_track.insert(*insert, id);
     }
     report.mixer_inserts = insert_track.len();
@@ -1123,6 +1250,11 @@ fn build_mixer(
         }
         if let Some(main) = main {
             track.output_bus = track_of(main.to);
+        }
+        // The route that carries it on, to master or to another insert, at
+        // its level. A route to master below full used to play at full.
+        let onward = main.or_else(|| routes.iter().find(|r| r.to == 0).copied());
+        if let Some(main) = onward {
             if main.level != 12_800 {
                 if routes.len() == 1 {
                     // Its only route comes after its fader: the same as a
@@ -1322,7 +1454,7 @@ fn parametric_eq_2(data: &[u8]) -> Option<Vec<(u32, f64)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fl_import::{FlChannel, FlNote, FlPlaylistClip};
+    use crate::fl_import::{FlArrangement, FlChannel, FlNote, FlPlaylistClip};
 
     fn channel(
         name: &str,
@@ -1331,6 +1463,7 @@ mod tests {
         plugin: Option<&str>,
     ) -> FlChannel {
         FlChannel {
+            color: None,
             plugin_data: Vec::new(),
             automation: Vec::new(),
             name: name.into(),
@@ -1385,18 +1518,18 @@ mod tests {
             pattern_names: vec![(1, "Drop".into())],
             playlist_clips: vec![
                 FlPlaylistClip {
-                arrangement: 0,
+                    arrangement: 0,
                     track_index: 1,
                     start_tick: 0,
                     length_ticks: 3840,
                     content: FlClipContent::Pattern {
-                    pattern_index: 1,
-                    offset_ticks: 0,
-                },
+                        pattern_index: 1,
+                        offset_ticks: 0,
+                    },
                     muted: false,
                 },
                 FlPlaylistClip {
-                arrangement: 0,
+                    arrangement: 0,
                     track_index: 5,
                     start_tick: 960,
                     length_ticks: 960,
@@ -1412,7 +1545,7 @@ mod tests {
                     muted: false,
                 },
                 FlPlaylistClip {
-                arrangement: 0,
+                    arrangement: 0,
                     track_index: 5,
                     start_tick: 1920,
                     length_ticks: 960,
@@ -1428,7 +1561,7 @@ mod tests {
                     muted: false,
                 },
                 FlPlaylistClip {
-                arrangement: 0,
+                    arrangement: 0,
                     track_index: 9,
                     start_tick: 0,
                     length_ticks: 960,
@@ -1444,7 +1577,7 @@ mod tests {
                     muted: false,
                 },
                 FlPlaylistClip {
-                arrangement: 0,
+                    arrangement: 0,
                     track_index: 2,
                     start_tick: 0,
                     length_ticks: 960,
@@ -1461,6 +1594,10 @@ mod tests {
             playlist_tracks_off: Vec::new(),
             automation_links: Vec::new(),
             playlist_tracks_solo: Vec::new(),
+            arrangements: Vec::new(),
+            current_arrangement: 0,
+            pattern_colors: Vec::new(),
+            playlist_track_colors: Vec::new(),
         }
     }
 
@@ -1830,6 +1967,128 @@ mod tests {
         assert_eq!(later.source_end, 84_000);
     }
 
+    #[test]
+    fn colours_come_across_to_tracks_and_clips() {
+        let mut fl = song();
+        fl.channels[0].color = Some("#e5243b".into());
+        let pattern = fl
+            .playlist_clips
+            .iter()
+            .find_map(|c| match c.content {
+                FlClipContent::Pattern { pattern_index, .. } => Some(pattern_index),
+                _ => None,
+            })
+            .expect("the song places a pattern");
+        fl.pattern_colors = vec![(pattern, "#22c55e".into())];
+        let p = build_project(&fl, "s", &|p| Some(p.to_string())).project;
+        let name = fl.channels[0].name.clone();
+        let first = p.tracks.iter().find(|t| t.name == name).expect("its track");
+        assert_eq!(first.color, "#e5243b");
+        let pattern_clips: Vec<Option<&str>> = p
+            .tracks
+            .iter()
+            .flat_map(|t| &t.clips)
+            .filter(|c| matches!(c.content, ClipContent::Midi(_)))
+            .map(|c| c.color.as_deref())
+            .collect();
+        assert!(!pattern_clips.is_empty());
+        assert!(
+            pattern_clips.iter().all(|c| *c == Some("#22c55e")),
+            "{pattern_clips:?}"
+        );
+    }
+
+    /// Two arrangements: the one open in FL is on the tracks, the other is
+    /// stored as an arrangement of its own, each with only its own clips.
+    #[test]
+    fn fl_arrangements_become_arrangements() {
+        let mut fl = song();
+        let total = fl.playlist_clips.len();
+        assert!(total >= 2);
+        // The first clip is in arrangement 0, every other in arrangement 1,
+        // which FL had open.
+        for (i, clip) in fl.playlist_clips.iter_mut().enumerate() {
+            clip.arrangement = usize::from(i > 0);
+        }
+        fl.arrangements = vec![
+            FlArrangement {
+                name: "Radio edit".into(),
+                ..Default::default()
+            },
+            FlArrangement {
+                name: "Extended".into(),
+                ..Default::default()
+            },
+        ];
+        fl.current_arrangement = 1;
+        let all = build_project(&song(), "s", &|p| Some(p.to_string())).project;
+        let split = build_project(&fl, "s", &|p| Some(p.to_string())).project;
+
+        let count = |p: &Project| -> usize {
+            p.tracks
+                .iter()
+                .map(|t| t.clips.len() + t.automation_clips.len())
+                .sum()
+        };
+        let names: Vec<&str> = split.arrangements.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["Radio edit", "Extended"]);
+        assert_eq!(split.active_arrangement, split.arrangements[1].id);
+        let stored: usize = split.arrangements[0]
+            .timelines
+            .values()
+            .map(|t| t.clips.len() + t.automation_clips.len())
+            .sum();
+        assert!(stored > 0, "the other arrangement keeps its clips");
+        assert_eq!(
+            count(&split) + stored,
+            count(&all),
+            "nothing lost, nothing doubled"
+        );
+        // Switching to it puts its clips on the tracks.
+        let mut switched = split.clone();
+        let other = switched.arrangements[0].id.clone();
+        switched.capture_active_arrangement();
+        switched.apply_arrangement(&other).expect("it is there");
+        assert_eq!(count(&switched), stored);
+    }
+
+    #[test]
+    fn a_pattern_clip_trimmed_at_its_start_plays_from_there() {
+        let mut fl = song();
+        let clip = fl
+            .playlist_clips
+            .iter_mut()
+            .find(|c| matches!(c.content, FlClipContent::Pattern { .. }))
+            .expect("the song places a pattern");
+        let FlClipContent::Pattern { offset_ticks, .. } = &mut clip.content else {
+            unreachable!()
+        };
+        *offset_ticks = hardwave_midi::PPQ;
+        let whole = build_project(&song(), "s", &|p| Some(p.to_string())).project;
+        let trimmed = build_project(&fl, "s", &|p| Some(p.to_string())).project;
+        let first_notes = |p: &Project| -> Vec<u64> {
+            p.tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .find_map(|c| match &c.content {
+                    ClipContent::Midi(m) => {
+                        Some(m.clip.notes.iter().map(|n| n.start_tick).collect())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        let before = first_notes(&whole);
+        let after = first_notes(&trimmed);
+        let expected: Vec<u64> = before
+            .iter()
+            .filter(|t| **t >= hardwave_midi::PPQ)
+            .map(|t| t - hardwave_midi::PPQ)
+            .collect();
+        assert!(before.len() > after.len() || before.iter().all(|t| *t >= hardwave_midi::PPQ));
+        assert_eq!(after, expected);
+    }
+
     fn mixer_song() -> FlProject {
         let mut fl = song();
         // The screech plays into insert 1, the kick render into 2, the 808
@@ -1870,6 +2129,41 @@ mod tests {
             insert(7, "Ghost", vec![to(0, 0)]),
         ];
         fl
+    }
+
+    /// A route to the master below full is the fader that much lower, as
+    /// any insert's one route is; it used to play at full.
+    #[test]
+    fn a_route_to_the_master_below_full_lowers_the_fader() {
+        let group = |level: i32| {
+            let mut fl = mixer_song();
+            let g = fl
+                .mixer
+                .iter_mut()
+                .find(|m| m.name == "Group")
+                .expect("a group");
+            g.volume = 10_000;
+            g.routes = vec![FlRoute { to: 0, level }];
+            let p = build_project(&fl, "s", &|p| Some(p.to_string())).project;
+            let t = p
+                .tracks
+                .iter()
+                .find(|t| t.name == "Group")
+                .expect("its track")
+                .clone();
+            (t.volume_db, t.output_bus)
+        };
+        let (full, to_full) = group(12_800);
+        let (half, to_half) = group(6_400);
+        assert_eq!(
+            (to_full, to_half),
+            (None, None),
+            "both play into the master"
+        );
+        assert!(
+            (half - (full + fl_volume_db(6_400))).abs() < 1e-9,
+            "{full} {half}"
+        );
     }
 
     #[test]

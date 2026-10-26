@@ -16,9 +16,9 @@
 //! samples, with a list of what could not be carried.
 
 use crate::fl_import::{
-    FlAutomationLink, FlAutomationPoint, FlAutomationTarget, FlChannel, FlChannelKind,
-    FlChannelSettings, FlClipContent, FlEnvelope, FlMixerSlot, FlMixerTrack, FlNote,
-    FlArrangement, FlPlaylistClip, FlProject, FlRoute,
+    FlArrangement, FlAutomationLink, FlAutomationPoint, FlAutomationTarget, FlChannel,
+    FlChannelKind, FlChannelSettings, FlClipContent, FlEnvelope, FlMixerSlot, FlMixerTrack, FlNote,
+    FlPlaylistClip, FlProject, FlRoute,
 };
 
 /// Event id boundaries: below 64 is one byte, below 128 two, below
@@ -96,6 +96,12 @@ const CH_LEVELS: u8 = TEXT + 27; // 219
 /// The arrangement starts: no channel event comes after it, while the
 /// mixer's plug-ins further on use the same name events as channels do.
 const ARRANGEMENT_NEW: u8 = WORD + 35; // 99
+/// Colours, four bytes red, green, blue, alpha: a channel's (also a mixer
+/// slot's, inside an insert), an insert's (before the insert's flags, as
+/// its name is) and a pattern's.
+const CH_COLOR: u8 = DWORD; // 128
+const INSERT_COLOR: u8 = DWORD + 21; // 149
+const PAT_COLOR: u8 = DWORD + 22; // 150
 /// The arrangement's name, after its start.
 const ARRANGEMENT_NAME: u8 = TEXT + 49; // 241
 /// Which arrangement is open in FL, by its place in the file, after them all.
@@ -320,6 +326,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     // plug-in waiting for its slot number, and the parameter list, read once
     // every insert is known.
     let mut insert_name: Option<String> = None;
+    let mut insert_color: Option<String> = None;
     let mut current_insert: Option<usize> = None;
     let mut pending_slot: Option<FlMixerSlot> = None;
     let mut mixer_params: Option<&[u8]> = None;
@@ -369,6 +376,17 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 }
             }
             INSERT_NAME => insert_name = Some(text(event.data)),
+            INSERT_COLOR => insert_color = color(event.data),
+            CH_COLOR => {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    channel.color = color(event.data);
+                }
+            }
+            PAT_COLOR => {
+                if let (Some(pattern), Some(c)) = (current_pattern, color(event.data)) {
+                    project.pattern_colors.push((pattern, c));
+                }
+            }
             INSERT_FLAGS => {
                 current_channel = None;
                 pending_slot = None;
@@ -377,6 +395,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 project.mixer.push(FlMixerTrack {
                     index: project.mixer.len() as u32,
                     name: insert_name.take().unwrap_or_default(),
+                    color: insert_color.take(),
                     enabled: flags & INSERT_ENABLED != 0,
                     effects_enabled: flags & INSERT_EFFECTS_ON != 0,
                     polarity_inverted: flags & INSERT_POLARITY != 0,
@@ -440,6 +459,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 }
                 if project.channels.len() <= index {
                     project.channels.resize_with(index + 1, || FlChannel {
+                        color: None,
                         plugin_data: Vec::new(),
                         automation: Vec::new(),
                         name: String::new(),
@@ -518,6 +538,12 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 current_track = Some(index);
                 let off = event.data.get(12) == Some(&0);
                 let solo = event.data.get(TRACK_SOLO_AT) == Some(&1);
+                if let Some(c) = event.data.get(4..8).and_then(color) {
+                    match project.arrangements.last_mut() {
+                        Some(a) => a.track_colors.push((index, c)),
+                        None => project.playlist_track_colors.push((index, c)),
+                    }
+                }
                 match project.arrangements.last_mut() {
                     Some(a) => {
                         if off {
@@ -725,14 +751,25 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     }
     // The open arrangement's track names and switches are the playlist's.
     if !project.arrangements.is_empty() {
-        let current = project.current_arrangement.min(project.arrangements.len() - 1);
+        let current = project
+            .current_arrangement
+            .min(project.arrangements.len() - 1);
         project.current_arrangement = current;
         let open = &project.arrangements[current];
         project.playlist_track_names = open.track_names.clone();
+        project.playlist_track_colors = open.track_colors.clone();
         project.playlist_tracks_off = open.tracks_off.clone();
         project.playlist_tracks_solo = open.tracks_solo.clone();
     }
     Ok(project)
+}
+
+/// A colour event's four bytes (red, green, blue, alpha) as `#rrggbb`.
+fn color(data: &[u8]) -> Option<String> {
+    match data {
+        [r, g, b, ..] => Some(format!("#{r:02x}{g:02x}{b:02x}")),
+        _ => None,
+    }
 }
 
 /// The mixer's parameter list: per record, four bytes we do not need, the
@@ -1182,9 +1219,9 @@ mod tests {
         assert!(matches!(
             project.playlist_clips[0].content,
             FlClipContent::Pattern {
-                    pattern_index: 1,
-                    offset_ticks: 0,
-                }
+                pattern_index: 1,
+                offset_ticks: 0,
+            }
         ));
         assert_eq!(
             project.playlist_clips[1].start_tick,
@@ -1420,6 +1457,102 @@ mod tests {
             vec![(7, "Kicks".to_string())],
             "the number is FL's own; it named the track below the one it meant"
         );
+    }
+
+    /// Colours, red, green, blue, alpha: a channel's after it starts, an
+    /// insert's before its flags, a pattern's after it starts, a playlist
+    /// track's in its data.
+    #[test]
+    fn colours_come_across() {
+        let mut writer = Writer::new();
+        writer.event(CH_NEW, &0u16.to_le_bytes());
+        writer.event(CH_COLOR, &[0xe5, 0x24, 0x3b, 0]);
+        writer.event(PAT_NEW, &1u16.to_le_bytes());
+        writer.event(PAT_COLOR, &[0x22, 0xc5, 0x5e, 0]);
+        writer.event(INSERT_COLOR, &[0x3b, 0x82, 0xf6, 0]);
+        writer.event(INSERT_FLAGS, &[0; 12]);
+        // A slot's colour inside the insert is not the channel's.
+        writer.event(CH_COLOR, &[1, 2, 3, 0]);
+        let mut track = track_data(4, true);
+        track[4..8].copy_from_slice(&[0xa8, 0x55, 0xf7, 0]);
+        writer.event(TRACK_DATA, &track);
+
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.channels[0].color.as_deref(), Some("#e5243b"));
+        assert_eq!(project.pattern_colors, vec![(1, "#22c55e".to_string())]);
+        assert_eq!(project.mixer[0].color.as_deref(), Some("#3b82f6"));
+        assert_eq!(
+            project.playlist_track_colors,
+            vec![(4, "#a855f7".to_string())]
+        );
+    }
+
+    /// FL 12.9 and later: each arrangement has its own playlist and its own
+    /// tracks, and the open one is named after them all.
+    #[test]
+    fn each_arrangement_keeps_its_own_playlist() {
+        let mut writer = Writer::new();
+        writer.event(ARRANGEMENT_NEW, &0u16.to_le_bytes());
+        writer.text(ARRANGEMENT_NAME, "Radio edit");
+        writer.event(ARR_PLAYLIST, &item(32, 0, 20481, 384, 1, (-1.0, -1.0)));
+        writer.event(TRACK_DATA, &track_data(1, false));
+        writer.text(TRACK_NAME, "Intro lead");
+        writer.event(ARRANGEMENT_NEW, &1u16.to_le_bytes());
+        writer.text(ARRANGEMENT_NAME, "Extended");
+        let mut items = item(32, 0, 20481, 384, 1, (-1.0, -1.0));
+        items.extend(item(32, 384, 20482, 384, 2, (-1.0, -1.0)));
+        writer.event(ARR_PLAYLIST, &items);
+        writer.event(TRACK_DATA, &track_data(1, true));
+        writer.text(TRACK_NAME, "Drop lead");
+        writer.event(ARRANGEMENT_CURRENT, &1u16.to_le_bytes());
+
+        let project = parse(&writer.finish(96)).expect("it should read");
+        let names: Vec<&str> = project
+            .arrangements
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, ["Radio edit", "Extended"]);
+        assert_eq!(project.current_arrangement, 1);
+        let in_arrangement: Vec<usize> = project
+            .playlist_clips
+            .iter()
+            .map(|c| c.arrangement)
+            .collect();
+        assert_eq!(in_arrangement, [0, 1, 1]);
+        // The playlist's names and switches are the open arrangement's.
+        assert_eq!(
+            project.playlist_track_names,
+            vec![(1, "Drop lead".to_string())]
+        );
+        assert!(project.playlist_tracks_off.is_empty());
+        assert_eq!(project.arrangements[0].tracks_off, vec![1]);
+    }
+
+    /// A pattern clip trimmed at its start says how far in, in the file's
+    /// ticks; -1 (as an integer or as a float) means it is not trimmed.
+    #[test]
+    fn a_pattern_clip_trimmed_at_its_start_says_where_it_starts() {
+        let mut trimmed = item(32, 0, 20481, 384, 1, (0.0, 0.0));
+        trimmed[24..28].copy_from_slice(&96u32.to_le_bytes());
+        let mut unset = item(32, 0, 20481, 384, 1, (0.0, 0.0));
+        unset[24..28].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut items = trimmed;
+        items.extend(unset);
+        items.extend(item(32, 0, 20481, 384, 1, (-1.0, -1.0)));
+        let mut writer = Writer::new();
+        writer.event(ARR_PLAYLIST, &items);
+
+        let project = parse(&writer.finish(96)).expect("it should read");
+        let offsets: Vec<u64> = project
+            .playlist_clips
+            .iter()
+            .map(|c| match c.content {
+                FlClipContent::Pattern { offset_ticks, .. } => offset_ticks,
+                _ => u64::MAX,
+            })
+            .collect();
+        assert_eq!(offsets, [hardwave_midi::PPQ, 0, 0]);
     }
 
     #[test]
