@@ -38,9 +38,9 @@ use vst3::Steinberg::Vst::{
     IConnectionPoint, IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList,
     IEventListTrait, IMidiMapping, IMidiMappingTrait, IParamValueQueue, IParamValueQueueTrait,
     IParameterChanges, IParameterChangesTrait, IUnitInfo, IUnitInfoTrait, IoModes_, MediaTypes_,
-    NoteOffEvent, NoteOnEvent, ParamID, ParamValue, PolyPressureEvent, ProcessContext,
-    ProcessContext_::StatesAndFlags_, ProcessModes_, ProcessSetup, ProgramListInfo,
-    SymbolicSampleSizes_, UnitInfo, ViewType,
+    NoteExpressionTypeIDs_, NoteExpressionValueEvent, NoteOffEvent, NoteOnEvent, ParamID,
+    ParamValue, PolyPressureEvent, ProcessContext, ProcessContext_::StatesAndFlags_, ProcessModes_,
+    ProcessSetup, ProgramListInfo, SymbolicSampleSizes_, UnitInfo, ViewType,
 };
 use vst3::Steinberg::{
     kResultFalse, kResultOk, tresult, FIDString, IBStream, IBStreamTrait,
@@ -1763,7 +1763,7 @@ fn encode_midi_events_for_vst3(
                     tuning: 0.0,
                     velocity,
                     length: 0,
-                    noteId: -1,
+                    noteId: vst3_note_id(channel, note),
                 };
                 push(event);
             }
@@ -1784,7 +1784,7 @@ fn encode_midi_events_for_vst3(
                     pitch: note as i16,
                     tuning: 0.0,
                     velocity,
-                    noteId: -1,
+                    noteId: vst3_note_id(channel, note),
                 };
                 push(event);
             }
@@ -1801,7 +1801,7 @@ fn encode_midi_events_for_vst3(
                     channel: channel as i16,
                     pitch: note as i16,
                     pressure,
-                    noteId: -1,
+                    noteId: vst3_note_id(channel, note),
                 };
                 push(event);
             }
@@ -1838,8 +1838,43 @@ fn encode_midi_events_for_vst3(
                     changes.add(id, timing as i32, pressure.clamp(0.0, 1.0) as f64);
                 }
             }
+            hardwave_midi::MidiEvent::NoteExpression {
+                timing,
+                channel,
+                note,
+                kind,
+                value,
+            } => {
+                // VST3 note expression, normalised: pan 0 (left) to 1, and
+                // tuning 0.5 for none with 0 and 1 at -120 and +120 semitones.
+                let (type_id, normalised) = match kind {
+                    hardwave_midi::NoteExpressionKind::Pan => (
+                        NoteExpressionTypeIDs_::kPanTypeID,
+                        ((value.clamp(-1.0, 1.0) + 1.0) * 0.5) as f64,
+                    ),
+                    hardwave_midi::NoteExpressionKind::Tuning => (
+                        NoteExpressionTypeIDs_::kTuningTypeID,
+                        0.5 + value.clamp(-120.0, 120.0) as f64 / 240.0,
+                    ),
+                };
+                let mut event: Event = unsafe { std::mem::zeroed() };
+                event.sampleOffset = timing as i32;
+                event.r#type = EventTypes_::kNoteExpressionValueEvent as u16;
+                event.__field0.noteExpressionValue = NoteExpressionValueEvent {
+                    typeId: type_id,
+                    noteId: vst3_note_id(channel, note),
+                    value: normalised.clamp(0.0, 1.0),
+                };
+                push(event);
+            }
         }
     }
+}
+
+/// A note's id: its channel and key, the same for its on, its expressions
+/// and its off, so a plug-in can tell which note an expression is for.
+fn vst3_note_id(channel: u8, note: u8) -> i32 {
+    (channel as i32 & 0x0F) * 128 + (note as i32 & 0x7F)
 }
 
 // ---------------------------------------------------------------------------
@@ -2156,6 +2191,68 @@ mod tests {
             assert_eq!((changes.queues[0].getParameterId(), o, v), (100, 10, 0.25));
             changes.queues[1].getPoint(0, &mut o, &mut v);
             assert_eq!((changes.queues[1].getParameterId(), o, v), (200, 20, 0.5));
+        }
+    }
+
+    /// A note's own pan and tuning reach a VST3 as note expression on the
+    /// note's id, and its on and off carry the same id.
+    #[test]
+    fn a_note_s_own_pan_and_tuning_reach_a_vst3_as_note_expression() {
+        use hardwave_midi::{MidiEvent, NoteExpressionKind};
+        let changes = HostParameterChanges::new();
+        let mut events = Vec::new();
+        encode_midi_events_for_vst3(
+            &[
+                MidiEvent::NoteOn {
+                    timing: 5,
+                    channel: 0,
+                    note: 60,
+                    velocity: 0.8,
+                },
+                MidiEvent::NoteExpression {
+                    timing: 5,
+                    channel: 0,
+                    note: 60,
+                    kind: NoteExpressionKind::Pan,
+                    value: -1.0,
+                },
+                MidiEvent::NoteExpression {
+                    timing: 5,
+                    channel: 0,
+                    note: 60,
+                    kind: NoteExpressionKind::Tuning,
+                    value: 12.0,
+                },
+                MidiEvent::NoteOff {
+                    timing: 40,
+                    channel: 0,
+                    note: 60,
+                    velocity: 0.0,
+                },
+            ],
+            &mut events,
+            &std::collections::HashMap::new(),
+            &changes,
+        );
+        assert_eq!(events.len(), 4);
+        unsafe {
+            assert_eq!(events[0].__field0.noteOn.noteId, 60);
+            assert_eq!(events[3].__field0.noteOff.noteId, 60);
+            assert_eq!(
+                events[1].r#type,
+                EventTypes_::kNoteExpressionValueEvent as u16
+            );
+            let pan = events[1].__field0.noteExpressionValue;
+            assert_eq!(
+                (pan.typeId, pan.noteId, pan.value),
+                (NoteExpressionTypeIDs_::kPanTypeID, 60, 0.0)
+            );
+            let tune = events[2].__field0.noteExpressionValue;
+            assert_eq!(tune.typeId, NoteExpressionTypeIDs_::kTuningTypeID);
+            assert!(
+                (tune.value - 0.55).abs() < 1e-9,
+                "12 semitones up is 0.5 + 12/240"
+            );
         }
     }
 

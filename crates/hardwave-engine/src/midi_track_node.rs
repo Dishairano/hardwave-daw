@@ -1536,6 +1536,7 @@ impl AudioNode for MidiTrackNode {
                             note: n.pitch,
                             velocity: n.velocity,
                         });
+                        push_note_expression(&mut block_midi, 0, n.pitch, n.pan, n.fine_cents);
                     }
                 }
             }
@@ -1557,18 +1558,23 @@ impl AudioNode for MidiTrackNode {
                         velocity: 0.0,
                     }
                 });
+                if h.on {
+                    push_note_expression(&mut block_midi, timing, h.pitch, h.pan, h.fine_cents);
+                }
             }
             for n in &self.notes {
                 if n.muted || in_session {
                     continue;
                 }
                 if n.note_on_sample >= block_start && n.note_on_sample < block_end {
+                    let timing = (n.note_on_sample - block_start) as u32;
                     block_midi.push(hardwave_midi::MidiEvent::NoteOn {
-                        timing: (n.note_on_sample - block_start) as u32,
+                        timing,
                         channel: 0,
                         note: n.pitch,
                         velocity: n.velocity,
                     });
+                    push_note_expression(&mut block_midi, timing, n.pitch, n.pan, n.fine_cents);
                 }
                 if n.note_off_sample >= block_start && n.note_off_sample < block_end {
                     block_midi.push(hardwave_midi::MidiEvent::NoteOff {
@@ -1826,6 +1832,38 @@ impl AudioNode for MidiTrackNode {
                 self.track_id
             );
         }
+    }
+}
+
+/// A note's own pan and fine tuning, as note expression for a plug-in
+/// instrument, right after its note-on (same time, so a stable sort keeps
+/// it after). The built-in synth reads them from the note itself; a plug-in
+/// got the plain note and played every note in the middle and in tune.
+fn push_note_expression(
+    block_midi: &mut Vec<hardwave_midi::MidiEvent>,
+    timing: u32,
+    note: u8,
+    pan: f32,
+    fine_cents: f32,
+) {
+    use hardwave_midi::{MidiEvent, NoteExpressionKind};
+    if pan != 0.0 {
+        block_midi.push(MidiEvent::NoteExpression {
+            timing,
+            channel: 0,
+            note,
+            kind: NoteExpressionKind::Pan,
+            value: pan,
+        });
+    }
+    if fine_cents != 0.0 {
+        block_midi.push(MidiEvent::NoteExpression {
+            timing,
+            channel: 0,
+            note,
+            kind: NoteExpressionKind::Tuning,
+            value: fine_cents / 100.0,
+        });
     }
 }
 
@@ -2415,6 +2453,54 @@ mod tests {
         let after = out[0][100..].iter().fold(0.0_f32, |m, s| m.max(s.abs()));
         assert_eq!(before, 0.0, "nothing before the note");
         assert!(after > 0.01, "the note from sample 100: {after}");
+    }
+
+    /// A note with a pan and a detune of its own reaches a plug-in with
+    /// them, right after its note-on.
+    #[test]
+    fn a_note_s_own_pan_and_tuning_reach_a_plug_in() {
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut node = make_node();
+        node.push_offline_slot(spy_instrument(received.clone()), 48_000.0, 256);
+        node.set_notes(vec![MidiNoteRegion {
+            note_on_sample: 10,
+            note_off_sample: 200,
+            pitch: 62,
+            velocity: 0.8,
+            muted: false,
+            pan: -0.5,
+            fine_cents: 25.0,
+            ..Default::default()
+        }]);
+        play_block_at(&mut node, 0);
+        let got = received.lock().unwrap().clone();
+        let on = got
+            .iter()
+            .position(|e| matches!(e, MidiEvent::NoteOn { note: 62, .. }))
+            .expect("the note");
+        match (&got[on + 1], &got[on + 2]) {
+            (
+                MidiEvent::NoteExpression {
+                    timing: 10,
+                    kind: hardwave_midi::NoteExpressionKind::Pan,
+                    value: pan,
+                    ..
+                },
+                MidiEvent::NoteExpression {
+                    timing: 10,
+                    kind: hardwave_midi::NoteExpressionKind::Tuning,
+                    value: tune,
+                    ..
+                },
+            ) => {
+                assert_eq!(*pan, -0.5);
+                assert!(
+                    (*tune - 0.25).abs() < 1e-6,
+                    "25 cents is a quarter of a semitone"
+                );
+            }
+            other => panic!("expected its pan and tuning after the note, got {other:?}"),
+        }
     }
 
     #[test]

@@ -13,7 +13,7 @@
 use std::io::{Read, Write};
 
 use crate::types::{ParameterInfo, TransportInfo};
-use hardwave_midi::MidiEvent;
+use hardwave_midi::{MidiEvent, NoteExpressionKind};
 
 /// Frames the DAW sends to the child.
 pub const REQ_AUDIO: u32 = 1;
@@ -90,6 +90,22 @@ fn put_event(out: &mut Vec<u8>, ev: &MidiEvent) {
             channel,
             pressure,
         } => (6, channel, 0, timing, pressure),
+        MidiEvent::NoteExpression {
+            timing,
+            channel,
+            note,
+            kind,
+            value,
+        } => {
+            let which = match kind {
+                NoteExpressionKind::Tuning => 0,
+                NoteExpressionKind::Pan => 1,
+            };
+            out.extend_from_slice(&[7, channel, note, which]);
+            out.extend_from_slice(&timing.to_le_bytes());
+            out.extend_from_slice(&value.to_le_bytes());
+            return;
+        }
     };
     out.extend_from_slice(&[kind, channel, data, 0]);
     out.extend_from_slice(&timing.to_le_bytes());
@@ -134,6 +150,17 @@ fn get_event(b: &[u8]) -> Option<MidiEvent> {
             timing,
             channel,
             pressure: value,
+        },
+        7 => MidiEvent::NoteExpression {
+            timing,
+            channel,
+            note: data,
+            kind: match b[3] {
+                0 => NoteExpressionKind::Tuning,
+                1 => NoteExpressionKind::Pan,
+                _ => return None,
+            },
+            value,
         },
         _ => return None,
     })
@@ -508,6 +535,13 @@ mod tests {
                 timing: 20,
                 channel: 2,
                 value: -0.25,
+            },
+            MidiEvent::NoteExpression {
+                timing: 3,
+                channel: 1,
+                note: 60,
+                kind: NoteExpressionKind::Pan,
+                value: -0.5,
             },
             MidiEvent::NoteOff {
                 timing: 63,
