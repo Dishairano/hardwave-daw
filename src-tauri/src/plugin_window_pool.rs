@@ -168,6 +168,79 @@ mod windows_pool {
         }
     }
 
+    /// The person sized window `label`: the editor gets the area below the bar, if it can
+    /// be resized; one that cannot keeps its size and the window goes back around it. A
+    /// window the host sizes itself, and a resize that arrives while the editor list is
+    /// busy (a plug-in asking for a size from inside its own resize), are left alone.
+    fn editor_resized(app: &AppHandle, label: &str, size: tauri::PhysicalSize<u32>) {
+        if crate::plugin_window_host::fitting() {
+            return;
+        }
+        let Some(area) = AREAS.lock().get(label).copied() else {
+            return;
+        };
+        let Some(window) = app.get_webview_window(label) else {
+            return;
+        };
+        let header = crate::plugin_window_host::header_px(&window);
+        let (w, h) = (size.width, size.height.saturating_sub(header as u32));
+        if w == 0 || h == 0 {
+            return; // minimised
+        }
+        let taken = {
+            let state = app.state::<AppState>();
+            let Some(mut editors) = state.plugin_editors.try_lock() else {
+                return;
+            };
+            let Some(open) = editors.get_mut(label) else {
+                return;
+            };
+            match open.resize(w, h) {
+                Some(size) => Ok(size),
+                None => Err(open.size()),
+            }
+        };
+        match taken {
+            // The editor took the size, or one near it: the area follows, and the window
+            // around it when the editor rounded the size.
+            Ok((ew, eh)) if (ew, eh) == (w, h) => {
+                crate::plugin_window_host::place_area(area, header, w, h)
+            }
+            Ok((ew, eh)) => crate::plugin_window_host::fit_area(&window, area, header, ew, eh),
+            // It keeps its own size: the window goes back around it.
+            Err(Some((ew, eh))) => {
+                crate::plugin_window_host::fit_area(&window, area, header, ew, eh)
+            }
+            Err(None) => {}
+        }
+    }
+
+    /// Window `label` moved to a screen with another scale: the editor is told, and the
+    /// window fitted to the size it takes then.
+    fn editor_rescaled(app: &AppHandle, label: &str, scale: f64) {
+        let Some(area) = AREAS.lock().get(label).copied() else {
+            return;
+        };
+        let Some(window) = app.get_webview_window(label) else {
+            return;
+        };
+        let size = {
+            let state = app.state::<AppState>();
+            let Some(mut editors) = state.plugin_editors.try_lock() else {
+                return;
+            };
+            let Some(open) = editors.get_mut(label) else {
+                return;
+            };
+            open.set_scale(scale);
+            open.size()
+        };
+        if let Some((w, h)) = size {
+            let header = crate::plugin_window_host::header_px(&window);
+            crate::plugin_window_host::fit_area(&window, area, header, w, h);
+        }
+    }
+
     /// Every plug-in window, open or kept, when the main window goes: hidden windows would
     /// keep the app running with nothing on screen.
     pub fn close_all(app: &AppHandle) {
@@ -218,6 +291,10 @@ mod windows_pool {
             tauri::WindowEvent::Destroyed => {
                 close_gui(&handle, &owned);
                 POOL.lock().forget(&owned);
+            }
+            tauri::WindowEvent::Resized(size) => editor_resized(&handle, &owned, *size),
+            tauri::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                editor_rescaled(&handle, &owned, *scale_factor)
             }
             _ => {}
         });

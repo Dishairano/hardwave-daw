@@ -91,18 +91,64 @@ impl PluginArea {
 
     /// Size the area to the editor and the window to the bar plus the area.
     pub fn fit(&self, window: &tauri::WebviewWindow, width: u32, height: u32) {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOP, SWP_NOACTIVATE};
-        unsafe {
-            SetWindowPos(
-                self.child,
-                HWND_TOP,
-                0,
-                self.header,
-                width as i32,
-                height as i32,
-                SWP_NOACTIVATE,
-            );
-        }
-        let _ = window.set_size(tauri::PhysicalSize::new(width, height + self.header as u32));
+        fit_area(window, self.child as isize, self.header, width, height);
+    }
+}
+
+/// The bar's height in physical pixels for `window`'s screen.
+#[cfg(windows)]
+pub fn header_px(window: &tauri::WebviewWindow) -> i32 {
+    (HEADER_CSS_PX * window.scale_factor().unwrap_or(1.0)).round() as i32
+}
+
+#[cfg(windows)]
+thread_local! {
+    /// Set while the host sizes a window itself, so the resize that causes
+    /// is not handed back to the plug-in as if the person had dragged.
+    static FITTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the host is sizing a window right now (see `FITTING`).
+#[cfg(windows)]
+pub fn fitting() -> bool {
+    FITTING.with(|f| f.get())
+}
+
+/// Size the area `area` to `width` by `height` below a bar `header` tall,
+/// and the window around them.
+#[cfg(windows)]
+pub fn fit_area(window: &tauri::WebviewWindow, area: isize, header: i32, width: u32, height: u32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOP, SWP_NOACTIVATE};
+    FITTING.with(|f| f.set(true));
+    unsafe {
+        SetWindowPos(
+            area as windows_sys::Win32::Foundation::HWND,
+            HWND_TOP,
+            0,
+            header,
+            width as i32,
+            height as i32,
+            SWP_NOACTIVATE,
+        );
+    }
+    let _ = window.set_size(tauri::PhysicalSize::new(width, height + header as u32));
+    FITTING.with(|f| f.set(false));
+}
+
+/// Move the area only, for a window the person sized: the window keeps
+/// the size they gave it.
+#[cfg(windows)]
+pub fn place_area(area: isize, header: i32, width: u32, height: u32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOP, SWP_NOACTIVATE};
+    unsafe {
+        SetWindowPos(
+            area as windows_sys::Win32::Foundation::HWND,
+            HWND_TOP,
+            0,
+            header,
+            width as i32,
+            height as i32,
+            SWP_NOACTIVATE,
+        );
     }
 }

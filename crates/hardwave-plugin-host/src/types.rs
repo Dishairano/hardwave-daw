@@ -121,6 +121,18 @@ pub trait HostedPlugin: Send {
     fn close_editor(&mut self);
     fn has_editor(&self) -> bool;
 
+    /// The window of a copy opened with `open_editor` was resized: see
+    /// `PluginEditor::resize`.
+    fn editor_resize(&mut self, _width: u32, _height: u32) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// See `PluginEditor::set_scale`.
+    fn editor_set_scale(&mut self, _scale: f64) {}
+
+    /// See `PluginEditor::set_resize_request`.
+    fn set_editor_resize_request(&mut self, _request: ResizeRequest) {}
+
     /// The size the open editor asks for, in pixels, so its window can fit
     /// it. None when no editor is open or the plug-in does not say.
     fn editor_size(&self) -> Option<(u32, u32)> {
@@ -249,4 +261,23 @@ pub trait PluginEditor: Send + Sync {
     fn open(&self, parent: raw_window_handle::RawWindowHandle) -> bool;
     fn size(&self) -> Option<(u32, u32)>;
     fn close(&self);
+
+    /// The window was resized to `width` by `height` (physical pixels):
+    /// the size the editor takes, which a plug-in may round to what it can
+    /// draw, or None when it cannot be resized.
+    fn resize(&self, _width: u32, _height: u32) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// The screen's scale (1.0 at 100%, 1.5 at 150%), so the editor draws
+    /// sharp and at the size the rest of the screen is.
+    fn set_scale(&self, _scale: f64) {}
+
+    /// Called when the plug-in asks for a new size itself (a panel that
+    /// opens, a zoom menu of its own), before it is opened.
+    fn set_resize_request(&self, _request: ResizeRequest) {}
 }
+
+/// What a plug-in calls to ask its window for a new size, in physical
+/// pixels; returns whether the window took it.
+pub type ResizeRequest = std::sync::Arc<dyn Fn(u32, u32) -> bool + Send + Sync>;

@@ -413,6 +413,31 @@ impl OpenEditor {
             OpenEditor::Copy(hosted) => hosted.close_editor(),
         }
     }
+
+    /// The window was sized to `width` by `height`: the size the editor
+    /// takes, or None when it keeps its own. On the main thread.
+    pub fn resize(&mut self, width: u32, height: u32) -> Option<(u32, u32)> {
+        match self {
+            OpenEditor::Playing(editor) => editor.resize(width, height),
+            OpenEditor::Copy(hosted) => hosted.editor_resize(width, height),
+        }
+    }
+
+    /// The size the editor has now.
+    pub fn size(&self) -> Option<(u32, u32)> {
+        match self {
+            OpenEditor::Playing(editor) => editor.size(),
+            OpenEditor::Copy(hosted) => hosted.editor_size(),
+        }
+    }
+
+    /// The screen's scale moved (the window went to another screen).
+    pub fn set_scale(&mut self, scale: f64) {
+        match self {
+            OpenEditor::Playing(editor) => editor.set_scale(scale),
+            OpenEditor::Copy(hosted) => hosted.editor_set_scale(scale),
+        }
+    }
 }
 
 /// Open a plugin editor in a floating native window parented to the
@@ -649,11 +674,46 @@ pub async fn open_plugin_editor(
                         .as_raw();
                     let area_ms = step.elapsed().as_millis();
                     let step = std::time::Instant::now();
+                    // A plug-in asking for another size itself (a panel that
+                    // opens, a zoom menu of its own) gets it: the window is
+                    // sized around it. It went nowhere before, so the editor
+                    // was cut off or left a gap.
+                    let request: hardwave_plugin_host::types::ResizeRequest = {
+                        let window = window.clone();
+                        #[cfg(windows)]
+                        let (area_handle, header) =
+                            (area.handle(), crate::plugin_window_host::header_px(&window));
+                        std::sync::Arc::new(move |w: u32, h: u32| {
+                            #[cfg(windows)]
+                            crate::plugin_window_host::fit_area(&window, area_handle, header, w, h);
+                            #[cfg(not(windows))]
+                            let _ = window.set_size(tauri::PhysicalSize::new(w, h));
+                            true
+                        })
+                    };
+                    match (&playing, copy.as_mut()) {
+                        (Some(editor), _) => editor.set_resize_request(request),
+                        (None, Some(hosted)) => hosted.set_editor_resize_request(request),
+                        (None, None) => {}
+                    }
                     let opened = match (&playing, copy.as_mut()) {
                         (Some(editor), _) => editor.open(parent),
                         (None, Some(hosted)) => hosted.open_editor(parent),
                         (None, None) => false,
                     };
+                    // The screen's scale, so the editor draws sharp and as
+                    // big as the rest of the screen; at 150% it drew at
+                    // 100% in a corner of its window.
+                    if opened {
+                        let scale = window.scale_factor().unwrap_or(1.0);
+                        if (scale - 1.0).abs() > f64::EPSILON {
+                            match (&playing, copy.as_mut()) {
+                                (Some(editor), _) => editor.set_scale(scale),
+                                (None, Some(hosted)) => hosted.editor_set_scale(scale),
+                                (None, None) => {}
+                            }
+                        }
+                    }
                     if !opened {
                         return Err(format!(
                             "{} has no window this host can show",
