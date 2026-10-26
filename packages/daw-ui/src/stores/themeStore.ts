@@ -136,6 +136,32 @@ export function getActiveThemeId(): string {
   return 'hardwaveRed'
 }
 
+export const CONTRAST_KEY = 'hardwave.daw.contrast'
+
+/**
+ * Whether text is drawn at higher contrast. Set in Settings; until it is,
+ * it follows Windows (a contrast theme, or "more contrast" asked for).
+ * Read once when the app starts, as the colours are.
+ */
+export function highContrast(): boolean {
+  try {
+    const set = localStorage.getItem(CONTRAST_KEY)
+    if (set === 'high') return true
+    if (set === 'normal') return false
+  } catch { /* ignore */ }
+  try {
+    return window.matchMedia('(prefers-contrast: more)').matches
+      || window.matchMedia('(forced-colors: active)').matches
+  } catch {
+    return false
+  }
+}
+
+/** Set it; it takes effect when the app next draws from the start. */
+export function setHighContrast(on: boolean) {
+  try { localStorage.setItem(CONTRAST_KEY, on ? 'high' : 'normal') } catch { /* ignore */ }
+}
+
 export function getActiveTheme(): ThemePalette {
   const id = getActiveThemeId()
   return allPalettes().find(p => p.id === id) ?? THEME_PRESETS[0]

@@ -1,7 +1,11 @@
 /** Hardwave DAW — Suite-matched dark glassmorphic theme with red accents */
-import { getActiveTheme } from './stores/themeStore'
+import { getActiveTheme, highContrast } from './stores/themeStore'
 
 const palette = getActiveTheme()
+// Higher contrast (Settings, or Windows asking for it): the faint and muted
+// text reach 4.5:1 on every panel, and borders show. The faint grey is
+// 2.3:1 otherwise, under what WCAG asks of text.
+const contrast = highContrast()
 
 export const hw = {
   // ─── Backgrounds ─────────────────────────────────────────────────────────────
@@ -19,15 +23,15 @@ export const hw = {
 
   // ─── Text ────────────────────────────────────────────────────────────────────
   textPrimary: '#fafafa',     // zinc-50
-  textSecondary: '#d4d4d8',   // zinc-300
-  textMuted: '#a1a1a6',       // zinc-400
-  textFaint: '#52525b',       // zinc-600
+  textSecondary: contrast ? '#e4e4e7' : '#d4d4d8',   // zinc-200 / zinc-300
+  textMuted: contrast ? '#c4c4c9' : '#a1a1a6',       // zinc-400
+  textFaint: contrast ? '#8b8b93' : '#52525b',       // zinc-600
   textBright: '#ffffff',
 
   // ─── Borders (glass style) ───────────────────────────────────────────────────
-  border: 'rgba(255,255,255,0.06)',
-  borderLight: 'rgba(255,255,255,0.08)',
-  borderDark: 'rgba(255,255,255,0.04)',
+  border: contrast ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.06)',
+  borderLight: contrast ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.08)',
+  borderDark: contrast ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)',
 
   // ─── Accent — themeable ─────────────────────────────────────────────────────
   accent: palette.accent,
