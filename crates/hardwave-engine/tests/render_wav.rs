@@ -704,3 +704,99 @@ fn render_rate_does_not_detune_audio_clips() {
         );
     }
 }
+
+/// A clip warped to play half as fast keeps its pitch. The warp used to
+/// play each stretch between markers like tape, so slowing a phrase down
+/// to sit on the grid also dropped it an octave. With "resample" set the
+/// clip still plays like tape, on purpose.
+#[test]
+#[ignore = "long: runs on GitHub in the nightly full test run, not in the per-push gate"]
+fn a_warped_clip_keeps_its_pitch() {
+    let sample_rate = 48_000_u32;
+    let render = |tape: bool| -> (f64, f64) {
+        let engine = DawEngine::new();
+        let buf = make_sine_buffer(sample_rate, 3.0, 440.0, 0.5);
+        let frames = buf.num_frames as u64;
+        engine.audio_pool.insert("warp-src".to_string(), buf);
+        let marker_at;
+        {
+            let mut project = engine.project.lock();
+            // Two beats into the clip on the timeline is half that far into
+            // the source: the first stretch plays at half speed.
+            marker_at = project.tempo_map.tick_to_samples(1920, sample_rate as f64);
+            let track_id = project.add_audio_track("Warp".into());
+            if let Some(t) = project.track_mut(&track_id) {
+                let treatment = hardwave_project::clip::SampleTreatment {
+                    resample: tape,
+                    ..Default::default()
+                };
+                let clip = AudioClip {
+                    id: "clip-warp".into(),
+                    name: "warp".into(),
+                    source_path: "warp-src".into(),
+                    source_hash: String::new(),
+                    source_start: 0,
+                    source_end: frames,
+                    gain_db: 0.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
+                    muted: false,
+                    reversed: false,
+                    pitch_semitones: 0.0,
+                    stretch_ratio: 1.0,
+                    warp_markers: vec![
+                        hardwave_project::clip::WarpMarker {
+                            clip_tick: 0,
+                            source_sample: 0,
+                        },
+                        hardwave_project::clip::WarpMarker {
+                            clip_tick: 1920,
+                            source_sample: marker_at / 2,
+                        },
+                    ],
+                    fade_in_curve: FadeCurve::Linear,
+                    fade_out_curve: FadeCurve::Linear,
+                    source_file: String::new(),
+                    treatment,
+                };
+                t.clips.push(ClipPlacement {
+                    content: ClipContent::Audio(clip),
+                    track_id: track_id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 1_000_000,
+                    lane: 0,
+                    color: None,
+                });
+            }
+        }
+        engine.rebuild_graph();
+        let mut out = Vec::new();
+        engine
+            .render_offline(sample_rate, marker_at, |block| {
+                out.extend_from_slice(block);
+                true
+            })
+            .unwrap();
+        // The middle of the slowed stretch, left channel.
+        let mono: Vec<f32> = out
+            .chunks(2)
+            .skip(marker_at as usize / 4)
+            .take(marker_at as usize / 2)
+            .map(|f| f[0])
+            .collect();
+        (
+            goertzel_mag(&mono, sample_rate, 440.0),
+            goertzel_mag(&mono, sample_rate, 220.0),
+        )
+    };
+    let (kept_440, kept_220) = render(false);
+    assert!(
+        kept_440 > kept_220 * 10.0,
+        "warped at half speed it stays at 440 Hz (440: {kept_440:.1}, 220: {kept_220:.1})"
+    );
+    let (tape_440, tape_220) = render(true);
+    assert!(
+        tape_220 > tape_440 * 10.0,
+        "set to resample it plays like tape, an octave down (440: {tape_440:.1}, 220: {tape_220:.1})"
+    );
+}

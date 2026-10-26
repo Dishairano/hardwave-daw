@@ -23,6 +23,66 @@ pub type OfflineInsertFactory<'a> =
 /// pitch) variant rather than a real imported source. Real source ids are
 /// file paths or import hashes and never contain it.
 const STRETCH_KEY_MARKER: &str = "#hw-stretch:";
+const WARP_KEY_MARKER: &str = "#hw-warp:";
+
+/// Pool id for a warped clip rendered with its pitch kept: the source, how
+/// its markers cut it, its transpose, and the rate it was rendered at (an
+/// export at another rate needs its own).
+fn warp_cache_key(
+    source_id: &str,
+    pieces: &[hardwave_dsp::stretch_apply::WarpPiece],
+    semitones: f64,
+    sample_rate: f64,
+) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    for p in pieces {
+        p.out_start.hash(&mut h);
+        p.src_start.to_bits().hash(&mut h);
+        p.step.to_bits().hash(&mut h);
+    }
+    semitones.to_bits().hash(&mut h);
+    sample_rate.to_bits().hash(&mut h);
+    format!("{source_id}{WARP_KEY_MARKER}{:016x}", h.finish())
+}
+
+/// How a warped clip's markers cut its source, at `sample_rate`: output
+/// sample n is the clip's nth sample on the timeline. Marker ticks are
+/// clip-relative; going through the tempo map (absolute tick to samples,
+/// minus the clip's start) keeps them honest under tempo changes.
+fn warp_pieces(
+    clip: &hardwave_project::clip::ClipPlacement,
+    audio_clip: &hardwave_project::clip::AudioClip,
+    tempo_map: &hardwave_project::tempo::TempoMap,
+    sample_rate: f64,
+    unity_step: f64,
+) -> Vec<hardwave_dsp::stretch_apply::WarpPiece> {
+    let timeline_start = tempo_map.tick_to_samples(clip.position_ticks, sample_rate);
+    let anchors: Vec<(u64, f64)> = audio_clip
+        .warp_markers
+        .iter()
+        .map(|m| {
+            let abs = tempo_map.tick_to_samples(clip.position_ticks + m.clip_tick, sample_rate);
+            (abs.saturating_sub(timeline_start), m.source_sample as f64)
+        })
+        .collect();
+    crate::track_node::build_warp_segments(&anchors, unity_step, audio_clip.source_start as f64)
+        .into_iter()
+        .map(|seg| hardwave_dsp::stretch_apply::WarpPiece {
+            out_start: seg.start_sample,
+            src_start: seg.source_start,
+            step: seg.step,
+        })
+        .collect()
+}
+
+/// One warped clip's render with its pitch kept, to bake.
+struct WarpBake {
+    key: String,
+    source_id: String,
+    pieces: Vec<hardwave_dsp::stretch_apply::WarpPiece>,
+    semitones: f64,
+}
 
 /// Pool id for a baked stretch / pitch-shift variant of a source. The
 /// original id stays untouched in the project, so `rehydrate_audio_pool`
@@ -1072,6 +1132,95 @@ impl DawEngine {
         );
     }
 
+    /// The warped clips' renders the project needs at `sample_rate`. A clip
+    /// set to resample plays its warp like a tape and is not baked.
+    fn warp_bake_plan(&self, sample_rate: f64) -> Vec<WarpBake> {
+        use hardwave_project::clip::ClipContent;
+        let project = self.project.lock();
+        let mut acc: Vec<WarpBake> = Vec::new();
+        for track in &project.tracks {
+            for clip in &track.clips {
+                let ClipContent::Audio(audio_clip) = &clip.content else {
+                    continue;
+                };
+                if audio_clip.warp_markers.is_empty() || audio_clip.treatment.resample {
+                    continue;
+                }
+                let Some(buffer_rate) = self
+                    .audio_pool
+                    .get(&audio_clip.source_path)
+                    .map(|b| b.sample_rate as f64)
+                else {
+                    continue;
+                };
+                let unity = if buffer_rate > 0.0 {
+                    buffer_rate / sample_rate
+                } else {
+                    1.0
+                };
+                let pieces = warp_pieces(clip, audio_clip, &project.tempo_map, sample_rate, unity);
+                let key = warp_cache_key(
+                    &audio_clip.source_path,
+                    &pieces,
+                    audio_clip.pitch_semitones,
+                    sample_rate,
+                );
+                if !acc.iter().any(|b| b.key == key) {
+                    acc.push(WarpBake {
+                        key,
+                        source_id: audio_clip.source_path.clone(),
+                        pieces,
+                        semitones: audio_clip.pitch_semitones,
+                    });
+                }
+            }
+        }
+        acc
+    }
+
+    /// Render one warped clip with its pitch kept into the pool, outside
+    /// the pool's lock like a stretch.
+    fn bake_warp_variant(pool: &AudioPool, bake: &WarpBake, sample_rate: f64) {
+        if pool.contains(&bake.key) {
+            return;
+        }
+        let Some(src) = pool.get(&bake.source_id) else {
+            return;
+        };
+        let channels: Vec<Vec<f32>> = src
+            .channels
+            .iter()
+            .map(|ch| {
+                hardwave_dsp::stretch_apply::warp_render(
+                    ch,
+                    &bake.pieces,
+                    bake.semitones as f32,
+                    sample_rate as f32,
+                )
+            })
+            .collect();
+        let num_frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
+        if num_frames == 0 {
+            return;
+        }
+        pool.insert(
+            bake.key.clone(),
+            AudioBuffer {
+                channels,
+                sample_rate: sample_rate.round() as u32,
+                num_frames,
+            },
+        );
+    }
+
+    /// Bake every warped clip's render the project needs at `sample_rate`,
+    /// BLOCKING until done: the export path, at the export's rate.
+    fn prebake_warps(&self, sample_rate: f64) {
+        for bake in self.warp_bake_plan(sample_rate) {
+            Self::bake_warp_variant(&self.audio_pool, &bake, sample_rate);
+        }
+    }
+
     /// Bake every stretch variant the project needs, BLOCKING until done.
     ///
     /// This is the export path: a bounce must not race the bake, or it would
@@ -1081,6 +1230,7 @@ impl DawEngine {
         for (source_id, stretch, semitones) in self.stretch_bake_plan() {
             Self::bake_stretch_variant(&self.audio_pool, &source_id, stretch, semitones);
         }
+        self.prebake_warps(self.current_sample_rate() as f64);
     }
 
     /// Same, but hands the work to a background thread and returns at once.
@@ -1090,17 +1240,25 @@ impl DawEngine {
     /// the audio thread picks it up. Keys already in flight are skipped, so
     /// dragging a stretch control doesn't spawn a bake per frame.
     pub fn prebake_stretch_sources_async(&self) {
-        let todo: Vec<(String, f64, f64)> = {
+        let sample_rate = self.current_sample_rate() as f64;
+        let (todo, warps): (Vec<(String, f64, f64)>, Vec<WarpBake>) = {
             let mut inflight = self.stretch_inflight.lock();
-            self.stretch_bake_plan()
+            let todo = self
+                .stretch_bake_plan()
                 .into_iter()
                 .filter(|(s, st, se)| {
                     let key = stretch_cache_key(s, *st, *se);
                     !self.audio_pool.contains(&key) && inflight.insert(key)
                 })
-                .collect()
+                .collect();
+            let warps = self
+                .warp_bake_plan(sample_rate)
+                .into_iter()
+                .filter(|b| !self.audio_pool.contains(&b.key) && inflight.insert(b.key.clone()))
+                .collect();
+            (todo, warps)
         };
-        if todo.is_empty() {
+        if todo.is_empty() && warps.is_empty() {
             return;
         }
         let pool = self.audio_pool.clone();
@@ -1116,10 +1274,15 @@ impl DawEngine {
                 keys: todo
                     .iter()
                     .map(|(s, st, se)| stretch_cache_key(s, *st, *se))
+                    .chain(warps.iter().map(|b| b.key.clone()))
                     .collect(),
             };
             for (source_id, stretch, semitones) in &todo {
                 Self::bake_stretch_variant(&pool, source_id, *stretch, *semitones);
+            }
+            // A warped clip plays like a tape until its render lands.
+            for bake in &warps {
+                Self::bake_warp_variant(&pool, bake, sample_rate);
             }
             // Ask the audio thread to rebuild so the fresh bakes are picked up.
             let _ = tx.try_send(EngineCommand::RebuildGraph);
@@ -2131,6 +2294,11 @@ impl DawEngine {
         // back to varispeed and not match playback. Safe here — an export
         // runs on the caller's thread, not the audio callback.
         self.prebake_stretch_sources();
+        // Warped clips at the export's own rate, which may not be the
+        // device's.
+        if sample_rate != self.current_sample_rate() {
+            self.prebake_warps(sample_rate as f64);
+        }
 
         // Harvest LIVE plug-in state so a bounce reflects the knobs the user
         // is actually hearing. `hydrate_offline_inserts` replays whatever is
@@ -3305,6 +3473,32 @@ impl EngineCallback {
                     // it remains a varispeed control.
                     // Resample is the varispeed path on purpose: like a
                     // tape, a longer clip plays lower.
+                    // A warped clip rendered with its pitch kept (see
+                    // `warp_bake_plan`), when the render has landed: played
+                    // straight through, its markers already in it.
+                    let warp_baked = if audio_clip.warp_markers.is_empty() || treatment.resample {
+                        None
+                    } else {
+                        self.audio_pool
+                            .get(&audio_clip.source_path)
+                            .map(|b| b.sample_rate as f64)
+                            .and_then(|buffer_rate| {
+                                let unity = if buffer_rate > 0.0 {
+                                    buffer_rate / sample_rate
+                                } else {
+                                    1.0
+                                };
+                                let pieces =
+                                    warp_pieces(clip, audio_clip, tempo_map, sample_rate, unity);
+                                let key = warp_cache_key(
+                                    &audio_clip.source_path,
+                                    &pieces,
+                                    audio_clip.pitch_semitones,
+                                    sample_rate,
+                                );
+                                self.audio_pool.contains(&key).then_some(key)
+                            })
+                    };
                     let needs_bake = audio_clip.warp_markers.is_empty()
                         && !treatment.resample
                         && ((stretch - 1.0).abs() > 1e-4
@@ -3320,18 +3514,20 @@ impl EngineCallback {
                     };
                     // Baking stretches the whole source, so an in-source start
                     // offset scales with the same ratio.
-                    let (region_source_id, region_source_offset, source_step) = match baked {
-                        Some(key) => (
-                            key,
-                            (audio_clip.source_start as f64 * stretch) as u64,
-                            track_pitch_factor,
-                        ),
-                        None => (
-                            audio_clip.source_path.clone(),
-                            audio_clip.source_start,
-                            pitch_factor / stretch,
-                        ),
-                    };
+                    let (region_source_id, region_source_offset, source_step) =
+                        match (baked, &warp_baked) {
+                            (_, Some(key)) => (key.clone(), 0, track_pitch_factor),
+                            (Some(key), None) => (
+                                key,
+                                (audio_clip.source_start as f64 * stretch) as u64,
+                                track_pitch_factor,
+                            ),
+                            (None, None) => (
+                                audio_clip.source_path.clone(),
+                                audio_clip.source_start,
+                                pitch_factor / stretch,
+                            ),
+                        };
                     // Rate-match the source to the rate we're rendering at.
                     // Pool buffers are normalised to the *device* rate on
                     // import, but an export renders at whatever rate the
@@ -3355,7 +3551,7 @@ impl EngineCallback {
                     // tempo map (absolute tick → samples, minus the
                     // clip start) keeps anchors honest under tempo
                     // automation.
-                    let warp = if audio_clip.warp_markers.is_empty() {
+                    let warp = if audio_clip.warp_markers.is_empty() || warp_baked.is_some() {
                         Vec::new()
                     } else {
                         let anchors: Vec<(u64, f64)> = audio_clip
