@@ -24,16 +24,28 @@ pub enum ModSource {
         /// Where in the cycle the song's start sits, 0 to 1.
         phase_offset: f64,
     },
+    /// How loud another track is, followed: it rises at once with the
+    /// track and falls back over `release_ms`. A kick track ducking a bass
+    /// is this source on the bass's volume.
+    Envelope { track_id: TrackId, release_ms: f64 },
+    /// A controller on the keyboard or desk (the mod wheel is 1), on any
+    /// channel: where it was last moved, 0 to 1.
+    MidiCc { cc: u8 },
 }
 
 /// What moves.
 ///
-/// Only a plug-in's own parameters for now: the track fader and pan are
-/// written every block from their automation lanes, so a route to them
-/// would be overwritten each time rather than heard.
+/// A plug-in's knob is set to the route's value. The track's volume, pan
+/// and sends are moved on top of what the fader, the pan knob, the send
+/// level and their automation say, since those are written every block:
+/// volume and a send are multiplied by the value (1 leaves them as they
+/// are), and pan is moved by it (0.5 leaves it where it is).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ModTarget {
     PluginParam { slot_id: String, param_id: u32 },
+    TrackVolume,
+    TrackPan,
+    SendLevel { send_index: usize },
 }
 
 /// One wire in the matrix.
@@ -53,11 +65,17 @@ pub struct ModRoute {
 }
 
 impl ModRoute {
-    /// Where this route puts its knob at a point in the song.
+    /// Where this route puts its knob at a point in the song, for an LFO.
+    /// The other sources need what is playing (see `value_with`).
     ///
     /// Returns 0 to 1, the shape a plug-in parameter takes.
     pub fn value_at(&self, position_ticks: u64, bpm: f64, ppq: u64) -> f64 {
-        let swing = match &self.source {
+        self.value_with(self.lfo_swing(position_ticks, bpm, ppq).unwrap_or(0.0))
+    }
+
+    /// An LFO's place in its swing, -1 to 1; None for another source.
+    pub fn lfo_swing(&self, position_ticks: u64, bpm: f64, ppq: u64) -> Option<f64> {
+        match &self.source {
             ModSource::Lfo {
                 shape,
                 rate,
@@ -68,10 +86,18 @@ impl ModRoute {
                     (position_ticks % cycle) as f64 / cycle as f64 + phase_offset.rem_euclid(1.0);
                 // sample_shape gives 0..1; the matrix works either side of
                 // the centre, so it is moved to -1..1 here.
-                sample_shape(*shape, phase, self.id.len() as u64) * 2.0 - 1.0
+                Some(sample_shape(*shape, phase, self.id.len() as u64) * 2.0 - 1.0)
             }
-        };
-        (self.center + self.depth * swing).clamp(0.0, 1.0)
+            _ => None,
+        }
+    }
+
+    /// The route's value for a source at `swing` (-1 to 1): the centre,
+    /// moved by the depth either side. A level or a controller from 0 to 1
+    /// is `2 * x - 1` here, so at rest it sits at the centre minus the
+    /// depth.
+    pub fn value_with(&self, swing: f64) -> f64 {
+        (self.center + self.depth * swing.clamp(-1.0, 1.0)).clamp(0.0, 1.0)
     }
 }
 
@@ -144,5 +170,28 @@ mod tests {
         let r = route(0.5, 0.5);
         // One bar later is the same point in a quarter-note cycle.
         assert!((r.value_at(240, 140.0, PPQ) - r.value_at(240 + PPQ * 4, 140.0, PPQ)).abs() < 1e-9);
+    }
+
+    /// A route to the volume ducking from a kick: at rest the bass plays
+    /// as set (1), at the kick's peak it is halved (0.5).
+    #[test]
+    fn an_envelope_route_ducks_from_its_rest() {
+        let duck = ModRoute {
+            source: ModSource::Envelope {
+                track_id: "kick".into(),
+                release_ms: 120.0,
+            },
+            target: ModTarget::TrackVolume,
+            ..route(-0.25, 0.75)
+        };
+        assert!(
+            (duck.value_with(-1.0) - 1.0).abs() < 1e-9,
+            "silence: untouched"
+        );
+        assert!(
+            (duck.value_with(1.0) - 0.5).abs() < 1e-9,
+            "full kick: halved"
+        );
+        assert_eq!(duck.lfo_swing(0, 140.0, PPQ), None);
     }
 }

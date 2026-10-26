@@ -227,6 +227,10 @@ pub struct MidiTrackNode {
     pan: f32,
     /// The fader and pan as set, before automation moves them for a block.
     fader_volume: f32,
+    /// Modulation's level and pan on top of the fader and the pan knob
+    /// (see `AudioNode::set_mod_mix`).
+    mod_gain: f32,
+    mod_pan: f32,
     fader_pan: f32,
     /// This track's automation, cloned in at rebuild. Instrument tracks
     /// ignored automation altogether, so a lane or clip on a synth track
@@ -342,6 +346,8 @@ impl MidiTrackNode {
             volume: 1.0,
             pan: 0.0,
             fader_volume: 1.0,
+            mod_gain: 1.0,
+            mod_pan: 0.0,
             fader_pan: 0.0,
             automation_lanes: Vec::new(),
             automation_clips: Vec::new(),
@@ -756,6 +762,11 @@ impl AudioNode for MidiTrackNode {
             .set_parameter_normalized(slot_id, param_id, value);
     }
 
+    fn set_mod_mix(&mut self, gain: f32, pan: f32) {
+        self.mod_gain = gain;
+        self.mod_pan = pan;
+    }
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -971,7 +982,9 @@ impl AudioNode for MidiTrackNode {
         // cos(π/4) = sin(π/4) ≈ 0.707; at pan=±1 the far channel hits
         // unity while the near channel is silent. Matches the standard
         // pan law every audio TrackNode in the engine uses.
-        let (pan_l, pan_r) = crate::pan::gains(self.pan, self.prefs.pan_law());
+        let pan = (self.pan + self.mod_pan).clamp(-1.0, 1.0);
+        let (pan_l, pan_r) = crate::pan::gains(pan, self.prefs.pan_law());
+        let vol = self.volume * self.mod_gain;
 
         let mut peak_l = 0.0_f32;
         let mut peak_r = 0.0_f32;
@@ -1442,9 +1455,7 @@ impl AudioNode for MidiTrackNode {
                 start,
                 self.stereo_separation,
             );
-            let (g0, g1) = self
-                .gain_ramp
-                .step((self.volume * pan_l, self.volume * pan_r));
+            let (g0, g1) = self.gain_ramp.step((vol * pan_l, vol * pan_r));
             crate::track_node::apply_ramped(&mut first[0][..n], &mut rest[0][..n], g0, g1);
             for i in 0..n {
                 let (l, r) = (first[0][i], rest[0][i]);
@@ -1454,7 +1465,7 @@ impl AudioNode for MidiTrackNode {
             }
         } else if let Some(buf) = outputs.get_mut(0) {
             for s in buf.iter_mut().take(block_size) {
-                *s *= self.volume * pan_l;
+                *s *= vol * pan_l;
                 peak_l = peak_l.max(s.abs());
                 energy_acc += *s * *s;
             }

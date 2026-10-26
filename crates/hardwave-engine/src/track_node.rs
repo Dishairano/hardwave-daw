@@ -624,6 +624,10 @@ pub struct TrackNode {
     /// Cached static pan setting (-1..=1). Same restore-on-clear story
     /// as `static_volume`.
     static_pan: f32,
+    /// Modulation's level and pan on top of the fader and the pan knob
+    /// (see `AudioNode::set_mod_mix`).
+    mod_gain: f32,
+    mod_pan: f32,
 }
 
 const TRACK_DELAY_CAPACITY: usize = 4800; // 100 ms at 48 kHz, both directions
@@ -674,6 +678,8 @@ impl TrackNode {
             live_input: false,
             static_volume: 1.0,
             static_pan: 0.0,
+            mod_gain: 1.0,
+            mod_pan: 0.0,
         }
     }
 
@@ -935,6 +941,11 @@ impl AudioNode for TrackNode {
         // Modulation moves a parameter 0..1, as automation does.
         self.chain
             .set_parameter_normalized(slot_id, param_id, value);
+    }
+
+    fn set_mod_mix(&mut self, gain: f32, pan: f32) {
+        self.mod_gain = gain;
+        self.mod_pan = pan;
     }
 
     /// The engine calls this through the trait after the send pass, so the
@@ -1468,8 +1479,9 @@ impl AudioNode for TrackNode {
         }
 
         // Apply track volume and pan, and measure post-fader peak/RMS.
-        let (pan_l, pan_r) = crate::pan::gains(self.pan, self.prefs.pan_law());
-        let vol = self.volume;
+        let pan = (self.pan + self.mod_pan).clamp(-1.0, 1.0);
+        let (pan_l, pan_r) = crate::pan::gains(pan, self.prefs.pan_law());
+        let vol = self.volume * self.mod_gain;
 
         let (out_left, out_rest) = outputs.split_at_mut(1);
         let (start, end) = self.gain_ramp.step((vol * pan_l, vol * pan_r));

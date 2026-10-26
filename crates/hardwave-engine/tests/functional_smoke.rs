@@ -2695,3 +2695,166 @@ fn a_prepared_render_runs_without_the_engine() {
     });
     assert!(peak > 0.05, "the render played nothing: peak {peak}");
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// Modulation from a track's level and from a controller, onto a track's
+// volume, pan and sends (H6).
+// ───────────────────────────────────────────────────────────────────────
+
+/// Render half a second and give the peak of each side, leaving out the
+/// first tenth: a route from a track's level reads the meter of the block
+/// before, and the fader glides to a new level over a block.
+fn settled_peaks(engine: &DawEngine) -> (f32, f32) {
+    let (mut peak_l, mut peak_r) = (0.0_f32, 0.0_f32);
+    let mut frame = 0_usize;
+    engine
+        .render_offline(SAMPLE_RATE, SAMPLE_RATE as u64 / 2, |block| {
+            for pair in block.as_chunks::<2>().0 {
+                if frame > SAMPLE_RATE as usize / 10 {
+                    peak_l = peak_l.max(pair[0].abs());
+                    peak_r = peak_r.max(pair[1].abs());
+                }
+                frame += 1;
+            }
+            true
+        })
+        .expect("offline render");
+    (peak_l, peak_r)
+}
+
+fn mod_route(
+    track_id: &str,
+    source: hardwave_project::modulation::ModSource,
+    target: hardwave_project::modulation::ModTarget,
+    center: f64,
+    depth: f64,
+) -> hardwave_project::modulation::ModRoute {
+    hardwave_project::modulation::ModRoute {
+        id: format!("route-{track_id}"),
+        name: "Route".into(),
+        enabled: true,
+        source,
+        track_id: track_id.to_string(),
+        target,
+        center,
+        depth,
+    }
+}
+
+#[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
+fn a_tracks_level_ducks_another_tracks_volume() {
+    use hardwave_project::modulation::{ModSource, ModTarget};
+    // The kick on the left, the bass on the right, so the right side is
+    // the bass alone. A level becomes a swing of 2 * level - 1, so with
+    // the centre at 0.5 and the depth at -0.5 the route is 1 while the
+    // kick is silent and 0.5 while it plays at 0.5: the bass halved.
+    let bass_peak = |duck: bool| {
+        let engine = DawEngine::new();
+        let kick =
+            add_audio_track_with_sine(&engine, "Kick", "duck-kick", SAMPLE_RATE, 1.0, 60.0, 0.5);
+        let bass =
+            add_audio_track_with_sine(&engine, "Bass", "duck-bass", SAMPLE_RATE, 1.0, 110.0, 0.5);
+        {
+            let mut project = engine.project.lock();
+            project.track_mut(&kick).unwrap().pan = -1.0;
+            project.track_mut(&bass).unwrap().pan = 1.0;
+            if duck {
+                project.modulations.push(mod_route(
+                    &bass,
+                    ModSource::Envelope {
+                        track_id: kick.clone(),
+                        release_ms: 100.0,
+                    },
+                    ModTarget::TrackVolume,
+                    0.5,
+                    -0.5,
+                ));
+            }
+        }
+        engine.rebuild_graph();
+        settled_peaks(&engine).1
+    };
+    let open = bass_peak(false);
+    let ducked = bass_peak(true);
+    assert!(open > 0.3, "the bass plays: {open}");
+    assert!(
+        ducked > open * 0.4 && ducked < open * 0.6,
+        "the kick at 0.5 halves the bass: {ducked} against {open}"
+    );
+}
+
+#[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
+fn a_midi_controller_moves_a_tracks_pan() {
+    use hardwave_project::modulation::{ModSource, ModTarget};
+    let engine = DawEngine::new();
+    let pad = add_audio_track_with_sine(&engine, "Pad", "cc-pan", SAMPLE_RATE, 1.0, 220.0, 0.5);
+    engine.project.lock().modulations.push(mod_route(
+        &pad,
+        ModSource::MidiCc { cc: 1 },
+        ModTarget::TrackPan,
+        0.5,
+        0.5,
+    ));
+    engine.rebuild_graph();
+    // The mod wheel all the way up: the pan knob moved fully right.
+    engine
+        .midi_input
+        .lock()
+        .inject(hardwave_midi::MidiEvent::ControlChange {
+            timing: 0,
+            channel: 0,
+            cc: 1,
+            value: 1.0,
+        });
+    let (left, right) = settled_peaks(&engine);
+    assert!(right > 0.3, "heard on the right: {right}");
+    assert!(left < 0.01, "and not on the left: {left}");
+}
+
+#[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
+fn a_route_moves_a_send() {
+    use hardwave_project::modulation::{ModSource, ModTarget};
+    // The source is silent on its own fader and heard only through a
+    // pre-fader send to a bus. A route holding at 0.5 halves the send.
+    let through_send = |route: bool| {
+        let engine = DawEngine::new();
+        let source =
+            add_audio_track_with_sine(&engine, "Source", "send-mod", SAMPLE_RATE, 1.0, 220.0, 0.5);
+        {
+            let mut project = engine.project.lock();
+            let bus = project.add_audio_track("Bus".into());
+            let track = project.track_mut(&source).unwrap();
+            track.volume_db = -100.0;
+            track.sends.push(hardwave_project::mixer::Send {
+                target: bus,
+                gain_db: 0.0,
+                pre_fader: true,
+                enabled: true,
+            });
+            if route {
+                project.modulations.push(mod_route(
+                    &source,
+                    // A controller left at 0 with no depth: the route
+                    // sits at its centre.
+                    ModSource::MidiCc { cc: 74 },
+                    ModTarget::SendLevel { send_index: 0 },
+                    0.5,
+                    0.0,
+                ));
+            }
+        }
+        engine.rebuild_graph();
+        let (l, r) = settled_peaks(&engine);
+        l.max(r)
+    };
+    let full = through_send(false);
+    let halved = through_send(true);
+    assert!(full > 0.2, "the send is heard: {full}");
+    assert!(
+        (halved / full - 0.5).abs() < 0.05,
+        "the route halves the send: {halved} against {full}"
+    );
+}
