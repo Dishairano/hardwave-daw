@@ -206,7 +206,7 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
       subtitle="Everything you have saved, across every plug-in"
       onClose={onClose}
       headerActions={<button type="button" className="hw-dbtn" onClick={() => { void refresh() }}>Refresh</button>}
-      footer={<span className="hw-dialog-note">A VST3's own presets are listed once you pick a slot running it. A CLAP's are not: those come through a factory the host does not read yet.</span>}
+      footer={<span className="hw-dialog-note">A plug-in's own presets, VST3 or CLAP, are listed once you pick a slot running it.</span>}
     >
       <div className="hw-dialog-bar">
         <input
