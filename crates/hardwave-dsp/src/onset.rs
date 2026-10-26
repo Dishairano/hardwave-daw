@@ -20,6 +20,18 @@ const MIN_GAP_SECS: f32 = 0.05;
 /// Detect onsets in a mono signal. Returns onset positions in samples,
 /// ascending. Stereo callers should pass an L+R mono mix.
 pub fn detect_onsets(samples: &[f32], sample_rate: u32) -> Vec<u64> {
+    detect_onsets_with(samples, sample_rate, THRESHOLD_FACTOR)
+}
+
+/// The same, with how far a rise must stand above its surroundings to
+/// count (`factor`, 2.5 by default): lower finds more, higher fewer. The
+/// beat slicer's sensitivity is this.
+pub fn detect_onsets_with(samples: &[f32], sample_rate: u32, factor: f32) -> Vec<u64> {
+    let factor = if factor.is_finite() {
+        factor.max(1.0)
+    } else {
+        THRESHOLD_FACTOR
+    };
     if samples.len() < WINDOW * 2 || sample_rate == 0 {
         return Vec::new();
     }
@@ -49,7 +61,7 @@ pub fn detect_onsets(samples: &[f32], sample_rate: u32) -> Vec<u64> {
         let mean: f32 = ctx.iter().sum::<f32>() / ctx.len().max(1) as f32;
         // Absolute floor keeps silence from producing onsets out of
         // numeric dust; relative factor does the real work.
-        let threshold = (mean * THRESHOLD_FACTOR).max(1e-4);
+        let threshold = (mean * factor).max(1e-4);
         let is_peak = flux[i] > threshold
             && flux[i] >= flux[i - 1]
             && flux.get(i + 1).map(|&n| flux[i] >= n).unwrap_or(true);
@@ -101,6 +113,25 @@ mod tests {
         let sig = clicks_at(&[48_000, 48_960], 120_000);
         let onsets = detect_onsets(&sig, sr);
         assert_eq!(onsets.len(), 1, "double trigger not collapsed: {onsets:?}");
+    }
+
+    /// A lower factor finds the quieter hits too, a higher one only the
+    /// loud ones.
+    #[test]
+    fn the_factor_decides_how_many_hits_count() {
+        let sr = 48_000;
+        let mut sig = clicks_at(&[24_000, 120_000], 240_000);
+        // A quiet hit between the loud ones.
+        for i in 0..1500 {
+            sig[72_000 + i] += 0.12 * (-(i as f32) / 300.0).exp();
+        }
+        let many = detect_onsets_with(&sig, sr, 1.5);
+        let few = detect_onsets_with(&sig, sr, 40.0);
+        assert!(many.len() > few.len(), "{many:?} {few:?}");
+        assert_eq!(
+            detect_onsets(&sig, sr),
+            detect_onsets_with(&sig, sr, THRESHOLD_FACTOR)
+        );
     }
 
     #[test]

@@ -856,6 +856,43 @@ pub fn detect_clip_transients(
     ))
 }
 
+/// Where the hits are in an audio file, for the beat slicer: the engine's
+/// detection (the warp editor's), with the slicer's sensitivity as how far
+/// a rise must stand out (0.25, the slicer's default, is the engine's own).
+/// The slicer had a cruder copy of its own. Positions are in the file's
+/// samples, at the file's rate, which comes back with them.
+#[derive(serde::Serialize)]
+pub struct FileTransients {
+    pub sample_rate: u32,
+    pub onsets: Vec<u64>,
+}
+
+#[tauri::command]
+pub async fn detect_file_transients(
+    path: String,
+    threshold: f32,
+) -> Result<FileTransients, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (info, channels) =
+            hardwave_dsp::audio_file::AudioFileReader::read(std::path::Path::new(&path))
+                .map_err(|e| format!("could not read {path}: {e:?}"))?;
+        let frames = channels.first().map_or(0, |c| c.len());
+        let mono: Vec<f32> = (0..frames)
+            .map(|i| channels.iter().map(|c| c[i]).sum::<f32>() / channels.len().max(1) as f32)
+            .collect();
+        Ok(FileTransients {
+            sample_rate: info.sample_rate,
+            onsets: hardwave_dsp::onset::detect_onsets_with(
+                &mono,
+                info.sample_rate,
+                1.0 + threshold.clamp(0.0, 1.0) * 6.0,
+            ),
+        })
+    })
+    .await
+    .map_err(|e| format!("detection stopped: {e}"))?
+}
+
 /// Replace a clip's full warp-marker set in one call. The UI edits the
 /// whole list locally (drag/add/remove) and commits atomically — a
 /// single command avoids marker-index races between rapid drags, and
