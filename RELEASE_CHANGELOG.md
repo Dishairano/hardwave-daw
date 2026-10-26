@@ -1,42 +1,44 @@
 ### New features
-- feat: every armed track records its own input (Records, in the channel's routing): a singer on input 1 and a guitar on input 2 at once, each with its own take
-- feat: song sections can be moved, renamed and repeated from a right-click on their band in the ruler
-- feat: the built-in synths have Poly, Mono and Legato with glide and a voice count
-- feat: slices go straight to the playlist or to channels from the slicer
-- feat: File > Export the whole song as one MIDI file
-- feat: previews at the song's tempo keep their pitch, and start at once
-- feat: your own click sounds, played by the engine on the beat (Settings, Recording)
-- feat: the audio editor saves next to the original file, and into the song
-- feat: follow MIDI timecode from a video app or another DAW (Settings, MIDI), with the timecode the song starts at
-- feat: with others in an Ableton Link session, play starts on the session's beat and stays on it
+- feat: a Mackie Control desk follows the mix: motor faders, mute, solo and arm lights, V-pot pan rings, and track names and levels on the scribble strips
+- feat: scripts can read the song: its tempo, every track, its clips and their notes
+- feat: mixer snapshots keep each plug-in's own settings, and recalling one reloads only the plug-ins that changed
+- feat: a MIDI take can replace the notes it is played over (Settings, Recording), instead of landing on top as a second clip that plays as well
 
 ### Bug fixes
-- fix: picking, muting or soloing a track no longer clicks in the sound; each one rebuilt the audio engine for longer than a sound card block (14 ms on a new song, now 0.3 ms)
-- fix: a synth track no longer allocates memory on the audio thread while it plays, another cause of clicks that come and go
-- fix: arming a track opens the audio input; it only ran while the monitor switch in Audio settings was on, so a take could come out silent
-- fix: when the audio input will not open, arming and recording say why, with the Windows setting to change, instead of recording silence
-- fix: channel rack step edits are undo steps
-- fix: a sound card that delivers a bigger block than asked plays it whole; the rest was silence
-- fix: MIDI clock out sends the song position, so a drum machine starts where the song is, not from the top
-- fix: following a MIDI clock, Continue carries on from the song position the master sent
+- fix: when the sound card will not open, a banner says why in words and offers Retry audio and Audio settings; a toast used to vanish with a raw Windows code
+- fix: a sound card that sends shorter blocks than asked no longer crackles in monitoring or writes silence into the take
+- fix: a note held on the keyboard is let go when the keyboard moves to another track; it hung before
+- fix: a take lands where it was played after a Link start, a timecode locate or a jump; it could come back as a stub plus the real take at bar 1
+- fix: arming, disarming and undo wait until the recording stops, instead of mixing up the takes
+- fix: following a MIDI clock, a jump keeps playing; following timecode, a pre-roll waits at the top; while Link holds the start, the clock out stays quiet
+- fix: cancelling a long take is instant; it read the whole take into memory first, about 2.8 GB for an hour
+- fix: a full disk or a pulled drive during a take keeps what was recorded and says the take is incomplete, and temporary take files left by a crash are cleaned up
+- fix: a Mackie desk's lights and faders go to the desk only, not to a synth on another MIDI output
+- fix: a loop jumps back on the exact sample; each pass ran up to a block long, and drifted against a clock or Link
+- fix: the old mixer (Options) no longer freezes for seconds when it opens on a big song, or drops frames while the song plays
+- fix: playing out of outputs 3/4 or further of an interface gives sound; it was silent
 
 ### Improvements
-- fix(audio): the audio thread allocates nothing while a song plays, and a test keeps it so
-- fix(audio): clicking a track no longer clicks in the sound
-- feat(link): play starts on the session's beat and stays on it
-- fix(recording): an input that will not open says why, before a silent take
-- feat(midi): follow MIDI timecode, and a clock master's song position
-- fix(midi): the clock out follows the song, with its position
-- fix(recording): arming a track opens the interface's input
-- feat(recording): every armed track records its own input
-- feat(sections): rename, move and repeat a section from the ruler
-- feat(sections): move and rename song sections
-- feat(slicer): slices straight to the playlist or to channels
-- perf(browser): a tempo-matched preview starts at once
-- feat(synths): Poly, Mono and Legato with glide and a voice count
-- feat(export): the whole song as one MIDI file
-- feat(browser): previews at the song's tempo keep their pitch
-- fix(channel-rack): step edits are undo steps
-- feat(audio-editor): save next to the original, and into the song
-- feat(metronome): your own click sounds, played by the engine on the beat
-- fix(audio): a driver's bigger-than-asked block plays whole
+- fix(audio): playing out of outputs 3/4 or further gives sound
+- feat(recording): a MIDI take can replace the notes it is played over
+- feat(mixer): snapshots keep each plug-in's own settings
+- fix(mixer): the old mixer no longer stalls on a big song or redraws every strip per meter tick
+- fix(engine): a loop jumps back on the exact sample
+- fix(control-surface): desk feedback goes to the desk, and only what changed on it
+- fix(recording): a disk error keeps what was recorded, and old take files are cleaned up
+- fix(recording): cancelling a take does not read it into memory first
+- Following a MIDI clock master, a jump arrives as Stop, the song
+- Following MIDI timecode with the song starting at 01:00:00 and the
+- While a Link session holds the start of playback, MIDI clock out sent
+- fix(recording): arming or undoing during a recording no longer mixes up the takes
+- fix(recording): a take lands where it was played after a Link start or a jump
+- fix(midi): a note held when the keyboard moves to another track is let go
+- fix(recording): a short audio block records its own length, not the full buffer
+- fix(audio): a sound card that will not open says why, and stays on screen
+- fix(scripts): the script runner without a song is for tests only
+- feat(scripts): a script can read the song
+- feat(control-surface): scribble strips, V-pots, lights and motor faders that follow the mix
+- perf(playlist): an edit to one track reloads that track, not the song
+- perf(playlist): the track column draws only the rows in view
+- perf: the track column beside the playlist draws only the rows in view, so a song with hundreds of tracks stays quick to work in
+- perf: moving, trimming or muting a clip reloads that track, not every track in the song
