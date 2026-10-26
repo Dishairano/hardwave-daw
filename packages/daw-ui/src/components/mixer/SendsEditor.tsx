@@ -1,19 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { hw } from '../../theme'
 import { useSendStore, type SendInfo } from '../../stores/sendStore'
 import { useTrackStore } from '../../stores/trackStore'
+
+const NO_SENDS: SendInfo[] = []
 
 interface SendsEditorProps {
   trackId: string
 }
 
+/** The sends of one channel. It reads only that channel's sends; the mixer
+ *  loads them all once. Each box used to load every send itself and read
+ *  the whole store, so opening the mixer on a 500-track song made 500
+ *  loads, each redrawing all 500 boxes: a stall of several seconds. */
 export function SendsEditor({ trackId }: SendsEditorProps) {
-  const { byTrack, fetchAll, addSend, removeSend, setGain, setPreFader, setEnabled, createReturnWithSend } = useSendStore()
-  const { tracks } = useTrackStore()
+  const sends = useSendStore((s) => s.byTrack[trackId] ?? NO_SENDS)
+  const { addSend, removeSend, setGain, setPreFader, setEnabled, createReturnWithSend } = useSendStore(useShallow((s) => ({
+    addSend: s.addSend, removeSend: s.removeSend, setGain: s.setGain,
+    setPreFader: s.setPreFader, setEnabled: s.setEnabled, createReturnWithSend: s.createReturnWithSend,
+  })))
+  const tracks = useTrackStore((s) => s.tracks)
   const [targetPicker, setTargetPicker] = useState(false)
-  const sends = byTrack[trackId] ?? []
-
-  useEffect(() => { fetchAll() }, [])
 
   const trackById = new Map(tracks.map(t => [t.id, t]))
   const selfExists = tracks.some(t => t.id === trackId)
