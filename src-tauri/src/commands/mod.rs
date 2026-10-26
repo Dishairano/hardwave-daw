@@ -10,6 +10,7 @@ pub mod clip_clipboard;
 pub mod cloud;
 pub mod collab;
 pub mod comping;
+pub mod dawproject;
 pub mod dev;
 pub mod engine;
 pub mod export;

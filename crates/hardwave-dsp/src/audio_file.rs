@@ -175,6 +175,39 @@ impl AudioFileReader {
         Ok((info, out))
     }
 
+    /// A file's rate, channels and length from its header, without
+    /// decoding it. None when the header does not say (a stream with no
+    /// frame count) or the file cannot be read.
+    pub fn probe(path: &Path) -> Option<AudioFileInfo> {
+        if crate::aiff_reader::looks_like_aiff(path) {
+            return Self::read(path).ok().map(|(info, _)| info);
+        }
+        let file = std::fs::File::open(path).ok()?;
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let mut hint = Hint::new();
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            hint.with_extension(ext);
+        }
+        let probed = symphonia::default::get_probe()
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
+            .ok()?;
+        let track = probed.format.default_track()?;
+        let sample_rate = track.codec_params.sample_rate?;
+        let total_frames = track.codec_params.n_frames?;
+        let channels = track.codec_params.channels.map(|c| c.count() as u16)?;
+        Some(AudioFileInfo {
+            sample_rate,
+            channels,
+            total_frames,
+            duration_secs: total_frames as f64 / sample_rate.max(1) as f64,
+        })
+    }
+
     pub fn read(path: &Path) -> Result<(AudioFileInfo, Vec<Vec<f32>>), AudioFileError> {
         // symphonia 0.5 lacks AIFF — dispatch to our own reader.
         let (info, channels) = if crate::aiff_reader::looks_like_aiff(path) {
@@ -410,5 +443,36 @@ mod resampling {
             (300.0f64 * 44_100.0 / 48_000.0).round() as usize
         );
         assert!(out[0].iter().any(|v| v.abs() > 0.5), "the sound is there");
+    }
+}
+
+#[cfg(test)]
+mod probing {
+    use super::*;
+
+    /// The header says the rate, channels and length without the file
+    /// being decoded.
+    #[test]
+    fn a_probe_reads_the_header() {
+        let path = std::env::temp_dir().join(format!("hw-probe-{}.wav", std::process::id()));
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for _ in 0..44_100 * 2 {
+            w.write_sample(0i16).unwrap();
+        }
+        w.finalize().unwrap();
+        let info = AudioFileReader::probe(&path).expect("a header");
+        assert_eq!(
+            (info.sample_rate, info.channels, info.total_frames),
+            (44_100, 2, 44_100)
+        );
+        assert!((info.duration_secs - 1.0).abs() < 1e-9);
+        assert!(AudioFileReader::probe(&path.with_extension("missing")).is_none());
+        let _ = std::fs::remove_file(&path);
     }
 }

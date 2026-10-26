@@ -814,6 +814,10 @@ pub struct Vst3ClassSummary {
     pub vendor: String,
     pub version: String,
     pub sub_categories: Vec<String>,
+    /// The class id as the SDK prints it (32 hex digits), what another host
+    /// and a .vstpreset know the plug-in by.
+    #[serde(default)]
+    pub cid: String,
 }
 
 /// List the audio classes in a VST3 module by asking its factory. This
@@ -861,6 +865,10 @@ pub fn read_vst3_classes(bundle_path: &Path) -> Result<Vec<Vst3ClassSummary>, St
                         .filter(|c| !c.is_empty())
                         .map(str::to_string)
                         .collect(),
+                    cid: crate::vstpreset::class_id_string(
+                        &info.cid.map(|b| b as u8),
+                        cfg!(windows),
+                    ),
                 }
             }
             None => {
@@ -876,6 +884,10 @@ pub fn read_vst3_classes(bundle_path: &Path) -> Result<Vec<Vst3ClassSummary>, St
                     vendor: String::new(),
                     version: String::new(),
                     sub_categories: Vec::new(),
+                    cid: crate::vstpreset::class_id_string(
+                        &info.cid.map(|b| b as u8),
+                        cfg!(windows),
+                    ),
                 }
             }
         };

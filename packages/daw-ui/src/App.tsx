@@ -2170,6 +2170,33 @@ export function App() {
               }
             },
           },
+          {
+            // The open format Bitwig Studio, Studio One and Cubase read: the
+            // tracks, notes, samples, mix and plug-ins, not stems.
+            label: 'Export DAWproject…',
+            action: async () => {
+              const push = useNotificationStore.getState().push
+              try {
+                const { save } = await import('@tauri-apps/plugin-dialog')
+                const path = await save({
+                  defaultPath: `${useProjectStore.getState().projectName || 'Song'}.dawproject`,
+                  filters: [{ name: 'DAWproject', extensions: ['dawproject'] }],
+                })
+                if (!path) return
+                push('info', 'Exporting DAWproject…')
+                const report = await invoke<{ path: string; tracks: number; files: number; leftOut: string[] }>(
+                  'export_dawproject', { path })
+                push('info', `DAWproject saved: ${report.tracks} tracks, ${report.files} files`, {
+                  detail: report.leftOut.length
+                    ? `Opens in Bitwig Studio, Studio One and Cubase. Not carried over: ${report.leftOut.join('. ')}.`
+                    : 'Opens in Bitwig Studio, Studio One and Cubase.',
+                  sticky: report.leftOut.length > 0,
+                })
+              } catch (e) {
+                push('error', 'DAWproject export failed', { detail: String(e) })
+              }
+            },
+          },
           { separator: true, label: '' },
           {
             label: 'Import FL Studio project…',
