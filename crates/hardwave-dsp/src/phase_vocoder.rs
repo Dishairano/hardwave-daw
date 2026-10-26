@@ -36,14 +36,18 @@ pub fn phase_vocoder_stretch(samples: &[f32], ratio: f32, n: usize) -> Vec<f32> 
         .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / (n - 1) as f32).cos()))
         .collect();
 
-    let num_frames = if samples.len() >= n {
-        (samples.len() - n) / h_a + 1
-    } else {
-        0
-    };
-    if num_frames == 0 {
-        return Vec::new();
-    }
+    // Frames centred on the input: half a window of silence before it and a
+    // window after, so the first frame is centred on sample 0 and the last
+    // ones reach past the end. Unpadded, the output began half a window
+    // early (at any ratio but 1: frame k's centre went from k*h_a + n/2 to
+    // k*h_s + n/2) and stopped about a window short, so a pitch shift made
+    // by squeezing it back to length came out flat: 38 cents for a second
+    // of audio shifted up an octave, more on a short sample.
+    let half = n / 2;
+    let len = samples.len();
+    let mut padded = vec![0.0_f32; half + len + n + h_a];
+    padded[half..half + len].copy_from_slice(samples);
+    let num_frames = samples.len() / h_a + 2;
 
     let out_len = (num_frames - 1) * h_s + n;
     let mut out = vec![0.0_f32; out_len];
@@ -60,7 +64,7 @@ pub fn phase_vocoder_stretch(samples: &[f32], ratio: f32, n: usize) -> Vec<f32> 
     for frame in 0..num_frames {
         let offset = frame * h_a;
         for i in 0..n {
-            let x = samples[offset + i] * window[i];
+            let x = padded[offset + i] * window[i];
             scratch[i] = Complex32::new(x, 0.0);
         }
         fft.process(&mut scratch);
@@ -72,9 +76,16 @@ pub fn phase_vocoder_stretch(samples: &[f32], ratio: f32, n: usize) -> Vec<f32> 
             let delta = phase - prev_analysis_phase[k] - expected;
             let wrapped = wrap_pi(delta);
             let true_freq = expected + wrapped;
-            let advance = true_freq * (h_s as f32) / (h_a as f32);
-            synthesis_phase[k] += advance;
-            synthesis_phase[k] = wrap_pi(synthesis_phase[k]);
+            if frame == 0 {
+                // The first frame keeps its own phases. Advanced from zero,
+                // as before, the bins of one note started out of step with
+                // each other and beat until the frames filled: up to 2.6x
+                // the level at the head of a 2x stretch.
+                synthesis_phase[k] = phase;
+            } else {
+                let advance = true_freq * (h_s as f32) / (h_a as f32);
+                synthesis_phase[k] = wrap_pi(synthesis_phase[k] + advance);
+            }
             prev_analysis_phase[k] = phase;
             let (sin_p, cos_p) = synthesis_phase[k].sin_cos();
             scratch[k] = Complex32::new(mag * cos_p, mag * sin_p);
@@ -113,8 +124,12 @@ pub fn phase_vocoder_stretch(samples: &[f32], ratio: f32, n: usize) -> Vec<f32> 
     for (o, w) in out.iter_mut().zip(weight.iter()) {
         *o /= w.max(floor);
     }
+    // Frame k's centre is now output sample k*h_s + half, which stands for
+    // input sample k*h_a: drop the half window so output sample j is input
+    // sample j * h_a / h_s.
+    out.drain(..half.min(out.len()));
     let target_len = ((samples.len() as f32) * ratio).round() as usize;
-    out.truncate(target_len);
+    out.resize(target_len, 0.0);
 
     // Match the source's RMS. The WOLA divisor above restores the *shape*,
     // but because the vocoder rewrites phases the overlapped frames no longer
@@ -263,5 +278,47 @@ mod tests {
                 "ratio {ratio}: output contains NaN/inf"
             );
         }
+    }
+
+    /// A shift up landed flat: the stretch stopped about a window short,
+    /// and squeezing the short result back to length lowered every note.
+    #[test]
+    fn a_pitch_shift_lands_on_the_note_and_keeps_the_length() {
+        let sr = 48_000.0;
+        let input = sine(440.0, sr, 48_000);
+        for semis in [12.0f32, 7.0, -12.0] {
+            let out = pitch_shift_pv(&input, semis);
+            assert_eq!(out.len(), input.len());
+            let n = 32_000;
+            let hz = zero_crossings(&out[8_000..8_000 + n]) as f32 / 2.0 * sr / n as f32;
+            let want = 440.0 * 2f32.powf(semis / 12.0);
+            let cents = 1200.0 * (hz / want).log2();
+            assert!(
+                cents.abs() < 6.0,
+                "{semis:+} semitones landed {cents:.0} cents off ({hz} Hz)"
+            );
+        }
+    }
+
+    /// A stretch puts a sound where the ratio says: half a window early
+    /// before the frames were centred.
+    #[test]
+    fn a_stretch_puts_a_click_where_the_ratio_says() {
+        let mut input = vec![0.0f32; 48_000];
+        for (i, s) in input.iter_mut().enumerate().skip(20_000).take(64) {
+            *s = if i % 2 == 0 { 1.0 } else { -1.0 };
+        }
+        let out = phase_vocoder_stretch(&input, 1.5, 2048);
+        assert_eq!(out.len(), 72_000);
+        let loudest = out
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            .map(|(i, _)| i)
+            .unwrap();
+        assert!(
+            (loudest as i64 - 30_000).abs() < 512,
+            "the click at 20,000 should land near 30,000, landed at {loudest}"
+        );
     }
 }
