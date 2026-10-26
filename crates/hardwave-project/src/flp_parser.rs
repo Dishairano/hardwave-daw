@@ -18,7 +18,7 @@
 use crate::fl_import::{
     FlAutomationLink, FlAutomationPoint, FlAutomationTarget, FlChannel, FlChannelKind,
     FlChannelSettings, FlClipContent, FlEnvelope, FlMixerSlot, FlMixerTrack, FlNote,
-    FlPlaylistClip, FlProject, FlRoute,
+    FlArrangement, FlPlaylistClip, FlProject, FlRoute,
 };
 
 /// Event id boundaries: below 64 is one byte, below 128 two, below
@@ -96,6 +96,12 @@ const CH_LEVELS: u8 = TEXT + 27; // 219
 /// The arrangement starts: no channel event comes after it, while the
 /// mixer's plug-ins further on use the same name events as channels do.
 const ARRANGEMENT_NEW: u8 = WORD + 35; // 99
+/// The arrangement's name, after its start.
+const ARRANGEMENT_NAME: u8 = TEXT + 49; // 241
+/// Which arrangement is open in FL, by its place in the file, after them all.
+const ARRANGEMENT_CURRENT: u8 = WORD + 36; // 100
+/// A pattern item's offsets, when not set: -1 as an integer, or as a float.
+const OFFSET_UNSET: [u32; 2] = [u32::MAX, 0xBF80_0000];
 /// FL 25 and later: the channel's mixer insert, two bytes, as FL 25 has
 /// five hundred of them. Older files used this id for something else.
 const CH_ROUTED_TO_FL25: u8 = WORD + 40; // 104
@@ -299,6 +305,9 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     // Playlist items naming a channel. Made into clips at the end, once
     // every channel's kind and sample is known.
     let mut channel_items: Vec<ChannelItem> = Vec::new();
+    // The arrangement the playlist events belong to: each has its own items
+    // and its own 500 tracks. Before 12.9 there is one, with no start event.
+    let mut arrangement = 0usize;
     let mut current_pattern: Option<u32> = None;
     let mut pattern_names: Vec<(u32, String)> = Vec::new();
 
@@ -485,23 +494,57 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                     channel.plugin_data = event.data.to_vec();
                 }
             }
-            ARRANGEMENT_NEW => current_channel = None,
+            ARRANGEMENT_NEW => {
+                current_channel = None;
+                current_track = None;
+                arrangement = project.arrangements.len();
+                project.arrangements.push(FlArrangement {
+                    name: format!("Arrangement {}", arrangement + 1),
+                    ..Default::default()
+                });
+            }
+            ARRANGEMENT_NAME => {
+                let name = text(event.data);
+                if let (Some(a), false) = (project.arrangements.last_mut(), name.is_empty()) {
+                    a.name = name;
+                }
+            }
+            ARRANGEMENT_CURRENT => {
+                project.current_arrangement = u16_at(event.data, 0) as usize;
+            }
             TRACK_DATA => {
                 current_channel = None;
                 let index = u32_at(event.data, 0);
                 current_track = Some(index);
-                if event.data.get(12) == Some(&0) {
-                    project.playlist_tracks_off.push(index);
-                }
-                if event.data.get(TRACK_SOLO_AT) == Some(&1) {
-                    project.playlist_tracks_solo.push(index);
+                let off = event.data.get(12) == Some(&0);
+                let solo = event.data.get(TRACK_SOLO_AT) == Some(&1);
+                match project.arrangements.last_mut() {
+                    Some(a) => {
+                        if off {
+                            a.tracks_off.push(index);
+                        }
+                        if solo {
+                            a.tracks_solo.push(index);
+                        }
+                    }
+                    None => {
+                        if off {
+                            project.playlist_tracks_off.push(index);
+                        }
+                        if solo {
+                            project.playlist_tracks_solo.push(index);
+                        }
+                    }
                 }
             }
             TRACK_NAME => {
                 if let Some(index) = current_track {
                     let name = text(event.data);
                     if !name.is_empty() {
-                        project.playlist_track_names.push((index, name));
+                        match project.arrangements.last_mut() {
+                            Some(a) => a.track_names.push((index, name)),
+                            None => project.playlist_track_names.push((index, name)),
+                        }
                     }
                 }
             }
@@ -563,12 +606,20 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                     // top of its own list.
                     let track_index = 500u32.saturating_sub(track);
                     if item_id > pattern_base {
+                        // In the file's ticks, unlike an audio item's.
+                        let offset = item
+                            .get(24..28)
+                            .map(|_| u32_at(item, 24))
+                            .filter(|o| !OFFSET_UNSET.contains(o))
+                            .map_or(0, |o| scale(o as u64));
                         project.playlist_clips.push(FlPlaylistClip {
+                            arrangement,
                             track_index,
                             start_tick: scale(position),
                             length_ticks: scale(length).max(1),
                             content: FlClipContent::Pattern {
                                 pattern_index: item_id - pattern_base,
+                                offset_ticks: offset,
                             },
                             muted,
                         });
@@ -582,6 +633,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                                 .filter(|v| item_extras && item.len() >= 60 && v.is_finite())
                         };
                         channel_items.push(ChannelItem {
+                            arrangement,
                             track_index,
                             start_tick: scale(position),
                             length_ticks: scale(length).max(1),
@@ -625,6 +677,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     // holds a sample, and an automation clip when it is one.
     for item in channel_items {
         let ChannelItem {
+            arrangement,
             track_index,
             start_tick,
             length_ticks,
@@ -662,12 +715,22 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
             _ => continue,
         };
         project.playlist_clips.push(FlPlaylistClip {
+            arrangement,
             track_index,
             start_tick,
             length_ticks,
             content,
             muted,
         });
+    }
+    // The open arrangement's track names and switches are the playlist's.
+    if !project.arrangements.is_empty() {
+        let current = project.current_arrangement.min(project.arrangements.len() - 1);
+        project.current_arrangement = current;
+        let open = &project.arrangements[current];
+        project.playlist_track_names = open.track_names.clone();
+        project.playlist_tracks_off = open.tracks_off.clone();
+        project.playlist_tracks_solo = open.tracks_solo.clone();
     }
     Ok(project)
 }
@@ -815,6 +878,7 @@ fn automation_target(knob: u32, master: u16, inserts: u32) -> FlAutomationTarget
 
 /// A playlist item that names a channel rather than a pattern.
 struct ChannelItem {
+    arrangement: usize,
     track_index: u32,
     start_tick: u64,
     length_ticks: u64,
@@ -1117,7 +1181,10 @@ mod tests {
         assert_eq!(project.playlist_clips[0].track_index, 1);
         assert!(matches!(
             project.playlist_clips[0].content,
-            FlClipContent::Pattern { pattern_index: 1 }
+            FlClipContent::Pattern {
+                    pattern_index: 1,
+                    offset_ticks: 0,
+                }
         ));
         assert_eq!(
             project.playlist_clips[1].start_tick,
@@ -1258,7 +1325,10 @@ mod tests {
             assert_eq!(clips.len(), 3, "{size}-byte items");
             assert!(matches!(
                 clips[0].content,
-                FlClipContent::Pattern { pattern_index: 1 }
+                FlClipContent::Pattern {
+                    pattern_index: 1,
+                    offset_ticks: 0,
+                }
             ));
             match &clips[1].content {
                 FlClipContent::AudioSample {
