@@ -107,6 +107,9 @@ interface DragState {
   paintedSlots?: Set<string>
   paintChain?: Promise<void>
   paintStepTicks?: number
+  // Slip drag only: how far the audio has been slid so far, in samples. Each
+  // move sends only what is new, one after the other through `paintChain`.
+  slipSamples?: number
 }
 
 interface ContextMenuState {
@@ -1582,7 +1585,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // release so one gesture is one undo step.
       const hit = hitTest(mouseX, mouseY, scrollOffset)
       if (!hit) return
+      // The whole gesture is one undo step, however many moves it sends.
+      useTrackStore.getState().beginHistoryGroup()
       dragRef.current = {
+        slipSamples: 0,
         mode: 'slip', clipId: hit.clip.id, trackId: hit.trackId,
         startMouseX: mouseX, startMouseY: mouseY,
         currentMouseX: mouseX, currentMouseY: mouseY,
@@ -1862,14 +1868,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
     if (drag.mode === 'slip') {
       // Dragging right pulls later audio into the clip, so the source offset
-      // moves forward by the dragged distance. Converted to samples because
-      // the offset into a sample is in samples, not ticks.
+      // moves forward by the dragged distance, in samples as the offset into
+      // a sample is. Only the part not sent yet goes: sending the whole
+      // distance on every move added it again each time.
       const seconds = dTicks / PPQ * (60 / Math.max(1, bpm))
-      const deltaSamples = Math.round(seconds * (sampleRate || 48000))
-      if (deltaSamples !== 0) {
-        useTrackStore
-          .getState()
-          .slipClip(drag.trackId, drag.clipId, deltaSamples)
+      const total = Math.round(seconds * (sampleRate || 48000))
+      const step = total - (drag.slipSamples ?? 0)
+      if (step !== 0) {
+        drag.slipSamples = total
+        drag.paintChain = (drag.paintChain ?? Promise.resolve())
+          .then(() => useTrackStore.getState().slipClip(drag.trackId, drag.clipId, step))
           .catch((err) => console.error('slipClip failed', err))
       }
       return
@@ -1995,6 +2003,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         if (!ts.looping) toggleLoop()
       }
       dragRef.current = null
+      forceRender(n => n + 1)
+      return
+    }
+    if (drag && drag.mode === 'slip') {
+      // The group closes once every slide it sent has landed.
+      const slid = (drag.slipSamples ?? 0) !== 0
+      const chain = drag.paintChain ?? Promise.resolve()
+      dragRef.current = null
+      chain.finally(() => {
+        useTrackStore.getState().endHistoryGroup(slid ? 'Slip clip' : null)
+      })
       forceRender(n => n + 1)
       return
     }
