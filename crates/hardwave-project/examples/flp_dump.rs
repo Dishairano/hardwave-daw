@@ -162,7 +162,6 @@ fn main() {
             "   quick fades left: {}",
             r.sample_fades_left_behind.join(", ")
         );
-        println!("   mixed lanes: {}", r.mixed_lanes.join(", "));
         // Each sampler channel's setup as read: envelope knobs as fractions
         // of FL's travel, then loop, voices and the sample's effects.
         for (i, ch) in fl.channels.iter().enumerate() {
