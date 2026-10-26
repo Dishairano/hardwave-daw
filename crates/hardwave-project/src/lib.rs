@@ -18,6 +18,7 @@ pub mod mixer;
 pub mod modulation;
 pub mod multiplayer;
 pub mod multiplayer_apply;
+pub mod note_expression;
 pub mod project;
 pub mod recording_session;
 pub mod sanitize;

@@ -428,4 +428,9 @@ export const nlPlaylist: Record<string, string> = {
   'click/drag to draw': 'klik of sleep om te tekenen',
   'click two points for line': 'klik twee punten voor een lijn',
   'click three points for curve': 'klik drie punten voor een curve',
+  'Pan and tuning to automation': 'Pan en stemming naar automatisering',
+  '{pan} pan points and {bends} pitch bend moves made': '{pan} panpunten en {bends} pitchbendbewegingen gemaakt',
+  'No note in this clip has its own pan or tuning': 'Geen noot in deze clip heeft een eigen pan of stemming',
+  'Pitch bend is set for a range of two semitones, the usual one.': 'De pitchbend gaat uit van een bereik van twee halve tonen, het gebruikelijke.',
+  'Could not turn it into automation': 'Kon er geen automatisering van maken',
 }

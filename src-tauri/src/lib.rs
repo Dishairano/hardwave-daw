@@ -766,6 +766,7 @@ pub fn run() {
             commands::midi::export_clip_midi,
             commands::midi::export_song_midi,
             commands::midi::get_midi_notes,
+            commands::midi::note_expression_to_automation,
             commands::midi::get_clip_controls,
             commands::midi::extract_groove,
             commands::midi::list_grooves,

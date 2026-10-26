@@ -2987,6 +2987,27 @@ export function PianoRoll() {
             startTick: Math.round(n.startTick / snap) * snap,
           }))
         }
+        // The clip's per-note pan and detune as the track's pan lane and
+        // pitch bend, for plug-ins and hardware that ignore note expression.
+        const toAutomation = async () => {
+          close()
+          if (!activeTrackId || !activeClipId) return
+          try {
+            const done = await invoke<{ panPoints: number; bends: number }>('note_expression_to_automation', {
+              trackId: activeTrackId, clipId: activeClipId,
+            })
+            useProjectStore.getState().markDirty()
+            await refreshNotes()
+            await useTrackStore.getState().fetchTracks()
+            useNotificationStore.getState().push('info', done.panPoints + done.bends > 0
+              ? tf('{pan} pan points and {bends} pitch bend moves made', { pan: done.panPoints, bends: done.bends })
+              : t('No note in this clip has its own pan or tuning'), {
+              detail: done.bends > 0 ? t('Pitch bend is set for a range of two semitones, the usual one.') : undefined,
+            })
+          } catch (err) {
+            useNotificationStore.getState().push('warning', t('Could not turn it into automation'), { detail: String(err) })
+          }
+        }
         const del = async () => {
           close()
           if (!activeTrackId || !activeClipId) return
@@ -3028,6 +3049,7 @@ export function PianoRoll() {
               <NoteMenuItem label={note.muted ? t('Unmute') : t('Mute')} onClick={toggleMute} />
               <NoteMenuItem label={t('Duplicate')} shortcut="Ctrl+D" onClick={duplicate} />
               <NoteMenuItem label={t('Quantize')} shortcut="Ctrl+Q" onClick={quantize} />
+              <NoteMenuItem label={t('Pan and tuning to automation')} onClick={toAutomation} />
               <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
               <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
                 {t('Velocity')}
