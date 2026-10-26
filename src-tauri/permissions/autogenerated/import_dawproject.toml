@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-dawproject"
+description = "Enables the import_dawproject command without any pre-configured scope."
+commands.allow = ["import_dawproject"]
+
+[[permission]]
+identifier = "deny-import-dawproject"
+description = "Denies the import_dawproject command without any pre-configured scope."
+commands.deny = ["import_dawproject"]
