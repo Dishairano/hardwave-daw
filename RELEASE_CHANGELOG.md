@@ -1,34 +1,53 @@
 ### New features
-- feat: modulation from another track's level (a kick ducking a bass, with a release time) or from a MIDI controller such as the mod wheel, as well as from an LFO
-- feat: modulation moves a track's volume, pan and sends, as well as a plug-in's knobs, on top of the fader and the automation
-- feat: MIDI clips in the clip launcher: right-click a clip on the playlist, Send to clip launcher, and it loops in its track's row, in time and on the exact sample, with the built-in synth or a plug-in instrument. Audio clips from the playlist go in the same way
-- feat: a plug-in running in its own process (Own process, and every 32-bit plug-in) now has its knobs in the DAW, plays notes (an instrument works), follows the song's tempo, and opens its own window, beside the DAW; knobs moved in that window are recorded as automation and saved with the song
-- feat: a warped clip keeps its pitch: the pieces between warp markers are stretched to fit instead of played faster or slower like tape (Resample on the clip still plays it like tape)
-- feat: a note's own pan and fine tuning reach a plug-in instrument (CLAP and VST3, as note expression), not only the built-in synth
-- feat: a macro can turn a send
-- feat: File > Export DAWproject writes the song in the open format Bitwig Studio, Studio One and Cubase read: tracks, notes, audio clips with their samples, the mix, sends and routing, VST3 and CLAP plug-ins with their settings, automation and tempo changes
-- feat: File > Open DAWproject opens a song from Bitwig Studio, Studio One or Cubase, with its samples unpacked next to it and its plug-ins found on this computer
+- feat: the whole app is in Dutch when it is set to Dutch (Settings, language): the playlist, piano roll, mixer, channel rack, plug-in windows, browser, every settings page, the sample window and editors, the panels and dialogs, and every menu
+- feat: capture what you just played (Tools) also works with the song stopped: the notes are laid out as you played them, from the playhead. It takes your last phrase, what came after the last pause of ten seconds
+- feat: right-click a note in the piano roll, Pan and tuning to automation: the notes' own pan becomes the track's pan lane and their detune pitch bend, for plug-ins and hardware that do not read per-note expression
+- feat: colours from FL come across: channels, patterns, playlist tracks and mixer inserts
+- feat: MPE out: with MPE on for a track, every note goes to a plug-in instrument on a channel of its own, with its own bend, so one note of a chord can slide while the others hold. The instrument is told the zone when playing starts
+- feat: Higher contrast (Settings, Theme): brighter hints, labels and borders, easier to read; on by itself when Windows asks for more contrast
 
 ### Bug fixes
-- fix: the convolution reverb could overload playback: it multiplied every sample by the whole impulse, about eight billion operations a second for the default plate. It now uses partitioned FFT convolution and sounds the same, and picking another space while playing no longer builds the impulse on the audio thread
-- fix: MIDI from a keyboard or controller could be lost: the thread that applies MIDI mappings took events from the same queue as the audio thread, so a note or a knob move sometimes never reached the track. Each now gets every event, and a control surface's own buttons no longer play an armed instrument
-- fix: a transposed audio clip played flat when shifted up (38 cents for a one-second sample raised an octave, more on a one-shot), and a stretched clip's sound sat up to 21 ms early
-- fix: a CLAP instrument now gets pitch bend, channel pressure and poly aftertouch (they were dropped), and hosting a CLAP plug-in no longer allocates on the audio thread every block
-- fix: a plug-in killed or crashed in its own process is noticed and started again, and each one keeps a short log of its own for support
+- fix: plug-ins on instrument (MIDI) tracks were taken off again by the next edit that rebuilt the song (drawing a note, adding a track, even adding another plug-in): the instrument went quiet and the built-in synth played in its place, and a plug-in in its own process was never run at all. They now stay
+- fix: changing the sound card, sample rate, buffer size, driver or output pair, the card coming back after it was lost, and the window coming back to the front (with "release the device" on) left the song without its plug-ins until it was opened again: silent instruments, effects gone. They are loaded again, with their settings as they were. Switching the theme no longer restarts the audio engine at all
+- fix: with the song stopped and no track armed, a MIDI keyboard played nothing, and the notes held back all sounded at once when play was pressed; it now plays the picked instrument at once, stopped or not
+- fix: the beat slicer finds hits with the engine's detection (the warp editor's): its own judged every hit against the loudest one, so a loud first kick hid the quieter hits after it
+- fix: slip editing slid the audio many times further than the mouse went, with an undo step for every move; it now slides by the distance dragged, as one undo step
+- fix: the channel rack's mixer track column showed the channel's place in the rack; it shows the mixer track the channel plays into
+- fix: an FL project with several arrangements had all of them stacked on one playlist, so a radio edit and an extended mix played at once. Each FL arrangement is now an arrangement here, with its own clips; the one open in FL opens first
+- fix: an FL layer channel came in silent; it now plays its notes on its children, each on a track of its own
+- fix: an FL playlist row with samples routed to different mixer inserts played them all through one; it becomes a track per insert
+- fix: an FL pattern clip trimmed at its start played from the pattern's start; it now starts where FL starts it
+- fix: an FL mixer insert routed to the master below full played at full; its fader is now that much lower
+- fix: a note recorded on its own MIDI channel (an MPE part, or a split keyboard) went to a plug-in on the first channel; it now keeps its channel, note-off included
+- fix: a CLAP plug-in could get a controller value one step low
+- fix: a plug-in in its own process that crashed and was started again lost the log lines saying how it ended; its logs are now added to
 
 ### Improvements
-- fix(sandbox): the plug-in's own window opens from its process, and its life is logged
-- feat(import): File > Open DAWproject, a song from Bitwig Studio, Studio One or Cubase
-- feat(export): File > Export DAWproject, for Bitwig Studio, Studio One and Cubase
-- fix(sandbox): a killed plug-in process is noticed, and its window thread has COM
-- feat(macros): a macro can turn a send
-- feat(midi): a note's own pan and tuning reach plug-in instruments; CLAP gets bends and pressure
-- feat(warp): a warped clip keeps its pitch
-- fix(dsp): a phase-vocoder pitch shift lands on the note, and a stretch puts sound where it belongs
-- fix(midi): the audio thread and the mapping thread each get every MIDI event
-- feat(sandbox): a plug-in in its own process has its knobs, its notes and its own window
-- feat(launcher): MIDI clips and playlist clips in the clip launcher
-- feat(modulation): a track's level or a MIDI controller as a source, and volume, pan and sends as targets
-- test(realtime): every built-in plug-in is checked for allocations on the audio thread
-- fix(reverb): the convolution reverb plays in real time, and switches space without a stall
-- test: every built-in plug-in is checked for allocations on the audio thread in every build
+- fix(engine): plug-ins on MIDI tracks survive a graph rebuild
+- feat(sandbox): count what happens to each plug-in's audio blocks
+- fix(engine): live MIDI is read with the song stopped and no track armed
+- feat(piano roll): a clip's note pan and tuning to automation
+- fix(slicer): the beat slicer finds hits with the engine's detection
+- feat(i18n): Dutch for the rest of the menus
+- fix(i18n): one Dutch word for Smooth
+- fix(engine): plug-ins survive the audio engine restarting
+- feat(i18n): Dutch for the remaining panels and small windows
+- feat(capture): capture what was just played, also with the song stopped
+- feat(i18n): Dutch for the sample window, the editors and the plug-in picker
+- fix(playlist): slip editing slides by the distance dragged, as one undo step
+- fix(fl-import): a playlist row with samples on different inserts splits
+- fix(rack): the mixer track column shows where the channel's sound goes
+- fix(fl-import): a layer plays its notes on its children
+- chore(i18n): tables for the editors and the panels
+- feat(settings): Higher contrast switch on the theme page
+- fix(i18n): one Dutch word for Start and for the folder prompt
+- fix(fl-import): arrangements, trimmed patterns, master levels and colours
+- fix(sandbox): a plug-in's logs are added to at each start, not wiped
+- feat(i18n): Dutch for the mixer, the channel rack and the plug-in windows
+- feat(i18n): Dutch for the playlist and the piano roll
+- feat(i18n): Dutch for the browser, the settings and the main dialogs
+- feat(ui): higher contrast colours, on when Windows asks for them
+- feat(engine): notes keep their MIDI channel, and MPE out to plug-ins
+- fix(clap): controller values rounded, not cut down
+- feat(i18n): tf() for sentences with blanks
+- chore(i18n): Dutch kept in one file per part of the app
