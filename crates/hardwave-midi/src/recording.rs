@@ -278,6 +278,10 @@ pub struct CapturedMidi {
     pub sample_pos: u64,
     pub pass: u32,
     pub event: crate::MidiEvent,
+    /// How many frames the engine had run when it came, playing or not.
+    /// With the song stopped every event has the same `sample_pos`; this
+    /// still says how far apart they were played.
+    pub clock: u64,
 }
 
 pub struct MidiCaptureRing {
@@ -309,12 +313,20 @@ impl MidiCaptureRing {
         self.push_in_pass(sample_pos, 0, ev)
     }
 
-    /// Push an event recorded during loop pass `pass`.
+    /// Push an event recorded during loop pass `pass`, at the engine's own
+    /// clock `sample_pos` (for callers with no clock of their own).
     pub fn push_in_pass(&mut self, sample_pos: u64, pass: u32, ev: crate::MidiEvent) {
+        self.push_timed(sample_pos, sample_pos, pass, ev)
+    }
+
+    /// Push an event: where the playhead was (`sample_pos`), how far the
+    /// engine's clock had run (`clock`) and the loop pass.
+    pub fn push_timed(&mut self, sample_pos: u64, clock: u64, pass: u32, ev: crate::MidiEvent) {
         let entry = CapturedMidi {
             sample_pos,
             pass,
             event: ev,
+            clock,
         };
         if self.entries.len() < self.capacity {
             self.entries.push(entry);

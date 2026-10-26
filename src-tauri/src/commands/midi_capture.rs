@@ -243,45 +243,104 @@ fn clear_notes_under_take(
     removed
 }
 
+/// A pause this long (seconds) ends a phrase: capture takes what was played
+/// after the last one.
+const PHRASE_GAP_SECONDS: f64 = 10.0;
+
 /// Turn what was just played into a clip, without having pressed record.
 ///
 /// The DAW keeps recent MIDI input in a rolling buffer whether or not it is
-/// recording, and a command could already read it, but nothing in the app
-/// called it: playing something good with record off meant playing it again.
-///
-/// The buffer timestamps events with the playhead, so this covers the case
-/// it can honestly cover: notes played while the song was running. With the
-/// transport stopped every event carries the same position and there is
-/// nothing to lay out, which the error says.
+/// recording. This takes the last phrase from it (what was played since the
+/// last pause of ten seconds or more) and makes it a clip on `track_id`.
+/// Played while the song ran, the notes land where the playhead was. Played
+/// with the song stopped, every note has the same playhead position, so
+/// they are laid out by the engine's own clock from where the playhead
+/// stands, at the song's tempo there; that used to be refused.
 #[tauri::command]
 pub fn capture_recent_midi(
     state: State<AppState>,
     track_id: String,
 ) -> Result<Vec<String>, String> {
-    let (from, to) = {
-        let ring_arc = {
-            let engine = state.engine.lock();
-            std::sync::Arc::clone(&engine.midi_capture_ring)
-        };
+    let engine = state.engine.lock();
+    let sample_rate = engine.current_sample_rate() as f64;
+    if sample_rate <= 0.0 {
+        return Err("invalid sample rate for tick conversion".into());
+    }
+    let ring_arc = std::sync::Arc::clone(&engine.midi_capture_ring);
+    let captured = {
         let Some(ring) = ring_arc.try_lock() else {
             return Err("the capture buffer is busy; try again".into());
         };
-        let entries = ring.entries_in_order();
-        if entries.is_empty() {
-            return Err("nothing has been played recently".into());
-        }
-        let first = entries.first().map(|(pos, _)| *pos).unwrap_or(0);
-        let last = entries.last().map(|(pos, _)| *pos).unwrap_or(0);
-        (first, last.saturating_add(1))
+        ring.captured_in_order()
     };
-    if to <= from + 1 {
-        return Err(
-            "everything in the buffer was played at the same point, which happens when the \
-             song was not running. Capture works while the song plays."
-                .into(),
-        );
+    let phrase = last_phrase(&captured, (PHRASE_GAP_SECONDS * sample_rate) as u64);
+    if phrase.is_empty() {
+        return Err("nothing has been played recently".into());
     }
-    commit_recording_to_midi_clip(state, track_id, from, to, None, Some(false), None)
+    let take = phrase_take(phrase);
+    let created = commit_takes(
+        &engine,
+        &track_id,
+        vec![take],
+        sample_rate,
+        None,
+        false,
+        false,
+    )?;
+    if created.is_empty() {
+        return Err("nothing that makes a note or a controller move was played".into());
+    }
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(created)
+}
+
+/// A phrase as a take. Played while the song ran, its events sit where the
+/// playhead was. Played with the song stopped, they all have the same
+/// playhead position, so they are laid out by the engine's clock from there.
+fn phrase_take(phrase: &[hardwave_midi::CapturedMidi]) -> Take {
+    let (first, last) = (&phrase[0], &phrase[phrase.len() - 1]);
+    let events: Vec<_> = if last.sample_pos > first.sample_pos {
+        phrase.iter().map(|c| (c.sample_pos, c.event)).collect()
+    } else {
+        phrase
+            .iter()
+            .map(|c| {
+                (
+                    first.sample_pos + c.clock.saturating_sub(first.clock),
+                    c.event,
+                )
+            })
+            .collect()
+    };
+    let to = events
+        .last()
+        .map_or(first.sample_pos, |(p, _)| *p)
+        .saturating_add(1);
+    Take {
+        from: first.sample_pos,
+        to,
+        events,
+        name: "Captured".into(),
+    }
+}
+
+/// The events since the last pause of `gap` frames or more on the engine's
+/// clock, oldest first.
+fn last_phrase(
+    captured: &[hardwave_midi::CapturedMidi],
+    gap: u64,
+) -> &[hardwave_midi::CapturedMidi] {
+    let mut start = captured.len();
+    while start > 1
+        && captured[start - 1]
+            .clock
+            .saturating_sub(captured[start - 2].clock)
+            < gap
+    {
+        start -= 1;
+    }
+    &captured[start.saturating_sub(1).min(captured.len())..]
 }
 
 /// Commit a slice of the rolling capture into a MIDI clip placed on the/// Commit a slice of the rolling capture into a MIDI clip placed on the
@@ -311,8 +370,7 @@ pub fn commit_recording_to_midi_clip(
     blend: Option<bool>,
     replace: Option<bool>,
 ) -> Result<Vec<String>, String> {
-    use hardwave_midi::{MidiClip, MidiControlKind, MidiControlPoint, MidiEvent, MidiRecorder};
-    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+    use hardwave_midi::MidiEvent;
 
     let engine = state.engine.lock();
     let sample_rate = engine.current_sample_rate() as f64;
@@ -352,23 +410,81 @@ pub fn commit_recording_to_midi_clip(
         (from, to.max(from))
     };
 
+    let takes: Vec<Take> = (0..passes)
+        .filter_map(|pass| {
+            let (from, to) = window_for(pass);
+            let events: Vec<(u64, MidiEvent)> = captured
+                .iter()
+                .filter(|c| c.pass == pass && c.sample_pos >= from && c.sample_pos < to)
+                .map(|c| (c.sample_pos, c.event))
+                .collect();
+            (to > from && !events.is_empty()).then(|| Take {
+                from,
+                to,
+                events,
+                name: if passes > 1 {
+                    format!("Recording {}", pass + 1)
+                } else {
+                    "Recording".to_string()
+                },
+            })
+        })
+        .collect();
+    let created = commit_takes(
+        &engine,
+        &track_id,
+        takes,
+        sample_rate,
+        quantize_ticks,
+        blend.unwrap_or(false),
+        replace.unwrap_or(false),
+    )?;
+
+    if created.is_empty() {
+        return Err("nothing was captured in the recorded range".into());
+    }
+
+    drop(engine);
+    state.engine.lock().rebuild_graph();
+    Ok(created)
+}
+
+/// A stretch of played MIDI to turn into a clip: the timeline window it
+/// covers (playhead samples), its events at their playhead positions, and
+/// the clip's name.
+struct Take {
+    from: u64,
+    to: u64,
+    events: Vec<(u64, hardwave_midi::MidiEvent)>,
+    name: String,
+}
+
+/// Turn takes into clips on `track_id`: notes paired through the recorder
+/// (quantized when asked), controller moves kept as played, merged into an
+/// overlapping clip with `blend`, or played alone over what they cover with
+/// `replace`. Returns the clips made or merged into.
+fn commit_takes(
+    engine: &hardwave_engine::DawEngine,
+    track_id: &str,
+    takes: Vec<Take>,
+    sample_rate: f64,
+    quantize_ticks: Option<u64>,
+    blend: bool,
+    replace: bool,
+) -> Result<Vec<String>, String> {
+    use hardwave_midi::{MidiClip, MidiControlKind, MidiControlPoint, MidiEvent, MidiRecorder};
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+
     engine.snapshot_before_mutation();
 
     let mut created = Vec::new();
-    for pass in 0..passes {
-        let (from, to) = window_for(pass);
-        if to <= from {
-            continue;
-        }
-        let events: Vec<(u64, MidiEvent)> = captured
-            .iter()
-            .filter(|c| c.pass == pass && c.sample_pos >= from && c.sample_pos < to)
-            .map(|c| (c.sample_pos, c.event))
-            .collect();
-        if events.is_empty() {
-            continue;
-        }
-
+    for Take {
+        from,
+        to,
+        events,
+        name,
+    } in takes
+    {
         // Ticks through the project's tempo map, not one tempo: a song with a
         // tempo change used to record its notes in the wrong place.
         let (position_ticks, length_ticks, tick_of) = {
@@ -441,19 +557,19 @@ pub fn commit_recording_to_midi_clip(
         }
 
         // Replace-record: what the take covers is played by the take alone.
-        if replace.unwrap_or(false) {
+        if replace {
             let mut project = engine.project.lock();
-            let Some(track) = project.track_mut(&track_id) else {
+            let Some(track) = project.track_mut(track_id) else {
                 return Err(format!("track {track_id} not found"));
             };
             clear_notes_under_take(track, position_ticks, length_ticks, &controls, &created);
         }
 
         // Blend-record merges into an overlapping clip when one exists.
-        if blend.unwrap_or(false) && !replace.unwrap_or(false) {
+        if blend && !replace {
             let merged = {
                 let mut project = engine.project.lock();
-                let Some(track) = project.track_mut(&track_id) else {
+                let Some(track) = project.track_mut(track_id) else {
                     return Err(format!("track {track_id} not found"));
                 };
                 merge_notes_into_overlapping_clip(
@@ -471,17 +587,12 @@ pub fn commit_recording_to_midi_clip(
         }
 
         let clip_id = uuid::Uuid::new_v4().to_string();
-        let name = if passes > 1 {
-            format!("Recording {}", pass + 1)
-        } else {
-            "Recording".to_string()
-        };
         let mut clip = MidiClip::new(clip_id.clone(), name, length_ticks);
         clip.notes = notes;
         clip.controls = controls;
         {
             let mut project = engine.project.lock();
-            let Some(track) = project.track_mut(&track_id) else {
+            let Some(track) = project.track_mut(track_id) else {
                 return Err(format!("track {track_id} not found"));
             };
             track.clips.push(ClipPlacement {
@@ -489,7 +600,7 @@ pub fn commit_recording_to_midi_clip(
                     id: clip_id.clone(),
                     clip,
                 }),
-                track_id: track_id.clone(),
+                track_id: track_id.to_string(),
                 position_ticks,
                 length_ticks,
                 lane: 0,
@@ -499,12 +610,6 @@ pub fn commit_recording_to_midi_clip(
         created.push(clip_id);
     }
 
-    if created.is_empty() {
-        return Err("nothing was captured in the recorded range".into());
-    }
-
-    drop(engine);
-    state.engine.lock().rebuild_graph();
     Ok(created)
 }
 
@@ -656,5 +761,72 @@ mod blend_tests {
             super::clear_notes_under_take(&mut t, 900, 1500, &[], &[id]),
             0
         );
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::{last_phrase, phrase_take};
+    use hardwave_midi::{CapturedMidi, MidiEvent};
+
+    fn at(sample_pos: u64, clock: u64, on: bool) -> CapturedMidi {
+        CapturedMidi {
+            sample_pos,
+            pass: 0,
+            clock,
+            event: if on {
+                MidiEvent::NoteOn {
+                    timing: 0,
+                    channel: 0,
+                    note: 60,
+                    velocity: 0.8,
+                }
+            } else {
+                MidiEvent::NoteOff {
+                    timing: 0,
+                    channel: 0,
+                    note: 60,
+                    velocity: 0.0,
+                }
+            },
+        }
+    }
+
+    #[test]
+    fn the_last_phrase_starts_after_the_last_long_pause() {
+        let gap = 480_000;
+        let played = [
+            at(0, 0, true),
+            at(0, 1_000, false),
+            at(0, 900_000, true),
+            at(0, 901_000, false),
+        ];
+        assert_eq!(last_phrase(&played, gap).len(), 2);
+        assert_eq!(last_phrase(&played[..2], gap).len(), 2);
+        assert!(last_phrase(&[], gap).is_empty());
+    }
+
+    /// With the song stopped every event has the same playhead position;
+    /// the take lays them out by the clock from there.
+    #[test]
+    fn played_while_stopped_is_laid_out_by_the_clock() {
+        let phrase = [
+            at(96_000, 5_000, true),
+            at(96_000, 29_000, false),
+            at(96_000, 53_000, true),
+        ];
+        let take = phrase_take(&phrase);
+        let positions: Vec<u64> = take.events.iter().map(|(p, _)| *p).collect();
+        assert_eq!(positions, [96_000, 120_000, 144_000]);
+        assert_eq!((take.from, take.to), (96_000, 144_001));
+    }
+
+    /// Played while the song ran, the playhead positions are used as they are.
+    #[test]
+    fn played_while_running_keeps_the_playhead_positions() {
+        let phrase = [at(10_000, 70_000, true), at(34_000, 94_000, false)];
+        let take = phrase_take(&phrase);
+        let positions: Vec<u64> = take.events.iter().map(|(p, _)| *p).collect();
+        assert_eq!(positions, [10_000, 34_000]);
     }
 }

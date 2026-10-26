@@ -2700,6 +2700,10 @@ struct EngineCallback {
     /// take can be split per pass the way an audio take is.
     record_pass: Arc<std::sync::atomic::AtomicU32>,
     record_last_pos: Arc<std::sync::atomic::AtomicU64>,
+    /// Frames run since the engine started, playing or not: the clock the
+    /// MIDI capture keeps so notes played with the song stopped can still be
+    /// laid out by when they were played.
+    capture_clock: u64,
     /// Which graph edges carry each send, filled at rebuild so a SendLevel
     /// automation lane can move a send's gain per block.
     send_edges: Vec<SendEdges>,
@@ -2907,6 +2911,7 @@ impl EngineCallback {
             audio_prefs,
             record_pass,
             record_last_pos,
+            capture_clock: 0,
             send_edges: Vec::with_capacity(64),
             mod_env: vec![0.0; MAX_MOD_ROUTES],
             mod_cc: [0.0; 128],
@@ -5123,17 +5128,23 @@ impl EngineCallback {
                             // Back off the lateness, but never past the block
                             // before this one: a stalled UI thread must not
                             // throw a note into an earlier bar.
-                            let corrected = abs.saturating_sub((*age).min(num_frames as u64));
-                            ring.push_in_pass(corrected, pass, *ev);
+                            let late = (*age).min(num_frames as u64);
+                            ring.push_timed(
+                                abs.saturating_sub(late),
+                                self.capture_clock.saturating_sub(late),
+                                pass,
+                                *ev,
+                            );
                         }
                     } else {
                         // Parked-drain path, which has no ages.
                         for ev in &self.midi_event_scratch {
-                            ring.push_in_pass(abs, pass, *ev);
+                            ring.push_timed(abs, self.capture_clock, pass, *ev);
                         }
                     }
                 }
             }
+            self.capture_clock = self.capture_clock.wrapping_add(num_frames as u64);
         }
 
         // Process the audio graph
