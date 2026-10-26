@@ -51,6 +51,7 @@ struct SessionHit {
     off: u64,
     on: bool,
     pitch: u8,
+    channel: u8,
     velocity: f32,
     pan: f32,
     fine_cents: f32,
@@ -76,6 +77,10 @@ pub struct MidiNoteRegion {
     pub fine_cents: f32,
     /// How hard the key was let go, 0 to 1. Shortens the release as it rises.
     pub release_velocity: f32,
+    /// The MIDI channel it goes to a plug-in on, 0 to 15. A recorded MPE
+    /// part keeps each note on its own; every note used to go out on the
+    /// first channel, so the part's per-note bends bent nothing.
+    pub channel: u8,
 }
 
 impl Default for MidiNoteRegion {
@@ -89,7 +94,35 @@ impl Default for MidiNoteRegion {
             pan: 0.0,
             fine_cents: 0.0,
             release_velocity: 0.5,
+            channel: 0,
         }
+    }
+}
+
+/// Give notes on the first channel member channels of their own, for MPE:
+/// a note that overlaps another gets another channel, the one free longest.
+/// Notes already on a channel of their own (a recorded MPE part) keep it.
+pub fn assign_mpe_channels(notes: &mut [MidiNoteRegion]) {
+    // When each member channel (1 to 15) is free again.
+    let mut free_at = [0u64; 16];
+    for n in notes.iter().filter(|n| n.channel != 0) {
+        let c = (n.channel & 0x0F) as usize;
+        free_at[c] = free_at[c].max(n.note_off_sample);
+    }
+    let mut order: Vec<usize> = (0..notes.len()).collect();
+    order.sort_by_key(|&i| notes[i].note_on_sample);
+    for i in order {
+        if notes[i].channel != 0 {
+            continue;
+        }
+        let on = notes[i].note_on_sample;
+        // A free channel, the one free longest; or else the one freeing first.
+        let channel = (1..16)
+            .filter(|&c| free_at[c] <= on)
+            .min_by_key(|&c| free_at[c])
+            .unwrap_or_else(|| (1..16).min_by_key(|&c| free_at[c]).unwrap_or(1));
+        notes[i].channel = channel as u8;
+        free_at[channel] = notes[i].note_off_sample;
     }
 }
 
@@ -235,7 +268,10 @@ pub struct MidiTrackNode {
     jumped: bool,
     /// Notes still held when the playhead went back, let go at the top of
     /// the next block (reused, so the audio thread does not allocate).
-    jump_offs: Vec<u8>,
+    /// (channel, key) of notes to let go at the top of the block.
+    jump_offs: Vec<(u8, u8)>,
+    /// The MPE zone was announced since playing started (or the last jump).
+    mpe_zone_sent: bool,
     /// This track's row of the launcher grid (MIDI loops; an empty slot or
     /// an audio loop is None), the grid state it shares with the UI, the
     /// playing loop's notes in this block, which slot played last block,
@@ -245,7 +281,9 @@ pub struct MidiTrackNode {
     session_midi: Vec<Option<SessionMidiClip>>,
     session_hits: Vec<SessionHit>,
     session_was: Option<usize>,
-    session_held: [bool; 128],
+    /// The channel (plus one) a loop holds each key down on in a hosted
+    /// instrument; 0 when the key is up.
+    session_held: [u8; 128],
     /// Keys held down on the keyboard right now, as it sent them, so they
     /// can be let go when the keyboard moves to another track.
     live_held: [bool; 128],
@@ -372,12 +410,13 @@ impl MidiTrackNode {
             last_block_end: 0,
             jumped: false,
             jump_offs: Vec::with_capacity(64),
+            mpe_zone_sent: false,
             session: None,
             session_quantise: None,
             session_midi: Vec::new(),
             session_hits: Vec::with_capacity(512),
             session_was: None,
-            session_held: [false; 128],
+            session_held: [0; 128],
             live_held: [false; 128],
             release_live: false,
             // The whole pool up front: it grew on the audio thread the
@@ -767,6 +806,7 @@ impl MidiTrackNode {
                     off,
                     on: true,
                     pitch: n.pitch,
+                    channel: n.channel & 0x0F,
                     velocity: n.velocity,
                     pan: n.pan,
                     fine_cents: n.fine_cents,
@@ -1100,7 +1140,7 @@ impl AudioNode for MidiTrackNode {
                         && n.note_off_sample >= at
                         && self.jump_offs.len() < self.jump_offs.capacity()
                     {
-                        self.jump_offs.push(n.pitch);
+                        self.jump_offs.push((n.channel & 0x0F, n.pitch));
                     }
                 }
                 for v in self.voices.iter_mut() {
@@ -1133,15 +1173,14 @@ impl AudioNode for MidiTrackNode {
                         && n.note_off_sample >= block_start
                         && self.jump_offs.len() < self.jump_offs.capacity()
                     {
-                        self.jump_offs.push(n.pitch);
+                        self.jump_offs.push((n.channel & 0x0F, n.pitch));
                     }
                 }
             }
             for note in 0..128u8 {
-                if std::mem::take(&mut self.session_held[note as usize])
-                    && self.jump_offs.len() < self.jump_offs.capacity()
-                {
-                    self.jump_offs.push(note);
+                let held = std::mem::take(&mut self.session_held[note as usize]);
+                if held != 0 && self.jump_offs.len() < self.jump_offs.capacity() {
+                    self.jump_offs.push((held - 1, note));
                 }
             }
             for v in self.voices.iter_mut() {
@@ -1511,15 +1550,33 @@ impl AudioNode for MidiTrackNode {
         }
         block_midi.extend_from_slice(midi_in);
         // Held notes the playhead jumped away from end here, first.
-        for &note in &self.jump_offs {
+        for &(channel, note) in &self.jump_offs {
             block_midi.push(hardwave_midi::MidiEvent::NoteOff {
                 timing: 0,
-                channel: 0,
+                channel,
                 note,
                 velocity: 0.0,
             });
         }
         block_midi.extend_from_slice(&self.control_scratch);
+        // MPE out: when playing starts (and after a jump) the instrument is
+        // told the lower zone has fifteen member channels, the
+        // configuration message an MPE synth listens for.
+        if !ctx.playing {
+            self.mpe_zone_sent = false;
+        }
+        if ctx.playing && self.mpe && (!self.mpe_zone_sent || self.jumped) {
+            self.mpe_zone_sent = true;
+            for (cc, value) in [(101u8, 0u8), (100, 6), (6, 15)] {
+                block_midi.push(hardwave_midi::MidiEvent::ControlChange {
+                    timing: 0,
+                    channel: 0,
+                    cc,
+                    value: value as f32 / 127.0,
+                });
+            }
+        }
+        let mpe = self.mpe;
         if ctx.playing {
             let block_end = block_start.saturating_add(block_size as u64);
             // Notes the playhead landed inside of, for a plug-in instrument,
@@ -1530,36 +1587,40 @@ impl AudioNode for MidiTrackNode {
                 for n in &self.notes {
                     if !n.muted && n.note_on_sample < block_start && n.note_off_sample > block_start
                     {
-                        block_midi.push(hardwave_midi::MidiEvent::NoteOn {
-                            timing: 0,
-                            channel: 0,
-                            note: n.pitch,
-                            velocity: n.velocity,
-                        });
-                        push_note_expression(&mut block_midi, 0, n.pitch, n.pan, n.fine_cents);
+                        push_note_on(
+                            &mut block_midi,
+                            0,
+                            n.channel,
+                            n.pitch,
+                            n.velocity,
+                            n.pan,
+                            n.fine_cents,
+                            mpe,
+                        );
                     }
                 }
             }
             for h in &self.session_hits {
                 let timing = (h.at - block_start) as u32;
-                self.session_held[h.pitch as usize] = h.on;
-                block_midi.push(if h.on {
-                    hardwave_midi::MidiEvent::NoteOn {
+                self.session_held[h.pitch as usize] = if h.on { h.channel + 1 } else { 0 };
+                if h.on {
+                    push_note_on(
+                        &mut block_midi,
                         timing,
-                        channel: 0,
-                        note: h.pitch,
-                        velocity: h.velocity,
-                    }
+                        h.channel,
+                        h.pitch,
+                        h.velocity,
+                        h.pan,
+                        h.fine_cents,
+                        mpe,
+                    );
                 } else {
-                    hardwave_midi::MidiEvent::NoteOff {
+                    block_midi.push(hardwave_midi::MidiEvent::NoteOff {
                         timing,
-                        channel: 0,
+                        channel: h.channel,
                         note: h.pitch,
                         velocity: 0.0,
-                    }
-                });
-                if h.on {
-                    push_note_expression(&mut block_midi, timing, h.pitch, h.pan, h.fine_cents);
+                    });
                 }
             }
             for n in &self.notes {
@@ -1568,18 +1629,21 @@ impl AudioNode for MidiTrackNode {
                 }
                 if n.note_on_sample >= block_start && n.note_on_sample < block_end {
                     let timing = (n.note_on_sample - block_start) as u32;
-                    block_midi.push(hardwave_midi::MidiEvent::NoteOn {
+                    push_note_on(
+                        &mut block_midi,
                         timing,
-                        channel: 0,
-                        note: n.pitch,
-                        velocity: n.velocity,
-                    });
-                    push_note_expression(&mut block_midi, timing, n.pitch, n.pan, n.fine_cents);
+                        n.channel,
+                        n.pitch,
+                        n.velocity,
+                        n.pan,
+                        n.fine_cents,
+                        mpe,
+                    );
                 }
                 if n.note_off_sample >= block_start && n.note_off_sample < block_end {
                     block_midi.push(hardwave_midi::MidiEvent::NoteOff {
                         timing: (n.note_off_sample - block_start) as u32,
-                        channel: 0,
+                        channel: n.channel & 0x0F,
                         note: n.pitch,
                         velocity: 0.0,
                     });
@@ -1842,6 +1906,7 @@ impl AudioNode for MidiTrackNode {
 fn push_note_expression(
     block_midi: &mut Vec<hardwave_midi::MidiEvent>,
     timing: u32,
+    channel: u8,
     note: u8,
     pan: f32,
     fine_cents: f32,
@@ -1850,7 +1915,7 @@ fn push_note_expression(
     if pan != 0.0 {
         block_midi.push(MidiEvent::NoteExpression {
             timing,
-            channel: 0,
+            channel,
             note,
             kind: NoteExpressionKind::Pan,
             value: pan,
@@ -1859,12 +1924,48 @@ fn push_note_expression(
     if fine_cents != 0.0 {
         block_midi.push(MidiEvent::NoteExpression {
             timing,
-            channel: 0,
+            channel,
             note,
             kind: NoteExpressionKind::Tuning,
             value: fine_cents / 100.0,
         });
     }
+}
+
+/// A note-on for a plug-in instrument on the note's own channel, with what
+/// goes with it. With MPE on, the note's detune is a pitch bend on its
+/// channel just before it (MPE's own way, which every MPE synth reads; the
+/// bend range is MPE's 48 semitones), and its pan goes as note expression.
+/// Without, both go as note expression after it.
+#[allow(clippy::too_many_arguments)]
+fn push_note_on(
+    block_midi: &mut Vec<hardwave_midi::MidiEvent>,
+    timing: u32,
+    channel: u8,
+    note: u8,
+    velocity: f32,
+    pan: f32,
+    fine_cents: f32,
+    mpe: bool,
+) {
+    let channel = channel & 0x0F;
+    if mpe && channel != 0 {
+        // Every note on a member channel sets the bend, so a channel used
+        // for a detuned note before does not carry its bend over.
+        block_midi.push(hardwave_midi::MidiEvent::PitchBend {
+            timing,
+            channel,
+            value: (fine_cents / 100.0 / 48.0).clamp(-1.0, 1.0),
+        });
+    }
+    block_midi.push(hardwave_midi::MidiEvent::NoteOn {
+        timing,
+        channel,
+        note,
+        velocity,
+    });
+    let tuning = if mpe && channel != 0 { 0.0 } else { fine_cents };
+    push_note_expression(block_midi, timing, channel, note, pan, tuning);
 }
 
 /// Order a block's events by their offset into the block, keeping events at
@@ -2501,6 +2602,141 @@ mod tests {
             }
             other => panic!("expected its pan and tuning after the note, got {other:?}"),
         }
+    }
+
+    /// A note recorded on a channel of its own (an MPE part) reaches a
+    /// plug-in on that channel, its note-off too.
+    #[test]
+    fn a_note_keeps_its_channel_on_the_way_to_a_plug_in() {
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut node = make_node();
+        node.push_offline_slot(spy_instrument(received.clone()), 48_000.0, 256);
+        node.set_notes(vec![MidiNoteRegion {
+            note_on_sample: 10,
+            note_off_sample: 100,
+            pitch: 64,
+            channel: 3,
+            ..Default::default()
+        }]);
+        play_block_at(&mut node, 0);
+        let got = received.lock().unwrap().clone();
+        assert!(got.iter().any(|e| matches!(
+            e,
+            MidiEvent::NoteOn {
+                channel: 3,
+                note: 64,
+                ..
+            }
+        )));
+        assert!(got.iter().any(|e| matches!(
+            e,
+            MidiEvent::NoteOff {
+                channel: 3,
+                note: 64,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn overlapping_notes_get_member_channels_of_their_own() {
+        let note = |on: u64, off: u64, channel: u8| MidiNoteRegion {
+            note_on_sample: on,
+            note_off_sample: off,
+            channel,
+            ..Default::default()
+        };
+        let mut notes = vec![
+            note(0, 100, 0),
+            note(10, 50, 0),
+            note(60, 90, 0),
+            note(200, 300, 0),
+            note(0, 400, 5),
+        ];
+        assign_mpe_channels(&mut notes);
+        let ch: Vec<u8> = notes.iter().map(|n| n.channel).collect();
+        assert_ne!(ch[0], ch[1], "two notes at once, two channels");
+        assert!(
+            ch[..4].iter().all(|c| (1..16).contains(c) && *c != 5),
+            "member channels, not the recorded one's: {ch:?}"
+        );
+        assert_eq!(ch[4], 5, "a note already on a channel keeps it");
+        // The third starts after the second ended: it may take its channel,
+        // but never the first's, which is still sounding.
+        assert_ne!(ch[2], ch[0]);
+    }
+
+    /// With MPE on, a detuned note's bend goes on its own channel just
+    /// before it, and the instrument is told the zone when playing starts.
+    #[test]
+    fn mpe_out_bends_each_note_on_its_channel() {
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut node = make_node();
+        node.push_offline_slot(spy_instrument(received.clone()), 48_000.0, 256);
+        node.set_mpe(true);
+        let mut notes = vec![
+            MidiNoteRegion {
+                note_on_sample: 20,
+                note_off_sample: 200,
+                pitch: 60,
+                fine_cents: 24.0,
+                ..Default::default()
+            },
+            MidiNoteRegion {
+                note_on_sample: 20,
+                note_off_sample: 200,
+                pitch: 64,
+                fine_cents: -12.0,
+                ..Default::default()
+            },
+        ];
+        assign_mpe_channels(&mut notes);
+        let (a, b) = (notes[0].channel, notes[1].channel);
+        node.set_notes(notes);
+        play_block_at(&mut node, 0);
+        let got = received.lock().unwrap().clone();
+        let mcm: Vec<(u8, f32)> = got
+            .iter()
+            .filter_map(|e| match e {
+                MidiEvent::ControlChange {
+                    channel: 0,
+                    cc,
+                    value,
+                    ..
+                } => Some((*cc, *value)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            mcm.iter()
+                .any(|(cc, v)| *cc == 6 && (*v * 127.0).round() == 15.0),
+            "fifteen member channels: {mcm:?}"
+        );
+        for (channel, pitch, cents) in [(a, 60u8, 24.0f32), (b, 64, -12.0)] {
+            let on = got
+                .iter()
+                .position(|e| matches!(e, MidiEvent::NoteOn { channel: c, note, .. } if *c == channel && *note == pitch))
+                .expect("the note on its channel");
+            match got[on - 1] {
+                MidiEvent::PitchBend {
+                    channel: c, value, ..
+                } => {
+                    assert_eq!(c, channel);
+                    assert!((value - cents / 100.0 / 48.0).abs() < 1e-6, "{value}");
+                }
+                ref other => panic!("a bend before the note, got {other:?}"),
+            }
+        }
+        assert!(
+            !got.iter().any(|e| matches!(
+                e,
+                MidiEvent::NoteExpression {
+                    kind: hardwave_midi::NoteExpressionKind::Tuning,
+                    ..
+                }
+            )),
+            "the detune is not sent twice"
+        );
     }
 
     #[test]
