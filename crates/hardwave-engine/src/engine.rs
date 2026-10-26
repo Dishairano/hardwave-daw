@@ -433,6 +433,8 @@ pub struct DawEngine {
     /// minus N seconds". Capacity sized for ~8k events which covers
     /// dense input over the 3-minute window.
     pub midi_capture_ring: Arc<Mutex<MidiCaptureRing>>,
+    /// How many times `start` has succeeded; see `start_count`.
+    starts: u64,
 }
 
 /// Commands sent from UI thread to audio thread.
@@ -495,6 +497,7 @@ impl DawEngine {
             insert_graveyard: Arc::new(Mutex::new(None)),
             pending_state_snapshot: Arc::new(Mutex::new(None)),
             midi_capture_ring: Arc::new(Mutex::new(MidiCaptureRing::new(8192))),
+            starts: 0,
         }
     }
 
@@ -1044,12 +1047,37 @@ impl DawEngine {
             Arc::clone(&self.session),
         );
 
-        self.audio_device.start(callback).map_err(|e| e.to_string())
+        self.audio_device
+            .start(callback)
+            .map_err(|e| e.to_string())?;
+        self.starts += 1;
+        Ok(())
     }
 
     /// Stop the audio engine.
     pub fn stop(&mut self) {
         self.audio_device.stop();
+    }
+
+    /// Stop on the way to starting again (another device, rate, buffer,
+    /// driver or output). A start builds the engine's processing anew,
+    /// without the plug-ins, which the app then loads again from the song;
+    /// so their settings as they are now go into the song first, or every
+    /// knob turned since the last save would be lost.
+    pub fn stop_for_restart(&mut self) {
+        if let Some(states) = self.snapshot_plugin_states(std::time::Duration::from_millis(500)) {
+            let mut project = self.project.lock();
+            for ((_, slot_id), bytes) in states {
+                project.set_plugin_state(slot_id, "unknown", bytes);
+            }
+        }
+        self.audio_device.stop();
+    }
+
+    /// How many times the engine has started. A start drops the plug-ins
+    /// it was hosting, so when this changes the app loads them again.
+    pub fn start_count(&self) -> u64 {
+        self.starts
     }
 
     /// Send a transport command from the UI thread.
@@ -1705,7 +1733,7 @@ impl DawEngine {
             return Ok(None);
         }
         let before = self.audio_device.active_device_name().map(str::to_string);
-        self.audio_device.stop();
+        self.stop_for_restart();
         let failed_again = self
             .last_audio_restart
             .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5));
@@ -1719,7 +1747,7 @@ impl DawEngine {
             return Ok(moved_to(before, now));
         }
         log::warn!("Audio stream failed again; falling back to the default output device");
-        self.audio_device.stop();
+        self.stop_for_restart();
         // With no device chosen, resolve_output_device() opens the system
         // default on restart.
         self.audio_device.selected_device = None;
@@ -1783,7 +1811,7 @@ impl DawEngine {
         let previous = self.audio_device.wasapi_exclusive;
         let was_running = self.audio_device.is_running();
         if was_running {
-            self.audio_device.stop();
+            self.stop_for_restart();
         }
         self.audio_device.wasapi_exclusive = enabled;
         if was_running {
@@ -1909,7 +1937,7 @@ impl DawEngine {
     ) -> Result<(), String> {
         let was_running = self.audio_device.is_running();
         if was_running {
-            self.audio_device.stop();
+            self.stop_for_restart();
         }
 
         self.audio_device.selected_device = device;
@@ -1954,7 +1982,7 @@ impl DawEngine {
         if output_changed && self.audio_device.is_running() {
             // The output pair is fixed when the stream opens, so the
             // stream has to come back up on the new one.
-            self.audio_device.stop();
+            self.stop_for_restart();
             let _ = self.start();
         }
     }
@@ -1977,7 +2005,7 @@ impl DawEngine {
         }
         self.audio_device.click_channel_offset = offset;
         if self.audio_device.is_running() {
-            self.audio_device.stop();
+            self.stop_for_restart();
             let _ = self.start();
         }
     }

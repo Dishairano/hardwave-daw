@@ -113,7 +113,9 @@ pub fn spawn(engine: Arc<Mutex<DawEngine>>) {
                             continue;
                         };
                         if e.is_running() {
-                            e.stop();
+                            // Opened again later: the plug-ins are loaded
+                            // again then, with their settings as they are now.
+                            e.stop_for_restart();
                             RELEASED.store(true, Ordering::Relaxed);
                             log::info!("audio device closed while another program is in front");
                         }

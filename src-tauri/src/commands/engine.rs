@@ -62,11 +62,14 @@ pub struct AudioConfig {
 
 #[tauri::command]
 pub fn start_engine(state: State<AppState>) -> Result<(), String> {
-    state
-        .engine
-        .lock()
-        .start()
-        .map_err(|e| audio_start_hint(&e))
+    let mut engine = state.engine.lock();
+    // The page asks at every load, and a page reload (a theme or contrast
+    // switch) is not a reason to rebuild the engine, which dropped every
+    // plug-in it hosted.
+    if engine.is_running() {
+        return Ok(());
+    }
+    engine.start().map_err(|e| audio_start_hint(&e))
 }
 
 /// Why the sound card would not open, in words that say what to do. The

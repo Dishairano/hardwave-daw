@@ -1025,6 +1025,12 @@ pub fn run() {
                 let mut sent_meters = String::new();
                 let mut sent_transport = String::new();
                 let mut tick: u32 = 0;
+                // The engine's starts, as last seen. A start after the first
+                // (another device, rate or buffer, a driver switch, the device
+                // coming back, the window coming back to the front) builds the
+                // engine's processing anew without the song's plug-ins, which
+                // were then gone until the song was opened again.
+                let mut seen_starts = 0u64;
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(33));
                     tick = tick.wrapping_add(1);
@@ -1049,6 +1055,22 @@ pub fn run() {
                             Err(e) => {
                                 log::error!("Audio health check failed: {e}");
                                 let _ = app_handle.emit("audio-device-error", e);
+                            }
+                        }
+                        let starts = eng.start_count();
+                        if starts != seen_starts {
+                            let restarted = seen_starts > 0;
+                            seen_starts = starts;
+                            if restarted {
+                                // Slow (every plug-in loads), so not here.
+                                let app = app_handle.clone();
+                                std::thread::spawn(move || {
+                                    let state = app.state::<AppState>();
+                                    match commands::plugins::hydrate_chains_from_project(&state) {
+                                        Ok(()) => log::info!("plug-ins loaded again after the audio engine restarted"),
+                                        Err(e) => log::warn!("plug-ins after the restart: {e}"),
+                                    }
+                                });
                             }
                         }
                         let meters = eng.master_meter();
