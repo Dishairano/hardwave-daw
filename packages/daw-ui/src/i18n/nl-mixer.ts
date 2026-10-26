@@ -477,4 +477,6 @@ export const nlMixer: Record<string, string> = {
   'The ceiling is the highest the output can go. Nothing passes it.': 'De ceiling is het hoogste niveau dat de uitgang kan halen. Niets komt erboven.',
   'Attack lifts or softens the start of each hit, sustain the body after it. It does not depend on level.': 'Attack maakt het begin van elke klap sterker of zachter, sustain de body erna. Het hangt niet van het niveau af.',
   'Everything under the crossover is summed to mono, so the kick and sub stay centred however wide the rest goes.': 'Alles onder de crossover wordt naar mono samengevoegd, zodat de kick en de sub in het midden blijven, hoe breed de rest ook wordt.',
+  'Plays into mixer track {n}': 'Speelt in mixerspoor {n}',
+  'Plays through its own mixer track ({n}) into the master': 'Speelt via zijn eigen mixerspoor ({n}) naar de master',
 }

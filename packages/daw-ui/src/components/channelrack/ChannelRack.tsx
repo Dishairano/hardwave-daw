@@ -100,6 +100,11 @@ export function ChannelRack() {
   // its instruments on the first playlist rows, and they belong here too.
   const allChannels = tracks.filter(t =>
     t.kind !== 'Master' && (!t.id.startsWith('insert-') || (t.kind || '').toLowerCase() === 'midi'))
+  // Each track's number in the mixer, counted the way the mixer counts its
+  // strips, for the column saying where a channel's sound goes.
+  const stripNumber = useMemo(() => new Map(
+    tracks.filter((t) => t.kind !== 'Master' && t.kind !== 'Automation').map((t, i) => [t.id, i + 1]),
+  ), [tracks])
   // Channels picked with Ctrl-click (one more) or Shift-click (a range) on
   // their names, for the Channels menu. With none picked the selected
   // channel is what "selected" means, as in FL.
@@ -902,12 +907,19 @@ export function ChannelRack() {
                 />
               </div>
 
-              {/* 4. Mixer track # */}
-              <div style={{
-                width: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 11, color: hw.textMuted, fontFamily: "'JetBrains Mono', Consolas, monospace",
-              }}>
-                {ci + 1}
+              {/* 4. Mixer track #: the strip its sound goes to, as FL shows
+                  the insert. It showed the channel's place in the rack. */}
+              <div
+                title={ch.outputBus
+                  ? tf('Plays into mixer track {n}', { n: stripNumber.get(ch.outputBus) ?? '?' })
+                  : tf('Plays through its own mixer track ({n}) into the master', { n: stripNumber.get(ch.id) ?? '?' })}
+                style={{
+                  width: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 11, color: ch.outputBus ? hw.textSecondary : hw.textMuted,
+                  fontFamily: "'JetBrains Mono', Consolas, monospace",
+                }}
+              >
+                {stripNumber.get(ch.outputBus ?? ch.id) ?? '-'}
               </div>
 
               {/* 5. Channel name */}
