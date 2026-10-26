@@ -80,6 +80,30 @@ struct ClapEditorSide {
     gui: *const ClapPluginGui,
     name: String,
     open: bool,
+    /// What the plug-in's `request_resize` calls, shared with the host
+    /// context it reaches through.
+    resize_request: SharedResizeRequest,
+}
+
+type SharedResizeRequest = Arc<Mutex<Option<crate::types::ResizeRequest>>>;
+
+/// The host resized the window: let the gui round the size to what it can
+/// draw and take it. None when it cannot be resized.
+///
+/// # Safety
+/// `gui` and `plugin` are alive, on the main thread.
+unsafe fn gui_resize(
+    gui: *const ClapPluginGui,
+    plugin: *const ClapPlugin,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32)> {
+    if !((*gui).can_resize)(plugin) {
+        return None;
+    }
+    let (mut w, mut h) = (width, height);
+    ((*gui).adjust_size)(plugin, &mut w, &mut h);
+    (w > 0 && h > 0 && ((*gui).set_size)(plugin, w, h)).then_some((w, h))
 }
 
 // SAFETY: the pointers are the plug-in's own, valid until the instance
@@ -126,6 +150,26 @@ impl PluginEditor for ClapEditor {
             }
         }
         side.open = false;
+    }
+
+    fn resize(&self, width: u32, height: u32) -> Option<(u32, u32)> {
+        let side = self.0.lock();
+        if !side.open || side.plugin.is_null() {
+            return None;
+        }
+        // SAFETY: alive while the lock is held (see above).
+        unsafe { gui_resize(side.gui, side.plugin, width, height) }
+    }
+
+    fn set_scale(&self, scale: f64) {
+        let side = self.0.lock();
+        if side.open && !side.plugin.is_null() {
+            unsafe { ((*side.gui).set_scale)(side.plugin, scale) };
+        }
+    }
+
+    fn set_resize_request(&self, request: crate::types::ResizeRequest) {
+        *self.0.lock().resize_request.lock() = Some(request);
     }
 }
 
@@ -177,6 +221,8 @@ fn clap_window(parent: raw_window_handle::RawWindowHandle) -> Option<ClapWindow>
 /// opaque `*mut c_void` and hands it straight back to us.
 struct ClapHostContext {
     plugin: *const ClapPlugin,
+    /// What `clap.gui`'s `request_resize` calls (see `ResizeRequest`).
+    resize_request: SharedResizeRequest,
     pending: SharedParamQueue,
     /// Every GUI edit again, drained by the app for automation recording.
     gui_edit_log: SharedParamQueue,
@@ -257,8 +303,10 @@ impl ClapPluginInstance {
             shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
         let gui_edit_log: SharedParamQueue =
             shared_log.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
+        let resize_request: SharedResizeRequest = Arc::new(Mutex::new(None));
         let mut host_ctx = Box::new(ClapHostContext {
             plugin: std::ptr::null(),
+            resize_request: Arc::clone(&resize_request),
             pending: Arc::clone(&pending_params),
             gui_edit_log: Arc::clone(&gui_edit_log),
         });
@@ -321,6 +369,7 @@ impl ClapPluginInstance {
                 gui: std::ptr::null(),
                 name: String::new(),
                 open: false,
+                resize_request,
             })),
             presets: std::sync::OnceLock::new(),
         };
@@ -812,6 +861,27 @@ impl HostedPlugin for ClapPluginInstance {
             .then(|| Arc::new(ClapEditor(Arc::clone(&self.editor))) as Arc<dyn PluginEditor>)
     }
 
+    fn editor_resize(&mut self, width: u32, height: u32) -> Option<(u32, u32)> {
+        if !self.gui_open {
+            return None;
+        }
+        let gui = self.gui_ext()?;
+        // SAFETY: the plug-in's own gui extension, on the main thread.
+        unsafe { gui_resize(gui, self.plugin, width, height) }
+    }
+
+    fn editor_set_scale(&mut self, scale: f64) {
+        if self.gui_open {
+            if let Some(gui) = self.gui_ext() {
+                unsafe { ((*gui).set_scale)(self.plugin, scale) };
+            }
+        }
+    }
+
+    fn set_editor_resize_request(&mut self, request: crate::types::ResizeRequest) {
+        *self.host_ctx.resize_request.lock() = Some(request);
+    }
+
     fn editor_size(&self) -> Option<(u32, u32)> {
         if !self.gui_open {
             return None;
@@ -1025,7 +1095,50 @@ static HOST_PARAMS: ClapHostParams = ClapHostParams {
 unsafe extern "C" fn host_params_rescan_noop(_host: *const ClapHost, _flags: u32) {}
 unsafe extern "C" fn host_params_clear_noop(_host: *const ClapHost, _param_id: u32, _flags: u32) {}
 
-/// `clap_host.get_extension` — we expose only `clap.host-params`.
+/// The host side of `clap.gui`: a plug-in asking its window for a new
+/// size. Without it a CLAP that grew a panel was cut off.
+#[repr(C)]
+struct ClapHostGui {
+    resize_hints_changed: unsafe extern "C" fn(host: *const ClapHost),
+    request_resize: unsafe extern "C" fn(host: *const ClapHost, width: u32, height: u32) -> bool,
+    request_show: unsafe extern "C" fn(host: *const ClapHost) -> bool,
+    request_hide: unsafe extern "C" fn(host: *const ClapHost) -> bool,
+    closed: unsafe extern "C" fn(host: *const ClapHost, was_destroyed: bool),
+}
+
+static HOST_GUI: ClapHostGui = ClapHostGui {
+    resize_hints_changed: host_gui_noop,
+    request_resize: host_gui_request_resize,
+    request_show: host_gui_no,
+    request_hide: host_gui_no,
+    closed: host_gui_closed,
+};
+
+unsafe extern "C" fn host_gui_noop(_host: *const ClapHost) {}
+unsafe extern "C" fn host_gui_no(_host: *const ClapHost) -> bool {
+    false
+}
+unsafe extern "C" fn host_gui_closed(_host: *const ClapHost, _was_destroyed: bool) {}
+
+unsafe extern "C" fn host_gui_request_resize(
+    host: *const ClapHost,
+    width: u32,
+    height: u32,
+) -> bool {
+    let Some(host) = host.as_ref() else {
+        return false;
+    };
+    let Some(ctx) = (host.host_data as *const ClapHostContext).as_ref() else {
+        return false;
+    };
+    let request = ctx.resize_request.lock().clone();
+    match request {
+        Some(request) if width > 0 && height > 0 => request(width, height),
+        _ => false,
+    }
+}
+
+/// `clap_host.get_extension`: `clap.host-params` and `clap.gui`.
 unsafe extern "C" fn clap_host_get_extension(
     _host: *const ClapHost,
     id: *const c_char,
@@ -1033,8 +1146,12 @@ unsafe extern "C" fn clap_host_get_extension(
     if id.is_null() {
         return std::ptr::null();
     }
-    if CStr::from_ptr(id).to_bytes_with_nul() == CLAP_EXT_HOST_PARAMS {
+    let id = CStr::from_ptr(id).to_bytes_with_nul();
+    if id == CLAP_EXT_HOST_PARAMS {
         return &HOST_PARAMS as *const ClapHostParams as *const c_void;
+    }
+    if id == CLAP_EXT_GUI {
+        return &HOST_GUI as *const ClapHostGui as *const c_void;
     }
     std::ptr::null()
 }

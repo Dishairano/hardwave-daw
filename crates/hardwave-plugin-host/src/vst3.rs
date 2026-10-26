@@ -43,8 +43,10 @@ use vst3::Steinberg::Vst::{
     SymbolicSampleSizes_, UnitInfo, ViewType,
 };
 use vst3::Steinberg::{
-    kResultOk, tresult, FIDString, IBStream, IBStreamTrait, IBStream_::IStreamSeekMode_, IPlugView,
-    IPlugViewTrait, IPluginBaseTrait, IPluginFactory, IPluginFactoryTrait, PClassInfo, TUID,
+    kResultFalse, kResultOk, tresult, FIDString, IBStream, IBStreamTrait,
+    IBStream_::IStreamSeekMode_, IPlugFrame, IPlugFrameTrait, IPlugView,
+    IPlugViewContentScaleSupport, IPlugViewContentScaleSupportTrait, IPlugViewTrait,
+    IPluginBaseTrait, IPluginFactory, IPluginFactoryTrait, PClassInfo, ViewRect, TUID,
 };
 
 #[cfg(target_os = "windows")]
@@ -112,6 +114,78 @@ pub struct Vst3PluginInstance {
 struct Vst3EditorSide {
     controller: Option<ComPtr<IEditController>>,
     view: Option<ComPtr<IPlugView>>,
+    /// The frame the open view asks to be resized through, kept alive while
+    /// the view is open.
+    frame: Option<vst3::ComWrapper<HardwavePlugFrame>>,
+    request: Option<crate::types::ResizeRequest>,
+}
+
+/// The host's side of a view's frame: a VST3 editor that wants another
+/// size (a panel opening, its own zoom menu) asks here. The window is
+/// resized first, then the view is told its new size, as the SDK has it.
+/// Without a frame such a request went nowhere and the editor was cut off
+/// or left a gap.
+struct HardwavePlugFrame {
+    request: Option<crate::types::ResizeRequest>,
+}
+
+impl vst3::Class for HardwavePlugFrame {
+    type Interfaces = (IPlugFrame,);
+}
+
+impl IPlugFrameTrait for HardwavePlugFrame {
+    unsafe fn resizeView(&self, view: *mut IPlugView, new_size: *mut ViewRect) -> tresult {
+        let (Some(request), Some(rect)) = (self.request.as_ref(), new_size.as_mut()) else {
+            return kResultFalse;
+        };
+        let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+        if w <= 0 || h <= 0 || !request(w as u32, h as u32) {
+            return kResultFalse;
+        }
+        if let Some(view) = vst3::ComRef::<IPlugView>::from_raw(view) {
+            view.onSize(rect);
+        }
+        kResultOk
+    }
+}
+
+/// The host resized the window: the size the view takes, after it rounds
+/// it to what it can draw. None when the view cannot be resized.
+fn view_resize(view: &ComPtr<IPlugView>, width: u32, height: u32) -> Option<(u32, u32)> {
+    if unsafe { view.canResize() } != kResultOk {
+        return None;
+    }
+    let mut rect = ViewRect {
+        left: 0,
+        top: 0,
+        right: width as i32,
+        bottom: height as i32,
+    };
+    unsafe { view.checkSizeConstraint(&mut rect) };
+    if unsafe { view.onSize(&mut rect) } != kResultOk {
+        return None;
+    }
+    let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+    (w > 0 && h > 0).then_some((w as u32, h as u32))
+}
+
+/// Tell a view the screen's scale, when it can take one.
+fn view_set_scale(view: &ComPtr<IPlugView>, scale: f64) {
+    if let Some(support) = view.cast::<IPlugViewContentScaleSupport>() {
+        unsafe { support.setContentScaleFactor(scale as f32) };
+    }
+}
+
+/// Close a view: its frame let go before it is removed.
+fn view_close(view: ComPtr<IPlugView>) {
+    unsafe {
+        view.setFrame(std::ptr::null_mut());
+        view.removed();
+    }
+}
+
+fn new_frame(request: Option<crate::types::ResizeRequest>) -> vst3::ComWrapper<HardwavePlugFrame> {
+    vst3::ComWrapper::new(HardwavePlugFrame { request })
 }
 
 /// The handle the app keeps for an instance's window.
@@ -121,13 +195,15 @@ impl PluginEditor for Vst3Editor {
     fn open(&self, parent: raw_window_handle::RawWindowHandle) -> bool {
         let mut side = self.0.lock();
         if let Some(view) = side.view.take() {
-            unsafe { view.removed() };
+            view_close(view);
         }
         let Some(controller) = side.controller.clone() else {
             // The instance has gone.
             return false;
         };
-        side.view = attach_view(&controller, parent);
+        let frame = new_frame(side.request.clone());
+        side.view = attach_view(&controller, parent, Some(&frame));
+        side.frame = Some(frame);
         side.view.is_some()
     }
 
@@ -136,9 +212,25 @@ impl PluginEditor for Vst3Editor {
     }
 
     fn close(&self) {
-        if let Some(view) = self.0.lock().view.take() {
-            unsafe { view.removed() };
+        let mut side = self.0.lock();
+        if let Some(view) = side.view.take() {
+            view_close(view);
         }
+        side.frame = None;
+    }
+
+    fn resize(&self, width: u32, height: u32) -> Option<(u32, u32)> {
+        view_resize(self.0.lock().view.as_ref()?, width, height)
+    }
+
+    fn set_scale(&self, scale: f64) {
+        if let Some(view) = self.0.lock().view.as_ref() {
+            view_set_scale(view, scale);
+        }
+    }
+
+    fn set_resize_request(&self, request: crate::types::ResizeRequest) {
+        self.0.lock().request = Some(request);
     }
 }
 
@@ -148,8 +240,9 @@ impl Drop for Vst3PluginInstance {
         // is left with nothing to call into.
         let mut side = self.editor.lock();
         if let Some(view) = side.view.take() {
-            unsafe { view.removed() };
+            view_close(view);
         }
+        side.frame = None;
         side.controller = None;
     }
 }
@@ -159,6 +252,7 @@ impl Drop for Vst3PluginInstance {
 fn attach_view(
     controller: &ComPtr<IEditController>,
     parent: raw_window_handle::RawWindowHandle,
+    frame: Option<&vst3::ComWrapper<HardwavePlugFrame>>,
 ) -> Option<ComPtr<IPlugView>> {
     let view_raw = unsafe { controller.createView(ViewType::kEditor) };
     let view = unsafe { ComPtr::<IPlugView>::from_raw(view_raw) }?;
@@ -181,6 +275,11 @@ fn attach_view(
     // Some plugins need isPlatformTypeSupported first.
     if unsafe { view.isPlatformTypeSupported(platform_type) } != kResultOk {
         return None;
+    }
+    // The frame goes in before the view is attached, as the SDK has it, so
+    // a view that sizes itself while attaching can already ask.
+    if let Some(frame) = frame.and_then(|f| f.to_com_ptr::<IPlugFrame>()) {
+        unsafe { view.setFrame(frame.as_ptr()) };
     }
     if unsafe { view.attached(handle_ptr, platform_type) } != kResultOk {
         return None;
@@ -213,6 +312,9 @@ struct Vst3Inner {
     /// and terminated before the component.
     separate_controller: bool,
     plug_view: Option<ComPtr<IPlugView>>,
+    /// The open view's frame and what it calls (see `HardwavePlugFrame`).
+    plug_frame: Option<vst3::ComWrapper<HardwavePlugFrame>>,
+    resize_request: Option<crate::types::ResizeRequest>,
     class_cid: TUID,
     sample_rate: f64,
     max_block: i32,
@@ -549,6 +651,8 @@ impl Vst3PluginInstance {
             controller,
             separate_controller,
             plug_view: None,
+            plug_frame: None,
+            resize_request: None,
             class_cid,
             sample_rate: 48_000.0,
             max_block: 0,
@@ -576,6 +680,8 @@ impl Vst3PluginInstance {
         let editor = Arc::new(Mutex::new(Vst3EditorSide {
             controller: inner.controller.clone(),
             view: None,
+            frame: None,
+            request: None,
         }));
         Ok(Self { inner, editor })
     }
@@ -606,8 +712,9 @@ impl Drop for Vst3Inner {
         // Detach + release the plug view first so the plugin can
         // clean up its editor state before its controller is dropped.
         if let Some(view) = self.plug_view.take() {
-            unsafe { view.removed() };
+            view_close(view);
         }
+        self.plug_frame = None;
         if self.processing {
             if let Some(p) = &self.processor {
                 unsafe { p.setProcessing(0) };
@@ -1171,12 +1278,14 @@ impl HostedPlugin for Vst3PluginInstance {
         };
         // Close any existing editor first.
         if let Some(view) = inner.plug_view.take() {
-            unsafe { view.removed() };
+            view_close(view);
         }
-        let Some(controller) = &inner.controller else {
+        let Some(controller) = inner.controller.clone() else {
             return false;
         };
-        inner.plug_view = attach_view(controller, parent);
+        let frame = new_frame(inner.resize_request.clone());
+        inner.plug_view = attach_view(&controller, parent, Some(&frame));
+        inner.plug_frame = Some(frame);
         inner.plug_view.is_some()
     }
 
@@ -1184,13 +1293,30 @@ impl HostedPlugin for Vst3PluginInstance {
         view_size(self.inner.plug_view.as_ref()?)
     }
 
+    fn editor_resize(&mut self, width: u32, height: u32) -> Option<(u32, u32)> {
+        view_resize(self.inner.plug_view.as_ref()?, width, height)
+    }
+
+    fn editor_set_scale(&mut self, scale: f64) {
+        if let Some(view) = self.inner.plug_view.as_ref() {
+            view_set_scale(view, scale);
+        }
+    }
+
+    fn set_editor_resize_request(&mut self, request: crate::types::ResizeRequest) {
+        if let Ok(inner) = self.inner_mut() {
+            inner.resize_request = Some(request);
+        }
+    }
+
     fn close_editor(&mut self) {
         let Ok(inner) = self.inner_mut() else {
             return;
         };
         if let Some(view) = inner.plug_view.take() {
-            unsafe { view.removed() };
+            view_close(view);
         }
+        inner.plug_frame = None;
     }
 
     fn has_editor(&self) -> bool {
