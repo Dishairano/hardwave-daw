@@ -516,6 +516,7 @@ pub fn run() {
             commands::engine::set_osc_enabled,
             commands::plugins::get_sandboxed_plugins,
             commands::plugins::take_sandbox_crashes,
+            commands::plugins::get_sandbox_stats,
             commands::plugins::restart_sandboxed_plugin,
             commands::plugins::set_plugin_sandboxed,
             commands::audio::align_track_to,

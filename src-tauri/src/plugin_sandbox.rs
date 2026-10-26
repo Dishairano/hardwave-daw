@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -52,6 +52,33 @@ struct SandboxEntry {
     plugin_id: String,
     crashed: Arc<AtomicBool>,
     message: Arc<Mutex<Option<String>>>,
+    shared: Arc<Shared>,
+}
+
+/// What each plug-in in its own process has done with its blocks.
+pub fn sandbox_stats() -> Vec<SandboxStats> {
+    let registry = match REGISTRY.lock() {
+        Ok(r) => r,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    registry
+        .iter()
+        .map(|entry| {
+            let s = &entry.shared.stats;
+            let n = |a: &AtomicU64| a.load(Ordering::Relaxed);
+            SandboxStats {
+                plugin_id: entry.plugin_id.clone(),
+                crashed: entry.crashed.load(Ordering::Relaxed),
+                calls: n(&s.calls),
+                sent: n(&s.sent),
+                dropped: n(&s.dropped),
+                no_buffer: n(&s.no_buffer),
+                too_long: n(&s.too_long),
+                back: n(&s.back),
+                no_outputs: n(&s.no_outputs),
+            }
+        })
+        .collect()
 }
 
 /// The plug-ins whose process has gone, with what it said on the way.
@@ -199,6 +226,43 @@ struct Shared {
     /// Its window is open, or its knobs moved since the state was fetched.
     editor_open: AtomicBool,
     state_stale: AtomicBool,
+    /// What the audio thread did with this plug-in, counted, for telling
+    /// where blocks stop when a plug-in in its own process plays nothing.
+    stats: BlockStats,
+}
+
+/// Counters the audio thread keeps for one plug-in in its own process.
+#[derive(Default)]
+struct BlockStats {
+    /// `process` calls.
+    calls: AtomicU64,
+    /// Blocks handed to the bridge.
+    sent: AtomicU64,
+    /// Blocks not sent: the bridge's queue was full (the child behind).
+    dropped: AtomicU64,
+    /// Blocks not sent: no free buffer in the pool.
+    no_buffer: AtomicU64,
+    /// Blocks not sent: longer than a pooled buffer holds.
+    too_long: AtomicU64,
+    /// Blocks played back from the child.
+    back: AtomicU64,
+    /// Calls with fewer than two outputs, which play nothing.
+    no_outputs: AtomicU64,
+}
+
+/// One plug-in in its own process, as `sandbox_stats` reports it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxStats {
+    pub plugin_id: String,
+    pub crashed: bool,
+    pub calls: u64,
+    pub sent: u64,
+    pub dropped: u64,
+    pub no_buffer: u64,
+    pub too_long: u64,
+    pub back: u64,
+    pub no_outputs: u64,
 }
 
 impl Shared {
@@ -326,6 +390,7 @@ impl SandboxedPlugin {
                 plugin_id: descriptor.id.clone(),
                 crashed: Arc::clone(&crashed),
                 message: Arc::clone(&crash_message),
+                shared: Arc::clone(&shared),
             });
         }
 
@@ -449,6 +514,36 @@ impl hardwave_plugin_host::types::PluginEditor for SandboxEditor {
     }
 }
 
+impl SandboxedPlugin {
+    /// Take whatever came back from the child and play the oldest block.
+    fn play_back(&mut self, outputs: &mut [Vec<f32>], num_samples: usize) {
+        loop {
+            match self.from_child.try_recv() {
+                Ok(FromChild::Block(block)) => self.pending.push_back(block),
+                Ok(FromChild::Crashed(message)) => {
+                    self.crashed.store(true, Ordering::Relaxed);
+                    if let Ok(mut slot) = self.crash_message.lock() {
+                        *slot = Some(message);
+                    }
+                    return;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.crashed.store(true, Ordering::Relaxed);
+                    return;
+                }
+            }
+        }
+        if let Some(block) = self.pending.pop_front() {
+            let n = num_samples.min(block.left.len()).min(block.right.len());
+            outputs[0][..n].copy_from_slice(&block.left[..n]);
+            outputs[1][..n].copy_from_slice(&block.right[..n]);
+            let _ = self.free_return.try_send(block);
+            self.shared.stats.back.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 impl HostedPlugin for SandboxedPlugin {
     fn descriptor(&self) -> &PluginDescriptor {
         &self.descriptor
@@ -472,11 +567,14 @@ impl HostedPlugin for SandboxedPlugin {
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
         num_samples: usize,
     ) {
+        let stats = &self.shared.stats;
+        stats.calls.fetch_add(1, Ordering::Relaxed);
         for out in outputs.iter_mut() {
             out.clear();
             out.resize(num_samples, 0.0);
         }
         if outputs.len() < 2 {
+            stats.no_outputs.fetch_add(1, Ordering::Relaxed);
             return;
         }
         // An instrument has no input: it plays silence through.
@@ -496,8 +594,14 @@ impl HostedPlugin for SandboxedPlugin {
         // latency this costs, and it is reported below. Nor does it
         // allocate: the block is one of the pool's, and a block longer
         // than a pooled buffer is not sent rather than grown.
-        if num_samples <= POOL_FRAMES {
-            if let Ok(mut block) = self.free.try_recv() {
+        if num_samples > POOL_FRAMES {
+            stats.too_long.fetch_add(1, Ordering::Relaxed);
+        } else {
+            let Ok(mut block) = self.free.try_recv() else {
+                stats.no_buffer.fetch_add(1, Ordering::Relaxed);
+                return self.play_back(outputs, num_samples);
+            };
+            {
                 let fill = |into: &mut Vec<f32>, from: &[f32]| {
                     into.clear();
                     let n = num_samples.min(from.len());
@@ -512,37 +616,20 @@ impl HostedPlugin for SandboxedPlugin {
                 block.transport = self.transport;
                 // A full queue means the child is behind: the block is
                 // dropped (back to the pool) rather than queued without end.
-                if let Err(mpsc::TrySendError::Full(ToChild::Block(block)))
-                | Err(mpsc::TrySendError::Disconnected(ToChild::Block(block))) =
-                    self.to_child.try_send(ToChild::Block(block))
-                {
-                    let _ = self.free_return.try_send(block);
-                }
-            }
-        }
-        loop {
-            match self.from_child.try_recv() {
-                Ok(FromChild::Block(block)) => self.pending.push_back(block),
-                Ok(FromChild::Crashed(message)) => {
-                    self.crashed.store(true, Ordering::Relaxed);
-                    if let Ok(mut slot) = self.crash_message.lock() {
-                        *slot = Some(message);
+                match self.to_child.try_send(ToChild::Block(block)) {
+                    Ok(()) => {
+                        stats.sent.fetch_add(1, Ordering::Relaxed);
                     }
-                    return;
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    self.crashed.store(true, Ordering::Relaxed);
-                    return;
+                    Err(mpsc::TrySendError::Full(ToChild::Block(block)))
+                    | Err(mpsc::TrySendError::Disconnected(ToChild::Block(block))) => {
+                        stats.dropped.fetch_add(1, Ordering::Relaxed);
+                        let _ = self.free_return.try_send(block);
+                    }
+                    Err(_) => {}
                 }
             }
         }
-        if let Some(block) = self.pending.pop_front() {
-            let n = num_samples.min(block.left.len()).min(block.right.len());
-            outputs[0][..n].copy_from_slice(&block.left[..n]);
-            outputs[1][..n].copy_from_slice(&block.right[..n]);
-            let _ = self.free_return.try_send(block);
-        }
+        self.play_back(outputs, num_samples);
     }
 
     fn get_parameter_count(&self) -> u32 {
