@@ -270,7 +270,6 @@ export const nlMixer: Record<string, string> = {
   'Step — loop at next step': 'Stap: herhalen bij de volgende stap',
   'Folder': 'Map',
   'New folder from this channel': 'Nieuwe map met dit kanaal',
-  'Folder name:': 'Naam van de map:',
   'Group {n}': 'Groep {n}',
   'Add to "{name}"': 'Toevoegen aan "{name}"',
   'Remove from folder': 'Uit de map halen',

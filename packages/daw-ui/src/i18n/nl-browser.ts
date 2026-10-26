@@ -174,7 +174,6 @@ export const nlBrowser: Record<string, string> = {
   'Input Monitor': 'Invoermonitor',
   'Live — {rate} Hz, {n} samples': 'Live: {rate} Hz, {n} samples',
   'Preview input signal level before recording': 'Bekijk het ingangsniveau voordat je opneemt',
-  'Start': 'Starten',
   'Direct monitoring': 'Direct monitoring',
   'Live input routes straight to master — track FX bypassed.': 'Live-invoer gaat rechtstreeks naar de master, de FX van het spoor worden overgeslagen.',
   'Software monitor: live input passes through the track FX chain.': 'Softwaremonitor: live-invoer gaat door de FX-keten van het spoor.',
