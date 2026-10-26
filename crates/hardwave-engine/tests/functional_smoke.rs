@@ -2858,3 +2858,81 @@ fn a_route_moves_a_send() {
         "the route halves the send: {halved} against {full}"
     );
 }
+
+/// The same duck between two MIDI tracks on the built-in synth: the kick's
+/// level from its meter, the bass's volume moved.
+#[test]
+#[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
+fn a_midi_kick_ducks_a_midi_bass() {
+    use hardwave_project::clip::{ClipContent, ClipPlacement, MidiClipRef};
+    use hardwave_project::modulation::{ModSource, ModTarget};
+    let bass_level = |duck: bool| {
+        let engine = DawEngine::new();
+        let kick = add_midi_track(&engine, "Kick");
+        let bass = add_midi_track(&engine, "Bass");
+        {
+            let mut project = engine.project.lock();
+            let note = |pitch: u8, start: u64, len: u64| hardwave_midi::MidiNote {
+                start_tick: start,
+                duration_ticks: len,
+                pitch,
+                velocity: 1.0,
+                channel: 0,
+                muted: false,
+                pan: 0.0,
+                fine_cents: 0.0,
+                release_velocity: 0.5,
+            };
+            for (id, notes, pan) in [
+                (
+                    &kick,
+                    (0..8).map(|b| note(48, b * 960, 900)).collect::<Vec<_>>(),
+                    -1.0,
+                ),
+                (&bass, vec![note(55, 0, 960 * 8)], 1.0),
+            ] {
+                let track = project.track_mut(id).unwrap();
+                track.pan = pan;
+                track.clips.push(ClipPlacement {
+                    content: ClipContent::Midi(MidiClipRef {
+                        id: format!("clip-{id}"),
+                        clip: hardwave_midi::MidiClip {
+                            notes,
+                            ..hardwave_midi::MidiClip::new(
+                                format!("c-{id}"),
+                                "Part".into(),
+                                960 * 8,
+                            )
+                        },
+                    }),
+                    track_id: id.clone(),
+                    position_ticks: 0,
+                    length_ticks: 960 * 8,
+                    lane: 0,
+                    color: None,
+                });
+            }
+            if duck {
+                project.modulations.push(mod_route(
+                    &bass,
+                    ModSource::Envelope {
+                        track_id: kick.clone(),
+                        release_ms: 120.0,
+                    },
+                    ModTarget::TrackVolume,
+                    0.5,
+                    -0.5,
+                ));
+            }
+        }
+        engine.rebuild_graph();
+        settled_peaks(&engine).1
+    };
+    let open = bass_level(false);
+    let ducked = bass_level(true);
+    assert!(open > 0.05, "the bass plays: {open}");
+    assert!(
+        ducked < open * 0.85,
+        "the kick ducks the bass: {ducked} against {open}"
+    );
+}
