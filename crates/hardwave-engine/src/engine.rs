@@ -1791,6 +1791,29 @@ impl DawEngine {
         }
     }
 
+    /// The output pair the metronome is asked to go out of (none is with
+    /// the mix), and the pair it goes out of in the running stream.
+    pub fn click_output(&self) -> (Option<u16>, Option<u16>) {
+        (
+            self.audio_device.click_channel_offset,
+            self.audio_device.active_click_offset(),
+        )
+    }
+
+    /// Send the metronome out of an output pair of its own, or back into
+    /// the mix with none. The pairs are fixed when the stream opens, so a
+    /// running stream comes back up on the new layout.
+    pub fn set_click_output(&mut self, offset: Option<u16>) {
+        if self.audio_device.click_channel_offset == offset {
+            return;
+        }
+        self.audio_device.click_channel_offset = offset;
+        if self.audio_device.is_running() {
+            self.audio_device.stop();
+            let _ = self.start();
+        }
+    }
+
     /// Update the input device preferences. The engine does not restart any
     /// input stream yet — recording isn't live — but the choice is stored so
     /// the recording pipeline picks it up when we ship it.
@@ -4319,15 +4342,35 @@ impl AudioCallback for EngineCallback {
     /// pass ran up to a block long, the audio after the loop end was heard,
     /// and a loop drifted against a clock or a Link session.
     fn process(&mut self, output: &mut [f32], num_frames: usize, _num_channels: u16) {
+        self.run(output, None, num_frames);
+    }
+
+    /// The click goes to `click`, on an output pair of its own, instead of
+    /// into the mix.
+    fn process_split(&mut self, main: &mut [f32], click: &mut [f32], num_frames: usize) {
+        self.run(main, Some(click), num_frames);
+    }
+}
+
+impl EngineCallback {
+    fn run(&mut self, output: &mut [f32], mut click: Option<&mut [f32]>, num_frames: usize) {
         let most = (self.graph.buffer_size_hint() as usize).max(1);
-        let num_frames = num_frames.min(output.len() / 2);
+        let mut num_frames = num_frames.min(output.len() / 2);
+        if let Some(c) = click.as_deref() {
+            num_frames = num_frames.min(c.len() / 2);
+        }
         let mut done = 0;
         while done < num_frames {
             let mut n = (num_frames - done).min(most);
             if let Some(to_end) = self.frames_to_loop_end(n) {
                 n = to_end;
             }
-            self.process_block(&mut output[done * 2..(done + n) * 2], n);
+            let piece = click.as_deref_mut().map(|c| {
+                let c = &mut c[done * 2..(done + n) * 2];
+                c.fill(0.0);
+                c
+            });
+            self.process_block(&mut output[done * 2..(done + n) * 2], piece, n);
             done += n;
         }
     }
@@ -4352,7 +4395,14 @@ impl EngineCallback {
 }
 
 impl EngineCallback {
-    fn process_block(&mut self, output: &mut [f32], num_frames: usize) {
+    /// One block. With `click`, the metronome and the count-in are rendered
+    /// there, for an output pair of their own, and not into the mix.
+    fn process_block(
+        &mut self,
+        output: &mut [f32],
+        mut click: Option<&mut [f32]>,
+        num_frames: usize,
+    ) {
         // Real audio load starts here and is published at the end of the
         // block. Instant::now does not allocate or lock, so it is safe on
         // this thread.
@@ -4369,6 +4419,10 @@ impl EngineCallback {
             let remaining = self.transport.count_in_remaining.load(Relaxed);
             if remaining > 0 {
                 output[..num_frames * 2].fill(0.0);
+                let target: &mut [f32] = match click.as_deref_mut() {
+                    Some(c) => c,
+                    None => &mut output[..],
+                };
                 let total = self.transport.count_in_total.load(Relaxed);
                 let elapsed = total.saturating_sub(remaining);
                 let bpm = self.transport.bpm.load(Relaxed).max(1.0);
@@ -4379,7 +4433,7 @@ impl EngineCallback {
                 let samples_per_beat =
                     60.0 / bpm * self.sample_rate as f64 * 4.0 / den.max(1) as f64;
                 self.metronome.render_count_in(
-                    output,
+                    target,
                     num_frames,
                     elapsed,
                     samples_per_beat,
@@ -4786,8 +4840,12 @@ impl EngineCallback {
                 // allowed to finish rather than being cut off.
                 0
             };
+            let target: &mut [f32] = match click {
+                Some(c) => c,
+                None => &mut output[..],
+            };
             self.metronome.render_scheduled(
-                output,
+                target,
                 num_frames,
                 &self.click_events[..events],
                 recording,
@@ -7008,6 +7066,43 @@ mod monitoring_tests {
             r.cb.transport.position(),
             1_000 + 156,
             "100 frames to the end, then 156 from the loop start"
+        );
+    }
+
+    /// With the click on an output pair of its own, the beat sounds there
+    /// and the mix stays silent; without one, it is in the mix as before.
+    #[test]
+    fn the_click_goes_to_its_own_pair_when_there_is_one() {
+        let peak = |b: &[f32]| b.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        let mut r = rig(Project::default());
+        r.cb.metronome.settings().enabled.store(true, Relaxed);
+        play(&r);
+        let (mut main_peak, mut click_peak) = (0.0_f32, 0.0_f32);
+        for _ in 0..4 {
+            let mut main = vec![0.0_f32; 512];
+            let mut click = vec![0.0_f32; 512];
+            r.cb.process_split(&mut main, &mut click, 256);
+            main_peak = main_peak.max(peak(&main));
+            click_peak = click_peak.max(peak(&click));
+        }
+        assert!(
+            click_peak > 0.01,
+            "the beat on the click pair: {click_peak}"
+        );
+        assert_eq!(main_peak, 0.0, "nothing in the mix");
+
+        let mut r = rig(Project::default());
+        r.cb.metronome.settings().enabled.store(true, Relaxed);
+        play(&r);
+        let mut in_mix = 0.0_f32;
+        for _ in 0..4 {
+            let mut out = vec![0.0_f32; 512];
+            r.cb.process(&mut out, 256, 2);
+            in_mix = in_mix.max(peak(&out));
+        }
+        assert!(
+            in_mix > 0.01,
+            "without a pair of its own the click is in the mix"
         );
     }
 }

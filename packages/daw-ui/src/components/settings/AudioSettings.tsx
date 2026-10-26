@@ -169,6 +169,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [osc, setOsc] = useState<{ enabled: boolean; port: number }>({ enabled: false, port: 9000 })
   const [oscError, setOscError] = useState<string | null>(null)
   const [outputOffset, setOutputOffset] = useState(0)
+  // The metronome on an output pair of its own: asked for, and in effect.
+  const [clickOut, setClickOut] = useState<{ requested: number | null; active: number | null }>({ requested: null, active: null })
   const [selectedInputChannels, setSelectedInputChannels] = useState(2)
   const [selectedRate, setSelectedRate] = useState(48000)
   const [selectedBuffer, setSelectedBuffer] = useState(512)
@@ -238,6 +240,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
         .catch(() => { /* older build or no engine */ })
       invoke<{ input: number; output: number }>('get_channel_offsets')
         .then(o => { setInputOffset(o.input); setOutputOffset(o.output) })
+        .catch(() => { /* older build or no engine */ })
+      invoke<{ requested: number | null; active: number | null }>('get_click_output')
+        .then(setClickOut)
         .catch(() => { /* older build or no engine */ })
       setSelectedInputChannels(inCfg.channels)
       setSelectedRate(cfg.sample_rate)
@@ -764,6 +769,40 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 )}
               />
             </SettingRow>
+
+            {/* A click only the drummer hears: the metronome out of its
+                own pair, so it never reaches the main speakers. Only on an
+                interface with more than one output pair. */}
+            {(devices.find(d => d.name === selectedDevice)?.max_channels
+              ?? devices.find(d => d.is_default)?.max_channels ?? 2) > 2 && (<>
+              <SettingRow label="Metronome output">
+                <Select
+                  value={clickOut.requested == null ? 'mix' : String(clickOut.requested)}
+                  onChange={v => {
+                    const offset = v === 'mix' ? null : Number(v)
+                    setClickOut(c => ({ ...c, requested: offset }))
+                    // Like the output pair, fixed when the stream opens: a
+                    // moment of silence, then the new layout.
+                    invoke<{ requested: number | null; active: number | null }>('set_click_output', { offset })
+                      .then(setClickOut)
+                      .catch(() => {})
+                  }}
+                  options={[
+                    { value: 'mix', label: tr('With the mix') },
+                    ...channelPairOptions(
+                      devices.find(d => d.name === selectedDevice)?.max_channels
+                      ?? devices.find(d => d.is_default)?.max_channels
+                      ?? 2,
+                    ).filter(o => Number(o.value) !== outputOffset),
+                  ]}
+                />
+              </SettingRow>
+              {clickOut.requested != null && clickOut.active == null && (
+                <div style={{ fontSize: 10, color: hw.textFaint, margin: '-4px 0 12px' }}>
+                  {tr('The click is in the mix for now: the interface did not open that pair, or exclusive mode is on.')}
+                </div>
+              )}
+            </>)}
 
             {/* Input Monitor / pre-record level meter */}
             <div style={{

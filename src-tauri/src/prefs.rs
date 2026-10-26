@@ -73,6 +73,10 @@ pub struct AudioPrefs {
     /// One folder for every take; none keeps them with the song.
     #[serde(default)]
     pub take_folder: Option<String>,
+    /// The output pair the metronome goes out of, first channel counting
+    /// from zero; none keeps it in the mix.
+    #[serde(default)]
+    pub click_channel_offset: Option<u16>,
 }
 
 fn default_sample_rate() -> u32 {
@@ -147,6 +151,7 @@ impl AudioPrefs {
             release_device_in_background: false,
             take_bits_24: false,
             take_folder: None,
+            click_channel_offset: None,
         }
     }
 }

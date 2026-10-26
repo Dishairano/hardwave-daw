@@ -145,6 +145,17 @@ pub struct Upsampled<C: AudioCallback> {
     /// That block raised, and how much of it is still to be handed out.
     raised: Vec<f32>,
     left: usize,
+    /// The click on a pair of its own: its own raising, made the first
+    /// time the stream asks for it, so a stream without one allocates
+    /// nothing more.
+    click: Option<ClickPath>,
+}
+
+/// The click's block at the engine's rate and raised, beside the mix's.
+struct ClickPath {
+    up: Upsampler,
+    engine: Vec<f32>,
+    raised: Vec<f32>,
 }
 
 impl<C: AudioCallback> Upsampled<C> {
@@ -160,18 +171,27 @@ impl<C: AudioCallback> Upsampled<C> {
             engine: vec![0.0; block * 2],
             raised: vec![0.0; block * k * 2],
             left: 0,
+            click: None,
         }
     }
-}
 
-impl<C: AudioCallback> AudioCallback for Upsampled<C> {
-    fn process(&mut self, output: &mut [f32], num_frames: usize, _num_channels: u16) {
+    /// Hand out `num_frames` raised frames of the mix, and of the click
+    /// when `click` is given, rendering engine blocks as they run out.
+    fn pull(&mut self, output: &mut [f32], mut click: Option<&mut [f32]>, num_frames: usize) {
         let total = self.raised.len() / 2;
         let mut done = 0;
         while done < num_frames {
             if self.left == 0 {
                 self.engine.fill(0.0);
-                self.inner.process(&mut self.engine, self.block, 2);
+                match (click.is_some(), self.click.as_mut()) {
+                    (true, Some(path)) => {
+                        path.engine.fill(0.0);
+                        self.inner
+                            .process_split(&mut self.engine, &mut path.engine, self.block);
+                        path.up.process(&path.engine, &mut path.raised);
+                    }
+                    _ => self.inner.process(&mut self.engine, self.block, 2),
+                }
                 self.up.process(&self.engine, &mut self.raised);
                 self.left = total;
             }
@@ -179,9 +199,32 @@ impl<C: AudioCallback> AudioCallback for Upsampled<C> {
             let n = self.left.min(num_frames - done);
             output[done * 2..(done + n) * 2]
                 .copy_from_slice(&self.raised[from * 2..(from + n) * 2]);
+            if let (Some(c), Some(path)) = (click.as_deref_mut(), self.click.as_ref()) {
+                c[done * 2..(done + n) * 2].copy_from_slice(&path.raised[from * 2..(from + n) * 2]);
+            }
             self.left -= n;
             done += n;
         }
+    }
+}
+
+impl<C: AudioCallback> AudioCallback for Upsampled<C> {
+    fn process(&mut self, output: &mut [f32], num_frames: usize, _num_channels: u16) {
+        self.pull(output, None, num_frames);
+    }
+
+    fn process_split(&mut self, main: &mut [f32], click: &mut [f32], num_frames: usize) {
+        if self.click.is_none() {
+            // The first block of a stream with a click pair. What is left of
+            // a mix block rendered without one plays out with a silent click.
+            let k = self.up.factor();
+            self.click = Some(ClickPath {
+                up: Upsampler::new(k),
+                engine: vec![0.0; self.block * 2],
+                raised: vec![0.0; self.block * k * 2],
+            });
+        }
+        self.pull(main, Some(click), num_frames);
     }
 }
 

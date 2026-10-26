@@ -280,6 +280,8 @@ pub fn run() {
     engine.set_input_config(prefs.input_device.clone(), prefs.input_channels);
     // Which pair of the interface is recorded from and played out of.
     engine.set_channel_offsets(prefs.input_channel_offset, prefs.output_channel_offset);
+    // The metronome on an output pair of its own, if one was picked.
+    engine.set_click_output(prefs.click_channel_offset);
     // Sharing the audio work across cores, if the setting asks for it.
     engine.set_trusted_servers(prefs.trusted_sample_servers.clone());
     // CLAP libraries are read in a child process, never in this one.
@@ -530,6 +532,8 @@ pub fn run() {
             commands::engine::set_worker_threads,
             commands::engine::get_channel_offsets,
             commands::engine::set_channel_offsets,
+            commands::engine::get_click_output,
+            commands::engine::set_click_output,
             commands::plugins::drain_plugin_knob_moves,
             commands::export::freeze_track,
             commands::export::unfreeze_track,
