@@ -463,7 +463,6 @@ export const nlPanels: Record<string, string> = {
   'Frozen': 'Bevroren',
   'Window': 'Venster',
   'Style': 'Stijl',
-  'Smooth': 'Afvlakken',
   'Peak hold': 'Piek vasthouden',
   'Oscilloscope': 'Oscilloscoop',
   'Master bus · {rate} Hz': 'Masterbus · {rate} Hz',
