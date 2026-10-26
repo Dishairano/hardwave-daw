@@ -53,6 +53,25 @@ struct ModuleClass {
     version: String,
     #[serde(rename = "Sub Categories", default)]
     sub_categories: Vec<String>,
+    #[serde(rename = "CID", default)]
+    cid: String,
+}
+
+/// A VST3 class's id from its bundle's moduleinfo.json (32 hex digits, as
+/// the SDK prints it), by class name, or the bundle's only audio class.
+/// None when the bundle has no moduleinfo.json; nothing in the bundle runs.
+pub fn moduleinfo_class_id(bundle_path: &Path, class_name: &str) -> Option<String> {
+    let info = read_moduleinfo(bundle_path)?;
+    let audio: Vec<&ModuleClass> = info
+        .classes
+        .iter()
+        .filter(|c| c.category == "Audio Module Class" && c.cid.len() == 32)
+        .collect();
+    audio
+        .iter()
+        .find(|c| c.name == class_name)
+        .or_else(|| (audio.len() == 1).then(|| &audio[0]))
+        .map(|c| c.cid.to_uppercase())
 }
 
 /// Reads the plug-ins a CLAP library declares. Reading them means
@@ -1019,6 +1038,7 @@ mod tests {
                 vendor: "Hardwave Studios".into(),
                 version: "0.4.0".into(),
                 sub_categories: vec!["Fx".into()],
+                cid: String::new(),
             }])
         }));
         s.scan();
@@ -1163,6 +1183,31 @@ mod hostile_folders {
         let mut scanner = scanner_for(&dir);
         scanner.scan();
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A class id comes from moduleinfo.json, by the class's name, with no
+    /// code in the bundle run.
+    #[test]
+    fn a_class_id_is_read_from_moduleinfo() {
+        let dir = std::env::temp_dir().join(format!("hw-cid-{}", std::process::id()));
+        let bundle = dir.join("Thing.vst3");
+        std::fs::create_dir_all(bundle.join("Contents")).unwrap();
+        std::fs::write(
+            bundle.join("Contents/moduleinfo.json"),
+            r#"{"Classes":[{"CID":"5b6ce4e0d7a65a2fa9a5bd9b4e9e2a7a","Category":"Audio Module Class","Name":"Thing"},{"CID":"00000000000000000000000000000001","Category":"Component Controller Class","Name":"Thing Controller"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            moduleinfo_class_id(&bundle, "Thing").as_deref(),
+            Some("5B6CE4E0D7A65A2FA9A5BD9B4E9E2A7A")
+        );
+        assert_eq!(
+            moduleinfo_class_id(&bundle, "Other").as_deref(),
+            Some("5B6CE4E0D7A65A2FA9A5BD9B4E9E2A7A"),
+            "the only audio class when the name differs"
+        );
+        assert_eq!(moduleinfo_class_id(&dir.join("None.vst3"), "Thing"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

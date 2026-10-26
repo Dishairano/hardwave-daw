@@ -504,6 +504,7 @@ pub fn run() {
             commands::session::set_session_slot,
             commands::session::clear_session_slot,
             commands::session::send_clip_to_launcher,
+            commands::dawproject::export_dawproject,
             commands::session::add_scene,
             commands::scripts::list_scripts,
             commands::scripts::save_script,
