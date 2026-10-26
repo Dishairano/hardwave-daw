@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { useNotificationStore } from '../../stores/notificationStore'
 import { hw } from '../../theme'
 import { usePluginStore } from '../../stores/pluginStore'
 import { useTrackStore } from '../../stores/trackStore'
@@ -521,6 +522,50 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
     } catch {}
   }
 
+  // The sample library: a folder of the DAW's own, listed in Places from
+  // the first start, where a pack's .zip is installed in one step.
+  const [libraryRoot, setLibraryRoot] = useState<string | null>(null)
+  useEffect(() => {
+    invoke<string>('get_library_folder').then(lib => {
+      setLibraryRoot(lib)
+      let added = false
+      try { added = localStorage.getItem('hw-library-in-places') === '1' } catch { /* private window */ }
+      if (!added) {
+        if (!useBrowserStore.getState().diskRoots.includes(lib)) addDiskRoot(lib)
+        try { localStorage.setItem('hw-library-in-places', '1') } catch { /* private window */ }
+      }
+    }).catch(() => { /* outside the app */ })
+  }, [addDiskRoot])
+  const installPack = async () => {
+    const { push } = useNotificationStore.getState()
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const zip = await open({ multiple: false, title: 'Install a sample pack', filters: [{ name: 'Sample pack', extensions: ['zip'] }] })
+      if (typeof zip !== 'string') return
+      push('info', 'Installing the pack…', { detail: zip.split(/[\\/]/).pop() })
+      const pack = await invoke<{ folder: string; files: number; skipped: number }>('install_sample_pack', { path: zip })
+      if (libraryRoot && !useBrowserStore.getState().diskRoots.includes(libraryRoot)) addDiskRoot(libraryRoot)
+      window.dispatchEvent(new CustomEvent('daw:browserRefresh', { detail: libraryRoot }))
+      push('info', `Installed ${pack.files} file${pack.files === 1 ? '' : 's'}`, {
+        detail: pack.skipped > 0
+          ? `${pack.folder}\n${pack.skipped} left out: only samples, MIDI, presets, images and text are installed.`
+          : pack.folder,
+      })
+    } catch (e) {
+      push('warning', 'The pack was not installed', { detail: String(e) })
+    }
+  }
+  const removePack = async (folder: string) => {
+    const name = folder.split(/[\\/]/).filter(Boolean).pop()
+    if (!window.confirm(`Move the pack "${name}" to the Recycle Bin?`)) return
+    try {
+      await invoke('remove_sample_pack', { folder })
+      window.dispatchEvent(new CustomEvent('daw:browserRefresh', { detail: libraryRoot }))
+    } catch (e) {
+      useNotificationStore.getState().push('warning', 'The pack was not removed', { detail: String(e) })
+    }
+  }
+
   const pickDiskRoot = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
@@ -824,13 +869,17 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
           onToggle={() => {}}
           actionLabel="Add folder"
           onAction={pickDiskRoot}
+          secondLabel="Install pack…"
+          onSecond={() => { void installPack() }}
         >
           {diskRoots.map(root => (
             <DiskFolder
               key={root}
               path={root}
+              name={root === libraryRoot ? 'Library' : undefined}
               depth={0}
               onRemoveRoot={() => removeDiskRoot(root)}
+              onRemoveChild={root === libraryRoot ? (folder) => { void removePack(folder) } : undefined}
               filter={filter}
               renderFile={renderDiskFile}
             />
@@ -928,7 +977,7 @@ function dropCachedListingsUnder(root: string) {
   }
 }
 
-function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, renderFile }: {
+function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, onRemoveChild, onRemove, filter, renderFile }: {
   path: string
   name?: string
   depth: number
@@ -936,6 +985,10 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, r
   generation?: number
   /** Only set on a Places root: adds the refresh and remove buttons. */
   onRemoveRoot?: () => void
+  /** On the library: removes a pack, a folder right inside it. */
+  onRemoveChild?: (folder: string) => void
+  /** Set by the library on each pack: the button that removes it. */
+  onRemove?: () => void
   filter: (path: string) => boolean
   renderFile: (path: string, depth: number) => React.ReactNode
 }) {
@@ -967,6 +1020,17 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, r
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [expanded, path, reloadToken])
+
+  // A pack installed or removed: the library lists itself again.
+  useEffect(() => {
+    const onRefresh = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== path) return
+      dropCachedListingsUnder(path)
+      setReloadToken(t => t + 1)
+    }
+    window.addEventListener('daw:browserRefresh', onRefresh)
+    return () => window.removeEventListener('daw:browserRefresh', onRefresh)
+  }, [path])
 
   // A file moved to the recycle bin from the menu leaves the listing at once.
   useEffect(() => {
@@ -1050,6 +1114,15 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, r
             </button>
           </>
         )}
+        {onRemove && hover && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onRemove() }}
+            title="Remove this pack (to the Recycle Bin)"
+            style={iconButton}
+          >
+            ×
+          </button>
+        )}
       </div>
       {expanded && (
         <div>
@@ -1062,6 +1135,7 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, r
               name={d.name}
               depth={depth + 1}
               generation={childGeneration}
+              onRemove={onRemoveChild ? () => onRemoveChild(d.path) : undefined}
               filter={filter}
               renderFile={renderFile}
             />
@@ -1076,10 +1150,11 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, filter, r
   )
 }
 
-function TreeGroup({ label, count, expanded, onToggle, children, actionLabel, onAction }: {
+function TreeGroup({ label, count, expanded, onToggle, children, actionLabel, onAction, secondLabel, onSecond }: {
   label: string; count: number; expanded: boolean; onToggle: () => void;
   children: React.ReactNode;
   actionLabel?: string; onAction?: () => void;
+  secondLabel?: string; onSecond?: () => void;
 }) {
   return (
     <div>
@@ -1104,6 +1179,22 @@ function TreeGroup({ label, count, expanded, onToggle, children, actionLabel, on
             }}
           >
             {actionLabel}
+          </span>
+        )}
+        {secondLabel && onSecond && (
+          <span
+            onClick={(e) => { e.stopPropagation(); onSecond() }}
+            style={{
+              marginLeft: 4,
+              fontSize: 11,
+              color: hw.textFaint,
+              padding: '1px 6px',
+              borderRadius: 4,
+              background: 'rgba(255,255,255,0.03)',
+              cursor: 'pointer',
+            }}
+          >
+            {secondLabel}
           </span>
         )}
       </div>

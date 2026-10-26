@@ -61,6 +61,7 @@ shine-rs.workspace = true
 chrono.workspace = true
 vorbis_rs.workspace = true
 trash = "5"
+zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 rhai = { version = "1.26.1", default-features = false, features = ["std", "sync"] }
 # The room connection's TLS is set up in commands/collab.rs with the Mozilla
 # roots from webpki-roots 1.x. tokio-tungstenite's own rustls-tls-webpki-roots
