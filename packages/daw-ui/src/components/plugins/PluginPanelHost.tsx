@@ -5,6 +5,7 @@ import { HwPluginWindow } from './HwPluginWindow'
 import { PluginControls } from '../mixer/PluginControls'
 import { layoutFor, windowWidth } from './pluginLayouts'
 import { OPEN_PLUGIN_PANEL, type PluginWindowRequest } from './openPluginWindow'
+import { tf, useLanguage } from '../../i18n'
 
 interface OpenPanel {
   req: PluginWindowRequest
@@ -19,6 +20,7 @@ interface OpenPanel {
  * with its × or Esc (the one in front).
  */
 export function PluginPanelHost() {
+  useLanguage()
   const [panels, setPanels] = useState<OpenPanel[]>([])
   const zTop = useRef(6000)
 
@@ -77,7 +79,7 @@ export function PluginPanelHost() {
           <div
             key={key}
             role="dialog"
-            aria-label={`${p.req.pluginName} window`}
+            aria-label={tf('{name} window', { name: p.req.pluginName })}
             onPointerDownCapture={() => raise(p)}
             style={{
               position: 'fixed', left: p.x, top: p.y, zIndex: p.z,

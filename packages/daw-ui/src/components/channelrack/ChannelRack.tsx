@@ -13,6 +13,7 @@ import type { TrackInfo } from '../../stores/trackStore'
 import { isBuiltIn, openPluginWindow } from '../plugins/openPluginWindow'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { mixHex } from '../../lib/color'
+import { t, tf, useLanguage } from '../../i18n'
 
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
@@ -47,6 +48,7 @@ function formatCutoff(hz: number): string {
 }
 
 export function ChannelRack() {
+  useLanguage()
   const { tracks, selectedTrackId, selectTrack, toggleMute, renameTrack, setTrackColor, removeTrack, reorderTrack, addMidiTrack, fetchTracks, setVolume, setPan, setTrackPitchSemitones, setTrackFineTuneCents, setTrackFilterType, setTrackFilterCutoffHz, setTrackFilterResonance, setTrackOutputBus } = useTrackStore()
   const folders = useTrackFolderStore(s => s.folders)
   const toggleFolderCollapsed = useTrackFolderStore(s => s.toggleCollapsed)
@@ -102,7 +104,7 @@ export function ChannelRack() {
   // their names, for the Channels menu. With none picked the selected
   // channel is what "selected" means, as in FL.
   const report = (what: string) => (e: unknown) =>
-    useNotificationStore.getState().push('error', `${what}: ${String(e)}`)
+    useNotificationStore.getState().push('error', `${t(what)}: ${String(e)}`)
   const [picked, setPicked] = useState<string[]>([])
   const pickAnchor = useRef<string | null>(null)
   const targets = () => {
@@ -150,7 +152,7 @@ export function ChannelRack() {
       const list = targets()
       setChannelMenuOpen(false)
       if (!list.length) return
-      if (!window.confirm(list.length === 1 ? `Delete ${list[0].name}?` : `Delete ${list.length} channels?`)) return
+      if (!window.confirm(list.length === 1 ? tf('Delete {name}?', { name: list[0].name }) : tf('Delete {n} channels?', { n: list.length }))) return
       for (const ch of list) await removeTrack(ch.id)
       setPicked([])
     },
@@ -178,7 +180,7 @@ export function ChannelRack() {
       const list = targets()
       setChannelMenuOpen(false)
       if (!list.length) return
-      const raw = window.prompt('Transpose the notes of the selected channels by how many semitones? (for example 12 or -5)', '12')
+      const raw = window.prompt(t('Transpose the notes of the selected channels by how many semitones? (for example 12 or -5)'), '12')
       const n = raw == null ? NaN : parseInt(raw, 10)
       if (!Number.isFinite(n) || n === 0) return
       for (const ch of list) await invoke('transpose_track_notes', { trackId: ch.id, semitones: n }).catch(report('Could not transpose'))
@@ -189,7 +191,7 @@ export function ChannelRack() {
       setChannelMenuOpen(false)
       if (!list.length) return
       const cur = useChannelRackPrefsStore.getState().channelSwingmix[list[0].id] ?? 1
-      const raw = window.prompt('How much of the swing these channels get (0 to 100 %):', String(Math.round(cur * 100)))
+      const raw = window.prompt(t('How much of the swing these channels get (0 to 100 %):'), String(Math.round(cur * 100)))
       const v = raw == null ? NaN : parseFloat(raw)
       if (!Number.isFinite(v)) return
       for (const ch of list) useChannelRackPrefsStore.getState().setChannelSwingmix(ch.id, v / 100)
@@ -215,8 +217,8 @@ export function ChannelRack() {
       try {
         const n = await invoke<number>('place_pattern_on_playlist')
         await fetchTracks()
-        useNotificationStore.getState().push('info', n ? `Pattern placed on ${n} channel${n === 1 ? '' : 's'}` : 'This pattern has no steps', {
-          detail: n ? 'At the bar the playhead is in, one clip per channel with steps.' : undefined,
+        useNotificationStore.getState().push('info', n === 1 ? t('Pattern placed on 1 channel') : n ? tf('Pattern placed on {n} channels', { n }) : t('This pattern has no steps'), {
+          detail: n ? t('At the bar the playhead is in, one clip per channel with steps.') : undefined,
         })
       } catch (e) { report('Could not place the pattern')(e) }
     },
@@ -445,7 +447,7 @@ export function ChannelRack() {
       >
         <button
           style={topBtn}
-          title="Channel options"
+          title={t('Channel options')}
           onClick={() => setChannelMenuOpen(v => !v)}
         >
           <svg width="8" height="8" viewBox="0 0 8 8"><path d="M1 2h6M1 4h6M1 6h6" stroke={hw.textMuted} strokeWidth="1"/></svg>
@@ -455,10 +457,10 @@ export function ChannelRack() {
         <div style={{ position: 'relative' }}>
           <button
             style={{ ...topBtn, width: 'auto', padding: '0 10px', fontSize: 11.5, fontWeight: 700, color: hw.accent }}
-            title="Add an instrument channel (native synth or VST/CLAP instrument)"
-            data-hint="Add an instrument channel — native synth or VST/CLAP instrument"
+            title={t('Add an instrument channel (native synth or VST/CLAP instrument)')}
+            data-hint={t('Add an instrument channel — native synth or VST/CLAP instrument')}
             onClick={() => setInstPickerOpen(v => !v)}
-          >+ Instrument</button>
+          >{t('+ Instrument')}</button>
           {instPickerOpen && (
             <>
               <div
@@ -473,13 +475,13 @@ export function ChannelRack() {
               }}>
                 {instrumentPlugins.length === 0 ? (
                   <div style={{ padding: 10, fontSize: 10, color: hw.textFaint }}>
-                    No instruments found — scan plug-ins in Settings, or check that native synths loaded.
+                    {t('No instruments found — scan plug-ins in Settings, or check that native synths loaded.')}
                   </div>
                 ) : instrumentPlugins.map(p => (
                   <button
                     key={p.id}
                     onClick={() => addInstrumentChannel(p.id, p.name)}
-                    title={`Add ${p.name} as a new channel`}
+                    title={tf('Add {name} as a new channel', { name: p.name })}
                     style={{
                       display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
                       width: '100%', textAlign: 'left', padding: '5px 8px', fontSize: 10,
@@ -506,7 +508,7 @@ export function ChannelRack() {
               background: g === 'All' ? hw.accentDim : 'transparent',
               border: `1px solid ${g === 'All' ? hw.accentGlow : 'transparent'}`,
             }}>
-              {g}
+              {t(g)}
             </button>
           ))}
         </div>
@@ -514,15 +516,15 @@ export function ChannelRack() {
         <TbSep />
 
         {/* Global Swing — left-click drag the mini-knob, double-click resets to 0 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 3 }} title={`Global swing · ${Math.round(globalSwing * 100)}%`}>
-          <span data-testid="rack-swing" style={{ fontSize: 11, color: hw.textMuted }}>Swing</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 3 }} title={tf('Global swing · {n}%', { n: Math.round(globalSwing * 100) })}>
+          <span data-testid="rack-swing" style={{ fontSize: 11, color: hw.textMuted }}>{t('Swing')}</span>
           <MiniKnob
             value={globalSwing}
             color={globalSwing > 0 ? hw.accent : hw.textMuted}
             size={18}
             onChange={setGlobalSwing}
             onReset={() => setGlobalSwing(0)}
-            title={`Global swing — multiplied with each channel's swingmix`}
+            title={t("Global swing — multiplied with each channel's swingmix")}
           />
         </div>
 
@@ -530,7 +532,7 @@ export function ChannelRack() {
 
         {/* Pattern length — click-to-edit input, right-click for bar selector */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, position: 'relative' }}>
-          <span style={{ fontSize: 11, color: hw.textMuted }}>Steps</span>
+          <span style={{ fontSize: 11, color: hw.textMuted }}>{t('Steps')}</span>
           <input
             type="number" min={1} max={512}
             value={patternLengthOverride ?? activePatternLength}
@@ -542,7 +544,7 @@ export function ChannelRack() {
               }
             }}
             onContextMenu={(e) => { e.preventDefault(); setStepLenMenuOpen(v => !v) }}
-            title="Pattern length 1–512 · right-click for bar selector"
+            title={t('Pattern length 1–512 · right-click for bar selector')}
             style={{
               width: 42, height: 18, fontSize: 10, color: hw.textPrimary, fontWeight: 700,
               fontFamily: "'Consolas', monospace", textAlign: 'center',
@@ -576,7 +578,7 @@ export function ChannelRack() {
               color: loopStepChannels ? hw.accent : hw.textMuted,
               background: loopStepChannels ? hw.accentDim : 'transparent',
             }}
-            title="Loop step channels · right-click for advanced modes"
+            title={t('Loop step channels · right-click for advanced modes')}
           >
             <svg width="12" height="9" viewBox="0 0 12 9" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2.5 5a3 3 0 0 1 3-3h3M9.5 4a3 3 0 0 1-3 3h-3M8 1l1.5 1.5L8 4M4 6l-1.5 1.5L4 9"/>
@@ -666,9 +668,9 @@ export function ChannelRack() {
               // FL gradient picker — we prompt for start + end hex and
               // interpolate linearly across the channel list. Channel
               // count = 1 falls back to start; otherwise step = 1/(N-1).
-              const start = window.prompt('Gradient start color (hex):', '#DC2626')?.trim()
+              const start = window.prompt(t('Gradient start color (hex):'), '#DC2626')?.trim()
               if (!start) return
-              const end = window.prompt('Gradient end color (hex):', '#7C3AED')?.trim()
+              const end = window.prompt(t('Gradient end color (hex):'), '#7C3AED')?.trim()
               if (!end) return
               const targets = selectedTrackId
                 ? allChannels.filter(c => c.id === selectedTrackId)
@@ -705,20 +707,20 @@ export function ChannelRack() {
             background: graphEditor ? hw.accentDim : 'transparent',
           }}
         >
-          Graph
+          {t('Graph')}
         </button>
 
         <PatternSwitcher />
         <button
           onClick={addPattern}
-          title="New pattern"
+          title={t('New pattern')}
           style={{ ...topBtn, width: 'auto', padding: '0 6px', fontSize: 9, color: hw.textMuted }}
         >
           +
         </button>
         <button
           onClick={clonePattern}
-          title="Clone pattern"
+          title={t('Clone pattern')}
           style={{ ...topBtn, width: 'auto', padding: '0 6px', fontSize: 9, color: hw.textMuted }}
         >
           ⎘
@@ -726,7 +728,7 @@ export function ChannelRack() {
         <button
           onClick={deletePattern}
           disabled={patternCount <= 1}
-          title={patternCount <= 1 ? 'At least one pattern required' : 'Delete pattern'}
+          title={patternCount <= 1 ? t('At least one pattern required') : t('Delete pattern')}
           style={{
             ...topBtn, width: 'auto', padding: '0 6px', fontSize: 9,
             color: patternCount <= 1 ? hw.textFaint : hw.textMuted,
@@ -759,7 +761,7 @@ export function ChannelRack() {
                   background: `linear-gradient(90deg, ${f.color}22, transparent 80%)`,
                   cursor: 'pointer',
                 }}
-                title="Click to expand/collapse folder"
+                title={t('Click to expand/collapse folder')}
               >
                 <svg width="8" height="8" viewBox="0 0 8 8" style={{ transform: f.collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.12s' }}>
                   <path d="M1 2l3 3.5L7 2" fill="none" stroke={f.color} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
@@ -788,7 +790,7 @@ export function ChannelRack() {
               <div
                 key={ch.id}
                 onClick={() => unzipChannel(ch.id)}
-                title="Click to unzip"
+                title={t('Click to unzip')}
                 style={{
                   height: 18, display: 'flex', alignItems: 'center', gap: 8,
                   padding: '0 8px',
@@ -802,10 +804,10 @@ export function ChannelRack() {
                   background: ch.color || hw.textMuted, flexShrink: 0,
                 }} />
                 <span style={{ fontSize: 9, color: hw.textMuted, fontFamily: hw.font.mono, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {ch.name} <span style={{ color: hw.textFaint, fontStyle: 'italic' }}>▸ zipped</span>
+                  {ch.name} <span style={{ color: hw.textFaint, fontStyle: 'italic' }}>{t('▸ zipped')}</span>
                 </span>
                 <span style={{ fontSize: 8, color: hw.textFaint }}>
-                  {activeSteps}/{steps.length || STEPS} steps · click to unzip
+                  {tf('{active}/{total} steps · click to unzip', { active: activeSteps, total: steps.length || STEPS })}
                 </span>
               </div>
             )
@@ -856,7 +858,7 @@ export function ChannelRack() {
                 }}
               >
                 <div
-                  title={ch.muted ? 'Muted: click to unmute' : 'Playing: click to mute'}
+                  title={ch.muted ? t('Muted: click to unmute') : t('Playing: click to mute')}
                   style={{
                     width: 10, height: 10, borderRadius: '50%',
                     background: ch.muted ? 'transparent' : hw.green,
@@ -879,7 +881,7 @@ export function ChannelRack() {
                     e.stopPropagation()
                     setParamCtx({ x: e.clientX, y: e.clientY, kind: 'pan', trackId: ch.id })
                   }}
-                  title={`Pan: ${ch.pan === 0 ? 'C' : (ch.pan > 0 ? `R${Math.round(ch.pan * 100)}` : `L${Math.round(-ch.pan * 100)}`)}`}
+                  title={tf('Pan: {value}', { value: ch.pan === 0 ? 'C' : (ch.pan > 0 ? `R${Math.round(ch.pan * 100)}` : `L${Math.round(-ch.pan * 100)}`) })}
                 />
               </div>
 
@@ -896,7 +898,7 @@ export function ChannelRack() {
                     e.stopPropagation()
                     setParamCtx({ x: e.clientX, y: e.clientY, kind: 'volume', trackId: ch.id })
                   }}
-                  title={`Volume: ${ch.volume_db.toFixed(1)} dB`}
+                  title={tf('Volume: {db} dB', { db: ch.volume_db.toFixed(1) })}
                 />
               </div>
 
@@ -933,8 +935,8 @@ export function ChannelRack() {
                 {channelInstrumentSlot(ch) && (
                   <button
                     onClick={(e) => { e.stopPropagation(); openChannelInstrument(ch) }}
-                    title="Open instrument editor"
-                    data-hint={`Open the instrument editor for ${ch.name}`}
+                    title={t('Open instrument editor')}
+                    data-hint={tf('Open the instrument editor for {name}', { name: ch.name })}
                     style={{
                       flexShrink: 0, width: 16, height: 16, display: 'flex',
                       alignItems: 'center', justifyContent: 'center', padding: 0,
@@ -1026,8 +1028,8 @@ export function ChannelRack() {
                         startVelocityDrag(ch.id, i, e)
                       }}
                       title={ghost
-                        ? `Step beyond ${mode} loop boundary — ghost (will not play)`
-                        : active ? `Velocity ${Math.round(vel * 127)} (drag up/down · Alt+click to preview)` : 'Click to add step'}
+                        ? tf('Step beyond {mode} loop boundary — ghost (will not play)', { mode: t(mode) })
+                        : active ? tf('Velocity {n} (drag up/down · Alt+click to preview)', { n: Math.round(vel * 127) }) : t('Click to add step')}
                       style={{
                         flex: 1, maxWidth: 34, height: 28, position: 'relative',
                         // Beats alternate between two greys so the bar reads
@@ -1069,7 +1071,7 @@ export function ChannelRack() {
 
         {channels.length === 0 && (
           <div style={{ padding: 20, textAlign: 'center', color: hw.textFaint, fontSize: 10 }}>
-            No channels — add instruments to get started
+            {t('No channels — add instruments to get started')}
           </div>
         )}
       </div>
@@ -1099,7 +1101,7 @@ export function ChannelRack() {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 16 }}>
               <span style={{ fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                Graph
+                {t('Graph')}
               </span>
               <span style={{ fontSize: 9, color: hw.accent, fontWeight: 600 }}>{target.name}</span>
               <div style={{ display: 'flex', gap: 2, marginLeft: 8, flexWrap: 'wrap' }}>
@@ -1116,7 +1118,7 @@ export function ChannelRack() {
                       cursor: 'pointer',
                     }}
                   >
-                    {STEP_GRAPH_LABELS[k]}
+                    {t(STEP_GRAPH_LABELS[k])}
                   </button>
                 ))}
               </div>
@@ -1176,7 +1178,7 @@ export function ChannelRack() {
                     opacity: inRange ? (active ? 1 : 0.4) : 0.2,
                     cursor: 'ns-resize',
                   }}
-                    title={`Step ${i + 1}: ${fmt(raw)}`}
+                    title={tf('Step {n}: {value}', { n: i + 1, value: fmt(raw) })}
                   >
                     <div style={{
                       position: 'absolute', left: 0, right: 0,
@@ -1199,7 +1201,7 @@ export function ChannelRack() {
         borderTop: `1px solid ${hw.border}`,
         display: 'flex', alignItems: 'center', padding: '0 6px', gap: 4,
       }}>
-        <span style={{ fontSize: 8, color: hw.textFaint }}>{channels.length} channels</span>
+        <span style={{ fontSize: 8, color: hw.textFaint }}>{tf('{n} channels', { n: channels.length })}</span>
         <div style={{ flex: 1 }} />
         <button style={{
           ...topBtn, width: 'auto', padding: '0 6px', fontSize: 9,
@@ -1209,7 +1211,7 @@ export function ChannelRack() {
             <line x1="4" y1="1" x2="4" y2="7" stroke="currentColor" strokeWidth="1.2"/>
             <line x1="1" y1="4" x2="7" y2="4" stroke="currentColor" strokeWidth="1.2"/>
           </svg>
-          Add
+          {t('Add')}
         </button>
       </div>
 
@@ -1229,7 +1231,7 @@ export function ChannelRack() {
           }}
         >
           <MenuItem
-            label="Rename"
+            label={t('Rename')}
             shortcut="F2"
             onClick={() => {
               const id = ctxMenu.trackId
@@ -1239,7 +1241,7 @@ export function ChannelRack() {
             }}
           />
           <MenuItem
-            label="Clone"
+            label={t('Clone')}
             shortcut=""
             onClick={async () => {
               const id = ctxMenu.trackId
@@ -1247,7 +1249,7 @@ export function ChannelRack() {
               setCtxMenu(null)
               if (!src) return
               const before = useTrackStore.getState().tracks.map(t => t.id)
-              await addMidiTrack(`${src.name} (copy)`)
+              await addMidiTrack(tf('{name} (copy)', { name: src.name }))
               await fetchTracks()
               const after = useTrackStore.getState().tracks
               const newTrack = after.find(t => !before.includes(t.id))
@@ -1269,10 +1271,10 @@ export function ChannelRack() {
             return (
               <>
                 <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                  Pitch
+                  {t('Pitch')}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 2px' }}>
-                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>Coarse</span>
+                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>{t('Coarse')}</span>
                   <input
                     type="range"
                     min={-24}
@@ -1287,7 +1289,7 @@ export function ChannelRack() {
                   </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 4px' }}>
-                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>Fine</span>
+                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>{t('Fine')}</span>
                   <input
                     type="range"
                     min={-100}
@@ -1303,10 +1305,10 @@ export function ChannelRack() {
                 </div>
                 <MenuSep />
                 <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                  Filter
+                  {t('Filter')}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 2px' }}>
-                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>Type</span>
+                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>{t('Type')}</span>
                   <select
                     value={ch.filterType || 'off'}
                     onChange={(e) => setTrackFilterType(ch.id, e.target.value)}
@@ -1317,14 +1319,14 @@ export function ChannelRack() {
                       padding: '2px 4px', outline: 'none',
                     }}
                   >
-                    <option value="off">Off</option>
-                    <option value="lp">Low-pass</option>
-                    <option value="hp">High-pass</option>
-                    <option value="bp">Band-pass</option>
+                    <option value="off">{t('Off')}</option>
+                    <option value="lp">{t('Low-pass')}</option>
+                    <option value="hp">{t('High-pass')}</option>
+                    <option value="bp">{t('Band-pass')}</option>
                   </select>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 2px', opacity: ch.filterType === 'off' ? 0.4 : 1 }}>
-                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>Cutoff</span>
+                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>{t('Cutoff')}</span>
                   <input
                     type="range"
                     min={0}
@@ -1340,7 +1342,7 @@ export function ChannelRack() {
                   </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 4px', opacity: ch.filterType === 'off' ? 0.4 : 1 }}>
-                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>Res</span>
+                  <span style={{ fontSize: 10, color: hw.textMuted, width: 48 }}>{t('Res')}</span>
                   <input
                     type="range"
                     min={0}
@@ -1357,7 +1359,7 @@ export function ChannelRack() {
                 </div>
                 <MenuSep />
                 <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                  Route to
+                  {t('Route to')}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 4px' }}>
                   <select
@@ -1386,7 +1388,7 @@ export function ChannelRack() {
             )
           })()}
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-            Color
+            {t('Color')}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 2, padding: '2px 6px 4px' }}>
             {CHANNEL_COLORS.map(c => (
@@ -1413,13 +1415,13 @@ export function ChannelRack() {
               2/4/8 stamps DEFAULT_VEL on every Nth step; Rotate
               shifts the row by one with wrap-around. */}
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-            Steps
+            {t('Steps')}
           </div>
-          <MenuItem label="Zip channel" shortcut="⌥Z" onClick={() => {
+          <MenuItem label={t('Zip channel')} shortcut="⌥Z" onClick={() => {
             zipChannel(ctxMenu.trackId)
             setCtxMenu(null)
           }} />
-          <MenuItem label="Cut steps" shortcut="^X" onClick={() => {
+          <MenuItem label={t('Cut steps')} shortcut="^X" onClick={() => {
             const id = ctxMenu.trackId
             const arr = activePattern.steps[id]
             if (arr) {
@@ -1428,13 +1430,13 @@ export function ChannelRack() {
             }
             setCtxMenu(null)
           }} />
-          <MenuItem label="Copy steps" shortcut="^C" onClick={() => {
+          <MenuItem label={t('Copy steps')} shortcut="^C" onClick={() => {
             const id = ctxMenu.trackId
             const arr = activePattern.steps[id]
             if (arr) stepClipboard = [...arr]
             setCtxMenu(null)
           }} />
-          <MenuItem label={stepClipboard ? `Paste (${stepClipboard.filter(v => v > 0).length} active)` : 'Paste'} shortcut="^V" onClick={() => {
+          <MenuItem label={stepClipboard ? tf('Paste ({n} active)', { n: stepClipboard.filter(v => v > 0).length }) : t('Paste')} shortcut="^V" onClick={() => {
             const id = ctxMenu.trackId
             if (stepClipboard) {
               const buf = stepClipboard
@@ -1442,22 +1444,22 @@ export function ChannelRack() {
             }
             setCtxMenu(null)
           }} />
-          <MenuItem label="Fill every 2 steps" onClick={() => {
+          <MenuItem label={t('Fill every 2 steps')} onClick={() => {
             const id = ctxMenu.trackId
             for (let i = 0; i < STEPS; i += 2) setStep(id, i, DEFAULT_VEL)
             setCtxMenu(null)
           }} />
-          <MenuItem label="Fill every 4 steps" onClick={() => {
+          <MenuItem label={t('Fill every 4 steps')} onClick={() => {
             const id = ctxMenu.trackId
             for (let i = 0; i < STEPS; i += 4) setStep(id, i, DEFAULT_VEL)
             setCtxMenu(null)
           }} />
-          <MenuItem label="Fill every 8 steps" onClick={() => {
+          <MenuItem label={t('Fill every 8 steps')} onClick={() => {
             const id = ctxMenu.trackId
             for (let i = 0; i < STEPS; i += 8) setStep(id, i, DEFAULT_VEL)
             setCtxMenu(null)
           }} />
-          <MenuItem label="Rotate left" shortcut="⇧^←" onClick={() => {
+          <MenuItem label={t('Rotate left')} shortcut="⇧^←" onClick={() => {
             const id = ctxMenu.trackId
             const arr = activePattern.steps[id]
             if (arr && arr.length > 0) {
@@ -1467,7 +1469,7 @@ export function ChannelRack() {
             }
             setCtxMenu(null)
           }} />
-          <MenuItem label="Rotate right" shortcut="⇧^→" onClick={() => {
+          <MenuItem label={t('Rotate right')} shortcut="⇧^→" onClick={() => {
             const id = ctxMenu.trackId
             const arr = activePattern.steps[id]
             if (arr && arr.length > 0) {
@@ -1477,7 +1479,7 @@ export function ChannelRack() {
             }
             setCtxMenu(null)
           }} />
-          <MenuItem label="Clear all steps" onClick={() => {
+          <MenuItem label={t('Clear all steps')} onClick={() => {
             const id = ctxMenu.trackId
             for (let i = 0; i < STEPS; i++) setStep(id, i, 0)
             setCtxMenu(null)
@@ -1489,16 +1491,16 @@ export function ChannelRack() {
               for Tier B. The menu shows the current mode + 4
               options so the user can preview their cycle. */}
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-            Looping ({loopMode[ctxMenu.trackId] ?? 'off'})
+            {tf('Looping ({mode})', { mode: t(loopMode[ctxMenu.trackId] ?? 'off') })}
           </div>
           {(['off', 'bar', 'beat', 'step'] as LoopMode[]).map(m => (
             <MenuItem
               key={m}
               label={
-                m === 'off'  ? 'Off (no loop)' :
-                m === 'bar'  ? 'Bar — loop at next bar' :
-                m === 'beat' ? 'Beat — loop at next beat' :
-                               'Step — loop at next step'
+                m === 'off'  ? t('Off (no loop)') :
+                m === 'bar'  ? t('Bar — loop at next bar') :
+                m === 'beat' ? t('Beat — loop at next beat') :
+                               t('Step — loop at next step')
               }
               onClick={() => {
                 setLoopMode(ctxMenu.trackId, m)
@@ -1508,15 +1510,15 @@ export function ChannelRack() {
           ))}
           <MenuSep />
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-            Folder
+            {t('Folder')}
           </div>
           <MenuItem
-            label="New folder from this channel"
+            label={t('New folder from this channel')}
             shortcut=""
             onClick={() => {
               const id = ctxMenu.trackId
               setCtxMenu(null)
-              const name = window.prompt('Folder name:', `Group ${folders.length + 1}`)?.trim()
+              const name = window.prompt(t('Folder name:'), tf('Group {n}', { n: folders.length + 1 }))?.trim()
               if (!name) return
               useTrackFolderStore.getState().createFolder([id], name)
             }}
@@ -1528,7 +1530,7 @@ export function ChannelRack() {
             return targets.map(f => (
               <MenuItem
                 key={`addto_${f.id}`}
-                label={`Add to "${f.name}"`}
+                label={tf('Add to "{name}"', { name: f.name })}
                 shortcut=""
                 onClick={() => {
                   setCtxMenu(null)
@@ -1539,7 +1541,7 @@ export function ChannelRack() {
           })()}
           {folderByTrack.get(ctxMenu.trackId) && (
             <MenuItem
-              label="Remove from folder"
+              label={t('Remove from folder')}
               shortcut=""
               onClick={() => {
                 const id = ctxMenu.trackId
@@ -1550,7 +1552,7 @@ export function ChannelRack() {
           )}
           <MenuSep />
           <MenuItem
-            label="Delete"
+            label={t('Delete')}
             shortcut="Del"
             danger
             onClick={async () => {
@@ -1569,7 +1571,7 @@ export function ChannelRack() {
             <ParameterContextMenu
               x={paramCtx.x}
               y={paramCtx.y}
-              label={`${ch.name} pan`}
+              label={tf('{name} pan', { name: ch.name })}
               value={ch.pan}
               defaultValue={0}
               unit=""
@@ -1591,7 +1593,7 @@ export function ChannelRack() {
           <ParameterContextMenu
             x={paramCtx.x}
             y={paramCtx.y}
-            label={`${ch.name} volume`}
+            label={tf('{name} volume', { name: ch.name })}
             value={ch.volume_db}
             defaultValue={0}
             unit=" dB"
@@ -1702,6 +1704,7 @@ function TbSep() {
 }
 
 function PatternSwitcher() {
+  useLanguage()
   const patterns = usePatternStore(s => s.patterns)
   const activeId = usePatternStore(s => s.activeId)
   const setActive = usePatternStore(s => s.setActive)
@@ -1750,7 +1753,7 @@ function PatternSwitcher() {
       <div ref={paletteRef} style={{ position: 'relative' }}>
         <button
           onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setPaletteOpen(v => !v) }}
-          title="Pattern color"
+          title={t('Pattern color')}
           style={{
             width: 14, height: 14, padding: 0,
             background: activeColor,
@@ -1785,7 +1788,7 @@ function PatternSwitcher() {
           </div>
         )}
       </div>
-      <button onClick={prev} title="Previous pattern" style={{
+      <button onClick={prev} title={t('Previous pattern')} style={{
         ...topBtn, width: 16, fontSize: 10, color: hw.textMuted,
       }}>
         ‹
@@ -1818,7 +1821,7 @@ function PatternSwitcher() {
             setDraft(active.name)
             setRenaming(true)
           }}
-          title="Double-click to rename"
+          title={t('Double-click to rename')}
           data-testid="pattern-select"
           style={{
             fontSize: 10, color: hw.textPrimary, fontWeight: 600,
@@ -1834,7 +1837,7 @@ function PatternSwitcher() {
           ))}
         </select>
       )}
-      <button onClick={next} title="Next pattern" style={{
+      <button onClick={next} title={t('Next pattern')} style={{
         ...topBtn, width: 16, fontSize: 10, color: hw.textMuted,
       }}>
         ›
@@ -1850,8 +1853,8 @@ function PatternSwitcher() {
         }}
         onDoubleClick={() => setPatternLength(active.id, undefined)}
         title={active.length
-          ? `Pattern length: ${active.length} steps (double-click to auto)`
-          : `Auto length: ${effectiveLen} steps (edit to override)`}
+          ? tf('Pattern length: {n} steps (double-click to auto)', { n: active.length })
+          : tf('Auto length: {n} steps (edit to override)', { n: effectiveLen })}
         style={{
           width: 32, fontSize: 9, color: active.length ? hw.accent : hw.textFaint,
           background: 'rgba(255,255,255,0.04)',
@@ -1868,7 +1871,7 @@ function PatternSwitcher() {
           <button
             key={n}
             onClick={() => setPatternLength(active.id, n)}
-            title={`${n} steps`}
+            title={tf('{n} steps', { n })}
             style={{
               minWidth: 18, height: 16, fontSize: 9, fontWeight: 600, padding: '0 3px',
               color: on ? hw.accent : hw.textFaint,
@@ -1904,6 +1907,7 @@ function HwStepLenMenu({ current, onPick, onClose }: {
   onPick: (n: number) => void
   onClose: () => void
 }) {
+  useLanguage()
   useEffect(() => {
     const handle = () => onClose()
     const id = window.setTimeout(() => window.addEventListener('click', handle), 0)
@@ -1928,7 +1932,7 @@ function HwStepLenMenu({ current, onPick, onClose }: {
         padding: '4px 10px', fontSize: 8, color: hw.textFaint,
         letterSpacing: 0.6, textTransform: 'uppercase',
         borderBottom: `1px solid ${hw.border}`, marginBottom: 4,
-      }}>Pattern length</div>
+      }}>{t('Pattern length')}</div>
       {STEP_LEN_PRESETS.map(n => {
         const active = current === n
         return (
@@ -1939,7 +1943,7 @@ function HwStepLenMenu({ current, onPick, onClose }: {
             border: 'none', textAlign: 'left', cursor: 'pointer',
             borderRadius: hw.radius.sm, display: 'flex', justifyContent: 'space-between',
           }}>
-            <span>{n / 16} bar{n / 16 === 1 ? '' : 's'}</span>
+            <span>{n / 16 === 1 ? t('1 bar') : tf('{n} bars', { n: n / 16 })}</span>
             <span style={{ fontFamily: hw.font.mono, fontSize: 9, color: hw.textFaint }}>{n} st</span>
           </button>
         )
@@ -1969,6 +1973,7 @@ function HwLoopIconMenu({
   onToggleAdvanced: () => void
   onClose: () => void
 }) {
+  useLanguage()
   useEffect(() => {
     const handle = () => onClose()
     const id = window.setTimeout(() => window.addEventListener('click', handle), 0)
@@ -1989,17 +1994,17 @@ function HwLoopIconMenu({
         padding: 6, display: 'flex', flexDirection: 'column', gap: 2,
       }}
     >
-      <div style={{ padding: '4px 10px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.6, textTransform: 'uppercase', borderBottom: `1px solid ${hw.border}`, marginBottom: 4 }}>Looping</div>
-      <HwCheckRow label="Loop step channels" checked={loopStepChannels} onClick={onToggleStep} />
-      <HwCheckRow label="Loop all channels" checked={loopAllChannels} onClick={onToggleAll} />
+      <div style={{ padding: '4px 10px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.6, textTransform: 'uppercase', borderBottom: `1px solid ${hw.border}`, marginBottom: 4 }}>{t('Looping')}</div>
+      <HwCheckRow label={t('Loop step channels')} checked={loopStepChannels} onClick={onToggleStep} />
+      <HwCheckRow label={t('Loop all channels')} checked={loopAllChannels} onClick={onToggleAll} />
       <div style={{ height: 1, background: hw.border, margin: '4px 6px' }} />
-      <div style={{ padding: '2px 10px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.6, textTransform: 'uppercase' }}>Per-channel modes</div>
+      <div style={{ padding: '2px 10px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.6, textTransform: 'uppercase' }}>{t('Per-channel modes')}</div>
       <div style={{ padding: '4px 10px', fontSize: 9, color: hw.textFaint, fontStyle: 'italic' }}>
-        Right-click any channel button → Looping ▸ Bar / Beat / Step
+        {t('Right-click any channel button → Looping ▸ Bar / Beat / Step')}
       </div>
       <div style={{ height: 1, background: hw.border, margin: '4px 6px' }} />
-      <HwCheckRow label="Colorful loop controls" checked={colorfulLoopControls} onClick={onToggleColorful} />
-      <HwCheckRow label="Always show advanced controls" checked={showAdvancedLoopControls} onClick={onToggleAdvanced} />
+      <HwCheckRow label={t('Colorful loop controls')} checked={colorfulLoopControls} onClick={onToggleColorful} />
+      <HwCheckRow label={t('Always show advanced controls')} checked={showAdvancedLoopControls} onClick={onToggleAdvanced} />
     </div>
   )
 }
@@ -2051,6 +2056,7 @@ function HwChannelOptionsMenu({
   onColorRandom: () => void
   onColorGradient: () => void
 }) {
+  useLanguage()
   useEffect(() => {
     const handle = () => onClose()
     const id = window.setTimeout(() => window.addEventListener('click', handle), 0)
@@ -2072,38 +2078,38 @@ function HwChannelOptionsMenu({
         padding: 6, display: 'flex', flexDirection: 'column', gap: 1,
       }}
     >
-      <HwMenuHeader>Channels</HwMenuHeader>
-      <HwMenuRow label="Add one…" kbd="⌥A" onClick={actions.addOne} />
-      <HwMenuRow label="Select unused channels" onClick={actions.selectUnused} />
-      <HwMenuRow label="Clone selected" kbd="⌥C" onClick={none ? undefined : actions.clone} disabled={none} />
-      <HwMenuRow label="Delete selected" kbd="⌥Del" onClick={none ? undefined : actions.remove} disabled={none} />
-      <HwMenuRow label="Move selected up" kbd="⌥↑" onClick={none ? undefined : () => actions.move(-1)} disabled={none} />
-      <HwMenuRow label="Move selected down" kbd="⌥↓" onClick={none ? undefined : () => actions.move(1)} disabled={none} />
+      <HwMenuHeader>{t('Channels')}</HwMenuHeader>
+      <HwMenuRow label={t('Add one…')} kbd="⌥A" onClick={actions.addOne} />
+      <HwMenuRow label={t('Select unused channels')} onClick={actions.selectUnused} />
+      <HwMenuRow label={t('Clone selected')} kbd="⌥C" onClick={none ? undefined : actions.clone} disabled={none} />
+      <HwMenuRow label={t('Delete selected')} kbd="⌥Del" onClick={none ? undefined : actions.remove} disabled={none} />
+      <HwMenuRow label={t('Move selected up')} kbd="⌥↑" onClick={none ? undefined : () => actions.move(-1)} disabled={none} />
+      <HwMenuRow label={t('Move selected down')} kbd="⌥↓" onClick={none ? undefined : () => actions.move(1)} disabled={none} />
       <HwDivider />
-      <HwMenuHeader>Sort by</HwMenuHeader>
-      <HwMenuRow label="Color" onClick={() => onSortColor()} />
-      <HwMenuRow label="Name" onClick={() => onSortName()} />
-      <HwMenuRow label="Track number" onClick={() => onSortTrack()} />
+      <HwMenuHeader>{t('Sort by')}</HwMenuHeader>
+      <HwMenuRow label={t('Color')} onClick={() => onSortColor()} />
+      <HwMenuRow label={t('Name')} onClick={() => onSortName()} />
+      <HwMenuRow label={t('Track number')} onClick={() => onSortTrack()} />
       <HwDivider />
-      <HwMenuHeader>Color selected</HwMenuHeader>
-      <HwMenuRow label="Random" onClick={() => onColorRandom()} />
-      <HwMenuRow label="Gradient (pick start + end)" onClick={() => onColorGradient()} />
+      <HwMenuHeader>{t('Color selected')}</HwMenuHeader>
+      <HwMenuRow label={t('Random')} onClick={() => onColorRandom()} />
+      <HwMenuRow label={t('Gradient (pick start + end)')} onClick={() => onColorGradient()} />
       <HwDivider />
-      <HwMenuRow label="Mute selected" onClick={none ? undefined : () => actions.setMute(true)} disabled={none} />
-      <HwMenuRow label="Unmute selected" onClick={none ? undefined : () => actions.setMute(false)} disabled={none} />
-      <HwMenuRow label="Transpose selected…" onClick={none ? undefined : actions.transpose} disabled={none} />
-      <HwMenuRow label="Set swingmix for selected…" onClick={none ? undefined : actions.swingmix} disabled={none} />
+      <HwMenuRow label={t('Mute selected')} onClick={none ? undefined : () => actions.setMute(true)} disabled={none} />
+      <HwMenuRow label={t('Unmute selected')} onClick={none ? undefined : () => actions.setMute(false)} disabled={none} />
+      <HwMenuRow label={t('Transpose selected…')} onClick={none ? undefined : actions.transpose} disabled={none} />
+      <HwMenuRow label={t('Set swingmix for selected…')} onClick={none ? undefined : actions.swingmix} disabled={none} />
       <HwDivider />
-      <HwMenuRow label="Assign to free mixer tracks" kbd="^L" onClick={none ? undefined : actions.assignFree} disabled={none} />
-      <HwCheckRow label="Show mixer-track selectors" kbd="⌥M" checked={showMixerSelectors} onClick={onToggleMixerSelectors} />
+      <HwMenuRow label={t('Assign to free mixer tracks')} kbd="^L" onClick={none ? undefined : actions.assignFree} disabled={none} />
+      <HwCheckRow label={t('Show mixer-track selectors')} kbd="⌥M" checked={showMixerSelectors} onClick={onToggleMixerSelectors} />
       <HwDivider />
-      <HwMenuRow label={selectedChannelId ? 'Zip selected channel' : 'Zip selected (no selection)'} kbd="⌥Z" onClick={selectedChannelId ? onZipSelected : undefined} disabled={!selectedChannelId} />
-      <HwMenuRow label={`Unzip all (${zippedCount})`} kbd="⌥U" onClick={zippedCount > 0 ? onUnzipAll : undefined} disabled={zippedCount === 0} />
-      <HwCheckRow label="Mute removed steps" checked={muteRemovedSteps} onClick={onToggleMuteRemovedSteps} />
-      <HwCheckRow label="Show complete piano-roll preview" checked={showCompletePianoRoll} onClick={onTogglePianoRollPreview} />
+      <HwMenuRow label={selectedChannelId ? t('Zip selected channel') : t('Zip selected (no selection)')} kbd="⌥Z" onClick={selectedChannelId ? onZipSelected : undefined} disabled={!selectedChannelId} />
+      <HwMenuRow label={tf('Unzip all ({n})', { n: zippedCount })} kbd="⌥U" onClick={zippedCount > 0 ? onUnzipAll : undefined} disabled={zippedCount === 0} />
+      <HwCheckRow label={t('Mute removed steps')} checked={muteRemovedSteps} onClick={onToggleMuteRemovedSteps} />
+      <HwCheckRow label={t('Show complete piano-roll preview')} checked={showCompletePianoRoll} onClick={onTogglePianoRollPreview} />
       <HwDivider />
-      <HwMenuRow label="Place pattern on the playlist" onClick={actions.placePattern} />
-      <HwMenuRow label="Detached (own window)" onClick={actions.detach} />
+      <HwMenuRow label={t('Place pattern on the playlist')} onClick={actions.placePattern} />
+      <HwMenuRow label={t('Detached (own window)')} onClick={actions.detach} />
     </div>
   )
 }

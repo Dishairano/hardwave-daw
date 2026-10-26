@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { hw } from '../../theme'
 import { useSendStore, type SendInfo } from '../../stores/sendStore'
 import { useTrackStore } from '../../stores/trackStore'
+import { t, tf, useLanguage } from '../../i18n'
 
 const NO_SENDS: SendInfo[] = []
 
@@ -15,6 +16,7 @@ interface SendsEditorProps {
  *  the whole store, so opening the mixer on a 500-track song made 500
  *  loads, each redrawing all 500 boxes: a stall of several seconds. */
 export function SendsEditor({ trackId }: SendsEditorProps) {
+  useLanguage()
   const sends = useSendStore((s) => s.byTrack[trackId] ?? NO_SENDS)
   const { addSend, removeSend, setGain, setPreFader, setEnabled, createReturnWithSend } = useSendStore(useShallow((s) => ({
     addSend: s.addSend, removeSend: s.removeSend, setGain: s.setGain,
@@ -59,10 +61,10 @@ export function SendsEditor({ trackId }: SendsEditorProps) {
         display: 'flex', alignItems: 'center', gap: 3, fontSize: 7,
         color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase',
       }}>
-        <span style={{ flex: 1 }}>Sends</span>
+        <span style={{ flex: 1 }}>{t('Sends')}</span>
         <button
           onClick={() => setTargetPicker(v => !v)}
-          title="Add send"
+          title={t('Add send')}
           data-testid={`sends-add-${trackId}`}
           style={{
             width: 14, height: 14, padding: 0, fontSize: 10, lineHeight: 1,
@@ -75,7 +77,7 @@ export function SendsEditor({ trackId }: SendsEditorProps) {
 
       {sends.length === 0 && !targetPicker && (
         <div style={{ fontSize: 8, color: hw.textFaint, textAlign: 'center', padding: '2px 0' }}>
-          none
+          {t('none')}
         </div>
       )}
 
@@ -108,13 +110,13 @@ export function SendsEditor({ trackId }: SendsEditorProps) {
           boxShadow: '0 6px 24px rgba(0,0,0,0.6)',
           padding: 4,
         }}>
-          <div style={{ fontSize: 8, color: hw.textFaint, padding: '3px 6px 4px', letterSpacing: 0.5, textTransform: 'uppercase' }}>Send to</div>
-          <button onClick={() => handleCreateReturn('reverb')} style={pickerItemStyle}>+ New Reverb Return</button>
-          <button onClick={() => handleCreateReturn('delay')} style={pickerItemStyle}>+ New Delay Return</button>
+          <div style={{ fontSize: 8, color: hw.textFaint, padding: '3px 6px 4px', letterSpacing: 0.5, textTransform: 'uppercase' }}>{t('Send to')}</div>
+          <button onClick={() => handleCreateReturn('reverb')} style={pickerItemStyle}>{t('+ New Reverb Return')}</button>
+          <button onClick={() => handleCreateReturn('delay')} style={pickerItemStyle}>{t('+ New Delay Return')}</button>
           <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
           {candidates.length === 0 ? (
             <div style={{ fontSize: 9, color: hw.textFaint, padding: '3px 6px' }}>
-              No other tracks available
+              {t('No other tracks available')}
             </div>
           ) : candidates.map(t => (
             <button
@@ -130,7 +132,7 @@ export function SendsEditor({ trackId }: SendsEditorProps) {
           <button
             onClick={() => setTargetPicker(false)}
             style={{ ...pickerItemStyle, color: hw.textFaint }}
-          >Cancel</button>
+          >{t('Cancel')}</button>
         </div>
       )}
     </div>
@@ -148,6 +150,7 @@ interface SendRowProps {
 }
 
 function SendRow({ send, targetName, targetColor, onGain, onTogglePreFader, onToggleEnabled, onRemove }: SendRowProps) {
+  useLanguage()
   const faderRef = useRef<HTMLInputElement>(null)
 
   // Debounce the drag so we don't spam the backend / history stack.
@@ -157,7 +160,9 @@ function SendRow({ send, targetName, targetColor, onGain, onTogglePreFader, onTo
   return (
     <div
       data-testid={`send-row-${send.index}`}
-      title={`Send → ${targetName} (${send.preFader ? 'pre' : 'post'}-fader)`}
+      title={send.preFader
+        ? tf('Send → {name} (pre-fader)', { name: targetName })
+        : tf('Send → {name} (post-fader)', { name: targetName })}
       style={{
         display: 'flex', flexDirection: 'column', gap: 1,
         padding: 3,
@@ -177,27 +182,27 @@ function SendRow({ send, targetName, targetColor, onGain, onTogglePreFader, onTo
         >→ {targetName}</span>
         <button
           onClick={onTogglePreFader}
-          title={send.preFader ? 'Pre-fader (click for post)' : 'Post-fader (click for pre)'}
+          title={send.preFader ? t('Pre-fader (click for post)') : t('Post-fader (click for pre)')}
           style={{
             fontSize: 7, padding: '1px 3px', height: 12,
             color: send.preFader ? hw.accent : hw.textMuted,
             background: send.preFader ? hw.redDim : 'rgba(255,255,255,0.04)',
             border: `1px solid ${hw.border}`, borderRadius: 3, cursor: 'pointer',
           }}
-        >{send.preFader ? 'PRE' : 'POST'}</button>
+        >{send.preFader ? t('PRE') : t('POST')}</button>
         <button
           onClick={onToggleEnabled}
-          title={send.enabled ? 'Disable send' : 'Enable send'}
+          title={send.enabled ? t('Disable send') : t('Enable send')}
           style={{
             fontSize: 7, padding: '1px 3px', height: 12,
             color: send.enabled ? hw.green : hw.textFaint,
             background: 'rgba(255,255,255,0.04)',
             border: `1px solid ${hw.border}`, borderRadius: 3, cursor: 'pointer',
           }}
-        >{send.enabled ? 'ON' : 'OFF'}</button>
+        >{send.enabled ? t('ON') : t('OFF')}</button>
         <button
           onClick={onRemove}
-          title="Remove send"
+          title={t('Remove send')}
           style={{
             width: 12, height: 12, padding: 0, fontSize: 9, lineHeight: 1,
             color: hw.textMuted, background: 'rgba(255,255,255,0.04)',

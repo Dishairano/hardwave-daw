@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChannelStrip } from './ChannelStrip'
 import { useTrackStore } from '../../../stores/trackStore'
 import { useMultiTouchGestures } from '../../../hooks/useMultiTouchGestures'
+import { t, useLanguage } from '../../../i18n'
 
 /**
  * Virtualized, GPU-composited horizontal scroller for the insert column.
@@ -51,6 +52,7 @@ export interface StripsScrollerProps {
 }
 
 export const StripsScroller = memo(function StripsScroller(props: StripsScrollerProps) {
+  useLanguage()
   const { onSelect, selectedId } = props
 
   // Subscribe to track ids only — adding/removing a track triggers a
@@ -251,7 +253,7 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
         {/* Add-channel button, pinned right after the last strip. */}
         <button
           className="mx-add-strip"
-          title="Add a mixer channel"
+          title={t('Add a mixer channel')}
           onClick={() => { void addAudioTrack() }}
           style={{
             position: 'absolute',
@@ -262,7 +264,7 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
           }}
         >
           <span>+</span>
-          <small>Add track</small>
+          <small>{t('Add track')}</small>
         </button>
       </div>
     </div>

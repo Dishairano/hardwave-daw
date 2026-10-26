@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { useTrackStore } from '../../stores/trackStore'
 import { valueForNumber, type ParamView, type PluginParam } from './pluginDraw'
+import { t, tf, useLanguage } from '../../i18n'
 
 export interface ParamMenuTarget {
   x: number
@@ -44,6 +45,7 @@ export function ParamMenu({ target, view, trackId, slotId, pluginName, accent, a
   onSet: (value: number) => void
   onClose: () => void
 }) {
+  useLanguage()
   const q = target.param
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: target.x, top: target.y })
@@ -51,7 +53,7 @@ export function ParamMenu({ target, view, trackId, slotId, pluginName, accent, a
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const notify = useNotificationStore.getState().push
-  const t = view.norm(q)
+  const norm = view.norm(q)
   const current = view.text(q)
   const label = `${q.name} (${pluginName})`
 
@@ -83,31 +85,31 @@ export function ParamMenu({ target, view, trackId, slotId, pluginName, accent, a
   }
 
   const createClip = run(async () => {
-    await invoke<string>('create_param_automation_clip', { trackId, slotId, paramId: q.id, value: t })
+    await invoke<string>('create_param_automation_clip', { trackId, slotId, paramId: q.id, value: norm })
     await refresh()
-    notify('info', `Automation clip for ${label}`, {
-      detail: 'Eight bars from the playhead, on this channel, flat at the current value. Move its points to automate it.',
+    notify('info', tf('Automation clip for {name}', { name: label }), {
+      detail: t('Eight bars from the playhead, on this channel, flat at the current value. Move its points to automate it.'),
     })
   })
 
   const addLane = run(async () => {
-    await invoke<string>('add_param_automation_lane', { trackId, slotId, paramId: q.id, value: t })
+    await invoke<string>('add_param_automation_lane', { trackId, slotId, paramId: q.id, value: norm })
     await refresh()
-    notify('info', `Automation lane for ${label}`, { detail: 'Under the channel in the playlist, starting at the current value.' })
+    notify('info', tf('Automation lane for {name}', { name: label }), { detail: t('Under the channel in the playlist, starting at the current value.') })
   })
 
   const learn = run(async () => {
     await invoke('midi_learn_start', { target: { kind: 'pluginParam', trackId, slotId, paramId: q.id } })
-    notify('info', 'Waiting for a knob', { detail: `Move a knob or fader on your controller to link it to ${label}.` })
+    notify('info', t('Waiting for a knob'), { detail: tf('Move a knob or fader on your controller to link it to {name}.', { name: label }) })
   })
 
   const initSong = run(async () => {
-    const changed = await invoke<number>('init_param_automation_at_start', { trackId, slotId, paramId: q.id, value: t })
+    const changed = await invoke<number>('init_param_automation_at_start', { trackId, slotId, paramId: q.id, value: norm })
     if (changed > 0) {
       await refresh()
-      notify('info', `${label} starts the song at ${current}`)
+      notify('info', tf('{name} starts the song at {value}', { name: label, value: current }))
     } else {
-      notify('info', `${label} has no automation`, { detail: `It keeps ${current} from the start of the song already; it is saved with the song.` })
+      notify('info', tf('{name} has no automation', { name: label }), { detail: tf('It keeps {value} from the start of the song already; it is saved with the song.', { value: current }) })
     }
   })
 
@@ -123,7 +125,7 @@ export function ParamMenu({ target, view, trackId, slotId, pluginName, accent, a
     }
     // A number in the parameter's unit: "2k", "-6", "120 ms", "1.5 s".
     const m = /^(-?[\d.]+)\s*(k)?\s*(hz|ms|s|db|%|st|ct|x)?$/i.exec(raw.replace(',', '.'))
-    if (!m) { notify('warning', `"${raw}" is not a value for ${q.name}`); return }
+    if (!m) { notify('warning', tf('"{value}" is not a value for {name}', { value: raw, name: q.name })); return }
     let n = parseFloat(m[1]) * (m[2] ? 1000 : 1)
     if (m[3]?.toLowerCase() === 's') n *= 1000
     onSet(valueForNumber(view, q, n))
@@ -136,7 +138,7 @@ export function ParamMenu({ target, view, trackId, slotId, pluginName, accent, a
       style={{ left: pos.left, top: pos.top, '--a2': accent } as React.CSSProperties}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <div className="hd"><small>{pluginName} · {q.name}{automated ? ' · automated' : ''}</small><b>{current}</b></div>
+      <div className="hd"><small>{automated ? tf('{plugin} · {param} · automated', { plugin: pluginName, param: q.name }) : `${pluginName} · ${q.name}`}</small><b>{current}</b></div>
       {typing ? (
         <div style={{ padding: '4px 6px 6px' }}>
           <input
@@ -150,25 +152,25 @@ export function ParamMenu({ target, view, trackId, slotId, pluginName, accent, a
             }}
           />
           <div style={{ font: '500 10px var(--mono)', color: 'var(--dim)', marginTop: 4 }}>
-            {q.texts ? `${q.texts[0]} to ${q.texts[100]}` : `${q.min} to ${q.max}`} · Enter to set
+            {tf('{min} to {max} · Enter to set', q.texts ? { min: q.texts[0], max: q.texts[100] } : { min: q.min, max: q.max })}
           </div>
         </div>
       ) : (
         <>
-          <button className="pri" onClick={createClip}><Icon d={IC.clip} />Create automation clip</button>
-          <button onClick={addLane}><Icon d={IC.lane} />Add automation lane on this channel</button>
-          <button onClick={learn}><Icon d={IC.link} />Link to controller…<em>MIDI learn</em></button>
-          <button onClick={initSong}><Icon d={IC.start} />Init song with this value</button>
+          <button className="pri" onClick={createClip}><Icon d={IC.clip} />{t('Create automation clip')}</button>
+          <button onClick={addLane}><Icon d={IC.lane} />{t('Add automation lane on this channel')}</button>
+          <button onClick={learn}><Icon d={IC.link} />{t('Link to controller…')}<em>{t('MIDI learn')}</em></button>
+          <button onClick={initSong}><Icon d={IC.start} />{t('Init song with this value')}</button>
           <hr />
-          <button onClick={() => { setDraft(current); setTyping(true) }}><Icon d={IC.type} />Type in value…</button>
-          <button onClick={run(() => onSet(q.defaultValue))}><Icon d={IC.reset} />Reset to default<em>{view.text(q, q.defaultValue)}</em></button>
-          <button onClick={run(() => { clipboard = { t, text: current }; notify('info', `Copied ${current}`) })}><Icon d={IC.copy} />Copy value</button>
+          <button onClick={() => { setDraft(current); setTyping(true) }}><Icon d={IC.type} />{t('Type in value…')}</button>
+          <button onClick={run(() => onSet(q.defaultValue))}><Icon d={IC.reset} />{t('Reset to default')}<em>{view.text(q, q.defaultValue)}</em></button>
+          <button onClick={run(() => { clipboard = { t: norm, text: current }; notify('info', tf('Copied {value}', { value: current })) })}><Icon d={IC.copy} />{t('Copy value')}</button>
           <button
             onClick={run(() => { if (clipboard) onSet(view.denorm(q, clipboard.t)) })}
             disabled={!clipboard}
             style={clipboard ? undefined : { opacity: 0.4 }}
           >
-            <Icon d={IC.paste} />Paste value{clipboard && <em>{clipboard.text}</em>}
+            <Icon d={IC.paste} />{t('Paste value')}{clipboard && <em>{clipboard.text}</em>}
           </button>
         </>
       )}

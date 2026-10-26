@@ -1,6 +1,7 @@
 import { memo, useEffect } from 'react'
 import { VcaStrip } from './VcaStrip'
 import { useVcaStore } from '../../../stores/vcaStore'
+import { t, useLanguage } from '../../../i18n'
 
 /**
  * The VCA faders, in a column of their own between the channels and the FX
@@ -9,6 +10,7 @@ import { useVcaStore } from '../../../stores/vcaStore'
  * scroll past.
  */
 export const VcaColumn = memo(function VcaColumn() {
+  useLanguage()
   const vcas = useVcaStore(s => s.vcas)
   useEffect(() => { void useVcaStore.getState().fetch() }, [])
   return (
@@ -20,7 +22,7 @@ export const VcaColumn = memo(function VcaColumn() {
       ))}
       <button
         className="mx-add-strip mx-add-vca"
-        title="Add a VCA: one fader that moves a group of tracks together"
+        title={t('Add a VCA: one fader that moves a group of tracks together')}
         onClick={() => { void useVcaStore.getState().add() }}
       >
         <span>+</span>

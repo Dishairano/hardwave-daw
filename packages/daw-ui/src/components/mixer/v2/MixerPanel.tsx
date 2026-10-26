@@ -8,6 +8,7 @@ import { useTrackStore } from '../../../stores/trackStore'
 import { useMeterStore } from '../../../stores/meterStore'
 import { useSendStore } from '../../../stores/sendStore'
 import { useMixerSelectionStore } from '../../../stores/mixerSelectionStore'
+import { t, useLanguage } from '../../../i18n'
 import '../../primitives/Knob.css'
 import '../../primitives/Fader.css'
 import '../../primitives/Meter.css'
@@ -30,6 +31,7 @@ import './mixer-v2.css'
  * stays the default until phase 3 is done.
  */
 export const MixerPanelV2 = memo(function MixerPanelV2() {
+  useLanguage()
   // Track list — only needed for the master id lookup. The inserts column
   // (StripsScroller) subscribes itself.
   const tracks = useTrackStore((s) => s.tracks)
@@ -69,7 +71,7 @@ export const MixerPanelV2 = memo(function MixerPanelV2() {
 
   return (
     <div className="mx-v2-root" style={{ position: 'relative' }}>
-      <div className="mx-detach" title="Pop the mixer into its own window (drag to another monitor)">
+      <div className="mx-detach" title={t('Pop the mixer into its own window (drag to another monitor)')}>
         <DetachButton panelId="mixer" />
       </div>
       <div className="mx-v2-body">

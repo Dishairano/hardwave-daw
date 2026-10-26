@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { useAutomationWriteStore } from '../../stores/automationWriteStore'
 import { useTransportStore } from '../../stores/transportStore'
+import { t, tf, useLanguage } from '../../i18n'
 
 interface PluginParamInfo {
   id: number
@@ -27,6 +28,7 @@ function formatParamValue(v: number, unit: string): string {
  * each as a labelled slider that pushes edits through `set_plugin_parameter`.
  */
 export function PluginParamSheet({ trackId, slotId, fill = false }: { trackId: string; slotId: string; fill?: boolean }) {
+  useLanguage()
   const [params, setParams] = useState<PluginParamInfo[]>([])
   const [values, setValues] = useState<Record<number, number>>({})
   const [loading, setLoading] = useState(true)
@@ -60,9 +62,9 @@ export function PluginParamSheet({ trackId, slotId, fill = false }: { trackId: s
       .catch((e) => console.error('set_plugin_parameter failed', e))
   }
 
-  if (loading) return <div style={{ fontSize: 10, color: hw.textFaint }}>Loading parameters…</div>
+  if (loading) return <div style={{ fontSize: 10, color: hw.textFaint }}>{t('Loading parameters…')}</div>
   if (params.length === 0) {
-    return <div style={{ fontSize: 10, color: hw.textFaint }}>This plug-in exposes no adjustable parameters.</div>
+    return <div style={{ fontSize: 10, color: hw.textFaint }}>{t('This plug-in exposes no adjustable parameters.')}</div>
   }
 
   return (
@@ -73,7 +75,9 @@ export function PluginParamSheet({ trackId, slotId, fill = false }: { trackId: s
         return (
           <label
             key={p.id}
-            data-hint={`${p.name}: ${formatParamValue(val, p.unit)}  (${p.min}–${p.max}${p.unit ? ' ' + p.unit : ''}) · double-click to reset`}
+            data-hint={tf('{name}: {value}  ({min}–{max}{unit}) · double-click to reset', {
+              name: p.name, value: formatParamValue(val, p.unit), min: p.min, max: p.max, unit: p.unit ? ' ' + p.unit : '',
+            })}
             style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: hw.textMuted, gap: 8 }}>
@@ -88,7 +92,7 @@ export function PluginParamSheet({ trackId, slotId, fill = false }: { trackId: s
               value={val}
               onChange={(e) => setParam(p.id, Number(e.target.value))}
               onDoubleClick={() => setParam(p.id, p.defaultValue)}
-              title={`${p.name} · double-click resets to default`}
+              title={tf('{name} · double-click resets to default', { name: p.name })}
               style={{ width: '100%', cursor: 'pointer' }}
             />
           </label>

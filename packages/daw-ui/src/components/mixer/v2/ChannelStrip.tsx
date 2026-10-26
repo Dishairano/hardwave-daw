@@ -30,6 +30,7 @@ import {
   normalizeVolumeDb,
   useAutomationWriteStore,
 } from '../../../stores/automationWriteStore'
+import { t, tf, useLanguage } from '../../../i18n'
 
 
 const NO_SENDS: SendInfo[] = []
@@ -101,6 +102,7 @@ function LockIcon() {
 }
 
 export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps) {
+  useLanguage()
   const { trackId, index, selected, onSelect, variant = 'insert', separator = 'none' } = props
 
   const name = useTrackName(trackId)
@@ -295,14 +297,14 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
             <button
               className={'mx-pill mx-pill-m' + (muted ? ' on' : '')}
               onClick={onMute}
-              title={muted ? 'Unmute' : 'Mute'}
+              title={muted ? t('Unmute') : t('Mute')}
             >
               M
             </button>
             <button
               className={'mx-pill mx-pill-s' + (soloed ? ' on' : '')}
               onClick={onSolo}
-              title={`${soloed ? 'Unsolo' : 'Solo'}. Ctrl-click: solo this one alone`}
+              title={soloed ? t('Unsolo. Ctrl-click: solo this one alone') : t('Solo. Ctrl-click: solo this one alone')}
             >
               S
             </button>
@@ -310,7 +312,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
               <button
                 className={'mx-pill mx-pill-r' + (armed ? ' on' : '')}
                 onClick={onArm}
-                title={armed ? 'Disarm' : 'Arm for recording'}
+                title={armed ? t('Disarm') : t('Arm for recording')}
               >
                 R
               </button>
@@ -319,7 +321,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
               <button
                 className={'mx-pill mx-pill-in' + (monitorMode !== 'off' ? ' on' : '')}
                 onClick={onMonitor}
-                title={MONITOR_TITLES[monitorMode]}
+                title={t(MONITOR_TITLES[monitorMode])}
               >
                 {monitorMode === 'auto' ? 'AUTO' : 'IN'}
               </button>
@@ -328,22 +330,22 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
               className={'mx-pill mx-pill-safe' + (soloSafe ? ' on' : '')}
               onClick={onSoloSafe}
               title={soloSafe
-                ? 'Solo-safe: soloing another track does not silence this one. Click to turn off'
-                : 'Solo-safe: keep this track playing when another is soloed'}
+                ? t('Solo-safe: soloing another track does not silence this one. Click to turn off')
+                : t('Solo-safe: keep this track playing when another is soloed')}
             >
               <LockIcon />
             </button>
           </div>
         )}
       </div>
-      <div className="mx-s-name">{name || 'Track'}</div>
+      <div className="mx-s-name">{name || t('Track')}</div>
       {/* What share of each audio block this track is taking. The CPU meter
           in the toolbar says the load is high; this says which track. Shown
           only once a track is worth noticing, so a mixer full of quiet
           strips is not a wall of 0%. */}
       {load >= 3 && (
         <div
-          title={`This track is using ${load.toFixed(0)}% of each audio block`}
+          title={tf('This track is using {n}% of each audio block', { n: load.toFixed(0) })}
           style={{
             fontSize: 8, textAlign: 'center', letterSpacing: 0.3,
             color: load >= 40 ? '#EF4444' : load >= 15 ? '#F59E0B' : 'var(--text-dim)',
@@ -366,7 +368,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
             kind="pan"
             onChange={onPanChange}
             onChangeEnd={onPanCommit}
-            title="Pan"
+            title={t('Pan')}
           />
           <span className="mx-klabel">PAN</span>
         </div>
@@ -380,9 +382,9 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
               kind="width"
               onChange={onWidthChange}
               onChangeEnd={onWidthCommit}
-              title="Width"
+              title={t('Width')}
             />
-            <span className="mx-klabel">WIDTH</span>
+            <span className="mx-klabel">{t('WIDTH')}</span>
           </div>
         )}
       </div>
@@ -393,7 +395,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
         type="button"
         className={'mx-s-peak' + (highestPeak >= 0 ? ' clipped' : '')}
         onClick={onResetPeak}
-        title={highestPeak > -100 ? 'Highest peak so far. Click to start again' : 'Highest peak'}
+        title={highestPeak > -100 ? t('Highest peak so far. Click to start again') : t('Highest peak')}
       >
         <span className="mx-s-clip-led" />
         <span className="mx-s-peak-db">
@@ -407,7 +409,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
             valueDb={volumeDb}
             onChange={onVolChange}
             onChangeEnd={onVolCommit}
-            title="Volume"
+            title={t('Volume')}
           />
         </div>
         <DbScale />
@@ -422,7 +424,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
       {kind !== 'Master' && (
         <div
           className={'mx-s-out' + (outputName ? ' routed' : '')}
-          title={`Goes to ${outputName ?? 'Master'}. Change it under Output in the FX rack.`}
+          title={tf('Goes to {name}. Change it under Output in the FX rack.', { name: outputName ?? 'Master' })}
         >
           → {outputName ?? 'Master'}
         </div>
