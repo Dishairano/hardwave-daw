@@ -476,6 +476,40 @@ pub fn apply_groove(
     })
 }
 
+/// What moving a clip's note expression into automation did.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpressionConverted {
+    pub pan_points: usize,
+    pub bends: usize,
+}
+
+/// A MIDI clip's per-note pan and detune moved into automation (the
+/// track's pan lane, pitch bend in the clip), for plug-ins and hardware that
+/// do not read note expression. Refused for notes sounding together with
+/// different values, which one lane cannot hold.
+#[tauri::command]
+pub fn note_expression_to_automation(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+) -> Result<ExpressionConverted, String> {
+    let done = {
+        let engine = state.engine.lock();
+        engine.snapshot_before_mutation();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        hardwave_project::note_expression::expression_to_automation(track, &clip_id)?
+    };
+    state.engine.lock().rebuild_graph();
+    Ok(ExpressionConverted {
+        pan_points: done.pan_points,
+        bends: done.bends,
+    })
+}
+
 /// Get all notes in a MIDI clip./// Get all notes in a MIDI clip./// Get all notes in a MIDI clip.
 #[tauri::command]
 pub fn get_midi_notes(
