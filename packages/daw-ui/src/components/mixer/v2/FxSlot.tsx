@@ -150,7 +150,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
               : `${insert.pluginName} will run inside the DAW again`,
             {
               detail: next
-                ? 'A crash in it cannot take the song with it. It costs one buffer of latency, and for now it runs as an effect only: no window of its own, no knobs in the DAW, and an instrument in it stays silent. Takes effect the next time it loads.'
+                ? 'A crash in it cannot take the song with it. It costs one buffer of latency, and its window opens on its own, beside the DAW rather than inside it. Takes effect the next time it loads.'
                 : 'Takes effect the next time it loads.',
             })
         })
@@ -167,11 +167,12 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
     })
   }, [insert, trackId])
 
-  // Built-in plug-ins have no window of their own, and a sandboxed one
-  // cannot show its window in this process: both get our window. Show GUI used to try to load a built-in as a CLAP file
-  // ("CLAP binary not found: <native>").
+  // Built-in plug-ins have no window of their own: they get our window.
+  // Show GUI used to try to load a built-in as a CLAP file ("CLAP binary
+  // not found: <native>"). A plug-in in its own process shows its window
+  // from there.
   const builtIn = !!insert?.pluginId.startsWith('hardwave.native.')
-  const usesPanel = builtIn || sandboxed
+  const usesPanel = builtIn
 
   const onShowGui = useCallback(() => {
     if (!insert) return
@@ -284,7 +285,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
             disabled={!insert}
             title={sandboxed
               ? 'It runs in a process of its own: a crash cannot take the song with it, at the cost of one buffer of latency.'
-              : 'Run it in a process of its own, so a crash cannot take the song with it. Costs one buffer of latency, and for now it runs as an effect only: no window of its own, no knobs in the DAW, and an instrument in it stays silent.'}
+              : 'Run it in a process of its own, so a crash cannot take the song with it. Costs one buffer of latency, and its window opens on its own, beside the DAW.'}
           >
             {sandboxed ? 'Own process: on' : 'Own process: off'}
           </button>

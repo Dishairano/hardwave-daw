@@ -12,8 +12,8 @@ export interface PluginWindowRequest {
   pluginId: string
   pluginName: string
   /**
-   * Shown in our own window: a built-in (it has no window of its own) or a
-   * plug-in running in its own process (its window cannot show in ours).
+   * Shown in our own window: a built-in, which has no window of its own. A
+   * plug-in running in its own process shows its window from there.
    */
   ownWindow: boolean
 }
@@ -36,9 +36,9 @@ export function isBuiltIn(pluginId: string): boolean {
 /**
  * Open a plug-in's window from anywhere (a mixer slot, the channel rack).
  *
- * Built-ins and plug-ins in their own process get our window: floating over
- * the app beside the docked mixer, an OS window of its own beside a detached
- * one. Every other plug-in opens its own editor. The channel rack used to
+ * Built-ins get our window: floating over the app beside the docked mixer,
+ * an OS window of its own beside a detached one. Every other plug-in opens
+ * its own editor. The channel rack used to
  * ask for a built-in synth's editor, which built-ins do not have, so
  * clicking one only showed an error.
  */

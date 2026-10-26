@@ -276,6 +276,14 @@ pub trait PluginEditor: Send + Sync {
     /// Called when the plug-in asks for a new size itself (a panel that
     /// opens, a zoom menu of its own), before it is opened.
     fn set_resize_request(&self, _request: ResizeRequest) {}
+
+    /// An editor that shows itself, in a window of its own rather than
+    /// in one the host gives it (a plug-in running in its own process):
+    /// opens it and says whether it did. None for the usual kind, which
+    /// needs `open` with the host's window.
+    fn open_own_window(&self) -> Option<bool> {
+        None
+    }
 }
 
 /// What a plug-in calls to ask its window for a new size, in physical
