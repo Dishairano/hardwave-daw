@@ -73,7 +73,7 @@ fn run(path: &str, id: &str) -> i32 {
         }
     };
     let descriptor = descriptor(path, id);
-    let mut plugin = match load(&descriptor) {
+    let plugin = match load(&descriptor) {
         Ok(plugin) => plugin,
         Err(e) => {
             let mut out = BufWriter::new(frames_out);
@@ -81,5 +81,6 @@ fn run(path: &str, id: &str) -> i32 {
             return 3;
         }
     };
-    hardwave_plugin_host::bridge_child::serve(plugin.as_mut(), stdin(), frames_out)
+    let title = descriptor.name.clone();
+    hardwave_plugin_host::bridge_child::serve(plugin, stdin(), frames_out, &title)
 }

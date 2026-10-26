@@ -479,6 +479,19 @@ pub async fn open_plugin_editor(
         (descriptor, shared_queue, shared_log, playing)
     };
 
+    // A plug-in in its own process shows its window from there, in a window
+    // of its own: nothing of the app's is opened for it.
+    if let Some(opened) = playing.as_ref().and_then(|editor| editor.open_own_window()) {
+        return if opened {
+            Ok(window_label)
+        } else {
+            Err(format!(
+                "{}'s process did not take the request for its window",
+                descriptor.name
+            ))
+        };
+    }
+
     // Built-in plug-ins have no window of their own: the mixer shows their
     // controls. Asked for one, this tried to load "<native>" as a CLAP file.
     if descriptor.path == std::path::Path::new("<native>") {
@@ -874,14 +887,22 @@ pub(crate) fn instantiate_for_slot(
     // No falling back to this process: the person sandboxed this plug-in
     // because it crashes, and a sandbox that will not start does not
     // change that. The slot says why it is empty instead.
-    crate::plugin_sandbox::SandboxedPlugin::start(descriptor.clone(), &exe)
-        .map(|plugin| Box::new(plugin) as Box<dyn HostedPlugin>)
+    let mut plugin = crate::plugin_sandbox::SandboxedPlugin::start(descriptor.clone(), &exe)
         .map_err(|e| {
             format!(
                 "{} could not start in its own process: {e}",
                 descriptor.name
             )
-        })
+        })?;
+    // Its parameters before it goes into a chain, which reads them when it
+    // takes the slot. A plug-in slow to load still plays, without them.
+    if !plugin.wait_for_params(crate::plugin_sandbox::PARAMS_DEADLINE) {
+        log::warn!(
+            "{} in its own process did not list its parameters in time",
+            descriptor.name
+        );
+    }
+    Ok(Box::new(plugin) as Box<dyn HostedPlugin>)
 }
 
 pub(crate) fn add_plugin_to_track_quietly(
