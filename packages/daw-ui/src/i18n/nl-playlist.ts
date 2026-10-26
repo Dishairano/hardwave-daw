@@ -298,7 +298,6 @@ export const nlPlaylist: Record<string, string> = {
   'Quantize options (Ctrl+Q applies)': 'Kwantiseeropties (Ctrl+Q past toe)',
   'Quantize': 'Kwantiseren',
   'Apply to': 'Toepassen op',
-  'Start': 'Begin',
   'End': 'Einde',
   'Both': 'Beide',
   'Apply quantize': 'Kwantiseren toepassen',
