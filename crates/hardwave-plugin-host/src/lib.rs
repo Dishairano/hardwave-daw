@@ -5,6 +5,7 @@ pub mod bridge_child;
 pub mod bridge_protocol;
 pub mod clap_ffi;
 pub mod clap_instance;
+pub mod clap_presets;
 pub mod gui_scaling;
 pub mod plugin_ops;
 pub mod scanner;

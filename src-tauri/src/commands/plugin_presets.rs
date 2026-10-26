@@ -400,8 +400,8 @@ pub fn list_all_presets(app: AppHandle) -> Result<Vec<PresetBank>, String> {
 ///
 /// The browser could only ever show what the user had saved, because
 /// the host never asked a plug-in what it carries. A VST3 publishes a
-/// program list; a CLAP publishes presets through a factory the host
-/// does not read yet, so a CLAP answers with an empty list.
+/// program list; a CLAP publishes its presets through its preset-discovery
+/// factory.
 ///
 /// Read from a throwaway instance, the same way the parameter sheet
 /// reads names, so nothing on the audio thread is disturbed.
@@ -425,13 +425,44 @@ pub fn list_factory_presets(
 }
 
 /// Play one of a plug-in's own presets in a live slot.
+///
+/// A VST3 switches program where it plays. A CLAP's preset is read from
+/// a file or from inside the plug-in, which must not happen on the audio
+/// thread, so it is loaded into a throwaway instance here and the state
+/// that comes out is given to the playing one, like a saved preset.
 #[tauri::command]
 pub fn load_factory_preset(
+    app: AppHandle,
     state: State<AppState>,
     track_id: String,
     slot_id: String,
     index: usize,
 ) -> Result<(), String> {
+    let plugin_id = {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        project
+            .track(&track_id)
+            .and_then(|t| t.inserts.iter().find(|i| i.id == slot_id))
+            .map(|i| i.plugin_id.clone())
+    };
+    if let Some(plugin_id) = plugin_id.filter(|id| id.starts_with("clap:")) {
+        let descriptor = {
+            let engine = state.engine.lock();
+            let scanner = engine.plugin_scanner.lock();
+            scanner
+                .find(&plugin_id)
+                .cloned()
+                .ok_or_else(|| format!("Plug-in not found: {plugin_id}"))?
+        };
+        let mut spare = crate::commands::plugins::load_hosted(&descriptor)?;
+        spare.load_factory_preset(index)?;
+        let bytes = spare.get_state();
+        if bytes.is_empty() {
+            return Err("the plug-in gave no settings for that preset".into());
+        }
+        return apply_state(&app, &state, track_id, slot_id, bytes);
+    }
     let cmd = InsertCommand::LoadFactoryPreset {
         track_id,
         slot_id,

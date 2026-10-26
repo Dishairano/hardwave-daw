@@ -66,6 +66,9 @@ pub struct ClapPluginInstance {
     /// The window side of this instance, shared with the app's main thread
     /// (see `HostedPlugin::editor`).
     editor: Arc<Mutex<ClapEditorSide>>,
+    /// The plug-in's own presets, found through its preset-discovery
+    /// factory the first time they are asked for.
+    presets: std::sync::OnceLock<Vec<crate::clap_presets::ClapPreset>>,
 }
 
 /// What the main thread needs for this instance's window. CLAP has the
@@ -319,6 +322,7 @@ impl ClapPluginInstance {
                 name: String::new(),
                 open: false,
             })),
+            presets: std::sync::OnceLock::new(),
         };
         me.refresh_params();
         {
@@ -499,7 +503,41 @@ fn clap_transport(t: &TransportInfo) -> ClapEventTransport {
     }
 }
 
+impl ClapPluginInstance {
+    fn own_presets(&self) -> &[crate::clap_presets::ClapPreset] {
+        self.presets.get_or_init(|| {
+            if self.entry.is_null() {
+                return Vec::new();
+            }
+            // SAFETY: the entry stays initialised for the instance's life.
+            unsafe {
+                crate::clap_presets::discover(self.entry, factory_plugin_id(&self.descriptor.id))
+            }
+        })
+    }
+}
+
 impl HostedPlugin for ClapPluginInstance {
+    fn factory_presets(&self) -> Vec<String> {
+        self.own_presets().iter().map(|p| p.name.clone()).collect()
+    }
+
+    /// Reads a file, so it is for an instance off the audio thread: the
+    /// app loads the preset into a throwaway instance and gives the
+    /// playing one the state that comes out.
+    fn load_factory_preset(&mut self, index: usize) -> Result<(), String> {
+        let preset = self
+            .own_presets()
+            .get(index)
+            .cloned()
+            .ok_or("no such preset")?;
+        if self.plugin.is_null() {
+            return Err("the plug-in is not loaded".into());
+        }
+        // SAFETY: a live, initialised plug-in.
+        unsafe { crate::clap_presets::load(self.plugin, &preset) }
+    }
+
     fn set_transport(&mut self, transport: TransportInfo) {
         self.transport = transport;
     }
