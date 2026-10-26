@@ -21,8 +21,11 @@
 - fix: a note recorded on its own MIDI channel (an MPE part, or a split keyboard) went to a plug-in on the first channel; it now keeps its channel, note-off included
 - fix: a CLAP plug-in could get a controller value one step low
 - fix: a plug-in in its own process that crashed and was started again lost the log lines saying how it ended; its logs are now added to
+- fix: the zstd library that reads and writes song files is updated for four security advisories published on 26 Oct
 
 ### Improvements
+- chore(permissions): the three new commands in the app's permission set
+- chore(deps): zstd 0.14.3 (zstd-safe 8.2.0, zstd-sys 2.1.2)
 - fix(engine): plug-ins on MIDI tracks survive a graph rebuild
 - feat(sandbox): count what happens to each plug-in's audio blocks
 - fix(engine): live MIDI is read with the song stopped and no track armed
