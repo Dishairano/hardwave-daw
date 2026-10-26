@@ -13,6 +13,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { t, tf, useLanguage } from '../i18n'
 
 const LAYER_NAMES = ['Transient', 'Punch', 'Bass', 'Tail'] as const
 const LAYER_CLASSES = ['transient', 'punch', 'bass', 'tail'] as const
@@ -20,6 +21,13 @@ type LayerIdx = 0 | 1 | 2 | 3
 
 type Waveform = 'sine' | 'saw' | 'square' | 'triangle'
 const WAVEFORMS: Waveform[] = ['sine', 'saw', 'square', 'triangle']
+/** Each wave's hint, whole, so it reads right in any language. */
+const WAVEFORM_HINTS: Record<Waveform, string> = {
+  sine: 'sine oscillator on this layer',
+  saw: 'saw oscillator on this layer',
+  square: 'square oscillator on this layer',
+  triangle: 'triangle oscillator on this layer',
+}
 
 const WAVEFORM_PATHS: Record<Waveform, string> = {
   sine: 'M0,6 Q4,0 8,6 T16,6 T24,6 T32,6',
@@ -53,6 +61,7 @@ interface Props {
 }
 
 export function KickSynthEditor({ trackId, patchLayers, drive, onClose }: Props) {
+  useLanguage()
   const [activeLayer, setActiveLayer] = useState<LayerIdx>(1)
   const [presets, setPresets] = useState<string[]>([])
 
@@ -108,14 +117,14 @@ export function KickSynthEditor({ trackId, patchLayers, drive, onClose }: Props)
           <span className="name">Kick<span>Synth</span></span>
         </div>
         <div className="preset-row" role="listbox">
-          {presets.length === 0 && <div className="preset-empty">No presets</div>}
+          {presets.length === 0 && <div className="preset-empty">{t('No presets')}</div>}
           {presets.slice(0, 4).map(name => (
             <button
               key={name}
               type="button"
               className="preset-card"
               onClick={() => applyPreset(name)}
-              title={`Load preset: ${name}`}
+              title={tf('Load preset: {name}', { name })}
             >
               <span className="nm">{name}</span>
               <span className="gen">PRESET</span>
@@ -123,8 +132,8 @@ export function KickSynthEditor({ trackId, patchLayers, drive, onClose }: Props)
           ))}
         </div>
         <div className="head-actions">
-          <button type="button" className="head-btn" onClick={reset} title="Reset to engine defaults">↺ Reset</button>
-          <button type="button" className="head-btn danger" onClick={onClose} title="Close editor">×</button>
+          <button type="button" className="head-btn" onClick={reset} title={t('Reset to engine defaults')}>↺ {t('Reset')}</button>
+          <button type="button" className="head-btn danger" onClick={onClose} title={t('Close editor')}>×</button>
         </div>
       </div>
 
@@ -145,8 +154,8 @@ export function KickSynthEditor({ trackId, patchLayers, drive, onClose }: Props)
       </div>
 
       <div className="fl-kick-editor-grid v2">
-        <Knob label="Peak"     value={layer.peak_gain}      min={0}     max={1}    unit=""    onChange={v => onParam('peak_gain', v)} />
-        <Knob label="Length"   value={layer.length_secs}    min={0.001} max={2}    unit="s"   onChange={v => onParam('length_secs', v)} format="ms" />
+        <Knob label={t('Peak')} value={layer.peak_gain}      min={0}     max={1}    unit=""    onChange={v => onParam('peak_gain', v)} />
+        <Knob label={t('Length')} value={layer.length_secs}    min={0.001} max={2}    unit="s"   onChange={v => onParam('length_secs', v)} format="ms" />
         <Knob label="Release"  value={layer.release_secs}   min={0.001} max={2}    unit="s"   onChange={v => onParam('release_secs', v)} format="ms" />
         <Knob label="Sweep ↑"  value={layer.sweep_start_hz} min={20}    max={5000} unit="Hz"  onChange={v => onParam('sweep_start_hz', v)} />
         <Knob label="Sweep ↓"  value={layer.sweep_end_hz}   min={20}    max={5000} unit="Hz"  onChange={v => onParam('sweep_end_hz', v)} colour="purple" />
@@ -154,26 +163,26 @@ export function KickSynthEditor({ trackId, patchLayers, drive, onClose }: Props)
       </div>
 
       <div className="fl-kick-editor-waves v2">
-        <span className="lbl">Wave</span>
+        <span className="lbl">{t('Wave')}</span>
         {WAVEFORMS.map(w => (
           <button
             key={w}
             type="button"
             className={`wave-chip${layer.waveform === w ? ' on' : ''}`}
             onClick={() => writeLayer({ ...layer, waveform: w })}
-            title={`${w} oscillator on this layer`}
+            title={t(WAVEFORM_HINTS[w])}
           >
             <svg viewBox="0 0 32 12" aria-hidden="true">
               <path d={WAVEFORM_PATHS[w]} stroke="currentColor" fill="none" strokeWidth="1.5" />
             </svg>
-            <span className="nm">{w}</span>
+            <span className="nm">{t(w)}</span>
           </button>
         ))}
       </div>
 
       <div className="fl-kick-editor-global">
         <div className="meter">
-          <span className="label">Output</span>
+          <span className="label">{t('Output')}</span>
           <div className="bar" />
         </div>
         <BigKnob

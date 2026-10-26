@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useColorPickerStore } from '../../stores/colorPickerStore'
+import { t, useLanguage } from '../../i18n'
 import './ColorPicker.css'
 
 /**
@@ -84,6 +85,7 @@ function normalizeHex(s: string): string {
 }
 
 export function ColorPicker() {
+  useLanguage()
   const args = useColorPickerStore((s) => s.args)
   const recent = useColorPickerStore((s) => s.recent)
   const close = useColorPickerStore((s) => s.close)
@@ -164,7 +166,7 @@ export function ColorPicker() {
       ref={ref}
       className="hw-color-picker"
       role="dialog"
-      aria-label={args.title ?? 'Pick a color'}
+      aria-label={args.title ?? t('Pick a color')}
       style={{ left, top }}
       onPointerDown={(e) => e.stopPropagation()}
     >
@@ -191,7 +193,7 @@ export function ColorPicker() {
       {/* Recent */}
       {recent.length > 0 && (
         <>
-          <div className="hw-cp-section-label">Recent</div>
+          <div className="hw-cp-section-label">{t('Recent')}</div>
           <div className="hw-cp-grid">
             {recent.slice(0, 12).map((c) => (
               <button
@@ -208,7 +210,7 @@ export function ColorPicker() {
       )}
 
       {/* HSL custom */}
-      <div className="hw-cp-section-label">Custom</div>
+      <div className="hw-cp-section-label">{t('Custom')}</div>
       <div
         className="hw-cp-sl"
         style={
@@ -273,9 +275,9 @@ export function ColorPicker() {
           type="button"
           className="hw-cp-apply"
           onClick={() => applyColor(liveHex)}
-          title="Apply custom color"
+          title={t('Apply custom color')}
         >
-          Apply
+          {t('Apply')}
         </button>
       </div>
       <div className="hw-cp-row hw-cp-row-foot">
@@ -287,9 +289,9 @@ export function ColorPicker() {
               args.onClear?.()
               close()
             }}
-            title="Reset to default colour"
+            title={t('Reset to default colour')}
           >
-            Default
+            {t('Default')}
           </button>
         )}
         <span style={{ flex: 1 }} />
@@ -298,7 +300,7 @@ export function ColorPicker() {
           className="hw-cp-cancel"
           onClick={() => close()}
         >
-          Close
+          {t('Close')}
         </button>
       </div>
     </div>

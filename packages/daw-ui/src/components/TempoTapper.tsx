@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { hw } from '../theme'
 import { useTransportStore } from '../stores/transportStore'
+import { t, useLanguage } from '../i18n'
 
 /**
  * Tempo Tapper — FL Studio View → Tempo tapper.
@@ -29,6 +30,7 @@ interface Props {
 }
 
 export function TempoTapper({ onClose }: Props) {
+  useLanguage()
   const setBpm = useTransportStore((s) => s.setBpm)
   const currentBpm = useTransportStore((s) => s.bpm)
   const tapsRef = useRef<number[]>([])
@@ -125,11 +127,11 @@ export function TempoTapper({ onClose }: Props) {
           <button onClick={onClose} style={{
             background: 'transparent', border: 0, color: hw.textFaint,
             cursor: 'pointer', fontSize: 16, padding: 4,
-          }} aria-label="Close">×</button>
+          }} aria-label={t('Close')}>×</button>
         </div>
         <div style={{ padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
           <div style={{ fontSize: 10, color: hw.textMuted, letterSpacing: 0.6, textTransform: 'uppercase' }}>
-            Tap in time with the beat — Space or Enter also works
+            {t('Tap in time with the beat — Space or Enter also works')}
           </div>
           <button
             onClick={tap}
@@ -145,7 +147,7 @@ export function TempoTapper({ onClose }: Props) {
               boxShadow: `0 0 30px ${hw.accent}30, 0 8px 20px rgba(0,0,0,0.5)`,
             }}
           >
-            TAP
+            {t('TAP')}
           </button>
           <div style={{ display: 'flex', gap: 24, alignItems: 'baseline' }}>
             <div style={{ textAlign: 'center' }}>
@@ -153,7 +155,7 @@ export function TempoTapper({ onClose }: Props) {
                 {derivedBpm != null ? derivedBpm.toFixed(1) : '—'}
               </div>
               <div style={{ fontSize: 9, color: hw.textMuted, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 2 }}>
-                Derived BPM
+                {t('Derived BPM')}
               </div>
             </div>
             <div style={{ textAlign: 'center' }}>
@@ -161,7 +163,7 @@ export function TempoTapper({ onClose }: Props) {
                 {currentBpm.toFixed(1)}
               </div>
               <div style={{ fontSize: 9, color: hw.textMuted, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 2 }}>
-                Current
+                {t('Current')}
               </div>
             </div>
             <div style={{ textAlign: 'center' }}>
@@ -169,7 +171,7 @@ export function TempoTapper({ onClose }: Props) {
                 {tapCount}
               </div>
               <div style={{ fontSize: 9, color: hw.textMuted, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 2 }}>
-                Taps
+                {t('Taps')}
               </div>
             </div>
           </div>
@@ -179,7 +181,7 @@ export function TempoTapper({ onClose }: Props) {
               background: 'rgba(255,255,255,0.08)', color: hw.textSecondary,
               border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
               cursor: 'pointer', fontFamily: 'inherit',
-            }}>Reset</button>
+            }}>{t('Reset')}</button>
             <button
               onClick={apply}
               disabled={derivedBpm == null}
@@ -192,7 +194,7 @@ export function TempoTapper({ onClose }: Props) {
                 cursor: derivedBpm != null ? 'pointer' : 'not-allowed',
                 fontFamily: 'inherit',
               }}
-            >Apply to transport</button>
+            >{t('Apply to transport')}</button>
           </div>
         </div>
       </div>

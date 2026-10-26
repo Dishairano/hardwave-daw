@@ -28,6 +28,7 @@ import { PPQ } from '../../utils/meter'
 import { FlatBox, FlatCheck, FlatKnob, FlatPanel, FlatSelect, FlatSwitch } from '../ui/flat/Flat'
 import type { PluginParam } from '../plugins/pluginDraw'
 import { rgbColour } from '../../lib/waveformColour'
+import { t, tf, useLanguage } from '../../i18n'
 import './sampleWindow.css'
 
 // ------------------------------------------------------------------ shared
@@ -38,6 +39,12 @@ const FOR_CLIPS = 'For audio clips; a sampler channel does not stretch yet'
 const ms = (v: number) => (v <= 0 ? '0 ms' : v < 1000 ? `${v < 10 ? v.toFixed(1) : Math.round(v)} ms` : `${(v / 1000).toFixed(2)} s`)
 const db = (v: number) => (v <= -60 ? '-inf dB' : `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`)
 const pct = (v: number) => `${Math.round(v * 100)} %`
+/** What the pan knob says: centred, or how far to which side. */
+const panText = (pan: number) => {
+  if (pan === 0) return t('Pan centred')
+  const n = Math.round(Math.abs(pan) * 100)
+  return pan < 0 ? tf('Pan {n}% left', { n }) : tf('Pan {n}% right', { n })
+}
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 /** C4 is 60, as the piano roll names its keys. */
 const noteName = (n: number) => `${NOTE_NAMES[n % 12]}${Math.floor(n / 12) - 1}`
@@ -105,6 +112,7 @@ function Frame({ name, color, hasEnvelope, page, onPage, top, children }: {
   top: ReactNode
   children: ReactNode
 }) {
+  useLanguage()
   const close = useSampleWindowStore((s) => s.close)
   // The window sits where it was dragged; it opens near the top, centred.
   const [pos, setPos] = useState(() => ({ x: Math.max(16, (window.innerWidth - 720) / 2), y: 96 }))
@@ -115,7 +123,7 @@ function Frame({ name, color, hasEnvelope, page, onPage, top, children }: {
   }, [close])
 
   return (
-    <div className="hwf sw-win" style={{ left: pos.x, top: pos.y }} role="dialog" aria-label={`${name} settings`}>
+    <div className="hwf sw-win" style={{ left: pos.x, top: pos.y }} role="dialog" aria-label={tf('{name} settings', { name })}>
       <div
         className="sw-title"
         onPointerDown={(e) => {
@@ -134,7 +142,7 @@ function Frame({ name, color, hasEnvelope, page, onPage, top, children }: {
         <span className="sw-swatch" style={{ background: color }} />
         <span className="sw-name">{name}</span>
         <span className="sw-grow" />
-        <button type="button" className="sw-x" title="Close (Esc)" onClick={close}>✕</button>
+        <button type="button" className="sw-x" title={t('Close (Esc)')} onClick={close}>✕</button>
       </div>
 
       <div className="sw-top">
@@ -146,12 +154,12 @@ function Frame({ name, color, hasEnvelope, page, onPage, top, children }: {
         </div>
         <div
           className={`sw-tab${hasEnvelope ? ' is-pick' : ' is-off'}${page === 'envelope' ? ' is-on' : ''}`}
-          title={hasEnvelope ? 'Envelope' : `Envelope. ${FOR_SAMPLER}`} role="tab" aria-selected={page === 'envelope'}
+          title={hasEnvelope ? 'Envelope' : `Envelope. ${t(FOR_SAMPLER)}`} role="tab" aria-selected={page === 'envelope'}
           onClick={() => { if (hasEnvelope) onPage('envelope') }}
         >
           <svg width="20" height="18" viewBox="0 0 26 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="4" cy="20" r="2.5" /><circle cx="22" cy="20" r="2.5" /><path d="M5.5 18 12 3l3 7 5.5 8" /></svg>
         </div>
-        <div className="sw-tab is-off" title={`More. ${NOT_YET}`}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 6.5a4.5 4.5 0 0 0-6 5.5L3 17.5 6.5 21 12 15.5a4.5 4.5 0 0 0 5.5-6l-3 3-2.5-.5-.5-2.5z" /></svg></div>
+        <div className="sw-tab is-off" title={`${t('More')}. ${t(NOT_YET)}`}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 6.5a4.5 4.5 0 0 0-6 5.5L3 17.5 6.5 21 12 15.5a4.5 4.5 0 0 0 5.5-6l-3 3-2.5-.5-.5-2.5z" /></svg></div>
         <span className="sw-grow" />
         {top}
       </div>
@@ -185,8 +193,12 @@ export function trackBoxValue(track: TrackInfo, tracks: TrackInfo[]): { value: s
 }
 
 function TrackBox({ track, tracks }: { track: TrackInfo; tracks: TrackInfo[] }) {
+  useLanguage()
   const { value, name } = trackBoxValue(track, tracks)
-  return <FlatBox label="Track" value={value} small={name} hint={`${track.name} plays into ${name === 'Master' ? 'the master' : name}; route it in the mixer`} />
+  const hint = name === 'Master'
+    ? tf('{track} plays into the master; route it in the mixer', { track: track.name })
+    : tf('{track} plays into {name}; route it in the mixer', { track: track.name, name })
+  return <FlatBox label={t('Track')} value={value} small={name} hint={hint} />
 }
 
 /** What FL has on the first page: its load-time options and the
@@ -207,29 +219,39 @@ function ContentPanel({ declick, onDeclick, regions, slices, onRegions, onSlices
   /** What the file holds, for the hints: regions and loops, and points. */
   found: { regions: number; points: number } | null
 }) {
-  const count = (n: number, one: string) => (n === 1 ? `1 ${one}` : `${n} ${one}s`)
+  useLanguage()
+  const regionHint = !found
+    ? t('Shows the regions and the loop the file carries')
+    : found.regions === 1
+      ? t('The file has 1 region and loops')
+      : tf('The file has {n} regions and loops', { n: found.regions })
+  const markerHint = !found
+    ? t('Shows the slice markers the file carries')
+    : found.points === 1
+      ? t('The file has 1 marker')
+      : tf('The file has {n} markers', { n: found.points })
   return (
-    <FlatPanel title="Content">
+    <FlatPanel title={t('Content')}>
       <div className="hwf-checks">
-        <FlatCheck label="Keep on disk" on={false} disabled hint="Samples load into memory; playing them from disk is not in this version yet" />
+        <FlatCheck label={t('Keep on disk')} on={false} disabled hint={t('Samples load into memory; playing them from disk is not in this version yet')} />
         <FlatCheck
-          label="Load regions" on={regions} onToggle={onRegions}
-          hint={found ? `The file has ${count(found.regions, 'region')} and loops` : 'Shows the regions and the loop the file carries'}
+          label={t('Load regions')} on={regions} onToggle={onRegions}
+          hint={regionHint}
         />
         <FlatCheck
           label="Resample" on={resampled} disabled
           hint={resampled
-            ? 'Always on for clips: the sample is converted to the project\'s rate when it loads'
-            : 'A sampler channel converts the rate as it plays; resampling on load is not in this version yet'}
+            ? t('Always on for clips: the sample is converted to the project\'s rate when it loads')
+            : t('A sampler channel converts the rate as it plays; resampling on load is not in this version yet')}
         />
         <FlatCheck
-          label="Load slice markers" on={slices} onToggle={onSlices}
-          hint={found ? `The file has ${count(found.points, 'marker')}` : 'Shows the slice markers the file carries'}
+          label={t('Load slice markers')} on={slices} onToggle={onSlices}
+          hint={markerHint}
         />
       </div>
-      <div className="sw-row" title={onDeclick ? DECLICK_HINT[declick] : FOR_CLIPS}>
-        <span className="sw-lead">Declicking mode</span>
-        <FlatSelect value={declick} options={DECLICKS} onPick={onDeclick} disabled={!onDeclick} style={{ flex: 1 }} />
+      <div className="sw-row" title={onDeclick ? t(DECLICK_HINT[declick]) : t(FOR_CLIPS)}>
+        <span className="sw-lead">{t('Declicking mode')}</span>
+        <FlatSelect value={declick} options={DECLICKS} label={(d) => t(d)} onPick={onDeclick} disabled={!onDeclick} style={{ flex: 1 }} />
       </div>
     </FlatPanel>
   )
@@ -359,6 +381,7 @@ const MODE_HINT: Record<(typeof MODES)[number], string> = {
 const timeFactor = (v: Values) => v.stretch / (v.resample ? Math.pow(2, v.pitch / 12) : 1)
 
 function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
+  useLanguage()
   const tracks = useTrackStore((s) => s.tracks)
   const bpm = useTransportStore((s) => s.bpm)
   const track = tracks.find((t) => t.id === trackId)
@@ -383,7 +406,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
     pending.current = {}
     if (sendTimer.current !== null) { window.clearTimeout(sendTimer.current); sendTimer.current = null }
     if (Object.keys(settings).length === 0) return Promise.resolve()
-    return invokeOrToast('set_sample_settings', { trackId, clipId, settings, snapshot }, { message: 'Changing the sample failed', retry: false })
+    return invokeOrToast('set_sample_settings', { trackId, clipId, settings, snapshot }, { message: t('Changing the sample failed'), retry: false })
   }
   const change = (patch: Partial<Values>, done: boolean, label: string) => {
     // A click on a knob that did not turn it is not a change.
@@ -437,10 +460,10 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
       name={clip.name || fileName} color={color} hasEnvelope={false} page={page} onPage={setPage}
       top={(
         <>
-          <FlatSwitch label="On" on={!v.muted} onToggle={() => change({ muted: !v.muted }, true, v.muted ? 'Sample on' : 'Sample off')} />
+          <FlatSwitch label={t('On')} on={!v.muted} onToggle={() => change({ muted: !v.muted }, true, v.muted ? 'Sample on' : 'Sample off')} />
           <FlatKnob
             label="Pan" size={32} value={(v.pan + 1) / 2} def={0.5}
-            text={`Pan ${v.pan === 0 ? 'centred' : `${Math.round(Math.abs(v.pan) * 100)}% ${v.pan < 0 ? 'left' : 'right'}`}`}
+            text={panText(v.pan)}
             onChange={(t, done) => change({ pan: Math.round((t * 2 - 1) * 100) / 100 }, done, 'Pan sample')}
             onReset={() => change({ pan: 0 }, true, 'Pan sample')}
           />
@@ -456,7 +479,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
             onChange={(t, done) => change({ pitch: Math.round((t * 2 - 1) * range * 100) / 100 }, done, 'Pitch sample')}
             onReset={() => change({ pitch: 0 }, true, 'Pitch sample')}
           />
-          <FlatBox label="Range" value={range} onStep={(by) => setRange((r) => Math.max(1, Math.min(48, r + by)))} hint={`The pitch knob turns ${range} semitones each way. Scroll to change.`} />
+          <FlatBox label={t('Range')} value={range} onStep={(by) => setRange((r) => Math.max(1, Math.min(48, r + by)))} hint={tf('The pitch knob turns {n} semitones each way. Scroll to change.', { n: range })} />
           <TrackBox track={track} tracks={tracks} />
         </>
       )}
@@ -465,7 +488,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
         <div className="sw-col">
           <FlatPanel>
             <div className="sw-file">
-              <span className="hwf-lab" style={{ textTransform: 'none', fontSize: 12 }}>File</span>
+              <span className="hwf-lab" style={{ textTransform: 'none', fontSize: 12 }}>{t('File')}</span>
               <span className="sw-file-name" title={clip.sourceFile || clip.source_id}>{fileName}</span>
             </div>
           </FlatPanel>
@@ -477,15 +500,15 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
             onSlices={() => change({ loadSlices: !v.loadSlices }, true, v.loadSlices ? 'Hide slice markers' : 'Load slice markers')}
             found={markers ? markerCounts(markers.markers) : null}
           />
-          <FlatPanel title="Playback" grow>
+          <FlatPanel title={t('Playback')} grow>
             <div className="hwf-krow">
-              <FlatKnob label="Offset" value={0} def={0} text="" disabled offText={FOR_SAMPLER} />
-              <FlatKnob label="Loop start" value={0} def={0} text="" disabled offText={FOR_SAMPLER} />
-              <FlatKnob label="Loop end" value={1} def={1} text="" disabled offText={FOR_SAMPLER} />
+              <FlatKnob label="Offset" value={0} def={0} text="" disabled offText={t(FOR_SAMPLER)} />
+              <FlatKnob label={t('Loop start')} value={0} def={0} text="" disabled offText={t(FOR_SAMPLER)} />
+              <FlatKnob label={t('Loop end')} value={1} def={1} text="" disabled offText={t(FOR_SAMPLER)} />
             </div>
             <div className="hwf-checks">
-              <FlatCheck label="Use loop points" on={false} disabled hint={FOR_SAMPLER} />
-              <FlatCheck label="Ping pong loop" on={false} disabled hint={FOR_SAMPLER} />
+              <FlatCheck label={t('Use loop points')} on={false} disabled hint={t(FOR_SAMPLER)} />
+              <FlatCheck label={t('Ping pong loop')} on={false} disabled hint={t(FOR_SAMPLER)} />
             </div>
           </FlatPanel>
         </div>
@@ -496,20 +519,20 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
               <div className="hwf-krow" style={{ flex: '0 0 192px' }}>
                 <FlatKnob
                   label="Pitch" value={(v.pitch * 100 + 1200) / 2400} def={0.5}
-                  text={`Pitch ${v.pitch > 0 ? '+' : ''}${Math.round(v.pitch * 100)} cents (the pitch at the top)`}
+                  text={tf('Pitch {value} cents (the pitch at the top)', { value: `${v.pitch > 0 ? '+' : ''}${Math.round(v.pitch * 100)}` })}
                   onChange={(t, done) => change({ pitch: Math.round(t * 2400 - 1200) / 100 }, done, 'Pitch sample')}
                   onReset={() => change({ pitch: 0 }, true, 'Pitch sample')}
                 />
                 <FlatKnob
                   label="Mul" value={(Math.log2(v.stretch) + 2) / 4} def={0.5}
-                  text={`Length × ${v.stretch.toFixed(2)}`}
+                  text={tf('Length × {n}', { n: v.stretch.toFixed(2) })}
                   onChange={(t, done) => change({ stretch: Math.round(Math.pow(2, t * 4 - 2) * 100) / 100 }, done, 'Stretch sample')}
                   onReset={() => change({ stretch: 1 }, true, 'Stretch sample')}
                 />
                 <FlatKnob
-                  label="Time" value={Math.min(1, beatsNow / 64)} def={Math.min(1, naturalBeats / 64)}
-                  disabled={!seconds} offText="The file is not loaded"
-                  text={`Lasts ${beatsNow.toFixed(beatsNow % 1 ? 2 : 0)} beats`}
+                  label={t('Time')} value={Math.min(1, beatsNow / 64)} def={Math.min(1, naturalBeats / 64)}
+                  disabled={!seconds} offText={t('The file is not loaded')}
+                  text={tf('Lasts {n} beats', { n: beatsNow.toFixed(beatsNow % 1 ? 2 : 0) })}
                   onChange={(t, done) => {
                     // Whole quarter beats, as FL's TIME knob counts.
                     const beats = Math.max(0.25, Math.round(t * 64 * 4) / 4)
@@ -520,53 +543,53 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
                 />
               </div>
               <div className="sw-stack">
-                <span className="hwf-lab">Mode</span>
+                <span className="hwf-lab">{t('Mode')}</span>
                 <FlatSelect
                   value={v.resample ? 'Resample' : 'Stretch'} options={MODES}
                   onPick={(m) => change({ resample: m === 'Resample' }, true, `Stretch mode ${m}`)}
                 />
-                <span className="sw-hint">{MODE_HINT[v.resample ? 'Resample' : 'Stretch']}</span>
+                <span className="sw-hint">{t(MODE_HINT[v.resample ? 'Resample' : 'Stretch'])}</span>
               </div>
             </div>
           </FlatPanel>
-          <FlatPanel title="Precomputed effects" grow>
+          <FlatPanel title={t('Precomputed effects')} grow>
             <div className="hwf-checks">
-              <FlatCheck label="Remove DC offset" on={v.removeDc} onToggle={() => change({ removeDc: !v.removeDc }, true, 'Remove DC offset')} />
-              <FlatCheck label="Reverse polarity" on={v.polarityInverted} onToggle={() => change({ polarityInverted: !v.polarityInverted }, true, 'Reverse polarity')} />
-              <FlatCheck label="Normalize" on={v.normalize} onToggle={() => change({ normalize: !v.normalize }, true, 'Normalize sample')} />
-              <FlatCheck label="Fade stereo" on={v.fadeStereo} onToggle={() => change({ fadeStereo: !v.fadeStereo }, true, 'Fade stereo')} />
-              <FlatCheck label="Reverse" on={v.reversed} onToggle={() => change({ reversed: !v.reversed }, true, 'Reverse sample')} />
-              <FlatCheck label="Swap stereo" on={v.swapStereo} onToggle={() => change({ swapStereo: !v.swapStereo }, true, 'Swap stereo')} />
+              <FlatCheck label={t('Remove DC offset')} on={v.removeDc} onToggle={() => change({ removeDc: !v.removeDc }, true, 'Remove DC offset')} />
+              <FlatCheck label={t('Reverse polarity')} on={v.polarityInverted} onToggle={() => change({ polarityInverted: !v.polarityInverted }, true, 'Reverse polarity')} />
+              <FlatCheck label={t('Normalize')} on={v.normalize} onToggle={() => change({ normalize: !v.normalize }, true, 'Normalize sample')} />
+              <FlatCheck label={t('Fade stereo')} on={v.fadeStereo} onToggle={() => change({ fadeStereo: !v.fadeStereo }, true, 'Fade stereo')} />
+              <FlatCheck label={t('Reverse')} on={v.reversed} onToggle={() => change({ reversed: !v.reversed }, true, 'Reverse sample')} />
+              <FlatCheck label={t('Swap stereo')} on={v.swapStereo} onToggle={() => change({ swapStereo: !v.swapStereo }, true, 'Swap stereo')} />
             </div>
             <div className="hwf-krow">
               <FlatKnob
-                label="Start" value={v.start} def={0}
-                text={`Sample start ${seconds ? ms(v.start * seconds * 1000) : pct(v.start)}`}
+                label={t('Start')} value={v.start} def={0}
+                text={tf('Sample start {value}', { value: seconds ? ms(v.start * seconds * 1000) : pct(v.start) })}
                 onChange={(t, done) => change({ start: Math.round(t * 1000) / 1000 }, done, 'Sample start')}
                 onReset={() => change({ start: 0 }, true, 'Sample start')}
               />
               <FlatKnob
-                label="Length" value={v.length} def={1}
-                text={`Length ${pct(v.length)}${seconds ? ` (${ms(v.length * (1 - v.start) * seconds * 1000)})` : ''}`}
+                label={t('Length')} value={v.length} def={1}
+                text={tf('Length {value}', { value: `${pct(v.length)}${seconds ? ` (${ms(v.length * (1 - v.start) * seconds * 1000)})` : ''}` })}
                 onChange={(t, done) => change({ length: Math.round(t * 1000) / 1000 }, done, 'Sample length')}
                 onReset={() => change({ length: 1 }, true, 'Sample length')}
               />
               <FlatKnob
                 label="In" value={Math.sqrt(v.fadeInMs / 2000)} def={0}
-                text={`Fade in ${ms(v.fadeInMs)}`}
+                text={tf('Fade in {value}', { value: ms(v.fadeInMs) })}
                 onChange={(t, done) => change({ fadeInMs: Math.round(t * t * 2000) }, done, 'Sample fade in')}
                 onReset={() => change({ fadeInMs: 0 }, true, 'Sample fade in')}
               />
               <FlatKnob
                 label="Out" value={Math.sqrt(v.fadeOutMs / 2000)} def={0}
-                text={`Fade out ${ms(v.fadeOutMs)}`}
+                text={tf('Fade out {value}', { value: ms(v.fadeOutMs) })}
                 onChange={(t, done) => change({ fadeOutMs: Math.round(t * t * 2000) }, done, 'Sample fade out')}
                 onReset={() => change({ fadeOutMs: 0 }, true, 'Sample fade out')}
               />
-              <FlatKnob label="X-fade" value={0} def={0} text="" disabled offText={FOR_SAMPLER} />
+              <FlatKnob label="X-fade" value={0} def={0} text="" disabled offText={t(FOR_SAMPLER)} />
               <FlatKnob
                 label="Trim" value={v.trim} def={0}
-                text={v.trim > 0 ? `Trim the tail under ${Math.round(-60 * (1 - v.trim))} dB` : 'Trim off'}
+                text={v.trim > 0 ? tf('Trim the tail under {n} dB', { n: Math.round(-60 * (1 - v.trim)) }) : t('Trim off')}
                 onChange={(t, done) => change({ trim: Math.round(t * 1000) / 1000 }, done, 'Trim sample')}
                 onReset={() => change({ trim: 0 }, true, 'Trim sample')}
               />
@@ -615,6 +638,7 @@ interface SamplerSampleInfo {
 }
 
 function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string }) {
+  useLanguage()
   const tracks = useTrackStore((s) => s.tracks)
   const bpm = useTransportStore((s) => s.bpm)
   const track = tracks.find((t) => t.id === trackId)
@@ -661,7 +685,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
     pending.current.clear()
     if (sendTimer.current !== null) { window.clearTimeout(sendTimer.current); sendTimer.current = null }
     return Promise.all(batch.map(([paramId, value]) =>
-      invokeOrToast('set_plugin_parameter', { trackId, slotId, paramId, value, snapshot }, { message: 'Changing the sampler failed', retry: false }),
+      invokeOrToast('set_plugin_parameter', { trackId, slotId, paramId, value, snapshot }, { message: t('Changing the sampler failed'), retry: false }),
     ))
   }
   const set = (id: number, value: number, done: boolean, label: string) => {
@@ -697,7 +721,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
       multiple: false,
     })
     if (!selected) return
-    await invokeOrToast('load_sampler', { trackId, slotId, path: selected as string, baseNote: Math.round(p(SP.root) * 127) }, { message: 'Loading the sample failed', retry: false })
+    await invokeOrToast('load_sampler', { trackId, slotId, path: selected as string, baseNote: Math.round(p(SP.root) * 127) }, { message: t('Loading the sample failed'), retry: false })
     useProjectStore.getState().markDirty()
     useHistoryStore.getState().push('Load sample')
     setSampleGen((g) => g + 1)
@@ -706,7 +730,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
   if (!track || params === null) return null
 
   const color = track.color || '#10b981'
-  const fileName = sample?.path ? baseName(sample.path) : sample === undefined ? '' : 'No sample yet'
+  const fileName = sample?.path ? baseName(sample.path) : sample === undefined ? '' : t('No sample yet')
   const pitchSt = (p(SP.pitch) * 2 - 1) * PITCH_RANGE_ST
   const root = Math.round(p(SP.root) * 127)
   const loop = on(SP.loop)
@@ -714,7 +738,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
   const regionStart = p(SP.sampleStart) * seconds
   const regionEnd = regionStart + p(SP.sampleLength) * (seconds - regionStart)
   const regionSpan = Math.max(0, regionEnd - regionStart)
-  const loopHint = 'Switch on "Use loop points" first'
+  const loopHint = t('Switch on "Use loop points" first')
   const timeKnob = (id: number, label: string, done: string) => (
     <FlatKnob
       key={id} label={label} value={p(id)} def={def(id)}
@@ -729,10 +753,10 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
       name={track.name} color={color} hasEnvelope page={page} onPage={setPage}
       top={(
         <>
-          <FlatSwitch label="On" on={!track.muted} onToggle={() => void useTrackStore.getState().toggleMute(trackId)} />
+          <FlatSwitch label={t('On')} on={!track.muted} onToggle={() => void useTrackStore.getState().toggleMute(trackId)} />
           <FlatKnob
             label="Pan" size={32} value={(track.pan + 1) / 2} def={0.5}
-            text={`Pan ${track.pan === 0 ? 'centred' : `${Math.round(Math.abs(track.pan) * 100)}% ${track.pan < 0 ? 'left' : 'right'}`}`}
+            text={panText(track.pan)}
             onChange={(t, done) => {
               const pan = Math.round((t * 2 - 1) * 100) / 100
               const store = useTrackStore.getState()
@@ -756,7 +780,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
             }}
             onReset={() => set(SP.pitch, 0.5, true, 'Channel pitch')}
           />
-          <FlatBox label="Range" value={range} onStep={(by) => setRange((r) => Math.max(1, Math.min(PITCH_RANGE_ST, r + by)))} hint={`The pitch knob turns ${range} semitones each way. Scroll to change.`} />
+          <FlatBox label={t('Range')} value={range} onStep={(by) => setRange((r) => Math.max(1, Math.min(PITCH_RANGE_ST, r + by)))} hint={tf('The pitch knob turns {n} semitones each way. Scroll to change.', { n: range })} />
           <TrackBox track={track} tracks={tracks} />
         </>
       )}
@@ -766,10 +790,10 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
           <div className="sw-col">
             <FlatPanel>
               <div className="sw-file">
-                <span className="hwf-lab" style={{ textTransform: 'none', fontSize: 12 }}>File</span>
+                <span className="hwf-lab" style={{ textTransform: 'none', fontSize: 12 }}>{t('File')}</span>
                 <span className="sw-file-name" title={sample?.path || ''}>{fileName}</span>
                 <span className="sw-grow" />
-                <button type="button" className="sw-btn" onClick={() => void loadFile()} title="Load a sample into this channel">Load…</button>
+                <button type="button" className="sw-btn" onClick={() => void loadFile()} title={t('Load a sample into this channel')}>{t('Load…')}</button>
               </div>
             </FlatPanel>
             <ContentPanel
@@ -781,30 +805,30 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
               onSlices={() => toggle(SP.loadSlices, on(SP.loadSlices) ? 'Hide slice markers' : 'Load slice markers')}
               found={samplerMarkers ? markerCounts(samplerMarkers.markers) : null}
             />
-            <FlatPanel title="Playback" grow>
+            <FlatPanel title={t('Playback')} grow>
               <div className="hwf-krow">
                 <FlatKnob
                   label="Offset" value={p(SP.offset)} def={def(SP.offset)}
-                  text={`Start offset ${pct(p(SP.offset))}${seconds ? ` (${ms(p(SP.offset) * regionSpan * 1000)})` : ''}`}
+                  text={tf('Start offset {value}', { value: `${pct(p(SP.offset))}${seconds ? ` (${ms(p(SP.offset) * regionSpan * 1000)})` : ''}` })}
                   onChange={(t, done) => set(SP.offset, Math.round(t * 1000) / 1000, done, 'Sample offset')}
                   onReset={() => set(SP.offset, 0, true, 'Sample offset')}
                 />
                 <FlatKnob
-                  label="Loop start" value={p(SP.loopStart)} def={def(SP.loopStart)} disabled={!loop} offText={loopHint}
-                  text={`Loop start ${seconds ? ms(p(SP.loopStart) * regionSpan * 1000) : pct(p(SP.loopStart))}`}
+                  label={t('Loop start')} value={p(SP.loopStart)} def={def(SP.loopStart)} disabled={!loop} offText={loopHint}
+                  text={tf('Loop start {value}', { value: seconds ? ms(p(SP.loopStart) * regionSpan * 1000) : pct(p(SP.loopStart)) })}
                   onChange={(t, done) => set(SP.loopStart, Math.round(Math.min(t, p(SP.loopEnd)) * 1000) / 1000, done, 'Loop start')}
                   onReset={() => set(SP.loopStart, 0, true, 'Loop start')}
                 />
                 <FlatKnob
-                  label="Loop end" value={p(SP.loopEnd)} def={def(SP.loopEnd)} disabled={!loop} offText={loopHint}
-                  text={`Loop end ${seconds ? ms(p(SP.loopEnd) * regionSpan * 1000) : pct(p(SP.loopEnd))}`}
+                  label={t('Loop end')} value={p(SP.loopEnd)} def={def(SP.loopEnd)} disabled={!loop} offText={loopHint}
+                  text={tf('Loop end {value}', { value: seconds ? ms(p(SP.loopEnd) * regionSpan * 1000) : pct(p(SP.loopEnd)) })}
                   onChange={(t, done) => set(SP.loopEnd, Math.round(Math.max(t, p(SP.loopStart)) * 1000) / 1000, done, 'Loop end')}
                   onReset={() => set(SP.loopEnd, 1, true, 'Loop end')}
                 />
               </div>
               <div className="hwf-checks">
-                <FlatCheck label="Use loop points" on={loop} onToggle={() => toggle(SP.loop, loop ? 'Loop off' : 'Loop on')} />
-                <FlatCheck label="Ping pong loop" on={on(SP.pingPong)} disabled={!loop} hint={loop ? undefined : loopHint} onToggle={() => toggle(SP.pingPong, 'Ping pong loop')} />
+                <FlatCheck label={t('Use loop points')} on={loop} onToggle={() => toggle(SP.loop, loop ? 'Loop off' : 'Loop on')} />
+                <FlatCheck label={t('Ping pong loop')} on={on(SP.pingPong)} disabled={!loop} hint={loop ? undefined : loopHint} onToggle={() => toggle(SP.pingPong, 'Ping pong loop')} />
               </div>
             </FlatPanel>
           </div>
@@ -813,50 +837,50 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
             <FlatPanel title="Time stretching">
               <div className="sw-row" style={{ alignItems: 'flex-start' }}>
                 <div className="hwf-krow" style={{ flex: '0 0 192px' }}>
-                  <FlatKnob label="Pitch" value={0.5} def={0.5} text="" disabled offText={FOR_CLIPS} />
-                  <FlatKnob label="Mul" value={0.5} def={0.5} text="" disabled offText={FOR_CLIPS} />
-                  <FlatKnob label="Time" value={0} def={0} text="" disabled offText={FOR_CLIPS} />
+                  <FlatKnob label="Pitch" value={0.5} def={0.5} text="" disabled offText={t(FOR_CLIPS)} />
+                  <FlatKnob label="Mul" value={0.5} def={0.5} text="" disabled offText={t(FOR_CLIPS)} />
+                  <FlatKnob label={t('Time')} value={0} def={0} text="" disabled offText={t(FOR_CLIPS)} />
                 </div>
                 <div className="sw-stack">
-                  <span className="hwf-lab">Mode</span>
+                  <span className="hwf-lab">{t('Mode')}</span>
                   <FlatSelect value="Resample" options={MODES} disabled />
-                  <span className="sw-hint">{FOR_CLIPS}</span>
+                  <span className="sw-hint">{t(FOR_CLIPS)}</span>
                 </div>
               </div>
             </FlatPanel>
-            <FlatPanel title="Precomputed effects" grow>
+            <FlatPanel title={t('Precomputed effects')} grow>
               <div className="hwf-checks">
-                <FlatCheck label="Remove DC offset" on={on(SP.removeDc)} onToggle={() => toggle(SP.removeDc, 'Remove DC offset')} />
-                <FlatCheck label="Reverse polarity" on={on(SP.polarity)} onToggle={() => toggle(SP.polarity, 'Reverse polarity')} />
-                <FlatCheck label="Normalize" on={on(SP.normalize)} onToggle={() => toggle(SP.normalize, 'Normalize sample')} />
-                <FlatCheck label="Fade stereo" on={on(SP.fadeStereo)} onToggle={() => toggle(SP.fadeStereo, 'Fade stereo')} />
-                <FlatCheck label="Reverse" on={on(SP.reverse)} onToggle={() => toggle(SP.reverse, 'Reverse sample')} />
-                <FlatCheck label="Swap stereo" on={on(SP.swapStereo)} onToggle={() => toggle(SP.swapStereo, 'Swap stereo')} />
+                <FlatCheck label={t('Remove DC offset')} on={on(SP.removeDc)} onToggle={() => toggle(SP.removeDc, 'Remove DC offset')} />
+                <FlatCheck label={t('Reverse polarity')} on={on(SP.polarity)} onToggle={() => toggle(SP.polarity, 'Reverse polarity')} />
+                <FlatCheck label={t('Normalize')} on={on(SP.normalize)} onToggle={() => toggle(SP.normalize, 'Normalize sample')} />
+                <FlatCheck label={t('Fade stereo')} on={on(SP.fadeStereo)} onToggle={() => toggle(SP.fadeStereo, 'Fade stereo')} />
+                <FlatCheck label={t('Reverse')} on={on(SP.reverse)} onToggle={() => toggle(SP.reverse, 'Reverse sample')} />
+                <FlatCheck label={t('Swap stereo')} on={on(SP.swapStereo)} onToggle={() => toggle(SP.swapStereo, 'Swap stereo')} />
               </div>
               <div className="hwf-krow">
                 <FlatKnob
-                  label="Start" value={p(SP.sampleStart)} def={def(SP.sampleStart)}
-                  text={`Sample start ${seconds ? ms(p(SP.sampleStart) * seconds * 1000) : pct(p(SP.sampleStart))}`}
+                  label={t('Start')} value={p(SP.sampleStart)} def={def(SP.sampleStart)}
+                  text={tf('Sample start {value}', { value: seconds ? ms(p(SP.sampleStart) * seconds * 1000) : pct(p(SP.sampleStart)) })}
                   onChange={(t, done) => set(SP.sampleStart, Math.round(t * 1000) / 1000, done, 'Sample start')}
                   onReset={() => set(SP.sampleStart, 0, true, 'Sample start')}
                 />
                 <FlatKnob
-                  label="Length" value={p(SP.sampleLength)} def={def(SP.sampleLength)}
-                  text={`Length ${pct(p(SP.sampleLength))}`}
+                  label={t('Length')} value={p(SP.sampleLength)} def={def(SP.sampleLength)}
+                  text={tf('Length {value}', { value: pct(p(SP.sampleLength)) })}
                   onChange={(t, done) => set(SP.sampleLength, Math.round(t * 1000) / 1000, done, 'Sample length')}
                   onReset={() => set(SP.sampleLength, 1, true, 'Sample length')}
                 />
-                <FlatKnob label="In" value={0} def={0} text="" disabled offText={FOR_CLIPS} />
-                <FlatKnob label="Out" value={0} def={0} text="" disabled offText={FOR_CLIPS} />
+                <FlatKnob label="In" value={0} def={0} text="" disabled offText={t(FOR_CLIPS)} />
+                <FlatKnob label="Out" value={0} def={0} text="" disabled offText={t(FOR_CLIPS)} />
                 <FlatKnob
                   label="X-fade" value={p(SP.xfade)} def={def(SP.xfade)} disabled={!loop} offText={loopHint}
-                  text={`Loop crossfade ${pct(p(SP.xfade))}`}
+                  text={tf('Loop crossfade {value}', { value: pct(p(SP.xfade)) })}
                   onChange={(t, done) => set(SP.xfade, Math.round(t * 1000) / 1000, done, 'Loop crossfade')}
                   onReset={() => set(SP.xfade, 0, true, 'Loop crossfade')}
                 />
                 <FlatKnob
                   label="Trim" value={p(SP.trim)} def={def(SP.trim)}
-                  text={p(SP.trim) > 0 ? `Trim the tail under ${Math.round(-60 * (1 - p(SP.trim)))} dB` : 'Trim off'}
+                  text={p(SP.trim) > 0 ? tf('Trim the tail under {n} dB', { n: Math.round(-60 * (1 - p(SP.trim))) }) : t('Trim off')}
                   onChange={(t, done) => set(SP.trim, Math.round(t * 1000) / 1000, done, 'Trim sample')}
                   onReset={() => set(SP.trim, 0, true, 'Trim sample')}
                 />
@@ -873,20 +897,20 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
           markers={visibleMarkers(samplerMarkers, on(SP.loadRegions), on(SP.loadSlices))}
           loop={loop ? { start: regionStart + p(SP.loopStart) * regionSpan, end: regionStart + p(SP.loopEnd) * regionSpan } : null}
           fadeIn={0} fadeOut={0} reversed={on(SP.reverse)}
-          empty={sample === null ? 'No sample yet: load one with the button above' : sample === undefined ? 'Loading…' : null}
+          empty={sample === null ? t('No sample yet: load one with the button above') : sample === undefined ? t('Loading…') : null}
         />
       </div>
 
       <div className={`sw-page${page === 'envelope' ? '' : ' is-hidden'}`}>
         <div className="sw-cols" style={{ gridTemplateColumns: '1fr' }}>
-          <FlatPanel title="Volume envelope">
+          <FlatPanel title={t('Volume envelope')}>
             <div className="sw-row">
               <div className="sw-targets" role="tablist">
                 <button type="button" className="is-on">VOL</button>
-                {['PAN', 'CUT', 'RES', 'PITCH'].map((t) => <button type="button" key={t} disabled title={`${t} envelope: ${NOT_YET.toLowerCase()}`}>{t}</button>)}
+                {['PAN', 'CUT', 'RES', 'PITCH'].map((name) => <button type="button" key={name} disabled title={tf('{name} envelope: not in this version yet', { name })}>{name}</button>)}
               </div>
               <span className="sw-grow" />
-              <FlatCheck label="Envelope on" on={on(SP.envelope)} onToggle={() => toggle(SP.envelope, on(SP.envelope) ? 'Envelope off' : 'Envelope on')} />
+              <FlatCheck label={t('Envelope on')} on={on(SP.envelope)} onToggle={() => toggle(SP.envelope, on(SP.envelope) ? 'Envelope off' : 'Envelope on')} />
             </div>
             <EnvelopeView
               visible={page === 'envelope'} color={color} on={on(SP.envelope)}
@@ -905,21 +929,21 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
                 onReset={() => set(SP.sustain, def(SP.sustain), true, 'Envelope sustain')}
               />
               {timeKnob(SP.release, 'Release', 'Envelope release')}
-              <FlatKnob label="Amount" value={1} def={1} text="" disabled />
+              <FlatKnob label={t('Amount')} value={1} def={1} text="" disabled offText={tf('{name}: not in this version yet', { name: t('Amount') })} />
             </div>
           </FlatPanel>
         </div>
         <div className="sw-cols is-two">
-          <FlatPanel title="Playing">
+          <FlatPanel title={t('Playing')}>
             <div className="hwf-checks" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
               <FlatCheck label="Mono" on={on(SP.mono)} onToggle={() => toggle(SP.mono, on(SP.mono) ? 'Polyphonic' : 'Mono')} />
-              <FlatCheck label="Cut itself" on={on(SP.cutItself)} onToggle={() => toggle(SP.cutItself, 'Cut itself')} />
+              <FlatCheck label={t('Cut itself')} on={on(SP.cutItself)} onToggle={() => toggle(SP.cutItself, 'Cut itself')} />
               <FlatCheck label="Porta" on={on(SP.porta)} onToggle={() => toggle(SP.porta, 'Porta')} />
             </div>
           </FlatPanel>
-          <FlatPanel title="Root note">
+          <FlatPanel title={t('Root note')}>
             <div className="sw-row">
-              <span className="sw-hint">Plays the sample as recorded on</span>
+              <span className="sw-hint">{t('Plays the sample as recorded on')}</span>
               <span className="sw-grow" />
               <FlatSelect
                 value={NOTE_OPTIONS[root]} options={NOTE_OPTIONS} style={{ flex: '0 0 84px' }}
@@ -961,6 +985,8 @@ function SampleView({ peaks, seconds, bpm, region, loop, window: win = null, mar
   const overview = useRef<HTMLCanvasElement>(null)
   const loopKey = loop ? `${loop.start}/${loop.end}` : ''
   const markerKey = markers.map((m) => `${m.kind}${m.start}-${m.end}`).join(',')
+  // The ruler and the hints are drawn in the chosen language, so a change redraws them.
+  const language = useLanguage()
 
   useLayoutEffect(() => {
     const c = cv.current
@@ -982,7 +1008,7 @@ function SampleView({ peaks, seconds, bpm, region, loop, window: win = null, mar
     const beat = 60 / Math.max(1, bpm)
     // The length at the right of the ruler; bar numbers stop short of it
     // so the two never print over each other.
-    const lengthLabel = seconds ? `${(seconds / beat).toFixed(1)} beats at ${Math.round(bpm)} BPM` : ''
+    const lengthLabel = seconds ? tf('{n} beats at {bpm} BPM', { n: (seconds / beat).toFixed(1), bpm: Math.round(bpm) }) : ''
     g.font = '500 11px Inter, sans-serif'
     const labelLeft = lengthLabel ? w - 10 - g.measureText(lengthLabel).width - 8 : w
     g.font = '600 11px Inter, sans-serif'
@@ -1050,7 +1076,7 @@ function SampleView({ peaks, seconds, bpm, region, loop, window: win = null, mar
         g.setLineDash([])
         g.fillStyle = 'rgba(236,236,240,.6)'
         g.font = '500 10px Inter, sans-serif'
-        g.fillText('file loop', x0 + 4, ruler + 24)
+        g.fillText(t('file loop'), x0 + 4, ruler + 24)
       }
     }
     if (loop && loop.end > loop.start) {
@@ -1074,13 +1100,13 @@ function SampleView({ peaks, seconds, bpm, region, loop, window: win = null, mar
     g.fillRect(sx - 0.5, ruler, 1.5, h - ruler)
     g.beginPath(); g.moveTo(sx - 0.5, ruler); g.lineTo(sx + 7, ruler); g.lineTo(sx - 0.5, ruler + 8); g.closePath(); g.fill()
     g.font = '600 11px Inter, sans-serif'
-    g.fillText('Start', sx + 10, ruler + 12)
+    g.fillText(t('Start'), sx + 10, ruler + 12)
     if (lengthLabel) {
       g.fillStyle = '#74747e'; g.font = '500 11px Inter, sans-serif'; g.textAlign = 'right'
       g.fillText(lengthLabel, w - 10, 13)
       g.textAlign = 'left'
     }
-    if (!n) { g.fillStyle = '#74747e'; g.font = '500 12px Inter, sans-serif'; g.fillText(empty ?? 'The file is not loaded', 12, mid + 4) }
+    if (!n) { g.fillStyle = '#74747e'; g.font = '500 12px Inter, sans-serif'; g.fillText(empty ?? t('The file is not loaded'), 12, mid + 4) }
 
     const o = overview.current
     if (!o) return
@@ -1098,7 +1124,7 @@ function SampleView({ peaks, seconds, bpm, region, loop, window: win = null, mar
       const a = Math.max(Math.abs(peaks[i][0]), Math.abs(peaks[i][1])) * (oh / 2 - 5)
       og.fillRect((i / n) * ow, oh / 2 - a, Math.max(1, ow / n), a * 2)
     }
-  }, [peaks, seconds, bpm, region.start, region.end, loopKey, markerKey, win?.start, win?.end, fadeIn, fadeOut, reversed, empty, visible]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [peaks, seconds, bpm, region.start, region.end, loopKey, markerKey, win?.start, win?.end, fadeIn, fadeOut, reversed, empty, visible, language]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="sw-view">
@@ -1114,6 +1140,8 @@ function EnvelopeView({ visible, color, on, delay, attack, hold, decay, sustain,
   visible: boolean; color: string; on: boolean; delay: number; attack: number; hold: number; decay: number; sustain: number; release: number
 }) {
   const cv = useRef<HTMLCanvasElement>(null)
+  // Its words are drawn in the chosen language, so a change redraws it.
+  const language = useLanguage()
   useLayoutEffect(() => {
     const c = cv.current
     // A hidden page has no size to draw in; it draws when it is shown.
@@ -1147,8 +1175,9 @@ function EnvelopeView({ visible, color, on, delay, attack, hold, decay, sustain,
     g.setLineDash([3, 4]); g.strokeStyle = 'rgba(255,255,255,.25)'
     g.beginPath(); g.moveTo(off, 8); g.lineTo(off, h); g.stroke(); g.setLineDash([])
     g.fillStyle = '#74747e'; g.font = '500 11px Inter, sans-serif'
-    if (off + 84 > w) { g.textAlign = 'right'; g.fillText('key released', off - 6, 16); g.textAlign = 'left' } else g.fillText('key released', off + 6, 16)
-    if (!on) { g.textAlign = 'right'; g.fillText('off: the sample plays as it is', w - 10, h - 8); g.textAlign = 'left' }
-  }, [visible, color, on, delay, attack, hold, decay, sustain, release])
+    const released = t('key released')
+    if (off + 84 > w) { g.textAlign = 'right'; g.fillText(released, off - 6, 16); g.textAlign = 'left' } else g.fillText(released, off + 6, 16)
+    if (!on) { g.textAlign = 'right'; g.fillText(t('off: the sample plays as it is'), w - 10, h - 8); g.textAlign = 'left' }
+  }, [visible, color, on, delay, attack, hold, decay, sustain, release, language])
   return <div className="sw-env"><canvas ref={cv} /></div>
 }

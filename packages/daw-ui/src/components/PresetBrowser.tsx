@@ -4,6 +4,7 @@ import { useTrackStore } from '../stores/trackStore'
 import { usePluginStore } from '../stores/pluginStore'
 import { useNotificationStore } from '../stores/notificationStore'
 import { DialogFrame } from './ui/DialogFrame'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * Every saved preset in one place.
@@ -42,6 +43,7 @@ interface Row {
 }
 
 export function PresetBrowser({ onClose }: { onClose: () => void }) {
+  useLanguage()
   const tracks = useTrackStore(s => s.tracks)
   const plugins = usePluginStore(s => s.plugins)
   const [banks, setBanks] = useState<PresetBank[]>([])
@@ -127,8 +129,8 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
           slotId: targetSlot.id,
           index: row.factoryIndex ?? 0,
         })
-        useNotificationStore.getState().push('info', `Loaded "${row.preset.name}"`, {
-          detail: `${row.pluginName}'s own preset.`,
+        useNotificationStore.getState().push('info', tf('Loaded "{name}"', { name: row.preset.name }), {
+          detail: tf("{plugin}'s own preset.", { plugin: row.pluginName }),
         })
         return
       }
@@ -138,11 +140,13 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
         pluginId: row.pluginId,
         presetId: row.preset.id,
       })
-      useNotificationStore.getState().push('info', `Loaded "${row.preset.name}"`, {
-        detail: `${row.pluginName} on ${targetTrack?.name ?? 'the track'}.`,
+      useNotificationStore.getState().push('info', tf('Loaded "{name}"', { name: row.preset.name }), {
+        detail: targetTrack
+          ? tf('{plugin} on {track}.', { plugin: row.pluginName, track: targetTrack.name })
+          : tf('{plugin} on the track.', { plugin: row.pluginName }),
       })
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not load that preset', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not load that preset'), { detail: String(e) })
     }
   }, [targetSlot, targetTrackId, targetTrack])
 
@@ -155,12 +159,12 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
     const { push } = useNotificationStore.getState()
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
-      const path = await open({ multiple: false, filters: [{ name: 'VST3 preset', extensions: ['vstpreset'] }] })
+      const path = await open({ multiple: false, filters: [{ name: t('VST3 preset'), extensions: ['vstpreset'] }] })
       if (typeof path !== 'string') return
       await invoke('import_vstpreset', { trackId: targetTrackId, slotId: targetSlot.id, pluginId: targetSlot.pluginId, path })
-      push('info', `Loaded "${path.split(/[\\/]/).pop()}"`, { detail: `Into ${targetSlot.pluginName}.` })
+      push('info', tf('Loaded "{name}"', { name: path.split(/[\\/]/).pop() ?? '' }), { detail: tf('Into {plugin}.', { plugin: targetSlot.pluginName }) })
     } catch (e) {
-      push('warning', 'That preset did not load', { detail: String(e) })
+      push('warning', t('That preset did not load'), { detail: String(e) })
     }
   }, [targetSlot, targetTrackId])
   const exportVstPreset = useCallback(async () => {
@@ -168,17 +172,17 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
     const { push } = useNotificationStore.getState()
     try {
       const { save } = await import('@tauri-apps/plugin-dialog')
-      const path = await save({ defaultPath: `${targetSlot.pluginName}.vstpreset`, filters: [{ name: 'VST3 preset', extensions: ['vstpreset'] }] })
+      const path = await save({ defaultPath: `${targetSlot.pluginName}.vstpreset`, filters: [{ name: t('VST3 preset'), extensions: ['vstpreset'] }] })
       if (!path) return
       await invoke('export_vstpreset', { trackId: targetTrackId, slotId: targetSlot.id, pluginId: targetSlot.pluginId, path })
-      push('info', 'Saved the preset file', { detail: path })
+      push('info', t('Saved the preset file'), { detail: path })
     } catch (e) {
-      push('warning', 'The preset file was not saved', { detail: String(e) })
+      push('warning', t('The preset file was not saved'), { detail: String(e) })
     }
   }, [targetSlot, targetTrackId])
 
   const rename = useCallback(async (row: Row) => {
-    const newName = window.prompt('Rename this preset', row.preset.name)?.trim()
+    const newName = window.prompt(t('Rename this preset'), row.preset.name)?.trim()
     if (!newName || newName === row.preset.name) return
     try {
       await invoke('rename_plugin_preset', {
@@ -186,7 +190,7 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
       })
       await refresh()
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not rename that preset', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not rename that preset'), { detail: String(e) })
     }
   }, [refresh])
 
@@ -195,7 +199,7 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
       await invoke('delete_plugin_preset', { pluginId: row.pluginId, presetId: row.preset.id })
       await refresh()
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not delete that preset', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not delete that preset'), { detail: String(e) })
     }
   }, [refresh])
 
@@ -203,31 +207,31 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
     <DialogFrame
       title="Presets"
       width={860}
-      subtitle="Everything you have saved, across every plug-in"
+      subtitle={t('Everything you have saved, across every plug-in')}
       onClose={onClose}
-      headerActions={<button type="button" className="hw-dbtn" onClick={() => { void refresh() }}>Refresh</button>}
-      footer={<span className="hw-dialog-note">A plug-in's own presets, VST3 or CLAP, are listed once you pick a slot running it.</span>}
+      headerActions={<button type="button" className="hw-dbtn" onClick={() => { void refresh() }}>{t('Refresh')}</button>}
+      footer={<span className="hw-dialog-note">{t("A plug-in's own presets, VST3 or CLAP, are listed once you pick a slot running it.")}</span>}
     >
       <div className="hw-dialog-bar">
         <input
           className="hw-input"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search presets"
+          placeholder={t('Search presets')}
           style={{ flex: 1, minWidth: 160 }}
         />
-        <span className="hw-dialog-lbl">Load into</span>
+        <span className="hw-dialog-lbl">{t('Load into')}</span>
         <select className="hw-select" value={targetTrackId} onChange={(e) => setTargetTrackId(e.target.value)}>
-          {tracks.length === 0 && <option value="">(no tracks)</option>}
+          {tracks.length === 0 && <option value="">{t('(no tracks)')}</option>}
           {tracks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
         <select className="hw-select" value={targetSlotId} onChange={(e) => setTargetSlotId(e.target.value)}>
-          {slots.length === 0 && <option value="">(no plug-ins on that track)</option>}
+          {slots.length === 0 && <option value="">{t('(no plug-ins on that track)')}</option>}
           {slots.map(s => <option key={s.id} value={s.id}>{s.pluginName}</option>)}
         </select>
         {isVst3 && (<>
-          <button type="button" className="hw-dbtn" onClick={() => { void importVstPreset() }} title="Load a .vstpreset file into this plug-in">Import .vstpreset…</button>
-          <button type="button" className="hw-dbtn" onClick={() => { void exportVstPreset() }} title="Save this plug-in's settings as a .vstpreset file other hosts open">Export…</button>
+          <button type="button" className="hw-dbtn" onClick={() => { void importVstPreset() }} title={t('Load a .vstpreset file into this plug-in')}>{t('Import .vstpreset…')}</button>
+          <button type="button" className="hw-dbtn" onClick={() => { void exportVstPreset() }} title={t("Save this plug-in's settings as a .vstpreset file other hosts open")}>{t('Export…')}</button>
         </>)}
       </div>
 
@@ -237,7 +241,7 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
             <tr>
               <th>Preset</th>
               <th>Plug-in</th>
-              <th>Saved</th>
+              <th>{t('Saved')}</th>
               <th />
             </tr>
           </thead>
@@ -245,8 +249,8 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
             {rows.length === 0 && (
               <tr><td colSpan={4} className="hw-muted">
                 {banks.length === 0
-                  ? 'Nothing saved yet. Save a preset from a plug-in slot and it appears here.'
-                  : 'Nothing matches that search.'}
+                  ? t('Nothing saved yet. Save a preset from a plug-in slot and it appears here.')
+                  : t('Nothing matches that search.')}
               </td></tr>
             )}
             {rows.map(row => (
@@ -254,11 +258,11 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
                 <td><b>{row.preset.name}</b></td>
                 <td className="hw-muted">
                   {row.pluginName}
-                  {row.notInstalled && <span className="hw-tag">not installed</span>}
+                  {row.notInstalled && <span className="hw-tag">{t('not installed')}</span>}
                 </td>
                 <td className="hw-faint">
                   {row.factory
-                    ? 'From the plug-in'
+                    ? t('From the plug-in')
                     : row.preset.created_at
                       ? new Date(row.preset.created_at * 1000).toLocaleDateString()
                       : ''}
@@ -270,14 +274,14 @@ export function PresetBrowser({ onClose }: { onClose: () => void }) {
                     onClick={() => { void load(row) }}
                     disabled={!canLoad(row)}
                     title={canLoad(row)
-                      ? 'Load into the chosen slot'
-                      : 'Pick a slot running this plug-in first'}
-                  >Load</button>
+                      ? t('Load into the chosen slot')
+                      : t('Pick a slot running this plug-in first')}
+                  >{t('Load')}</button>
                   {/* A preset inside the plug-in is the plug-in's,
                       not ours: it cannot be renamed or deleted. */}
                   {!row.factory && (<>
-                    <button type="button" className="hw-dbtn" onClick={() => { void rename(row) }}>Rename</button>
-                    <button type="button" className="hw-dbtn danger" onClick={() => { void remove(row) }}>Delete</button>
+                    <button type="button" className="hw-dbtn" onClick={() => { void rename(row) }}>{t('Rename')}</button>
+                    <button type="button" className="hw-dbtn danger" onClick={() => { void remove(row) }}>{t('Delete')}</button>
                   </>)}
                 </td>
               </tr>

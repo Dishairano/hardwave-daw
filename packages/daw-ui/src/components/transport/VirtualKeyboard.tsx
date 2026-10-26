@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { defaultPadNote, useTouchControllerStore } from '../../stores/touchControllerStore'
 import { pitchToName as namePitch } from '../../stores/generalPrefsStore'
+import { t, tf, useLanguage } from '../../i18n'
 
 /**
  * Touch Controllers — virtual on-screen MIDI keyboard + drum-pad
@@ -66,6 +67,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
   visible,
   onClose,
 }: VirtualKeyboardProps) {
+  useLanguage()
   const settings = useTouchControllerStore()
   const [active, setActive] = useState<ActiveNote | null>(null)
   const [showSettings, setShowSettings] = useState(false)
@@ -139,7 +141,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
     <div className="hw-vkbd">
       <div className="hw-vkbd-titlebar">
         <span className="hw-vkbd-title">
-          {settings.mode === 'keyboard' ? 'Touch Keyboard' : 'Touch Pads'}
+          {settings.mode === 'keyboard' ? t('Touch Keyboard') : t('Touch Pads')}
         </span>
         <div className="hw-vkbd-mode-toggle">
           <button
@@ -147,7 +149,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
             className={`hw-vkbd-mode-btn${settings.mode === 'keyboard' ? ' is-active' : ''}`}
             onClick={() => settings.setMode('keyboard')}
           >
-            Keys
+            {t('Keys')}
           </button>
           <button
             type="button"
@@ -163,7 +165,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
               type="button"
               className="hw-vkbd-octave-btn"
               onClick={() => settings.setRootNote(settings.rootNote - 12)}
-              aria-label="Octave down"
+              aria-label={t('Octave down')}
             >
               −
             </button>
@@ -172,7 +174,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
               type="button"
               className="hw-vkbd-octave-btn"
               onClick={() => settings.setRootNote(settings.rootNote + 12)}
-              aria-label="Octave up"
+              aria-label={t('Octave up')}
             >
               +
             </button>
@@ -182,8 +184,8 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
           type="button"
           className="hw-vkbd-gear"
           onClick={() => setShowSettings((v) => !v)}
-          aria-label="Settings"
-          title="Options"
+          aria-label={t('Settings')}
+          title={t('Options')}
         >
           ⚙
         </button>
@@ -191,7 +193,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
           type="button"
           className="hw-vkbd-close"
           onClick={onClose}
-          aria-label="Close"
+          aria-label={t('Close')}
         >
           ×
         </button>
@@ -201,20 +203,20 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
         <div className="hw-vkbd-settings">
           {settings.mode === 'keyboard' && (
             <label className="hw-vkbd-row">
-              <span>Keyboard rows</span>
+              <span>{t('Keyboard rows')}</span>
               <select
                 value={settings.keyboardRows}
                 onChange={(e) => settings.setKeyboardRows(Number(e.target.value) as 1 | 2)}
               >
-                <option value={1}>Single</option>
-                <option value={2}>Double</option>
+                <option value={1}>{t('Single')}</option>
+                <option value={2}>{t('Double')}</option>
               </select>
             </label>
           )}
           {settings.mode === 'drumpad' && (
             <>
               <label className="hw-vkbd-row">
-                <span>Pad columns</span>
+                <span>{t('Pad columns')}</span>
                 <input
                   type="number"
                   min={2}
@@ -224,7 +226,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
                 />
               </label>
               <label className="hw-vkbd-row">
-                <span>Pad rows</span>
+                <span>{t('Pad rows')}</span>
                 <input
                   type="number"
                   min={1}
@@ -235,7 +237,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
               </label>
               {selectedPads.size > 0 && (
                 <div className="hw-vkbd-row">
-                  <span>{selectedPads.size} pad{selectedPads.size === 1 ? '' : 's'} selected</span>
+                  <span>{selectedPads.size === 1 ? t('1 pad selected') : tf('{n} pads selected', { n: selectedPads.size })}</span>
                   <div className="hw-vkbd-color-swatches">
                     {['#ff2d4f', '#a872ff', '#5a9bff', '#3ed07a', '#f0a032', null].map((c) => (
                       <button
@@ -243,7 +245,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
                         type="button"
                         className="hw-vkbd-color-swatch"
                         style={{ background: c ?? 'transparent', border: c ? '0' : '1px dashed #555' }}
-                        title={c ?? 'Reset'}
+                        title={c ?? t('Reset')}
                         onClick={() => {
                           const cells = Array.from(selectedPads).map((k) => {
                             const [row, col] = k.split(',').map(Number)
@@ -260,7 +262,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
             </>
           )}
           <label className="hw-vkbd-row">
-            <span>Velocity from position</span>
+            <span>{t('Velocity from position')}</span>
             <input
               type="checkbox"
               checked={settings.velocityFromPosition}
@@ -268,7 +270,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
             />
           </label>
           <label className="hw-vkbd-row">
-            <span>Show note labels</span>
+            <span>{t('Show note labels')}</span>
             <input
               type="checkbox"
               checked={settings.showNoteLabels}
@@ -276,7 +278,7 @@ export const VirtualKeyboard = memo(function VirtualKeyboard({
             />
           </label>
           <label className="hw-vkbd-row">
-            <span>Lock scrollbar</span>
+            <span>{t('Lock scrollbar')}</span>
             <input
               type="checkbox"
               checked={settings.scrollbarLocked}
@@ -347,6 +349,7 @@ function KeyboardBody({
   press,
   release,
 }: KeyboardBodyProps) {
+  useLanguage()
   // The visible left-edge is the C at-or-below rootNote.
   const baseC = rootNote - (rootNote % 12)
   const whiteW = 100 / TOTAL_WHITES
@@ -383,8 +386,8 @@ function KeyboardBody({
                 e.preventDefault()
                 setRootNote(pitch)
               }}
-              aria-label={`MIDI note ${pitch}`}
-              title="Right-click to set root note"
+              aria-label={tf('MIDI note {n}', { n: pitch })}
+              title={t('Right-click to set root note')}
             >
               {(showLabels || whiteInOctave === 0) && (
                 <span className="hw-vkbd-keylabel">
@@ -421,7 +424,7 @@ function KeyboardBody({
                   e.preventDefault()
                   setRootNote(pitch)
                 }}
-                aria-label={`MIDI note ${pitch}`}
+                aria-label={tf('MIDI note {n}', { n: pitch })}
               >
                 {showLabels ? (
                   <span className="hw-vkbd-blacklabel">{pitchToName(pitch)}</span>
@@ -467,6 +470,7 @@ function DrumPadBody({
   release,
   toggleSelection,
 }: DrumPadBodyProps) {
+  useLanguage()
   return (
     <div
       className="hw-vkbd-pads"
@@ -509,8 +513,8 @@ function DrumPadBody({
                 e.preventDefault()
                 toggleSelection(row, col)
               }}
-              aria-label={`Pad ${row},${col} — MIDI note ${note}`}
-              title="Shift+click or right-click to select for bulk colour"
+              aria-label={tf('Pad {row},{col} — MIDI note {n}', { row, col, n: note })}
+              title={t('Shift+click or right-click to select for bulk colour')}
             >
               {showLabels ? (
                 <span className="hw-vkbd-padlabel">{pitchToName(note)}</span>

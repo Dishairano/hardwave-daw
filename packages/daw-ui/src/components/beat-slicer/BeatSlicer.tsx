@@ -7,6 +7,7 @@ import { useTransportStore } from '../../stores/transportStore'
 import { useTrackStore } from '../../stores/trackStore'
 import { invoke } from '@tauri-apps/api/core'
 import { SAMPLER_ID } from '../browser/fileActions'
+import { t, tf, useLanguage } from '../../i18n'
 
 const SLICE_MIDI_PPQ = 960
 const SLICE_MIDI_BASE_PITCH = 60 // C3, matches the chromatic KEYMAP convention
@@ -77,6 +78,7 @@ function sliceEnd(slices: Slice[], i: number, total: number) {
 }
 
 export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
+  useLanguage()
   const [sample, setSample] = useState<Sample | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -136,7 +138,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
     if (newSlices[0].start !== 0) newSlices.unshift(defaultSlice(0))
     setSlices(newSlices)
     setSelectedSlice(0)
-    setBanner(`Detected ${newSlices.length} slice${newSlices.length === 1 ? '' : 's'}`)
+    setBanner(newSlices.length === 1 ? t('Detected 1 slice') : tf('Detected {n} slices', { n: newSlices.length }))
   }, [sample, threshold])
 
   useEffect(() => {
@@ -239,7 +241,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
         const next = slices.filter((_, i) => i !== hit)
         setSlices(next)
         setSelectedSlice(null)
-        setBanner('Slice removed')
+        setBanner(t('Slice removed'))
       }
       return
     }
@@ -254,7 +256,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
     setSlices(next)
     const newIdx = next.findIndex(s => s.start === sampleIdx)
     setSelectedSlice(newIdx)
-    setBanner('Slice added')
+    setBanner(t('Slice added'))
   }
 
   const updateSlice = (idx: number, patch: Partial<Slice>) => {
@@ -294,7 +296,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
     a.click()
     document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 1000)
-    setBanner(`Exported ${slices.length} slice${slices.length === 1 ? '' : 's'} as MIDI`)
+    setBanner(slices.length === 1 ? t('Exported 1 slice as MIDI') : tf('Exported {n} slices as MIDI', { n: slices.length }))
   }
 
   const exportSlices = () => {
@@ -331,7 +333,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
       document.body.removeChild(a)
       setTimeout(() => URL.revokeObjectURL(url), 1000)
     })
-    setBanner(`Exported ${slices.length} slices`)
+    setBanner(tf('Exported {n} slices', { n: slices.length }))
   }
 
   /** Each slice's part of the file, in seconds. */
@@ -360,9 +362,9 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
         positionTicks: position,
       })
       await useTrackStore.getState().fetchTracks()
-      setBanner(`Placed ${slices.length} slice${slices.length === 1 ? '' : 's'} on a new track`)
+      setBanner(slices.length === 1 ? t('Placed 1 slice on a new track') : tf('Placed {n} slices on a new track', { n: slices.length }))
     } catch (e) {
-      setBanner(`Could not place the slices: ${String(e)}`)
+      setBanner(tf('Could not place the slices: {error}', { error: String(e) }))
     }
   }
 
@@ -390,9 +392,9 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
         await invoke('set_plugin_parameter', { trackId, slotId, paramId: 18, value: start })
         await invoke('set_plugin_parameter', { trackId, slotId, paramId: 19, value: Math.min(1, length) })
       }
-      setBanner(`Made ${ranges.length} channel${ranges.length === 1 ? '' : 's'}, one per slice`)
+      setBanner(ranges.length === 1 ? t('Made 1 channel, one per slice') : tf('Made {n} channels, one per slice', { n: ranges.length }))
     } catch (e) {
-      setBanner(`Could not make the channels: ${String(e)}`)
+      setBanner(tf('Could not make the channels: {error}', { error: String(e) }))
     } finally {
       await store.endHistoryGroup(`Slice "${stem}" into ${slices.length} channels`)
       await store.fetchTracks()
@@ -434,11 +436,11 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
           <div style={{ fontSize: 10, color: hw.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
             {name}
           </div>
-          <button onClick={onClose} style={btnStyle('ghost')}>Close</button>
+          <button onClick={onClose} style={btnStyle('ghost')}>{t('Close')}</button>
         </div>
 
-        {loading && <div style={{ padding: 24, fontSize: 12, color: hw.textSecondary }}>Loading…</div>}
-        {err && <div style={{ padding: 24, fontSize: 11, color: hw.red }}>Error: {err}</div>}
+        {loading && <div style={{ padding: 24, fontSize: 12, color: hw.textSecondary }}>{t('Loading…')}</div>}
+        {err && <div style={{ padding: 24, fontSize: 11, color: hw.red }}>{tf('Error: {error}', { error: err })}</div>}
 
         {sample && !loading && !err && (
           <>
@@ -455,7 +457,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
               background: hw.bgElevated, flexWrap: 'wrap',
             }}>
               <div style={{ fontSize: 10, color: hw.textFaint }}>
-                Click to add · Shift+click to remove · Keys {KEYMAP.slice(0, Math.min(KEYMAP.length, slices.length)).join(' ')} play slices
+                {tf('Click to add · Shift+click to remove · Keys {keys} play slices', { keys: KEYMAP.slice(0, Math.min(KEYMAP.length, slices.length)).join(' ') })}
               </div>
               <div style={{ flex: 1 }} />
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}>
@@ -467,22 +469,22 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
                 />
                 <span style={{ width: 28, textAlign: 'right' }}>{threshold.toFixed(2)}</span>
               </label>
-              <button onClick={runAutoDetect} style={btnStyle('primary')}>Auto-detect</button>
-              <button onClick={clearAll} style={btnStyle('ghost')}>Clear</button>
+              <button onClick={runAutoDetect} style={btnStyle('primary')}>{t('Auto-detect')}</button>
+              <button onClick={clearAll} style={btnStyle('ghost')}>{t('Clear')}</button>
               <div style={{ display: 'flex', gap: 0, border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, overflow: 'hidden' }}>
                 <button
                   onClick={() => setSliceView('list')}
                   style={viewToggleStyle(sliceView === 'list')}
-                  title="Show slices as a vertical list"
-                >List</button>
+                  title={t('Show slices as a vertical list')}
+                >{t('List')}</button>
                 <button
                   onClick={() => setSliceView('pads')}
                   style={viewToggleStyle(sliceView === 'pads')}
-                  title="Show slices as a drum pad grid"
+                  title={t('Show slices as a drum pad grid')}
                 >Pads</button>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}
-                title="When on, slices are stretched via playbackRate so a loop tagged with its original BPM plays at the current session tempo.">
+                title={t('When on, slices are stretched via playbackRate so a loop tagged with its original BPM plays at the current session tempo.')}>
                 <input
                   type="checkbox"
                   checked={tempoSync}
@@ -510,10 +512,10 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
                   }}
                 />
               </label>
-              <button onClick={exportSlicesAsMidi} style={btnStyle('primary')}>Export MIDI</button>
-              <button onClick={exportSlices} style={btnStyle('accent')}>Export WAVs</button>
-              <button onClick={() => { void slicesToPlaylist() }} style={btnStyle('accent')} title="A new audio track with one clip per slice, from the playhead; on the loop's beat grid when its BPM is set">To playlist</button>
-              <button onClick={() => { void slicesToChannels() }} style={btnStyle('accent')} title="One sampler channel per slice">To channels</button>
+              <button onClick={exportSlicesAsMidi} style={btnStyle('primary')}>{t('Export MIDI')}</button>
+              <button onClick={exportSlices} style={btnStyle('accent')}>{t('Export WAVs')}</button>
+              <button onClick={() => { void slicesToPlaylist() }} style={btnStyle('accent')} title={t("A new audio track with one clip per slice, from the playhead; on the loop's beat grid when its BPM is set")}>{t('To playlist')}</button>
+              <button onClick={() => { void slicesToChannels() }} style={btnStyle('accent')} title={t('One sampler channel per slice')}>{t('To channels')}</button>
             </div>
 
             <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -523,7 +525,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
               }}>
                 {slices.length === 0 && (
                   <div style={{ padding: 12, fontSize: 10, color: hw.textFaint }}>
-                    No slices yet. Click the waveform to add one.
+                    {t('No slices yet. Click the waveform to add one.')}
                   </div>
                 )}
                 {sliceView === 'list' && slices.map((s, i) => {
@@ -567,7 +569,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
                 {sel && selectedSlice !== null ? (
                   <>
                     <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 8 }}>
-                      Slice {selectedSlice + 1} — {sliceDurationSec.toFixed(3)}s
+                      {tf('Slice {n} — {seconds}s', { n: selectedSlice + 1, seconds: sliceDurationSec.toFixed(3) })}
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                       <Section title="Envelope (ADSR)">
@@ -580,7 +582,7 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
                         <Knob label="R" value={sel.adsr.r} min={0.001} max={1} step={0.001} unit="s"
                           onChange={(v) => updateAdsr(selectedSlice, { r: v })} />
                       </Section>
-                      <Section title="Dynamics">
+                      <Section title={t('Dynamics')}>
                         <Knob label="Volume" value={sel.vol} min={0} max={1.5} step={0.01}
                           onChange={(v) => updateSlice(selectedSlice, { vol: v })} />
                         <Knob label="Pan" value={sel.pan} min={-1} max={1} step={0.01}
@@ -590,17 +592,17 @@ export function BeatSlicer({ path, onClose }: BeatSlicerProps) {
                             type="checkbox" checked={sel.reverse}
                             onChange={(e) => updateSlice(selectedSlice, { reverse: e.target.checked })}
                           />
-                          <span>Reverse</span>
+                          <span>{t('Reverse')}</span>
                         </label>
                         <button onClick={() => playSlice(selectedSlice)} style={{ ...btnStyle('primary'), marginTop: 10 }}>
-                          Audition
+                          {t('Audition')}
                         </button>
                       </Section>
                     </div>
                   </>
                 ) : (
                   <div style={{ fontSize: 10, color: hw.textFaint }}>
-                    Select a slice from the list to edit its parameters.
+                    {t('Select a slice from the list to edit its parameters.')}
                   </div>
                 )}
               </div>

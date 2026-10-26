@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef } from 'react'
 import { usePluginCatalogStore, isHardwaveNative } from '../../stores/pluginCatalogStore'
 import { usePluginFavoritesStore } from '../../stores/pluginFavoritesStore'
+import { t, useLanguage } from '../../i18n'
 import './picker.css'
 
 export interface PluginPickerFlyoutProps {
@@ -42,6 +43,7 @@ export const PluginPickerFlyout = memo(function PluginPickerFlyout(
   props: PluginPickerFlyoutProps,
 ) {
   const { anchor, slotIndex, onPick, onSearchMore, onClose } = props
+  useLanguage()
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   // Subscribe so the flyout repopulates if the catalog finishes loading
@@ -107,14 +109,14 @@ export const PluginPickerFlyout = memo(function PluginPickerFlyout(
   }, [onClose])
 
   return (
-    <div ref={rootRef} className="hw-pf open" style={style} role="dialog" aria-label="Add plug-in">
+    <div ref={rootRef} className="hw-pf open" style={style} role="dialog" aria-label={t('Add plug-in')}>
       <div className="hw-pf-head">
-        <span>Add plug-in</span>
+        <span>{t('Add plug-in')}</span>
         <b>Slot {slotIndex + 1}</b>
       </div>
       <div className="hw-pf-list">
         {favs.length === 0 && (
-          <div className="hw-pf-empty">No favorites yet — search more →</div>
+          <div className="hw-pf-empty">{t('No favorites yet — search more →')}</div>
         )}
         {favs.map((p) => {
           const hw = isHardwaveNative(p)
@@ -127,14 +129,14 @@ export const PluginPickerFlyout = memo(function PluginPickerFlyout(
               <span className="hw-pf-icn" aria-hidden="true">{hw ? 'H' : '·'}</span>
               <span className="hw-pf-text">
                 <span className="hw-pf-name">{p.name}</span>
-                <span className="hw-pf-cat">{p.vendor} · {p.category}</span>
+                <span className="hw-pf-cat">{p.vendor} · {t(p.category)}</span>
               </span>
             </div>
           )
         })}
       </div>
       <div className="hw-pf-more" onClick={onSearchMore} role="button">
-        <span>Search more plug-ins…</span>
+        <span>{t('Search more plug-ins…')}</span>
         <span className="hw-pf-more-ico" aria-hidden="true">›</span>
       </div>
     </div>
