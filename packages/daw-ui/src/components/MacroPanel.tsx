@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTrackStore } from '../stores/trackStore'
 import { useNotificationStore } from '../stores/notificationStore'
+import { useSendStore } from '../stores/sendStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn, sel, th, td } from './ui/dialogStyles'
 
@@ -23,6 +24,7 @@ type MacroTarget =
   | 'TrackVolume'
   | 'TrackPan'
   | { PluginParam: { slot_id: string; param_id: number } }
+  | { SendLevel: { send_index: number } }
 
 interface MacroLink {
   id: string
@@ -57,6 +59,9 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
 
   const [linkTrackId, setLinkTrackId] = useState<string>('')
   const [linkWhat, setLinkWhat] = useState<string>('volume')
+  const sendsByTrack = useSendStore(st => st.byTrack)
+  const fetchSends = useSendStore(st => st.fetchAll)
+  useEffect(() => { void fetchSends().catch(() => {}) }, [fetchSends])
   const [params, setParams] = useState<ParamInfo[]>([])
   const [linkParamId, setLinkParamId] = useState<number>(-1)
 
@@ -102,7 +107,7 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
     const wanted = new Set<string>()
     for (const m of macros) {
       for (const l of m.links) {
-        if (typeof l.target === 'object') wanted.add(`${l.track_id}|${l.target.PluginParam.slot_id}`)
+        if (typeof l.target === 'object' && 'PluginParam' in l.target) wanted.add(`${l.track_id}|${l.target.PluginParam.slot_id}`)
       }
     }
     for (const key of wanted) {
@@ -122,6 +127,7 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
     const trackName = track ? track.name : `track ${link.track_id.slice(0, 6)}`
     if (link.target === 'TrackVolume') return `${trackName} · volume`
     if (link.target === 'TrackPan') return `${trackName} · pan`
+    if ('SendLevel' in link.target) return `${trackName} · send ${link.target.SendLevel.send_index + 1}`
     const slotId = link.target.PluginParam.slot_id
     const slot = track?.inserts.find(i => i.id === slotId)
     const slotName = slot ? slot.pluginName : `slot ${slotId.slice(0, 6)}`
@@ -185,6 +191,10 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
     if (isParam) {
       args.slotId = linkWhat.slice(5)
       args.paramId = linkParamId
+    } else if (linkWhat.startsWith('send:')) {
+      // A send runs from silent up to its full level, as volume does.
+      args.trackTarget = 'send'
+      args.sendIndex = Number(linkWhat.slice(5))
     } else {
       args.trackTarget = linkWhat
     }
@@ -333,6 +343,9 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
                 <select value={linkWhat} onChange={(e) => setLinkWhat(e.target.value)} style={sel()}>
                   <option value="volume">Volume</option>
                   <option value="pan">Pan</option>
+                  {(sendsByTrack[linkTrackId] ?? []).map(s => (
+                    <option key={`send-${s.index}`} value={`send:${s.index}`}>Send {s.index + 1}</option>
+                  ))}
                   {slots.map(s => (
                     <option key={s.id} value={`slot:${s.id}`}>{s.pluginName}</option>
                   ))}
