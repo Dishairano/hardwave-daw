@@ -36,6 +36,15 @@ fn apply(state: &State<AppState>, the_macro: &Macro) {
                         touched_project = true;
                     }
                 }
+                MacroTarget::SendLevel { send_index } => {
+                    if let Some(send) = project
+                        .track_mut(&link.track_id)
+                        .and_then(|t| t.sends.get_mut(*send_index))
+                    {
+                        send.gain_db = value.min(6.0);
+                        touched_project = true;
+                    }
+                }
                 MacroTarget::PluginParam { slot_id, param_id } => {
                     let cmd = InsertCommand::SetParameter {
                         track_id: link.track_id.clone(),
@@ -153,6 +162,7 @@ pub fn add_macro_link(
     track_target: Option<String>,
     min: f64,
     max: f64,
+    send_index: Option<usize>,
 ) -> Result<String, String> {
     if !min.is_finite() || !max.is_finite() {
         return Err("give the link two real values".into());
@@ -161,8 +171,19 @@ pub fn add_macro_link(
         (Some(slot_id), Some(param_id), _) => MacroTarget::PluginParam { slot_id, param_id },
         (_, _, Some("volume")) => MacroTarget::TrackVolume,
         (_, _, Some("pan")) => MacroTarget::TrackPan,
+        (_, _, Some("send")) => MacroTarget::SendLevel {
+            send_index: send_index.ok_or("pick a send")?,
+        },
         _ => return Err("say what the link moves".into()),
     };
+    if let MacroTarget::SendLevel { send_index } = target {
+        let engine = state.engine.lock();
+        let project = engine.project.lock();
+        let sends = project.track(&track_id).map_or(0, |t| t.sends.len());
+        if send_index >= sends {
+            return Err("that track has no such send".into());
+        }
+    }
     state.engine.lock().snapshot_before_mutation();
     let link_id = uuid::Uuid::new_v4().to_string();
     with_macro(&state, &id, |m| {

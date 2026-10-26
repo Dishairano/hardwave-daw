@@ -21,7 +21,14 @@ use serde::{Deserialize, Serialize};
 pub enum MacroTarget {
     TrackVolume,
     TrackPan,
-    PluginParam { slot_id: String, param_id: u32 },
+    PluginParam {
+        slot_id: String,
+        param_id: u32,
+    },
+    /// One of the track's sends, its level in decibels.
+    SendLevel {
+        send_index: usize,
+    },
 }
 
 /// One thing a macro moves, and how far.
@@ -124,5 +131,20 @@ mod tests {
         m.value = 0.25;
         let resolved: Vec<f64> = m.resolved().into_iter().map(|(_, v)| v).collect();
         assert_eq!(resolved, vec![0.25, 0.75]);
+    }
+
+    /// A link to a send saves and loads with the song.
+    #[test]
+    fn a_send_link_survives_a_save() {
+        let link = MacroLink {
+            id: "l".into(),
+            track_id: "t".into(),
+            target: MacroTarget::SendLevel { send_index: 2 },
+            min: -60.0,
+            max: 0.0,
+        };
+        let back: MacroLink = serde_json::from_str(&serde_json::to_string(&link).unwrap()).unwrap();
+        assert_eq!(back.target, MacroTarget::SendLevel { send_index: 2 });
+        assert_eq!(back.value_at(0.5), -30.0);
     }
 }
