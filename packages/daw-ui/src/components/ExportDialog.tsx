@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTransportStore } from '../stores/transportStore'
 import { usePatternStore } from '../stores/patternStore'
+import { t, tf, useLanguage } from '../i18n'
 
 export type BitDepth = 0 | 16 | 24
 export type SampleRate = 44100 | 48000 | 88200 | 96000 | 192000
@@ -74,6 +75,7 @@ function readBool(key: string, fallback: boolean): boolean {
 }
 
 export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) {
+  useLanguage()
   const [bitDepth, setBitDepth] = useState<BitDepth>(() => readNumber(BIT_DEPTH_KEY, initial.bitDepth) as BitDepth)
   const [sampleRate, setSampleRate] = useState<SampleRate>(() => readNumber(SAMPLE_RATE_KEY, initial.sampleRate) as SampleRate)
   const [tailSecs, setTailSecs] = useState(() => readNumber(TAIL_SECS_KEY, initial.tailSecs))
@@ -232,7 +234,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
 
     if (stems) {
       const folder = await open({
-        title: 'Export stems to folder',
+        title: t('Export stems to folder'),
         directory: true,
         defaultPath: lastDir,
       })
@@ -271,7 +273,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           oggQuality,
         })
         if (result.cancelled) {
-          onError('Export cancelled')
+          onError(t('Export cancelled'))
         } else {
           onComplete({ path: result.folder, duration_secs: result.duration_secs })
         }
@@ -288,14 +290,14 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
       ? `${lastDir}/${initial.defaultName}.${ext}`
       : `${initial.defaultName}.${ext}`
     const filterName = format === 'flac'
-      ? 'FLAC audio'
+      ? t('FLAC audio')
       : format === 'mp3'
-        ? 'MP3 audio'
+        ? t('MP3 audio')
         : format === 'ogg'
-          ? 'OGG Vorbis audio'
-          : 'WAV audio'
+          ? t('OGG Vorbis audio')
+          : t('WAV audio')
     const path = await save({
-      title: 'Export audio',
+      title: t('Export audio'),
       defaultPath,
       filters: [{ name: filterName, extensions: [ext] }],
     })
@@ -327,7 +329,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
         oggQuality,
       })
       if (result.cancelled) {
-        onError('Export cancelled')
+        onError(t('Export cancelled'))
       } else {
         if (playAfter) {
           try {
@@ -364,13 +366,13 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
         boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
       }}>
         <div style={{ fontSize: 15, fontWeight: 600, color: hw.textPrimary, marginBottom: 4 }}>
-          Export audio
+          {t('Export audio')}
         </div>
         <div style={{ fontSize: 12, color: hw.textMuted, marginBottom: 16 }}>
-          Render the full project to a WAV file.
+          {t('Render the full project to a WAV file.')}
         </div>
 
-        <Row label="Format">
+        <Row label={t('Format')}>
           <select
             value={format}
             disabled={exporting}
@@ -378,13 +380,13 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
             style={selectStyle}
           >
             <option value="wav">WAV (PCM)</option>
-            <option value="flac">FLAC (lossless)</option>
+            <option value="flac">{t('FLAC (lossless)')}</option>
             <option value="mp3">MP3 (CBR)</option>
             <option value="ogg">OGG Vorbis (VBR)</option>
           </select>
         </Row>
         {format === 'mp3' && (
-          <Row label="MP3 bitrate">
+          <Row label={t('MP3 bitrate')}>
             <select
               value={mp3Bitrate}
               disabled={exporting}
@@ -398,7 +400,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           </Row>
         )}
         {format === 'ogg' && (
-          <Row label={`OGG quality (${oggQuality.toFixed(2)})`}>
+          <Row label={tf('OGG quality ({quality})', { quality: oggQuality.toFixed(2) })}>
             <input
               type="range"
               min={0}
@@ -412,7 +414,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           </Row>
         )}
 
-        <Row label="Bit depth">
+        <Row label={t('Bit depth')}>
           <select
             value={bitDepth}
             disabled={exporting}
@@ -425,7 +427,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           </select>
         </Row>
 
-        <Row label="Sample rate">
+        <Row label={t('Sample rate')}>
           <select
             value={sampleRate}
             disabled={exporting}
@@ -438,7 +440,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           </select>
         </Row>
 
-        <Row label={`Tail (${tailSecs.toFixed(1)}s)`}>
+        <Row label={tf('Tail ({seconds}s)', { seconds: tailSecs.toFixed(1) })}>
           <input
             type="range"
             min={0}
@@ -451,41 +453,41 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           />
         </Row>
 
-        <Row label="Range">
+        <Row label={t('Range')}>
           <select
             value={range}
             disabled={exporting}
             onChange={e => setRange(e.target.value as ExportRange)}
             style={selectStyle}
           >
-            <option value="full">Full project</option>
+            <option value="full">{t('Full project')}</option>
             <option value="loop" disabled={!loopRangeValid}>
               {loopRangeValid
-                ? `Loop region (${loopDurationSecs.toFixed(2)}s)`
-                : 'Loop region (no range set)'}
+                ? tf('Loop region ({seconds}s)', { seconds: loopDurationSecs.toFixed(2) })
+                : t('Loop region (no range set)')}
             </option>
             <option value="pattern" disabled={patternDurationSecs <= 0}>
               {patternDurationSecs > 0
-                ? `Current pattern (${patternDurationSecs.toFixed(2)}s)`
-                : 'Current pattern (unknown)'}
+                ? tf('Current pattern ({seconds}s)', { seconds: patternDurationSecs.toFixed(2) })
+                : t('Current pattern (unknown)')}
             </option>
           </select>
         </Row>
 
-        <Row label="Normalize">
+        <Row label={t('Normalize')}>
           <select
             value={normalizeMode}
             disabled={exporting}
             onChange={e => setNormalizeMode(e.target.value as NormalizeMode)}
             style={selectStyle}
           >
-            <option value="off">Off</option>
-            <option value="peak">Peak</option>
+            <option value="off">{t('Off')}</option>
+            <option value="peak">{t('Peak')}</option>
             <option value="lufs">LUFS (BS.1770)</option>
           </select>
         </Row>
         {normalizeMode === 'peak' && (
-          <Row label={`Target (${normalizeTargetDb.toFixed(1)} dB)`}>
+          <Row label={tf('Target ({db} dB)', { db: normalizeTargetDb.toFixed(1) })}>
             <input
               type="range"
               min={-12}
@@ -499,7 +501,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           </Row>
         )}
         {normalizeMode === 'lufs' && (
-          <Row label={`Target (${normalizeTargetLufs.toFixed(1)} LUFS)`}>
+          <Row label={tf('Target ({lufs} LUFS)', { lufs: normalizeTargetLufs.toFixed(1) })}>
             <input
               type="range"
               min={-30}
@@ -513,20 +515,20 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           </Row>
         )}
 
-        <Row label="Dither">
+        <Row label={t('Dither')}>
           <select
             value={ditherMode}
             disabled={exporting || bitDepth === 0}
             onChange={e => setDitherMode(e.target.value as DitherMode)}
             style={selectStyle}
           >
-            <option value="none">None</option>
+            <option value="none">{t('None')}</option>
             <option value="tpdf">TPDF</option>
-            <option value="tpdf_shaped">TPDF noise-shaped</option>
+            <option value="tpdf_shaped">{t('TPDF noise-shaped')}</option>
           </select>
         </Row>
 
-        <Row label="After">
+        <Row label={t('After')}>
           <label style={checkLabel}>
             <input
               type="checkbox"
@@ -534,11 +536,11 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
               disabled={exporting}
               onChange={e => setPlayAfter(e.target.checked)}
             />
-            <span>Play rendered file when done</span>
+            <span>{t('Play rendered file when done')}</span>
           </label>
         </Row>
 
-        <Row label="Stems">
+        <Row label={t('Stems')}>
           <label style={checkLabel}>
             <input
               type="checkbox"
@@ -546,7 +548,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
               disabled={exporting}
               onChange={e => setStems(e.target.checked)}
             />
-            <span>Export each track to a separate file</span>
+            <span>{t('Export each track to a separate file')}</span>
           </label>
         </Row>
         {stems && (
@@ -559,7 +561,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
                   disabled={exporting}
                   onChange={e => setIncludeMaster(e.target.checked)}
                 />
-                <span>Include master bus stem</span>
+                <span>{t('Include master bus stem')}</span>
               </label>
             </Row>
             <Row label="">
@@ -570,7 +572,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
                   disabled={exporting}
                   onChange={e => setRespectMuteSolo(e.target.checked)}
                 />
-                <span>Respect existing mute / solo state</span>
+                <span>{t('Respect existing mute / solo state')}</span>
               </label>
             </Row>
           </>
@@ -582,7 +584,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
               fontSize: 11, color: hw.textMuted, marginBottom: 6,
               display: 'flex', justifyContent: 'space-between',
             }}>
-              <span>{stageLabel ? `Rendering: ${stageLabel}` : 'Rendering…'}</span>
+              <span>{stageLabel ? tf('Rendering: {stage}', { stage: stageLabel }) : t('Rendering…')}</span>
               <span>{percent.toFixed(0)}%</span>
             </div>
             <div style={{
@@ -604,7 +606,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
               display: 'flex', justifyContent: 'flex-end',
             }}>
               {etaSecs !== null && percent < 100
-                ? `~${formatEta(etaSecs)} remaining`
+                ? tf('~{eta} remaining', { eta: formatEta(etaSecs) })
                 : ' '}
             </div>
           </div>
@@ -620,11 +622,11 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
                 borderColor: hw.red,
               }}
             >
-              Cancel render
+              {t('Cancel render')}
             </button>
           ) : (
             <>
-              <button onClick={onCancel} style={btnStyle}>Cancel</button>
+              <button onClick={onCancel} style={btnStyle}>{t('Cancel')}</button>
               <button
                 ref={startBtn}
                 onClick={handleStart}
@@ -635,7 +637,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
                   border: `1px solid ${hw.accent}`,
                 }}
               >
-                {stems ? 'Export stems' : 'Start export'}
+                {stems ? t('Export stems') : t('Start export')}
               </button>
             </>
           )}

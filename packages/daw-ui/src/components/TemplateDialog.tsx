@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useUserTemplateStore } from '../stores/userTemplateStore'
 import { useGeneralPrefsStore } from '../stores/generalPrefsStore'
 import { DialogFrame } from './ui/DialogFrame'
+import { t, tf, useLanguage } from '../i18n'
 
 export type BuiltInTemplateId = 'blank' | 'beat4' | 'vocal' | 'mixing'
 export type StarterId = 'hardstyle' | 'rawstyle' | 'frenchcore' | 'uptempo'
@@ -43,6 +44,7 @@ interface Props {
 }
 
 export function TemplateDialog({ onPick, onCancel }: Props) {
+  useLanguage()
   const [hover, setHover] = useState<string | null>(null)
   const firstBtn = useRef<HTMLButtonElement>(null)
   const userTemplates = useUserTemplateStore(s => s.templates)
@@ -62,7 +64,7 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
   }
   useEffect(reloadSongTemplates, [])
   const deleteSongTemplate = (name: string) => {
-    if (!window.confirm(`Delete the template "${name}"?`)) return
+    if (!window.confirm(tf('Delete the template "{name}"?', { name }))) return
     invoke('delete_song_template', { name }).then(() => {
       if (startupTemplate === name) setStartupTemplate(null)
       reloadSongTemplates()
@@ -79,27 +81,27 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
   }, [onCancel])
 
   const handleRename = (id: string, current: string) => {
-    const next = window.prompt('Rename template', current)
+    const next = window.prompt(t('Rename template'), current)
     if (next !== null) renameUserTemplate(id, next)
   }
 
   const handleDelete = (id: string, name: string) => {
-    if (window.confirm(`Delete template "${name}"?`)) removeUserTemplate(id)
+    if (window.confirm(tf('Delete template "{name}"?', { name }))) removeUserTemplate(id)
   }
 
   return createPortal(
-    <DialogFrame title="New project" subtitle="Choose a template to start from." onClose={onCancel} width={600}>
+    <DialogFrame title={t('New project')} subtitle={t('Choose a template to start from.')} onClose={onCancel} width={600}>
       <div style={{ padding: 20, overflowY: 'auto' }}>
 
         <div style={{
           fontSize: 10, fontWeight: 600, color: hw.textFaint,
           textTransform: 'uppercase', letterSpacing: 0.6, margin: '0 0 8px',
         }}>
-          Start from a song
+          {t('Start from a song')}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
-          {STARTERS.map((t, i) => {
-            const id = `starter:${t.id}` as const
+          {STARTERS.map((s, i) => {
+            const id = `starter:${s.id}` as const
             const active = hover === id
             return (
               <button
@@ -120,10 +122,10 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{t.title}</span>
-                  <span style={{ fontSize: 11, color: hw.textMuted }}>{t.bpm} BPM</span>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{s.title}</span>
+                  <span style={{ fontSize: 11, color: hw.textMuted }}>{s.bpm} BPM</span>
                 </div>
-                <div style={{ fontSize: 11, color: hw.textSecondary, lineHeight: 1.4 }}>{t.detail}</div>
+                <div style={{ fontSize: 11, color: hw.textSecondary, lineHeight: 1.4 }}>{t(s.detail)}</div>
               </button>
             )
           })}
@@ -133,17 +135,17 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
           fontSize: 10, fontWeight: 600, color: hw.textFaint,
           textTransform: 'uppercase', letterSpacing: 0.6, margin: '0 0 8px',
         }}>
-          Or an empty layout
+          {t('Or an empty layout')}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-          {TEMPLATES.map((t) => {
-            const active = hover === t.id
+          {TEMPLATES.map((tpl) => {
+            const active = hover === tpl.id
             return (
               <button
-                key={t.id}
-                onMouseEnter={() => setHover(t.id)}
+                key={tpl.id}
+                onMouseEnter={() => setHover(tpl.id)}
                 onMouseLeave={() => setHover(null)}
-                onClick={() => onPick(t.id)}
+                onClick={() => onPick(tpl.id)}
                 style={{
                   textAlign: 'left',
                   padding: '12px 14px',
@@ -155,9 +157,9 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
                   transition: 'border-color 0.1s, background 0.1s',
                 }}
               >
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{t.title}</div>
-                <div style={{ fontSize: 11, color: hw.textMuted, marginBottom: 6 }}>{t.subtitle}</div>
-                <div style={{ fontSize: 11, color: hw.textSecondary, lineHeight: 1.4 }}>{t.detail}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{t(tpl.title)}</div>
+                <div style={{ fontSize: 11, color: hw.textMuted, marginBottom: 6 }}>{t(tpl.subtitle)}</div>
+                <div style={{ fontSize: 11, color: hw.textSecondary, lineHeight: 1.4 }}>{t(tpl.detail)}</div>
               </button>
             )
           })}
@@ -169,7 +171,7 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
               fontSize: 10, fontWeight: 600, color: hw.textFaint,
               textTransform: 'uppercase', letterSpacing: 0.6, margin: '4px 0 8px',
             }}>
-              Your song templates
+              {t('Your song templates')}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
               {songTemplates.map(name => {
@@ -198,17 +200,17 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
                     >
                       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2, paddingRight: 48 }}>{name}</div>
                       <div style={{ fontSize: 11, color: hw.textMuted }}>
-                        {startsWith ? 'The DAW starts with this song' : 'Tracks, plug-ins and routing'}
+                        {startsWith ? t('The DAW starts with this song') : t('Tracks, plug-ins and routing')}
                       </div>
                     </button>
                     <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 4 }}>
                       <button
-                        title={startsWith ? 'Start the DAW empty again' : 'Start the DAW with this song'}
+                        title={startsWith ? t('Start the DAW empty again') : t('Start the DAW with this song')}
                         onClick={e => { e.stopPropagation(); setStartupTemplate(startsWith ? null : name) }}
                         style={{ ...utBtnStyle, color: startsWith ? hw.accent : hw.textMuted }}
                       >★</button>
                       <button
-                        title="Delete"
+                        title={t('Delete')}
                         onClick={e => { e.stopPropagation(); deleteSongTemplate(name) }}
                         style={{ ...utBtnStyle, color: hw.red }}
                       >×</button>
@@ -226,15 +228,15 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
               fontSize: 10, fontWeight: 600, color: hw.textFaint,
               textTransform: 'uppercase', letterSpacing: 0.6, margin: '4px 0 8px',
             }}>
-              Your templates
+              {t('Your templates')}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
-              {userTemplates.map(t => {
-                const active = hover === t.id
+              {userTemplates.map(tpl => {
+                const active = hover === tpl.id
                 return (
                   <div
-                    key={t.id}
-                    onMouseEnter={() => setHover(t.id)}
+                    key={tpl.id}
+                    onMouseEnter={() => setHover(tpl.id)}
                     onMouseLeave={() => setHover(null)}
                     style={{
                       position: 'relative',
@@ -245,7 +247,7 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
                     }}
                   >
                     <button
-                      onClick={() => onPick(`user:${t.id}`)}
+                      onClick={() => onPick(`user:${tpl.id}`)}
                       style={{
                         width: '100%',
                         textAlign: 'left',
@@ -256,24 +258,24 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
                         cursor: 'pointer',
                       }}
                     >
-                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{t.name}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{tpl.name}</div>
                       <div style={{ fontSize: 11, color: hw.textMuted, marginBottom: 6 }}>
-                        {t.tracks.length} track{t.tracks.length === 1 ? '' : 's'}
+                        {tpl.tracks.length === 1 ? t('1 track') : tf('{n} tracks', { n: tpl.tracks.length })}
                       </div>
                       <div style={{ fontSize: 11, color: hw.textSecondary, lineHeight: 1.4 }}>
-                        {t.tracks.slice(0, 4).map(x => x.name).join(', ')}
-                        {t.tracks.length > 4 ? '…' : ''}
+                        {tpl.tracks.slice(0, 4).map(x => x.name).join(', ')}
+                        {tpl.tracks.length > 4 ? '…' : ''}
                       </div>
                     </button>
                     <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 4 }}>
                       <button
-                        title="Rename"
-                        onClick={e => { e.stopPropagation(); handleRename(t.id, t.name) }}
+                        title={t('Rename')}
+                        onClick={e => { e.stopPropagation(); handleRename(tpl.id, tpl.name) }}
                         style={utBtnStyle}
                       >✎</button>
                       <button
-                        title="Delete"
-                        onClick={e => { e.stopPropagation(); handleDelete(t.id, t.name) }}
+                        title={t('Delete')}
+                        onClick={e => { e.stopPropagation(); handleDelete(tpl.id, tpl.name) }}
                         style={{ ...utBtnStyle, color: hw.red }}
                       >×</button>
                     </div>
@@ -298,7 +300,7 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
               minWidth: 90,
             }}
           >
-            Cancel
+            {t('Cancel')}
           </button>
         </div>
       </div>

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useMissingPluginsStore, type MissingPluginInfo } from '../stores/missingPluginsStore'
 import { useNotificationStore } from '../stores/notificationStore'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * Persistent banner for projects that reference uninstalled plugins.
@@ -14,6 +15,7 @@ import { useNotificationStore } from '../stores/notificationStore'
  * without reloading the project.
  */
 export function MissingPluginsBanner() {
+  useLanguage()
   const missing = useMissingPluginsStore(s => s.missing)
   const dismissed = useMissingPluginsStore(s => s.dismissed)
   const setMissing = useMissingPluginsStore(s => s.set)
@@ -37,16 +39,18 @@ export function MissingPluginsBanner() {
       const restored = before - still.length
       const push = useNotificationStore.getState().push
       if (restored > 0 && still.length === 0) {
-        push('info', `All ${restored} missing plugin instance${restored === 1 ? '' : 's'} restored — saved settings intact.`)
+        push('info', restored === 1
+          ? t('All 1 missing plugin instance restored — saved settings intact.')
+          : tf('All {n} missing plugin instances restored — saved settings intact.', { n: restored }))
       } else if (restored > 0) {
-        push('info', `${restored} restored, ${still.length} still missing.`)
+        push('info', tf('{restored} restored, {missing} still missing.', { restored, missing: still.length }))
       } else {
-        push('warning', 'Rescan finished — the missing plugins are still not installed.', {
-          detail: 'Install them (or add their folder under Audio settings → plugin paths), then rescan again.',
+        push('warning', t('Rescan finished — the missing plugins are still not installed.'), {
+          detail: t('Install them (or add their folder under Audio settings → plugin paths), then rescan again.'),
         })
       }
     } catch (e) {
-      useNotificationStore.getState().push('error', 'Plugin rescan failed', { detail: String(e) })
+      useNotificationStore.getState().push('error', t('Plugin rescan failed'), { detail: String(e) })
     } finally {
       setBusy(false)
     }
@@ -65,16 +69,17 @@ export function MissingPluginsBanner() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 12px' }}>
         <span style={{ color: hw.yellow }}>⚠</span>
         <span style={{ flex: 1 }}>
-          {missing.length} plugin instance{missing.length === 1 ? '' : 's'} missing — those inserts are
-          bypassed, so the mix may sound different. State is preserved.
+          {missing.length === 1
+            ? t('1 plugin instance missing — those inserts are bypassed, so the mix may sound different. State is preserved.')
+            : tf('{n} plugin instances missing — those inserts are bypassed, so the mix may sound different. State is preserved.', { n: missing.length })}
         </span>
         <button onClick={() => setExpanded(v => !v)} style={linkBtn}>
-          {expanded ? 'Hide details' : 'Details'}
+          {expanded ? t('Hide details') : t('Details')}
         </button>
         <button onClick={() => void rescan()} disabled={busy} style={{ ...linkBtn, fontWeight: 700 }}>
-          {busy ? 'Rescanning…' : 'Rescan plugins'}
+          {busy ? t('Rescanning…') : t('Rescan plugins')}
         </button>
-        <button onClick={dismiss} title="Hide for this session" style={{ ...linkBtn, color: hw.textFaint }}>
+        <button onClick={dismiss} title={t('Hide for this session')} style={{ ...linkBtn, color: hw.textFaint }}>
           ×
         </button>
       </div>

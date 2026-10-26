@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { hw } from '../theme'
+import { t, tf, useLanguage } from '../i18n'
 
 export type CrashChoice = 'recover' | 'discard' | 'open'
 
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function CrashRecoveryDialog({ autosavePath, modifiedUnix, onChoice }: Props) {
+  useLanguage()
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onChoice('discard')
@@ -22,7 +24,7 @@ export function CrashRecoveryDialog({ autosavePath, modifiedUnix, onChoice }: Pr
 
   const when = modifiedUnix > 0
     ? new Date(modifiedUnix * 1000).toLocaleString()
-    : 'unknown time'
+    : t('unknown time')
   const name = autosavePath.split(/[\\/]/).pop() || autosavePath
 
   return createPortal(
@@ -41,29 +43,43 @@ export function CrashRecoveryDialog({ autosavePath, modifiedUnix, onChoice }: Pr
         boxShadow: hw.glowRed,
       }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: hw.textBright, marginBottom: 6 }}>
-          Recover from crash?
+          {t('Recover from crash?')}
         </div>
         <div style={{ fontSize: 13, color: hw.textSecondary, marginBottom: 6, lineHeight: 1.5 }}>
-          It looks like the last session ended unexpectedly. An auto-save from {when} is available.
+          {tf('It looks like the last session ended unexpectedly. An auto-save from {when} is available.', { when })}
         </div>
         <div style={{ fontSize: 11, color: hw.textFaint, marginBottom: 6, fontFamily: 'monospace' }}>
           {name}
         </div>
         <div style={{ fontSize: 11.5, color: hw.textFaint, marginBottom: 18, lineHeight: 1.5 }}>
-          <b style={{ color: hw.textSecondary }}>Recover</b> loads that auto-save ·{' '}
-          <b style={{ color: hw.textSecondary }}>Open project…</b> ignores it and picks a file ·{' '}
-          <b style={{ color: hw.textSecondary }}>Discard</b> deletes it.
-          If recovery fails, File → Revert to last backup has older snapshots.
+          {withBold(
+            t('{recover} loads that auto-save · {open} ignores it and picks a file · {discard} deletes it.'),
+            { recover: t('Recover'), open: t('Open project…'), discard: t('Discard') },
+          )}{' '}
+          {t('If recovery fails, File → Revert to last backup has older snapshots.')}
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button onClick={() => onChoice('discard')} style={btn(false)}>Discard</button>
-          <button onClick={() => onChoice('open')} style={btn(false)}>Open project…</button>
-          <button onClick={() => onChoice('recover')} style={btn(true)}>Recover</button>
+          <button onClick={() => onChoice('discard')} style={btn(false)}>{t('Discard')}</button>
+          <button onClick={() => onChoice('open')} style={btn(false)}>{t('Open project…')}</button>
+          <button onClick={() => onChoice('recover')} style={btn(true)}>{t('Recover')}</button>
         </div>
       </div>
     </div>,
     document.body,
   )
+}
+
+/**
+ * A translated sentence with the button names in bold where its {blanks}
+ * are, so a translation can put them wherever its word order wants.
+ */
+function withBold(sentence: string, names: Record<string, string>) {
+  return sentence.split(/(\{\w+\})/).map((part, i) => {
+    const key = /^\{(\w+)\}$/.exec(part)?.[1]
+    return key && key in names
+      ? <b key={i} style={{ color: hw.textSecondary }}>{names[key]}</b>
+      : part
+  })
 }
 
 function btn(primary: boolean): React.CSSProperties {

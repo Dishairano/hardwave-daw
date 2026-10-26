@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 // `t` is a loop variable for tabs in this file, so the translation
 // function comes in as `tr`.
-import { t as tr, useLanguage, useLanguageStore, LANGUAGES, type LanguageId } from '../../i18n'
+import { t as tr, tf, useLanguage, useLanguageStore, LANGUAGES, type LanguageId } from '../../i18n'
 import { ThemePicker } from './ThemePicker'
 import { ShortcutsPanel } from '../ShortcutsPanel'
 import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
@@ -513,7 +513,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder={tr('Search settings')}
-          aria-label="Search settings"
+          aria-label={tr('Search settings')}
           style={{
             marginBottom: 8, padding: '5px 7px', fontSize: 11,
             background: hw.bgInput, color: hw.textPrimary,
@@ -550,8 +550,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
         <div ref={bodyRef} role="tabpanel" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 16px 12px' }}>
           {query.trim() !== '' && (
             <div style={{ fontSize: 11, color: hw.textMuted, marginBottom: 10 }}>
-              Showing what matches "{query.trim()}" on this page. Other pages are
-              searched as you open them.
+              {tf('Showing what matches "{query}" on this page. Other pages are searched as you open them.', { query: query.trim() })}
             </div>
           )}
           {tab === 'audio' && (<>
@@ -604,7 +603,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   }
                 }}
                 options={[
-                  { value: '', label: `System Default${devices.find(d => d.is_default) ? ` (${devices.find(d => d.is_default)!.name})` : ''}` },
+                  { value: '', label: `${tr('System Default')}${devices.find(d => d.is_default) ? ` (${devices.find(d => d.is_default)!.name})` : ''}` },
                   ...devices.map(d => ({ value: d.name, label: d.name })),
                 ]}
               />
@@ -644,10 +643,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               fontSize: 9, color: hw.textFaint, lineHeight: 1.5,
               margin: '4px 4px 10px', maxWidth: 360,
             }}>
-              <strong style={{ color: hw.textMuted }}>Latency = {latencyMs} ms.</strong>{' '}
-              Target ~10 ms (441 samples @ 44.1 kHz · 480 samples @ 48 kHz) for live play.
-              Below ~5 ms is "cutting edge" and CPU-heavy. 11–20 ms is "good".
-              Drop the buffer until you hear underruns, then step back up.
+              <strong style={{ color: hw.textMuted }}>{tf('Latency = {ms} ms.', { ms: latencyMs })}</strong>{' '}
+              {tr('Target ~10 ms (441 samples @ 44.1 kHz · 480 samples @ 48 kHz) for live play. Below ~5 ms is "cutting edge" and CPU-heavy. 11–20 ms is "good". Drop the buffer until you hear underruns, then step back up.')}
             </div>
 
             {/* Audio cache */}
@@ -671,12 +668,14 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                     border: `1px solid ${hw.borderDark}`, borderRadius: 3,
                   }}
                   data-testid="audio-cache-max-mb"
-                  title="Maximum decoded audio memory before oldest entries are evicted (FIFO)"
+                  title={tr('Maximum decoded audio memory before oldest entries are evicted (FIFO)')}
                 />
-                <span style={{ fontSize: 11, color: hw.textMuted }}>MB cap</span>
+                <span style={{ fontSize: 11, color: hw.textMuted }}>{tr('MB cap')}</span>
                 <span style={{ fontSize: 11, color: hw.textFaint, marginLeft: 'auto' }} data-testid="audio-cache-stats">
                   {cacheStats
-                    ? `${(cacheStats.bytesUsed / (1024 * 1024)).toFixed(1)} MB used · ${cacheStats.entryCount} file${cacheStats.entryCount === 1 ? '' : 's'}`
+                    ? cacheStats.entryCount === 1
+                      ? tf('{mb} MB used · 1 file', { mb: (cacheStats.bytesUsed / (1024 * 1024)).toFixed(1) })
+                      : tf('{mb} MB used · {n} files', { mb: (cacheStats.bytesUsed / (1024 * 1024)).toFixed(1), n: cacheStats.entryCount })
                     : '—'}
                 </span>
               </div>
@@ -688,9 +687,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 value={selectedInput ?? ''}
                 onChange={v => setSelectedInput(v === '' ? null : v)}
                 options={[
-                  { value: '', label: `System Default${inputDevices.find(d => d.is_default) ? ` (${inputDevices.find(d => d.is_default)!.name})` : ''}` },
+                  { value: '', label: `${tr('System Default')}${inputDevices.find(d => d.is_default) ? ` (${inputDevices.find(d => d.is_default)!.name})` : ''}` },
                   ...inputDevices.map(d => ({ value: d.name, label: d.name })),
-                  ...(inputDevices.length === 0 ? [{ value: '', label: 'No input devices found' }] : []),
+                  ...(inputDevices.length === 0 ? [{ value: '', label: tr('No input devices found') }] : []),
                 ]}
               />
             </SettingRow>
@@ -701,8 +700,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 value={String(selectedInputChannels)}
                 onChange={v => setSelectedInputChannels(Number(v))}
                 options={[
-                  { value: '1', label: 'Mono (1 channel, summed)' },
-                  { value: '2', label: 'Stereo (2 channels)' },
+                  { value: '1', label: tr('Mono (1 channel, summed)') },
+                  { value: '2', label: tr('Stereo (2 channels)') },
                 ]}
               />
             </SettingRow>
@@ -812,11 +811,11 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: monitorOn ? 6 : 0 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 11, color: hw.textMuted }}>Input Monitor</span>
+                  <span style={{ fontSize: 11, color: hw.textMuted }}>{tr('Input Monitor')}</span>
                   <span style={{ fontSize: 10, color: hw.textFaint }}>
                     {monitorOn && monitor?.running
-                      ? `Live — ${monitor.sample_rate} Hz, ${monitor.buffer_size} samples`
-                      : 'Preview input signal level before recording'}
+                      ? tf('Live — {rate} Hz, {n} samples', { rate: monitor.sample_rate, n: monitor.buffer_size })
+                      : tr('Preview input signal level before recording')}
                   </span>
                 </div>
                 <button
@@ -830,7 +829,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                     fontFamily: 'inherit',
                   }}
                 >
-                  {monitorOn ? 'Stop' : 'Start'}
+                  {monitorOn ? tr('Stop') : tr('Start')}
                 </button>
               </div>
               {monitorOn && (
@@ -850,11 +849,11 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 border: `1px solid ${directMonitoring ? hw.accent : hw.borderDark}`,
               }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 11, color: hw.textSecondary }}>Direct monitoring</span>
+                  <span style={{ fontSize: 11, color: hw.textSecondary }}>{tr('Direct monitoring')}</span>
                   <span style={{ fontSize: 9, color: hw.textFaint }}>
                     {directMonitoring
-                      ? 'Live input routes straight to master — track FX bypassed.'
-                      : 'Software monitor: live input passes through the track FX chain.'}
+                      ? tr('Live input routes straight to master — track FX bypassed.')
+                      : tr('Software monitor: live input passes through the track FX chain.')}
                   </span>
                 </div>
                 <button
@@ -868,7 +867,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                     fontFamily: 'inherit',
                   }}
                 >
-                  {directMonitoring ? 'On' : 'Off'}
+                  {directMonitoring ? tr('On') : tr('Off')}
                 </button>
               </div>
             </div>
@@ -880,7 +879,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               background: hw.bgPanel, borderRadius: hw.radius.sm,
               border: `1px solid ${hw.borderDark}`,
             }}>
-              <span style={{ fontSize: 11, color: hw.textMuted }}>Output Latency</span>
+              <span style={{ fontSize: 11, color: hw.textMuted }}>{tr('Output Latency')}</span>
               <span style={{ fontSize: 12, fontWeight: 600, color: hw.textPrimary, fontFamily: "'Consolas', monospace" }}>
                 {latencyMs} ms
               </span>
@@ -897,11 +896,11 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               opacity: exclusive.available ? 1 : 0.5,
             }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textMuted }}>WASAPI Exclusive Mode</span>
+                <span style={{ fontSize: 11, color: hw.textMuted }}>{tr('WASAPI Exclusive Mode')}</span>
                 <span style={{ fontSize: 10, color: hw.textFaint }}>
                   {exclusive.available
-                    ? 'Lowest latency, locks the output device to the DAW'
-                    : 'Only available on Windows with WASAPI host'}
+                    ? tr('Lowest latency, locks the output device to the DAW')
+                    : tr('Only available on Windows with WASAPI host')}
                 </span>
               </div>
               <button
@@ -1047,11 +1046,11 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: midiPorts.length > 0 ? 6 : 0 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 11, color: hw.textMuted }}>MIDI Inputs</span>
+                  <span style={{ fontSize: 11, color: hw.textMuted }}>{tr('MIDI Inputs')}</span>
                   <span style={{ fontSize: 10, color: hw.textFaint }}>
                     {midiPorts.length === 0
-                      ? 'No MIDI input ports detected'
-                      : `${midiOpen.length} of ${midiPorts.length} open`}
+                      ? tr('No MIDI input ports detected')
+                      : tf('{open} of {total} open', { open: midiOpen.length, total: midiPorts.length })}
                   </span>
                 </div>
                 <button
@@ -1065,7 +1064,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                     fontFamily: 'inherit',
                   }}
                 >
-                  Rescan
+                  {tr('Rescan')}
                 </button>
               </div>
               {midiPorts.length > 0 && (
@@ -1095,7 +1094,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                             fontFamily: 'inherit',
                           }}
                         >
-                          {open ? 'Connected' : 'Connect'}
+                          {open ? tr('Connected') : tr('Connect')}
                         </button>
                       </div>
                     )
@@ -1112,13 +1111,13 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 opacity: midiOpen.length === 0 ? 0.6 : 1,
               }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 11, color: hw.textSecondary }}>Sync to external clock</span>
+                  <span style={{ fontSize: 11, color: hw.textSecondary }}>{tr('Sync to external clock')}</span>
                   <span style={{ fontSize: 9, color: hw.textFaint, fontFamily: "'Consolas', monospace" }}>
                     {midiSyncTicksSeen
                       ? (midiSyncBpm != null
-                        ? `Master: ${midiSyncBpm.toFixed(2)} BPM`
-                        : 'Master detected · waiting for stable tempo')
-                      : 'No clock ticks received yet'}
+                        ? tf('Master: {bpm} BPM', { bpm: midiSyncBpm.toFixed(2) })
+                        : tr('Master detected · waiting for stable tempo'))
+                      : tr('No clock ticks received yet')}
                   </span>
                 </div>
                 <button
@@ -1133,7 +1132,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                     fontFamily: 'inherit',
                   }}
                 >
-                  {midiSyncEnabled ? 'On' : 'Off'}
+                  {midiSyncEnabled ? tr('On') : tr('Off')}
                 </button>
               </div>
               <MtcFollowRow disabled={midiOpen.length === 0} />
@@ -1150,11 +1149,11 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 marginBottom: midiOutPorts.length > 0 ? 6 : 0,
               }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 11, color: hw.textMuted }}>MIDI Outputs</span>
+                  <span style={{ fontSize: 11, color: hw.textMuted }}>{tr('MIDI Outputs')}</span>
                   <span style={{ fontSize: 10, color: hw.textFaint }}>
                     {midiOutPorts.length === 0
-                      ? 'No MIDI output ports detected'
-                      : `${midiOutOpen.length} of ${midiOutPorts.length} open`}
+                      ? tr('No MIDI output ports detected')
+                      : tf('{open} of {total} open', { open: midiOutOpen.length, total: midiOutPorts.length })}
                   </span>
                 </div>
                 <button
@@ -1168,7 +1167,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                     fontFamily: 'inherit',
                   }}
                 >
-                  Rescan
+                  {tr('Rescan')}
                 </button>
               </div>
               {midiOutPorts.length > 0 && (
@@ -1198,7 +1197,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                             fontFamily: 'inherit',
                           }}
                         >
-                          {open ? 'Connected' : 'Connect'}
+                          {open ? tr('Connected') : tr('Connect')}
                         </button>
                       </div>
                     )
@@ -1215,9 +1214,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 opacity: midiOutOpen.length === 0 ? 0.6 : 1,
               }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 11, color: hw.textSecondary }}>Send MIDI clock</span>
+                  <span style={{ fontSize: 11, color: hw.textSecondary }}>{tr('Send MIDI clock')}</span>
                   <span style={{ fontSize: 9, color: hw.textFaint }}>
-                    Broadcasts 24 PPQN clock + Start/Stop to every open output.
+                    {tr('Broadcasts 24 PPQN clock + Start/Stop to every open output.')}
                   </span>
                 </div>
                 <button
@@ -1232,7 +1231,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                     fontFamily: 'inherit',
                   }}
                 >
-                  {midiClockEnabled ? 'On' : 'Off'}
+                  {midiClockEnabled ? tr('On') : tr('Off')}
                 </button>
               </div>
               <div style={{
@@ -1245,9 +1244,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 opacity: midiOutOpen.length === 0 ? 0.6 : 1,
               }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 11, color: hw.textSecondary }}>Send MIDI timecode</span>
+                  <span style={{ fontSize: 11, color: hw.textSecondary }}>{tr('Send MIDI timecode')}</span>
                   <span style={{ fontSize: 9, color: hw.textFaint }}>
-                    Broadcasts SMPTE timecode as MTC Quarter Frames while playing.
+                    {tr('Broadcasts SMPTE timecode as MTC Quarter Frames while playing.')}
                   </span>
                 </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1281,7 +1280,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                       fontFamily: 'inherit',
                     }}
                   >
-                    {midiMtcEnabled ? 'On' : 'Off'}
+                    {midiMtcEnabled ? tr('On') : tr('Off')}
                   </button>
                 </div>
               </div>
@@ -1295,16 +1294,15 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 value={audioPrefs.panLaw}
                 onChange={v => audioPrefs.setPanLaw(v as typeof audioPrefs.panLaw)}
                 options={[
-                  { value: '-3', label: '-3 dB centre (default)' },
-                  { value: '-4.5', label: '-4.5 dB centre' },
-                  { value: '-6', label: '-6 dB centre' },
-                  { value: '0', label: '0 dB centre' },
+                  { value: '-3', label: tr('-3 dB centre (default)') },
+                  { value: '-4.5', label: tr('-4.5 dB centre') },
+                  { value: '-6', label: tr('-6 dB centre') },
+                  { value: '0', label: tr('0 dB centre') },
                 ]}
               />
             </SettingRow>
             <div style={{ fontSize: 9, color: hw.textFaint, margin: '-4px 0 10px' }}>
-              How much quieter a track is in the middle than panned hard to one side.
-              Match the DAW a song came from, or its panning will sit at a different level.
+              {tr('How much quieter a track is in the middle than panned hard to one side. Match the DAW a song came from, or its panning will sit at a different level.')}
             </div>
 
             {/* What the playlist ruler counts in. */}
@@ -1313,10 +1311,10 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 value={generalPrefs.rulerUnits}
                 onChange={v => generalPrefs.setRulerUnits(v as typeof generalPrefs.rulerUnits)}
                 options={[
-                  { value: 'bars', label: 'Bars' },
-                  { value: 'time', label: 'Minutes and seconds' },
-                  { value: 'timecode', label: 'Timecode' },
-                  { value: 'samples', label: 'Samples' },
+                  { value: 'bars', label: tr('Bars') },
+                  { value: 'time', label: tr('Minutes and seconds') },
+                  { value: 'timecode', label: tr('Timecode') },
+                  { value: 'samples', label: tr('Samples') },
                 ]}
               />
             </SettingRow>
@@ -1334,8 +1332,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               </SettingRow>
             )}
             <div style={{ fontSize: 9, color: hw.textFaint, margin: '-4px 0 10px' }}>
-              Bars for music. Time and timecode are for work to picture, where a cue lands at a time, not a bar;
-              samples for lining up sound to the sample. The frame rate also sets the MIDI timecode sent out.
+              {tr('Bars for music. Time and timecode are for work to picture, where a cue lands at a time, not a bar; samples for lining up sound to the sample. The frame rate also sets the MIDI timecode sent out.')}
             </div>
 
             {/* Whether the view chases the song. Off by default. */}
@@ -1348,9 +1345,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               border: `1px solid ${generalPrefs.followPlayhead ? hw.accent : hw.borderDark}`,
             }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textSecondary }}>Scroll with the playhead</span>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>{tr('Scroll with the playhead')}</span>
                 <span style={{ fontSize: 9, color: hw.textFaint }}>
-                  The playlist and piano roll follow the song while it plays. Off keeps the view where you put it, so working on one part is not interrupted by the view jumping. The FOLLOW buttons switch it too.
+                  {tr('The playlist and piano roll follow the song while it plays. Off keeps the view where you put it, so working on one part is not interrupted by the view jumping. The FOLLOW buttons switch it too.')}
                 </span>
               </div>
               <button
@@ -1364,7 +1361,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   fontFamily: 'inherit',
                 }}
               >
-                {generalPrefs.followPlayhead ? 'On' : 'Off'}
+                {generalPrefs.followPlayhead ? tr('On') : tr('Off')}
               </button>
             </div>
 
@@ -1378,9 +1375,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               border: `1px solid ${audioPrefs.resetPluginsOnTransport ? hw.accent : hw.borderDark}`,
             }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textSecondary }}>Reset instruments when the transport moves</span>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>{tr('Reset instruments when the transport moves')}</span>
                 <span style={{ fontSize: 9, color: hw.textFaint }}>
-                  Stops held notes when you press stop or move the playhead, instead of letting them carry on at the new position. Leave it on unless you want tails to ring through a jump.
+                  {tr('Stops held notes when you press stop or move the playhead, instead of letting them carry on at the new position. Leave it on unless you want tails to ring through a jump.')}
                 </span>
               </div>
               <button
@@ -1394,7 +1391,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   fontFamily: 'inherit',
                 }}
               >
-                {audioPrefs.resetPluginsOnTransport ? 'On' : 'Off'}
+                {audioPrefs.resetPluginsOnTransport ? tr('On') : tr('Off')}
               </button>
             </div>
 
@@ -1407,9 +1404,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               border: `1px solid ${audioPrefs.playTruncatedNotes ? hw.accent : hw.borderDark}`,
             }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 11, color: hw.textSecondary }}>Play truncated notes</span>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>{tr('Play truncated notes')}</span>
                 <span style={{ fontSize: 9, color: hw.textFaint }}>
-                  When you start playing in the middle of a note, play the rest of it from where you started, with its envelope already open. Off means only notes that begin after that point sound.
+                  {tr('When you start playing in the middle of a note, play the rest of it from where you started, with its envelope already open. Off means only notes that begin after that point sound.')}
                 </span>
               </div>
               <button
@@ -1423,7 +1420,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   fontFamily: 'inherit',
                 }}
               >
-                {audioPrefs.playTruncatedNotes ? 'On' : 'Off'}
+                {audioPrefs.playTruncatedNotes ? tr('On') : tr('Off')}
               </button>
             </div>
           </>)}
@@ -1433,21 +1430,21 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 click, the count-in, and how late the take lands. */}
             <SettingRow label="Metronome">
               <Btn
-                label={metronome.enabled ? 'On' : 'Off'}
+                label={metronome.enabled ? tr('On') : tr('Off')}
                 primary={metronome.enabled}
                 onClick={() => metronome.setEnabled(!metronome.enabled)}
               />
             </SettingRow>
             <SettingRow label="Click only while recording">
               <Btn
-                label={metronome.recordOnly ? 'On' : 'Off'}
+                label={metronome.recordOnly ? tr('On') : tr('Off')}
                 primary={metronome.recordOnly}
                 onClick={() => metronome.setRecordOnly(!metronome.recordOnly)}
               />
             </SettingRow>
             <SettingRow label="Accent the downbeat">
               <Btn
-                label={metronome.accent ? 'On' : 'Off'}
+                label={metronome.accent ? tr('On') : tr('Off')}
                 primary={metronome.accent}
                 onClick={() => metronome.setAccent(!metronome.accent)}
               />
@@ -1465,20 +1462,20 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
             </SettingRow>
             {/* The user's own click sounds, played by the engine on the beat. */}
             <SettingRow label="Click sound">
-              <ClickFile path={metronome.beatSound} empty="Built-in" onChange={metronome.setBeatSound} />
+              <ClickFile path={metronome.beatSound} empty={tr('Built-in')} onChange={metronome.setBeatSound} />
             </SettingRow>
             <SettingRow label="Downbeat sound">
-              <ClickFile path={metronome.downbeatSound} empty="Same as the click" onChange={metronome.setDownbeatSound} />
+              <ClickFile path={metronome.downbeatSound} empty={tr('Same as the click')} onChange={metronome.setDownbeatSound} />
             </SettingRow>
             <SettingRow label="Count-in">
               <Select
                 value={String(metronome.precountBars)}
                 onChange={v => metronome.setPrecountBars(Number(v))}
                 options={[
-                  { value: '0', label: 'Off' },
-                  { value: '1', label: '1 bar' },
-                  { value: '2', label: '2 bars' },
-                  { value: '4', label: '4 bars' },
+                  { value: '0', label: tr('Off') },
+                  { value: '1', label: tr('1 bar') },
+                  { value: '2', label: tf('{n} bars', { n: 2 }) },
+                  { value: '4', label: tf('{n} bars', { n: 4 }) },
                 ]}
               />
             </SettingRow>
@@ -1491,18 +1488,17 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
             {/* Where the DAW looks for plug-ins. This lived in the browser
                 panel, which is not where anyone looks for a setting. */}
             <div style={{ fontSize: 11, color: hw.textSecondary, marginBottom: 8 }}>
-              {scanning ? 'Scanning…' : `${plugins.length} plug-ins found`}
+              {scanning ? tr('Scanning…') : tf('{n} plug-ins found', { n: plugins.length })}
               <span style={{ marginLeft: 8 }}>
-                <Btn label="Rescan" onClick={() => { void scanPlugins() }} disabled={scanning} />
+                <Btn label={tr('Rescan')} onClick={() => { void scanPlugins() }} disabled={scanning} />
               </span>
             </div>
             <div style={{ fontSize: 10, color: hw.textFaint, marginBottom: 10, lineHeight: 1.5 }}>
-              The usual system folders are always searched. Add a folder here when you keep
-              plug-ins somewhere else.
+              {tr('The usual system folders are always searched. Add a folder here when you keep plug-ins somewhere else.')}
             </div>
             {[...customVst3Paths, ...customClapPaths].length === 0 && (
               <div style={{ fontSize: 10, color: hw.textFaint, marginBottom: 8 }}>
-                No extra folders.
+                {tr('No extra folders.')}
               </div>
             )}
             {customVst3Paths.map(path => (
@@ -1515,7 +1511,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 </span>
                 <span style={{ fontSize: 9, color: hw.textFaint }}>VST3</span>
                 <Btn
-                  label="Remove"
+                  label={tr('Remove')}
                   onClick={() => {
                     void setCustomPaths(customVst3Paths.filter(p => p !== path), customClapPaths)
                   }}
@@ -1532,7 +1528,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 </span>
                 <span style={{ fontSize: 9, color: hw.textFaint }}>CLAP</span>
                 <Btn
-                  label="Remove"
+                  label={tr('Remove')}
                   onClick={() => {
                     void setCustomPaths(customVst3Paths, customClapPaths.filter(p => p !== path))
                   }}
@@ -1551,7 +1547,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 }}
               />
               <Btn
-                label="Add VST3 folder"
+                label={tr('Add VST3 folder')}
                 onClick={() => {
                   const path = newPluginPath.trim()
                   if (!path) return
@@ -1560,7 +1556,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 }}
               />
               <Btn
-                label="Add CLAP folder"
+                label={tr('Add CLAP folder')}
                 onClick={() => {
                   const path = newPluginPath.trim()
                   if (!path) return
@@ -1577,14 +1573,14 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               <Select
                 value={autosavePrefs.frequency}
                 onChange={v => autosavePrefs.setFrequency(v as typeof autosavePrefs.frequency)}
-                options={AUTOSAVE_OPTIONS.map(o => ({ value: o.id, label: o.label }))}
+                options={AUTOSAVE_OPTIONS.map(o => ({ value: o.id, label: tr(o.label) }))}
               />
             </SettingRow>
             <div style={{
               fontSize: 9, color: hw.textFaint, lineHeight: 1.5,
               margin: '-4px 4px 10px', maxWidth: 360,
             }}>
-              {AUTOSAVE_OPTIONS.find(o => o.id === autosavePrefs.frequency)?.desc}
+              {tr(AUTOSAVE_OPTIONS.find(o => o.id === autosavePrefs.frequency)?.desc ?? '')}
             </div>
           </>)}
 
@@ -1614,8 +1610,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 value={generalPrefs.noteNaming}
                 onChange={v => generalPrefs.setNoteNaming(v as typeof generalPrefs.noteNaming)}
                 options={[
-                  { value: 'english', label: 'English (C-B)' },
-                  { value: 'germanic', label: 'Germanic (C-H)' },
+                  { value: 'english', label: tr('English (C-B)') },
+                  { value: 'germanic', label: tr('Germanic (C-H)') },
                   { value: 'solfege', label: 'Solfège (Do-Ti)' },
                 ]}
               />
@@ -1636,9 +1632,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   border: `1px solid ${generalPrefs.animationsEnabled ? hw.borderDark : hw.accent}`,
                   fontFamily: 'inherit',
                 }}
-                title="When off, the UI runs without transitions or animations (FL 'Don't distract me')"
+                title={tr("When off, the UI runs without transitions or animations (FL 'Don't distract me')")}
               >
-                Animations: {generalPrefs.animationsEnabled ? 'On' : 'Off'}
+                {tf('Animations: {state}', { state: generalPrefs.animationsEnabled ? tr('On') : tr('Off') })}
               </button>
               <button
                 onClick={() => generalPrefs.setHighVisibility(!generalPrefs.highVisibility)}
@@ -1652,9 +1648,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   border: `1px solid ${generalPrefs.highVisibility ? hw.accent : hw.borderDark}`,
                   fontFamily: 'inherit',
                 }}
-                title="Bumps text + border contrast and adds focus rings for accessibility"
+                title={tr('Bumps text + border contrast and adds focus rings for accessibility')}
               >
-                High-visibility: {generalPrefs.highVisibility ? 'On' : 'Off'}
+                {tf('High-visibility: {state}', { state: generalPrefs.highVisibility ? tr('On') : tr('Off') })}
               </button>
             </div>
           </>)}
@@ -1700,13 +1696,14 @@ function ClickFile({ path, empty, onChange }: {
   empty: string
   onChange: (path: string | null) => void
 }) {
+  useLanguage()
   const name = path ? path.split(/[\\/]/).pop() : empty
   const choose = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const picked = await open({
         multiple: false,
-        title: 'Click sound',
+        title: tr('Click sound'),
         filters: [{ name: 'Audio', extensions: ['wav', 'aif', 'aiff', 'flac', 'mp3', 'ogg'] }],
       })
       if (typeof picked === 'string') onChange(picked)
@@ -1720,8 +1717,8 @@ function ClickFile({ path, empty, onChange }: {
       >
         {name}
       </span>
-      <Btn label="Choose…" onClick={() => { void choose() }} />
-      {path && <Btn label="Reset" onClick={() => onChange(null)} />}
+      <Btn label={tr('Choose…')} onClick={() => { void choose() }} />
+      {path && <Btn label={tr('Reset')} onClick={() => onChange(null)} />}
     </>
   )
 }

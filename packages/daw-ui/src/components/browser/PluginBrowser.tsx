@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { usePluginStore } from '../../stores/pluginStore'
 import { useTrackStore } from '../../stores/trackStore'
+import { t, tf, useLanguage } from '../../i18n'
 
 export function PluginBrowser() {
+  useLanguage()
   const {
     plugins,
     scanning,
@@ -65,11 +67,11 @@ export function PluginBrowser() {
         justifyContent: 'space-between',
         gap: 6,
       }}>
-        <span style={{ fontSize: 10, fontWeight: 700, color: '#555', letterSpacing: 1 }}>PLUGINS</span>
+        <span style={{ fontSize: 10, fontWeight: 700, color: '#555', letterSpacing: 1 }}>{t('PLUGINS')}</span>
         <div style={{ display: 'flex', gap: 4 }}>
           <button
             onClick={() => setShowSettings((v) => !v)}
-            title="Scan settings"
+            title={t('Scan settings')}
             style={{
               padding: '2px 8px', fontSize: 9,
               background: showSettings ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)',
@@ -82,14 +84,14 @@ export function PluginBrowser() {
           <button
             onClick={scanPlugins}
             disabled={scanning}
-            title="Re-scan plugin folders"
+            title={t('Re-scan plugin folders')}
             style={{
               padding: '2px 8px', fontSize: 9,
               background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
               borderRadius: 4, color: '#666', cursor: 'pointer', fontFamily: 'inherit',
             }}
           >
-            {scanning ? 'Scanning...' : 'Re-scan'}
+            {scanning ? t('Scanning...') : t('Re-scan')}
           </button>
         </div>
       </div>
@@ -101,7 +103,7 @@ export function PluginBrowser() {
           borderBottom: '1px solid rgba(255,255,255,0.04)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>
-          Scanning… {scanProgress.count} found · {scanProgress.current || '…'}
+          {tf('Scanning… {n} found · {current}', { n: scanProgress.count, current: scanProgress.current || '…' })}
         </div>
       )}
 
@@ -111,7 +113,7 @@ export function PluginBrowser() {
           background: 'rgba(255,255,255,0.02)',
           borderBottom: '1px solid rgba(255,255,255,0.04)',
         }}>
-          +{lastDiff.added.length} new · -{lastDiff.removed.length} missing
+          {tf('+{added} new · -{removed} missing', { added: lastDiff.added.length, removed: lastDiff.removed.length })}
         </div>
       )}
 
@@ -123,11 +125,11 @@ export function PluginBrowser() {
           display: 'flex', flexDirection: 'column', gap: 8,
         }}>
           <div style={{ fontSize: 9, color: '#555' }}>
-            Cache: <span style={{ color: '#777' }}>{cachePath ?? 'unavailable'}</span>
+            {t('Cache:')} <span style={{ color: '#777' }}>{cachePath ?? t('unavailable')}</span>
           </div>
 
           <div>
-            <div style={{ fontSize: 9, color: '#555', marginBottom: 3 }}>CUSTOM VST3 PATHS</div>
+            <div style={{ fontSize: 9, color: '#555', marginBottom: 3 }}>{t('CUSTOM VST3 PATHS')}</div>
             {customVst3Paths.map((p) => (
               <div key={p} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
                 <span style={{ fontSize: 10, color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p}</span>
@@ -164,12 +166,12 @@ export function PluginBrowser() {
                   background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
                   borderRadius: 3, color: '#888', cursor: 'pointer', fontFamily: 'inherit',
                 }}
-              >Add</button>
+              >{t('Add')}</button>
             </div>
           </div>
 
           <div>
-            <div style={{ fontSize: 9, color: '#555', marginBottom: 3 }}>CUSTOM CLAP PATHS</div>
+            <div style={{ fontSize: 9, color: '#555', marginBottom: 3 }}>{t('CUSTOM CLAP PATHS')}</div>
             {customClapPaths.map((p) => (
               <div key={p} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
                 <span style={{ fontSize: 10, color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p}</span>
@@ -206,20 +208,20 @@ export function PluginBrowser() {
                   background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
                   borderRadius: 3, color: '#888', cursor: 'pointer', fontFamily: 'inherit',
                 }}
-              >Add</button>
+              >{t('Add')}</button>
             </div>
           </div>
 
           <div style={{ fontSize: 9, color: '#444' }}>
-            New custom paths apply on the next Re-scan.
+            {t('New custom paths apply on the next Re-scan.')}
           </div>
         </div>
       )}
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {plugins.length === 0 && (
-          <div style={{ padding: 16, textAlign: 'center', color: '#222', fontSize: 10 }}>
-            Click "Re-scan" to find<br />VST3 & CLAP plugins
+          <div style={{ padding: 16, textAlign: 'center', color: '#222', fontSize: 10, whiteSpace: 'pre-line' }}>
+            {t('Click "Re-scan" to find\nVST3 & CLAP plugins')}
           </div>
         )}
 
@@ -263,7 +265,7 @@ export function PluginBrowser() {
               </div>
               <button
                 onClick={(e) => { e.stopPropagation(); toggleBlocked(plugin.id) }}
-                title={isBlocked ? 'Unblock plugin' : 'Block plugin'}
+                title={isBlocked ? t('Unblock plugin') : t('Block plugin')}
                 style={{
                   fontSize: 9, padding: '1px 6px', marginLeft: 6,
                   background: isBlocked ? 'rgba(255, 80, 80, 0.12)' : 'rgba(255,255,255,0.04)',
@@ -272,7 +274,7 @@ export function PluginBrowser() {
                   cursor: 'pointer', fontFamily: 'inherit',
                 }}
               >
-                {isBlocked ? 'blocked' : 'block'}
+                {isBlocked ? t('blocked') : t('block')}
               </button>
             </div>
           )
@@ -281,7 +283,7 @@ export function PluginBrowser() {
 
       {selectedTrackId && plugins.length > 0 && (
         <div style={{ padding: '6px 12px', borderTop: '1px solid rgba(255,255,255,0.04)', fontSize: 9, color: '#333' }}>
-          Click a plugin to add to selected track
+          {t('Click a plugin to add to selected track')}
         </div>
       )}
     </div>

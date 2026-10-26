@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { hw } from '../theme'
+import { t, tf, useLanguage } from '../i18n'
 
 export type SaveChangesChoice = 'save' | 'discard' | 'cancel'
 
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export function SaveChangesDialog({ action, onChoice }: Props) {
+  useLanguage()
   const saveBtn = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     saveBtn.current?.focus()
@@ -42,30 +44,30 @@ export function SaveChangesDialog({ action, onChoice }: Props) {
           color: hw.textPrimary,
           marginBottom: 8,
         }}>
-          Unsaved changes
+          {t('Unsaved changes')}
         </div>
         <div style={{ fontSize: 13, color: hw.textSecondary, marginBottom: 20, lineHeight: 1.5 }}>
-          You have unsaved changes in this project. {action}?
+          {tf('You have unsaved changes in this project. {action}?', { action: t(action) })}
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button
             onClick={() => onChoice('cancel')}
             style={btnStyle(false)}
           >
-            Cancel
+            {t('Cancel')}
           </button>
           <button
             onClick={() => onChoice('discard')}
             style={btnStyle(false)}
           >
-            Don't Save
+            {t("Don't Save")}
           </button>
           <button
             ref={saveBtn}
             onClick={() => onChoice('save')}
             style={btnStyle(true)}
           >
-            Save
+            {t('Save')}
           </button>
         </div>
       </div>

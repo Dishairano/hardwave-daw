@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
+import { t, useLanguage } from '../../i18n'
 
 interface TakeFormat {
   bits24: boolean
@@ -21,6 +22,7 @@ const buttonStyle = (on = false): React.CSSProperties => ({
  * have room for the longest take.
  */
 export function TakeFormatRow() {
+  useLanguage()
   const [format, setFormat] = useState<TakeFormat | null>(null)
   useEffect(() => {
     invoke<TakeFormat>('get_take_format').then(setFormat).catch(() => setFormat({ bits24: false, folder: null }))
@@ -35,7 +37,7 @@ export function TakeFormatRow() {
   const chooseFolder = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
-      const picked = await open({ directory: true, multiple: false, title: 'Folder for recorded takes' })
+      const picked = await open({ directory: true, multiple: false, title: t('Folder for recorded takes') })
       if (typeof picked === 'string') save({ ...format, folder: picked })
     } catch { /* no dialog outside the app */ }
   }
@@ -46,29 +48,29 @@ export function TakeFormatRow() {
       background: hw.bgPanel, borderRadius: hw.radius.sm, border: `1px solid ${hw.borderDark}`,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: 11, color: hw.textMuted }}>Takes are saved as</span>
+        <span style={{ fontSize: 11, color: hw.textMuted }}>{t('Takes are saved as')}</span>
         <div style={{ display: 'flex', gap: 4 }}>
           <button style={buttonStyle(!format.bits24)} onClick={() => save({ ...format, bits24: false })}>32-bit float</button>
           <button style={buttonStyle(format.bits24)} onClick={() => save({ ...format, bits24: true })}>24-bit</button>
         </div>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 11, color: hw.textMuted, flexShrink: 0 }}>Takes are saved in</span>
+        <span style={{ fontSize: 11, color: hw.textMuted, flexShrink: 0 }}>{t('Takes are saved in')}</span>
         <span
           title={format.folder ?? undefined}
           style={{ fontSize: 10, color: hw.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl', minWidth: 0 }}
         >
-          {format.folder ?? "The song's Recordings folder"}
+          {format.folder ?? t("The song's Recordings folder")}
         </span>
         <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-          <button style={buttonStyle()} onClick={() => { void chooseFolder() }}>Choose…</button>
+          <button style={buttonStyle()} onClick={() => { void chooseFolder() }}>{t('Choose…')}</button>
           {format.folder && (
-            <button style={buttonStyle()} onClick={() => save({ ...format, folder: null })}>With the song</button>
+            <button style={buttonStyle()} onClick={() => save({ ...format, folder: null })}>{t('With the song')}</button>
           )}
         </div>
       </div>
       <span style={{ fontSize: 10, color: hw.textFaint }}>
-        Takes go to disk while you play, with no length limit: the folder needs room for the longest take.
+        {t('Takes go to disk while you play, with no length limit: the folder needs room for the longest take.')}
       </span>
     </div>
   )

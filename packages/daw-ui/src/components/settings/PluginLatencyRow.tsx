@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
+import { t, useLanguage } from '../../i18n'
 
 /**
  * How late the plug-ins make the song play, on top of the output latency.
@@ -10,6 +11,7 @@ import { hw } from '../../theme'
  * the sound looked like a slow audio device.
  */
 export function PluginLatencyRow() {
+  useLanguage()
   const [latency, setLatency] = useState<{ ms: number; pdcEnabled: boolean } | null>(null)
   useEffect(() => {
     let alive = true
@@ -27,8 +29,8 @@ export function PluginLatencyRow() {
   return (
     <div
       title={latency.pdcEnabled
-        ? 'The slowest plug-in chain: the other tracks wait this long so everything stays in time'
-        : 'Delay compensation is off (Options menu), so no track waits for its plug-ins'}
+        ? t('The slowest plug-in chain: the other tracks wait this long so everything stays in time')
+        : t('Delay compensation is off (Options menu), so no track waits for its plug-ins')}
       style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         marginTop: 6, padding: '8px 12px',
@@ -36,9 +38,9 @@ export function PluginLatencyRow() {
         border: `1px solid ${hw.borderDark}`,
       }}
     >
-      <span style={{ fontSize: 11, color: hw.textMuted }}>Plug-in delay</span>
+      <span style={{ fontSize: 11, color: hw.textMuted }}>{t('Plug-in delay')}</span>
       <span style={{ fontSize: 12, fontWeight: 600, color: hw.textPrimary, fontFamily: "'Consolas', monospace" }}>
-        {latency.pdcEnabled ? `${latency.ms.toFixed(1)} ms` : 'compensation off'}
+        {latency.pdcEnabled ? `${latency.ms.toFixed(1)} ms` : t('compensation off')}
       </span>
     </div>
   )
