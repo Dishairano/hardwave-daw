@@ -89,6 +89,11 @@ pub type TrackMeterMap = Arc<Mutex<HashMap<String, Arc<TrackMeterState>>>>;
 /// Maximum number of snapshots kept on each side of the history.
 const HISTORY_CAP: usize = 256;
 
+/// How many modulation routes the audio thread follows. Its state is sized
+/// for this many up front, so it never allocates; routes past it are left
+/// still.
+const MAX_MOD_ROUTES: usize = 256;
+
 /// Snapshot-based undo/redo. A snapshot is a full `Project` clone; the struct is
 /// small (track/clip metadata only — audio samples live in the AudioPool and are
 /// referenced by source id), so cloning is cheap.
@@ -2530,6 +2535,15 @@ struct EngineCallback {
     /// Which graph edges carry each send, filled at rebuild so a SendLevel
     /// automation lane can move a send's gain per block.
     send_edges: Vec<SendEdges>,
+    /// Modulation's state between blocks: each route's envelope follower,
+    /// where every MIDI controller was last moved, each route's value this
+    /// block (NaN when off), and the level and pan it gave each node this
+    /// block and the last, so a node whose route went away is put back.
+    mod_env: Vec<f32>,
+    mod_cc: [f32; 128],
+    mod_values: Vec<f64>,
+    mod_mix: Vec<(usize, f32, f32)>,
+    mod_mix_prev: Vec<(usize, f32, f32)>,
     /// The edges that carry live input to a monitoring track, switched per
     /// block for tracks whose monitoring follows the transport.
     monitor_edges: Vec<MonitorEdges>,
@@ -2559,6 +2573,11 @@ struct SendEdges {
     send_index: usize,
     left_edge: usize,
     right_edge: usize,
+    /// The send's level as the mixer has it, for a block with no lane.
+    base_gain: f32,
+    /// A route moved it last block, so it goes back to its level when
+    /// the route is taken away.
+    modulated: bool,
 }
 
 /// The two edges that carry live input to one monitoring track (or to the
@@ -2721,6 +2740,11 @@ impl EngineCallback {
             record_pass,
             record_last_pos,
             send_edges: Vec::with_capacity(64),
+            mod_env: vec![0.0; MAX_MOD_ROUTES],
+            mod_cc: [0.0; 128],
+            mod_values: Vec::with_capacity(MAX_MOD_ROUTES),
+            mod_mix: Vec::with_capacity(MAX_MOD_ROUTES),
+            mod_mix_prev: Vec::with_capacity(MAX_MOD_ROUTES),
             monitor_edges: Vec::with_capacity(8),
             worker_pool,
             reference,
@@ -3459,6 +3483,9 @@ impl EngineCallback {
 
         self.graph.clear();
         self.send_edges.clear();
+        // The new nodes start with their own level and pan.
+        self.mod_mix.clear();
+        self.mod_mix_prev.clear();
         self.monitor_edges.clear();
         self.midi_track_nodes.clear();
         // Whether the work is shared across cores is a setting, and a
@@ -4210,6 +4237,8 @@ impl EngineCallback {
                     send_index,
                     left_edge,
                     right_edge,
+                    base_gain: gain,
+                    modulated: false,
                 });
             }
         }
@@ -4615,67 +4644,156 @@ impl EngineCallback {
             }
         }
 
-        // Send level automation. Sends are graph edges with a gain baked at
-        // rebuild, so a SendLevel lane had nowhere to land: it was stored,
-        // drawn in the lane editor, and never applied. The lanes live in the
-        // project, which the audio thread must not wait on, so this runs only
-        // when the lock is free, and a busy block leaves the send at its last
-        // value rather than jumping to silence.
-        if !self.send_edges.is_empty() {
-            if let Some(project) = self.project.try_lock() {
-                for entry in &self.send_edges {
-                    let Some(track) = project.tracks.iter().find(|t| t.id == entry.track_id) else {
-                        continue;
-                    };
-                    let lane = track.automation_lanes.iter().find(|l| {
-                        l.visible
-                            && matches!(
-                                l.target,
-                                hardwave_project::automation::AutomationTarget::SendLevel {
-                                    send_index
-                                } if send_index == entry.send_index
-                            )
-                    });
-                    let Some(lane) = lane else { continue };
+        // Send levels and modulation. Both live in the project, which the
+        // audio thread must not wait on, so this runs only when the lock is
+        // free, and a busy block leaves every send and knob where it was.
+        if let Some(project) = self.project.try_lock() {
+            use hardwave_project::automation::AutomationTarget;
+            use hardwave_project::modulation::{ModSource, ModTarget};
+
+            // Every route's value this block. A source that keeps running,
+            // wired to a knob: automation draws a shape once, this one never
+            // stops. A track's level is read from its meter, so it is the
+            // level of the block before: a few milliseconds.
+            self.mod_values.clear();
+            let routes = &project.modulations[..project.modulations.len().min(MAX_MOD_ROUTES)];
+            let meters = if routes
+                .iter()
+                .any(|r| matches!(r.source, ModSource::Envelope { .. }))
+            {
+                self.track_meters.try_lock()
+            } else {
+                None
+            };
+            let block_secs = num_frames as f32 / self.sample_rate as f32;
+            for (i, route) in routes.iter().enumerate() {
+                let swing = match &route.source {
+                    ModSource::Lfo { .. } => route
+                        .lfo_swing(position_ticks, tempo_now, hardwave_midi::PPQ)
+                        .unwrap_or(0.0),
+                    ModSource::Envelope {
+                        track_id,
+                        release_ms,
+                    } => {
+                        let env = &mut self.mod_env[i];
+                        if let Some(meter) = meters.as_ref().and_then(|m| m.get(track_id)) {
+                            use std::sync::atomic::Ordering::Relaxed;
+                            let db = meter
+                                .peak_db_l
+                                .load(Relaxed)
+                                .max(meter.peak_db_r.load(Relaxed));
+                            let level = 10.0_f32.powf(db / 20.0).min(1.0);
+                            // Up at once with the track, down over the
+                            // release: a follower, as a compressor has.
+                            let fall = (-block_secs * 1000.0 / release_ms.max(1.0) as f32).exp();
+                            *env = level.max(*env * fall);
+                        }
+                        *env as f64 * 2.0 - 1.0
+                    }
+                    ModSource::MidiCc { cc } => {
+                        self.mod_cc[(*cc & 0x7F) as usize] as f64 * 2.0 - 1.0
+                    }
+                };
+                self.mod_values.push(if route.enabled {
+                    route.value_with(swing)
+                } else {
+                    f64::NAN
+                });
+            }
+            drop(meters);
+
+            // Sends are graph edges with a gain baked at rebuild, so a
+            // SendLevel lane had nowhere to land: it was stored, drawn in
+            // the lane editor, and never applied. A lane sets the level each
+            // block, and a route multiplies whatever the lane or the mixer
+            // says.
+            for entry in &mut self.send_edges {
+                let Some(track) = project.tracks.iter().find(|t| t.id == entry.track_id) else {
+                    continue;
+                };
+                let lane = track.automation_lanes.iter().find(|l| {
+                    l.visible
+                        && matches!(
+                            l.target,
+                            AutomationTarget::SendLevel { send_index } if send_index == entry.send_index
+                        )
+                });
+                let mut gain = match lane {
                     // Lane values are 0..1 across the send's own range, the
                     // same shape the mixer's send control uses.
-                    let db = lane.denormalized_value_at(position_ticks, -60.0, 6.0);
-                    let gain = if db <= -60.0 {
-                        0.0
-                    } else {
-                        10.0_f64.powf(db / 20.0) as f32
-                    };
-                    self.graph.set_edge_gain(entry.left_edge, gain);
-                    self.graph.set_edge_gain(entry.right_edge, gain);
-                }
-            }
-        }
-
-        // Modulation. A source that keeps running, wired to a plug-in's
-        // knob: automation draws a shape once, this one never stops. The
-        // routes live in the project, which the audio thread must not
-        // wait on, so a busy block leaves every knob where it was.
-        {
-            let bpm = tempo_now;
-            if let Some(project) = self.project.try_lock() {
-                for route in &project.modulations {
-                    if !route.enabled {
-                        continue;
-                    }
-                    let value = route.value_at(position_ticks, bpm, hardwave_midi::PPQ);
-                    let Some(&node_id) = self.track_id_to_node.get(&route.track_id) else {
-                        continue;
-                    };
-                    match &route.target {
-                        hardwave_project::modulation::ModTarget::PluginParam {
-                            slot_id,
-                            param_id,
-                        } => {
-                            if let Some(node) = self.graph.node_mut(node_id) {
-                                node.set_chain_parameter(slot_id, *param_id, value);
-                            }
+                    Some(lane) => {
+                        let db = lane.denormalized_value_at(position_ticks, -60.0, 6.0);
+                        if db <= -60.0 {
+                            0.0
+                        } else {
+                            10.0_f64.powf(db / 20.0) as f32
                         }
                     }
+                    None => entry.base_gain,
+                };
+                let mut modulated = false;
+                for (route, &value) in routes.iter().zip(&self.mod_values) {
+                    if !value.is_nan()
+                        && route.track_id == entry.track_id
+                        && matches!(
+                            route.target,
+                            ModTarget::SendLevel { send_index } if send_index == entry.send_index
+                        )
+                    {
+                        gain *= value as f32;
+                        modulated = true;
+                    }
+                }
+                if lane.is_none() && !modulated && !entry.modulated {
+                    continue;
+                }
+                entry.modulated = modulated;
+                self.graph.set_edge_gain(entry.left_edge, gain);
+                self.graph.set_edge_gain(entry.right_edge, gain);
+            }
+
+            // Plug-in knobs are set to the value; a track's level and pan
+            // are moved on top of the fader and pan knob, which their
+            // automation writes every block. All routes onto one node are
+            // added up first: levels multiply, pans add.
+            std::mem::swap(&mut self.mod_mix, &mut self.mod_mix_prev);
+            self.mod_mix.clear();
+            for (route, &value) in routes.iter().zip(&self.mod_values) {
+                if value.is_nan() {
+                    continue;
+                }
+                let Some(&node_id) = self.track_id_to_node.get(&route.track_id) else {
+                    continue;
+                };
+                let (gain, pan) = match &route.target {
+                    ModTarget::PluginParam { slot_id, param_id } => {
+                        if let Some(node) = self.graph.node_mut(node_id) {
+                            node.set_chain_parameter(slot_id, *param_id, value);
+                        }
+                        continue;
+                    }
+                    ModTarget::SendLevel { .. } => continue,
+                    ModTarget::TrackVolume => (value as f32, 0.0),
+                    ModTarget::TrackPan => (1.0, (value as f32 - 0.5) * 2.0),
+                };
+                match self.mod_mix.iter_mut().find(|m| m.0 == node_id) {
+                    Some(m) => {
+                        m.1 *= gain;
+                        m.2 += pan;
+                    }
+                    None => self.mod_mix.push((node_id, gain, pan)),
+                }
+            }
+            for &(node_id, _, _) in &self.mod_mix_prev {
+                if !self.mod_mix.iter().any(|m| m.0 == node_id) {
+                    if let Some(node) = self.graph.node_mut(node_id) {
+                        node.set_mod_mix(1.0, 0.0);
+                    }
+                }
+            }
+            for &(node_id, gain, pan) in &self.mod_mix {
+                if let Some(node) = self.graph.node_mut(node_id) {
+                    node.set_mod_mix(gain, pan);
                 }
             }
         }
@@ -4719,6 +4837,10 @@ impl EngineCallback {
             }
             for (ev, _) in &self.midi_aged_scratch {
                 self.midi_event_scratch.push(*ev);
+                // Where each controller was left, for modulation from it.
+                if let hardwave_midi::MidiEvent::ControlChange { cc, value, .. } = ev {
+                    self.mod_cc[(*cc & 0x7F) as usize] = value.clamp(0.0, 1.0);
+                }
             }
         }
 

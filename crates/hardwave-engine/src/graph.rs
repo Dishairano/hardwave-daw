@@ -67,6 +67,11 @@ pub trait AudioNode: Send {
     /// once per route per block.
     fn set_chain_parameter(&mut self, _slot_id: &str, _param_id: u32, _value: f64) {}
 
+    /// Modulation's share of a track's level and pan, on top of the fader,
+    /// the pan knob and their automation: the level multiplied by `gain`,
+    /// the pan moved by `pan`. (1, 0) changes nothing.
+    fn set_mod_mix(&mut self, _gain: f32, _pan: f32) {}
+
     /// Stable project-side identifier for the track this node represents,
     /// if any. Returns `None` for non-track nodes (master, input bus,
     /// etc.). Used by the engine to route per-track plug-in commands.
