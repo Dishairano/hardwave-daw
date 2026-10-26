@@ -381,6 +381,21 @@ pub fn build_project(
         })
         .map(|(_, channel, _)| *channel)
         .collect();
+    // A layer that plays brings its children, each with a track of its own,
+    // even when they have no notes themselves; layers of layers too.
+    let mut playing = playing;
+    let mut layers = playing.iter().copied().collect::<Vec<_>>();
+    while let Some(index) = layers.pop() {
+        for child in fl
+            .channels
+            .get(index as usize)
+            .map_or(&[][..], |c| &c.layer_children)
+        {
+            if (*child as usize) < fl.channels.len() && playing.insert(*child) {
+                layers.push(*child);
+            }
+        }
+    }
     let mut instrument_track: BTreeMap<u32, String> = BTreeMap::new();
     for channel_index in playing {
         row += 1;
@@ -435,6 +450,13 @@ pub fn build_project(
                         track.muted |= !carried;
                     }
                 }
+                // A layer has no sound of its own: its notes play on its
+                // children (routed to them below).
+                (FlChannelKind::Layer, _) if !channel.layer_children.is_empty() => {
+                    if let Some(track) = project.track_mut(&id) {
+                        track.muted = true;
+                    }
+                }
                 (FlChannelKind::Instrument | FlChannelKind::Layer, _) => {
                     report.plugins_left_behind.push(match &channel.plugin_name {
                         Some(plugin) if plugin != "Fruity Wrapper" => format!("{name} ({plugin})"),
@@ -453,6 +475,19 @@ pub fn build_project(
             }
         }
         instrument_track.insert(channel_index, id);
+    }
+    for (index, layer_id) in &instrument_track {
+        let children: Vec<String> = fl
+            .channels
+            .get(*index as usize)
+            .map_or(&[][..], |c| &c.layer_children)
+            .iter()
+            .filter_map(|child| instrument_track.get(child).cloned())
+            .filter(|child| child != layer_id)
+            .collect();
+        if let (false, Some(track)) = (children.is_empty(), project.track_mut(layer_id)) {
+            track.midi_route_to = children;
+        }
     }
 
     // Each placement of a pattern brings its notes, per channel, to that
@@ -1464,6 +1499,7 @@ mod tests {
     ) -> FlChannel {
         FlChannel {
             color: None,
+            layer_children: Vec::new(),
             plugin_data: Vec::new(),
             automation: Vec::new(),
             name: name.into(),
@@ -1965,6 +2001,55 @@ mod tests {
         .apply(&mut later, 96_000, 48_000);
         assert_eq!(later.source_start, 36_000);
         assert_eq!(later.source_end, 84_000);
+    }
+
+    /// A layer plays its notes on its children, which get tracks even with
+    /// no notes of their own; the layer itself makes no sound.
+    #[test]
+    fn a_layer_plays_its_notes_on_its_children() {
+        let mut fl = song();
+        let screech = fl
+            .channels
+            .iter()
+            .position(|c| c.name == "Screech")
+            .expect("screech") as u32;
+        fl.channels
+            .push(channel("Pad", FlChannelKind::Instrument, None, None));
+        let pad = fl.channels.len() as u32 - 1;
+        let mut stack = channel("Stack", FlChannelKind::Layer, None, None);
+        stack.layer_children = vec![screech, pad];
+        fl.channels.push(stack);
+        let layer = fl.channels.len() as u32 - 1;
+        let (pattern, _, notes) = fl.pattern_notes[0].clone();
+        fl.pattern_notes.push((pattern, layer, notes));
+
+        let built = build_project(&fl, "s", &here);
+        let p = &built.project;
+        let track = |name: &str| {
+            p.tracks
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("{name}"))
+        };
+        let stack = track("Stack");
+        assert!(stack.muted, "no sound of its own");
+        let mut routed = stack.midi_route_to.clone();
+        routed.sort();
+        let mut children = vec![track("Screech").id.clone(), track("Pad").id.clone()];
+        children.sort();
+        assert_eq!(routed, children);
+        assert!(
+            !stack.clips.is_empty(),
+            "its notes are on it, for its children to play"
+        );
+        assert!(
+            !built
+                .report
+                .plugins_left_behind
+                .iter()
+                .any(|n| n.starts_with("Stack")),
+            "a layer is not a plug-in left behind"
+        );
     }
 
     #[test]
