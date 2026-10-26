@@ -230,12 +230,6 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
             list_of(&r.sample_fades_left_behind)
         ));
     }
-    if !r.mixed_lanes.is_empty() {
-        left_behind.push(format!(
-            "the routing of {}, whose samples play into different mixer inserts; it plays into the one most of them use",
-            list_of(&r.mixed_lanes)
-        ));
-    }
     if !r.effects_left_behind.is_empty() {
         left_behind.push(format!(
             "{} mixer effect{} with nothing built in to stand in for {} ({})",

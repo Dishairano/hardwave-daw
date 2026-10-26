@@ -246,10 +246,6 @@ pub struct FlBuildReport {
     /// Channels using FL's quick fade knobs on their sample, which do not
     /// come across yet.
     pub sample_fades_left_behind: Vec<String>,
-    /// Playlist tracks holding samples from channels routed to different
-    /// inserts, where a track here plays into one. (Channels panned,
-    /// swapped or inverted differently each keep theirs on their clips.)
-    pub mixed_lanes: Vec<String>,
     /// FL mixer inserts that came across as tracks.
     pub mixer_inserts: usize,
     /// Effects in the mixer that could not come across, as "insert: effect".
@@ -568,19 +564,46 @@ pub fn build_project(
 
     // The playlist's tracks that hold samples, in FL's order, after the
     // instruments.
-    let mut audio_lanes: BTreeMap<u32, Vec<&crate::fl_import::FlPlaylistClip>> = BTreeMap::new();
+    // Grouped by the insert they play into as well: a row whose samples go
+    // to different inserts becomes a track per insert, so each sample plays
+    // through the one FL played it through. The whole row used to go to the
+    // insert most of its samples used.
+    let mut audio_lanes: BTreeMap<(u32, u32), Vec<&crate::fl_import::FlPlaylistClip>> =
+        BTreeMap::new();
     for clip in &fl.playlist_clips {
-        match &clip.content {
-            FlClipContent::AudioSample { .. } => {
-                audio_lanes.entry(clip.track_index).or_default().push(clip)
-            }
-            FlClipContent::Automation { .. } => {}
-            FlClipContent::Pattern { .. } => {}
+        if let FlClipContent::AudioSample { channel_index, .. } = &clip.content {
+            let insert = fl
+                .channels
+                .get(*channel_index as usize)
+                .map(channel_insert)
+                .unwrap_or(0);
+            audio_lanes
+                .entry((clip.track_index, insert))
+                .or_default()
+                .push(clip);
         }
     }
+    let mut inserts_on_row: BTreeMap<u32, usize> = BTreeMap::new();
+    for (fl_track, _) in audio_lanes.keys() {
+        *inserts_on_row.entry(*fl_track).or_default() += 1;
+    }
+    let insert_label = |insert: u32| -> String {
+        fl.mixer
+            .iter()
+            .find(|m| m.index == insert)
+            .map(|m| m.name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| {
+                if insert == 0 {
+                    "Master".into()
+                } else {
+                    format!("Insert {insert}")
+                }
+            })
+    };
     let mut faded = BTreeSet::new();
     let mut lanes_of_channel: BTreeMap<u32, Vec<(String, f64)>> = BTreeMap::new();
-    for (fl_track, clips) in audio_lanes {
+    for ((fl_track, insert), clips) in audio_lanes {
         let channels: BTreeSet<u32> = clips
             .iter()
             .filter_map(|c| match &c.content {
@@ -597,6 +620,11 @@ pub fn build_project(
                 (channels.len() == 1).then(|| channel_name(*channels.iter().next().unwrap_or(&0)))
             })
             .unwrap_or_else(|| format!("Track {fl_track}"));
+        let lane_name = if inserts_on_row.get(&fl_track).copied().unwrap_or(1) > 1 {
+            format!("{lane_name} ({})", insert_label(insert))
+        } else {
+            lane_name
+        };
         row += 1;
         let track_id = project.claim_row(row, &lane_name, false);
         // The row's colour in FL, or its one channel's.
@@ -645,7 +673,6 @@ pub fn build_project(
                 )
             })
             .collect();
-        let mut agree = true;
         let mut per_clip = false;
         if let Some(first) = settings.first().copied() {
             if settings.iter().all(|s| *s == first) {
@@ -658,30 +685,7 @@ pub fn build_project(
                 per_clip = true;
             }
         }
-        // The lane plays into the insert most of its clips' channels go to.
-        let mut clips_per_insert: BTreeMap<u32, usize> = BTreeMap::new();
-        for clip in &clips {
-            if let FlClipContent::AudioSample { channel_index, .. } = &clip.content {
-                let insert = fl
-                    .channels
-                    .get(*channel_index as usize)
-                    .map(channel_insert)
-                    .unwrap_or(0);
-                *clips_per_insert.entry(insert).or_default() += 1;
-            }
-        }
-        if clips_per_insert.len() > 1 {
-            agree = false;
-        }
-        if let Some((&insert, _)) = clips_per_insert
-            .iter()
-            .max_by_key(|(i, n)| (**n, std::cmp::Reverse(**i)))
-        {
-            sources.push((track_id.clone(), insert));
-        }
-        if !agree {
-            report.mixed_lanes.push(lane_name.clone());
-        }
+        sources.push((track_id.clone(), insert));
         if let Some(track) = project.track_mut(&track_id) {
             track.muted |= track_off(fl_track);
             track.soloed = soloed(fl_track);
@@ -1829,14 +1833,13 @@ mod tests {
     }
 
     #[test]
-    fn lanes_whose_channels_disagree_are_named() {
+    fn lanes_whose_channels_disagree_pan_each_clip() {
         let mut fl = lane_song();
         fl.channels[4].settings.pan = 0;
         fl.channels[4].settings.polarity_inverted = true;
-        fl.channels[4].settings.mixer_insert = 3;
+        fl.channels[4].settings.mixer_insert = fl.channels[1].settings.mixer_insert;
         fl.playlist_clips[3].track_index = 5;
         let built = build_project(&fl, "Industrial", &here);
-        assert_eq!(built.report.mixed_lanes, vec!["Track 5".to_string()]);
         // The track stays centred; each clip pans as its own channel.
         let lane = built.project.track("insert-003").unwrap();
         assert_eq!(lane.pan, 0.0);
@@ -1855,6 +1858,38 @@ mod tests {
         assert!(treatments
             .iter()
             .any(|(_, t)| t.pan == -1.0 && t.polarity_inverted));
+    }
+
+    /// A row whose samples play into different inserts becomes a track per
+    /// insert, each routed as FL routed its samples; the whole row used to
+    /// play into the insert most of them used.
+    #[test]
+    fn a_row_whose_samples_go_to_different_inserts_becomes_a_track_each() {
+        let mut fl = mixer_song();
+        fl.playlist_clips[3].track_index = 5;
+        let row: Vec<_> = fl
+            .playlist_clips
+            .iter()
+            .filter(|c| c.track_index == 5)
+            .collect();
+        assert!(row.len() >= 2, "the row holds samples of two channels");
+        let built = build_project(&fl, "Industrial", &here);
+        let p = &built.project;
+        // FL never named row 5, so each track is named by its one channel,
+        // and by the insert it plays into.
+        let names: Vec<&str> = p.tracks.iter().map(|t| t.name.as_str()).collect();
+        let lane = |name: &str| {
+            p.tracks
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("{name} in {names:?}"))
+        };
+        let insert = |name: &str| lane(name).id.clone();
+        assert_eq!(
+            lane("Kick render (Insert 2)").output_bus,
+            Some(insert("Insert 2"))
+        );
+        assert_eq!(lane("Lost vocal (Ghost)").output_bus, Some(insert("Ghost")));
     }
 
     #[test]
