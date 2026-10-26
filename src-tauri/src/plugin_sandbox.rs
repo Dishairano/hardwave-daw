@@ -125,12 +125,29 @@ impl Block {
 #[derive(Clone, Default)]
 struct Trace(Option<Arc<Mutex<std::fs::File>>>);
 
+/// Most a plug-in's logs grow to before the next start begins them again.
+const LOG_LIMIT: u64 = 256 * 1024;
+
+/// A plug-in's log, added to at each start rather than begun again: a
+/// restart after a crash used to wipe the lines that said how it crashed.
+/// Begun again once it passes [`LOG_LIMIT`].
+fn plugin_log(file_name: &str) -> Option<std::fs::File> {
+    let dir = crate::diagnostics::logs_dir()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(file_name);
+    let too_big = std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_LIMIT);
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(!too_big)
+        .write(true)
+        .truncate(too_big)
+        .open(path)
+        .ok()
+}
+
 impl Trace {
     fn open(name: &str) -> Self {
-        let file = crate::diagnostics::logs_dir().and_then(|dir| {
-            std::fs::create_dir_all(&dir).ok()?;
-            std::fs::File::create(dir.join(format!("plugin-{name}-host.log"))).ok()
-        });
+        let file = plugin_log(&format!("plugin-{name}-host.log"));
         Trace(file.map(|f| Arc::new(Mutex::new(f))))
     }
 
@@ -256,11 +273,7 @@ impl SandboxedPlugin {
             .take(80)
             .collect();
         let trace = Trace::open(&log_name);
-        let stderr = crate::diagnostics::logs_dir()
-            .and_then(|dir| {
-                std::fs::create_dir_all(&dir).ok()?;
-                std::fs::File::create(dir.join(format!("plugin-{log_name}.log"))).ok()
-            })
+        let stderr = plugin_log(&format!("plugin-{log_name}.log"))
             .map(Stdio::from)
             .unwrap_or_else(Stdio::null);
         let child = command

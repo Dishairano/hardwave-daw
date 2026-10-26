@@ -59,7 +59,7 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
     }
     let mut would_make = 0usize;
     for clip in &fl.playlist_clips {
-        if let hardwave_project::fl_import::FlClipContent::Pattern { pattern_index } = &clip.content
+        if let hardwave_project::fl_import::FlClipContent::Pattern { pattern_index, .. } = &clip.content
         {
             would_make = would_make
                 .saturating_add(notes_per_pattern.get(pattern_index).copied().unwrap_or(0));

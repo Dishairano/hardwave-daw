@@ -287,12 +287,33 @@ pub struct FlPlaylistClip {
     /// Muted on the playlist (FL greys it out).
     #[serde(default)]
     pub muted: bool,
+    /// Which of FL's arrangements it is in, an index into
+    /// [`FlProject::arrangements`] (0 for a file from before them).
+    #[serde(default)]
+    pub arrangement: usize,
+}
+
+/// One of FL's arrangements (12.9 and later): its own playlist, its own
+/// track names and switches. The clips say which one they are in.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FlArrangement {
+    pub name: String,
+    #[serde(default)]
+    pub track_names: Vec<(u32, String)>,
+    #[serde(default)]
+    pub tracks_off: Vec<u32>,
+    #[serde(default)]
+    pub tracks_solo: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FlClipContent {
     Pattern {
         pattern_index: u32,
+        /// How far into the pattern the clip starts: a clip trimmed at its
+        /// left edge plays from there, not from the pattern's start.
+        #[serde(default)]
+        offset_ticks: u64,
     },
     /// A sample on the playlist: the channel it belongs to, its file, and
     /// where in the file the clip starts and ends, in milliseconds (FL
@@ -619,6 +640,13 @@ pub struct FlProject {
     /// Which knob each automation clip moves.
     #[serde(default)]
     pub automation_links: Vec<FlAutomationLink>,
+    /// FL's arrangements in the file's order; empty for a file from before
+    /// them. The playlist track names and switches above are the open one's.
+    #[serde(default)]
+    pub arrangements: Vec<FlArrangement>,
+    /// The arrangement open in FL, an index into `arrangements`.
+    #[serde(default)]
+    pub current_arrangement: usize,
 }
 
 /// Plugin mapping — translate an FL native plugin name into a
@@ -885,10 +913,14 @@ mod tests {
                 }],
             )],
             playlist_clips: vec![FlPlaylistClip {
+                arrangement: 0,
                 track_index: 0,
                 start_tick: 0,
                 length_ticks: 1920,
-                content: FlClipContent::Pattern { pattern_index: 0 },
+                content: FlClipContent::Pattern {
+                    pattern_index: 0,
+                    offset_ticks: 0,
+                },
                 muted: false,
             }],
             mixer: vec![FlMixerTrack {
@@ -901,6 +933,8 @@ mod tests {
             playlist_tracks_off: Vec::new(),
             automation_links: Vec::new(),
             playlist_tracks_solo: Vec::new(),
+            arrangements: Vec::new(),
+            current_arrangement: 0,
         }
     }
 
@@ -959,6 +993,7 @@ mod tests {
     fn automation_clip_count_derived_from_content_kind() {
         let mut project = sample_project();
         project.playlist_clips.push(FlPlaylistClip {
+                arrangement: 0,
             track_index: 1,
             start_tick: 0,
             length_ticks: 960,

@@ -458,7 +458,7 @@ pub fn build_project(
             .unwrap_or_else(|| format!("Pattern {pattern}"))
     };
     for clip in &fl.playlist_clips {
-        let FlClipContent::Pattern { pattern_index } = &clip.content else {
+        let FlClipContent::Pattern { pattern_index, .. } = &clip.content else {
             continue;
         };
         // A muted placement, or one on a track switched off, stays silent
@@ -1385,13 +1385,18 @@ mod tests {
             pattern_names: vec![(1, "Drop".into())],
             playlist_clips: vec![
                 FlPlaylistClip {
+                arrangement: 0,
                     track_index: 1,
                     start_tick: 0,
                     length_ticks: 3840,
-                    content: FlClipContent::Pattern { pattern_index: 1 },
+                    content: FlClipContent::Pattern {
+                    pattern_index: 1,
+                    offset_ticks: 0,
+                },
                     muted: false,
                 },
                 FlPlaylistClip {
+                arrangement: 0,
                     track_index: 5,
                     start_tick: 960,
                     length_ticks: 960,
@@ -1407,6 +1412,7 @@ mod tests {
                     muted: false,
                 },
                 FlPlaylistClip {
+                arrangement: 0,
                     track_index: 5,
                     start_tick: 1920,
                     length_ticks: 960,
@@ -1422,6 +1428,7 @@ mod tests {
                     muted: false,
                 },
                 FlPlaylistClip {
+                arrangement: 0,
                     track_index: 9,
                     start_tick: 0,
                     length_ticks: 960,
@@ -1437,6 +1444,7 @@ mod tests {
                     muted: false,
                 },
                 FlPlaylistClip {
+                arrangement: 0,
                     track_index: 2,
                     start_tick: 0,
                     length_ticks: 960,
@@ -2193,6 +2201,7 @@ mod tests {
                 target: *target,
             });
             fl.playlist_clips.push(FlPlaylistClip {
+                arrangement: 0,
                 track_index: 20,
                 start_tick: 8 * beat,
                 length_ticks: 4 * beat,
