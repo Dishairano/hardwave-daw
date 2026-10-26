@@ -2732,6 +2732,9 @@ struct EngineCallback {
     /// MIDI capture keeps so notes played with the song stopped can still be
     /// laid out by when they were played.
     capture_clock: u64,
+    /// Frames left to keep processing with the song stopped, after the last
+    /// live MIDI event (see `LIVE_MIDI_HOLD_SECONDS`).
+    live_midi_hold: u64,
     /// Which graph edges carry each send, filled at rebuild so a SendLevel
     /// automation lane can move a send's gain per block.
     send_edges: Vec<SendEdges>,
@@ -2940,6 +2943,7 @@ impl EngineCallback {
             record_pass,
             record_last_pos,
             capture_clock: 0,
+            live_midi_hold: 0,
             send_edges: Vec::with_capacity(64),
             mod_env: vec![0.0; MAX_MOD_ROUTES],
             mod_cc: [0.0; 128],
@@ -4644,6 +4648,11 @@ impl EngineCallback {
     }
 }
 
+/// How long the engine keeps processing with the song stopped after the
+/// last note or controller played live: long enough for a release or a
+/// reverb tail to sound out.
+const LIVE_MIDI_HOLD_SECONDS: u64 = 10;
+
 impl AudioCallback for EngineCallback {
     /// Some drivers hand over a bigger block than the one asked for. The
     /// graph is built for the size asked for, so everything past it came out
@@ -4855,9 +4864,97 @@ impl EngineCallback {
                 }
             }
         }
-        // When transport is stopped AND nothing is monitoring live input,
-        // the graph can only produce silence — skip processing to save CPU.
-        if !playing && !self.has_monitored_input {
+        // Drain external/injected MIDI events into the per-block scratch.
+        // try_lock keeps the audio thread non-blocking — on contention we
+        // simply pick up the events on the next block (~5ms later, well
+        // below human perception). The graph then forwards this slice
+        // only to nodes whose `accepts_live_midi` flag is set during
+        // rebuild (armed+monitor_input tracks + MIDI tracks).
+        // (Skipped when the wait-for-input check above already drained —
+        // clearing here would eat the very note that started playback.)
+        if !drained_while_parked {
+            self.midi_event_scratch.clear();
+            self.midi_aged_scratch.clear();
+            if let Some(mgr) = self.midi_input.try_lock() {
+                // With ages, so a recorded note goes back to when it was
+                // played rather than to the start of the block that noticed
+                // it. The graph still gets the plain events.
+                mgr.try_drain_events_with_age_into(
+                    &mut self.midi_aged_scratch,
+                    self.sample_rate as f64,
+                );
+            }
+            for (ev, _) in &self.midi_aged_scratch {
+                self.midi_event_scratch.push(*ev);
+                // Where each controller was left, for modulation from it.
+                if let hardwave_midi::MidiEvent::ControlChange { cc, value, .. } = ev {
+                    self.mod_cc[(*cc & 0x7F) as usize] = value.clamp(0.0, 1.0);
+                }
+            }
+        }
+
+        // Push drained events into the rolling capture ring. try_lock
+        // keeps the audio thread non-blocking — if the UI is mid-dump
+        // we skip this block (events still feed the graph below).
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            // Notice a loop jump while recording, so captured MIDI can be
+            // split per pass the way audio is. Inside a loop the positions
+            // repeat, so without this a second pass reads as more notes in
+            // the first one.
+            let abs = self.transport.position();
+            // Only blocks that play count: while Link holds the start, the
+            // playhead sits still and then moves back a little to land on
+            // the beat, which is not a loop pass.
+            if self.transport.recording.load(Relaxed) && playing {
+                let previous = self.record_last_pos.swap(abs, Relaxed);
+                if previous != u64::MAX && abs < previous {
+                    self.record_pass.fetch_add(1, Relaxed);
+                }
+            }
+            if !self.midi_event_scratch.is_empty() {
+                if let Some(mut ring) = self.midi_capture_ring.try_lock() {
+                    let pass = self.record_pass.load(Relaxed);
+                    if self.midi_aged_scratch.len() == self.midi_event_scratch.len() {
+                        for (ev, age) in &self.midi_aged_scratch {
+                            // Back off the lateness, but never past the block
+                            // before this one: a stalled UI thread must not
+                            // throw a note into an earlier bar.
+                            let late = (*age).min(num_frames as u64);
+                            ring.push_timed(
+                                abs.saturating_sub(late),
+                                self.capture_clock.saturating_sub(late),
+                                pass,
+                                *ev,
+                            );
+                        }
+                    } else {
+                        // Parked-drain path, which has no ages.
+                        for ev in &self.midi_event_scratch {
+                            ring.push_timed(abs, self.capture_clock, pass, *ev);
+                        }
+                    }
+                }
+            }
+            self.capture_clock = self.capture_clock.wrapping_add(num_frames as u64);
+        }
+
+        // Live MIDI keeps the engine running a while after the last event,
+        // so a note played with the song stopped sounds out with its tail.
+        // The input used to be read only after the stopped-song shortcut
+        // below, so with no track armed a keyboard played nothing while
+        // stopped, its notes waited and all sounded at once on play, and
+        // capture had nothing to capture.
+        if self.midi_event_scratch.is_empty() {
+            self.live_midi_hold = self.live_midi_hold.saturating_sub(num_frames as u64);
+        } else {
+            self.live_midi_hold = self.sample_rate as u64 * LIVE_MIDI_HOLD_SECONDS;
+        }
+
+        // When transport is stopped AND nothing is monitoring live input
+        // or being played live, the graph can only produce silence — skip
+        // processing to save CPU.
+        if !playing && !self.has_monitored_input && self.live_midi_hold == 0 {
             output.fill(0.0);
             self.park_meters();
             return;
@@ -5099,81 +5196,6 @@ impl EngineCallback {
             position_samples: self.transport.position(),
             playing,
         };
-
-        // Drain external/injected MIDI events into the per-block scratch.
-        // try_lock keeps the audio thread non-blocking — on contention we
-        // simply pick up the events on the next block (~5ms later, well
-        // below human perception). The graph then forwards this slice
-        // only to nodes whose `accepts_live_midi` flag is set during
-        // rebuild (armed+monitor_input tracks + MIDI tracks).
-        // (Skipped when the wait-for-input check above already drained —
-        // clearing here would eat the very note that started playback.)
-        if !drained_while_parked {
-            self.midi_event_scratch.clear();
-            self.midi_aged_scratch.clear();
-            if let Some(mgr) = self.midi_input.try_lock() {
-                // With ages, so a recorded note goes back to when it was
-                // played rather than to the start of the block that noticed
-                // it. The graph still gets the plain events.
-                mgr.try_drain_events_with_age_into(
-                    &mut self.midi_aged_scratch,
-                    self.sample_rate as f64,
-                );
-            }
-            for (ev, _) in &self.midi_aged_scratch {
-                self.midi_event_scratch.push(*ev);
-                // Where each controller was left, for modulation from it.
-                if let hardwave_midi::MidiEvent::ControlChange { cc, value, .. } = ev {
-                    self.mod_cc[(*cc & 0x7F) as usize] = value.clamp(0.0, 1.0);
-                }
-            }
-        }
-
-        // Push drained events into the rolling capture ring. try_lock
-        // keeps the audio thread non-blocking — if the UI is mid-dump
-        // we skip this block (events still feed the graph below).
-        {
-            use std::sync::atomic::Ordering::Relaxed;
-            // Notice a loop jump while recording, so captured MIDI can be
-            // split per pass the way audio is. Inside a loop the positions
-            // repeat, so without this a second pass reads as more notes in
-            // the first one.
-            let abs = self.transport.position();
-            // Only blocks that play count: while Link holds the start, the
-            // playhead sits still and then moves back a little to land on
-            // the beat, which is not a loop pass.
-            if self.transport.recording.load(Relaxed) && playing {
-                let previous = self.record_last_pos.swap(abs, Relaxed);
-                if previous != u64::MAX && abs < previous {
-                    self.record_pass.fetch_add(1, Relaxed);
-                }
-            }
-            if !self.midi_event_scratch.is_empty() {
-                if let Some(mut ring) = self.midi_capture_ring.try_lock() {
-                    let pass = self.record_pass.load(Relaxed);
-                    if self.midi_aged_scratch.len() == self.midi_event_scratch.len() {
-                        for (ev, age) in &self.midi_aged_scratch {
-                            // Back off the lateness, but never past the block
-                            // before this one: a stalled UI thread must not
-                            // throw a note into an earlier bar.
-                            let late = (*age).min(num_frames as u64);
-                            ring.push_timed(
-                                abs.saturating_sub(late),
-                                self.capture_clock.saturating_sub(late),
-                                pass,
-                                *ev,
-                            );
-                        }
-                    } else {
-                        // Parked-drain path, which has no ages.
-                        for ev in &self.midi_event_scratch {
-                            ring.push_timed(abs, self.capture_clock, pass, *ev);
-                        }
-                    }
-                }
-            }
-            self.capture_clock = self.capture_clock.wrapping_add(num_frames as u64);
-        }
 
         // Process the audio graph
         self.graph.process(&ctx, &self.midi_event_scratch);
@@ -6894,6 +6916,50 @@ mod wait_for_input_tests {
         assert!(
             !cb.midi_event_scratch.is_empty(),
             "the triggering event must not be swallowed"
+        );
+    }
+
+    /// With the song stopped and no track armed, notes played live are
+    /// still read, captured with the engine's clock, and keep the engine
+    /// running for their tail; they used to wait unread until play.
+    #[test]
+    fn live_notes_with_the_song_stopped_are_read_and_captured() {
+        let midi = Arc::new(Mutex::new(MidiInputManager::new()));
+        let (mut cb, _tx) = make_callback(Arc::clone(&midi));
+        let mut out = vec![0.0f32; 512];
+        assert!(!cb.transport.is_playing());
+        cb.process(&mut out, 256, 2);
+        midi.lock().inject(hardwave_midi::MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.9,
+        });
+        cb.process(&mut out, 256, 2);
+        assert!(
+            cb.live_midi_hold > 0,
+            "the engine keeps running for the tail"
+        );
+        for _ in 0..4 {
+            cb.process(&mut out, 256, 2);
+        }
+        midi.lock().inject(hardwave_midi::MidiEvent::NoteOff {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.0,
+        });
+        cb.process(&mut out, 256, 2);
+        let captured = cb.midi_capture_ring.lock().captured_in_order();
+        assert_eq!(captured.len(), 2, "both events captured");
+        assert_eq!(
+            captured[0].sample_pos, captured[1].sample_pos,
+            "the playhead stood still"
+        );
+        assert_eq!(
+            captured[1].clock - captured[0].clock,
+            5 * 256,
+            "the clock says how far apart they were played"
         );
     }
 
