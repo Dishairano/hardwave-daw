@@ -5,6 +5,8 @@ import {
   useThemeStore,
   isValidPalette,
   derivePaletteFromAccent,
+  highContrast,
+  setHighContrast,
   type ThemePalette,
 } from '../../stores/themeStore'
 import { t, tf, useLanguage } from '../../i18n'
@@ -200,6 +202,31 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
               {t('Applying a theme reloads the window so every panel picks up the new accents.')}
             </div>
           )}
+
+          {/* Higher contrast: read once at start, as the colours are. */}
+          <label style={{
+            marginTop: 14, padding: 12, display: 'flex', gap: 10, alignItems: 'flex-start',
+            background: hw.bgPanel, borderRadius: hw.radius.md,
+            border: `1px solid ${hw.borderDark}`, cursor: 'pointer',
+          }}>
+            <input
+              type="checkbox"
+              defaultChecked={highContrast()}
+              onChange={e => {
+                setHighContrast(e.target.checked)
+                window.location.reload()
+              }}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              <span style={{ display: 'block', fontSize: 12, color: hw.textPrimary, fontWeight: 600 }}>
+                {t('Higher contrast')}
+              </span>
+              <span style={{ display: 'block', fontSize: 11, color: hw.textMuted, marginTop: 2 }}>
+                {t('Brighter hints, labels and borders, easier to read. On by itself when Windows asks for more contrast. The window reloads.')}
+              </span>
+            </span>
+          </label>
 
           {/* Custom background */}
           <div style={{

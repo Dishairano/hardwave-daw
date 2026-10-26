@@ -577,4 +577,7 @@ export const nlBrowser: Record<string, string> = {
   'Redo {n} steps': '{n} stappen opnieuw doen',
   'Project opened': 'Project geopend',
   'Click any row to undo or redo to that state. Tracks volume/pan, clip edits, track add/remove, and more.': 'Klik op een regel om tot die staat ongedaan te maken of opnieuw te doen. Houdt volume/pan, clipbewerkingen, sporen toevoegen/verwijderen en meer bij.',
+  'Higher contrast': 'Meer contrast',
+  'Brighter hints, labels and borders, easier to read. On by itself when Windows asks for more contrast. The window reloads.':
+    'Lichtere hints, labels en randen, beter leesbaar. Staat vanzelf aan als Windows om meer contrast vraagt. Het venster laadt opnieuw.',
 }
