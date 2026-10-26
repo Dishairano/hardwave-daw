@@ -139,6 +139,7 @@ permissions = [
   "allow-set-session-quantise",
   "allow-set-session-slot",
   "allow-clear-session-slot",
+  "allow-send-clip-to-launcher",
   "allow-add-scene",
   "allow-list-scripts",
   "allow-save-script",

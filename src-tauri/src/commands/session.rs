@@ -14,6 +14,8 @@ use tauri::State;
 pub struct SlotInfo {
     pub name: String,
     pub length_ticks: u64,
+    /// Notes rather than audio.
+    pub midi: bool,
 }
 
 /// A track's row, and what it is doing.
@@ -61,6 +63,7 @@ pub fn get_session_grid(state: State<AppState>) -> SessionGrid {
                         .map(|s| SlotInfo {
                             name: s.name.clone(),
                             length_ticks: s.length_ticks,
+                            midi: s.notes.is_some(),
                         })
                 })
                 .collect();
@@ -224,10 +227,99 @@ pub fn set_session_slot(
             source_start: 0,
             length_ticks,
             gain_db: 0.0,
+            notes: None,
         });
     }
     engine.rebuild_graph();
     Ok(length_ticks)
+}
+
+/// Put a clip from the playlist into the launcher: its audio or its notes,
+/// as long as the clip is on the playlist, into the first empty slot of its
+/// track's row (a new scene when the row is full). Returns the slot.
+#[tauri::command]
+pub fn send_clip_to_launcher(
+    state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+) -> Result<usize, String> {
+    use hardwave_project::clip::ClipContent;
+    use hardwave_project::track::SessionSlot;
+    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    let slot_index = {
+        let mut project = engine.project.lock();
+        let track = project
+            .track(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        let clip = track
+            .clips
+            .iter()
+            .find(|c| match &c.content {
+                ClipContent::Audio(a) => a.id == clip_id,
+                ClipContent::Midi(m) => m.id == clip_id,
+            })
+            .ok_or("that clip is not on this track")?;
+        let length_ticks = clip.length_ticks.max(1);
+        let slot = match &clip.content {
+            ClipContent::Audio(a) => {
+                // The launcher plays the audio as it is: a clip changed on
+                // the playlist would sound different there.
+                if a.reversed || (a.stretch_ratio - 1.0).abs() > 1e-9 || a.pitch_semitones != 0.0 {
+                    return Err(
+                        "a reversed, stretched or pitched clip can't go in the launcher yet".into(),
+                    );
+                }
+                SessionSlot {
+                    name: a.name.clone(),
+                    source_path: a.source_path.clone(),
+                    source_start: a.source_start,
+                    length_ticks,
+                    gain_db: a.gain_db,
+                    notes: None,
+                }
+            }
+            ClipContent::Midi(m) => SessionSlot {
+                name: m.clip.name.clone(),
+                source_path: String::new(),
+                source_start: 0,
+                length_ticks,
+                gain_db: 0.0,
+                // What the playlist plays of it: the notes inside the clip.
+                notes: Some(
+                    m.clip
+                        .notes
+                        .iter()
+                        .filter(|n| n.start_tick < length_ticks)
+                        .cloned()
+                        .collect(),
+                ),
+            },
+        };
+        let scene_count = project.scenes.len();
+        let free = project
+            .track(&track_id)
+            .map(|t| (0..scene_count).find(|i| t.session_slots.get(*i).is_none_or(|s| s.is_none())))
+            .unwrap_or(None);
+        let index = match free {
+            Some(index) => index,
+            None => {
+                project.scenes.push(format!("Scene {}", scene_count + 1));
+                scene_count
+            }
+        };
+        let scene_count = project.scenes.len();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {track_id}"))?;
+        if track.session_slots.len() < scene_count {
+            track.session_slots.resize(scene_count, None);
+        }
+        track.session_slots[index] = Some(slot);
+        index
+    };
+    engine.rebuild_graph();
+    Ok(slot_index)
 }
 
 /// Empty a slot.

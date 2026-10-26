@@ -11,10 +11,12 @@ import { btn } from './ui/dialogStyles'
  * A timeline is for writing a song down. A grid of loops is for
  * finding one, and for playing live: press a clip and it starts on the
  * next bar, press a row and the row starts together. A cell waiting
- * for the bar is outlined; the one sounding is filled.
+ * for the bar is outlined; the one sounding is filled. A clip comes
+ * from an audio file (click an empty cell) or from the playlist (right-
+ * click a clip, Send to clip launcher), which is how notes get in.
  */
 
-interface SlotInfo { name: string; length_ticks?: number; lengthTicks?: number }
+interface SlotInfo { name: string; length_ticks?: number; lengthTicks?: number; midi?: boolean }
 interface TrackRow {
   trackId: string
   name: string
@@ -139,7 +141,9 @@ export function SessionView({ onClose }: { onClose: () => void }) {
                             .catch(() => {})
                             .finally(() => void refresh())
                         }}
-                        title={slot ? `${slot.name} — right-click to empty` : 'Empty: click to load a loop'}
+                        title={slot
+                          ? `${slot.name}${slot.midi ? ' (notes)' : ''}, right-click to empty`
+                          : 'Empty: click to load an audio loop, or send a clip here from the playlist (right-click it)'}
                         aria-label={slot
                           ? `${slot.name} on ${row.name}, ${playing ? 'playing' : waiting ? 'waiting for the boundary' : 'stopped'}`
                           : `Empty slot on ${row.name}`}
@@ -156,7 +160,7 @@ export function SessionView({ onClose }: { onClose: () => void }) {
                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         }}
                       >
-                        {slot ? (playing ? `▶ ${slot.name}` : slot.name) : '+'}
+                        {slot ? `${playing ? '▶ ' : ''}${slot.midi ? '♪ ' : ''}${slot.name}` : '+'}
                       </button>
                     </td>
                   )

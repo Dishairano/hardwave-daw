@@ -2781,6 +2781,18 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
               useNotificationStore.getState().push('warning', 'Nothing to warp', { detail: String(e) })
             }
           }} />
+          <MenuItem label="Send to clip launcher" onClick={async () => {
+            const { trackId, clipId } = contextMenu
+            setContextMenu(null)
+            const push = useNotificationStore.getState().push
+            try {
+              const slot = await invoke<number>('send_clip_to_launcher', { trackId, clipId })
+              useHistoryStore.getState().push('Send clip to launcher')
+              push('info', `In the clip launcher, scene ${slot + 1}`)
+            } catch (e) {
+              push('warning', 'Could not send that clip to the launcher', { detail: String(e) })
+            }
+          }} />
           <MenuItem label="Consolidate selected clips" onClick={async () => {
             const { trackId } = contextMenu
             setContextMenu(null)
