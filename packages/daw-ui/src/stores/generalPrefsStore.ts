@@ -46,6 +46,9 @@ interface GeneralPrefsState {
   timecodeFps: TimecodeFps
   /** The FPS meter overlay (Tools > Show FPS meter, Ctrl+Shift+F). */
   showFpsMeter: boolean
+  /** The song template the DAW starts with, by name; none starts empty. */
+  startupTemplate: string | null
+  setStartupTemplate: (name: string | null) => void
 
   setNoteNaming: (n: NoteNamingConvention) => void
   setAnimationsEnabled: (v: boolean) => void
@@ -68,6 +71,8 @@ export const useGeneralPrefsStore = create<GeneralPrefsState>()(
       rulerUnits: 'bars',
       timecodeFps: 25,
       showFpsMeter: false,
+      startupTemplate: null,
+      setStartupTemplate: (startupTemplate) => set({ startupTemplate }),
       setNoteNaming: (noteNaming) => set({ noteNaming }),
       setAnimationsEnabled: (animationsEnabled) => set({ animationsEnabled }),
       setHighVisibility: (highVisibility) => set({ highVisibility }),

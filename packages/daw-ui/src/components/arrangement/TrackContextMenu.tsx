@@ -15,7 +15,6 @@ import { MidiFxPanel } from '../MidiFxPanel'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { PATTERN_COLORS } from '../../stores/patternStore'
-import { useTrackTemplateStore } from '../../stores/trackTemplateStore'
 import { useTrackFolderStore } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { useColorPickerStore } from '../../stores/colorPickerStore'
@@ -212,10 +211,11 @@ export function TrackContextMenu({ trackId, x, y, onClose }: {
       <Item label="Save as track template…" onClick={run(() => {
         const name = window.prompt('Template name:', t.name)?.trim()
         if (!name) return
-        useTrackTemplateStore.getState().save({
-          name, kind: isMidi ? 'Midi' : 'Audio', trackName: t.name, color: t.color, volumeDb: t.volume_db, pan: t.pan,
-        })
-        push('info', `Saved track template "${name}"`)
+        // The track with its plug-ins and their settings, and the bus and
+        // sends it feeds; Add > Track from a template brings it back.
+        invoke('save_track_template', { trackId: t.id, name })
+          .then(() => push('info', `Saved the track template "${name}"`, { detail: 'Add > Track from a template adds it to a song.' }))
+          .catch(err => push('warning', 'The track template was not saved', { detail: String(err) }))
       })} />
 
       <Divider />

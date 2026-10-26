@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { hw } from '../theme'
+import { invoke } from '@tauri-apps/api/core'
 import { useUserTemplateStore } from '../stores/userTemplateStore'
+import { useGeneralPrefsStore } from '../stores/generalPrefsStore'
 import { DialogFrame } from './ui/DialogFrame'
 
 export type BuiltInTemplateId = 'blank' | 'beat4' | 'vocal' | 'mixing'
 export type StarterId = 'hardstyle' | 'rawstyle' | 'frenchcore' | 'uptempo'
-export type TemplateId = BuiltInTemplateId | `user:${string}` | `starter:${StarterId}`
+export type TemplateId = BuiltInTemplateId | `user:${string}` | `starter:${StarterId}` | `song:${string}`
 
 interface TemplateDef {
   id: BuiltInTemplateId
@@ -49,6 +51,23 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
   const renameUserTemplate = useUserTemplateStore(s => s.rename)
 
   useEffect(() => { loadUserTemplates() }, [loadUserTemplates])
+
+  // Song templates: whole songs kept with File > Save as template, plug-ins
+  // and routing included.
+  const [songTemplates, setSongTemplates] = useState<string[]>([])
+  const startupTemplate = useGeneralPrefsStore(s => s.startupTemplate)
+  const setStartupTemplate = useGeneralPrefsStore(s => s.setStartupTemplate)
+  const reloadSongTemplates = () => {
+    invoke<string[]>('list_song_templates').then(setSongTemplates).catch(() => setSongTemplates([]))
+  }
+  useEffect(reloadSongTemplates, [])
+  const deleteSongTemplate = (name: string) => {
+    if (!window.confirm(`Delete the template "${name}"?`)) return
+    invoke('delete_song_template', { name }).then(() => {
+      if (startupTemplate === name) setStartupTemplate(null)
+      reloadSongTemplates()
+    }).catch(() => {})
+  }
 
   useEffect(() => {
     firstBtn.current?.focus()
@@ -143,6 +162,63 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
             )
           })}
         </div>
+
+        {songTemplates.length > 0 && (
+          <>
+            <div style={{
+              fontSize: 10, fontWeight: 600, color: hw.textFaint,
+              textTransform: 'uppercase', letterSpacing: 0.6, margin: '4px 0 8px',
+            }}>
+              Your song templates
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
+              {songTemplates.map(name => {
+                const id = `song:${name}` as const
+                const active = hover === id
+                const startsWith = startupTemplate === name
+                return (
+                  <div
+                    key={id}
+                    onMouseEnter={() => setHover(id)}
+                    onMouseLeave={() => setHover(null)}
+                    style={{
+                      position: 'relative',
+                      background: active ? hw.bgElevated : hw.bgSurface,
+                      border: `1px solid ${active ? hw.accent : hw.border}`,
+                      borderRadius: hw.radius.md,
+                      transition: 'border-color 0.1s, background 0.1s',
+                    }}
+                  >
+                    <button
+                      onClick={() => onPick(id)}
+                      style={{
+                        width: '100%', textAlign: 'left', padding: '12px 14px',
+                        background: 'transparent', border: 'none', color: hw.textPrimary, cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2, paddingRight: 48 }}>{name}</div>
+                      <div style={{ fontSize: 11, color: hw.textMuted }}>
+                        {startsWith ? 'The DAW starts with this song' : 'Tracks, plug-ins and routing'}
+                      </div>
+                    </button>
+                    <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 4 }}>
+                      <button
+                        title={startsWith ? 'Start the DAW empty again' : 'Start the DAW with this song'}
+                        onClick={e => { e.stopPropagation(); setStartupTemplate(startsWith ? null : name) }}
+                        style={{ ...utBtnStyle, color: startsWith ? hw.accent : hw.textMuted }}
+                      >★</button>
+                      <button
+                        title="Delete"
+                        onClick={e => { e.stopPropagation(); deleteSongTemplate(name) }}
+                        style={{ ...utBtnStyle, color: hw.red }}
+                      >×</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
 
         {userTemplates.length > 0 && (
           <>

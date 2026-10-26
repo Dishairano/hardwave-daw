@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-track-template"
+description = "Enables the delete_track_template command without any pre-configured scope."
+commands.allow = ["delete_track_template"]
+
+[[permission]]
+identifier = "deny-delete-track-template"
+description = "Denies the delete_track_template command without any pre-configured scope."
+commands.deny = ["delete_track_template"]
