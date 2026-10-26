@@ -4082,6 +4082,16 @@ impl EngineCallback {
                     );
                 }
 
+                // Its plug-ins, carried over from the node this rebuild
+                // replaces, as an audio track's are below. They were not:
+                // every rebuild after a plug-in went on an instrument track
+                // (a note drawn, a track added, a plug-in added, which itself
+                // rebuilds) sent the chain to the graveyard, so instruments
+                // and effects on MIDI tracks went silent and the built-in
+                // synth played in their place.
+                if let Some(chain) = stashed_chains.remove(&track.id) {
+                    midi_node.restore_chain(chain);
+                }
                 let node_id = self.graph.add_node(Box::new(midi_node));
                 // A track armed for input hears the keyboard; with none
                 // armed, the keyboard plays the track picked last, so a new
@@ -6715,6 +6725,52 @@ mod rt_safety_tests {
             slots_on(&mut cb, &shared),
             vec!["new-synth".to_string()],
             "the old song's plug-in must not survive into the new song"
+        );
+    }
+
+    /// A plug-in on a MIDI track (an instrument, or an effect after the
+    /// synth) stays there when the graph is rebuilt, as on an audio track.
+    #[test]
+    fn a_midi_track_keeps_its_plug_ins_through_a_rebuild() {
+        use crate::insert_chain::{tests::make_gain_slot, InsertCommand};
+        let mut project = Project::default();
+        let id = project.add_midi_track("Lead".into());
+        let project_arc = Arc::new(Mutex::new(project));
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
+        let mut out = vec![0.0f32; 512];
+        let slots_on = |cb: &mut EngineCallback, id: &str| -> Vec<String> {
+            let node_id = cb.track_id_to_node[id];
+            let node = cb.graph.node_mut(node_id).unwrap();
+            let chain = node.take_chain();
+            let ids = chain
+                .as_ref()
+                .map(|c| c.slots.iter().map(|s| s.slot_id.clone()).collect())
+                .unwrap_or_default();
+            if let Some(chain) = chain {
+                node.restore_chain(chain);
+            }
+            ids
+        };
+        cb.process(&mut out, 256, 2);
+        let (fx, _) = make_gain_slot("fx", 1.0, true);
+        cmd_tx
+            .try_send(InsertCommand::Add {
+                track_id: id.clone(),
+                slot: fx,
+            })
+            .ok()
+            .unwrap();
+        cb.process(&mut out, 256, 2);
+        assert_eq!(slots_on(&mut cb, &id), vec!["fx".to_string()]);
+
+        // Anything that rebuilds the graph: a note, a new track, a route.
+        cb.needs_rebuild = true;
+        cb.process(&mut out, 256, 2);
+        cb.process(&mut out, 256, 2);
+        assert_eq!(
+            slots_on(&mut cb, &id),
+            vec!["fx".to_string()],
+            "the MIDI track's chain must come through the rebuild"
         );
     }
 
