@@ -18,6 +18,7 @@ import { PATTERN_COLORS } from '../../stores/patternStore'
 import { useTrackFolderStore } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { useColorPickerStore } from '../../stores/colorPickerStore'
+import { t, tf, useLanguage } from '../../i18n'
 
 export function TrackContextMenu({ trackId, x, y, onClose }: {
   trackId: string
@@ -25,14 +26,15 @@ export function TrackContextMenu({ trackId, x, y, onClose }: {
   y: number
   onClose: () => void
 }) {
+  useLanguage()
   const tracks = useTrackStore(s => s.tracks)
-  const t = tracks.find(tr => tr.id === trackId)
+  const track = tracks.find(tr => tr.id === trackId)
   const folders = useTrackFolderStore(s => s.folders)
   const [dialog, setDialog] = useState<'midiFx' | 'route' | null>(null)
   const [frozen, setFrozen] = useState(false)
   const [tuning, setTuning] = useState<string | null>(null)
   const [mpe, setMpe] = useState(false)
-  const isMidi = t?.kind === 'Midi'
+  const isMidi = track?.kind === 'Midi'
 
   // What the menu has to say about this one track, read as it opens.
   useEffect(() => {
@@ -57,20 +59,20 @@ export function TrackContextMenu({ trackId, x, y, onClose }: {
     }
   }, [dialog, onClose])
 
-  if (!t) return null
+  if (!track) return null
   // On the page itself: the track list it opens from is moved with a
   // transform, which would pin a fixed menu to the list instead.
-  if (dialog === 'midiFx') return createPortal(<MidiFxPanel trackId={t.id} onClose={onClose} />, document.body)
-  if (dialog === 'route') return createPortal(<MidiRouteDialog trackId={t.id} onClose={onClose} />, document.body)
+  if (dialog === 'midiFx') return createPortal(<MidiFxPanel trackId={track.id} onClose={onClose} />, document.body)
+  if (dialog === 'route') return createPortal(<MidiRouteDialog trackId={track.id} onClose={onClose} />, document.body)
 
   const store = useTrackStore.getState()
   const push = useNotificationStore.getState().push
   const run = (action: () => Promise<void> | void) => () => {
     onClose()
-    Promise.resolve(action()).catch(e => push('warning', 'That did not work', { detail: String(e) }))
+    Promise.resolve(action()).catch(e => push('warning', t('That did not work'), { detail: String(e) }))
   }
-  const folderOf = folders.find(f => f.trackIds.includes(t.id))
-  const otherAudio = tracks.filter(x => x.id !== t.id && x.kind === 'Audio')
+  const folderOf = folders.find(f => f.trackIds.includes(track.id))
+  const otherAudio = tracks.filter(x => x.id !== track.id && x.kind === 'Audio')
 
   return createPortal(
     <div
@@ -87,139 +89,140 @@ export function TrackContextMenu({ trackId, x, y, onClose }: {
         backdropFilter: hw.blur.md,
       }}
     >
-      <Heading text={t.name} />
-      <Item label="Rename" shortcut="F2" onClick={run(async () => {
-        const name = window.prompt('Track name:', t.name)?.trim()
-        if (name && name !== t.name) await store.renameTrack(t.id, name)
+      <Heading text={track.name} />
+      <Item label={t('Rename')} shortcut="F2" onClick={run(async () => {
+        const name = window.prompt(t('Track name:'), track.name)?.trim()
+        if (name && name !== track.name) await store.renameTrack(track.id, name)
       })} />
-      <Item label={t.muted ? 'Unmute' : 'Mute'} onClick={run(() => store.toggleMute(t.id))} />
-      <Item label={t.soloed ? 'Unsolo' : 'Solo'} onClick={run(() => store.toggleSolo(t.id))} />
-      <Item label={t.solo_safe ? 'Solo-safe: on' : 'Solo-safe: off'} onClick={run(() => store.toggleSoloSafe(t.id))} />
+      <Item label={track.muted ? t('Unmute') : t('Mute')} onClick={run(() => store.toggleMute(track.id))} />
+      <Item label={track.soloed ? t('Unsolo') : t('Solo')} onClick={run(() => store.toggleSolo(track.id))} />
+      <Item label={track.solo_safe ? t('Solo-safe: on') : t('Solo-safe: off')} onClick={run(() => store.toggleSoloSafe(track.id))} />
 
       {isMidi && (
         <>
           <Divider />
-          <Item label="MIDI effects…" onClick={() => setDialog('midiFx')} />
-          <Item label="Send its notes to…" onClick={() => setDialog('route')} />
-          <Item label={mpe ? 'MPE: on' : 'MPE: off'} onClick={run(async () => {
-            await invoke('set_mpe', { trackId: t.id, enabled: !mpe })
-            push('info', !mpe ? `"${t.name}" reads MPE` : `"${t.name}" reads ordinary MIDI`, {
+          <Item label={t('MIDI effects…')} onClick={() => setDialog('midiFx')} />
+          <Item label={t('Send its notes to…')} onClick={() => setDialog('route')} />
+          <Item label={mpe ? t('MPE: on') : t('MPE: off')} onClick={run(async () => {
+            await invoke('set_mpe', { trackId: track.id, enabled: !mpe })
+            push('info', !mpe ? tf('"{name}" reads MPE', { name: track.name }) : tf('"{name}" reads ordinary MIDI', { name: track.name }), {
               detail: !mpe
-                ? 'Each note is bent and pressed on the channel it arrives on, so one note of a chord can be bent on its own.'
-                : 'One bend for the whole track again.',
+                ? t('Each note is bent and pressed on the channel it arrives on, so one note of a chord can be bent on its own.')
+                : t('One bend for the whole track again.'),
             })
           })} />
-          <Item label={tuning ? `Tuning: ${tuning} (clear)` : 'Tuning from a Scala file…'} onClick={run(async () => {
+          <Item label={tuning ? tf('Tuning: {name} (clear)', { name: tuning }) : t('Tuning from a Scala file…')} onClick={run(async () => {
             if (tuning) {
-              await invoke('clear_tuning', { trackId: t.id })
-              push('info', `"${t.name}" is back in twelve equal`)
+              await invoke('clear_tuning', { trackId: track.id })
+              push('info', tf('"{name}" is back in twelve equal', { name: track.name }))
               return
             }
             const { open } = await import('@tauri-apps/plugin-dialog')
-            const picked = await open({ multiple: false, filters: [{ name: 'Scala tuning', extensions: ['scl'] }] })
+            const picked = await open({ multiple: false, filters: [{ name: t('Scala tuning'), extensions: ['scl'] }] })
             if (typeof picked !== 'string') return
             const loaded = await invoke<{ name: string; degrees_cents: number[] }>(
-              'load_tuning_file', { trackId: t.id, path: picked, rootNote: null, rootHz: null },
+              'load_tuning_file', { trackId: track.id, path: picked, rootNote: null, rootHz: null },
             )
-            push('info', `"${t.name}" plays ${loaded.name}`, {
-              detail: `${loaded.degrees_cents.length} notes to the repeat. The built-in instruments follow it; a hosted plug-in keeps its own tuning.`,
+            push('info', tf('"{name}" plays {tuning}', { name: track.name, tuning: loaded.name }), {
+              detail: tf('{n} notes to the repeat. The built-in instruments follow it; a hosted plug-in keeps its own tuning.', { n: loaded.degrees_cents.length }),
             })
           })} />
         </>
       )}
 
       <Divider />
-      <Item label="Spread the takes onto lanes" onClick={run(async () => {
-        const lanes = await invoke<number>('spread_takes_to_lanes', { trackId: t.id })
+      <Item label={t('Spread the takes onto lanes')} onClick={run(async () => {
+        const lanes = await invoke<number>('spread_takes_to_lanes', { trackId: track.id })
         await store.fetchTracks()
-        push('info', lanes > 1 ? `${lanes} takes on their own lanes` : 'Only one take on this track')
+        push('info', lanes > 1 ? tf('{n} takes on their own lanes', { n: lanes }) : t('Only one take on this track'))
       })} />
-      {t.kind === 'Audio' && (
-        <Item label="Line up with another track…" onClick={run(async () => {
-          if (otherAudio.length === 0) { push('info', 'There is no other audio track to line up with'); return }
+      {track.kind === 'Audio' && (
+        <Item label={t('Line up with another track…')} onClick={run(async () => {
+          if (otherAudio.length === 0) { push('info', t('There is no other audio track to line up with')); return }
           const names = otherAudio.map(o => o.name)
-          const picked = window.prompt(`Line "${t.name}" up with which track?\n\n${names.join('\n')}`, names[0])?.trim()
+          const picked = window.prompt(tf('Line "{name}" up with which track?\n\n{names}', { name: track.name, names: names.join('\n') }), names[0])?.trim()
           const reference = otherAudio.find(o => o.name === picked)
           if (!reference) return
           const result = await invoke<{ offsetSamples: number; offsetMs: number; polarityFlipped: boolean }>(
-            'align_track_to', { trackId: t.id, referenceTrackId: reference.id },
+            'align_track_to', { trackId: track.id, referenceTrackId: reference.id },
           )
           await store.fetchTracks()
           const gap = `${Math.abs(result.offsetMs).toFixed(2)} ms`
-          push('info', `"${t.name}" lined up with "${reference.name}"`, {
+          const blanks = { name: track.name, reference: reference.name, gap }
+          push('info', tf('"{name}" lined up with "{reference}"', blanks), {
             detail: (result.offsetSamples === 0
-              ? 'They were already in time'
+              ? t('They were already in time')
               : result.offsetMs > 0
-                ? `"${t.name}" was ${gap} late, so "${reference.name}" now waits for it`
-                : `"${t.name}" was ${gap} early and now waits for "${reference.name}"`)
-              + `${result.polarityFlipped ? ', and it was turned upside down because the two agreed better that way' : ''}.`,
+                ? tf('"{name}" was {gap} late, so "{reference}" now waits for it', blanks)
+                : tf('"{name}" was {gap} early and now waits for "{reference}"', blanks))
+              + `${result.polarityFlipped ? t(', and it was turned upside down because the two agreed better that way') : ''}.`,
           })
         })} />
       )}
 
       <Divider />
-      <Item label={frozen ? 'Unfreeze' : 'Freeze'} onClick={run(async () => {
+      <Item label={frozen ? t('Unfreeze') : t('Freeze')} onClick={run(async () => {
         if (frozen) {
-          await invoke('unfreeze_track', { trackId: t.id })
-          push('info', `"${t.name}" is live again`, { detail: 'The part, the plug-ins and the automation are exactly as they were.' })
+          await invoke('unfreeze_track', { trackId: track.id })
+          push('info', tf('"{name}" is live again', { name: track.name }), { detail: t('The part, the plug-ins and the automation are exactly as they were.') })
         } else {
-          push('info', `Freezing "${t.name}"…`)
-          await invoke<string>('freeze_track', { trackId: t.id })
-          push('info', `"${t.name}" is frozen`, { detail: 'It plays a render now, so its plug-ins cost nothing until you unfreeze it.' })
+          push('info', tf('Freezing "{name}"…', { name: track.name }))
+          await invoke<string>('freeze_track', { trackId: track.id })
+          push('info', tf('"{name}" is frozen', { name: track.name }), { detail: t('It plays a render now, so its plug-ins cost nothing until you unfreeze it.') })
         }
         await store.fetchTracks()
       })} />
-      <Item label="Bounce to audio" onClick={run(async () => {
-        push('info', `Bouncing "${t.name}"…`)
-        await invoke<string>('bounce_track_to_audio', { trackId: t.id })
+      <Item label={t('Bounce to audio')} onClick={run(async () => {
+        push('info', tf('Bouncing "{name}"…', { name: track.name }))
+        await invoke<string>('bounce_track_to_audio', { trackId: track.id })
         await store.fetchTracks()
-        push('info', `Bounced "${t.name}"`, { detail: 'The original is muted. Unmute it to go back to the plug-ins.' })
+        push('info', tf('Bounced "{name}"', { name: track.name }), { detail: t('The original is muted. Unmute it to go back to the plug-ins.') })
       })} />
 
       <Divider />
-      <Heading text="Color" />
+      <Heading text={t('Color')} />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 2, padding: '2px 6px 4px' }}>
         {PATTERN_COLORS.map(c => (
-          <button key={c} title={c} onClick={run(() => store.setTrackColor(t.id, c))}
+          <button key={c} title={c} onClick={run(() => store.setTrackColor(track.id, c))}
             style={{
               width: 18, height: 18, borderRadius: hw.radius.sm, padding: 0, cursor: 'pointer',
-              background: c, border: c === t.color ? '2px solid #fff' : '1px solid rgba(255,255,255,0.12)',
+              background: c, border: c === track.color ? '2px solid #fff' : '1px solid rgba(255,255,255,0.12)',
             }}
           />
         ))}
       </div>
-      <Item label="Custom color…" onClick={(e) => {
+      <Item label={t('Custom color…')} onClick={(e) => {
         const anchor = (e.currentTarget as HTMLElement).getBoundingClientRect()
         onClose()
         useColorPickerStore.getState().open({
-          anchor, current: t.color, title: `Color · ${t.name}`,
-          onPick: (c) => { store.setTrackColor(t.id, c).catch(console.error) },
+          anchor, current: track.color, title: tf('Color · {name}', { name: track.name }),
+          onPick: (c) => { store.setTrackColor(track.id, c).catch(console.error) },
         })
       }} />
 
       <Divider />
-      <Item label="New folder from this track" onClick={run(() => {
-        const name = window.prompt('Folder name:', `Group ${folders.length + 1}`)?.trim()
-        if (name) useTrackFolderStore.getState().createFolder([t.id], name)
+      <Item label={t('New folder from this track')} onClick={run(() => {
+        const name = window.prompt(t('Folder name:'), `Group ${folders.length + 1}`)?.trim()
+        if (name) useTrackFolderStore.getState().createFolder([track.id], name)
       })} />
       {folders.filter(f => f.id !== folderOf?.id).map(f => (
-        <Item key={f.id} label={`Add to "${f.name}"`} onClick={run(() => useTrackFolderStore.getState().addTrackToFolder(t.id, f.id))} />
+        <Item key={f.id} label={tf('Add to "{name}"', { name: f.name })} onClick={run(() => useTrackFolderStore.getState().addTrackToFolder(track.id, f.id))} />
       ))}
       {folderOf && (
-        <Item label="Remove from folder" onClick={run(() => useTrackFolderStore.getState().removeTrackFromFolder(t.id))} />
+        <Item label={t('Remove from folder')} onClick={run(() => useTrackFolderStore.getState().removeTrackFromFolder(track.id))} />
       )}
-      <Item label="Save as track template…" onClick={run(() => {
-        const name = window.prompt('Template name:', t.name)?.trim()
+      <Item label={t('Save as track template…')} onClick={run(() => {
+        const name = window.prompt(t('Template name:'), track.name)?.trim()
         if (!name) return
         // The track with its plug-ins and their settings, and the bus and
         // sends it feeds; Add > Track from a template brings it back.
-        invoke('save_track_template', { trackId: t.id, name })
-          .then(() => push('info', `Saved the track template "${name}"`, { detail: 'Add > Track from a template adds it to a song.' }))
-          .catch(err => push('warning', 'The track template was not saved', { detail: String(err) }))
+        invoke('save_track_template', { trackId: track.id, name })
+          .then(() => push('info', tf('Saved the track template "{name}"', { name }), { detail: t('Add > Track from a template adds it to a song.') }))
+          .catch(err => push('warning', t('The track template was not saved'), { detail: String(err) }))
       })} />
 
       <Divider />
-      <Item label="Delete" shortcut="Del" danger onClick={run(() => store.removeTrack(t.id))} />
+      <Item label={t('Delete')} shortcut="Del" danger onClick={run(() => store.removeTrack(track.id))} />
     </div>,
     document.body,
   )

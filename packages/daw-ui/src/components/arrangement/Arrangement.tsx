@@ -36,6 +36,7 @@ import { bpmAt, flagEntry, tempoFlags } from './tempoFlags'
 import { gridLines } from '../../utils/meter'
 import { mixHex, hexLuma } from '../../lib/color'
 import { rgbColour } from '../../lib/waveformColour'
+import { t, tf, useLanguage } from '../../i18n'
 
 const PPQ = 960
 const PIXELS_PER_SECOND_BASE = 100
@@ -315,6 +316,7 @@ function fitCanvas(canvas: HTMLCanvasElement, w: number, h: number, dpr: number)
 }
 
 export function Arrangement({ onSetHint }: ArrangementProps = {}) {
+  useLanguage()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
@@ -1515,7 +1517,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // single paste, so the toolbar offered a paint brush that painted once.
       const selection = usePickerStore.getState().selection
       if (selection?.kind !== 'audioClip') {
-        onSetHint?.('Paint tool: pick a clip in the picker panel first, then drag across the playlist')
+        onSetHint?.(t('Paint tool: pick a clip in the picker panel first, then drag across the playlist'))
         return
       }
       const source = useTrackStore.getState().tracks
@@ -1745,15 +1747,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // Hint bar at bottom of playlist — describe whatever is under the cursor.
       if (onSetHint) {
         if (mouseY < RULER_HEIGHT) {
-          onSetHint('Timeline ruler — click to place playhead')
+          onSetHint(t('Timeline ruler — click to place playhead'))
         } else if (hit) {
           const tip = hit.edge === 'right' || hit.edge === 'left'
-            ? 'drag to resize · alt to bypass snap'
+            ? t('drag to resize · alt to bypass snap')
             : hit.edge === 'fade-in'
-              ? 'drag to set fade-in length'
+              ? t('drag to set fade-in length')
               : hit.edge === 'fade-out'
-                ? 'drag to set fade-out length'
-                : 'drag to move · alt to bypass snap'
+                ? t('drag to set fade-out length')
+                : t('drag to move · alt to bypass snap')
           onSetHint(`${hit.clip.name} · ${tip}`)
         } else {
           onSetHint('')
@@ -2166,7 +2168,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       useBrowserStore.getState().pushFileRecent(path)
     } catch (err) {
       console.error('browser drop import failed:', path, err)
-      useNotificationStore.getState().push('error', `Could not add the sample: ${String(err)}`)
+      useNotificationStore.getState().push('error', tf('Could not add the sample: {error}', { error: String(err) }))
     }
   }, [audioTracks, pixelsPerTick, getScrollOffset, applySnap, trackRowAt])
 
@@ -2259,9 +2261,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   }, [trackHeight, setTrackHeight, horizontalZoom, setHorizontalZoom, audioTracks.length, followPlayhead, getScrollOffset, PIXELS_PER_SECOND, setFollowPlayhead])
 
   /** Run one section command from the ruler menu and refresh what it
-   *  changed: the bands always, the clips when the music moved. */
+   *  changed: the bands always, the clips when the music moved. `failure`
+   *  is the whole message shown when it does not work. */
   const sectionAction = useCallback(async (
-    what: string, command: string, args: Record<string, unknown>, movesMusic: boolean,
+    failure: string, command: string, args: Record<string, unknown>, movesMusic: boolean,
   ) => {
     setMarkerCtx(null)
     try {
@@ -2269,7 +2272,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       if (movesMusic) await useTrackStore.getState().fetchTracks()
       window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
     } catch (e) {
-      useNotificationStore.getState().push('warning', `Could not ${what}`, { detail: String(e) })
+      useNotificationStore.getState().push('warning', failure, { detail: String(e) })
     }
   }, [])
 
@@ -2300,15 +2303,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     if (!track) return
     const clip = track.clips[clipIndex]
     if (!clip) {
-      setSpokenFocus(`${track.name}, no clips`)
+      setSpokenFocus(tf('{track}, no clips', { track: track.name }))
       return
     }
     const bar = Math.floor(clip.position_ticks / (PPQ * 4)) + 1
     const bars = Math.max(1, Math.round(clip.length_ticks / (PPQ * 4)))
+    const where = { track: track.name, n: clipIndex + 1, count: track.clips.length, bar, bars }
     setSpokenFocus(
-      `${track.name}, clip ${clipIndex + 1} of ${track.clips.length}, `
-      + `bar ${bar}, ${bars} bar${bars === 1 ? '' : 's'}`
-      + `${clip.muted ? ', muted' : ''}`,
+      (bars === 1
+        ? tf('{track}, clip {n} of {count}, bar {bar}, 1 bar', where)
+        : tf('{track}, clip {n} of {count}, bar {bar}, {bars} bars', where))
+      + `${clip.muted ? t(', muted') : ''}`,
     )
   }, [audioTracks])
 
@@ -2356,7 +2361,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           const ids = ts.selectedClipIds.has(clip.id) ? ts.selectedClipIds : new Set([clip.id])
           void ts.nudgeClips(ids, step * by)
           const to = Math.max(0, clip.position_ticks + step * by)
-          setSpokenFocus(`moved to bar ${Math.floor(to / (PPQ * 4)) + 1}`)
+          setSpokenFocus(tf('moved to bar {bar}', { bar: Math.floor(to / (PPQ * 4)) + 1 }))
           return
         }
         if (clipIndex < 0) clipIndex = step > 0 ? -1 : track.clips.length
@@ -2371,9 +2376,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         if (clip.kind === 'midi') {
           ts.setActiveMidiClip(track.id, clip.id)
           window.dispatchEvent(new CustomEvent('daw:openPianoRoll'))
-          setSpokenFocus(`opened ${clip.name} in the piano roll`)
+          setSpokenFocus(tf('opened {name} in the piano roll', { name: clip.name }))
         } else {
-          setSpokenFocus(`${clip.name} is audio, nothing to open`)
+          setSpokenFocus(tf('{name} is audio, nothing to open', { name: clip.name }))
         }
         return
       }
@@ -2383,7 +2388,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         e.preventDefault()
         const name = track.clips[clipIndex].name
         void ts.deleteSelectedClips()
-        setSpokenFocus(`removed ${name}`)
+        setSpokenFocus(tf('removed {name}', { name }))
         return
       }
       default:
@@ -2456,8 +2461,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       })
       if (allPaths.length > 0 && files.length === 0) {
         log({ level: 'fail', test: 'drag-drop', message: 'unsupported file format', actual: allPaths.join(', ') })
-        pushNotif('warning', 'Dropped file is not a supported audio format', {
-          detail: `Supported: ${audioExts.join(', ')}`,
+        pushNotif('warning', t('Dropped file is not a supported audio format'), {
+          detail: tf('Supported: {formats}', { formats: audioExts.join(', ') }),
         })
         return
       }
@@ -2482,7 +2487,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         }
       }
       if (!trackId) {
-        pushNotif('error', 'Could not find or create an audio track for dropped file')
+        pushNotif('error', t('Could not find or create an audio track for dropped file'))
         return
       }
 
@@ -2532,14 +2537,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         } catch (e) {
           console.error('Failed to import:', file, e)
           log({ level: 'fail', test: 'drag-drop', message: `import failed: ${file.split(/[\\/]/).pop() || file}`, actual: String(e) })
-          pushNotif('error', `Failed to import ${file.split(/[\\/]/).pop()}`, { detail: String(e) })
+          pushNotif('error', tf('Failed to import {name}', { name: file.split(/[\\/]/).pop() ?? '' }), { detail: String(e) })
         }
       }
       if (imported > 0) {
         log({ level: 'info', test: 'drag-drop', message: `imported ${imported}/${files.length} file(s) on track ${trackId}` })
         pushNotif('info', imported === files.length
-          ? `Imported ${imported} file${imported === 1 ? '' : 's'}`
-          : `Imported ${imported} of ${files.length} files`)
+          ? (imported === 1 ? t('Imported 1 file') : tf('Imported {n} files', { n: imported }))
+          : tf('Imported {n} of {total} files', { n: imported, total: files.length }))
       }
     }
 
@@ -2623,7 +2628,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const onTrack = track.clips.filter(c => ids.has(c.id)).map(c => c.id)
       if (onTrack.length === 0) continue
       useTrackStore.getState().setClipColor(track.id, onTrack, color)
-        .catch(e => useNotificationStore.getState().push('warning', 'Could not colour the clip', { detail: String(e) }))
+        .catch(e => useNotificationStore.getState().push('warning', t('Could not colour the clip'), { detail: String(e) }))
     }
   }
 
@@ -2661,7 +2666,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         data-track-height={trackHeight}
         tabIndex={0}
         role="application"
-        aria-label="Arrangement. Arrow keys move between tracks and clips, Enter opens a clip, Delete removes it, Ctrl with left or right nudges it by the snap value."
+        aria-label={t('Arrangement. Arrow keys move between tracks and clips, Enter opens a clip, Delete removes it, Ctrl with left or right nudges it by the snap value.')}
         onKeyDown={handleCanvasKeyDown}
         style={{ position: 'absolute', top: 0, left: 0, outline: 'none' }}
         onMouseDown={handleMouseDown}
@@ -2714,41 +2719,41 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
               {menuClip.name}
             </div>
           )}
-          <MenuItem label="Duplicate (Ctrl+D)" onClick={async () => {
+          <MenuItem label={t('Duplicate (Ctrl+D)')} onClick={async () => {
             await duplicateClip(contextMenu.trackId, contextMenu.clipId)
             setContextMenu(null)
           }} />
-          <MenuItem label="Split at playhead (S)" onClick={async () => {
+          <MenuItem label={t('Split at playhead (S)')} onClick={async () => {
             const sr = sampleRate || 48000
             const { positionSamples } = useTransportStore.getState()
             const atTicks = Math.round((positionSamples / sr) * (bpm / 60) * 960)
             try { await splitClip(contextMenu.trackId, contextMenu.clipId, atTicks) } catch {}
             setContextMenu(null)
           }} />
-          <MenuItem label={menuClip?.reversed ? 'Un-reverse' : 'Reverse audio'} onClick={async () => {
+          <MenuItem label={menuClip?.reversed ? t('Un-reverse') : t('Reverse audio')} onClick={async () => {
             await toggleClipReverse(contextMenu.trackId, contextMenu.clipId)
             setContextMenu(null)
           }} />
           {/* Each note moved by its own amount: a singer is sharp on one
               word and flat on the next. */}
-          <MenuItem label="Paint something out…" onClick={() => {
+          <MenuItem label={t('Paint something out…')} onClick={() => {
             const { trackId, clipId } = contextMenu
             setContextMenu(null)
             setSpectralTarget({ trackId, clipId })
           }} />
-          <MenuItem label="Tune this take…" onClick={async () => {
+          <MenuItem label={t('Tune this take…')} onClick={async () => {
             const { trackId, clipId } = contextMenu
             setContextMenu(null)
             setTuneTarget({ trackId, clipId })
           }} />
-          <MenuItem label="Separate stems (Pro)…" onClick={() => {
+          <MenuItem label={t('Separate stems (Pro)…')} onClick={() => {
             const { trackId, clipId } = contextMenu
             setContextMenu(null)
             setStemsTarget({ trackId, clipId, name: menuClip?.name ?? 'Clip' })
           }} />
           {/* A hummed line is the fastest way to get an idea down and the
               slowest to retype. */}
-          <MenuItem label="Turn into notes (audio to MIDI)" onClick={async () => {
+          <MenuItem label={t('Turn into notes (audio to MIDI)')} onClick={async () => {
             const { trackId, clipId } = contextMenu
             setContextMenu(null)
             try {
@@ -2757,17 +2762,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
               }>('audio_clip_to_midi', { trackId, clipId })
               await useTrackStore.getState().fetchTracks()
               useNotificationStore.getState().push('info',
-                `${result.noteCount} ${result.noteCount === 1 ? 'note' : 'notes'} written`, {
-                  detail: `${noteName(result.lowest)} to ${noteName(result.highest)}, on a new track under this one. `
-                    + 'One voice at a time: a chord comes out as whichever note is loudest.',
+                result.noteCount === 1 ? t('1 note written') : tf('{n} notes written', { n: result.noteCount }), {
+                  detail: tf('{lowest} to {highest}, on a new track under this one. One voice at a time: a chord comes out as whichever note is loudest.',
+                    { lowest: noteName(result.lowest), highest: noteName(result.highest) }),
                 })
             } catch (e) {
-              useNotificationStore.getState().push('warning', 'Could not follow that', { detail: String(e) })
+              useNotificationStore.getState().push('warning', t('Could not follow that'), { detail: String(e) })
             }
           }} />
           {/* Warping: the engine has always been able to pin a clip's beats
               to the grid and nothing could ask it to. */}
-          <MenuItem label="Warp beats to the grid" onClick={async () => {
+          <MenuItem label={t('Warp beats to the grid')} onClick={async () => {
             const { trackId, clipId } = contextMenu
             setContextMenu(null)
             const grid = snapEnabled ? snapToTicks(snapValue, true) : 0
@@ -2776,24 +2781,24 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
                 trackId, clipId, gridTicks: grid,
               })
               await useTrackStore.getState().fetchTracks()
-              useNotificationStore.getState().push('info', `Warped ${count} beats to the grid`)
+              useNotificationStore.getState().push('info', tf('Warped {n} beats to the grid', { n: count }))
             } catch (e) {
-              useNotificationStore.getState().push('warning', 'Nothing to warp', { detail: String(e) })
+              useNotificationStore.getState().push('warning', t('Nothing to warp'), { detail: String(e) })
             }
           }} />
-          <MenuItem label="Send to clip launcher" onClick={async () => {
+          <MenuItem label={t('Send to clip launcher')} onClick={async () => {
             const { trackId, clipId } = contextMenu
             setContextMenu(null)
             const push = useNotificationStore.getState().push
             try {
               const slot = await invoke<number>('send_clip_to_launcher', { trackId, clipId })
               useHistoryStore.getState().push('Send clip to launcher')
-              push('info', `In the clip launcher, scene ${slot + 1}`)
+              push('info', tf('In the clip launcher, scene {n}', { n: slot + 1 }))
             } catch (e) {
-              push('warning', 'Could not send that clip to the launcher', { detail: String(e) })
+              push('warning', t('Could not send that clip to the launcher'), { detail: String(e) })
             }
           }} />
-          <MenuItem label="Consolidate selected clips" onClick={async () => {
+          <MenuItem label={t('Consolidate selected clips')} onClick={async () => {
             const { trackId } = contextMenu
             setContextMenu(null)
             // The span the selected clips cover on this track, glued into
@@ -2808,26 +2813,26 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             const from = Math.min(...clips.map(c => c.position_ticks))
             const to = Math.max(...clips.map(c => c.position_ticks + c.length_ticks))
             const push = useNotificationStore.getState().push
-            push('info', 'Consolidating…')
+            push('info', t('Consolidating…'))
             try {
               await invoke('consolidate_track_range', { trackId, startTicks: from, endTicks: to })
               // The engine took its undo snapshot; the history names the step,
               // or Edit > History would not show it.
               useHistoryStore.getState().push('Consolidate clips')
               await useTrackStore.getState().fetchTracks()
-              push('info', `Consolidated ${clips.length} clips into one`)
+              push('info', tf('Consolidated {n} clips into one', { n: clips.length }))
             } catch (e) {
-              push('warning', 'Could not consolidate', { detail: String(e), sticky: true })
+              push('warning', t('Could not consolidate'), { detail: String(e), sticky: true })
             }
           }} />
-          <MenuItem label="Remove warping" onClick={async () => {
+          <MenuItem label={t('Remove warping')} onClick={async () => {
             const { trackId, clipId } = contextMenu
             setContextMenu(null)
             try {
               await invoke('set_clip_warp_markers', { trackId, clipId, markers: [] })
               await useTrackStore.getState().fetchTracks()
             } catch (e) {
-              useNotificationStore.getState().push('warning', 'Could not remove the warping', { detail: String(e) })
+              useNotificationStore.getState().push('warning', t('Could not remove the warping'), { detail: String(e) })
             }
           }} />
           <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
@@ -2838,16 +2843,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             return (
               <>
                 {canGroup && (
-                  <MenuItem label={`Group ${selectionIds.length} clips`} onClick={() => {
+                  <MenuItem label={tf('Group {n} clips', { n: selectionIds.length })} onClick={() => {
                     groupClipsAction(selectionIds)
                     setContextMenu(null)
                   }} />
                 )}
                 {!gid && !canGroup && (
-                  <MenuItem label="Group (select 2+ clips first)" onClick={() => setContextMenu(null)} />
+                  <MenuItem label={t('Group (select 2+ clips first)')} onClick={() => setContextMenu(null)} />
                 )}
                 {gid && (
-                  <MenuItem label="Ungroup this clip" onClick={() => {
+                  <MenuItem label={t('Ungroup this clip')} onClick={() => {
                     ungroupClipAction(contextMenu.clipId)
                     setContextMenu(null)
                   }} />
@@ -2856,11 +2861,11 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             )
           })()}
           <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
-          <MenuItem label="Reset gain (0 dB)" onClick={async () => {
+          <MenuItem label={t('Reset gain (0 dB)')} onClick={async () => {
             await setClipGain(contextMenu.trackId, contextMenu.clipId, 0)
             setContextMenu(null)
           }} />
-          <MenuItem label="Reset fades" onClick={async () => {
+          <MenuItem label={t('Reset fades')} onClick={async () => {
             await setClipFades(contextMenu.trackId, contextMenu.clipId, 0, 0)
             setContextMenu(null)
           }} />
@@ -2880,20 +2885,20 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
               <>
                 <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
                 <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                  Fade in curve
+                  {t('Fade in curve')}
                 </div>
                 {curves.map(c => (
-                  <MenuItem key={`fi_${c.value}`} label={`${c.value === fi ? '● ' : '   '}${c.label}`}
+                  <MenuItem key={`fi_${c.value}`} label={`${c.value === fi ? '● ' : '   '}${t(c.label)}`}
                     onClick={async () => {
                       await setClipFadeCurves(contextMenu.trackId, contextMenu.clipId, c.value, fo)
                       setContextMenu(null)
                     }} />
                 ))}
                 <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                  Fade out curve
+                  {t('Fade out curve')}
                 </div>
                 {curves.map(c => (
-                  <MenuItem key={`fo_${c.value}`} label={`${c.value === fo ? '● ' : '   '}${c.label}`}
+                  <MenuItem key={`fo_${c.value}`} label={`${c.value === fo ? '● ' : '   '}${t(c.label)}`}
                     onClick={async () => {
                       await setClipFadeCurves(contextMenu.trackId, contextMenu.clipId, fi, c.value)
                       setContextMenu(null)
@@ -2902,26 +2907,26 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
               </>
             )
           })()}
-          <MenuItem label="Reset pitch (0 st)" onClick={async () => {
+          <MenuItem label={t('Reset pitch (0 st)')} onClick={async () => {
             await setClipPitch(contextMenu.trackId, contextMenu.clipId, 0)
             setContextMenu(null)
           }} />
-          <MenuItem label="Reset stretch (1.00×)" onClick={async () => {
+          <MenuItem label={t('Reset stretch (1.00×)')} onClick={async () => {
             await setClipStretch(contextMenu.trackId, contextMenu.clipId, 1)
             setContextMenu(null)
           }} />
-          <MenuItem label="Rename…" onClick={() => {
+          <MenuItem label={t('Rename…')} onClick={() => {
             const { trackId, clipId } = contextMenu
             setContextMenu(null)
-            const name = window.prompt('Clip name:', menuClip?.name ?? '')?.trim()
+            const name = window.prompt(t('Clip name:'), menuClip?.name ?? '')?.trim()
             if (name && name !== menuClip?.name) {
               useTrackStore.getState().renameClip(trackId, clipId, name)
-                .catch(e => useNotificationStore.getState().push('warning', 'Could not rename the clip', { detail: String(e) }))
+                .catch(e => useNotificationStore.getState().push('warning', t('Could not rename the clip'), { detail: String(e) }))
             }
           }} />
           <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
           <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-            Color
+            {t('Color')}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 2, padding: '2px 6px 4px' }}>
             {CLIP_COLORS.map(c => {
@@ -2939,7 +2944,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             })}
           </div>
           <MenuItem
-            label="Custom color…"
+            label={t('Custom color…')}
             onClick={(e) => {
               const trigger = e?.currentTarget as HTMLElement | undefined
               const anchor = trigger?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0)
@@ -2949,17 +2954,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
                 current: menuClipColor,
                 onPick: (c) => recolor(c),
                 onClear: () => recolor(null),
-                title: 'Clip color',
+                title: t('Clip color'),
               })
               setContextMenu(null)
             }}
           />
-          <MenuItem label="Clear color override" onClick={() => {
+          <MenuItem label={t('Clear color override')} onClick={() => {
             colorMenuClips(null)
             setContextMenu(null)
           }} />
           <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
-          <MenuItem label="Delete" danger onClick={async () => {
+          <MenuItem label={t('Delete')} danger onClick={async () => {
             await deleteClip(contextMenu.trackId, contextMenu.clipId)
             setContextMenu(null)
           }} />
@@ -2989,75 +2994,75 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             </div>
             {section && moves && (
               <>
-                <MenuItem label="Rename section…" onClick={() => {
-                  const next = window.prompt(`New name for "${section.name}"`, section.name)?.trim()
+                <MenuItem label={t('Rename section…')} onClick={() => {
+                  const next = window.prompt(tf('New name for "{name}"', { name: section.name }), section.name)?.trim()
                   if (!next || next === section.name) { setMarkerCtx(null); return }
-                  void sectionAction('rename that section', 'rename_section', { id: section.id, name: next }, false)
+                  void sectionAction(t('Could not rename that section'), 'rename_section', { id: section.id, name: next }, false)
                 }} />
                 {moves.earlier !== undefined && (
-                  <MenuItem label="Move section earlier" onClick={() => {
-                    void sectionAction('move that section', 'move_section', { id: section.id, before: moves.earlier }, true)
+                  <MenuItem label={t('Move section earlier')} onClick={() => {
+                    void sectionAction(t('Could not move that section'), 'move_section', { id: section.id, before: moves.earlier }, true)
                   }} />
                 )}
                 {moves.later !== undefined && (
-                  <MenuItem label="Move section later" onClick={() => {
-                    void sectionAction('move that section', 'move_section', { id: section.id, before: moves.later }, true)
+                  <MenuItem label={t('Move section later')} onClick={() => {
+                    void sectionAction(t('Could not move that section'), 'move_section', { id: section.id, before: moves.later }, true)
                   }} />
                 )}
-                <MenuItem label="Repeat section" onClick={() => {
-                  void sectionAction('repeat that section', 'duplicate_section', { id: section.id }, true)
+                <MenuItem label={t('Repeat section')} onClick={() => {
+                  void sectionAction(t('Could not repeat that section'), 'duplicate_section', { id: section.id }, true)
                 }} />
-                <MenuItem label="Remove section (keeps the music)" onClick={() => {
-                  void sectionAction('remove that section', 'delete_section', { id: section.id }, false)
+                <MenuItem label={t('Remove section (keeps the music)')} onClick={() => {
+                  void sectionAction(t('Could not remove that section'), 'delete_section', { id: section.id }, false)
                 }} />
                 <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
               </>
             )}
             {!hit && (
               <>
-                <MenuItem label="Add marker here" onClick={() => {
+                <MenuItem label={t('Add marker here')} onClick={() => {
                   addMarker(markerCtx.tick)
                   setMarkerCtx(null)
                 }} />
-                <MenuItem label="Add tempo change…" onClick={() => {
+                <MenuItem label={t('Add tempo change…')} onClick={() => {
                   const raw = window.prompt('Tempo (BPM):', String(bpmAt(tempoEntries, markerCtx.tick)))
                   if (raw == null) { setMarkerCtx(null); return }
                   const parsed = parseFloat(raw)
                   if (Number.isFinite(parsed) && parsed > 0) {
                     tempoActions().setTempoAt(markerCtx.tick, Math.max(20, Math.min(999, parsed)))
-                      .catch(e => useNotificationStore.getState().push('warning', 'Could not change the tempo there', { detail: String(e) }))
+                      .catch(e => useNotificationStore.getState().push('warning', t('Could not change the tempo there'), { detail: String(e) }))
                   }
                   setMarkerCtx(null)
                 }} />
-                <MenuItem label="Add time signature change…" onClick={() => {
-                  const raw = window.prompt('Time signature (e.g. 4/4, 6/8, 7/8):', '4/4')
+                <MenuItem label={t('Add time signature change…')} onClick={() => {
+                  const raw = window.prompt(t('Time signature (e.g. 4/4, 6/8, 7/8):'), '4/4')
                   if (raw == null) { setMarkerCtx(null); return }
                   const m = raw.trim().match(/^(\d+)\s*\/\s*(\d+)$/)
                   if (m) {
                     tempoActions().setSignatureAt(markerCtx.tick, parseInt(m[1], 10), parseInt(m[2], 10))
-                      .catch(e => useNotificationStore.getState().push('warning', 'Could not change the time signature there', { detail: String(e) }))
+                      .catch(e => useNotificationStore.getState().push('warning', t('Could not change the time signature there'), { detail: String(e) }))
                   }
                   setMarkerCtx(null)
                 }} />
                 <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
-                <MenuItem label="Set punch-in here" onClick={() => {
+                <MenuItem label={t('Set punch-in here')} onClick={() => {
                   setPunchIn(markerCtx.tick)
                   if (punchOutTicks != null && punchOutTicks <= markerCtx.tick) setPunchOut(null)
                   setMarkerCtx(null)
                 }} />
-                <MenuItem label="Set punch-out here" onClick={() => {
+                <MenuItem label={t('Set punch-out here')} onClick={() => {
                   setPunchOut(markerCtx.tick)
                   if (punchInTicks != null && punchInTicks >= markerCtx.tick) setPunchIn(null)
                   setMarkerCtx(null)
                 }} />
                 {looping && loopEnd > loopStart && (
-                  <MenuItem label="Set punch range from loop" onClick={() => {
+                  <MenuItem label={t('Set punch range from loop')} onClick={() => {
                     setPunchRangeFromLoop()
                     setMarkerCtx(null)
                   }} />
                 )}
                 {(punchInTicks != null || punchOutTicks != null) && (
-                  <MenuItem label="Clear punch range" onClick={() => {
+                  <MenuItem label={t('Clear punch range')} onClick={() => {
                     clearPunch()
                     setMarkerCtx(null)
                   }} />
@@ -3067,34 +3072,34 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             {hit && (
               <>
                 {hit.kind === 'tempo' && (
-                  <MenuItem label="Edit tempo…" onClick={() => {
+                  <MenuItem label={t('Edit tempo…')} onClick={() => {
                     const raw = window.prompt('Tempo (BPM):', String(hit.bpm ?? bpm))
                     if (raw == null) { setMarkerCtx(null); return }
                     const parsed = parseFloat(raw)
                     const entry = flagEntry(hit.id)
                     if (entry && Number.isFinite(parsed) && parsed > 0) {
                       tempoActions().setEntryTempo(entry.index, Math.max(20, Math.min(999, parsed)))
-                        .catch(e => useNotificationStore.getState().push('warning', 'Could not change the tempo', { detail: String(e) }))
+                        .catch(e => useNotificationStore.getState().push('warning', t('Could not change the tempo'), { detail: String(e) }))
                     }
                     setMarkerCtx(null)
                   }} />
                 )}
                 {hit.kind === 'timesig' && (
-                  <MenuItem label="Edit time signature…" onClick={() => {
+                  <MenuItem label={t('Edit time signature…')} onClick={() => {
                     const current = `${hit.timeSigNum ?? 4}/${hit.timeSigDen ?? 4}`
-                    const raw = window.prompt('Time signature (e.g. 4/4, 6/8):', current)
+                    const raw = window.prompt(t('Time signature (e.g. 4/4, 6/8):'), current)
                     if (raw == null) { setMarkerCtx(null); return }
                     const m = raw.trim().match(/^(\d+)\s*\/\s*(\d+)$/)
                     const entry = flagEntry(hit.id)
                     if (m && entry) {
                       tempoActions().setEntrySignature(entry.index, parseInt(m[1], 10), parseInt(m[2], 10))
-                        .catch(e => useNotificationStore.getState().push('warning', 'Could not change the time signature', { detail: String(e) }))
+                        .catch(e => useNotificationStore.getState().push('warning', t('Could not change the time signature'), { detail: String(e) }))
                     }
                     setMarkerCtx(null)
                   }} />
                 )}
                 {(!hit.kind || hit.kind === 'generic') && (
-                  <MenuItem label="Rename" onClick={() => {
+                  <MenuItem label={t('Rename')} onClick={() => {
                     setRenamingMarker({ id: hit.id, draft: hit.label })
                     setMarkerCtx(null)
                   }} />
@@ -3103,7 +3108,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
                   <>
                     <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
                     <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                      Color
+                      {t('Color')}
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 2, padding: '2px 6px 4px' }}>
                       {['#3B82F6', '#10B981', '#F59E0B', '#A855F7', '#EC4899', '#06B6D4'].map(c => (
@@ -3121,7 +3126,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
                 )}
                 <div style={{ height: 1, background: hw.border, margin: '3px 4px' }} />
                 <MenuItem
-                  label={hit.kind === 'tempo' ? 'Remove tempo change' : hit.kind === 'timesig' ? 'Remove time signature change' : 'Delete marker'}
+                  label={hit.kind === 'tempo' ? t('Remove tempo change') : hit.kind === 'timesig' ? t('Remove time signature change') : t('Delete marker')}
                   danger
                   onClick={() => {
                     const entry = flagEntry(hit.id)
@@ -3175,7 +3180,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: hw.textFaint, fontSize: 12, pointerEvents: 'none',
         }}>
-          Drop audio files here or add tracks from the toolbar
+          {t('Drop audio files here or add tracks from the toolbar')}
         </div>
       )}
       {spectralTarget && (

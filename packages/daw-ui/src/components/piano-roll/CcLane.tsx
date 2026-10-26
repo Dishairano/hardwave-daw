@@ -7,6 +7,7 @@ import {
   laneDisplayValue,
   useMidiCcStore,
 } from '../../stores/midiCcStore'
+import { t, tf, useLanguage } from '../../i18n'
 
 export type CcTool = 'pencil' | 'line' | 'curve'
 
@@ -39,6 +40,7 @@ export function CcLane({
   onChangeLane,
   allDefs,
 }: CcLaneProps) {
+  useLanguage()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<{ slot: number; value: number } | null>(null)
@@ -299,23 +301,23 @@ export function CcLane({
             padding: '2px 3px',
             outline: 'none',
           }}
-          title="CC lane type"
+          title={t('CC lane type')}
         >
           {allDefs.map(d => (
-            <option key={d.id} value={d.id}>{d.label}</option>
+            <option key={d.id} value={d.id}>{t(d.label)}</option>
           ))}
         </select>
         <div style={{ display: 'flex', gap: 3 }}>
           <button
             onClick={onClear}
-            title="Clear lane"
+            title={t('Clear lane')}
             style={laneHeaderBtn}
           >
-            Clr
+            {t('Clr')}
           </button>
           <button
             onClick={onRemove}
-            title="Remove lane"
+            title={t('Remove lane')}
             style={laneHeaderBtn}
           >
             ×
@@ -332,7 +334,10 @@ export function CcLane({
             display: 'block',
             cursor: tool === 'pencil' ? 'crosshair' : 'cell',
           }}
-          title={`${def.label} — ${tool === 'pencil' ? 'click/drag to draw' : tool === 'line' ? 'click two points for line' : 'click three points for curve'}`}
+          title={tf('{lane} — {how}', {
+            lane: t(def.label),
+            how: tool === 'pencil' ? t('click/drag to draw') : tool === 'line' ? t('click two points for line') : t('click three points for curve'),
+          })}
         />
       </div>
     </div>
