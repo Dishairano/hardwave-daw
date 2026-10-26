@@ -2732,6 +2732,10 @@ struct EngineCallback {
     /// MIDI capture keeps so notes played with the song stopped can still be
     /// laid out by when they were played.
     capture_clock: u64,
+    /// Frozen tracks' plug-in chains, kept while the track plays its render:
+    /// not run (that is what freezing saves), not dropped either, so
+    /// unfreezing puts them back with their settings. They were dropped.
+    parked_chains: HashMap<String, crate::insert_chain::InsertChain>,
     /// Frames left to keep processing with the song stopped, after the last
     /// live MIDI event (see `LIVE_MIDI_HOLD_SECONDS`).
     live_midi_hold: u64,
@@ -2943,6 +2947,7 @@ impl EngineCallback {
             record_pass,
             record_last_pos,
             capture_clock: 0,
+            parked_chains: HashMap::new(),
             live_midi_hold: 0,
             send_edges: Vec::with_capacity(64),
             mod_env: vec![0.0; MAX_MOD_ROUTES],
@@ -3046,6 +3051,16 @@ impl EngineCallback {
                 }
             }
         }
+        // A frozen track's plug-ins are parked, not in the graph; a save
+        // keeps their settings too.
+        for (track_id, chain) in &self.parked_chains {
+            for slot in &chain.slots {
+                map.insert(
+                    (track_id.clone(), slot.slot_id.clone()),
+                    slot.plugin.get_state(),
+                );
+            }
+        }
         // Best-effort send — if the UI thread dropped the receiver
         // (e.g. on save abort) we silently discard.
         let _ = tx.try_send(map);
@@ -3105,6 +3120,14 @@ impl EngineCallback {
                     sample_rate,
                     buffer_size,
                 );
+            }
+            // And the frozen tracks' chains: the new song has its own.
+            for (_, mut chain) in self.parked_chains.drain() {
+                for slot in chain.slots.drain(..) {
+                    if let Err(slot) = self.insert_graveyard_tx.try_bury(slot) {
+                        std::mem::forget(slot);
+                    }
+                }
             }
             return;
         };
@@ -4100,7 +4123,10 @@ impl EngineCallback {
                 // rebuilds) sent the chain to the graveyard, so instruments
                 // and effects on MIDI tracks went silent and the built-in
                 // synth played in their place.
-                if let Some(chain) = stashed_chains.remove(&track.id) {
+                if let Some(chain) = stashed_chains
+                    .remove(&track.id)
+                    .or_else(|| self.parked_chains.remove(&track.id))
+                {
                     midi_node.restore_chain(chain);
                 }
                 let node_id = self.graph.add_node(Box::new(midi_node));
@@ -4136,8 +4162,13 @@ impl EngineCallback {
             // plug-in twice and cost the CPU freezing was meant to give
             // back. The chain is dropped from the graph, not from the
             // project, so unfreezing puts it back untouched.
-            if let Some(chain) = stashed_chains.remove(&track.id) {
-                if !track.frozen {
+            if let Some(chain) = stashed_chains
+                .remove(&track.id)
+                .or_else(|| self.parked_chains.remove(&track.id))
+            {
+                if track.frozen {
+                    self.parked_chains.insert(track.id.clone(), chain);
+                } else {
                     node.restore_chain(chain);
                 }
             }
@@ -4601,6 +4632,19 @@ impl EngineCallback {
         // Persist the track_id → NodeId map so per-track plug-in
         // commands can resolve in O(1) on the audio thread.
         self.track_id_to_node = track_id_to_node;
+
+        // A frozen track that was deleted: its parked chain goes too.
+        let gone: Vec<String> = self
+            .parked_chains
+            .keys()
+            .filter(|id| project.track(id).is_none())
+            .cloned()
+            .collect();
+        for id in gone {
+            if let Some(chain) = self.parked_chains.remove(&id) {
+                stashed_chains.insert(id, chain);
+            }
+        }
 
         // Any chains left in `stashed_chains` belong to tracks that
         // disappeared during this rebuild. Ship them to the graveyard
@@ -6737,6 +6781,80 @@ mod rt_safety_tests {
             vec!["new-synth".to_string()],
             "the old song's plug-in must not survive into the new song"
         );
+    }
+
+    /// Freezing a track parks its plug-ins (they do not run while it plays
+    /// the render); unfreezing gives them back. They were dropped, so an
+    /// unfrozen track came back without its plug-ins.
+    #[test]
+    fn unfreezing_a_track_gives_its_plug_ins_back() {
+        use crate::insert_chain::{tests::make_gain_slot, InsertCommand};
+        let mut project = Project::default();
+        let id = project.add_audio_track("Vox".into());
+        // In the song too, as adding a plug-in in the app does.
+        project
+            .track_mut(&id)
+            .unwrap()
+            .inserts
+            .push(hardwave_project::track::PluginSlot {
+                id: "fx".into(),
+                plugin_id: "test.gain".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 1.0,
+            });
+        let project_arc = Arc::new(Mutex::new(project));
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
+        let mut out = vec![0.0f32; 512];
+        let slots_on = |cb: &mut EngineCallback, id: &str| -> Vec<String> {
+            let Some(&node_id) = cb.track_id_to_node.get(id) else {
+                return Vec::new();
+            };
+            let node = cb.graph.node_mut(node_id).unwrap();
+            let chain = node.take_chain();
+            let ids = chain
+                .as_ref()
+                .map(|c| c.slots.iter().map(|s| s.slot_id.clone()).collect())
+                .unwrap_or_default();
+            if let Some(chain) = chain {
+                node.restore_chain(chain);
+            }
+            ids
+        };
+        cb.process(&mut out, 256, 2);
+        let (fx, _) = make_gain_slot("fx", 1.0, true);
+        cmd_tx
+            .try_send(InsertCommand::Add {
+                track_id: id.clone(),
+                slot: fx,
+            })
+            .ok()
+            .unwrap();
+        // An empty track has no node yet: the plug-in asks for one and lands
+        // the block after.
+        cb.process(&mut out, 256, 2);
+        cb.process(&mut out, 256, 2);
+        assert_eq!(slots_on(&mut cb, &id), vec!["fx".to_string()]);
+
+        project_arc.lock().track_mut(&id).unwrap().frozen = true;
+        cb.needs_rebuild = true;
+        cb.process(&mut out, 256, 2);
+        assert!(
+            slots_on(&mut cb, &id).is_empty(),
+            "a frozen track runs no plug-ins"
+        );
+        assert!(cb.parked_chains.contains_key(&id), "they are kept");
+
+        project_arc.lock().track_mut(&id).unwrap().frozen = false;
+        cb.needs_rebuild = true;
+        cb.process(&mut out, 256, 2);
+        assert_eq!(
+            slots_on(&mut cb, &id),
+            vec!["fx".to_string()],
+            "back after unfreezing"
+        );
+        assert!(cb.parked_chains.is_empty());
     }
 
     /// A plug-in on a MIDI track (an instrument, or an effect after the
