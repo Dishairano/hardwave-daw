@@ -2121,6 +2121,7 @@ dependencies = [
  "dirs 5.0.1",
  "hardwave-midi",
  "log",
+ "quick-xml",
  "rmp-serde",
  "serde",
  "serde_json",

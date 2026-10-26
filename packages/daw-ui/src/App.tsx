@@ -2223,6 +2223,37 @@ export function App() {
             },
           },
           {
+            // A song from Bitwig Studio, Studio One or Cubase, as a song here.
+            label: 'Open DAWproject…',
+            action: async () => {
+              const push = useNotificationStore.getState().push
+              try {
+                const { open } = await import('@tauri-apps/plugin-dialog')
+                const picked = await open({
+                  multiple: false,
+                  filters: [{ name: 'DAWproject', extensions: ['dawproject'] }],
+                })
+                if (typeof picked !== 'string') return
+                if (!(await confirmDiscardIfDirty('Save changes before opening the DAWproject'))) return
+                const report = await invoke<{
+                  application: string; tracks: number; clips: number; notes: number; bpm: number
+                  samplesFolder: string | null; leftOut: string[]
+                }>('import_dawproject', { path: picked })
+                await useTrackStore.getState().fetchTracks()
+                push('info',
+                  `From ${report.application}: ${report.tracks} tracks, ${report.clips} clips, ${report.notes} notes at ${Math.round(report.bpm * 100) / 100} BPM`, {
+                    detail: [
+                      report.samplesFolder ? `Its samples are in ${report.samplesFolder}.` : '',
+                      report.leftOut.length ? `Not carried over: ${report.leftOut.join('. ')}.` : '',
+                    ].filter(Boolean).join(' ') || undefined,
+                    sticky: report.leftOut.length > 0,
+                  })
+              } catch (e) {
+                push('warning', 'Could not open that project', { detail: String(e) })
+              }
+            },
+          },
+          {
             label: 'Import audio file…',
             shortcut: 'Ctrl+I',
             action: async () => {

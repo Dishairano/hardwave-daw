@@ -141,6 +141,7 @@ permissions = [
   "allow-clear-session-slot",
   "allow-send-clip-to-launcher",
   "allow-export-dawproject",
+  "allow-import-dawproject",
   "allow-add-scene",
   "allow-list-scripts",
   "allow-save-script",
