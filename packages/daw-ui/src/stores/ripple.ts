@@ -6,6 +6,22 @@ export interface Placed {
 }
 
 /**
+ * Where the other clips of a track go when `moved` clips move by `delta`
+ * with ripple editing on: every clip starting at or after `fromTick` (where
+ * the earliest moved clip started) moves by as much, none before 0.
+ * Returns the clips that move, with their new positions.
+ */
+export function rippleMoveShifts(clips: Placed[], moved: Set<string>, fromTick: number, delta: number): Map<string, number> {
+  const out = new Map<string, number>()
+  if (delta === 0) return out
+  for (const c of clips) {
+    if (moved.has(c.id) || c.position_ticks < fromTick) continue
+    out.set(c.id, Math.max(0, c.position_ticks + delta))
+  }
+  return out
+}
+
+/**
  * Where the clips that stay end up when `deleted` go and the gaps close
  * (ripple delete), on one track. A deleted clip's space only closes where no
  * remaining clip covers it, so closing never pushes clips onto each other.

@@ -603,6 +603,7 @@ export function App() {
   const toggleTouchController = useTouchControllerStore((s) => s.toggleVisible)
   const [pdcEnabled, setPdcEnabled] = useState(true)
   const useNewMixer = useMixerSettingsStore(s => s.useNewMixer)
+  const rippleEditing = usePlaylistToolStore(s => s.ripple)
   const setUseNewMixer = useMixerSettingsStore(s => s.setUseNewMixer)
   const [midiLearnPreset, setMidiLearnPreset] = useState<MidiMapTarget | undefined>(undefined)
   const sampleEditorPath = useSampleEditorStore(s => s.openPath)
@@ -2270,6 +2271,7 @@ export function App() {
           { label: 'Insert time at the loop range', action: () => { void insertTimeAtLoop() } },
           { label: 'Delete the loop range', action: () => { void deleteTimeAtLoop() } },
           { label: 'Delete and close the gap', shortcut: 'Ctrl+Del', action: () => { void useTrackStore.getState().rippleDeleteSelected() } },
+          { label: `${rippleEditing ? '✓ ' : '   '}Ripple editing: moving a clip moves the clips after it`, action: () => usePlaylistToolStore.getState().toggleRipple() },
         ],
       },
       {
@@ -2524,7 +2526,7 @@ export function App() {
     ]
   }, [
     recentProjects, showBrowser, showPlaylist, showChannelRack, showPianoRoll, showMixer, pdcEnabled,
-    uiScaleMode, setUiScaleMode, showFpsMeter,
+    uiScaleMode, setUiScaleMode, showFpsMeter, rippleEditing, useNewMixer, setUseNewMixer,
     handleNewProject, handleOpenProject, handleSaveProject, handleSaveProjectAs, handleSaveAsTemplate,
     handleExportAudio, handleOpenRecent, handleAddAutomationTrack, cutSelection, pasteAtPlayhead, duplicateSelection,
   ])
