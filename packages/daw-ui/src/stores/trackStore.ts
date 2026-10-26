@@ -98,6 +98,9 @@ export interface ClipInfo {
   lane?: number
   /** The clip's own colour (`#rrggbb`), saved with the song; absent for the track's. */
   color?: string
+  /** A MIDI clip's notes for the playlist to draw: [start tick in the clip,
+   *  length, pitch]. Absent for audio, and from older builds. */
+  notePreview?: [number, number, number][]
   /** Where in its file the clip starts, in the loaded file's frames. */
   sourceStart?: number
   /** The loaded file's length in frames and its rate; 0 when not loaded. */

@@ -309,6 +309,7 @@ pub(crate) fn track_clips_to_info(
                         ac.fade_out_ticks,
                         false,
                     ),
+                    note_preview: Vec::new(),
                 }
             }
             hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
@@ -338,6 +339,7 @@ pub(crate) fn track_clips_to_info(
                 source_file: String::new(),
                 fade_in_ms: 0.0,
                 fade_out_ms: 0.0,
+                note_preview: note_preview(&mc.clip.notes),
             },
         })
         .collect()
@@ -636,6 +638,32 @@ pub struct ClipInfo {
     fade_in_ms: f64,
     #[serde(rename = "fadeOutMs")]
     fade_out_ms: f64,
+    /// A MIDI clip's notes for the playlist to draw inside it, as FL draws a
+    /// pattern: (start tick in the clip, length, pitch). At most
+    /// `NOTE_PREVIEW_MAX`, spread over the clip when there are more.
+    #[serde(rename = "notePreview", skip_serializing_if = "Vec::is_empty")]
+    note_preview: Vec<[u32; 3]>,
+}
+
+/// The most notes a clip sends for its preview: enough to show the shape
+/// of a dense part, small enough for a 500-track song.
+const NOTE_PREVIEW_MAX: usize = 512;
+
+/// A MIDI clip's notes as the playlist draws them (see `ClipInfo`).
+fn note_preview(notes: &[hardwave_midi::MidiNote]) -> Vec<[u32; 3]> {
+    let audible: Vec<&hardwave_midi::MidiNote> = notes.iter().filter(|n| !n.muted).collect();
+    let step = audible.len().div_ceil(NOTE_PREVIEW_MAX).max(1);
+    audible
+        .iter()
+        .step_by(step)
+        .map(|n| {
+            [
+                n.start_tick.min(u32::MAX as u64) as u32,
+                n.duration_ticks.min(u32::MAX as u64) as u32,
+                n.pitch as u32,
+            ]
+        })
+        .collect()
 }
 
 fn fade_curve_name(curve: hardwave_project::clip::FadeCurve) -> String {
@@ -2891,5 +2919,37 @@ mod slice_layout_tests {
     fn without_a_loop_tempo_the_slices_keep_their_time() {
         let at_120 = slice_layout(&quarters(2, 0.5), 120.0, None);
         assert_eq!(at_120, vec![(0, 960), (960, 960)]);
+    }
+}
+
+#[cfg(test)]
+mod note_preview_tests {
+    use super::{note_preview, NOTE_PREVIEW_MAX};
+    use hardwave_midi::MidiNote;
+
+    fn note(start_tick: u64, muted: bool) -> MidiNote {
+        MidiNote {
+            start_tick,
+            duration_ticks: 120,
+            pitch: 60,
+            velocity: 0.8,
+            muted,
+            ..Default::default()
+        }
+    }
+
+    /// The playable notes go to the playlist; a muted one does not, and a
+    /// dense part is thinned to the cap, spread over the clip.
+    #[test]
+    fn a_pattern_sends_its_notes_to_the_playlist() {
+        let p = note_preview(&[note(0, false), note(240, true), note(480, false)]);
+        assert_eq!(p, vec![[0, 120, 60], [480, 120, 60]]);
+        let dense: Vec<MidiNote> = (0..2000).map(|i| note(i * 10, false)).collect();
+        let p = note_preview(&dense);
+        assert!(p.len() <= NOTE_PREVIEW_MAX);
+        assert!(
+            p.last().unwrap()[0] > 15_000,
+            "the end of the clip is in it too"
+        );
     }
 }
