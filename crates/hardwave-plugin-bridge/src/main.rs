@@ -10,7 +10,7 @@
 //! It speaks the frames in `bridge_protocol`: audio in, audio out,
 //! parameter moves, state. Nothing else lives in this process.
 
-use std::io::{stdin, BufWriter};
+use std::io::BufWriter;
 
 use hardwave_plugin_host::bridge_protocol::*;
 use hardwave_plugin_host::types::{HostedPlugin, PluginCategory, PluginDescriptor, PluginFormat};
@@ -63,15 +63,17 @@ fn load(descriptor: &PluginDescriptor) -> Result<Box<dyn HostedPlugin>, String> 
 }
 
 fn run(path: &str, id: &str) -> i32 {
-    // Frames get a private copy of stdout before any plug-in code runs;
-    // what the plug-in prints goes nowhere.
-    let frames_out = match hardwave_plugin_host::bridge_child::private_stdout() {
-        Ok(out) => out,
+    // Frames get private copies of stdin and stdout before any plug-in
+    // code runs; what the plug-in prints goes nowhere.
+    let (frames_in, frames_out) = match hardwave_plugin_host::bridge_child::private_stdio() {
+        Ok(streams) => streams,
         Err(e) => {
-            eprintln!("hardwave-plugin-bridge: no stream for frames: {e}");
+            eprintln!("hardwave-plugin-bridge: no streams for frames: {e}");
             return 4;
         }
     };
+    // This thread keeps the plug-in's window.
+    hardwave_plugin_host::bridge_child::prepare_window_thread();
     let descriptor = descriptor(path, id);
     let plugin = match load(&descriptor) {
         Ok(plugin) => plugin,
@@ -82,5 +84,5 @@ fn run(path: &str, id: &str) -> i32 {
         }
     };
     let title = descriptor.name.clone();
-    hardwave_plugin_host::bridge_child::serve(plugin, stdin(), frames_out, &title)
+    hardwave_plugin_host::bridge_child::serve(plugin, frames_in, frames_out, &title)
 }

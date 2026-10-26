@@ -16,56 +16,100 @@ use std::sync::{Arc, Mutex};
 use crate::bridge_protocol::*;
 use crate::types::{HostedPlugin, PluginEditor, SharedParamQueue};
 
-/// Take standard output for frames, leaving the plug-in a stdout that
-/// goes nowhere. Call before the plug-in is loaded.
+/// Take standard input and output for frames, leaving the plug-in a stdin
+/// and stdout that go nowhere. Call before the plug-in is loaded.
+///
+/// The copies kept for frames cannot be inherited, and the originals are
+/// closed: a plug-in that starts processes of its own (a WebView2 editor
+/// starts several) used to hand them the pipe to the DAW, so killing this
+/// process left the pipe open, the DAW's writes to it hung, and the crash
+/// was never noticed.
+pub fn private_stdio() -> std::io::Result<(std::fs::File, std::fs::File)> {
+    let input = imp::private_handle(imp::Which::Input)?;
+    let output = imp::private_handle(imp::Which::Output)?;
+    Ok((input, output))
+}
+
+/// Take standard output alone (see `private_stdio`), for a child that only
+/// answers once and reads nothing.
 pub fn private_stdout() -> std::io::Result<std::fs::File> {
-    imp::private_stdout()
+    imp::private_handle(imp::Which::Output)
+}
+
+/// Ready this thread to keep a plug-in's window: on Windows, OLE and COM in
+/// a single-threaded apartment, as editors (and WebView2) expect. Call on
+/// the thread that loads the plug-in, before loading it.
+pub fn prepare_window_thread() {
+    imp::prepare_window_thread();
 }
 
 #[cfg(unix)]
 mod imp {
     use std::os::fd::FromRawFd;
 
-    pub fn private_stdout() -> std::io::Result<std::fs::File> {
-        // Safety: plain descriptor calls on this process's own stdout;
-        // every result is checked before it is used.
+    pub enum Which {
+        Input,
+        Output,
+    }
+
+    pub fn private_handle(which: Which) -> std::io::Result<std::fs::File> {
+        let (fd, mode) = match which {
+            Which::Input => (0, libc::O_RDONLY),
+            Which::Output => (1, libc::O_WRONLY),
+        };
+        // Safety: plain descriptor calls on this process's own standard
+        // streams; every result is checked before it is used.
         unsafe {
-            let ours = libc::dup(1);
+            let ours = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3);
             if ours < 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
+            let null = libc::open(c"/dev/null".as_ptr(), mode);
             if null >= 0 {
-                libc::dup2(null, 1);
+                libc::dup2(null, fd);
                 libc::close(null);
             }
             Ok(std::fs::File::from_raw_fd(ours))
         }
     }
+
+    pub fn prepare_window_thread() {}
 }
 
 #[cfg(windows)]
 mod imp {
     use std::os::windows::io::FromRawHandle;
     use windows_sys::Win32::Foundation::{
-        DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
+        CloseHandle, DuplicateHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_GENERIC_WRITE, FILE_SHARE_WRITE, OPEN_EXISTING,
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
-    use windows_sys::Win32::System::Console::{GetStdHandle, SetStdHandle, STD_OUTPUT_HANDLE};
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, SetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-    pub fn private_stdout() -> std::io::Result<std::fs::File> {
-        // Safety: handle calls on this process's own standard output;
+    pub enum Which {
+        Input,
+        Output,
+    }
+
+    pub fn private_handle(which: Which) -> std::io::Result<std::fs::File> {
+        let (std_handle, access) = match which {
+            Which::Input => (STD_INPUT_HANDLE, GENERIC_READ),
+            Which::Output => (STD_OUTPUT_HANDLE, GENERIC_WRITE),
+        };
+        // Safety: handle calls on this process's own standard streams;
         // every result is checked before it is used.
         unsafe {
-            let current = GetStdHandle(STD_OUTPUT_HANDLE);
+            let current = GetStdHandle(std_handle);
             if current == 0 || current == INVALID_HANDLE_VALUE {
                 return Err(std::io::Error::last_os_error());
             }
             let mut ours: HANDLE = 0;
             let process = GetCurrentProcess();
+            // Not inheritable (the 0 before the access flag).
             if DuplicateHandle(
                 process,
                 current,
@@ -73,7 +117,7 @@ mod imp {
                 &mut ours,
                 0,
                 0,
-                DUPLICATE_SAME_ACCESS,
+                windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS,
             ) == 0
             {
                 return Err(std::io::Error::last_os_error());
@@ -81,17 +125,27 @@ mod imp {
             let nul: Vec<u16> = "NUL\0".encode_utf16().collect();
             let null = CreateFileW(
                 nul.as_ptr(),
-                FILE_GENERIC_WRITE,
-                FILE_SHARE_WRITE,
+                access,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
                 std::ptr::null(),
                 OPEN_EXISTING,
                 0,
                 0,
             );
             if null != INVALID_HANDLE_VALUE {
-                SetStdHandle(STD_OUTPUT_HANDLE, null);
+                SetStdHandle(std_handle, null);
             }
+            // The inheritable original goes, so nothing started from here
+            // holds the pipe.
+            CloseHandle(current);
             Ok(std::fs::File::from_raw_handle(ours as _))
+        }
+    }
+
+    pub fn prepare_window_thread() {
+        // Safety: called once on this thread before any window or COM use.
+        unsafe {
+            windows_sys::Win32::System::Ole::OleInitialize(std::ptr::null());
         }
     }
 }
