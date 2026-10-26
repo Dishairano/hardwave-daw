@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlChannel {
     pub name: String,
+    /// Its colour in the rack, as `#rrggbb`.
+    #[serde(default)]
+    pub color: Option<String>,
     pub sample_path: Option<String>,
     pub plugin_name: Option<String>,
     pub pattern_steps: Vec<bool>,
@@ -300,6 +303,9 @@ pub struct FlArrangement {
     pub name: String,
     #[serde(default)]
     pub track_names: Vec<(u32, String)>,
+    /// Each playlist track's colour, as `#rrggbb`.
+    #[serde(default)]
+    pub track_colors: Vec<(u32, String)>,
     #[serde(default)]
     pub tracks_off: Vec<u32>,
     #[serde(default)]
@@ -352,6 +358,9 @@ fn unit_volume() -> f32 {
 pub struct FlMixerTrack {
     /// Its number in FL's mixer; 0 is the master.
     pub index: u32,
+    /// Its colour, as `#rrggbb`, when it was given one.
+    #[serde(default)]
+    pub color: Option<String>,
     /// Empty when it has FL's default name ("Insert 3").
     pub name: String,
     /// Off is FL's mute switch on the insert.
@@ -379,6 +388,7 @@ impl Default for FlMixerTrack {
     fn default() -> Self {
         Self {
             index: 0,
+            color: None,
             name: String::new(),
             enabled: true,
             effects_enabled: true,
@@ -625,6 +635,12 @@ pub struct FlProject {
     /// Pattern names, for naming the clips they become.
     #[serde(default)]
     pub pattern_names: Vec<(u32, String)>,
+    /// Pattern colours, as `#rrggbb`, for the clips they become.
+    #[serde(default)]
+    pub pattern_colors: Vec<(u32, String)>,
+    /// Playlist track colours, the open arrangement's, by track number.
+    #[serde(default)]
+    pub playlist_track_colors: Vec<(u32, String)>,
     pub playlist_clips: Vec<FlPlaylistClip>,
     pub mixer: Vec<FlMixerTrack>,
     /// Names given to playlist tracks, by track number (1 is the top).
@@ -863,6 +879,7 @@ mod tests {
             time_sig_denominator: 4,
             channels: vec![
                 FlChannel {
+                    color: None,
                     plugin_data: Vec::new(),
                     automation: Vec::new(),
                     name: "Kick".into(),
@@ -873,6 +890,7 @@ mod tests {
                     settings: FlChannelSettings::default(),
                 },
                 FlChannel {
+                    color: None,
                     plugin_data: Vec::new(),
                     automation: Vec::new(),
                     name: "Sytrus Lead".into(),
@@ -883,6 +901,7 @@ mod tests {
                     settings: FlChannelSettings::default(),
                 },
                 FlChannel {
+                    color: None,
                     plugin_data: Vec::new(),
                     automation: Vec::new(),
                     name: "Harmor Pad".into(),
@@ -893,6 +912,7 @@ mod tests {
                     settings: FlChannelSettings::default(),
                 },
                 FlChannel {
+                    color: None,
                     plugin_data: Vec::new(),
                     automation: Vec::new(),
                     name: "Mystery Plugin".into(),
@@ -929,6 +949,8 @@ mod tests {
             }],
             pattern_notes: Vec::new(),
             pattern_names: Vec::new(),
+            pattern_colors: Vec::new(),
+            playlist_track_colors: Vec::new(),
             playlist_track_names: Vec::new(),
             playlist_tracks_off: Vec::new(),
             automation_links: Vec::new(),
@@ -993,7 +1015,7 @@ mod tests {
     fn automation_clip_count_derived_from_content_kind() {
         let mut project = sample_project();
         project.playlist_clips.push(FlPlaylistClip {
-                arrangement: 0,
+            arrangement: 0,
             track_index: 1,
             start_tick: 0,
             length_ticks: 960,

@@ -59,7 +59,8 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
     }
     let mut would_make = 0usize;
     for clip in &fl.playlist_clips {
-        if let hardwave_project::fl_import::FlClipContent::Pattern { pattern_index, .. } = &clip.content
+        if let hardwave_project::fl_import::FlClipContent::Pattern { pattern_index, .. } =
+            &clip.content
         {
             would_make = would_make
                 .saturating_add(notes_per_pattern.get(pattern_index).copied().unwrap_or(0));
@@ -363,10 +364,18 @@ fn apply_fixups(
     fixups: &[hardwave_project::fl_build::AudioFixup],
 ) {
     for fixup in fixups {
-        let Some(track) = project.track_mut(&fixup.track_id) else {
-            continue;
-        };
-        for placement in &mut track.clips {
+        // On the track, or in one of FL's other arrangements.
+        let stored = project
+            .arrangements
+            .iter_mut()
+            .filter_map(|a| a.timelines.get_mut(&fixup.track_id))
+            .flat_map(|t| t.clips.iter_mut());
+        let live = project
+            .tracks
+            .iter_mut()
+            .filter(|t| t.id == fixup.track_id)
+            .flat_map(|t| t.clips.iter_mut());
+        for placement in live.chain(stored) {
             let ClipContent::Audio(clip) = &mut placement.content else {
                 continue;
             };
