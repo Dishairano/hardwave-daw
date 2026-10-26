@@ -740,8 +740,8 @@ pub fn set_keyboard_track(state: State<AppState>, track_id: Option<String>) {
 }
 
 /// One saved mixer state: every track's fader, pan, mute and solo, its
-/// width, its sends, and whether each plug-in is on and how much of it is
-/// heard. The plug-ins' own settings are not part of it.
+/// width, its sends, and each plug-in: whether it is on, how much of it is
+/// heard, and its own settings (the EQ curve, the compressor's threshold).
 ///
 /// Comparing two mixes meant writing the numbers down: there was nothing in
 /// the DAW that could hold "the mix as it was ten minutes ago" and put it
@@ -786,10 +786,35 @@ pub struct MixerSnapshotInsert {
     pub slot_id: String,
     pub enabled: bool,
     pub wet: f32,
+    /// The plug-in's own settings, base64. None in snapshots saved before
+    /// these were kept, and for a plug-in whose settings are too big to
+    /// copy into every snapshot (see `SNAPSHOT_STATE_MAX`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+/// A plug-in's own settings are kept in a snapshot up to this size. A
+/// sampler's settings can carry its samples, tens of megabytes, and each
+/// snapshot would copy that into the song; past this a snapshot keeps that
+/// plug-in's switch and mix only.
+const SNAPSHOT_STATE_MAX: usize = 2 * 1024 * 1024;
+
+/// Live plug-in settings of one track, by slot id.
+type LiveStates = std::collections::HashMap<String, Vec<u8>>;
+
+/// What recalling a snapshot changed on one track's plug-ins, for the live
+/// chains: switches and mixes, and settings.
+#[derive(Debug, Default, PartialEq)]
+struct InsertChanges {
+    switches: Vec<(String, bool, f32)>,
+    states: Vec<(String, Vec<u8>)>,
 }
 
 impl MixerSnapshotTrack {
-    fn of(t: &hardwave_project::Track) -> Self {
+    /// The track as it is, with each plug-in's settings as it plays now
+    /// (`live`), or as last saved when the audio engine is not running.
+    fn of(t: &hardwave_project::Track, live: &LiveStates) -> Self {
+        use base64::Engine as _;
         Self {
             track_id: t.id.clone(),
             volume_db: t.volume_db,
@@ -814,6 +839,11 @@ impl MixerSnapshotTrack {
                         slot_id: i.id.clone(),
                         enabled: i.enabled,
                         wet: i.wet,
+                        state: live
+                            .get(&i.id)
+                            .or(i.state.as_ref())
+                            .filter(|b| !b.is_empty() && b.len() <= SNAPSHOT_STATE_MAX)
+                            .map(|b| base64::engine::general_purpose::STANDARD.encode(b)),
                     })
                     .collect(),
             ),
@@ -821,9 +851,12 @@ impl MixerSnapshotTrack {
     }
 
     /// Put this onto the track. Sends to tracks and plug-ins that are gone
-    /// are skipped. Returns the plug-ins whose on/off or mix changed, for
-    /// the live chain.
-    fn apply(&self, t: &mut hardwave_project::Track) -> Vec<(String, bool, f32)> {
+    /// are skipped. Returns the plug-ins whose on/off, mix or settings
+    /// changed, for the live chain; settings only where they differ from
+    /// how the plug-in plays now (`live`), so an untouched plug-in is not
+    /// reloaded.
+    fn apply(&self, t: &mut hardwave_project::Track, live: &LiveStates) -> InsertChanges {
+        use base64::Engine as _;
         t.volume_db = self.volume_db;
         t.pan = self.pan;
         t.muted = self.muted;
@@ -837,18 +870,47 @@ impl MixerSnapshotTrack {
                 send.enabled = saved.enabled;
             }
         }
-        let mut changed = Vec::new();
+        let mut changed = InsertChanges::default();
         for saved in self.inserts.iter().flatten() {
             if let Some(slot) = t.inserts.iter_mut().find(|i| i.id == saved.slot_id) {
                 if slot.enabled != saved.enabled || slot.wet != saved.wet {
                     slot.enabled = saved.enabled;
                     slot.wet = saved.wet;
-                    changed.push((slot.id.clone(), slot.enabled, slot.wet));
+                    changed
+                        .switches
+                        .push((slot.id.clone(), slot.enabled, slot.wet));
+                }
+                let Some(bytes) = saved
+                    .state
+                    .as_deref()
+                    .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+                else {
+                    continue;
+                };
+                let now = live.get(&slot.id).or(slot.state.as_ref());
+                if now != Some(&bytes) {
+                    slot.state = Some(bytes.clone());
+                    changed.states.push((slot.id.clone(), bytes));
                 }
             }
         }
         changed
     }
+}
+
+/// Every plug-in's settings as it plays now, by track and slot. Empty when
+/// the audio engine is not running; the settings last saved stand in then.
+fn live_states_by_track(state: &State<AppState>) -> std::collections::HashMap<String, LiveStates> {
+    let mut by_track: std::collections::HashMap<String, LiveStates> = Default::default();
+    let live = state
+        .engine
+        .lock()
+        .snapshot_plugin_states(std::time::Duration::from_millis(500))
+        .unwrap_or_default();
+    for ((track, slot), bytes) in live {
+        by_track.entry(track).or_default().insert(slot, bytes);
+    }
+    by_track
 }
 
 /// Snapshots live in the project's timeline blob, beside the markers, so
@@ -888,11 +950,16 @@ pub fn save_mixer_snapshot(state: State<AppState>, name: String) -> Result<(), S
     if name.is_empty() {
         return Err("give the snapshot a name".into());
     }
+    let live = live_states_by_track(&state);
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
-    let tracks: Vec<MixerSnapshotTrack> =
-        project.tracks.iter().map(MixerSnapshotTrack::of).collect();
+    let none = LiveStates::new();
+    let tracks: Vec<MixerSnapshotTrack> = project
+        .tracks
+        .iter()
+        .map(|t| MixerSnapshotTrack::of(t, live.get(&t.id).unwrap_or(&none)))
+        .collect();
     let mut snapshots = read_snapshots(&project);
     snapshots.retain(|s| s.name != name);
     snapshots.push(MixerSnapshot { name, tracks });
@@ -914,8 +981,9 @@ pub fn list_mixer_snapshots(state: State<AppState>) -> Vec<String> {
 /// reset to something the snapshot never knew about.
 #[tauri::command]
 pub fn recall_mixer_snapshot(state: State<AppState>, name: String) -> Result<usize, String> {
+    let live = live_states_by_track(&state);
     state.engine.lock().snapshot_before_mutation();
-    let (restored, plugins) = {
+    let (restored, plugins, settings) = {
         let engine = state.engine.lock();
         let mut project = engine.project.lock();
         let snapshots = read_snapshots(&project);
@@ -925,17 +993,32 @@ pub fn recall_mixer_snapshot(state: State<AppState>, name: String) -> Result<usi
             .ok_or_else(|| format!("no snapshot called {name}"))?;
         let mut restored = 0usize;
         let mut plugins = Vec::new();
+        let mut settings = Vec::new();
+        let none = LiveStates::new();
         for saved in snapshot.tracks {
             if let Some(track) = project.track_mut(&saved.track_id) {
-                for (slot_id, enabled, wet) in saved.apply(track) {
+                let changed = saved.apply(track, live.get(&saved.track_id).unwrap_or(&none));
+                for (slot_id, enabled, wet) in changed.switches {
                     plugins.push((saved.track_id.clone(), slot_id, enabled, wet));
+                }
+                for (slot_id, bytes) in changed.states {
+                    settings.push((saved.track_id.clone(), slot_id, bytes));
                 }
                 restored += 1;
             }
         }
-        (restored, plugins)
+        (restored, plugins, settings)
     };
     let engine = state.engine.lock();
+    // The plug-ins' own settings, where they differ from how they play now.
+    for (track_id, slot_id, bytes) in settings {
+        use hardwave_engine::insert_chain::InsertCommand;
+        let _ = engine.try_send_insert_command(InsertCommand::SetState {
+            track_id,
+            slot_id,
+            bytes,
+        });
+    }
     // The playing plug-ins are switched where they run.
     for (track_id, slot_id, enabled, wet) in plugins {
         use hardwave_engine::insert_chain::InsertCommand;
@@ -1537,7 +1620,7 @@ pub fn duplicate_track(
 
 #[cfg(test)]
 mod snapshot_tests {
-    use super::MixerSnapshotTrack;
+    use super::{InsertChanges, LiveStates, MixerSnapshotTrack, SNAPSHOT_STATE_MAX};
     use hardwave_project::mixer::Send;
     use hardwave_project::track::PluginSlot;
     use hardwave_project::Track;
@@ -1564,17 +1647,23 @@ mod snapshot_tests {
     #[test]
     fn width_sends_and_plug_in_switches_come_back() {
         let mut t = track();
-        let saved = MixerSnapshotTrack::of(&t);
+        let saved = MixerSnapshotTrack::of(&t, &LiveStates::new());
         t.stereo_separation = 1.6;
         t.sends[0].gain_db = 0.0;
         t.sends[0].enabled = false;
         t.inserts[0].enabled = false;
         t.inserts[0].wet = 0.3;
-        let changed = saved.apply(&mut t);
+        let changed = saved.apply(&mut t, &LiveStates::new());
         assert_eq!(t.stereo_separation, 1.0);
         assert_eq!((t.sends[0].gain_db, t.sends[0].enabled), (-6.0, true));
         assert_eq!((t.inserts[0].enabled, t.inserts[0].wet), (true, 1.0));
-        assert_eq!(changed, vec![("s1".to_string(), true, 1.0)]);
+        assert_eq!(
+            changed,
+            InsertChanges {
+                switches: vec![("s1".to_string(), true, 1.0)],
+                states: vec![],
+            }
+        );
     }
 
     #[test]
@@ -1586,9 +1675,51 @@ mod snapshot_tests {
         let mut t = track();
         t.stereo_separation = 1.6;
         t.inserts[0].enabled = false;
-        assert!(old.apply(&mut t).is_empty());
+        assert_eq!(
+            old.apply(&mut t, &LiveStates::new()),
+            InsertChanges::default()
+        );
         assert_eq!(t.volume_db, -3.0);
         assert_eq!(t.stereo_separation, 1.6);
         assert!(!t.inserts[0].enabled);
+    }
+
+    /// The plug-in's settings as it plays when the snapshot is taken come
+    /// back on recall, and only a plug-in whose settings moved is reloaded.
+    #[test]
+    fn a_plug_ins_own_settings_come_back() {
+        let mut t = track();
+        let live: LiveStates = [("s1".to_string(), vec![1, 2, 3])].into();
+        let saved = MixerSnapshotTrack::of(&t, &live);
+        // Nothing moved: nothing to reload.
+        assert!(saved.apply(&mut t, &live).states.is_empty());
+        // The EQ was turned since.
+        let moved: LiveStates = [("s1".to_string(), vec![9, 9])].into();
+        let changed = saved.apply(&mut t, &moved);
+        assert_eq!(changed.states, vec![("s1".to_string(), vec![1, 2, 3])]);
+        assert_eq!(t.inserts[0].state.as_deref(), Some(&[1u8, 2, 3][..]));
+    }
+
+    /// With the audio engine off, the settings last saved stand in.
+    #[test]
+    fn without_the_engine_the_saved_settings_are_kept() {
+        let mut t = track();
+        t.inserts[0].state = Some(vec![4, 5]);
+        let saved = MixerSnapshotTrack::of(&t, &LiveStates::new());
+        t.inserts[0].state = Some(vec![6]);
+        let changed = saved.apply(&mut t, &LiveStates::new());
+        assert_eq!(changed.states, vec![("s1".to_string(), vec![4, 5])]);
+    }
+
+    /// A sampler's settings with its samples in them are too big to copy
+    /// into every snapshot: its switch and mix are kept, not its settings.
+    #[test]
+    fn huge_settings_are_left_out() {
+        let t = track();
+        let live: LiveStates = [("s1".to_string(), vec![0; SNAPSHOT_STATE_MAX + 1])].into();
+        let saved = MixerSnapshotTrack::of(&t, &live);
+        let insert = &saved.inserts.as_ref().unwrap()[0];
+        assert!(insert.state.is_none());
+        assert!(insert.enabled);
     }
 }
