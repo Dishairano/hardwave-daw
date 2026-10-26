@@ -552,9 +552,37 @@ pub fn get_midi_notes(
 }
 
 /// Add a note to a MIDI clip.
+///
+/// The engine plays notes it was given at the last graph rebuild, and none
+/// of the three note commands asked for one: a note drawn in the piano roll
+/// stayed silent (and a moved or deleted one kept playing where it was)
+/// until something else rebuilt the song. Each now does, once the song is
+/// let go of. A piano-roll gesture sends one command, at mouse-up.
 #[tauri::command]
 pub fn add_midi_note(
     state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    pitch: u8,
+    start_tick: u64,
+    duration_ticks: u64,
+    velocity: Option<f32>,
+) -> Result<usize, String> {
+    let index = add_note_to_song(
+        &state,
+        track_id,
+        clip_id,
+        pitch,
+        start_tick,
+        duration_ticks,
+        velocity,
+    )?;
+    state.engine.lock().rebuild_graph();
+    Ok(index)
+}
+
+fn add_note_to_song(
+    state: &State<AppState>,
     track_id: String,
     clip_id: String,
     pitch: u8,
@@ -617,7 +645,7 @@ pub fn add_midi_note(
     Err(format!("MIDI clip not found: {}", clip_id))
 }
 
-/// Update a note in a MIDI clip.
+/// Update a note in a MIDI clip (see [`add_midi_note`] for why it rebuilds).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn update_midi_note(
@@ -634,6 +662,55 @@ pub fn update_midi_note(
     fine_cents: Option<f32>,
     release_velocity: Option<f32>,
 ) -> Result<(), String> {
+    update_note_in_song(
+        &state,
+        track_id,
+        clip_id,
+        note_index,
+        NoteChange {
+            pitch,
+            start_tick,
+            duration_ticks,
+            velocity,
+            muted,
+            pan,
+            fine_cents,
+            release_velocity,
+        },
+    )?;
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+/// What a note update changes; `None` leaves that field as it is.
+struct NoteChange {
+    pitch: Option<u8>,
+    start_tick: Option<u64>,
+    duration_ticks: Option<u64>,
+    velocity: Option<f32>,
+    muted: Option<bool>,
+    pan: Option<f32>,
+    fine_cents: Option<f32>,
+    release_velocity: Option<f32>,
+}
+
+fn update_note_in_song(
+    state: &State<AppState>,
+    track_id: String,
+    clip_id: String,
+    note_index: usize,
+    change: NoteChange,
+) -> Result<(), String> {
+    let NoteChange {
+        pitch,
+        start_tick,
+        duration_ticks,
+        velocity,
+        muted,
+        pan,
+        fine_cents,
+        release_velocity,
+    } = change;
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
@@ -684,10 +761,21 @@ pub fn update_midi_note(
     Err(format!("MIDI clip not found: {}", clip_id))
 }
 
-/// Delete a note from a MIDI clip.
+/// Delete a note from a MIDI clip (see [`add_midi_note`] for why it rebuilds).
 #[tauri::command]
 pub fn delete_midi_note(
     state: State<AppState>,
+    track_id: String,
+    clip_id: String,
+    note_index: usize,
+) -> Result<(), String> {
+    delete_note_from_song(&state, track_id, clip_id, note_index)?;
+    state.engine.lock().rebuild_graph();
+    Ok(())
+}
+
+fn delete_note_from_song(
+    state: &State<AppState>,
     track_id: String,
     clip_id: String,
     note_index: usize,
