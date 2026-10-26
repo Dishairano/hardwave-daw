@@ -3954,6 +3954,7 @@ impl EngineCallback {
                             pan: note.pan,
                             fine_cents: note.fine_cents,
                             release_velocity: note.release_velocity,
+                            channel: note.channel & 0x0F,
                         });
                     }
                     // Controller movements: mod wheel, sustain, bend. Mapped
@@ -3979,6 +3980,11 @@ impl EngineCallback {
                 // the audio thread only ever reads a table.
                 midi_node.set_tuning(track.tuning.as_ref().map(|t| Box::new(t.table())));
                 midi_node.set_mpe(track.mpe);
+                // MPE out: each note a member channel of its own, so its
+                // detune can be its own bend.
+                if track.mpe {
+                    crate::midi_track_node::assign_mpe_channels(&mut note_regions);
+                }
                 midi_node.set_notes(note_regions);
                 // The channel's audio clips: a consolidated part, a sample
                 // dropped on it. They used to be silent here, so a
@@ -4021,6 +4027,7 @@ impl EngineCallback {
                                         pan: n.pan,
                                         fine_cents: n.fine_cents,
                                         release_velocity: n.release_velocity,
+                                        channel: n.channel & 0x0F,
                                     }
                                 })
                                 .collect();
