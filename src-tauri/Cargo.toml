@@ -62,6 +62,9 @@ chrono.workspace = true
 vorbis_rs.workspace = true
 trash = "5"
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+# zip turns flate2 on without a backend; this picks the pure-Rust one. On
+# Linux another crate happened to pick it, so only the Windows build failed.
+flate2 = "1"
 rhai = { version = "1.26.1", default-features = false, features = ["std", "sync"] }
 # The room connection's TLS is set up in commands/collab.rs with the Mozilla
 # roots from webpki-roots 1.x. tokio-tungstenite's own rustls-tls-webpki-roots

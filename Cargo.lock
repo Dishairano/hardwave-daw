@@ -1972,6 +1972,7 @@ dependencies = [
  "dirs 5.0.1",
  "env_logger",
  "flacenc",
+ "flate2",
  "futures-util",
  "hardwave-dsp",
  "hardwave-engine",
