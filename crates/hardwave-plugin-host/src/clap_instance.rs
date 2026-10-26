@@ -1078,7 +1078,7 @@ fn encode_midi_events(midi: &[hardwave_midi::MidiEvent], events: &mut Vec<Encode
                 [
                     0xB0 | (channel & 0x0F),
                     cc & 0x7F,
-                    (value.clamp(0.0, 1.0) * 127.0) as u8,
+                    (value.clamp(0.0, 1.0) * 127.0).round() as u8,
                 ],
             ),
             hardwave_midi::MidiEvent::PitchBend {
