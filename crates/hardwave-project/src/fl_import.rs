@@ -15,6 +15,10 @@ pub struct FlChannel {
     /// Its colour in the rack, as `#rrggbb`.
     #[serde(default)]
     pub color: Option<String>,
+    /// A layer's channels, by their place in the rack: the layer plays its
+    /// notes on each of them and has no sound of its own.
+    #[serde(default)]
+    pub layer_children: Vec<u32>,
     pub sample_path: Option<String>,
     pub plugin_name: Option<String>,
     pub pattern_steps: Vec<bool>,
@@ -880,6 +884,7 @@ mod tests {
             channels: vec![
                 FlChannel {
                     color: None,
+                    layer_children: Vec::new(),
                     plugin_data: Vec::new(),
                     automation: Vec::new(),
                     name: "Kick".into(),
@@ -891,6 +896,7 @@ mod tests {
                 },
                 FlChannel {
                     color: None,
+                    layer_children: Vec::new(),
                     plugin_data: Vec::new(),
                     automation: Vec::new(),
                     name: "Sytrus Lead".into(),
@@ -902,6 +908,7 @@ mod tests {
                 },
                 FlChannel {
                     color: None,
+                    layer_children: Vec::new(),
                     plugin_data: Vec::new(),
                     automation: Vec::new(),
                     name: "Harmor Pad".into(),
@@ -913,6 +920,7 @@ mod tests {
                 },
                 FlChannel {
                     color: None,
+                    layer_children: Vec::new(),
                     plugin_data: Vec::new(),
                     automation: Vec::new(),
                     name: "Mystery Plugin".into(),

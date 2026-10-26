@@ -100,6 +100,9 @@ const ARRANGEMENT_NEW: u8 = WORD + 35; // 99
 /// slot's, inside an insert), an insert's (before the insert's flags, as
 /// its name is) and a pattern's.
 const CH_COLOR: u8 = DWORD; // 128
+/// A layer's child, two bytes: the child channel's place in the rack, one
+/// event per child.
+const CH_LAYER_CHILD: u8 = WORD + 30; // 94
 const INSERT_COLOR: u8 = DWORD + 21; // 149
 const PAT_COLOR: u8 = DWORD + 22; // 150
 /// The arrangement's name, after its start.
@@ -377,6 +380,11 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
             }
             INSERT_NAME => insert_name = Some(text(event.data)),
             INSERT_COLOR => insert_color = color(event.data),
+            CH_LAYER_CHILD => {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    channel.layer_children.push(u16_at(event.data, 0) as u32);
+                }
+            }
             CH_COLOR => {
                 if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
                     channel.color = color(event.data);
@@ -460,6 +468,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 if project.channels.len() <= index {
                     project.channels.resize_with(index + 1, || FlChannel {
                         color: None,
+                        layer_children: Vec::new(),
                         plugin_data: Vec::new(),
                         automation: Vec::new(),
                         name: String::new(),
@@ -1457,6 +1466,21 @@ mod tests {
             vec![(7, "Kicks".to_string())],
             "the number is FL's own; it named the track below the one it meant"
         );
+    }
+
+    /// A layer names its children, one event each, by their place in the rack.
+    #[test]
+    fn a_layer_names_its_children() {
+        let mut writer = Writer::new();
+        writer.event(CH_NEW, &0u16.to_le_bytes());
+        writer.event(CH_NEW, &1u16.to_le_bytes());
+        writer.event(CH_NEW, &2u16.to_le_bytes());
+        writer.event(CH_TYPE, &[3]);
+        writer.event(CH_LAYER_CHILD, &0u16.to_le_bytes());
+        writer.event(CH_LAYER_CHILD, &1u16.to_le_bytes());
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.channels[2].layer_children, vec![0, 1]);
+        assert!(project.channels[0].layer_children.is_empty());
     }
 
     /// Colours, red, green, blue, alpha: a channel's after it starts, an
