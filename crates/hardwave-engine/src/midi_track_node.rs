@@ -312,6 +312,10 @@ pub struct MidiTrackNode {
     /// Mid/side width: 0 mono, 1 as played, 2 wide.
     stereo_separation: f32,
     width_applied: f32,
+    /// The channel's delay, left/right swap, polarity and filter, after the
+    /// instrument and its effects (an instrument plug-in makes its sound in
+    /// the chain), before the width and the fader.
+    utility: crate::track_node::ChannelUtility,
     gain_ramp: crate::track_node::GainRamp,
     muted: bool,
     soloed: bool,
@@ -432,6 +436,7 @@ impl MidiTrackNode {
             automation_clips: Vec::new(),
             stereo_separation: 1.0,
             width_applied: 1.0,
+            utility: crate::track_node::ChannelUtility::default(),
             gain_ramp: crate::track_node::GainRamp::default(),
             muted: false,
             soloed: false,
@@ -863,6 +868,30 @@ impl MidiTrackNode {
         self.volume = 10.0_f64.powf(db / 20.0) as f32;
         self.fader_volume = self.volume;
     }
+    /// See [`crate::track_node::ChannelUtility`].
+    pub fn set_filter(
+        &mut self,
+        kind: crate::track_node::TrackFilterType,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: f32,
+    ) {
+        self.utility
+            .set_filter(kind, cutoff_hz, resonance, sample_rate);
+    }
+
+    pub fn set_phase_invert(&mut self, inv: bool) {
+        self.utility.set_phase_invert(inv);
+    }
+
+    pub fn set_swap_lr(&mut self, swap: bool) {
+        self.utility.set_swap_lr(swap);
+    }
+
+    pub fn set_delay_samples(&mut self, samples: i64) {
+        self.utility.set_delay_samples(samples);
+    }
+
     pub fn set_stereo_separation(&mut self, sep: f64) {
         self.stereo_separation = sep.clamp(0.0, 2.0) as f32;
     }
@@ -1746,10 +1775,15 @@ impl AudioNode for MidiTrackNode {
         self.block_midi_scratch = block_midi;
 
         // Width, fader and pan, ramped from the last block, then meters on
-        // the post-FX signal.
+        // the post-FX signal. First the channel's own delay, swap, polarity
+        // and filter, which instrument tracks never had.
         if outputs.len() >= 2 {
             let (first, rest) = outputs.split_at_mut(1);
             let n = block_size.min(first[0].len()).min(rest[0].len());
+            self.utility
+                .process_pre(&mut first[0][..n], &mut rest[0][..n]);
+            self.utility
+                .process_filter(&mut first[0][..n], &mut rest[0][..n]);
             let start = self.width_applied;
             self.width_applied = self.stereo_separation;
             crate::track_node::apply_width(
@@ -2419,6 +2453,44 @@ mod tests {
             ..Default::default()
         }]);
         (node, received)
+    }
+
+    /// The mixer strip's polarity acts on an instrument track as on an audio
+    /// track: the same notes come out flipped. It did nothing there before.
+    /// (Swap is the same utility, checked in track_node; the built-in synth
+    /// is mono before the pan, so swapping its sides changes nothing here.)
+    #[test]
+    fn polarity_acts_on_an_instrument_track() {
+        let render = |invert: bool, pan: f64| -> (Vec<f32>, Vec<f32>) {
+            let mut node = make_node();
+            node.set_pan(pan);
+            node.set_phase_invert(invert);
+            node.set_notes(vec![MidiNoteRegion {
+                note_on_sample: 0,
+                note_off_sample: 4_000,
+                pitch: 69,
+                ..Default::default()
+            }]);
+            let mut out = block_outputs(256);
+            let inputs: [&[f32]; 0] = [];
+            node.process(
+                &inputs,
+                &mut out,
+                &[],
+                &mut Vec::new(),
+                &ctx_at(48_000.0, 256, 0, true),
+            );
+            (out[0].clone(), out[1].clone())
+        };
+        let (l, r) = render(false, -0.5);
+        assert!(l.iter().any(|s| s.abs() > 1e-4), "the note sounds");
+        let (il, ir) = render(true, -0.5);
+        for i in 0..256 {
+            assert!(
+                (il[i] + l[i]).abs() < 1e-6 && (ir[i] + r[i]).abs() < 1e-6,
+                "flipped at {i}"
+            );
+        }
     }
 
     fn play_block_at(node: &mut MidiTrackNode, pos: u64) {
