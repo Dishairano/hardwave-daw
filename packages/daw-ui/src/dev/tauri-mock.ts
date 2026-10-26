@@ -371,6 +371,13 @@ const mock: TauriInternals = {
         return { input: 0, output: 0 }
       case 'set_channel_offsets':
         return null
+      case 'get_library_folder':
+      case 'set_library_folder':
+        return 'C:/Users/you/Documents/Hardwave/Library'
+      case 'install_sample_pack':
+        return { folder: 'C:/Users/you/Documents/Hardwave/Library/Pack', files: 0, skipped: 0 }
+      case 'remove_sample_pack':
+        return null
       case 'list_song_templates':
       case 'list_track_templates':
         return []

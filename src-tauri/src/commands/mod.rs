@@ -15,6 +15,7 @@ pub mod engine;
 pub mod export;
 pub mod flp;
 pub mod history;
+pub mod library;
 pub mod load_test;
 pub mod macros;
 pub mod midi;
