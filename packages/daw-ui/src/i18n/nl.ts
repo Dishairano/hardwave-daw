@@ -1,8 +1,16 @@
+import { nlBrowser } from './nl-browser'
+import { nlMixer } from './nl-mixer'
+import { nlPlaylist } from './nl-playlist'
+
 /**
  * Dutch. The key is the English text exactly as it appears in the app,
  * so anything missing here simply stays English instead of breaking.
+ * The panels' own words are in nl-*.ts, one file per part of the app.
  */
 export const nl: Record<string, string> = {
+  ...nlPlaylist,
+  ...nlMixer,
+  ...nlBrowser,
   // Menus
   'File': 'Bestand',
   'Edit': 'Bewerken',
