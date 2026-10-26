@@ -92,6 +92,9 @@ pub struct Collab {
     /// Each track's hash as last sent or received, so what goes out is
     /// only the tracks that changed since.
     track_hashes: Mutex<std::collections::HashMap<String, u64>>,
+    /// The same for what belongs to the song rather than a track (tempo,
+    /// channel rack, markers, arrangements; see `Project::song_level_blob`).
+    song_hash: Mutex<Option<u64>>,
 }
 
 /// Tracks that changed, as (id, place in the song, bytes).
@@ -108,6 +111,7 @@ impl Collab {
     /// Take the song as it is now as what the other side has, so only
     /// later edits are sent (when a room opens or a song arrives).
     pub fn remember_tracks(&self, project: &hardwave_project::Project) {
+        *self.song_hash.lock() = Some(hash_of(&project.song_level_blob()));
         let mut hashes = self.track_hashes.lock();
         hashes.clear();
         for t in &project.tracks {
@@ -123,6 +127,25 @@ impl Collab {
         self.track_hashes
             .lock()
             .insert(track_id.to_string(), hash_of(blob));
+    }
+
+    /// What the other side sent of the song level: it has it, so it is not
+    /// sent back.
+    pub fn remember_song(&self, blob: &[u8]) {
+        *self.song_hash.lock() = Some(hash_of(blob));
+    }
+
+    /// The song level, when it changed since last sent or received. Marks
+    /// it as sent.
+    pub fn song_changes(&self, project: &hardwave_project::Project) -> Option<Vec<u8>> {
+        let blob = project.song_level_blob();
+        let h = hash_of(&blob);
+        let mut last = self.song_hash.lock();
+        if *last == Some(h) {
+            return None;
+        }
+        *last = Some(h);
+        Some(blob)
     }
 
     pub fn forget_track(&self, track_id: &str) {

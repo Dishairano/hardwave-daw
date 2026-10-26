@@ -13,6 +13,7 @@ import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { PanelWindow } from './PanelWindow'
 import { listenForTrackChanges } from './stores/trackStore'
 import { startRackSync } from './stores/rackSync'
+import { startTimelineRoomSync } from './stores/timelineState'
 import './fonts'
 import './mockup.css'
 import './rework.css'
@@ -25,6 +26,7 @@ import './rework.css'
 // Every window, main or detached, follows channel changes made in another.
 listenForTrackChanges()
 startRackSync()
+startTimelineRoomSync()
 
 const injected = (window as unknown as { __HW_PANEL__?: { panel?: string; params?: string } }).__HW_PANEL__
 const rawFallback = window.location.hash.startsWith('#')

@@ -9,7 +9,7 @@ use futures_util::{SinkExt, StreamExt};
 use hardwave_project::multiplayer::{SyncKind, SyncMessage, TransportSync};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::mpsc;
 
 /// What the UI needs after asking to open or join.
@@ -208,11 +208,24 @@ pub async fn start_collab(
             if !collab_for_tracks.is_current(generation) {
                 break;
             }
-            let (changed, gone) = {
+            let (changed, gone, song) = {
                 let engine_guard = engine_for_tracks.lock();
                 let project = engine_guard.project.lock();
-                collab_for_tracks.track_changes(&project)
+                let (changed, gone) = collab_for_tracks.track_changes(&project);
+                (changed, gone, collab_for_tracks.song_changes(&project))
             };
+            // The song level first: a tempo change has to be there before
+            // the clips placed by it.
+            if let Some(blob) = song {
+                if blob.len() > hardwave_room_limits::MAX_TRACK {
+                    log::warn!(
+                        "room: the song's settings are too large to send ({} bytes)",
+                        blob.len()
+                    );
+                } else {
+                    collab_for_tracks.send(SyncKind::SongState { blob });
+                }
+            }
             for (track_id, index, blob) in changed {
                 if blob.len() > hardwave_room_limits::MAX_TRACK {
                     log::warn!(
@@ -355,6 +368,10 @@ fn apply_one(
             blob,
         } => {
             apply_track_state(app, engine, collab, track_id, *index, blob);
+            return;
+        }
+        SyncKind::SongState { blob } => {
+            apply_song_state(app, engine, collab, blob);
             return;
         }
         SyncKind::TrackRemoved { track_id } => {
@@ -507,6 +524,55 @@ pub fn share_presence(state: State<AppState>, tick: u64, track_index: Option<u32
 /// A whole track the other side sent: put in place of ours (or added at
 /// its place), its plug-ins brought in line, and remembered as what the
 /// other side has so it is not sent back.
+/// What the other side sent of the song level (tempo, channel rack,
+/// markers, arrangements, macros, VCAs, modulation): taken into the song,
+/// and every window told so it shows it. A tempo change or a pattern drawn
+/// in the rack reached the other side only when the whole song was sent
+/// again.
+fn apply_song_state(
+    app: &tauri::AppHandle,
+    engine: &Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
+    collab: &Arc<crate::collab::Collab>,
+    blob: &[u8],
+) {
+    use std::sync::atomic::Ordering;
+    let (rack, timeline) = {
+        let engine_guard = engine.lock();
+        engine_guard.snapshot_before_mutation();
+        let (rack, timeline, bpm) = {
+            let mut project = engine_guard.project.lock();
+            if let Err(e) = project.put_song_level_blob(blob) {
+                log::warn!("room: the song's settings were not taken: {e}");
+                return;
+            }
+            collab.remember_song(&project.song_level_blob());
+            (
+                project.channel_rack_state.clone(),
+                project.timeline_state.clone(),
+                project
+                    .tempo_map
+                    .entries
+                    .first()
+                    .map(|e| e.bpm)
+                    .unwrap_or(140.0),
+            )
+        };
+        engine_guard.transport.bpm.store(bpm, Ordering::Relaxed);
+        engine_guard.send_command(hardwave_engine::TransportCommand::SetBpm(bpm));
+        crate::commands::project::apply_project_time_signature(&engine_guard);
+        engine_guard.rebuild_graph();
+        (rack, timeline)
+    };
+    // The windows show what the room sent: the rack, the markers and the
+    // tempo lane read it again.
+    let _ = app.emit(
+        "daw:rackChanged",
+        serde_json::json!({ "payload": rack, "from": "room" }),
+    );
+    let _ = app.emit("daw:timelineChanged", timeline);
+    let _ = app.emit("daw:tempoChanged", ());
+}
+
 fn apply_track_state(
     app: &tauri::AppHandle,
     engine: &Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
