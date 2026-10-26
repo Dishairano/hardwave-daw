@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
+import { t, useLanguage } from '../../i18n'
 
 /**
  * Let go of the audio device while another program is in front, for ASIO
@@ -9,6 +10,7 @@ import { hw } from '../../theme'
  * front.
  */
 export function ReleaseInBackgroundRow() {
+  useLanguage()
   const [on, setOn] = useState<boolean | null>(null)
   useEffect(() => {
     invoke<boolean>('get_release_device_in_background').then(setOn).catch(() => setOn(false))
@@ -27,9 +29,9 @@ export function ReleaseInBackgroundRow() {
       border: `1px solid ${hw.borderDark}`,
     }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontSize: 11, color: hw.textMuted }}>Free the sound card in the background</span>
+        <span style={{ fontSize: 11, color: hw.textMuted }}>{t('Free the sound card in the background')}</span>
         <span style={{ fontSize: 10, color: hw.textFaint }}>
-          When the song is stopped and another program is in front, so another program can use an ASIO device that takes one program at a time
+          {t('When the song is stopped and another program is in front, so another program can use an ASIO device that takes one program at a time')}
         </span>
       </div>
       <button

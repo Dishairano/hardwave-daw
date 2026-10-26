@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
+import { t, tf, useLanguage } from '../../i18n'
 
 interface MtcStatus {
   enabled: boolean
@@ -34,6 +35,7 @@ export function parseStart(text: string): number | null {
  * timecode at the top of the song; video work usually starts at 01:00:00.
  */
 export function MtcFollowRow({ disabled }: { disabled: boolean }) {
+  useLanguage()
   const [status, setStatus] = useState<MtcStatus | null>(null)
   const [start, setStart] = useState('00:00:00')
 
@@ -62,8 +64,11 @@ export function MtcFollowRow({ disabled }: { disabled: boolean }) {
 
   const enabled = status?.enabled ?? false
   const seen = status?.seenSeconds != null && status.fps
-    ? `Master: ${formatTimecode(status.seenSeconds, status.fps)} at ${Number(status.fps.toFixed(2))} fps`
-    : 'No timecode received yet'
+    ? tf('Master: {timecode} at {fps} fps', {
+      timecode: formatTimecode(status.seenSeconds, status.fps),
+      fps: Number(status.fps.toFixed(2)),
+    })
+    : t('No timecode received yet')
 
   return (
     <div style={{
@@ -76,12 +81,12 @@ export function MtcFollowRow({ disabled }: { disabled: boolean }) {
       opacity: disabled ? 0.6 : 1,
     }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-        <span style={{ fontSize: 11, color: hw.textSecondary }}>Follow MIDI timecode (MTC)</span>
+        <span style={{ fontSize: 11, color: hw.textSecondary }}>{t('Follow MIDI timecode (MTC)')}</span>
         <span style={{ fontSize: 9, color: hw.textFaint, fontFamily: "'Consolas', monospace" }}>{seen}</span>
       </div>
       <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9, color: hw.textMuted, flexShrink: 0 }}
-        title="The master's timecode at the top of the song. Video work usually starts at 01:00:00.">
-        Song starts at
+        title={t("The master's timecode at the top of the song. Video work usually starts at 01:00:00.")}>
+        {t('Song starts at')}
         <input
           value={start}
           onChange={e => setStart(e.target.value)}
@@ -105,7 +110,7 @@ export function MtcFollowRow({ disabled }: { disabled: boolean }) {
           fontFamily: 'inherit',
         }}
       >
-        {enabled ? 'On' : 'Off'}
+        {enabled ? t('On') : t('Off')}
       </button>
     </div>
   )

@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTempoMapStore } from '../stores/tempoMapStore'
 import { barBeatAtTick, meterSegments } from '../utils/meter'
+import { t, tf, useLanguage } from '../i18n'
 
 export interface TempoEntryInfo {
   tick: number
@@ -37,6 +38,7 @@ interface Props {
 }
 
 export function TempoMapDialog({ onClose }: Props) {
+  useLanguage()
   const [entries, setEntries] = useState<TempoEntryInfo[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [newTickBeats, setNewTickBeats] = useState<string>('16')
@@ -65,8 +67,8 @@ export function TempoMapDialog({ onClose }: Props) {
   const handleAdd = async () => {
     const beats = parseFloat(newTickBeats)
     const bpm = parseFloat(newBpm)
-    if (!isFinite(beats) || beats <= 0) { setErr('Position must be > 0 beats'); return }
-    if (!isFinite(bpm)) { setErr('BPM must be a number'); return }
+    if (!isFinite(beats) || beats <= 0) { setErr(t('Position must be > 0 beats')); return }
+    if (!isFinite(bpm)) { setErr(t('BPM must be a number')); return }
     try {
       await invoke('add_tempo_entry', { tick: Math.round(beats * PPQ), bpm, ramp: 'instant' })
       await reload()
@@ -86,7 +88,7 @@ export function TempoMapDialog({ onClose }: Props) {
     const tick = field === 'tick' ? Math.max(0, Math.round(parseFloat(value) * PPQ)) : cur.tick
     const bpm = field === 'bpm' ? parseFloat(value) : cur.bpm
     const ramp = field === 'ramp' ? value : cur.ramp
-    if (!isFinite(bpm)) { setErr('BPM must be a number'); return }
+    if (!isFinite(bpm)) { setErr(t('BPM must be a number')); return }
     try {
       await invoke('set_tempo_entry', { index, tick, bpm, ramp })
       await reload()
@@ -140,7 +142,7 @@ export function TempoMapDialog({ onClose }: Props) {
         boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
       }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: hw.textPrimary }}>Tempo map</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: hw.textPrimary }}>{t('Tempo map')}</div>
           <button onClick={onClose} style={{
             width: 22, height: 22, borderRadius: 3, padding: 0,
             background: 'transparent', color: hw.textMuted,
@@ -148,7 +150,7 @@ export function TempoMapDialog({ onClose }: Props) {
           }}>×</button>
         </div>
         <div style={{ fontSize: 12, color: hw.textMuted, marginBottom: 14 }}>
-          Add tempo entries at specific positions. Playback BPM follows the map automatically.
+          {t('Add tempo entries at specific positions. Playback BPM follows the map automatically.')}
         </div>
 
         {err && (
@@ -164,10 +166,10 @@ export function TempoMapDialog({ onClose }: Props) {
         }}>
           <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 1fr 1fr 1fr 40px', ...headerStyle }}>
             <span>#</span>
-            <span>Position (beats)</span>
+            <span>{t('Position (beats)')}</span>
             <span>BPM</span>
-            <span>Time sig</span>
-            <span>Ramp</span>
+            <span>{t('Time sig')}</span>
+            <span>{t('Ramp')}</span>
             <span></span>
           </div>
           {entries.map((e, i) => (
@@ -184,7 +186,7 @@ export function TempoMapDialog({ onClose }: Props) {
                 value={(e.tick / PPQ).toString()}
                 disabled={i === 0}
                 onChange={(ev) => handleEdit(i, 'tick', ev.target.value)}
-                title={i === 0 ? 'Initial entry is always at position 0' : `Bar ${formatBarBeat(segments, e.tick)}`}
+                title={i === 0 ? t('Initial entry is always at position 0') : tf('Bar {bar}', { bar: formatBarBeat(segments, e.tick) })}
                 style={inputStyle(i === 0)}
               />
               <input
@@ -200,7 +202,7 @@ export function TempoMapDialog({ onClose }: Props) {
                 data-testid={`tempo-entry-timesig-${i}`}
                 value={`${e.timeSigNum}/${e.timeSigDen}`}
                 onChange={(ev) => handleTimeSig(i, ev.target.value)}
-                title="The signature from this entry until the next change"
+                title={t('The signature from this entry until the next change')}
                 style={{ ...inputStyle(false), cursor: 'pointer' }}
               >
                 {TIME_SIGNATURES.map(sig => (
@@ -212,8 +214,8 @@ export function TempoMapDialog({ onClose }: Props) {
                 onChange={(ev) => handleEdit(i, 'ramp', ev.target.value)}
                 style={{ ...inputStyle(false), cursor: 'pointer' }}
               >
-                <option value="instant">Instant</option>
-                <option value="linear">Linear</option>
+                <option value="instant">{t('Instant')}</option>
+                <option value="linear">{t('Linear')}</option>
               </select>
               {i === 0 ? (
                 <span />
@@ -221,7 +223,7 @@ export function TempoMapDialog({ onClose }: Props) {
                 <button
                   data-testid={`tempo-entry-remove-${i}`}
                   onClick={() => handleRemove(i)}
-                  title="Remove"
+                  title={t('Remove')}
                   style={{
                     width: 24, height: 22, padding: 0,
                     background: 'transparent', color: '#e06060',
@@ -235,7 +237,7 @@ export function TempoMapDialog({ onClose }: Props) {
 
         <div style={{ display: 'flex', alignItems: 'end', gap: 8, marginBottom: 14 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1 }}>
-            <span style={{ fontSize: 10, color: hw.textMuted }}>Position (beats)</span>
+            <span style={{ fontSize: 10, color: hw.textMuted }}>{t('Position (beats)')}</span>
             <input
               data-testid="tempo-new-tick"
               type="number"
@@ -268,7 +270,7 @@ export function TempoMapDialog({ onClose }: Props) {
               border: '1px solid rgba(124, 58, 237, 0.5)', borderRadius: hw.radius.sm,
               cursor: 'pointer',
             }}
-          >Add entry</button>
+          >{t('Add entry')}</button>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -276,7 +278,7 @@ export function TempoMapDialog({ onClose }: Props) {
             padding: '8px 16px', fontSize: 13,
             color: hw.textPrimary, background: hw.bgElevated,
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.md, cursor: 'pointer', minWidth: 90,
-          }}>Close</button>
+          }}>{t('Close')}</button>
         </div>
       </div>
     </div>,

@@ -4,6 +4,7 @@ import { hw } from '../theme'
 import { useHistoryStore } from '../stores/historyStore'
 import { useTrackStore } from '../stores/trackStore'
 import { DialogFrame } from './ui/DialogFrame'
+import { t, tf, useLanguage } from '../i18n'
 
 interface Props {
   onClose: () => void
@@ -18,6 +19,7 @@ function formatTime(t: number) {
 }
 
 export function HistoryPanel({ onClose }: Props) {
+  useLanguage()
   const entries = useHistoryStore(s => s.entries)
   const cursor = useHistoryStore(s => s.cursor)
   const jumpTo = useHistoryStore(s => s.jumpTo)
@@ -36,8 +38,10 @@ export function HistoryPanel({ onClose }: Props) {
 
   return createPortal(
     <DialogFrame
-      title="History"
-      subtitle={`${entries.length} action${entries.length === 1 ? '' : 's'} · cursor at ${cursor}`}
+      title={t('History')}
+      subtitle={entries.length === 1
+        ? tf('1 action · cursor at {cursor}', { cursor })
+        : tf('{n} actions · cursor at {cursor}', { n: entries.length, cursor })}
       onClose={onClose}
       width={520}
       headerActions={<>
@@ -50,7 +54,7 @@ export function HistoryPanel({ onClose }: Props) {
               color: entries.length === 0 ? hw.textFaint : hw.textSecondary,
               cursor: entries.length === 0 ? 'default' : 'pointer',
             }}
-          >Clear log</button>
+          >{t('Clear log')}</button>
       </>}
     >
       <div style={{ flex: 1, overflowY: 'auto', padding: 4 }}>
@@ -63,9 +67,10 @@ export function HistoryPanel({ onClose }: Props) {
               key={e.id}
               onClick={() => handleJump(targetCursor)}
               title={
-                isCurrent ? 'Current state' :
-                targetCursor < cursor ? `Undo ${cursor - targetCursor} step${cursor - targetCursor === 1 ? '' : 's'}` :
-                `Redo ${targetCursor - cursor} step${targetCursor - cursor === 1 ? '' : 's'}`
+                isCurrent ? t('Current state') :
+                targetCursor < cursor
+                  ? (cursor - targetCursor === 1 ? t('Undo 1 step') : tf('Undo {n} steps', { n: cursor - targetCursor }))
+                  : (targetCursor - cursor === 1 ? t('Redo 1 step') : tf('Redo {n} steps', { n: targetCursor - cursor }))
               }
               style={{
                 display: 'flex', alignItems: 'center', gap: 10,
@@ -85,7 +90,7 @@ export function HistoryPanel({ onClose }: Props) {
                 {isCurrent ? '▶' : isApplied ? '·' : '○'}
               </span>
               <span style={{ flex: 1, fontSize: 12.5, fontStyle: e.id === '__initial__' ? 'italic' : 'normal' }}>
-                {e.label}
+                {t(e.label)}
               </span>
               {e.time > 0 && (
                 <span style={{ fontSize: 11, color: hw.textFaint, fontVariantNumeric: 'tabular-nums' }}>
@@ -101,7 +106,7 @@ export function HistoryPanel({ onClose }: Props) {
         padding: '6px 12px', borderTop: `1px solid ${hw.border}`,
         background: hw.bgElevated, fontSize: 11, color: hw.textFaint,
       }}>
-        Click any row to undo or redo to that state. Tracks volume/pan, clip edits, track add/remove, and more.
+        {t('Click any row to undo or redo to that state. Tracks volume/pan, clip edits, track add/remove, and more.')}
       </div>
     </DialogFrame>,
     document.body,

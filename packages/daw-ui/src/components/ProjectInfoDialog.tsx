@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
+import { t, useLanguage } from '../i18n'
 
 /**
  * Project Info dialog — FL Studio's File → Project info page.
@@ -32,6 +33,7 @@ const GENRE_SUGGESTIONS = [
 ]
 
 export function ProjectInfoDialog({ onClose }: Props) {
+  useLanguage()
   const [meta, setMeta] = useState<ProjectInfoMeta | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -104,7 +106,7 @@ export function ProjectInfoDialog({ onClose }: Props) {
           borderBottom: `1px solid ${hw.border}`,
         }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: hw.accent, letterSpacing: 0.5 }}>
-            PROJECT INFO
+            {t('PROJECT INFO')}
           </span>
           <button
             onClick={onClose}
@@ -112,35 +114,35 @@ export function ProjectInfoDialog({ onClose }: Props) {
               background: 'transparent', border: 0, color: hw.textFaint,
               cursor: 'pointer', fontSize: 16, padding: 4,
             }}
-            aria-label="Close"
+            aria-label={t('Close')}
           >×</button>
         </div>
 
         <div style={{ padding: 16, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Field label="Title">
+          <Field label={t('Title')}>
             <input
               value={meta.title}
               onChange={e => setMeta({ ...meta, title: e.target.value })}
-              placeholder="Untitled"
+              placeholder={t('Untitled')}
               style={inputStyle}
             />
           </Field>
 
-          <Field label="Author">
+          <Field label={t('Author')}>
             <input
               value={meta.author}
               onChange={e => setMeta({ ...meta, author: e.target.value })}
-              placeholder="Your name / artist alias"
+              placeholder={t('Your name / artist alias')}
               style={inputStyle}
             />
           </Field>
 
-          <Field label="Genre">
+          <Field label={t('Genre')}>
             <input
               value={meta.genre}
               onChange={e => setMeta({ ...meta, genre: e.target.value })}
               list="hw-genre-suggestions"
-              placeholder="e.g. Hardstyle, Techno, …"
+              placeholder={t('e.g. Hardstyle, Techno, …')}
               style={inputStyle}
             />
             <datalist id="hw-genre-suggestions">
@@ -148,11 +150,11 @@ export function ProjectInfoDialog({ onClose }: Props) {
             </datalist>
           </Field>
 
-          <Field label="Info / Description">
+          <Field label={t('Info / Description')}>
             <textarea
               value={meta.info}
               onChange={e => setMeta({ ...meta, info: e.target.value })}
-              placeholder="Notes for collaborators or your future self"
+              placeholder={t('Notes for collaborators or your future self')}
               rows={4}
               style={{ ...inputStyle, resize: 'vertical', minHeight: 70, fontFamily: 'inherit' }}
             />
@@ -162,7 +164,7 @@ export function ProjectInfoDialog({ onClose }: Props) {
             <input
               value={meta.url}
               onChange={e => setMeta({ ...meta, url: e.target.value })}
-              placeholder="https:// or mailto:"
+              placeholder={t('https:// or mailto:')}
               style={inputStyle}
             />
           </Field>
@@ -180,9 +182,9 @@ export function ProjectInfoDialog({ onClose }: Props) {
               onChange={e => setMeta({ ...meta, show_on_open: e.target.checked })}
             />
             <div>
-              <div style={{ color: hw.textPrimary }}>Show on open</div>
+              <div style={{ color: hw.textPrimary }}>{t('Show on open')}</div>
               <div style={{ color: hw.textFaint, fontSize: 10, marginTop: 2 }}>
-                Display the Title + Info + URL splash whenever this project is loaded.
+                {t('Display the Title + Info + URL splash whenever this project is loaded.')}
               </div>
             </div>
           </label>
@@ -195,7 +197,7 @@ export function ProjectInfoDialog({ onClose }: Props) {
             borderRadius: hw.radius.sm, fontSize: 12,
           }}>
             <div>
-              <div style={{ color: hw.textPrimary }}>Working time</div>
+              <div style={{ color: hw.textPrimary }}>{t('Working time')}</div>
               <div style={{ color: hw.textFaint, fontFamily: 'monospace', fontSize: 11, marginTop: 2 }}>
                 {fmtTime(meta.working_time_seconds)}
               </div>
@@ -208,7 +210,7 @@ export function ProjectInfoDialog({ onClose }: Props) {
                 border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
                 cursor: 'pointer', fontFamily: 'inherit',
               }}
-            >Reset</button>
+            >{t('Reset')}</button>
           </div>
         </div>
 
@@ -225,7 +227,7 @@ export function ProjectInfoDialog({ onClose }: Props) {
               border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
               cursor: 'pointer', fontFamily: 'inherit',
             }}
-          >Cancel</button>
+          >{t('Cancel')}</button>
           <button
             onClick={save}
             disabled={saving}
@@ -235,7 +237,7 @@ export function ProjectInfoDialog({ onClose }: Props) {
               border: `1px solid ${hw.accent}`, borderRadius: hw.radius.sm,
               cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit',
             }}
-          >{saving ? 'Saving…' : 'Save'}</button>
+          >{saving ? t('Saving…') : t('Save')}</button>
         </div>
       </div>
     </div>

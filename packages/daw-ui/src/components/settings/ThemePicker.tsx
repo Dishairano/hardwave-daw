@@ -7,6 +7,7 @@ import {
   derivePaletteFromAccent,
   type ThemePalette,
 } from '../../stores/themeStore'
+import { t, tf, useLanguage } from '../../i18n'
 
 interface ThemePickerProps {
   onClose: () => void
@@ -19,6 +20,7 @@ interface ThemePickerProps {
 }
 
 export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
+  useLanguage()
   const activeId = useThemeStore(s => s.activeId)
   const setTheme = useThemeStore(s => s.setTheme)
   const customs = useThemeStore(s => s.customs)
@@ -62,7 +64,7 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
       const text = await file.text()
       const parsed = JSON.parse(text)
       if (!isValidPalette(parsed)) {
-        setImportError('File is not a valid Hardwave theme.')
+        setImportError(t('File is not a valid Hardwave theme.'))
         return
       }
       const base = parsed.id.replace(/\s+/g, '-').toLowerCase()
@@ -73,12 +75,12 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
       }
       const palette: ThemePalette = { ...parsed, id, custom: true }
       if (!addCustom(palette)) {
-        setImportError('Could not import (id clashes with a built-in).')
+        setImportError(t('Could not import (id clashes with a built-in).'))
         return
       }
       setPreviewId(palette.id)
     } catch (err: any) {
-      setImportError(`Could not read file: ${err?.message ?? err}`)
+      setImportError(tf('Could not read file: {error}', { error: String(err?.message ?? err) }))
     }
   }
 
@@ -94,7 +96,7 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
           borderBottom: `1px solid ${hw.border}`,
         }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: hw.accent, letterSpacing: 0.5 }}>
-            THEME
+            {t('THEME')}
           </span>
           <div
             onClick={onClose}
@@ -115,7 +117,7 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
         {/* Body */}
         <div style={{ padding: 16 }}>
           <div style={{ fontSize: 11, color: hw.textMuted, marginBottom: 12 }}>
-            Pick an accent palette. Background and text stay neutral — only accents, selection, and glow shift.
+            {t('Pick an accent palette. Background and text stay neutral — only accents, selection, and glow shift.')}
           </div>
 
           <div style={{
@@ -147,9 +149,9 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
               style={{ display: 'none' }}
               onChange={onImportFile}
             />
-            <SmallBtn label="Create custom..." onClick={() => setEditorOpen(true)} />
-            <SmallBtn label="Import theme..." onClick={() => importRef.current?.click()} />
-            <SmallBtn label="Export current" onClick={exportCurrent} />
+            <SmallBtn label={t('Create custom...')} onClick={() => setEditorOpen(true)} />
+            <SmallBtn label={t('Import theme...')} onClick={() => importRef.current?.click()} />
+            <SmallBtn label={t('Export current')} onClick={exportCurrent} />
           </div>
 
           {importError && (
@@ -165,25 +167,25 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
             border: `1px solid ${hw.borderDark}`,
           }}>
             <div style={{ fontSize: 10, color: hw.textFaint, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 }}>
-              Preview — {preview.name}
+              {tf('Preview — {name}', { name: preview.name })}
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <Swatch color={preview.accent} label="accent" />
-              <Swatch color={preview.accentLight} label="light" />
-              <Swatch color={preview.secondary} label="secondary" />
+              <Swatch color={preview.accent} label={t('accent')} />
+              <Swatch color={preview.accentLight} label={t('light')} />
+              <Swatch color={preview.secondary} label={t('secondary')} />
               <div style={{ flex: 1 }} />
               <div style={{
                 padding: '4px 10px',
                 background: preview.accent, color: '#fff',
                 fontSize: 10, fontWeight: 700, borderRadius: hw.radius.sm,
-              }}>BUTTON</div>
+              }}>{t('BUTTON')}</div>
               <div style={{
                 padding: '4px 10px',
                 background: preview.selectionDim,
                 border: `1px solid ${preview.accent}`,
                 color: preview.accentLight,
                 fontSize: 10, fontWeight: 600, borderRadius: hw.radius.sm,
-              }}>SELECTED</div>
+              }}>{t('SELECTED')}</div>
             </div>
           </div>
 
@@ -195,7 +197,7 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
               borderRadius: hw.radius.sm,
               fontSize: 11, color: hw.yellow,
             }}>
-              Applying a theme reloads the window so every panel picks up the new accents.
+              {t('Applying a theme reloads the window so every panel picks up the new accents.')}
             </div>
           )}
 
@@ -206,10 +208,16 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
             border: `1px solid ${hw.borderDark}`,
           }}>
             <div style={{ fontSize: 10, color: hw.textFaint, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 }}>
-              Custom background
+              {t('Custom background')}
             </div>
             <div style={{ fontSize: 11, color: hw.textMuted, marginBottom: 8 }}>
-              Set any CSS background — a solid color, linear/radial gradient or <code style={{ color: hw.textSecondary }}>url(...)</code> image. Leave empty to restore the theme default.
+              {/* One sentence with the CSS in it, so a translation can put
+                  the example where its own word order wants it. */}
+              {t('Set any CSS background — a solid color, linear/radial gradient or {code} image. Leave empty to restore the theme default.')
+                .split(/(\{code\})/)
+                .map((part, i) => part === '{code}'
+                  ? <code key={i} style={{ color: hw.textSecondary }}>url(...)</code>
+                  : part)}
             </div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               <input
@@ -225,8 +233,8 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
                   fontFamily: 'ui-monospace, Menlo, monospace',
                 }}
               />
-              <SmallBtn label="Apply" onClick={() => setCustomBg(bgDraft)} />
-              <SmallBtn label="Clear" onClick={() => { setBgDraft(''); setCustomBg('') }} />
+              <SmallBtn label={t('Apply')} onClick={() => setCustomBg(bgDraft)} />
+              <SmallBtn label={t('Clear')} onClick={() => { setBgDraft(''); setCustomBg('') }} />
             </div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
               <SmallBtn label="Crimson fade" onClick={() => {
@@ -243,7 +251,7 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
               }} />
               {customBg && (
                 <div style={{ alignSelf: 'center', fontSize: 10, color: hw.textFaint }}>
-                  Active: custom background
+                  {t('Active: custom background')}
                 </div>
               )}
             </div>
@@ -267,7 +275,7 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
               borderRadius: hw.radius.sm, cursor: 'pointer',
             }}
           >
-            Cancel
+            {t('Cancel')}
           </button>
           <button
             onClick={applyAndReload}
@@ -282,7 +290,7 @@ export function ThemePicker({ onClose, embedded = false }: ThemePickerProps) {
               opacity: hasChanges ? 1 : 0.5,
             }}
           >
-            Apply & Reload
+            {t('Apply & Reload')}
           </button>
         </div>
       {editorOpen && (
@@ -339,6 +347,7 @@ function PresetCard({
   onPick: () => void
   onDelete?: () => void
 }) {
+  useLanguage()
   return (
     <div
       onClick={onPick}
@@ -355,7 +364,7 @@ function PresetCard({
       {onDelete && (
         <button
           onClick={(e) => { e.stopPropagation(); onDelete() }}
-          title="Delete custom theme"
+          title={t('Delete custom theme')}
           style={{
             position: 'absolute', top: 6, right: 6,
             width: 18, height: 18, borderRadius: 4,
@@ -386,7 +395,7 @@ function PresetCard({
                 color: hw.textMuted,
                 background: 'rgba(255,255,255,0.06)',
                 border: `1px solid ${hw.border}`,
-              }}>CUSTOM</span>
+              }}>{t('CUSTOM')}</span>
             )}
             {active && (
               <span style={{
@@ -395,13 +404,13 @@ function PresetCard({
                 color: palette.accent,
                 background: palette.selectionDim,
                 border: `1px solid ${palette.accent}`,
-              }}>ACTIVE</span>
+              }}>{t('ACTIVE')}</span>
             )}
           </div>
           <div style={{
             fontSize: 10, color: hw.textFaint,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>{palette.description}</div>
+          }}>{palette.custom ? palette.description : t(palette.description)}</div>
         </div>
       </div>
       <div style={{ display: 'flex', gap: 4 }}>
@@ -463,22 +472,23 @@ function CustomThemeEditor({
   onSave: (palette: ThemePalette) => void
   onClose: () => void
 }) {
-  const [name, setName] = useState('My Theme')
-  const [description, setDescription] = useState('Custom palette')
+  useLanguage()
+  const [name, setName] = useState(() => t('My Theme'))
+  const [description, setDescription] = useState(() => t('Custom palette'))
   const [accent, setAccent] = useState('#DC2626')
   const [secondary, setSecondary] = useState('#B91C1C')
   const [error, setError] = useState<string | null>(null)
 
   const save = () => {
     const trimmed = name.trim()
-    if (!trimmed) { setError('Name required.'); return }
+    if (!trimmed) { setError(t('Name required.')); return }
     const base = `custom-${trimmed.replace(/\s+/g, '-').toLowerCase()}`.slice(0, 40)
     let id = base
     let i = 2
     while (existingIds.includes(id)) {
       id = `${base}-${i++}`
     }
-    const palette = derivePaletteFromAccent(id, trimmed, description.trim() || 'Custom palette', accent, secondary)
+    const palette = derivePaletteFromAccent(id, trimmed, description.trim() || t('Custom palette'), accent, secondary)
     onSave(palette)
     onClose()
   }
@@ -508,32 +518,32 @@ function CustomThemeEditor({
           borderBottom: `1px solid ${hw.border}`,
         }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: hw.accent, letterSpacing: 0.5 }}>
-            NEW CUSTOM THEME
+            {t('NEW CUSTOM THEME')}
           </span>
         </div>
         <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <EditorField label="Name">
+          <EditorField label={t('Name')}>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
               style={editorInputStyle}
             />
           </EditorField>
-          <EditorField label="Description">
+          <EditorField label={t('Description')}>
             <input
               value={description}
               onChange={e => setDescription(e.target.value)}
               style={editorInputStyle}
             />
           </EditorField>
-          <EditorField label="Accent">
+          <EditorField label={t('Accent')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="color" value={accent} onChange={e => setAccent(e.target.value)}
                 style={{ width: 30, height: 24, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0 }} />
               <input value={accent} onChange={e => setAccent(e.target.value)} style={editorInputStyle} />
             </div>
           </EditorField>
-          <EditorField label="Secondary">
+          <EditorField label={t('Secondary')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="color" value={secondary} onChange={e => setSecondary(e.target.value)}
                 style={{ width: 30, height: 24, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0 }} />
@@ -552,7 +562,7 @@ function CustomThemeEditor({
               boxShadow: `0 0 14px ${accent}55`,
             }} />
             <div style={{ fontSize: 11, color: hw.textMuted }}>
-              Accent and secondary drive the full palette. Dim/glow/selection derive from accent alpha.
+              {t('Accent and secondary drive the full palette. Dim/glow/selection derive from accent alpha.')}
             </div>
           </div>
           {error && (
@@ -567,8 +577,8 @@ function CustomThemeEditor({
           borderTop: `1px solid ${hw.border}`,
           background: 'rgba(255,255,255,0.02)',
         }}>
-          <button onClick={onClose} style={smallFooterBtn(false)}>Cancel</button>
-          <button onClick={save} style={smallFooterBtn(true)}>Save</button>
+          <button onClick={onClose} style={smallFooterBtn(false)}>{t('Cancel')}</button>
+          <button onClick={save} style={smallFooterBtn(true)}>{t('Save')}</button>
         </div>
       </div>
     </div>

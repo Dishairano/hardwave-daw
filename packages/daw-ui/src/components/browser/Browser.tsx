@@ -14,10 +14,12 @@ import {
   selectedSendTarget, sendToSelectedChannel, openInNewChannel,
   sendToPlaylistAsClip, sendToPlaylistAsAudioTrack, showInFolder, trashFile,
 } from './fileActions'
+import { t, tf, useLanguage } from '../../i18n'
 
 type Tab = 'favorites' | 'folders' | 'audio' | 'lists' | 'search'
 
 export function Browser() {
+  useLanguage()
   const [activeTab, setActiveTab] = useState<Tab>('folders')
   // Item count shown in the header — switches with the active tab so the
   // user always sees how many items are available in the current scope.
@@ -40,7 +42,7 @@ export function Browser() {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div className="fl-browser-head">
         <span className="disclosure" aria-hidden="true">▾</span>
-        <span style={{ flex: 1 }}>Browser</span>
+        <span style={{ flex: 1 }}>{t('Browser')}</span>
         {headerCount > 0 && <span className="count">{headerCount}</span>}
         <DetachButton panelId="browser" />
       </div>
@@ -54,29 +56,29 @@ export function Browser() {
         <button
           type="button"
           onClick={() => setActiveTab('favorites')}
-          title="Favorites"
+          title={t('Favorites')}
           className={`fl-browser-tab${activeTab === 'favorites' ? ' on' : ''}`}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <path d="M8 1.5l1.9 4 4.4.5-3.3 3 .9 4.3L8 11.4l-3.9 1.9.9-4.3-3.3-3 4.4-.5z" fill="currentColor"/>
           </svg>
-          <span>Favorites</span>
+          <span>{t('Favorites')}</span>
         </button>
         <button
           type="button"
           onClick={() => setActiveTab('folders')}
-          title="Folders"
+          title={t('Folders')}
           className={`fl-browser-tab${activeTab === 'folders' ? ' on' : ''}`}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <path d="M2 4.5h4l1 1h7v8H2z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
           </svg>
-          <span>Folders</span>
+          <span>{t('Folders')}</span>
         </button>
         <button
           type="button"
           onClick={() => setActiveTab('audio')}
-          title="Audio"
+          title={t('Audio')}
           className={`fl-browser-tab${activeTab === 'audio' ? ' on' : ''}`}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
@@ -84,30 +86,30 @@ export function Browser() {
             <circle cx="11" cy="10" r="2" fill="currentColor"/>
             <path d="M7 12V3.5l6-1.5v8" fill="none" stroke="currentColor" strokeWidth="1.4"/>
           </svg>
-          <span>Audio</span>
+          <span>{t('Audio')}</span>
         </button>
         <button
           type="button"
           onClick={() => setActiveTab('lists')}
-          title="Plug-ins"
+          title={t('Plug-ins')}
           className={`fl-browser-tab${activeTab === 'lists' ? ' on' : ''}`}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
-          <span>Plug-ins</span>
+          <span>{t('Plug-ins')}</span>
         </button>
         <button
           type="button"
           onClick={() => setActiveTab('search')}
-          title="Search"
+          title={t('Search')}
           className={`fl-browser-tab${activeTab === 'search' ? ' on' : ''}`}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <circle cx="6.8" cy="6.8" r="4.3" fill="none" stroke="currentColor" strokeWidth="1.3"/>
             <path d="M10 10l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
           </svg>
-          <span>Search</span>
+          <span>{t('Search')}</span>
         </button>
       </div>
 
@@ -124,6 +126,7 @@ export function Browser() {
 
 /* ─── Favorites tab — combined starred plugins + starred files ──────────── */
 function FavoritesTab() {
+  useLanguage()
   const plugins = usePluginStore(s => s.plugins)
   const pluginFavorites = useBrowserStore(s => s.pluginFavorites)
   const fileFavorites = useBrowserStore(s => s.fileFavorites)
@@ -143,9 +146,9 @@ function FavoritesTab() {
       <div style={{
         padding: 18, textAlign: 'center', fontSize: 12,
         color: hw.textFaint, fontFamily: hw.font.mono,
-        letterSpacing: hw.tracking.wide, lineHeight: 1.6,
+        letterSpacing: hw.tracking.wide, lineHeight: 1.6, whiteSpace: 'pre-line',
       }}>
-        Star plugins or files in the<br />other tabs to see them here.
+        {t('Star plugins or files in the\nother tabs to see them here.')}
       </div>
     )
   }
@@ -154,7 +157,7 @@ function FavoritesTab() {
     <>
       {favPlugins.length > 0 && (
         <TreeGroup
-          label="Plugins"
+          label={t('Plugins')}
           count={favPlugins.length}
           expanded={pluginsOpen}
           onToggle={() => setPluginsOpen(v => !v)}
@@ -172,7 +175,7 @@ function FavoritesTab() {
       )}
       {favFiles.length > 0 && (
         <TreeGroup
-          label="Files"
+          label={t('Files')}
           count={favFiles.length}
           expanded={filesOpen}
           onToggle={() => setFilesOpen(v => !v)}
@@ -190,6 +193,7 @@ function FavoritesTab() {
 
 /* ─── Search tab — cross-domain (plugins + favorited files) ──────────────── */
 function SearchTab() {
+  useLanguage()
   const [query, setQuery] = useState('')
   const plugins = usePluginStore(s => s.plugins)
   const fileFavorites = useBrowserStore(s => s.fileFavorites)
@@ -220,7 +224,7 @@ function SearchTab() {
           autoFocus
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Search plugins & files..."
+          placeholder={t('Search plugins & files...')}
           style={{
             width: '100%', padding: '4px 8px', fontSize: 12,
             background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
@@ -232,9 +236,9 @@ function SearchTab() {
         <div style={{
           padding: 18, textAlign: 'center', fontSize: 12,
           color: hw.textFaint, fontFamily: hw.font.mono,
-          letterSpacing: hw.tracking.wide,
+          letterSpacing: hw.tracking.wide, whiteSpace: 'pre-line',
         }}>
-          Type to search across plugins<br />and starred / recent files.
+          {t('Type to search across plugins\nand starred / recent files.')}
         </div>
       )}
       {q && matchedPlugins.length === 0 && matchedFiles.length === 0 && (
@@ -243,11 +247,11 @@ function SearchTab() {
           color: hw.textFaint, fontFamily: hw.font.mono,
           letterSpacing: hw.tracking.wide,
         }}>
-          No matches.
+          {t('No matches.')}
         </div>
       )}
       {matchedPlugins.length > 0 && (
-        <TreeGroup label="Plugins" count={matchedPlugins.length} expanded onToggle={() => {}}>
+        <TreeGroup label={t('Plugins')} count={matchedPlugins.length} expanded onToggle={() => {}}>
           {matchedPlugins.map(p => (
             <PluginItem
               key={p.id}
@@ -260,7 +264,7 @@ function SearchTab() {
         </TreeGroup>
       )}
       {matchedFiles.length > 0 && (
-        <TreeGroup label="Files" count={matchedFiles.length} expanded onToggle={() => {}}>
+        <TreeGroup label={t('Files')} count={matchedFiles.length} expanded onToggle={() => {}}>
           {matchedFiles.map(path => (
             <div key={path} className="fl-bt-leaf" title={path}>
               {path.split(/[\\/]/).pop() || path}
@@ -273,6 +277,7 @@ function SearchTab() {
 }
 
 function PluginsTab() {
+  useLanguage()
   const { plugins, scanning, scanPlugins } = usePluginStore()
   const { selectedTrackId } = useTrackStore()
   const pluginFavorites = useBrowserStore(s => s.pluginFavorites)
@@ -306,7 +311,7 @@ function PluginsTab() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search plugins..."
+          placeholder={t('Search plugins...')}
           data-testid="plugin-search"
           style={{
             flex: 1, padding: '3px 6px', fontSize: 12,
@@ -317,20 +322,20 @@ function PluginsTab() {
         <button
           onClick={scanPlugins}
           disabled={scanning}
-          title="Scan for VST3 & CLAP plugins"
+          title={t('Scan for VST3 & CLAP plugins')}
           style={{
             padding: '3px 8px', fontSize: 12, color: hw.textSecondary,
             background: 'rgba(255,255,255,0.04)', border: `1px solid ${hw.border}`,
             borderRadius: hw.radius.md, opacity: scanning ? 0.5 : 1,
           }}
         >
-          {scanning ? '...' : 'Scan'}
+          {scanning ? '...' : t('Scan')}
         </button>
       </div>
 
       {plugins.length === 0 && !scanning && (
-        <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 12 }}>
-          Click Scan to find<br />VST3 & CLAP plugins
+        <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 12, whiteSpace: 'pre-line' }}>
+          {t('Click Scan to find\nVST3 & CLAP plugins')}
         </div>
       )}
 
@@ -343,8 +348,7 @@ function PluginsTab() {
           color: hw.textSecondary, background: 'rgba(255,255,255,0.03)',
           border: `1px solid ${hw.border}`, borderRadius: hw.radius.md,
         }}>
-          The Hardwave plug-ins are free inside this DAW. Install them with the
-          Hardwave Suite and they appear here, unlocked.
+          {t('The Hardwave plug-ins are free inside this DAW. Install them with the Hardwave Suite and they appear here, unlocked.')}
           <button
             onClick={() => window.open('https://hardwavestudios.com/downloads', '_blank', 'noopener,noreferrer')}
             style={{
@@ -353,7 +357,7 @@ function PluginsTab() {
               border: 'none', borderRadius: hw.radius.sm, cursor: 'pointer',
               fontFamily: 'inherit',
             }}
-          >Get the Suite</button>
+          >{t('Get the Suite')}</button>
         </div>
       )}
 
@@ -361,7 +365,7 @@ function PluginsTab() {
         <>
           {favorites.length > 0 && (
             <TreeGroup
-              label="Favorites"
+              label={t('Favorites')}
               count={favorites.length}
               expanded={expanded.Favorites}
               onToggle={() => setExpanded(p => ({ ...p, Favorites: !p.Favorites }))}
@@ -373,7 +377,7 @@ function PluginsTab() {
             </TreeGroup>
           )}
           <TreeGroup
-            label="Instruments"
+            label={t('Instruments')}
             count={instruments.length}
             expanded={expanded.Instruments}
             onToggle={() => setExpanded(p => ({ ...p, Instruments: !p.Instruments }))}
@@ -385,7 +389,7 @@ function PluginsTab() {
             {instruments.length === 0 && <EmptyRow />}
           </TreeGroup>
           <TreeGroup
-            label="Effects"
+            label={t('Effects')}
             count={effects.length}
             expanded={expanded.Effects}
             onToggle={() => setExpanded(p => ({ ...p, Effects: !p.Effects }))}
@@ -406,6 +410,7 @@ function PluginsTab() {
 const AUDIO_EXTENSIONS = new Set(['wav', 'mp3', 'flac', 'aiff', 'aif', 'ogg', 'm4a'])
 
 function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
+  useLanguage()
   const fileRecents = useBrowserStore(s => s.fileRecents)
   const fileFavorites = useBrowserStore(s => s.fileFavorites)
   const folders = useBrowserStore(s => s.folders)
@@ -491,7 +496,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
   }
 
   const handleAddTag = (path: string) => {
-    const raw = window.prompt('Add tag (comma-separated for multiple)', '')
+    const raw = window.prompt(t('Add tag (comma-separated for multiple)'), '')
     if (!raw) return
     raw.split(',').map(t => t.trim()).filter(Boolean).forEach(t => addFileTag(path, t))
   }
@@ -540,36 +545,36 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
     const { push } = useNotificationStore.getState()
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
-      const zip = await open({ multiple: false, title: 'Install a sample pack', filters: [{ name: 'Sample pack', extensions: ['zip'] }] })
+      const zip = await open({ multiple: false, title: t('Install a sample pack'), filters: [{ name: t('Sample pack'), extensions: ['zip'] }] })
       if (typeof zip !== 'string') return
-      push('info', 'Installing the pack…', { detail: zip.split(/[\\/]/).pop() })
+      push('info', t('Installing the pack…'), { detail: zip.split(/[\\/]/).pop() })
       const pack = await invoke<{ folder: string; files: number; skipped: number }>('install_sample_pack', { path: zip })
       if (libraryRoot && !useBrowserStore.getState().diskRoots.includes(libraryRoot)) addDiskRoot(libraryRoot)
       window.dispatchEvent(new CustomEvent('daw:browserRefresh', { detail: libraryRoot }))
-      push('info', `Installed ${pack.files} file${pack.files === 1 ? '' : 's'}`, {
+      push('info', pack.files === 1 ? t('Installed 1 file') : tf('Installed {n} files', { n: pack.files }), {
         detail: pack.skipped > 0
-          ? `${pack.folder}\n${pack.skipped} left out: only samples, MIDI, presets, images and text are installed.`
+          ? `${pack.folder}\n${tf('{n} left out: only samples, MIDI, presets, images and text are installed.', { n: pack.skipped })}`
           : pack.folder,
       })
     } catch (e) {
-      push('warning', 'The pack was not installed', { detail: String(e) })
+      push('warning', t('The pack was not installed'), { detail: String(e) })
     }
   }
   const removePack = async (folder: string) => {
     const name = folder.split(/[\\/]/).filter(Boolean).pop()
-    if (!window.confirm(`Move the pack "${name}" to the Recycle Bin?`)) return
+    if (!window.confirm(tf('Move the pack "{name}" to the Recycle Bin?', { name: String(name) }))) return
     try {
       await invoke('remove_sample_pack', { folder })
       window.dispatchEvent(new CustomEvent('daw:browserRefresh', { detail: libraryRoot }))
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'The pack was not removed', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('The pack was not removed'), { detail: String(e) })
     }
   }
 
   const pickDiskRoot = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
-      const selected = await open({ directory: true, multiple: false, title: 'Add a folder to the browser' })
+      const selected = await open({ directory: true, multiple: false, title: t('Add a folder to the browser') })
       if (typeof selected === 'string') addDiskRoot(selected)
     } catch {}
   }
@@ -617,14 +622,17 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
       if (!matchTempo) {
         setPreviewNote(null)
       } else if (plan.fileBpm === null) {
-        setPreviewNote('No tempo in the file name, so it played at its own speed')
+        setPreviewNote(t('No tempo in the file name, so it played at its own speed'))
       } else if (Math.abs(plan.speed - 1) < 0.001) {
-        setPreviewNote(`${Math.round(plan.fileBpm)} BPM, same as the song`)
+        setPreviewNote(tf('{bpm} BPM, same as the song', { bpm: Math.round(plan.fileBpm) }))
       } else {
         setPreviewNote(
           plan.keepsPitch
-            ? `${Math.round(plan.fileBpm)} BPM stretched to the song's tempo, pitch kept`
-            : `${Math.round(plan.fileBpm)} BPM played at ${plan.speed.toFixed(2)}x, so the pitch moves too (too long to stretch)`,
+            ? tf("{bpm} BPM stretched to the song's tempo, pitch kept", { bpm: Math.round(plan.fileBpm) })
+            : tf('{bpm} BPM played at {speed}x, so the pitch moves too (too long to stretch)', {
+              bpm: Math.round(plan.fileBpm),
+              speed: plan.speed.toFixed(2),
+            }),
         )
       }
       // The engine stops at the end of the sample on its own. This only
@@ -640,17 +648,17 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
   }
 
   const handleNewFolder = (parentId: string | null) => {
-    const name = window.prompt(parentId ? 'Subfolder name' : 'Folder name', 'New Folder')
+    const name = window.prompt(parentId ? t('Subfolder name') : t('Folder name'), t('New Folder'))
     if (name && name.trim()) createFolder(name, parentId)
   }
 
   const handleRenameFolder = (id: string, currentName: string) => {
-    const name = window.prompt('Rename folder', currentName)
+    const name = window.prompt(t('Rename folder'), currentName)
     if (name && name.trim()) renameFolder(id, name)
   }
 
   const handleDeleteFolder = (id: string, name: string) => {
-    const confirmed = window.confirm(`Delete folder "${name}"? Files and subfolders move up one level.`)
+    const confirmed = window.confirm(tf('Delete folder "{name}"? Files and subfolders move up one level.', { name }))
     if (confirmed) deleteFolder(id)
   }
 
@@ -737,7 +745,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search files..."
+          placeholder={t('Search files...')}
           data-testid="file-search"
           style={{
             flex: 1, minWidth: 0, padding: '5px 8px', fontSize: 12,
@@ -747,25 +755,25 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         />
         <button
           onClick={() => handleNewFolder(null)}
-          title="New folder"
+          title={t('New folder')}
           style={{
             padding: '3px 8px', fontSize: 12, color: hw.textSecondary,
             background: 'rgba(255,255,255,0.04)', border: `1px solid ${hw.border}`,
             borderRadius: hw.radius.md,
           }}
         >
-          + Folder
+          {t('+ Folder')}
         </button>
         <button
           onClick={pickFile}
-          title="Add audio file"
+          title={t('Add audio file')}
           style={{
             padding: '3px 8px', fontSize: 12, color: hw.textSecondary,
             background: 'rgba(255,255,255,0.04)', border: `1px solid ${hw.border}`,
             borderRadius: hw.radius.md,
           }}
         >
-          Add
+          {t('Add')}
         </button>
       </div>
 
@@ -774,15 +782,15 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         fontSize: 11, color: hw.textFaint,
         borderBottom: `1px solid ${hw.border}`,
       }}>
-        <span title="Preview volume" className="fl-browser-vol-lbl">
+        <span title={t('Preview volume')} className="fl-browser-vol-lbl">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M2.5 6h2.5l3.5-3v10l-3.5-3H2.5z" /><path d="M11 5.5a3.5 3.5 0 010 5M12.8 3.6a6 6 0 010 8.8" strokeLinecap="round" /></svg>
-          Preview
+          {t('Preview')}
         </span>
         <input
           type="range" min={0} max={1} step={0.01}
           value={previewVolume}
           onChange={(e) => setPreviewVolume(parseFloat(e.target.value))}
-          title={`Preview volume ${Math.round(previewVolume * 100)}%`}
+          title={tf('Preview volume {percent}%', { percent: Math.round(previewVolume * 100) })}
           data-testid="preview-volume"
           className="fl-range"
           style={{ flex: 1, minWidth: 0 }}
@@ -793,8 +801,8 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         <button
           onClick={() => setAutoPreview(v => !v)}
           title={autoPreview
-            ? 'Auto-preview ON: click a filename to hear it (double-click to import)'
-            : 'Auto-preview OFF: click a filename to import it to the selected track'}
+            ? t('Auto-preview ON: click a filename to hear it (double-click to import)')
+            : t('Auto-preview OFF: click a filename to import it to the selected track')}
           data-testid="auto-preview-toggle"
           style={{
             padding: '2px 6px', fontSize: 11, fontWeight: 600,
@@ -804,13 +812,13 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
             borderRadius: hw.radius.sm, cursor: 'pointer',
           }}
         >
-          Auto
+          {t('Auto')}
         </button>
         <button
           onClick={() => setMatchTempo(v => !v)}
           title={matchTempo
-            ? "Previews play at the song's tempo when the file name says the tempo, with the pitch kept. Files over 32 seconds change pitch with the speed."
-            : 'Previews play at the speed the file was recorded at'}
+            ? t("Previews play at the song's tempo when the file name says the tempo, with the pitch kept. Files over 32 seconds change pitch with the speed.")
+            : t('Previews play at the speed the file was recorded at')}
           data-testid="preview-tempo-toggle"
           style={{
             padding: '2px 6px', fontSize: 11, fontWeight: 600,
@@ -820,7 +828,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
             borderRadius: hw.radius.sm, cursor: 'pointer',
           }}
         >
-          Sync
+          {t('Sync')}
         </button>
       </div>
       {previewNote && (
@@ -842,7 +850,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
       {/* What the search found across the whole library. */}
       {query.trim().length >= 2 && diskRoots.length > 0 && (
         <TreeGroup
-          label={librarySearching ? 'Searching…' : `Found in Places (${libraryHits.length})`}
+          label={librarySearching ? t('Searching…') : tf('Found in Places ({n})', { n: libraryHits.length })}
           count={libraryHits.length}
           expanded
           onToggle={() => {}}
@@ -850,12 +858,12 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
           {libraryHits.map(hit => renderDiskFile(hit.path, 1))}
           {!librarySearching && libraryHits.length === 0 && (
             <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 11 }}>
-              Nothing in your folders matches that.
+              {t('Nothing in your folders matches that.')}
             </div>
           )}
           {libraryCapped && (
             <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 11 }}>
-              Stopped early: there is more to find. Type more of the name to narrow it.
+              {t('Stopped early: there is more to find. Type more of the name to narrow it.')}
             </div>
           )}
         </TreeGroup>
@@ -863,21 +871,21 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
 
       <div data-testid="browser-places">
         <TreeGroup
-          label="Places"
+          label={t('Places')}
           count={diskRoots.length}
           expanded
           onToggle={() => {}}
-          actionLabel="Add folder"
+          actionLabel={t('Add folder')}
           onAction={pickDiskRoot}
-          secondLabel="Add pack"
-          secondTitle="Install a sample pack from its .zip into your library"
+          secondLabel={t('Add pack')}
+          secondTitle={t('Install a sample pack from its .zip into your library')}
           onSecond={() => { void installPack() }}
         >
           {diskRoots.map(root => (
             <DiskFolder
               key={root}
               path={root}
-              name={root === libraryRoot ? 'Library' : undefined}
+              name={root === libraryRoot ? t('Library') : undefined}
               depth={0}
               onRemoveRoot={() => removeDiskRoot(root)}
               onRemoveChild={root === libraryRoot ? (folder) => { void removePack(folder) } : undefined}
@@ -887,7 +895,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
           ))}
           {diskRoots.length === 0 && (
             <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 11 }}>
-              Add a folder on disk, like a sample pack, to browse it here.
+              {t('Add a folder on disk, like a sample pack, to browse it here.')}
             </div>
           )}
         </TreeGroup>
@@ -901,7 +909,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
           transition: 'background 0.1s',
         }}
       >
-        <TreeGroup label="Favorites" count={favoritePaths.length} expanded onToggle={() => {}}>
+        <TreeGroup label={t('Favorites')} count={favoritePaths.length} expanded onToggle={() => {}}>
           {rootFolders.map(f => renderFolder(f, 0))}
           {rootFiles.map(p => (
             <FileItem
@@ -921,18 +929,18 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
           ))}
           {!favHasAny && (
             <div style={{ padding: '4px 12px', color: hw.textFaint, fontSize: 11 }}>
-              Star files or drop into folders.
+              {t('Star files or drop into folders.')}
             </div>
           )}
         </TreeGroup>
       </div>
 
       <TreeGroup
-        label="Recent"
+        label={t('Recent')}
         count={recents.length}
         expanded
         onToggle={() => {}}
-        actionLabel={fileRecents.length > 0 ? 'Clear' : undefined}
+        actionLabel={fileRecents.length > 0 ? t('Clear') : undefined}
         onAction={fileRecents.length > 0 ? clearRecents : undefined}
       >
         {recents.map(p => (
@@ -953,7 +961,7 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
         ))}
         {recents.length === 0 && !favHasAny && (
           <div style={{ padding: '8px 12px', color: hw.textFaint, fontSize: 12 }}>
-            Click Add to pick audio files.
+            {t('Click Add to pick audio files.')}
           </div>
         )}
       </TreeGroup>
@@ -993,6 +1001,7 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, onRemoveC
   filter: (path: string) => boolean
   renderFile: (path: string, depth: number) => React.ReactNode
 }) {
+  useLanguage()
   const expanded = useBrowserStore(s => s.expandedDiskPaths.has(path))
   const toggleExpanded = useBrowserStore(s => s.toggleDiskPathExpanded)
   const [entries, setEntries] = useState<DiskEntry[] | null>(() => diskListingCache.get(path) ?? null)
@@ -1101,14 +1110,14 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, onRemoveC
           <>
             <button
               onClick={(e) => { e.stopPropagation(); refresh() }}
-              title="Refresh"
+              title={t('Refresh')}
               style={iconButton}
             >
               ⟳
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); onRemoveRoot?.() }}
-              title="Remove from Places (nothing on disk is deleted)"
+              title={t('Remove from Places (nothing on disk is deleted)')}
               style={iconButton}
             >
               ×
@@ -1118,7 +1127,7 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, onRemoveC
         {onRemove && hover && (
           <button
             onClick={(e) => { e.stopPropagation(); onRemove() }}
-            title="Remove this pack (to the Recycle Bin)"
+            title={t('Remove this pack (to the Recycle Bin)')}
             style={iconButton}
           >
             ×
@@ -1127,7 +1136,7 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, onRemoveC
       </div>
       {expanded && (
         <div>
-          {loading && !entries && <div style={hint}>Loading…</div>}
+          {loading && !entries && <div style={hint}>{t('Loading…')}</div>}
           {error && <div style={{ ...hint, color: hw.yellow }}>{error}</div>}
           {dirs.map(d => (
             <DiskFolder
@@ -1143,7 +1152,7 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, onRemoveC
           ))}
           {files.map(f => renderFile(f.path, depth + 1))}
           {entries && dirs.length === 0 && files.length === 0 && (
-            <div style={hint}>{entries.length === 0 ? 'No audio files here.' : 'No matches.'}</div>
+            <div style={hint}>{entries.length === 0 ? t('No audio files here.') : t('No matches.')}</div>
           )}
         </div>
       )}
@@ -1212,6 +1221,7 @@ function FolderRow({ folder, depth, expanded, count, onToggle, onAddSub, onRenam
   onDropHere: (data: string) => void;
   children: React.ReactNode;
 }) {
+  useLanguage()
   const [hover, setHover] = useState(false)
   const [dropHover, setDropHover] = useState(false)
   const rowRef = useRef<HTMLDivElement>(null)
@@ -1259,7 +1269,7 @@ function FolderRow({ folder, depth, expanded, count, onToggle, onAddSub, onRenam
           <>
             <button
               onClick={(e) => { e.stopPropagation(); onAddSub() }}
-              title="New subfolder"
+              title={t('New subfolder')}
               style={{
                 width: 16, height: 16, padding: 0,
                 background: 'transparent', border: 'none',
@@ -1268,7 +1278,7 @@ function FolderRow({ folder, depth, expanded, count, onToggle, onAddSub, onRenam
             >+</button>
             <button
               onClick={(e) => { e.stopPropagation(); onDelete() }}
-              title="Delete folder"
+              title={t('Delete folder')}
               style={{
                 width: 16, height: 16, padding: 0,
                 background: 'transparent', border: 'none',
@@ -1304,9 +1314,10 @@ function AudioFileIcon() {
 }
 
 function EmptyRow() {
+  useLanguage()
   return (
     <div style={{ padding: '4px 16px', color: hw.textFaint, fontSize: 11 }}>
-      (none)
+      {t('(none)')}
     </div>
   )
 }
@@ -1314,6 +1325,7 @@ function EmptyRow() {
 function PluginItem({ plugin, canAdd, isFavorite, onToggleFavorite }: {
   plugin: any; canAdd: boolean; isFavorite: boolean; onToggleFavorite: () => void;
 }) {
+  useLanguage()
   return (
     <div
       className="fl-bt-leaf"
@@ -1337,7 +1349,7 @@ function PluginItem({ plugin, canAdd, isFavorite, onToggleFavorite }: {
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); onToggleFavorite() }}
-        title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+        title={isFavorite ? t('Remove from favorites') : t('Add to favorites')}
         style={{
           width: 14, height: 14, padding: 0,
           background: 'transparent', border: 'none',
@@ -1364,6 +1376,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
   /** Hide the parent-folder subtitle where a tree already shows it. */
   showDir?: boolean;
 }) {
+  useLanguage()
   const name = path.split(/[\\/]/).pop() || path
   const dir = path.slice(0, path.length - name.length).replace(/[\\/]+$/, '')
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
@@ -1436,8 +1449,8 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
         onClick={autoPreview ? onPreview : onImport}
         onDoubleClick={autoPreview ? onImport : undefined}
         title={autoPreview
-          ? `Preview (double-click to import)\n${path}`
-          : `Import to selected track\n${path}`}
+          ? `${t('Preview (double-click to import)')}\n${path}`
+          : `${t('Import to selected track')}\n${path}`}
       >
         <div style={{
           fontSize: 12, color: hw.textPrimary,
@@ -1458,11 +1471,11 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           <div style={{
             display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 2,
           }}>
-            {tags.map(t => (
+            {tags.map(tag => (
               <span
-                key={t}
-                onClick={(e) => { e.stopPropagation(); onRemoveTag?.(t) }}
-                title={`Remove tag "${t}"`}
+                key={tag}
+                onClick={(e) => { e.stopPropagation(); onRemoveTag?.(tag) }}
+                title={tf('Remove tag "{tag}"', { tag })}
                 style={{
                   fontSize: 10, padding: '1px 5px',
                   color: hw.accent,
@@ -1472,7 +1485,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
                   lineHeight: 1.3,
                 }}
               >
-                #{t}
+                #{tag}
               </span>
             ))}
           </div>
@@ -1481,7 +1494,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
       <FileWaveform path={path} />
       <button
         onClick={(e) => { e.stopPropagation(); onPreview() }}
-        title="Preview"
+        title={t('Preview')}
         style={{
           width: 18, height: 18, padding: 0,
           background: 'transparent', border: 'none',
@@ -1493,7 +1506,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
       </button>
       <button
         onClick={(e) => { e.stopPropagation(); onToggleFavorite() }}
-        title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+        title={isFavorite ? t('Remove from favorites') : t('Add to favorites')}
         style={{
           width: 18, height: 18, padding: 0,
           background: 'transparent', border: 'none',
@@ -1506,7 +1519,7 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
       {onRemove && (
         <button
           onClick={(e) => { e.stopPropagation(); onRemove() }}
-          title="Remove"
+          title={t('Remove')}
           style={{
             width: 16, height: 16, padding: 0,
             background: 'transparent', border: 'none',
@@ -1541,47 +1554,47 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           {(() => {
             const target = selectedSendTarget()
             const sendHint = target.kind === 'none' ? target.reason
-              : target.kind === 'audio' ? `Clip at the playhead on ${target.name}`
-              : `Load into the sampler on ${target.name}`
+              : target.kind === 'audio' ? tf('Clip at the playhead on {name}', { name: target.name })
+              : tf('Load into the sampler on {name}', { name: target.name })
             return (
-              <FileMenuItem label="Send to selected channel" hint={sendHint}
+              <FileMenuItem label={t('Send to selected channel')} hint={sendHint}
                 disabled={target.kind === 'none'} onClick={() => run(() => sendToSelectedChannel(path))} />
             )
           })()}
-          <FileMenuItem label="Open in new channel" hint="New sampler channel with this sample" onClick={() => run(() => openInNewChannel(path))} />
+          <FileMenuItem label={t('Open in new channel')} hint={t('New sampler channel with this sample')} onClick={() => run(() => openInNewChannel(path))} />
           <MenuDivider />
-          <FileMenuItem label="Send to playlist as audio clip" onClick={() => run(() => sendToPlaylistAsClip(path))} />
-          <FileMenuItem label="Send to playlist as audio track" onClick={() => run(() => sendToPlaylistAsAudioTrack(path))} />
+          <FileMenuItem label={t('Send to playlist as audio clip')} onClick={() => run(() => sendToPlaylistAsClip(path))} />
+          <FileMenuItem label={t('Send to playlist as audio track')} onClick={() => run(() => sendToPlaylistAsAudioTrack(path))} />
           <MenuDivider />
-          <FileMenuItem label="Edit in audio editor" onClick={() => { setCtxMenu(null); useSampleEditorStore.getState().open(path) }} />
-          <FileMenuItem label="Open in slicer" onClick={() => { setCtxMenu(null); useBeatSlicerStore.getState().open(path) }} />
-          <FileMenuItem label={isPreviewing ? 'Stop preview' : 'Preview'} onClick={() => { setCtxMenu(null); onPreview() }} />
-          <MenuSection label="System" />
-          <FileMenuItem label="Open parent folder" onClick={() => run(() => showInFolder(path))} />
-          <FileMenuItem label="Copy full path" onClick={copyPath} />
-          <FileMenuItem label="Copy filename" onClick={copyFilename} />
-          <FileMenuItem label="Delete file…" danger onClick={() => run(() => trashFile(path))} />
-          <MenuSection label="Tags" />
-          <FileMenuItem label="Favorite" checked={isFavorite} onClick={() => { setCtxMenu(null); onToggleFavorite() }} />
+          <FileMenuItem label={t('Edit in audio editor')} onClick={() => { setCtxMenu(null); useSampleEditorStore.getState().open(path) }} />
+          <FileMenuItem label={t('Open in slicer')} onClick={() => { setCtxMenu(null); useBeatSlicerStore.getState().open(path) }} />
+          <FileMenuItem label={isPreviewing ? t('Stop preview') : t('Preview')} onClick={() => { setCtxMenu(null); onPreview() }} />
+          <MenuSection label={t('System')} />
+          <FileMenuItem label={t('Open parent folder')} onClick={() => run(() => showInFolder(path))} />
+          <FileMenuItem label={t('Copy full path')} onClick={copyPath} />
+          <FileMenuItem label={t('Copy filename')} onClick={copyFilename} />
+          <FileMenuItem label={t('Delete file…')} danger onClick={() => run(() => trashFile(path))} />
+          <MenuSection label={t('Tags')} />
+          <FileMenuItem label={t('Favorite')} checked={isFavorite} onClick={() => { setCtxMenu(null); onToggleFavorite() }} />
           {onAddTag && (
             <>
-              <FileMenuItem label="Add tag…" onClick={() => { setCtxMenu(null); onAddTag() }} />
-              {tags.map(t => (
+              <FileMenuItem label={t('Add tag…')} onClick={() => { setCtxMenu(null); onAddTag() }} />
+              {tags.map(tag => (
                 <FileMenuItem
-                  key={`rm-${t}`}
-                  label={`Remove tag "${t}"`}
-                  onClick={() => { setCtxMenu(null); onRemoveTag?.(t) }}
+                  key={`rm-${tag}`}
+                  label={tf('Remove tag "{tag}"', { tag })}
+                  onClick={() => { setCtxMenu(null); onRemoveTag?.(tag) }}
                 />
               ))}
               {tags.length > 1 && onClearTags && (
-                <FileMenuItem label="Clear all tags" onClick={() => { setCtxMenu(null); onClearTags() }} />
+                <FileMenuItem label={t('Clear all tags')} onClick={() => { setCtxMenu(null); onClearTags() }} />
               )}
             </>
           )}
           {onRemove && (
             <>
               <MenuDivider />
-              <FileMenuItem label="Remove from list" danger onClick={() => { setCtxMenu(null); onRemove() }} />
+              <FileMenuItem label={t('Remove from list')} danger onClick={() => { setCtxMenu(null); onRemove() }} />
             </>
           )}
           {actionError && (
@@ -1784,6 +1797,7 @@ const waveformCache = new Map<string, number[]>()
 const infoCache = new Map<string, FileInfo>()
 
 function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
+  useLanguage()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [peaks, setPeaks] = useState<number[] | null>(() => waveformCache.get(path) ?? null)
   const [info, setInfo] = useState<FileInfo | null>(() => infoCache.get(path) ?? null)
@@ -1885,7 +1899,7 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
         }}>{name}</span>
         <button
           onClick={onStop}
-          title="Stop preview"
+          title={t('Stop preview')}
           style={{
             width: 16, height: 16, padding: 0,
             background: 'transparent', border: 'none',
@@ -1897,7 +1911,7 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
         {peaks
           ? <canvas ref={canvasRef} />
           : <div style={{ fontSize: 11, color: hw.textFaint }}>
-              {err ? 'waveform unavailable' : 'decoding…'}
+              {err ? t('waveform unavailable') : t('decoding…')}
             </div>
         }
       </div>
@@ -1907,20 +1921,20 @@ function WaveformStrip({ path, onStop }: { path: string; onStop: () => void }) {
           fontSize: 11, color: hw.textFaint,
           fontFamily: 'ui-monospace, Menlo, monospace',
         }}>
-          <span title="Duration">{formatDuration(info.durationSec)}</span>
-          <span title="Sample rate">{(info.sampleRate / 1000).toFixed(1)} kHz</span>
-          <span title="Channels">{info.channels === 1 ? 'mono' : info.channels === 2 ? 'stereo' : `${info.channels}ch`}</span>
+          <span title={t('Duration')}>{formatDuration(info.durationSec)}</span>
+          <span title={t('Sample rate')}>{(info.sampleRate / 1000).toFixed(1)} kHz</span>
+          <span title={t('Channels')}>{info.channels === 1 ? t('mono') : info.channels === 2 ? t('stereo') : `${info.channels}ch`}</span>
           {info.bpm !== null && (
-            <span title="Estimated BPM from onset autocorrelation" style={{ color: hw.accent }}>
+            <span title={t('Estimated BPM from onset autocorrelation')} style={{ color: hw.accent }}>
               ~{info.bpm} BPM
             </span>
           )}
           {info.key && (
-            <span title="Estimated musical key (chroma vs. Krumhansl-Schmuckler profile)" style={{ color: hw.accent }}>
+            <span title={t('Estimated musical key (chroma vs. Krumhansl-Schmuckler profile)')} style={{ color: hw.accent }}>
               {info.key}
             </span>
           )}
-          <span title="File size" style={{ marginLeft: 'auto' }}>{formatBytes(info.sizeBytes)}</span>
+          <span title={t('File size')} style={{ marginLeft: 'auto' }}>{formatBytes(info.sizeBytes)}</span>
         </div>
       )}
     </div>

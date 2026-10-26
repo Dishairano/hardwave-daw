@@ -7,6 +7,7 @@ import {
   isReservedBinding,
   type ActionId, type Binding,
 } from '../stores/shortcutsStore'
+import { t, tf, useLanguage } from '../i18n'
 
 interface Category {
   name: string
@@ -34,6 +35,7 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
    */
   embedded?: boolean
 }) {
+  const language = useLanguage()
   const [query, setQuery] = useState('')
   const bindings = useShortcutsStore(s => s.bindings)
   const capturingFor = useShortcutsStore(s => s.capturingFor)
@@ -80,7 +82,7 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
         alt: e.altKey,
       }
       if (isReservedBinding(b)) {
-        setBanner({ kind: 'error', text: 'That combination cannot be used as a shortcut.' })
+        setBanner({ kind: 'error', text: t('That combination cannot be used as a shortcut.') })
         startCapture(null)
         return
       }
@@ -89,7 +91,10 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
         const otherLabel = ACTIONS.find(a => a.id === conflict)?.label ?? conflict
         setBanner({
           kind: 'warn',
-          text: `${bindingLabel(b)} was bound to “${otherLabel}” — that shortcut is now unassigned (reset to default).`,
+          text: tf('{binding} was bound to “{action}” — that shortcut is now unassigned (reset to default).', {
+            binding: bindingLabel(b),
+            action: t(otherLabel),
+          }),
         })
         // Reset the conflicting action to its default; then assign new binding
         setBinding(conflict, null)
@@ -111,11 +116,12 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
         ...cat,
         actions: cat.actions.filter(a =>
           a.label.toLowerCase().includes(q)
+          || t(a.label).toLowerCase().includes(q)
           || bindingLabel(bindings[a.id]).toLowerCase().includes(q),
         ),
       }))
       .filter(cat => cat.actions.length > 0)
-  }, [query, bindings])
+  }, [query, bindings, language])
 
   if (!open) return null
 
@@ -129,16 +135,16 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-    setBanner({ kind: 'info', text: 'Shortcut map exported to hardwave-shortcuts.json.' })
+    setBanner({ kind: 'info', text: t('Shortcut map exported to hardwave-shortcuts.json.') })
   }
 
   const onImportFile = (file: File) => {
     file.text().then(text => {
       const result = importJson(text)
       if (result.ok) {
-        setBanner({ kind: 'info', text: 'Shortcut map imported successfully.' })
+        setBanner({ kind: 'info', text: t('Shortcut map imported successfully.') })
       } else {
-        setBanner({ kind: 'error', text: `Import failed: ${result.error}` })
+        setBanner({ kind: 'error', text: tf('Import failed: {error}', { error: String(result.error) }) })
       }
     })
   }
@@ -156,11 +162,11 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
           display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
         }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: hw.textPrimary, marginRight: 'auto' }}>
-            Keyboard shortcuts
+            {t('Keyboard shortcuts')}
           </div>
           <input
             autoFocus
-            placeholder="Search…"
+            placeholder={t('Search…')}
             value={query}
             onChange={e => setQuery(e.target.value)}
             style={{
@@ -176,7 +182,7 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
               const id = e.target.value
               if (!id) return
               loadPreset(id)
-              setBanner({ kind: 'info', text: `Loaded preset: ${PRESETS.find(p => p.id === id)?.name}` })
+              setBanner({ kind: 'info', text: tf('Loaded preset: {name}', { name: t(PRESETS.find(p => p.id === id)?.name ?? '') }) })
               e.target.value = ''
             }}
             style={{
@@ -186,13 +192,13 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
               padding: '3px 6px', outline: 'none',
             }}
           >
-            <option value="" disabled>Load preset…</option>
+            <option value="" disabled>{t('Load preset…')}</option>
             {PRESETS.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <option key={p.id} value={p.id}>{t(p.name)}</option>
             ))}
           </select>
-          <HeaderBtn onClick={downloadJson}>Export</HeaderBtn>
-          <HeaderBtn onClick={() => fileInputRef.current?.click()}>Import</HeaderBtn>
+          <HeaderBtn onClick={downloadJson}>{t('Export')}</HeaderBtn>
+          <HeaderBtn onClick={() => fileInputRef.current?.click()}>{t('Import')}</HeaderBtn>
           <input
             ref={fileInputRef}
             type="file"
@@ -206,12 +212,12 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
           />
           <HeaderBtn onClick={() => {
             resetAll()
-            setBanner({ kind: 'info', text: 'All shortcuts reset to defaults.' })
-          }}>Reset</HeaderBtn>
-          <HeaderBtn onClick={() => printShortcuts(filteredCategories, bindings)}>Print</HeaderBtn>
+            setBanner({ kind: 'info', text: t('All shortcuts reset to defaults.') })
+          }}>{t('Reset')}</HeaderBtn>
+          <HeaderBtn onClick={() => printShortcuts(filteredCategories, bindings)}>{t('Print')}</HeaderBtn>
           {/* A tab has the settings window's own Close; a second one
               next to it only raises the question of what it closes. */}
-            {!embedded && <HeaderBtn onClick={onClose}>Close</HeaderBtn>}
+            {!embedded && <HeaderBtn onClick={onClose}>{t('Close')}</HeaderBtn>}
         </div>
 
         {banner && (
@@ -237,14 +243,20 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
             borderBottom: `1px solid ${hw.accent}40`,
             color: hw.accentLight,
           }}>
-            Press a key combo for <strong>{ACTIONS.find(a => a.id === capturingFor)?.label}</strong> — Esc to cancel.
+            {/* One sentence, with the action in bold wherever the
+                translation puts it. */}
+            {t('Press a key combo for {action} — Esc to cancel.')
+              .split(/(\{action\})/)
+              .map((part, i) => part === '{action}'
+                ? <strong key={i}>{t(ACTIONS.find(a => a.id === capturingFor)?.label ?? '')}</strong>
+                : part)}
           </div>
         )}
 
         <div style={{ overflowY: 'auto', padding: 12 }}>
           {filteredCategories.length === 0 && (
             <div style={{ padding: 24, textAlign: 'center', color: hw.textFaint, fontSize: 11 }}>
-              No shortcuts match "{query}"
+              {tf('No shortcuts match "{query}"', { query })}
             </div>
           )}
           {filteredCategories.map(cat => (
@@ -253,7 +265,7 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
                 fontSize: 9, color: hw.textFaint, letterSpacing: 0.6,
                 textTransform: 'uppercase', marginBottom: 4, padding: '0 4px',
               }}>
-                {cat.name}
+                {t(cat.name)}
               </div>
               {cat.actions.map(a => {
                 const isCapturing = capturingFor === a.id
@@ -279,24 +291,24 @@ export function ShortcutsPanel({ open, onClose, embedded = false }: {
                         borderRadius: hw.radius.sm, cursor: 'pointer',
                         textAlign: 'center',
                       }}
-                      title="Click to rebind"
+                      title={t('Click to rebind')}
                     >
-                      {isCapturing ? 'Press a key…' : bindingLabel(bindings[a.id])}
+                      {isCapturing ? t('Press a key…') : bindingLabel(bindings[a.id])}
                     </span>
                     <span style={{ fontSize: 11, color: hw.textSecondary, flex: 1 }}>
-                      {a.label}
+                      {t(a.label)}
                     </span>
                     <span
                       onClick={() => {
                         setBinding(a.id, null)
-                        setBanner({ kind: 'info', text: `“${a.label}” restored to default.` })
+                        setBanner({ kind: 'info', text: tf('“{action}” restored to default.', { action: t(a.label) }) })
                       }}
                       style={{
                         fontSize: 9, color: hw.textFaint,
                         padding: '2px 6px', borderRadius: hw.radius.sm,
                         cursor: 'pointer', opacity: 0.6,
                       }}
-                      title="Reset this shortcut to default"
+                      title={t('Reset this shortcut to default')}
                     >↺</span>
                   </div>
                 )
@@ -364,12 +376,12 @@ function printShortcuts(cats: Category[], bindings: Record<ActionId, Binding>) {
   const rows = cats
     .map(c => {
       const items = c.actions
-        .map(a => `<tr><td class="k">${escapeHtml(bindingLabel(bindings[a.id]))}</td><td>${escapeHtml(a.label)}</td></tr>`)
+        .map(a => `<tr><td class="k">${escapeHtml(bindingLabel(bindings[a.id]))}</td><td>${escapeHtml(t(a.label))}</td></tr>`)
         .join('')
-      return `<h2>${escapeHtml(c.name)}</h2><table>${items}</table>`
+      return `<h2>${escapeHtml(t(c.name))}</h2><table>${items}</table>`
     })
     .join('')
-  win.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>Hardwave DAW — Keyboard Shortcuts</title>
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>${escapeHtml(t('Hardwave DAW — Keyboard Shortcuts'))}</title>
 <style>
 body{font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:#111;padding:24px;max-width:720px;margin:0 auto}
 h1{font-size:18px;margin:0 0 4px}
@@ -380,8 +392,8 @@ td{padding:3px 6px;border-bottom:1px solid #eee;vertical-align:top}
 td.k{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#b91c1c;width:220px}
 @media print{body{padding:12px}h2{page-break-after:avoid}table{page-break-inside:auto}tr{page-break-inside:avoid}}
 </style></head><body>
-<h1>Hardwave DAW — Keyboard shortcuts</h1>
-<div class="sub">Generated from the in-app shortcuts panel.</div>
+<h1>${escapeHtml(t('Hardwave DAW — Keyboard shortcuts'))}</h1>
+<div class="sub">${escapeHtml(t('Generated from the in-app shortcuts panel.'))}</div>
 ${rows}
 </body></html>`)
   win.document.close()

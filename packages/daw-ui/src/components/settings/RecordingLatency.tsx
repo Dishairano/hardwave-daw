@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../../theme'
 import { useAudioPrefsStore } from '../../stores/audioPrefsStore'
+import { t, tf, useLanguage } from '../../i18n'
 
 interface RecordingLatencyInfo {
   outputMs: number
@@ -19,6 +20,7 @@ interface RecordingLatencyInfo {
  * the panel is open.
  */
 export function RecordingLatencyRow() {
+  useLanguage()
   const offset = useAudioPrefsStore(s => s.recordOffsetMs)
   const setOffset = useAudioPrefsStore(s => s.setRecordOffsetMs)
   const [info, setInfo] = useState<RecordingLatencyInfo | null>(null)
@@ -55,9 +57,9 @@ export function RecordingLatencyRow() {
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 11, color: hw.textMuted }}>Recording compensation</div>
+          <div style={{ fontSize: 11, color: hw.textMuted }}>{t('Recording compensation')}</div>
           <div style={{ fontSize: 10, color: hw.textFaint, marginTop: 2, lineHeight: 1.4 }}>
-            Takes are moved back by this much so they land where you played them.
+            {t('Takes are moved back by this much so they land where you played them.')}
           </div>
         </div>
         <span style={{ fontSize: 12, fontWeight: 600, color: hw.textPrimary, fontFamily: "'Consolas', monospace", whiteSpace: 'nowrap' }}>
@@ -66,15 +68,20 @@ export function RecordingLatencyRow() {
       </div>
       {info && (
         <div style={{ fontSize: 10, color: hw.textFaint, marginTop: 6, fontFamily: "'Consolas', monospace" }}>
-          measured {f(measured)} ms = output {f(info.outputMs)} + input {info.inputRunning ? f(info.inputMs) : '?'} + queue {f(info.queueMs)}
-          {!info.inputRunning && ' (arm a track to measure the input)'}
+          {tf('measured {measured} ms = output {output} + input {input} + queue {queue}', {
+            measured: f(measured),
+            output: f(info.outputMs),
+            input: info.inputRunning ? f(info.inputMs) : '?',
+            queue: f(info.queueMs),
+          })}
+          {!info.inputRunning && ` ${t('(arm a track to measure the input)')}`}
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
         <label htmlFor="rec-offset" style={{ fontSize: 11, color: hw.textMuted, flex: 1 }}>
-          Manual offset (ms)
+          {t('Manual offset (ms)')}
           <span style={{ display: 'block', fontSize: 10, color: hw.textFaint }}>
-            If takes still sound late, raise it; if early, lower it.
+            {t('If takes still sound late, raise it; if early, lower it.')}
           </span>
         </label>
         <input

@@ -10,6 +10,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { useTrackStore, type TrackInfo } from '../../stores/trackStore'
 import { useBrowserStore } from '../../stores/browserStore'
+import { t, tf } from '../../i18n'
 
 export const SAMPLER_ID = 'hardwave.native.sampler'
 
@@ -42,15 +43,15 @@ export type SendTarget =
 export function selectedSendTarget(): SendTarget {
   const { tracks, selectedTrackId } = useTrackStore.getState()
   const track = tracks.find(t => t.id === selectedTrackId)
-  if (!track || track.kind === 'Master') return { kind: 'none', reason: 'No channel selected' }
+  if (!track || track.kind === 'Master') return { kind: 'none', reason: t('No channel selected') }
   if (track.kind === 'Audio') return { kind: 'audio', trackId: track.id, name: track.name }
   if (track.kind === 'Midi') {
     const slot = samplerSlot(track)
     if (slot) return { kind: 'sampler', trackId: track.id, slotId: slot.id, name: track.name }
     if (!track.inserts?.length) return { kind: 'emptyMidi', trackId: track.id, name: track.name }
-    return { kind: 'none', reason: `${track.name} holds another instrument` }
+    return { kind: 'none', reason: tf('{name} holds another instrument', { name: track.name }) }
   }
-  return { kind: 'none', reason: 'Select an audio or instrument channel' }
+  return { kind: 'none', reason: t('Select an audio or instrument channel') }
 }
 
 async function loadIntoSampler(trackId: string, slotId: string, path: string) {
@@ -128,9 +129,11 @@ export async function trashFile(path: string): Promise<boolean> {
   let ok = false
   try {
     const { ask } = await import('@tauri-apps/plugin-dialog')
-    ok = await ask(`Move "${name}" to the recycle bin?`, { title: 'Delete file', kind: 'warning', okLabel: 'Delete', cancelLabel: 'Cancel' })
+    ok = await ask(tf('Move "{name}" to the recycle bin?', { name }), {
+      title: t('Delete file'), kind: 'warning', okLabel: t('Delete'), cancelLabel: t('Cancel'),
+    })
   } catch {
-    ok = window.confirm(`Move "${name}" to the recycle bin?`)
+    ok = window.confirm(tf('Move "{name}" to the recycle bin?', { name }))
   }
   if (!ok) return false
   await invoke('trash_browser_file', { path })
