@@ -666,7 +666,7 @@ impl AudioDeviceManager {
                     // Denormals turn a reverb tail into a CPU spike; every
                     // DAW switches them off on its audio thread.
                     crate::denormals::flush_denormals_to_zero();
-                    let num_frames = data.len() / 2;
+                    let num_frames = data.len() / stream_channels as usize;
                     // At least the block being written has to play out before
                     // anything after it is heard. The driver's own estimate is
                     // used when it is larger.
@@ -680,29 +680,13 @@ impl AudioDeviceManager {
                     if stream_channels == 2 {
                         cb.process(data, num_frames, 2);
                     } else {
-                        // Render the mix as stereo, then put it on the
-                        // pair the user picked and leave the rest of the
-                        // interface silent.
-                        let needed = num_frames * 2;
-                        if scatter.len() < needed {
-                            // The driver handed a bigger block than the
-                            // size asked for. Rather than allocate here,
-                            // play what fits and let the rest be silence.
-                            data.fill(0.0);
-                            return;
-                        }
-                        scatter[..needed].fill(0.0);
-                        cb.process(&mut scatter[..needed], num_frames, 2);
-                        data.fill(0.0);
-                        let left = out_offset as usize;
-                        let right = left + 1;
-                        for frame in 0..num_frames {
-                            let base = frame * stream_channels as usize;
-                            if base + right < data.len() {
-                                data[base + left] = scatter[frame * 2];
-                                data[base + right] = scatter[frame * 2 + 1];
-                            }
-                        }
+                        play_on_pair(
+                            data,
+                            stream_channels as usize,
+                            out_offset as usize,
+                            &mut scatter,
+                            |block, frames| cb.process(block, frames, 2),
+                        );
                     }
                 },
                 move |err| {
@@ -1039,6 +1023,85 @@ pub fn default_output_name(windows_default: &str, names: &[String]) -> String {
         .find(|n| !is_display_audio(n))
         .cloned()
         .unwrap_or_else(|| windows_default.to_string())
+}
+
+/// Render the mix as stereo and put it on the pair `offset`, `offset + 1`
+/// of an interleaved stream `channels` wide, with the rest of the
+/// interface silent. `scratch` is the stereo buffer the mix is rendered
+/// into, allocated with the stream; a block bigger than it is rendered in
+/// pieces rather than allocating on the audio thread.
+///
+/// The frame count used to be the buffer's length over two whatever the
+/// stream's width, so on a four-channel interface every block looked twice
+/// its size, failed the "fits in the scratch" check and played as silence:
+/// picking outputs 3/4 gave no sound at all.
+fn play_on_pair(
+    data: &mut [f32],
+    channels: usize,
+    offset: usize,
+    scratch: &mut [f32],
+    mut render: impl FnMut(&mut [f32], usize),
+) {
+    data.fill(0.0);
+    let frames = data.len() / channels.max(1);
+    let piece = scratch.len() / 2;
+    if piece == 0 || offset + 1 >= channels {
+        return;
+    }
+    let mut done = 0;
+    while done < frames {
+        let n = (frames - done).min(piece);
+        let block = &mut scratch[..n * 2];
+        block.fill(0.0);
+        render(block, n);
+        for f in 0..n {
+            let base = (done + f) * channels + offset;
+            data[base] = block[f * 2];
+            data[base + 1] = block[f * 2 + 1];
+        }
+        done += n;
+    }
+}
+
+#[cfg(test)]
+mod pair_tests {
+    use super::play_on_pair;
+
+    /// The mix lands on outputs 3/4 of a four-channel stream, every frame,
+    /// with 1/2 silent; it was all silence before.
+    #[test]
+    fn the_mix_plays_on_the_pair_picked() {
+        let frames = 8;
+        let mut data = vec![9.0_f32; frames * 4];
+        let mut scratch = vec![0.0_f32; frames * 2];
+        play_on_pair(&mut data, 4, 2, &mut scratch, |block, n| {
+            for f in 0..n {
+                block[f * 2] = 0.5;
+                block[f * 2 + 1] = -0.5;
+            }
+        });
+        for f in 0..frames {
+            assert_eq!(&data[f * 4..f * 4 + 4], &[0.0, 0.0, 0.5, -0.5], "frame {f}");
+        }
+    }
+
+    /// A block bigger than the scratch is rendered in pieces, all of it.
+    #[test]
+    fn a_bigger_block_than_asked_plays_whole() {
+        let frames = 10;
+        let mut data = vec![0.0_f32; frames * 4];
+        let mut scratch = vec![0.0_f32; 4 * 2];
+        let mut next = 0.0_f32;
+        play_on_pair(&mut data, 4, 2, &mut scratch, |block, n| {
+            for f in 0..n {
+                next += 1.0;
+                block[f * 2] = next;
+                block[f * 2 + 1] = next;
+            }
+        });
+        let left: Vec<f32> = (0..frames).map(|f| data[f * 4 + 2]).collect();
+        assert_eq!(left, (1..=10).map(|v| v as f32).collect::<Vec<_>>());
+    }
 }
 
 #[cfg(test)]
