@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import manualSource from '../../../../docs/MANUAL.md?raw'
 import { hw } from '../theme'
 import { DialogFrame } from './ui/DialogFrame'
+import { t, useLanguage } from '../i18n'
 
 /**
  * The manual, in the app.
@@ -117,6 +118,7 @@ function Body({ lines }: { lines: string[] }) {
 }
 
 export function ManualWindow({ onClose }: { onClose: () => void }) {
+  useLanguage()
   const all = useMemo(() => sections(manualSource), [])
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
@@ -137,8 +139,8 @@ export function ManualWindow({ onClose }: { onClose: () => void }) {
 
   return (
     <DialogFrame
-      title="Manual"
-      subtitle="What the program does today"
+      title={t('Manual')}
+      subtitle={t('What the program does today')}
       onClose={onClose}
       width={860}
       height="80vh"
@@ -147,7 +149,7 @@ export function ManualWindow({ onClose }: { onClose: () => void }) {
           className="hw-input"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search the manual"
+          placeholder={t('Search the manual')}
           style={{ width: 200 }}
         />
       }
@@ -159,7 +161,7 @@ export function ManualWindow({ onClose }: { onClose: () => void }) {
         }}>
           {matches.length === 0 && (
             <div style={{ fontSize: 12, color: hw.textFaint, padding: 8 }}>
-              Nothing in the manual mentions that.
+              {t('Nothing in the manual mentions that.')}
             </div>
           )}
           {matches.map(i => (

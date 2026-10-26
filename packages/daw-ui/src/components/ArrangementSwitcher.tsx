@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useTrackStore } from '../stores/trackStore'
+import { t, tf, useLanguage } from '../i18n'
 
 interface ArrangementInfo {
   id: string
@@ -14,6 +15,7 @@ interface ArrangementInfo {
 }
 
 export function ArrangementSwitcher() {
+  useLanguage()
   const [arrangements, setArrangements] = useState<ArrangementInfo[]>([])
   const fetchTracks = useTrackStore(s => s.fetchTracks)
 
@@ -69,7 +71,7 @@ export function ArrangementSwitcher() {
 
   const onRename = useCallback(async () => {
     if (!active) return
-    const name = window.prompt('Rename arrangement', active.name)?.trim()
+    const name = window.prompt(t('Rename arrangement'), active.name)?.trim()
     if (!name) return
     try {
       await invoke('rename_arrangement', { id: active.id, name })
@@ -81,7 +83,7 @@ export function ArrangementSwitcher() {
 
   const onDelete = useCallback(async () => {
     if (!active || arrangements.length <= 1) return
-    if (!window.confirm(`Delete arrangement "${active.name}"?`)) return
+    if (!window.confirm(tf('Delete arrangement "{name}"?', { name: active.name }))) return
     try {
       await invoke('delete_arrangement', { id: active.id })
       await fetchTracks()
@@ -99,11 +101,11 @@ export function ArrangementSwitcher() {
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 6px' }}>
-      <span style={{ fontSize: 8, letterSpacing: 0.5, textTransform: 'uppercase', color: '#7a7a88' }}>Arr</span>
+      <span style={{ fontSize: 8, letterSpacing: 0.5, textTransform: 'uppercase', color: '#7a7a88' }}>{t('Arr')}</span>
       <select
         value={active?.id ?? ''}
         onChange={e => onSwitch(e.target.value)}
-        title="Switch arrangement"
+        title={t('Switch arrangement')}
         style={{
           fontSize: 10, background: 'rgba(255,255,255,0.05)', color: '#e8e8ef',
           border: '1px solid #2a2a36', borderRadius: 4, padding: '2px 4px', maxWidth: 160,
@@ -113,13 +115,13 @@ export function ArrangementSwitcher() {
           <option key={a.id} value={a.id}>{a.name}</option>
         ))}
       </select>
-      <button type="button" style={btn} title="New arrangement" onClick={onCreate}>+</button>
-      <button type="button" style={btn} title="Duplicate arrangement" onClick={onDuplicate}>dup</button>
-      <button type="button" style={btn} title="Rename arrangement" onClick={onRename}>ren</button>
+      <button type="button" style={btn} title={t('New arrangement')} onClick={onCreate}>+</button>
+      <button type="button" style={btn} title={t('Duplicate arrangement')} onClick={onDuplicate}>{t('dup')}</button>
+      <button type="button" style={btn} title={t('Rename arrangement')} onClick={onRename}>{t('ren')}</button>
       <button
         type="button"
         style={{ ...btn, opacity: arrangements.length <= 1 ? 0.4 : 1 }}
-        title="Delete arrangement"
+        title={t('Delete arrangement')}
         onClick={onDelete}
         disabled={arrangements.length <= 1}
       >×</button>

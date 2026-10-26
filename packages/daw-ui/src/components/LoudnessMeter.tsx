@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { hw } from '../theme'
 import { useMeterStore } from '../stores/meterStore'
 import { DialogFrame } from './ui/DialogFrame'
+import { t, useLanguage } from '../i18n'
 
 interface LoudnessMeterProps {
   onClose: () => void
@@ -39,6 +40,7 @@ function formatLra(v: number | null) {
 }
 
 export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
+  useLanguage()
   const master = useMeterStore(s => s.master)
   const [target, setTarget] = useState(-14)
   const [history, setHistory] = useState<{ m: number | null; s: number | null; i: number | null }[]>(
@@ -72,14 +74,17 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
 
   const [copied, setCopied] = useState(false)
   const copyReadings = async () => {
-    const rows = [
-      `Momentary:  ${formatLufs(master.lufs_m)} LUFS`,
-      `Short-term: ${formatLufs(master.lufs_s)} LUFS`,
-      `Integrated: ${formatLufs(master.lufs_i)} LUFS`,
-      `LRA:        ${formatLra(lra)} LU`,
-      `True Peak:  ${isFinite(master.true_peak_db) ? master.true_peak_db.toFixed(1) : '—'} dBTP`,
-      `Target:     ${target.toFixed(1)} LUFS`,
+    const readings: [string, string][] = [
+      [t('Momentary'), `${formatLufs(master.lufs_m)} LUFS`],
+      [t('Short-term'), `${formatLufs(master.lufs_s)} LUFS`],
+      [t('Integrated'), `${formatLufs(master.lufs_i)} LUFS`],
+      ['LRA', `${formatLra(lra)} LU`],
+      [t('True Peak'), `${isFinite(master.true_peak_db) ? master.true_peak_db.toFixed(1) : '—'} dBTP`],
+      [t('Target'), `${target.toFixed(1)} LUFS`],
     ]
+    // The values line up one space past the longest label, in any language.
+    const column = Math.max(...readings.map(([label]) => label.length)) + 2
+    const rows = readings.map(([label, value]) => `${label}:`.padEnd(column) + value)
     try {
       await navigator.clipboard.writeText(rows.join('\n'))
       setCopied(true)
@@ -89,8 +94,8 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
 
   return (
     <DialogFrame
-      title="Loudness Meter"
-      subtitle="BS.1770 · 30s history"
+      title={t('Loudness Meter')}
+      subtitle={t('BS.1770 · 30s history')}
       onClose={onClose}
       width={560}
       headerActions={<>
@@ -100,23 +105,23 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
             color: copied ? hw.accent : hw.textSecondary, cursor: 'pointer',
             transition: 'color 0.15s, border-color 0.15s',
           }}>
-            {copied ? 'Copied!' : 'Copy readings'}
+            {copied ? t('Copied!') : t('Copy readings')}
           </button>
           <button onClick={reset} style={{
             padding: '3px 10px', fontSize: 12, background: 'transparent',
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
             color: hw.textSecondary, cursor: 'pointer',
           }}>
-            Clear history
+            {t('Clear history')}
           </button>
       </>}
     >
       <div style={{ padding: 12, display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
-        <Reading label="Momentary" unit="LUFS" value={formatLufs(master.lufs_m)} target={target} dbValue={master.lufs_m} />
-        <Reading label="Short-term" unit="LUFS" value={formatLufs(master.lufs_s)} target={target} dbValue={master.lufs_s} />
-        <Reading label="Integrated" unit="LUFS" value={formatLufs(master.lufs_i)} target={target} dbValue={master.lufs_i} />
+        <Reading label={t('Momentary')} unit="LUFS" value={formatLufs(master.lufs_m)} target={target} dbValue={master.lufs_m} />
+        <Reading label={t('Short-term')} unit="LUFS" value={formatLufs(master.lufs_s)} target={target} dbValue={master.lufs_s} />
+        <Reading label={t('Integrated')} unit="LUFS" value={formatLufs(master.lufs_i)} target={target} dbValue={master.lufs_i} />
         <Reading label="LRA" unit="LU" value={formatLra(lra)} target={target} dbValue={null} />
-        <Reading label="True Peak" unit="dBTP"
+        <Reading label={t('True Peak')} unit="dBTP"
           value={isFinite(master.true_peak_db) ? master.true_peak_db.toFixed(1) : '—'}
           target={0} dbValue={master.true_peak_db} invertTolerance />
       </div>
@@ -126,7 +131,7 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
         background: hw.bgElevated, display: 'flex', alignItems: 'center', gap: 12,
       }}>
         <label style={{ fontSize: 12, color: hw.textSecondary, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span>Target</span>
+          <span>{t('Target')}</span>
           <input type="range" min={-30} max={-6} step={0.5} value={target}
             onChange={(e) => setTarget(parseFloat(e.target.value))}
             style={{ width: 140 }} />
@@ -136,10 +141,10 @@ export function LoudnessMeter({ onClose }: LoudnessMeterProps) {
         </label>
         <div style={{ flex: 1 }} />
         <div style={{ fontSize: 11, color: hw.textFaint }}>
-          <span style={{ color: hw.accent }}>━</span> Momentary &nbsp;
-          <span style={{ color: hw.secondary }}>━</span> Short-term &nbsp;
-          <span style={{ color: hw.textMuted }}>━</span> Integrated &nbsp;
-          <span style={{ color: hw.textFaint }}>┄</span> Target
+          <span style={{ color: hw.accent }}>━</span> {t('Momentary')} &nbsp;
+          <span style={{ color: hw.secondary }}>━</span> {t('Short-term')} &nbsp;
+          <span style={{ color: hw.textMuted }}>━</span> {t('Integrated')} &nbsp;
+          <span style={{ color: hw.textFaint }}>┄</span> {t('Target')}
         </div>
       </div>
 

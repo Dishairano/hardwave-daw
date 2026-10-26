@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { DialogFrame } from './ui/DialogFrame'
+import { t, tf, useLanguage } from '../i18n'
 
 interface OscilloscopeProps {
   onClose: () => void
@@ -25,6 +26,8 @@ function findRisingZeroCross(left: Float32Array): number {
 }
 
 export function Oscilloscope({ onClose }: OscilloscopeProps) {
+  // The waiting text is drawn in the chosen language, so a change redraws it.
+  const language = useLanguage()
   const [windowMs, setWindowMs] = useState(DEFAULT_WINDOW_MS)
   const [mode, setMode] = useState<Mode>('overlay')
   const [trigger, setTrigger] = useState<Trigger>('rising')
@@ -74,12 +77,12 @@ export function Oscilloscope({ onClose }: OscilloscopeProps) {
     const c = canvasRef.current
     if (!c) return
     draw(c, leftRef.current, rightRef.current, mode, trigger)
-  }, [mode, trigger])
+  }, [mode, trigger, language])
 
   return (
     <DialogFrame
-      title="Oscilloscope"
-      subtitle={`Master bus · ${sampleRate} Hz`}
+      title={t('Oscilloscope')}
+      subtitle={tf('Master bus · {rate} Hz', { rate: sampleRate })}
       onClose={onClose}
       width={680}
       headerActions={<>
@@ -89,7 +92,7 @@ export function Oscilloscope({ onClose }: OscilloscopeProps) {
             color: freeze ? hw.accent : hw.textSecondary, cursor: 'pointer',
             transition: 'color 0.15s, border-color 0.15s',
           }}>
-            {freeze ? 'Frozen' : 'Freeze'}
+            {freeze ? t('Frozen') : t('Freeze')}
           </button>
       </>}
     >
@@ -106,7 +109,7 @@ export function Oscilloscope({ onClose }: OscilloscopeProps) {
         gap: 16, flexWrap: 'wrap',
       }}>
         <label style={{ fontSize: 12, color: hw.textSecondary, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span>Window</span>
+          <span>{t('Window')}</span>
           <input
             type="range"
             min={MIN_WINDOW_MS}
@@ -123,7 +126,7 @@ export function Oscilloscope({ onClose }: OscilloscopeProps) {
         </label>
 
         <label style={{ fontSize: 12, color: hw.textSecondary, display: 'flex', gap: 6, alignItems: 'center' }}>
-          <span>Mode</span>
+          <span>{t('Mode')}</span>
           <select
             value={mode}
             onChange={(e) => setMode(e.target.value as Mode)}
@@ -133,14 +136,14 @@ export function Oscilloscope({ onClose }: OscilloscopeProps) {
               color: hw.textPrimary,
             }}
           >
-            <option value="overlay">Overlay L+R</option>
-            <option value="split">Split (L/R)</option>
+            <option value="overlay">{t('Overlay L+R')}</option>
+            <option value="split">{t('Split (L/R)')}</option>
             <option value="xy">Lissajous (X-Y)</option>
           </select>
         </label>
 
         <label style={{ fontSize: 12, color: hw.textSecondary, display: 'flex', gap: 6, alignItems: 'center' }}>
-          <span>Trigger</span>
+          <span>{t('Trigger')}</span>
           <select
             value={trigger}
             onChange={(e) => setTrigger(e.target.value as Trigger)}
@@ -151,8 +154,8 @@ export function Oscilloscope({ onClose }: OscilloscopeProps) {
               color: hw.textPrimary,
             }}
           >
-            <option value="off">Free-run</option>
-            <option value="rising">Rising zero-cross</option>
+            <option value="off">{t('Free-run')}</option>
+            <option value="rising">{t('Rising zero-cross')}</option>
           </select>
         </label>
 
@@ -189,7 +192,7 @@ function draw(
   if (left.length === 0) {
     ctx.fillStyle = hw.textFaint
     ctx.font = '10px sans-serif'
-    ctx.fillText('Waiting for signal...', 12, 18)
+    ctx.fillText(t('Waiting for signal...'), 12, 18)
     return
   }
 

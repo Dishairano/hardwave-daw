@@ -4,6 +4,7 @@ import { hw } from '../theme'
 import { useNotificationStore } from '../stores/notificationStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn } from './ui/dialogStyles'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * The clip launcher.
@@ -39,6 +40,7 @@ const QUANTISE = [
 ]
 
 export function SessionView({ onClose }: { onClose: () => void }) {
+  useLanguage()
   const [grid, setGrid] = useState<SessionGrid | null>(null)
 
   const refresh = useCallback(async () => {
@@ -65,24 +67,24 @@ export function SessionView({ onClose }: { onClose: () => void }) {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const picked = await open({
         multiple: false,
-        filters: [{ name: 'Audio', extensions: ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a', 'aiff'] }],
+        filters: [{ name: t('Audio'), extensions: ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a', 'aiff'] }],
       })
       if (typeof picked !== 'string') return
       await invoke('set_session_slot', { trackId, slot, path: picked })
       void refresh()
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not load that loop', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not load that loop'), { detail: String(e) })
     }
   }
 
   return (
     <DialogFrame
-      title="Clip launcher"
-      subtitle="A clip starts on the next boundary, a row starts together"
+      title={t('Clip launcher')}
+      subtitle={t('A clip starts on the next boundary, a row starts together')}
       onClose={onClose}
       width={980}
       headerActions={<>
-          <span style={{ fontSize: 12, color: hw.textFaint }}>Launch on</span>
+          <span style={{ fontSize: 12, color: hw.textFaint }}>{t('Launch on')}</span>
           <select
             value={grid?.quantiseBeats ?? 4}
             onChange={e => {
@@ -96,22 +98,22 @@ export function SessionView({ onClose }: { onClose: () => void }) {
               border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
             }}
           >
-            {QUANTISE.map(q => <option key={q.beats} value={q.beats}>{q.label}</option>)}
+            {QUANTISE.map(q => <option key={q.beats} value={q.beats}>{t(q.label)}</option>)}
           </select>
           <button
             onClick={() => { invoke('stop_all_slots').catch(() => {}); void refresh() }}
             style={btn()}
-          >Stop all</button>
+          >{t('Stop all')}</button>
       </>}
     >
       <div style={{ overflow: 'auto', padding: 10 }}>
         <table
-          aria-label="Clip launcher: a column per track, a row per scene"
+          aria-label={t('Clip launcher: a column per track, a row per scene')}
           style={{ borderCollapse: 'separate', borderSpacing: 4, width: '100%' }}
         >
           <thead>
             <tr>
-              <th style={{ ...headCell(), textAlign: 'left', width: 120 }}>Scene</th>
+              <th style={{ ...headCell(), textAlign: 'left', width: 120 }}>{t('Scene')}</th>
               {(grid?.rows ?? []).map(row => (
                 <th key={row.trackId} style={headCell()}>{row.name}</th>
               ))}
@@ -142,11 +144,17 @@ export function SessionView({ onClose }: { onClose: () => void }) {
                             .finally(() => void refresh())
                         }}
                         title={slot
-                          ? `${slot.name}${slot.midi ? ' (notes)' : ''}, right-click to empty`
-                          : 'Empty: click to load an audio loop, or send a clip here from the playlist (right-click it)'}
+                          ? (slot.midi
+                            ? tf('{name} (notes), right-click to empty', { name: slot.name })
+                            : tf('{name}, right-click to empty', { name: slot.name }))
+                          : t('Empty: click to load an audio loop, or send a clip here from the playlist (right-click it)')}
                         aria-label={slot
-                          ? `${slot.name} on ${row.name}, ${playing ? 'playing' : waiting ? 'waiting for the boundary' : 'stopped'}`
-                          : `Empty slot on ${row.name}`}
+                          ? (playing
+                            ? tf('{name} on {track}, playing', { name: slot.name, track: row.name })
+                            : waiting
+                              ? tf('{name} on {track}, waiting for the boundary', { name: slot.name, track: row.name })
+                              : tf('{name} on {track}, stopped', { name: slot.name, track: row.name }))
+                          : tf('Empty slot on {track}', { track: row.name })}
                         aria-pressed={playing}
                         style={{
                           width: '100%', minWidth: 110, padding: '8px 10px',
@@ -172,13 +180,13 @@ export function SessionView({ onClose }: { onClose: () => void }) {
                 <button
                   onClick={() => { invoke('add_scene', {}).catch(() => {}); void refresh() }}
                   style={{ ...btn(), width: '100%' }}
-                >+ scene</button>
+                >{t('+ scene')}</button>
               </td>
               {(grid?.rows ?? []).map(row => (
                 <td key={`stop-${row.trackId}`}>
                   <button
                     onClick={() => { invoke('stop_slot', { trackId: row.trackId }).catch(() => {}); void refresh() }}
-                    title={row.pending === -2 ? 'Stopping at the next boundary' : 'Stop at the next boundary'}
+                    title={row.pending === -2 ? t('Stopping at the next boundary') : t('Stop at the next boundary')}
                     style={{
                       ...btn(), width: '100%',
                       border: row.pending === -2 ? `1px dashed ${hw.accent}` : 'none',
@@ -191,7 +199,7 @@ export function SessionView({ onClose }: { onClose: () => void }) {
         </table>
         {(grid?.rows.length ?? 0) === 0 && (
           <div style={{ padding: 20, fontSize: 12.5, color: hw.textFaint }}>
-            Add a track and its row appears here.
+            {t('Add a track and its row appears here.')}
           </div>
         )}
       </div>

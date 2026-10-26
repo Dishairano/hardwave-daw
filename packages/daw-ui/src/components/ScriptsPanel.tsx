@@ -4,6 +4,7 @@ import { hw } from '../theme'
 import { useNotificationStore } from '../stores/notificationStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn } from './ui/dialogStyles'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * The user's own scripts.
@@ -40,6 +41,7 @@ for t in song.tracks {
 `
 
 export function ScriptsPanel({ onClose }: { onClose: () => void }) {
+  useLanguage()
   const [scripts, setScripts] = useState<ScriptFile[]>([])
   const [name, setName] = useState('new script')
   const [body, setBody] = useState(EXAMPLE)
@@ -60,7 +62,9 @@ export function ScriptsPanel({ onClose }: { onClose: () => void }) {
     setBusy(true)
     try {
       const result = await invoke<ScriptResult>('check_script', { body })
-      setLog([...result.output, `${result.asked} ${result.asked === 1 ? 'command' : 'commands'}, nothing applied`])
+      setLog([...result.output, result.asked === 1
+        ? tf('{n} command, nothing applied', { n: result.asked })
+        : tf('{n} commands, nothing applied', { n: result.asked })])
     } catch (e) {
       setError(String(e))
     } finally {
@@ -76,12 +80,15 @@ export function ScriptsPanel({ onClose }: { onClose: () => void }) {
       const skipped = result.asked - result.applied
       setLog([
         ...result.output,
-        `${result.applied} of ${result.asked} applied`
-          + (skipped > 0 ? `, ${skipped} skipped because what they named was not there` : ''),
+        skipped > 0
+          ? tf('{applied} of {asked} applied, {skipped} skipped because what they named was not there', {
+            applied: result.applied, asked: result.asked, skipped,
+          })
+          : tf('{applied} of {asked} applied', { applied: result.applied, asked: result.asked }),
       ])
     } catch (e) {
       setError(String(e))
-      useNotificationStore.getState().push('warning', 'The script stopped', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('The script stopped'), { detail: String(e) })
     } finally {
       setBusy(false)
     }
@@ -91,7 +98,7 @@ export function ScriptsPanel({ onClose }: { onClose: () => void }) {
     try {
       await invoke('save_script', { name, body })
       await refresh()
-      useNotificationStore.getState().push('info', `Saved "${name}"`)
+      useNotificationStore.getState().push('info', tf('Saved "{name}"', { name }))
     } catch (e) {
       setError(String(e))
     }
@@ -108,8 +115,8 @@ export function ScriptsPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <DialogFrame
-      title="Scripts"
-      subtitle="A run is one undo step, however much it does"
+      title={t('Scripts')}
+      subtitle={t('A run is one undo step, however much it does')}
       onClose={onClose}
       width={820}
     >
@@ -120,7 +127,7 @@ export function ScriptsPanel({ onClose }: { onClose: () => void }) {
         }}>
           {scripts.length === 0 && (
             <div style={{ fontSize: 12, color: hw.textFaint, padding: 6 }}>
-              Nothing saved yet.
+              {t('Nothing saved yet.')}
             </div>
           )}
           {scripts.map(script => (
@@ -135,7 +142,7 @@ export function ScriptsPanel({ onClose }: { onClose: () => void }) {
               >{script.name}</button>
               <button
                 onClick={() => void remove(script.name)}
-                title={`Delete ${script.name}`}
+                title={tf('Delete {name}', { name: script.name })}
                 style={{ ...btn(), padding: '3px 6px' }}
               >×</button>
             </div>
@@ -147,27 +154,27 @@ export function ScriptsPanel({ onClose }: { onClose: () => void }) {
             <input
               value={name}
               onChange={e => setName(e.target.value)}
-              aria-label="Script name"
+              aria-label={t('Script name')}
               style={{
                 flex: 1, padding: '4px 8px', fontSize: 12.5, fontFamily: 'inherit',
                 background: 'rgba(255,255,255,0.04)', color: hw.textPrimary,
                 border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
               }}
             />
-            <button onClick={() => void save()} style={btn()}>Save</button>
-            <button onClick={() => void check()} disabled={busy} style={btn()}>Check</button>
+            <button onClick={() => void save()} style={btn()}>{t('Save')}</button>
+            <button onClick={() => void check()} disabled={busy} style={btn()}>{t('Check')}</button>
             <button
               onClick={() => void run()}
               disabled={busy}
               style={{ ...btn(), background: hw.accent, color: '#fff' }}
-            >Run</button>
+            >{t('Run')}</button>
           </div>
 
           <textarea
             value={body}
             onChange={e => setBody(e.target.value)}
             spellCheck={false}
-            aria-label="Script"
+            aria-label={t('Script')}
             style={{
               flex: 1, minHeight: 240, resize: 'vertical',
               padding: 10, fontSize: 12, lineHeight: 1.5,
@@ -186,11 +193,11 @@ export function ScriptsPanel({ onClose }: { onClose: () => void }) {
             color: error ? hw.red : hw.textSecondary,
             border: `1px solid ${hw.border}`,
           }}>
-            {error ?? (log.length > 0 ? log.join('\n') : 'Check reads the script without changing anything.')}
+            {error ?? (log.length > 0 ? log.join('\n') : t('Check reads the script without changing anything.'))}
           </div>
 
           <details style={{ fontSize: 12, color: hw.textFaint }}>
-            <summary style={{ cursor: 'pointer' }}>What a script can call</summary>
+            <summary style={{ cursor: 'pointer' }}>{t('What a script can call')}</summary>
             <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', fontSize: 12 }}>{
 `play()  stop()  seek(tick)
 set_volume(track_id, db)   set_pan(track_id, -1..1)

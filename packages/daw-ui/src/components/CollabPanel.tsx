@@ -6,6 +6,7 @@ import { useNotificationStore } from '../stores/notificationStore'
 import { useCollabStore } from '../stores/collabStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn } from './ui/dialogStyles'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * Working on a song with someone else.
@@ -40,6 +41,7 @@ interface Joined {
 }
 
 export function CollabPanel({ onClose }: { onClose: () => void }) {
+  useLanguage()
   const [status, setStatus] = useState<CollabStatus | null>(null)
   const [code, setCode] = useState('')
   const [room, setRoom] = useState('')
@@ -64,8 +66,8 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
       const joined = await invoke<Joined>('start_collab', {})
       setStatus(s => s && { ...s, connected: true, inviteCode: joined.inviteCode, hosting: true })
       useCollabStore.getState().start()
-      useNotificationStore.getState().push('info', 'Room open', {
-        detail: `Read this out: ${joined.inviteCode}`,
+      useNotificationStore.getState().push('info', t('Room open'), {
+        detail: tf('Read this out: {code}', { code: joined.inviteCode }),
       })
       void refresh()
     } catch (e) {
@@ -81,10 +83,10 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
       const joined = await invoke<Joined>('start_collab', { room: room.trim(), code: code.trim() })
       useCollabStore.getState().start()
       await useTrackStore.getState().fetchTracks()
-      useNotificationStore.getState().push('info', 'You are in the room', {
+      useNotificationStore.getState().push('info', t('You are in the room'), {
         detail: joined.caughtUp
-          ? 'Everything you missed has been applied.'
-          : 'You were away too long to replay: ask them to send the project.',
+          ? t('Everything you missed has been applied.')
+          : t('You were away too long to replay: ask them to send the project.'),
       })
       void refresh()
     } catch (e) {
@@ -108,8 +110,8 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
   const copyInvite = useCallback(async () => {
     if (!status) return
     try {
-      await navigator.clipboard.writeText(`Room ${status.roomId}, code ${status.inviteCode}`)
-      useNotificationStore.getState().push('info', 'Invite copied')
+      await navigator.clipboard.writeText(tf('Room {room}, code {code}', { room: status.roomId, code: status.inviteCode }))
+      useNotificationStore.getState().push('info', t('Invite copied'))
     } catch { /* clipboard refused; it is on screen */ }
   }, [status])
 
@@ -123,8 +125,8 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <DialogFrame
-      title="Work together"
-      subtitle="The edits travel, the audio stays on your machine"
+      title={t('Work together')}
+      subtitle={t('The edits travel, the audio stays on your machine')}
       onClose={onClose}
       width={480}
     >
@@ -132,22 +134,21 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
         {connected ? (
           <>
             {status?.joinRequest && (
-              <div role="alertdialog" aria-label="Someone wants to join" style={{
+              <div role="alertdialog" aria-label={t('Someone wants to join')} style={{
                 padding: 12, borderRadius: hw.radius.md,
                 background: 'rgba(220,38,38,0.08)', border: `1px solid ${hw.accent}`,
               }}>
                 <div style={{ fontSize: 12, fontWeight: 600 }}>
-                  {status.joinRequest.name} wants to join
+                  {tf('{name} wants to join', { name: status.joinRequest.name })}
                 </div>
                 <div style={{ fontSize: 12, color: hw.textFaint, marginTop: 4, lineHeight: 1.5 }}>
-                  They have your code. Letting them in also sends them a copy of this song when
-                  they ask for it; the audio files stay here.
+                  {t('They have your code. Letting them in also sends them a copy of this song when they ask for it; the audio files stay here.')}
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                   <button onClick={() => void answer(true)} style={{ ...btn(), background: hw.accent, color: '#fff' }}>
-                    Let them in
+                    {t('Let them in')}
                   </button>
-                  <button onClick={() => void answer(false)} style={btn()}>No</button>
+                  <button onClick={() => void answer(false)} style={btn()}>{t('No')}</button>
                 </div>
               </div>
             )}
@@ -156,31 +157,31 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
               background: 'rgba(255,255,255,0.04)', border: `1px solid ${hw.border}`,
             }}>
               <div style={{ fontSize: 12, color: hw.textFaint }}>
-                {status?.hosting ? 'Your room. Send both to the other person:' : 'In their room:'}
+                {status?.hosting ? t('Your room. Send both to the other person:') : t('In their room:')}
               </div>
               <div style={{ display: 'flex', gap: 18, marginTop: 4, alignItems: 'baseline', flexWrap: 'wrap' }}>
                 <div>
-                  <div style={{ fontSize: 11, color: hw.textFaint }}>Room</div>
+                  <div style={{ fontSize: 11, color: hw.textFaint }}>{t('Room')}</div>
                   <div style={codeStyle()}>{status?.roomId || '-'}</div>
                 </div>
                 {status?.hosting && (
                   <div>
-                    <div style={{ fontSize: 11, color: hw.textFaint }}>Code</div>
+                    <div style={{ fontSize: 11, color: hw.textFaint }}>{t('Code')}</div>
                     <div style={codeStyle()}>{status?.inviteCode || '-'}</div>
                   </div>
                 )}
                 {status?.hosting && (
-                  <button onClick={() => void copyInvite()} style={{ ...btn(), alignSelf: 'center' }}>Copy invite</button>
+                  <button onClick={() => void copyInvite()} style={{ ...btn(), alignSelf: 'center' }}>{t('Copy invite')}</button>
                 )}
               </div>
               <div style={{ fontSize: 12, color: hw.textFaint, marginTop: 6 }}>
-                {status?.sent ?? 0} sent, {status?.received ?? 0} received.
-                {status?.hosting && ' You are asked before anyone comes in.'}
+                {tf('{sent} sent, {received} received.', { sent: status?.sent ?? 0, received: status?.received ?? 0 })}
+                {status?.hosting && ` ${t('You are asked before anyone comes in.')}`}
               </div>
               <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }} aria-live="polite">
                 {(status?.members ?? []).length <= 1 && (
                   <span style={{ fontSize: 12.5, color: hw.textFaint }}>
-                    Waiting for the other person to come in.
+                    {t('Waiting for the other person to come in.')}
                   </span>
                 )}
                 {(status?.members ?? []).length > 1 && (status?.members ?? []).map((name, i) => (
@@ -191,7 +192,7 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
                       background: i === 0 ? hw.accent : 'rgba(255,255,255,0.08)',
                       color: i === 0 ? '#fff' : hw.textPrimary,
                     }}
-                    title={i === 0 ? 'Opened the room' : 'Joined'}
+                    title={i === 0 ? t('Opened the room') : t('Joined')}
                   >{name}</span>
                 ))}
               </div>
@@ -200,60 +201,59 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
               {!status?.hosting && <button
                 onClick={() => {
                   invoke('request_project')
-                    .then(() => useNotificationStore.getState().push('info', 'Asked them for the song', {
-                      detail: 'It replaces what is open here when it arrives. The audio files do not travel with it.',
+                    .then(() => useNotificationStore.getState().push('info', t('Asked them for the song'), {
+                      detail: t('It replaces what is open here when it arrives. The audio files do not travel with it.'),
                     }))
                     .catch(e => setError(String(e)))
                 }}
-                title="Replaces the song open here with theirs"
+                title={t('Replaces the song open here with theirs')}
                 style={btn()}
-              >Get the song from them</button>}
-              <button onClick={() => void leave()} style={btn()}>Leave the room</button>
+              >{t('Get the song from them')}</button>}
+              <button onClick={() => void leave()} style={btn()}>{t('Leave the room')}</button>
             </div>
           </>
         ) : (
           <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600 }}>Open a room</div>
+              <div style={{ fontSize: 12.5, fontWeight: 600 }}>{t('Open a room')}</div>
               <div style={{ fontSize: 12, color: hw.textFaint, lineHeight: 1.5 }}>
-                You get a code to read out. Opening a room is part of Pro; the person you
-                invite needs only a free account.
+                {t('You get a code to read out. Opening a room is part of Pro; the person you invite needs only a free account.')}
               </div>
               <button
                 onClick={() => void open()}
                 disabled={busy}
                 style={{ ...btn(), alignSelf: 'flex-start', background: hw.accent, color: '#fff' }}
-              >{busy ? 'One moment…' : 'Open a room'}</button>
+              >{busy ? t('One moment…') : t('Open a room')}</button>
             </div>
 
             <div style={{ height: 1, background: hw.border }} />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600 }}>Join theirs</div>
+              <div style={{ fontSize: 12.5, fontWeight: 600 }}>{t('Join theirs')}</div>
               <div style={{ display: 'flex', gap: 6 }}>
                 <input
                   value={room}
                   onChange={e => setRoom(e.target.value.toUpperCase())}
-                  placeholder="room"
-                  aria-label="Room"
+                  placeholder={t('room')}
+                  aria-label={t('Room')}
                   style={input()}
                 />
                 <input
                   value={code}
                   onChange={e => setCode(e.target.value.toUpperCase())}
-                  placeholder="code"
-                  aria-label="Invite code"
+                  placeholder={t('code')}
+                  aria-label={t('Invite code')}
                   style={{ ...input(), letterSpacing: '0.08em' }}
                 />
                 <button onClick={() => void join()} disabled={busy || !code.trim() || !room.trim()} style={btn()}>
-                  {busy ? 'Waiting…' : 'Join'}
+                  {busy ? t('Waiting…') : t('Join')}
                 </button>
               </div>
               {busy && (
                 <div style={{ fontSize: 12, color: hw.textFaint, lineHeight: 1.5 }} aria-live="polite">
                   {status?.waitingForHost
-                    ? 'The code is right. Waiting for the host to let you in.'
-                    : 'Checking the room…'}
+                    ? t('The code is right. Waiting for the host to let you in.')
+                    : t('Checking the room…')}
                 </div>
               )}
             </div>

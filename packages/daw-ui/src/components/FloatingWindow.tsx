@@ -5,6 +5,7 @@ import { hw } from '../theme'
 import { usePanelLayoutStore, type PanelId } from '../stores/panelLayoutStore'
 import { useTrackStore } from '../stores/trackStore'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { t, useLanguage } from '../i18n'
 
 interface Props {
   panelId: PanelId
@@ -21,6 +22,7 @@ const MIN_W = 260
 const MIN_H = 160
 
 export function FloatingWindow({ panelId, title, onClose, dockable = true, actions, children }: Props) {
+  useLanguage()
   const layout = usePanelLayoutStore(s => s.layout[panelId])
   const setPos = usePanelLayoutStore(s => s.setPos)
   const setSize = usePanelLayoutStore(s => s.setSize)
@@ -100,13 +102,13 @@ export function FloatingWindow({ panelId, title, onClose, dockable = true, actio
           fontSize: isMobile ? 13 : 10, color: hw.textSecondary, fontWeight: 600,
         }}
       >
-        <span style={{ flex: 1 }}>{title}</span>
+        <span style={{ flex: 1 }}>{t(title)}</span>
         {!isMobile && actions && <span data-nodrag style={{ display: 'flex' }}>{actions}</span>}
         {!isMobile && dockable && (
           <button
             data-nodrag
             onClick={() => setFloating(panelId, false)}
-            title="Dock"
+            title={t('Dock')}
             style={{
               width: 18, height: 18, padding: 0,
               background: 'transparent', border: 'none',
@@ -118,7 +120,7 @@ export function FloatingWindow({ panelId, title, onClose, dockable = true, actio
           <button
             data-nodrag
             onClick={onClose}
-            title="Close"
+            title={t('Close')}
             style={{
               width: isMobile ? 32 : 18, height: isMobile ? 32 : 18, padding: 0,
               background: 'transparent', border: 'none',
@@ -133,7 +135,7 @@ export function FloatingWindow({ panelId, title, onClose, dockable = true, actio
       {!isMobile && (
         <div
           onMouseDown={startResize}
-          title="Resize"
+          title={t('Resize')}
           style={{
             position: 'absolute',
             right: 0, bottom: 0,
@@ -183,11 +185,12 @@ export async function detachPanel(panelId: PanelId) {
 }
 
 export function DetachButton({ panelId, title }: { panelId: PanelId; title?: string }) {
+  useLanguage()
   const onClick = () => { void detachPanel(panelId) }
   return (
     <button
       onClick={onClick}
-      title={title || 'Pop out into its own window (drag to another monitor)'}
+      title={title ? t(title) : t('Pop out into its own window (drag to another monitor)')}
       style={{
         width: 18, height: 18, padding: 0,
         background: 'transparent', border: 'none',

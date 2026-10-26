@@ -6,6 +6,7 @@ import { useNotificationStore } from '../stores/notificationStore'
 import { useSendStore } from '../stores/sendStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn, sel, th, td } from './ui/dialogStyles'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * Macro knobs: one control that moves several parameters at once.
@@ -53,6 +54,7 @@ interface ParamInfo {
 }
 
 export function MacroPanel({ onClose }: { onClose: () => void }) {
+  useLanguage()
   const tracks = useTrackStore(s => s.tracks)
   const [macros, setMacros] = useState<MacroDef[]>([])
   const [selectedId, setSelectedId] = useState<string>('')
@@ -124,27 +126,27 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
 
   const targetLabel = useCallback((link: MacroLink) => {
     const track = tracks.find(t => t.id === link.track_id)
-    const trackName = track ? track.name : `track ${link.track_id.slice(0, 6)}`
-    if (link.target === 'TrackVolume') return `${trackName} · volume`
-    if (link.target === 'TrackPan') return `${trackName} · pan`
-    if ('SendLevel' in link.target) return `${trackName} · send ${link.target.SendLevel.send_index + 1}`
+    const trackName = track ? track.name : tf('track {id}', { id: link.track_id.slice(0, 6) })
+    if (link.target === 'TrackVolume') return tf('{track} · volume', { track: trackName })
+    if (link.target === 'TrackPan') return tf('{track} · pan', { track: trackName })
+    if ('SendLevel' in link.target) return tf('{track} · send {n}', { track: trackName, n: link.target.SendLevel.send_index + 1 })
     const slotId = link.target.PluginParam.slot_id
     const slot = track?.inserts.find(i => i.id === slotId)
-    const slotName = slot ? slot.pluginName : `slot ${slotId.slice(0, 6)}`
+    const slotName = slot ? slot.pluginName : tf('slot {id}', { id: slotId.slice(0, 6) })
     const paramId = link.target.PluginParam.param_id
     const paramName = paramNames[`${link.track_id}|${slotId}|${paramId}`]
-    return `${trackName} · ${slotName} · ${paramName ?? `parameter ${paramId}`}`
+    return `${trackName} · ${slotName} · ${paramName ?? tf('parameter {n}', { n: paramId })}`
   }, [tracks, paramNames])
 
   const newMacro = useCallback(async () => {
-    const name = window.prompt('Name this macro', 'Open')?.trim()
+    const name = window.prompt(t('Name this macro'), 'Open')?.trim()
     if (!name) return
     try {
       const id = await invoke<string>('add_macro', { name })
       await refresh()
       setSelectedId(id)
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not add that macro', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not add that macro'), { detail: String(e) })
     }
   }, [refresh])
 
@@ -153,18 +155,18 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
       await invoke('delete_macro', { id })
       await refresh()
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not remove that macro', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not remove that macro'), { detail: String(e) })
     }
   }, [refresh])
 
   const renameMacro = useCallback(async (macro: MacroDef) => {
-    const name = window.prompt('Rename this macro', macro.name)?.trim()
+    const name = window.prompt(t('Rename this macro'), macro.name)?.trim()
     if (!name || name === macro.name) return
     try {
       await invoke('rename_macro', { id: macro.id, name })
       await refresh()
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not rename that macro', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not rename that macro'), { detail: String(e) })
     }
   }, [refresh])
 
@@ -202,7 +204,7 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
       await invoke('add_macro_link', args)
       await refresh()
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not link that', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not link that'), { detail: String(e) })
     }
   }, [selected, linkTrackId, linkWhat, linkParamId, params, refresh])
 
@@ -222,7 +224,7 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
       await invoke('remove_macro_link', { id: selected.id, linkId })
       await refresh()
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not unlink that', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not unlink that'), { detail: String(e) })
     }
   }, [selected, refresh])
 
@@ -230,11 +232,11 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <DialogFrame
-      title="Macro knobs"
-      subtitle="One knob, several parameters · saved with the song"
+      title={t('Macro knobs')}
+      subtitle={t('One knob, several parameters · saved with the song')}
       onClose={onClose}
       width={720}
-      headerActions={<button onClick={() => { void newMacro() }} style={btn()}>New macro</button>}
+      headerActions={<button onClick={() => { void newMacro() }} style={btn()}>{t('New macro')}</button>}
     >
       <div style={{ display: 'flex', minHeight: 0, flex: 1 }}>
         <div style={{
@@ -243,7 +245,7 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
         }}>
           {macros.length === 0 && (
             <div style={{ padding: 12, fontSize: 12, color: hw.textFaint }}>
-              No macros yet. Make one, then link the knobs it should move.
+              {t('No macros yet. Make one, then link the knobs it should move.')}
             </div>
           )}
           {macros.map(m => (
@@ -269,7 +271,7 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
         <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: 12 }}>
           {!selected && (
             <div style={{ fontSize: 12, color: hw.textFaint }}>
-              Pick a macro on the left, or make one.
+              {t('Pick a macro on the left, or make one.')}
             </div>
           )}
           {selected && (
@@ -285,16 +287,16 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
                 <div style={{ width: 34, textAlign: 'right', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
                   {Math.round(selected.value * 100)}
                 </div>
-                <button onClick={() => { void renameMacro(selected) }} style={btn()}>Rename</button>
-                <button onClick={() => { void removeMacro(selected.id) }} style={btn()}>Delete</button>
+                <button onClick={() => { void renameMacro(selected) }} style={btn()}>{t('Rename')}</button>
+                <button onClick={() => { void removeMacro(selected.id) }} style={btn()}>{t('Delete')}</button>
               </div>
 
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ color: hw.textSecondary, borderBottom: `1px solid ${hw.border}` }}>
-                    <th style={th()}>Moves</th>
-                    <th style={th()}>At 0</th>
-                    <th style={th()}>At 100</th>
+                    <th style={th()}>{t('Moves')}</th>
+                    <th style={th()}>{t('At 0')}</th>
+                    <th style={th()}>{t('At 100')}</th>
                     <th style={th()} />
                   </tr>
                 </thead>
@@ -302,7 +304,7 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
                   {linkRows.length === 0 && (
                     <tr><td style={td()} colSpan={4}>
                       <span style={{ color: hw.textFaint }}>
-                        Nothing linked yet. Pick a track and a parameter below.
+                        {t('Nothing linked yet. Pick a track and a parameter below.')}
                       </span>
                     </td></tr>
                   )}
@@ -324,7 +326,7 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
                         />
                       </td>
                       <td style={td()}>
-                        <button onClick={() => { void removeLink(link.id) }} style={btn()}>Unlink</button>
+                        <button onClick={() => { void removeLink(link.id) }} style={btn()}>{t('Unlink')}</button>
                       </td>
                     </tr>
                   ))}
@@ -335,16 +337,16 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
                 marginTop: 12, paddingTop: 10, borderTop: `1px solid ${hw.border}`,
                 display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
               }}>
-                <span style={{ fontSize: 12, color: hw.textSecondary }}>Link:</span>
+                <span style={{ fontSize: 12, color: hw.textSecondary }}>{t('Link:')}</span>
                 <select value={linkTrackId} onChange={(e) => setLinkTrackId(e.target.value)} style={sel()}>
-                  {tracks.length === 0 && <option value="">(no tracks)</option>}
+                  {tracks.length === 0 && <option value="">{t('(no tracks)')}</option>}
                   {tracks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
                 <select value={linkWhat} onChange={(e) => setLinkWhat(e.target.value)} style={sel()}>
-                  <option value="volume">Volume</option>
-                  <option value="pan">Pan</option>
+                  <option value="volume">{t('Volume')}</option>
+                  <option value="pan">{t('Pan')}</option>
                   {(sendsByTrack[linkTrackId] ?? []).map(s => (
-                    <option key={`send-${s.index}`} value={`send:${s.index}`}>Send {s.index + 1}</option>
+                    <option key={`send-${s.index}`} value={`send:${s.index}`}>{tf('Send {n}', { n: s.index + 1 })}</option>
                   ))}
                   {slots.map(s => (
                     <option key={s.id} value={`slot:${s.id}`}>{s.pluginName}</option>
@@ -356,15 +358,15 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
                     onChange={(e) => setLinkParamId(Number(e.target.value))}
                     style={sel()}
                   >
-                    {params.length === 0 && <option value={-1}>(no parameters)</option>}
+                    {params.length === 0 && <option value={-1}>{t('(no parameters)')}</option>}
                     {params.map(p => (
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
                   </select>
                 )}
-                <button onClick={() => { void addLink() }} style={btn(true)}>Add</button>
+                <button onClick={() => { void addLink() }} style={btn(true)}>{t('Add')}</button>
                 <span style={{ fontSize: 11, color: hw.textFaint }}>
-                  Put the larger number in the "At 0" box to make a link run backwards.
+                  {t('Put the larger number in the "At 0" box to make a link run backwards.')}
                 </span>
               </div>
             </>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { hw } from '../theme'
+import { t, useLanguage } from '../i18n'
 
 const SKIP_KEY = 'hardwave.daw.welcomeSkip'
 
@@ -26,9 +27,13 @@ export function WelcomeScreen({
   onOpenAudioSettings,
   onDismiss,
 }: Props) {
+  useLanguage()
   const [mounted, setMounted] = useState(false)
   const [skipNext, setSkipNext] = useState<boolean>(() => shouldSkipWelcome())
   useEffect(() => { setMounted(true) }, [])
+
+  // The key sits in the sentence wherever the language puts it.
+  const [pressBefore, pressAfter] = t('Press {key} anytime for shortcuts').split('{key}')
 
   const dismiss = () => {
     try { localStorage.setItem(SKIP_KEY, skipNext ? '1' : '0') } catch {}
@@ -67,55 +72,55 @@ export function WelcomeScreen({
           Hardwave DAW
         </div>
         <div style={{ fontSize: 13, color: hw.textMuted, marginBottom: 28 }}>
-          Start a new project or open a recent one.
+          {t('Start a new project or open a recent one.')}
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 28 }}>
           <div>
             <div style={{ fontSize: 11, color: hw.textFaint, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 }}>
-              Get started
+              {t('Get started')}
             </div>
             <button
               onClick={() => { onNewProject(); dismiss() }}
               style={actionBtn(true)}
             >
-              New project
+              {t('New project')}
             </button>
             <button
               onClick={() => { onOpenProject(); dismiss() }}
               style={actionBtn(false)}
             >
-              Open project…
+              {t('Open project…')}
             </button>
             <button
               onClick={() => { onOpenSampleProject(); dismiss() }}
               style={actionBtn(false)}
-              title="A hardstyle song at 150 BPM with a kick that plays straight away. New project offers rawstyle, frenchcore and uptempo too."
+              title={t('A hardstyle song at 150 BPM with a kick that plays straight away. New project offers rawstyle, frenchcore and uptempo too.')}
             >
-              Start from a hardstyle song
+              {t('Start from a hardstyle song')}
             </button>
             <button
               onClick={() => { onOpenAudioSettings() }}
               style={actionBtn(false)}
-              title="Pick an output device, sample rate and buffer size"
+              title={t('Pick an output device, sample rate and buffer size')}
             >
-              Configure audio device…
+              {t('Configure audio device…')}
             </button>
             <button
               onClick={dismiss}
               style={{ ...actionBtn(false), marginTop: 18 }}
             >
-              Close this screen
+              {t('Close this screen')}
             </button>
           </div>
 
           <div>
             <div style={{ fontSize: 11, color: hw.textFaint, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 }}>
-              Recent projects
+              {t('Recent projects')}
             </div>
             {recentProjects.length === 0 ? (
               <div style={{ fontSize: 12, color: hw.textMuted, padding: '16px 0' }}>
-                No recent projects yet.
+                {t('No recent projects yet.')}
               </div>
             ) : (
               <div style={{ maxHeight: 260, overflowY: 'auto' }}>
@@ -148,18 +153,18 @@ export function WelcomeScreen({
             fontSize: 11, color: hw.textFaint,
             textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10,
           }}>
-            Quick tour
+            {t('Quick tour')}
           </div>
           <div style={{
             display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 18px',
             fontSize: 11, color: hw.textSecondary,
           }}>
-            <PanelHint shortcut="F5" label="Playlist" hint="Arrange clips on a timeline" />
-            <PanelHint shortcut="F6" label="Channel Rack" hint="Step-sequence drums and loops" />
-            <PanelHint shortcut="F7" label="Piano Roll" hint="Draw and edit MIDI notes" />
-            <PanelHint shortcut="F8" label="Browser" hint="Find samples and plugins" />
-            <PanelHint shortcut="F9" label="Mixer" hint="Levels, routing and FX chains" />
-            <PanelHint shortcut="?" label="Shortcuts" hint="Full keyboard cheat sheet" />
+            <PanelHint shortcut="F5" label={t('Playlist')} hint={t('Arrange clips on a timeline')} />
+            <PanelHint shortcut="F6" label={t('Channel Rack')} hint={t('Step-sequence drums and loops')} />
+            <PanelHint shortcut="F7" label={t('Piano Roll')} hint={t('Draw and edit MIDI notes')} />
+            <PanelHint shortcut="F8" label={t('Browser')} hint={t('Find samples and plugins')} />
+            <PanelHint shortcut="F9" label={t('Mixer')} hint={t('Levels, routing and FX chains')} />
+            <PanelHint shortcut="?" label={t('Shortcuts')} hint={t('Full keyboard cheat sheet')} />
           </div>
         </div>
 
@@ -171,7 +176,7 @@ export function WelcomeScreen({
             fontSize: 11, color: hw.textFaint,
             textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10,
           }}>
-            Documentation & help
+            {t('Documentation & help')}
           </div>
           <div style={{
             display: 'flex', gap: 18, flexWrap: 'wrap',
@@ -179,18 +184,18 @@ export function WelcomeScreen({
           }}>
             <DocLink
               href="https://github.com/Dishairano/hardwave-daw#readme"
-              label="Read the docs"
-              hint="Project README on GitHub"
+              label={t('Read the docs')}
+              hint={t('Project README on GitHub')}
             />
             <DocLink
               href="https://github.com/Dishairano/hardwave-daw/releases"
-              label="Release notes"
-              hint="Changelog for every version"
+              label={t('Release notes')}
+              hint={t('Changelog for every version')}
             />
             <DocLink
               href="https://github.com/Dishairano/hardwave-daw/issues"
-              label="Report an issue"
-              hint="Bug reports and feature requests"
+              label={t('Report an issue')}
+              hint={t('Bug reports and feature requests')}
             />
           </div>
         </div>
@@ -206,11 +211,11 @@ export function WelcomeScreen({
               onChange={e => setSkipNext(e.target.checked)}
               style={{ accentColor: hw.accent }}
             />
-            Don't show this on startup
+            {t("Don't show this on startup")}
           </label>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 10, color: hw.textFaint }}>
-            Press <kbd style={kbdStyle}>?</kbd> anytime for shortcuts
+            {pressBefore}<kbd style={kbdStyle}>?</kbd>{pressAfter}
           </span>
         </div>
       </div>

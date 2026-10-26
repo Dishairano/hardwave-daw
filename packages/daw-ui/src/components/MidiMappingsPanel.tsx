@@ -4,6 +4,7 @@ import { hw } from '../theme'
 import { useTrackStore, type TrackInfo } from '../stores/trackStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn, sel, th, td } from './ui/dialogStyles'
+import { t, tf, useLanguage } from '../i18n'
 
 interface MidiMappingsPanelProps {
   onClose: () => void
@@ -32,14 +33,14 @@ interface LearnStatus {
 
 type TargetKind = 'masterVolume' | 'trackVolume' | 'trackPan' | 'trackMute'
 
-function targetLabel(t: MidiMapTarget, tracks: TrackInfo[]): string {
-  if (t.kind === 'masterVolume') return 'Master volume'
-  const tr = tracks.find(x => x.id === t.trackId)
-  const name = tr ? tr.name : `track:${t.trackId.slice(0, 6)}`
-  if (t.kind === 'trackVolume') return `${name} — Volume`
-  if (t.kind === 'trackPan') return `${name} — Pan`
-  if (t.kind === 'trackMute') return `${name} — Mute`
-  return `${name} — Plug-in ${t.slotId.slice(0, 4)} param ${t.paramId}`
+function targetLabel(target: MidiMapTarget, tracks: TrackInfo[]): string {
+  if (target.kind === 'masterVolume') return t('Master volume')
+  const tr = tracks.find(x => x.id === target.trackId)
+  const name = tr ? tr.name : `track:${target.trackId.slice(0, 6)}`
+  if (target.kind === 'trackVolume') return tf('{name} — Volume', { name })
+  if (target.kind === 'trackPan') return tf('{name} — Pan', { name })
+  if (target.kind === 'trackMute') return tf('{name} — Mute', { name })
+  return tf('{name} — Plug-in {slot} param {n}', { name, slot: target.slotId.slice(0, 4), n: target.paramId })
 }
 
 function buildTarget(kind: TargetKind, trackId: string): MidiMapTarget {
@@ -48,6 +49,7 @@ function buildTarget(kind: TargetKind, trackId: string): MidiMapTarget {
 }
 
 export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelProps) {
+  useLanguage()
   const tracks = useTrackStore(s => s.tracks)
   const [mappings, setMappings] = useState<MidiMapping[]>([])
   const [learnStatus, setLearnStatus] = useState<LearnStatus>({
@@ -130,13 +132,13 @@ export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelP
 
   return (
     <DialogFrame
-      title="MIDI Mappings"
-      subtitle="CC → parameter · persisted to user config"
+      title={t('MIDI Mappings')}
+      subtitle={t('CC → parameter · persisted to user config')}
       onClose={onClose}
       width={560}
       headerActions={<>
           {mappings.length > 0 && (
-            <button onClick={clearAll} style={btn()}>Clear all</button>
+            <button onClick={clearAll} style={btn()}>{t('Clear all')}</button>
           )}
       </>}
     >
@@ -144,17 +146,17 @@ export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelP
         padding: 12, background: hw.bgElevated, borderBottom: `1px solid ${hw.border}`,
         display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
       }}>
-        <span style={{ fontSize: 12, color: hw.textSecondary }}>Add mapping:</span>
+        <span style={{ fontSize: 12, color: hw.textSecondary }}>{t('Add mapping:')}</span>
         <select
           value={addKind}
           onChange={(e) => setAddKind(e.target.value as TargetKind)}
           disabled={learnStatus.learning}
           style={sel()}
         >
-          <option value="masterVolume">Master volume</option>
-          <option value="trackVolume">Track volume</option>
-          <option value="trackPan">Track pan</option>
-          <option value="trackMute">Track mute</option>
+          <option value="masterVolume">{t('Master volume')}</option>
+          <option value="trackVolume">{t('Track volume')}</option>
+          <option value="trackPan">{t('Track pan')}</option>
+          <option value="trackMute">{t('Track mute')}</option>
         </select>
         {addKind !== 'masterVolume' && (
           <select
@@ -163,15 +165,15 @@ export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelP
             disabled={learnStatus.learning}
             style={sel()}
           >
-            {tracks.length === 0 && <option value="">(no tracks)</option>}
+            {tracks.length === 0 && <option value="">{t('(no tracks)')}</option>}
             {tracks.map(t => (
               <option key={t.id} value={t.id}>{t.name}</option>
             ))}
           </select>
         )}
         {learnStatus.learning
-          ? <button onClick={cancelLearn} style={btn(true)}>Cancel learn</button>
-          : <button onClick={() => startLearn()} style={btn(false)}>Start learn</button>
+          ? <button onClick={cancelLearn} style={btn(true)}>{t('Cancel learn')}</button>
+          : <button onClick={() => startLearn()} style={btn(false)}>{t('Start learn')}</button>
         }
       </div>
 
@@ -180,7 +182,7 @@ export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelP
           padding: '8px 12px', fontSize: 12, color: hw.accent,
           background: hw.bg, borderBottom: `1px solid ${hw.border}`,
         }}>
-          Move a MIDI controller now. The first CC received will be mapped to&nbsp;
+          {t('Move a MIDI controller now. The first CC received will be mapped to')}&nbsp;
           <strong>
             {learnStatus.target ? targetLabel(learnStatus.target, tracks) : ''}
           </strong>.
@@ -192,15 +194,15 @@ export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelP
       }}>
         {mappings.length === 0 ? (
           <div style={{ fontSize: 12.5, color: hw.textFaint, textAlign: 'center', padding: 24 }}>
-            No mappings yet. Pick a target above and click "Start learn".
+            {t('No mappings yet. Pick a target above and click "Start learn".')}
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ color: hw.textFaint, fontSize: 11, textTransform: 'uppercase' }}>
                 <th style={th()}>CC</th>
-                <th style={th()}>Ch</th>
-                <th style={th()}>Target</th>
+                <th style={th()}>{t('Ch')}</th>
+                <th style={th()}>{t('Target')}</th>
                 <th style={th()}></th>
               </tr>
             </thead>
@@ -208,10 +210,10 @@ export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelP
               {mappings.map(m => (
                 <tr key={m.id} style={{ borderTop: `1px solid ${hw.border}` }}>
                   <td style={td()}>{m.cc}</td>
-                  <td style={td()}>{m.channel === null ? 'any' : m.channel + 1}</td>
+                  <td style={td()}>{m.channel === null ? t('any') : m.channel + 1}</td>
                   <td style={td()}>{targetLabel(m.target, tracks)}</td>
                   <td style={{ ...td(), textAlign: 'right' }}>
-                    <button onClick={() => removeMapping(m.id)} style={btn()}>Remove</button>
+                    <button onClick={() => removeMapping(m.id)} style={btn()}>{t('Remove')}</button>
                   </td>
                 </tr>
               ))}
@@ -224,13 +226,13 @@ export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelP
         padding: '6px 12px', borderTop: `1px solid ${hw.border}`,
         background: hw.bgElevated, fontSize: 11, color: hw.textFaint,
       }}>
-        <strong>Tip:</strong> open a MIDI input device in Audio Settings
-        before trying to learn. Value range: volume 0→-60..0 dB, pan 0→-1..+1,
-        mute &gt; 0.5 = muted.
+        <strong>{t('Tip:')}</strong> {t('open a MIDI input device in Audio Settings before trying to learn. Value range: volume 0→-60..0 dB, pan 0→-1..+1, mute > 0.5 = muted.')}
         {learnStatus.lastLearned && (
           <span style={{ color: hw.accent, marginLeft: 8 }}>
-            · Last captured: CC {learnStatus.lastLearned.cc} · {' '}
-            {targetLabel(learnStatus.lastLearned.target, tracks)}
+            · {tf('Last captured: CC {cc} · {target}', {
+              cc: learnStatus.lastLearned.cc,
+              target: targetLabel(learnStatus.lastLearned.target, tracks),
+            })}
           </span>
         )}
         {mappings.some(m =>
@@ -238,7 +240,7 @@ export function MidiMappingsPanel({ onClose, initialTarget }: MidiMappingsPanelP
           && !tracks.some(t => t.id === (m.target as { trackId: string }).trackId)
         ) && (
           <span style={{ color: hw.red, marginLeft: 8 }}>
-            · Warning: some mappings reference missing tracks.
+            · {t('Warning: some mappings reference missing tracks.')}
           </span>
         )}
       </div>

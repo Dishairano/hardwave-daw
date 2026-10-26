@@ -4,6 +4,7 @@ import { hw } from '../theme'
 import { useProjectStore } from '../stores/projectStore'
 import { useNotificationStore } from '../stores/notificationStore'
 import { DialogFrame } from './ui/DialogFrame'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * Songs saved to Workspace.
@@ -22,6 +23,7 @@ interface CloudSong {
 }
 
 export function WorkspaceSongs({ onClose }: { onClose: () => void }) {
+  useLanguage()
   const [songs, setSongs] = useState<CloudSong[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [opening, setOpening] = useState<number | null>(null)
@@ -37,7 +39,7 @@ export function WorkspaceSongs({ onClose }: { onClose: () => void }) {
     try {
       const path = await invoke<string>('open_from_workspace', { fileId: song.fileId })
       await useProjectStore.getState().loadProject(path)
-      useNotificationStore.getState().push('info', `Opened "${song.name}" from Workspace`)
+      useNotificationStore.getState().push('info', tf('Opened "{name}" from Workspace', { name: song.name }))
       onClose()
     } catch (e) {
       setError(String(e))
@@ -47,19 +49,19 @@ export function WorkspaceSongs({ onClose }: { onClose: () => void }) {
 
   return (
     <DialogFrame
-      title="Open from Workspace"
-      subtitle="Songs saved with their samples"
+      title={t('Open from Workspace')}
+      subtitle={t('Songs saved with their samples')}
       onClose={onClose}
       width={520}
     >
       <div style={{ overflowY: 'auto', padding: 8 }}>
         {error && <div style={{ padding: 10, fontSize: 12.5, color: hw.red }}>{error}</div>}
         {!error && songs === null && (
-          <div style={{ padding: 16, fontSize: 12.5, color: hw.textFaint }}>Looking in your Workspace…</div>
+          <div style={{ padding: 16, fontSize: 12.5, color: hw.textFaint }}>{t('Looking in your Workspace…')}</div>
         )}
         {songs && songs.length === 0 && (
           <div style={{ padding: 16, fontSize: 12.5, color: hw.textFaint, lineHeight: 1.6 }}>
-            Nothing here yet. File &gt; Save to Workspace puts the open song here, samples and all.
+            {t('Nothing here yet. File > Save to Workspace puts the open song here, samples and all.')}
           </div>
         )}
         {songs?.map(song => (
@@ -78,12 +80,12 @@ export function WorkspaceSongs({ onClose }: { onClose: () => void }) {
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, fontWeight: 600 }}>{song.name}</div>
               <div style={{ fontSize: 12, color: hw.textFaint }}>
-                {song.files} {song.files === 1 ? 'file' : 'files'}
-                {song.updatedAt ? ` · saved ${song.updatedAt.slice(0, 10)}` : ''}
+                {song.files === 1 ? tf('{n} file', { n: song.files }) : tf('{n} files', { n: song.files })}
+                {song.updatedAt ? ` · ${tf('saved {date}', { date: song.updatedAt.slice(0, 10) })}` : ''}
               </div>
             </div>
             <span style={{ fontSize: 12, color: hw.textSecondary }}>
-              {opening === song.fileId ? 'Bringing it down…' : 'Open'}
+              {opening === song.fileId ? t('Bringing it down…') : t('Open')}
             </span>
           </button>
         ))}
