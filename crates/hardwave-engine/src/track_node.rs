@@ -555,8 +555,8 @@ pub struct TrackNode {
     pan: f32,    // -1.0 to 1.0
     muted: bool,
     soloed: bool,
-    phase_invert: bool,
-    swap_lr: bool,
+    /// Delay, swap, polarity and filter, before the plug-ins.
+    utility: ChannelUtility,
     /// Shared behaviour switches, read on the audio thread. Only the pan
     /// law is used here; the rest belong to the instrument tracks.
     prefs: crate::audio_prefs::AudioPrefs,
@@ -565,14 +565,6 @@ pub struct TrackNode {
     /// What the last block used, so the next ramps from it.
     width_applied: f32,
     gain_ramp: GainRamp,
-    /// Positive = delay, negative = advance. Bounded against delay_capacity.
-    delay_samples: i32,
-    /// Delay line for the left/right channels (ring buffer, zero-initialized),
-    /// made only for a track that has a delay: every track used to carry
-    /// 100 ms of it, made and zeroed for all 500 tracks at every rebuild.
-    delay_buf_l: Vec<f32>,
-    delay_buf_r: Vec<f32>,
-    delay_write_pos: usize,
     /// Cached Arc references to audio buffers, refreshed when clips change.
     cached_buffers: Vec<Option<Arc<AudioBuffer>>>,
     /// The clips in this track's row of the launcher grid, and the
@@ -589,9 +581,6 @@ pub struct TrackNode {
     meter: Arc<TrackMeterState>,
     /// Smoothed RMS (linear), updated each block.
     rms_smooth: f32,
-    /// Per-channel filter stage (biquad), applied before the fader.
-    filter_kind: TrackFilterType,
-    filter: BiquadStereo,
     /// Per-track plug-in insert chain. Audio flows through here after
     /// the filter+delay step but before the fader+pan, matching the
     /// pre-fader insert slot every major DAW exposes.
@@ -632,59 +621,43 @@ pub struct TrackNode {
 
 const TRACK_DELAY_CAPACITY: usize = 4800; // 100 ms at 48 kHz, both directions
 
-impl TrackNode {
-    /// Construct a track node bound to a specific project track id. The
-    /// id propagates through the audio thread so per-track plug-in
-    /// commands can be routed directly without scanning every node.
-    pub fn new(
-        track_id: String,
-        name: String,
-        pool: AudioPool,
-        meter: Arc<TrackMeterState>,
-    ) -> Self {
+/// A channel's utility stage before its plug-ins: its time offset, left and
+/// right swapped, its polarity and its filter. The same on an audio track and
+/// an instrument track; the instrument track had none of it, so the mixer
+/// strip's polarity, swap and delay and the rack's filter did nothing there.
+pub struct ChannelUtility {
+    phase_invert: bool,
+    swap_lr: bool,
+    /// Positive delays only; bounded by TRACK_DELAY_CAPACITY.
+    delay_samples: i32,
+    /// Delay line for the left/right channels (ring buffer, zero-initialized),
+    /// made only for a track that has a delay: every track used to carry
+    /// 100 ms of it, made and zeroed for all 500 tracks at every rebuild.
+    delay_buf_l: Vec<f32>,
+    delay_buf_r: Vec<f32>,
+    delay_write_pos: usize,
+    filter_kind: TrackFilterType,
+    filter: BiquadStereo,
+}
+
+impl Default for ChannelUtility {
+    fn default() -> Self {
         Self {
-            track_id,
-            name,
-            pool,
-            clips: Vec::new(),
-            session_slots: Vec::new(),
-            session_buffers: Vec::new(),
-            session: None,
-            session_quantise: None,
-            prefs: crate::audio_prefs::AudioPrefs::new(),
-            volume: 1.0,
-            pan: 0.0,
-            muted: false,
-            soloed: false,
             phase_invert: false,
             swap_lr: false,
-            stereo_separation: 1.0,
-            width_applied: 1.0,
-            gain_ramp: GainRamp::default(),
             delay_samples: 0,
             delay_buf_l: Vec::new(),
             delay_buf_r: Vec::new(),
             delay_write_pos: 0,
-            cached_buffers: Vec::new(),
-            meter,
-            rms_smooth: 0.0,
             filter_kind: TrackFilterType::Off,
             filter: BiquadStereo::default(),
-            chain: crate::insert_chain::InsertChain::new(),
-            chain_scratch: crate::insert_chain::Scratch::default(),
-            automation_lanes: Vec::new(),
-            automation_clips: Vec::new(),
-            receives_input: false,
-            live_input: false,
-            static_volume: 1.0,
-            static_pan: 0.0,
-            mod_gain: 1.0,
-            mod_pan: 0.0,
         }
     }
+}
 
-    /// Configure the per-channel filter. Called from the engine thread when the
-    /// project state changes, so computing coefficients here is fine.
+impl ChannelUtility {
+    /// Configure the filter. Called from the engine thread when the project
+    /// changes, so computing coefficients here is fine.
     pub fn set_filter(
         &mut self,
         kind: TrackFilterType,
@@ -709,10 +682,6 @@ impl TrackNode {
         self.swap_lr = swap;
     }
 
-    pub fn set_stereo_separation(&mut self, sep: f64) {
-        self.stereo_separation = sep.clamp(0.0, 2.0) as f32;
-    }
-
     pub fn set_delay_samples(&mut self, samples: i64) {
         let max = TRACK_DELAY_CAPACITY as i64 - 1;
         // Only positive delay is honored; negative delay (advance) isn't representable
@@ -723,6 +692,123 @@ impl TrackNode {
             self.delay_buf_l = vec![0.0; TRACK_DELAY_CAPACITY];
             self.delay_buf_r = vec![0.0; TRACK_DELAY_CAPACITY];
         }
+    }
+
+    /// Delay, swap and polarity, in that order: the shifted signal feeds the
+    /// rest. Allocation-free.
+    pub fn process_pre(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
+        let n = out_l.len().min(out_r.len());
+        if self.delay_samples > 0 && !self.delay_buf_l.is_empty() {
+            let cap = self.delay_buf_l.len();
+            let delay = self.delay_samples as usize;
+            for frame in 0..n {
+                let write = self.delay_write_pos;
+                let read = (write + cap - delay) % cap;
+                let in_l = out_l[frame];
+                let in_r = out_r[frame];
+                out_l[frame] = self.delay_buf_l[read];
+                out_r[frame] = self.delay_buf_r[read];
+                self.delay_buf_l[write] = in_l;
+                self.delay_buf_r[write] = in_r;
+                self.delay_write_pos = (write + 1) % cap;
+            }
+        }
+        if self.swap_lr {
+            for frame in 0..n {
+                std::mem::swap(&mut out_l[frame], &mut out_r[frame]);
+            }
+        }
+        if self.phase_invert {
+            for s in out_l[..n].iter_mut().chain(out_r[..n].iter_mut()) {
+                *s = -*s;
+            }
+        }
+    }
+
+    /// The filter, after the width stage. `Off` skips the loop.
+    pub fn process_filter(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
+        if self.filter_kind == TrackFilterType::Off {
+            return;
+        }
+        let n = out_l.len().min(out_r.len());
+        for frame in 0..n {
+            let (yl, yr) = self.filter.process_stereo(out_l[frame], out_r[frame]);
+            out_l[frame] = yl;
+            out_r[frame] = yr;
+        }
+    }
+}
+
+impl TrackNode {
+    /// Construct a track node bound to a specific project track id. The
+    /// id propagates through the audio thread so per-track plug-in
+    /// commands can be routed directly without scanning every node.
+    pub fn new(
+        track_id: String,
+        name: String,
+        pool: AudioPool,
+        meter: Arc<TrackMeterState>,
+    ) -> Self {
+        Self {
+            track_id,
+            name,
+            pool,
+            clips: Vec::new(),
+            session_slots: Vec::new(),
+            session_buffers: Vec::new(),
+            session: None,
+            session_quantise: None,
+            prefs: crate::audio_prefs::AudioPrefs::new(),
+            volume: 1.0,
+            pan: 0.0,
+            muted: false,
+            soloed: false,
+            utility: ChannelUtility::default(),
+            stereo_separation: 1.0,
+            width_applied: 1.0,
+            gain_ramp: GainRamp::default(),
+            cached_buffers: Vec::new(),
+            meter,
+            rms_smooth: 0.0,
+            chain: crate::insert_chain::InsertChain::new(),
+            chain_scratch: crate::insert_chain::Scratch::default(),
+            automation_lanes: Vec::new(),
+            automation_clips: Vec::new(),
+            receives_input: false,
+            live_input: false,
+            static_volume: 1.0,
+            static_pan: 0.0,
+            mod_gain: 1.0,
+            mod_pan: 0.0,
+        }
+    }
+
+    /// Configure the per-channel filter (see [`ChannelUtility::set_filter`]).
+    pub fn set_filter(
+        &mut self,
+        kind: TrackFilterType,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: f32,
+    ) {
+        self.utility
+            .set_filter(kind, cutoff_hz, resonance, sample_rate);
+    }
+
+    pub fn set_phase_invert(&mut self, inv: bool) {
+        self.utility.set_phase_invert(inv);
+    }
+
+    pub fn set_swap_lr(&mut self, swap: bool) {
+        self.utility.set_swap_lr(swap);
+    }
+
+    pub fn set_stereo_separation(&mut self, sep: f64) {
+        self.stereo_separation = sep.clamp(0.0, 2.0) as f32;
+    }
+
+    pub fn set_delay_samples(&mut self, samples: i64) {
+        self.utility.set_delay_samples(samples);
     }
 
     /// Update the clip list. Called from the engine thread (not the audio thread)
@@ -1334,42 +1420,10 @@ impl AudioNode for TrackNode {
         // Order is deliberate: delay first so the shifted signal feeds the rest of
         // the chain, then L/R swap, then polarity flip, then M/S separation.
 
-        if self.delay_samples > 0 && !self.delay_buf_l.is_empty() {
-            let cap = self.delay_buf_l.len();
-            let delay = self.delay_samples as usize;
+        {
             let (out_left, out_rest) = outputs.split_at_mut(1);
-            let out_l = &mut out_left[0];
-            let out_r = &mut out_rest[0];
-            for frame in 0..buf_size {
-                let write = self.delay_write_pos;
-                let read = (write + cap - delay) % cap;
-                let in_l = out_l[frame];
-                let in_r = out_r[frame];
-                out_l[frame] = self.delay_buf_l[read];
-                out_r[frame] = self.delay_buf_r[read];
-                self.delay_buf_l[write] = in_l;
-                self.delay_buf_r[write] = in_r;
-                self.delay_write_pos = (write + 1) % cap;
-            }
-        }
-
-        if self.swap_lr {
-            let (out_left, out_rest) = outputs.split_at_mut(1);
-            let out_l = &mut out_left[0];
-            let out_r = &mut out_rest[0];
-            for frame in 0..buf_size {
-                std::mem::swap(&mut out_l[frame], &mut out_r[frame]);
-            }
-        }
-
-        if self.phase_invert {
-            let (out_left, out_rest) = outputs.split_at_mut(1);
-            for s in out_left[0].iter_mut().take(buf_size) {
-                *s = -*s;
-            }
-            for s in out_rest[0].iter_mut().take(buf_size) {
-                *s = -*s;
-            }
+            self.utility
+                .process_pre(&mut out_left[0][..buf_size], &mut out_rest[0][..buf_size]);
         }
 
         {
@@ -1387,15 +1441,10 @@ impl AudioNode for TrackNode {
 
         // Per-channel biquad filter stage. Applied pre-fader so metering and
         // sends see the filtered signal. `Off` skips the inner loop.
-        if self.filter_kind != TrackFilterType::Off {
+        {
             let (out_left, out_rest) = outputs.split_at_mut(1);
-            let out_l = &mut out_left[0];
-            let out_r = &mut out_rest[0];
-            for frame in 0..buf_size {
-                let (yl, yr) = self.filter.process_stereo(out_l[frame], out_r[frame]);
-                out_l[frame] = yl;
-                out_r[frame] = yr;
-            }
+            self.utility
+                .process_filter(&mut out_left[0][..buf_size], &mut out_rest[0][..buf_size]);
         }
 
         // Plug-in insert chain. Slots run in series, post-utility +
@@ -1542,6 +1591,27 @@ fn pan_law(pan: f32) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The channel utility shared by audio and instrument tracks: a delay
+    /// shifts the signal later by its samples, swap trades the sides, and
+    /// polarity flips both.
+    #[test]
+    fn the_channel_utility_delays_swaps_and_flips() {
+        let mut u = ChannelUtility::default();
+        u.set_delay_samples(3);
+        let mut l = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let mut r = vec![0.0, 2.0, 0.0, 0.0, 0.0, 0.0];
+        u.process_pre(&mut l, &mut r);
+        assert_eq!(l, vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(r, vec![0.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
+
+        let mut u = ChannelUtility::default();
+        u.set_swap_lr(true);
+        u.set_phase_invert(true);
+        let (mut l, mut r) = (vec![0.5, 0.25], vec![-0.1, 0.0]);
+        u.process_pre(&mut l, &mut r);
+        assert_eq!((l, r), (vec![0.1, -0.0], vec![-0.5, -0.25]));
+    }
     use std::sync::Arc;
 
     fn make_test_node() -> (TrackNode, Arc<TrackMeterState>) {

@@ -3835,6 +3835,17 @@ impl EngineCallback {
                 midi_node.set_automation_lanes(track.automation_lanes.clone());
                 midi_node.set_automation_clips(track.automation_clips.clone());
                 midi_node.set_stereo_separation(track.stereo_separation);
+                // The mixer strip's polarity, swap and delay and the rack's
+                // filter, as an audio track has them.
+                midi_node.set_phase_invert(track.phase_invert);
+                midi_node.set_swap_lr(track.swap_lr);
+                midi_node.set_delay_samples(track.delay_samples);
+                midi_node.set_filter(
+                    crate::track_node::TrackFilterType::parse(&track.filter_type),
+                    track.filter_cutoff_hz,
+                    track.filter_resonance,
+                    self.sample_rate as f32,
+                );
                 // The live mix starts from what the project says.
                 meter.set_mix(
                     db_to_linear_f32(track.volume_db + vca_gain_db),
