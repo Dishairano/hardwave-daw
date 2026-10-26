@@ -788,23 +788,7 @@ impl TrackNode {
             .map(|q| q.load(Ordering::Relaxed))
             .unwrap_or(4);
         let quantise = crate::session::quantise_samples(beats, ctx.tempo, ctx.sample_rate);
-        let pending = session.pending.load(Ordering::Relaxed);
-        if pending != crate::session::NONE {
-            let boundary = crate::session::next_boundary(pos, quantise);
-            if boundary < pos + buf_size as u64 {
-                if pending == crate::session::STOP {
-                    session
-                        .playing
-                        .store(crate::session::NONE, Ordering::Relaxed);
-                } else {
-                    session.playing.store(pending, Ordering::Relaxed);
-                    session.launch_sample.store(boundary, Ordering::Relaxed);
-                }
-                session
-                    .pending
-                    .store(crate::session::NONE, Ordering::Relaxed);
-            }
-        }
+        session.advance(pos, buf_size, quantise);
 
         let Some(slot_index) = session.playing_slot() else {
             return false;

@@ -62,6 +62,28 @@ impl TrackSession {
     pub fn pending_slot(&self) -> i32 {
         self.pending.load(Ordering::Relaxed)
     }
+
+    /// Start, or stop, what is queued if its boundary falls inside the
+    /// block of `frames` from `pos`. Called by the track's node at the top
+    /// of each block; the launch lands on the boundary sample rather than
+    /// the block edge, which keeps tracks launched together together.
+    pub fn advance(&self, pos: u64, frames: usize, quantise: u64) {
+        let pending = self.pending.load(Ordering::Relaxed);
+        if pending == NONE {
+            return;
+        }
+        let boundary = next_boundary(pos, quantise);
+        if boundary >= pos + frames as u64 {
+            return;
+        }
+        if pending == STOP {
+            self.playing.store(NONE, Ordering::Relaxed);
+        } else {
+            self.playing.store(pending, Ordering::Relaxed);
+            self.launch_sample.store(boundary, Ordering::Relaxed);
+        }
+        self.pending.store(NONE, Ordering::Relaxed);
+    }
 }
 
 /// The grid as a whole: every track's slot state, and how launches are

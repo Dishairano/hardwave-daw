@@ -3795,6 +3795,52 @@ impl EngineCallback {
                     midi_node.set_audio_clips(self.audio_pool.clone(), audio);
                 }
                 midi_node.set_controls(control_regions);
+                // This track's row of the launcher grid: its MIDI loops, in
+                // samples from each loop's start. Lengths are in ticks in
+                // the project so they follow the tempo.
+                if !track.session_slots.is_empty() {
+                    let samples_per_tick =
+                        tempo_map.tick_to_samples(hardwave_midi::PPQ, sample_rate) as f64
+                            / hardwave_midi::PPQ as f64;
+                    let at = |tick: u64| (tick as f64 * samples_per_tick).round() as u64;
+                    let slots = track
+                        .session_slots
+                        .iter()
+                        .map(|slot| {
+                            let slot = slot.as_ref()?;
+                            let notes = slot.notes.as_ref()?;
+                            let length = slot.length_ticks.max(1);
+                            let mut regions: Vec<crate::midi_track_node::MidiNoteRegion> = notes
+                                .iter()
+                                .filter(|n| n.start_tick < length)
+                                .map(|n| {
+                                    // A note held past the loop's end is let go there.
+                                    let off = (n.start_tick + n.duration_ticks.max(1)).min(length);
+                                    crate::midi_track_node::MidiNoteRegion {
+                                        note_on_sample: at(n.start_tick),
+                                        note_off_sample: at(off),
+                                        pitch: n.pitch,
+                                        velocity: n.velocity,
+                                        muted: n.muted,
+                                        pan: n.pan,
+                                        fine_cents: n.fine_cents,
+                                        release_velocity: n.release_velocity,
+                                    }
+                                })
+                                .collect();
+                            regions.sort_by_key(|r| r.note_on_sample);
+                            Some(crate::midi_track_node::SessionMidiClip {
+                                length_samples: at(length),
+                                notes: regions,
+                            })
+                        })
+                        .collect();
+                    midi_node.set_session_midi(
+                        slots,
+                        self.session.track(&track.id),
+                        Arc::clone(&self.session.quantise_beats),
+                    );
+                }
 
                 let node_id = self.graph.add_node(Box::new(midi_node));
                 // A track armed for input hears the keyboard; with none
@@ -3884,15 +3930,18 @@ impl EngineCallback {
                     .session_slots
                     .iter()
                     .map(|slot| {
-                        slot.as_ref().map(|s| crate::track_node::SessionClip {
-                            source_id: s.source_path.clone(),
-                            source_offset: s.source_start,
-                            length_samples: (s.length_ticks as f64 * samples_per_tick) as u64,
-                            gain: if s.gain_db <= -100.0 {
-                                0.0
-                            } else {
-                                10f64.powf(s.gain_db / 20.0) as f32
-                            },
+                        // A MIDI loop has no audio to play on an audio track.
+                        slot.as_ref().filter(|s| s.notes.is_none()).map(|s| {
+                            crate::track_node::SessionClip {
+                                source_id: s.source_path.clone(),
+                                source_offset: s.source_start,
+                                length_samples: (s.length_ticks as f64 * samples_per_tick) as u64,
+                                gain: if s.gain_db <= -100.0 {
+                                    0.0
+                                } else {
+                                    10f64.powf(s.gain_db / 20.0) as f32
+                                },
+                            }
                         })
                     })
                     .collect();

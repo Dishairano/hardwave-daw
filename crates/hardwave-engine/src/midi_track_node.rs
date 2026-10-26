@@ -33,6 +33,30 @@ pub struct MidiControlRegion {
     pub value: f32,
 }
 
+/// One loop in the launcher grid on a MIDI track: its notes in samples
+/// from the loop's start (note_on_sample and note_off_sample count from
+/// there), in start order, and where it wraps.
+#[derive(Debug, Clone, Default)]
+pub struct SessionMidiClip {
+    pub length_samples: u64,
+    pub notes: Vec<MidiNoteRegion>,
+}
+
+/// A note start or end from the playing loop, inside this block, in
+/// samples on the transport's clock.
+#[derive(Debug, Clone, Copy)]
+struct SessionHit {
+    at: u64,
+    /// Where the note ends, for a built-in voice started here.
+    off: u64,
+    on: bool,
+    pitch: u8,
+    velocity: f32,
+    pan: f32,
+    fine_cents: f32,
+    release_velocity: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct MidiNoteRegion {
     /// Absolute timeline sample at which note-on fires.
@@ -212,6 +236,16 @@ pub struct MidiTrackNode {
     /// Notes still held when the playhead went back, let go at the top of
     /// the next block (reused, so the audio thread does not allocate).
     jump_offs: Vec<u8>,
+    /// This track's row of the launcher grid (MIDI loops; an empty slot or
+    /// an audio loop is None), the grid state it shares with the UI, the
+    /// playing loop's notes in this block, which slot played last block,
+    /// and the keys a loop holds down in a hosted instrument.
+    session: Option<Arc<crate::session::TrackSession>>,
+    session_quantise: Option<Arc<std::sync::atomic::AtomicU32>>,
+    session_midi: Vec<Option<SessionMidiClip>>,
+    session_hits: Vec<SessionHit>,
+    session_was: Option<usize>,
+    session_held: [bool; 128],
     /// Keys held down on the keyboard right now, as it sent them, so they
     /// can be let go when the keyboard moves to another track.
     live_held: [bool; 128],
@@ -338,6 +372,12 @@ impl MidiTrackNode {
             last_block_end: 0,
             jumped: false,
             jump_offs: Vec::with_capacity(64),
+            session: None,
+            session_quantise: None,
+            session_midi: Vec::new(),
+            session_hits: Vec::with_capacity(512),
+            session_was: None,
+            session_held: [false; 128],
             live_held: [false; 128],
             release_live: false,
             // The whole pool up front: it grew on the audio thread the
@@ -661,6 +701,101 @@ impl MidiTrackNode {
         }
     }
 
+    /// Put this track's row of the launcher grid in place, with the grid
+    /// state it shares with the UI.
+    pub fn set_session_midi(
+        &mut self,
+        slots: Vec<Option<SessionMidiClip>>,
+        session: Arc<crate::session::TrackSession>,
+        quantise: Arc<std::sync::atomic::AtomicU32>,
+    ) {
+        self.session_midi = slots;
+        self.session = Some(session);
+        self.session_quantise = Some(quantise);
+    }
+
+    /// Start what the grid has queued, and gather the playing loop's note
+    /// starts and ends that fall in this block. Returns the slot playing,
+    /// when it is one of this track's MIDI loops.
+    fn run_session_midi(&mut self, pos: u64, frames: usize, ctx: &ProcessContext) -> Option<usize> {
+        use std::sync::atomic::Ordering;
+        self.session_hits.clear();
+        let session = self.session.as_ref()?;
+        if self.session_midi.is_empty() {
+            return None;
+        }
+        let beats = self
+            .session_quantise
+            .as_ref()
+            .map(|q| q.load(Ordering::Relaxed))
+            .unwrap_or(4);
+        session.advance(
+            pos,
+            frames,
+            crate::session::quantise_samples(beats, ctx.tempo, ctx.sample_rate),
+        );
+        let slot_index = session.playing_slot()?;
+        let clip = self.session_midi.get(slot_index)?.as_ref()?;
+        let len = clip.length_samples;
+        if len == 0 {
+            return None;
+        }
+        let launched = session.launch_sample.load(Ordering::Relaxed);
+        let end = pos + frames as u64;
+        if end <= launched {
+            return Some(slot_index);
+        }
+        let first = pos.max(launched);
+        let hits = &mut self.session_hits;
+        // The loop before is looked at too: a note let go at the very end
+        // of a pass ends inside the next one's first block.
+        let from = ((first - launched) / len).saturating_sub(1);
+        let to = (end - 1 - launched) / len;
+        'passes: for pass in from..=to {
+            let start = launched + pass * len;
+            for n in &clip.notes {
+                if n.muted {
+                    continue;
+                }
+                if hits.len() + 2 > hits.capacity() {
+                    break 'passes;
+                }
+                let on = start + n.note_on_sample;
+                let off = start + n.note_off_sample;
+                let hit = SessionHit {
+                    at: on,
+                    off,
+                    on: true,
+                    pitch: n.pitch,
+                    velocity: n.velocity,
+                    pan: n.pan,
+                    fine_cents: n.fine_cents,
+                    release_velocity: n.release_velocity,
+                };
+                if on >= first && on < end {
+                    hits.push(hit);
+                }
+                if off >= first && off < end {
+                    hits.push(SessionHit {
+                        at: off,
+                        on: false,
+                        ..hit
+                    });
+                }
+            }
+        }
+        // In time order, a key's end before its next start on the same
+        // sample; insertion sort, so nothing is allocated here.
+        for i in 1..hits.len() {
+            let mut j = i;
+            while j > 0 && (hits[j - 1].at, hits[j - 1].on) > (hits[j].at, hits[j].on) {
+                hits.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        Some(slot_index)
+    }
+
     pub fn set_notes(&mut self, mut notes: Vec<MidiNoteRegion>) {
         notes.sort_by_key(|n| n.note_on_sample);
         self.notes = notes;
@@ -933,7 +1068,8 @@ impl AudioNode for MidiTrackNode {
         // When transport is stopped, render the live-MIDI voice tail
         // (envelope release) but skip the clip-schedule path so we
         // don't fire stale clip notes from a paused playhead.
-        if !ctx.playing && self.voices.is_empty() {
+        // (A loop from the launcher still sounding is let go below first.)
+        if !ctx.playing && self.voices.is_empty() && self.session_was.is_none() {
             return;
         }
 
@@ -978,6 +1114,51 @@ impl AudioNode for MidiTrackNode {
             self.last_block_end = block_start.saturating_add(block_size as u64);
         }
 
+        // The launcher grid: a loop playing in this track's row stands in
+        // for its playlist notes, as an audio loop does on an audio track.
+        let session_slot = if ctx.playing {
+            self.run_session_midi(block_start, block_size, ctx)
+        } else {
+            self.session_hits.clear();
+            None
+        };
+        if session_slot != self.session_was {
+            // Into the grid, out of it, or on to another loop: what was
+            // sounding is let go, and the playlist picks up from here as
+            // it does after a jump.
+            if self.session_was.is_none() {
+                for n in &self.notes {
+                    if !n.muted
+                        && n.note_on_sample < block_start
+                        && n.note_off_sample >= block_start
+                        && self.jump_offs.len() < self.jump_offs.capacity()
+                    {
+                        self.jump_offs.push(n.pitch);
+                    }
+                }
+            }
+            for note in 0..128u8 {
+                if std::mem::take(&mut self.session_held[note as usize])
+                    && self.jump_offs.len() < self.jump_offs.capacity()
+                {
+                    self.jump_offs.push(note);
+                }
+            }
+            for v in self.voices.iter_mut() {
+                if v.off_sample.is_some()
+                    && v.stage != EnvStage::Release
+                    && v.stage != EnvStage::Idle
+                {
+                    v.stage = EnvStage::Release;
+                }
+            }
+            self.next_note_idx = 0;
+            self.next_control_idx = 0;
+            self.jumped = session_slot.is_none() && ctx.playing;
+            self.session_was = session_slot;
+        }
+        let in_session = session_slot.is_some();
+
         // Constant-power pan curve. At pan=0 both channels get
         // cos(π/4) = sin(π/4) ≈ 0.707; at pan=±1 the far channel hits
         // unity while the near channel is silent. Matches the standard
@@ -1012,7 +1193,21 @@ impl AudioNode for MidiTrackNode {
             // 21 ms at 1024 frames, in playback and in a render, which is
             // where a consolidated kick got its opening silence.
             let mut from = 0usize;
-            if ctx.playing {
+            if in_session {
+                for h in 0..self.session_hits.len() {
+                    let hit = self.session_hits[h];
+                    if !hit.on {
+                        continue;
+                    }
+                    let at = (hit.at - block_start) as usize;
+                    if at > from {
+                        self.kick
+                            .render_into(&mut self.kick_l[from..at], &mut self.kick_r[from..at]);
+                        from = at;
+                    }
+                    self.kick.note_on(hit.pitch, hit.velocity);
+                }
+            } else if ctx.playing {
                 let block_end = block_start.saturating_add(block_size as u64);
                 let mut idx = self.next_note_idx;
                 while idx < self.notes.len() && self.notes[idx].note_off_sample < block_start {
@@ -1120,6 +1315,7 @@ impl AudioNode for MidiTrackNode {
             }
         }
 
+        let mut hit_idx = 0usize;
         for i in 0..block_size {
             let global_sample = block_start.saturating_add(i as u64);
 
@@ -1127,7 +1323,8 @@ impl AudioNode for MidiTrackNode {
             // exact sample — only while the transport is playing. Stopped
             // transport must not re-fire the same note every block.
             if ctx.playing {
-                while self.next_note_idx < self.notes.len()
+                while !in_session
+                    && self.next_note_idx < self.notes.len()
                     && self.notes[self.next_note_idx].note_on_sample <= global_sample
                 {
                     // Clone the note's fields so the borrow on `self.notes`
@@ -1176,6 +1373,23 @@ impl AudioNode for MidiTrackNode {
                         }
                     }
                     self.next_note_idx += 1;
+                }
+                // The launcher's loop, on the same sample-exact footing.
+                while hit_idx < self.session_hits.len()
+                    && self.session_hits[hit_idx].at <= global_sample
+                {
+                    let h = self.session_hits[hit_idx];
+                    hit_idx += 1;
+                    if h.on && matches!(self.instrument, Instrument::BuiltinSine) {
+                        self.start_voice_shaped(
+                            h.pitch,
+                            h.velocity.clamp(0.0, 1.0),
+                            Some(h.off),
+                            h.pan,
+                            h.fine_cents,
+                            h.release_velocity,
+                        );
+                    }
                 }
 
                 // Release clip-scheduled voices whose note-off sample has
@@ -1312,7 +1526,7 @@ impl AudioNode for MidiTrackNode {
             // as the built-in synth does with them: "play truncated notes"
             // decides. A plug-in got nothing for them, so starting a song
             // in the middle of a long pad or bass note played silence there.
-            if self.jumped && self.prefs.play_truncated_notes() {
+            if self.jumped && !in_session && self.prefs.play_truncated_notes() {
                 for n in &self.notes {
                     if !n.muted && n.note_on_sample < block_start && n.note_off_sample > block_start
                     {
@@ -1325,8 +1539,27 @@ impl AudioNode for MidiTrackNode {
                     }
                 }
             }
+            for h in &self.session_hits {
+                let timing = (h.at - block_start) as u32;
+                self.session_held[h.pitch as usize] = h.on;
+                block_midi.push(if h.on {
+                    hardwave_midi::MidiEvent::NoteOn {
+                        timing,
+                        channel: 0,
+                        note: h.pitch,
+                        velocity: h.velocity,
+                    }
+                } else {
+                    hardwave_midi::MidiEvent::NoteOff {
+                        timing,
+                        channel: 0,
+                        note: h.pitch,
+                        velocity: 0.0,
+                    }
+                });
+            }
             for n in &self.notes {
-                if n.muted {
+                if n.muted || in_session {
                     continue;
                 }
                 if n.note_on_sample >= block_start && n.note_on_sample < block_end {
@@ -2096,6 +2329,92 @@ mod tests {
                 .any(|e| matches!(e, MidiEvent::NoteOff { note: 60, .. })),
             "the held note must be let go, got {got:?}"
         );
+    }
+
+    /// A loop in this track's row of the launcher: 1,000 samples long,
+    /// one note from 100 to 600, launched with no lining up.
+    fn launch_row(node: &mut MidiTrackNode) -> std::sync::Arc<crate::session::TrackSession> {
+        let session = std::sync::Arc::new(crate::session::TrackSession::new());
+        node.set_session_midi(
+            vec![Some(SessionMidiClip {
+                length_samples: 1_000,
+                notes: vec![MidiNoteRegion {
+                    note_on_sample: 100,
+                    note_off_sample: 600,
+                    pitch: 72,
+                    velocity: 0.9,
+                    muted: false,
+                    ..Default::default()
+                }],
+            })],
+            session.clone(),
+            std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        );
+        session
+    }
+
+    fn take_events(received: &std::sync::Mutex<Vec<MidiEvent>>) -> Vec<(u32, u8, bool)> {
+        std::mem::take(&mut *received.lock().unwrap())
+            .into_iter()
+            .filter_map(|e| match e {
+                MidiEvent::NoteOn { timing, note, .. } => Some((timing, note, true)),
+                MidiEvent::NoteOff { timing, note, .. } => Some((timing, note, false)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_launched_loop_plays_on_the_sample_round_and_round_and_lets_go_on_a_stop() {
+        // A playlist note held from 0, so taking over from it shows too.
+        let (mut node, received) = spied_node(0, 48_000, false);
+        let session = launch_row(&mut node);
+        play_block_at(&mut node, 0);
+        assert_eq!(take_events(&received), vec![(0, 60, true)]);
+
+        // Launched at 256: the playlist's note is let go there, and the
+        // loop's note starts 100 samples in.
+        session.queue(0);
+        play_block_at(&mut node, 256);
+        assert_eq!(
+            take_events(&received),
+            vec![(0, 60, false), (100, 72, true)]
+        );
+        play_block_at(&mut node, 512);
+        assert_eq!(take_events(&received), vec![]);
+        // Its end at 856, then the second pass from 1,256: on again at 1,356.
+        play_block_at(&mut node, 768);
+        assert_eq!(take_events(&received), vec![(88, 72, false)]);
+        play_block_at(&mut node, 1024);
+        assert_eq!(take_events(&received), vec![]);
+        play_block_at(&mut node, 1280);
+        assert_eq!(take_events(&received), vec![(76, 72, true)]);
+
+        // Stopped while the note is down: it is let go, and the playlist
+        // does not pick its long note up again from the middle.
+        session.stop_now();
+        play_block_at(&mut node, 1536);
+        assert_eq!(take_events(&received), vec![(0, 72, false)]);
+    }
+
+    #[test]
+    fn the_built_in_synth_starts_a_launched_note_on_its_sample() {
+        let mut node = make_node();
+        let session = launch_row(&mut node);
+        session.queue(0);
+        let mut out = block_outputs(256);
+        let inputs: [&[f32]; 0] = [];
+        node.process(
+            &inputs,
+            &mut out,
+            &[],
+            &mut Vec::new(),
+            &ctx_at(48_000.0, 256, 0, true),
+        );
+        let before = out[0][..100].iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        let after = out[0][100..].iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert_eq!(before, 0.0, "nothing before the note");
+        assert!(after > 0.01, "the note from sample 100: {after}");
     }
 
     #[test]

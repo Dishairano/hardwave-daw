@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-send-clip-to-launcher"
+description = "Enables the send_clip_to_launcher command without any pre-configured scope."
+commands.allow = ["send_clip_to_launcher"]
+
+[[permission]]
+identifier = "deny-send-clip-to-launcher"
+description = "Denies the send_clip_to_launcher command without any pre-configured scope."
+commands.deny = ["send_clip_to_launcher"]

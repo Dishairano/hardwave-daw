@@ -153,11 +153,11 @@ impl KickPatch {
     }
 }
 
-/// One loop in the launcher grid.
+/// One loop in the launcher grid: audio, or notes on a MIDI track.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionSlot {
     pub name: String,
-    /// The audio file behind it.
+    /// The audio behind it (empty for a MIDI loop).
     pub source_path: String,
     /// Where the loop starts inside that file, in samples.
     #[serde(default)]
@@ -166,6 +166,9 @@ pub struct SessionSlot {
     pub length_ticks: u64,
     #[serde(default)]
     pub gain_db: f64,
+    /// A MIDI loop's notes, from the loop's start. None for audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<Vec<hardwave_midi::MidiNote>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
